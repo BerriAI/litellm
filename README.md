@@ -1,6 +1,9 @@
 # litellm
 a simple, fast, 100 line package to call OpenAI, Azure, Cohere, Anthropic API Endpoints 
 
+litellm manages:
+- translating inputs to completion and embedding endpoints
+- guarantees consistent output, text responses will always be available at `['choices'][0]['message']['content']`
 # usage
 
 ```python
