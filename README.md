@@ -2,8 +2,12 @@
 a simple, fast, 100 line package to call OpenAI, Azure, Cohere, Anthropic API Endpoints 
 
 # usage
+
 ```python
+from litellm import completion
+
 messages = [{ "content": "Hello, how are you?","role": "user"}]
+
 # openai call
 response = completion(model="gpt-3.5-turbo", messages=messages)
 
