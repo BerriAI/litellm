@@ -1,11 +1,12 @@
 # litellm
+[![](https://dcbadge.vercel.app/api/server/wuPM9dRgDw)](https://discord.gg/wuPM9dRgDw)
 a simple & light 100 line package to call OpenAI, Azure, Cohere, Anthropic API Endpoints 
 
 litellm manages:
 - translating inputs to completion and embedding endpoints
 - guarantees consistent output, text responses will always be available at `['choices'][0]['message']['content']`
 # usage
-
+* [Getting Started Notebook](https://colab.research.google.com/drive/1gR3pY-JzDZahzpVdbGBtrNGDBmzUNJaJ?usp=sharing)
 ```python
 from litellm import completion
 
