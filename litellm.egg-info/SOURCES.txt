@@ -1,0 +1,10 @@
+LICENSE
+README.md
+setup.py
+litellm/__init__.py
+litellm/main.py
+litellm.egg-info/PKG-INFO
+litellm.egg-info/SOURCES.txt
+litellm.egg-info/dependency_links.txt
+litellm.egg-info/requires.txt
+litellm.egg-info/top_level.txt
