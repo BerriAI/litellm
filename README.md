@@ -25,3 +25,6 @@ response = completion("chatgpt-test", messages, azure=True)
 ```
 pip install litellm
 ```
+
+# why did I build this 
+- **Need for simplicity**: My code started to get extremely complicated managing & translating calls between Azure, OpenAI, Cohere
