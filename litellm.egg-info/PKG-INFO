@@ -1,6 +1,6 @@
 Metadata-Version: 2.1
 Name: litellm
-Version: 0.1.0
+Version: 0.1.1
 Summary: Library to easily interface with LLM API providers
 Home-page: UNKNOWN
 Author: Ishaan Jaffer
