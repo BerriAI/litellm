@@ -18,3 +18,7 @@ response = completion("command-nightly", messages)
 response = completion("chatgpt-test", messages, azure=True)
 ```
 
+# installation
+```
+pip install litellm
+```
