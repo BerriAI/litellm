@@ -10,7 +10,6 @@ setup(
     ],
     install_requires=[
         'openai',
-        'cohere',
-        'os'
+        'cohere'
     ],
 )
