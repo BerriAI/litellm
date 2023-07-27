@@ -9,6 +9,10 @@ litellm manages:
 ```python
 from litellm import completion
 
+## set ENV variables
+os.environ["OPENAI_API_KEY"] = "openai key"
+os.environ["COHERE_API_KEY"] = "cohere key"
+
 messages = [{ "content": "Hello, how are you?","role": "user"}]
 
 # openai call
