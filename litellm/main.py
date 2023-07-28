@@ -34,6 +34,32 @@ def completion(model, messages, azure=False):
       engine=model,
       messages = messages
     )
+  elif "replicate" in model: 
+    prompt = " ".join([message["content"] for message in messages])
+    output = replicate.run(
+      model,
+      input={
+        "prompt": prompt,
+      })
+    print(f"output: {output}")
+    response = ""
+    for item in output: 
+      print(f"item: {item}")
+      response += item
+    new_response = {
+      "choices": [
+        {
+          "finish_reason": "stop",
+          "index": 0,
+          "message": {
+              "content": response,
+              "role": "assistant"
+          }
+        }
+      ]
+    }
+    print(f"new response: {new_response}")
+    response = new_response
   elif model in cohere_models:
     cohere_key = os.environ.get("COHERE_API_KEY")
     co = cohere.Client(cohere_key)
