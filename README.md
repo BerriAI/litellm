@@ -32,6 +32,9 @@ response = completion("chatgpt-test", messages, azure=True)
 pip install litellm
 ```
 
+# hosted version
+- [Grab time if you want access 👋](https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version)
+
 # why did I build this 
 - **Need for simplicity**: My code started to get extremely complicated managing & translating calls between Azure, OpenAI, Cohere
 
