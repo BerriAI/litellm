@@ -1,4 +1,4 @@
-# litellm
+# *litellm*
 [![](https://dcbadge.vercel.app/api/server/wuPM9dRgDw)](https://discord.gg/wuPM9dRgDw)
 
 a simple & light 100 line package to call OpenAI, Azure, Cohere, Anthropic API Endpoints 
