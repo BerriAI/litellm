@@ -36,4 +36,4 @@ pip install litellm
 - **Need for simplicity**: My code started to get extremely complicated managing & translating calls between Azure, OpenAI, Cohere
 
 # Support
-Contact me at ishaan@berri.ai
+Contact us at ishaan@berri.ai / krrish@berri.ai
