@@ -1,4 +1,4 @@
-from main import completion
+from litellm.main import completion
 import os
 
 ## Configs for Models ##
@@ -28,3 +28,7 @@ response = completion("command-nightly", messages)
 print("\nCohere call")
 print(response)
 
+# openrouter call
+response = completion("google/palm-2-codechat-bison", messages)
+print("\OpenRouter call")
+print(response)
