@@ -1,0 +1,15 @@
+site_name: liteLLM
+nav:
+  - ⚡ Getting Started:
+    - Installation & Quick Start: index.md
+  - 🤖 Supported LLM APIs: 
+    - Supported Completion & Chat APIs: supported.md
+    - Supported Embedding APIs: supported_embedding.md
+  - 💾 liteLLM Client - Logging Output: 
+    - Quick Start: advanced.md
+    - Output Integrations: client_integrations.md
+  - 💡 Support:
+    - Troubleshooting & Help: troubleshoot.md
+    - Contact Us: contact.md
+
+theme: readthedocs
