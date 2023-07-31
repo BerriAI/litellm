@@ -1,4 +1,4 @@
-name: Python Tests
+name: liteLLM Dev Tests
 
 on: [push, pull_request]
 
