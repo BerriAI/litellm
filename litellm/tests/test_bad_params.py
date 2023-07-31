@@ -1,6 +1,16 @@
 import sys, os
 import traceback
-sys.path.append('..')  # Adds the parent directory to the system path
+
+# Get the current directory of the script
+current_dir = os.path.dirname(os.path.abspath(__file__))
+
+# Get the parent directory by joining the current directory with '..'
+parent_dir = os.path.join(current_dir, '..')
+
+# Add the parent directory to the system path
+sys.path.append(parent_dir)
+
+
 import main
 from main import embedding, completion
 main.success_callback = ["posthog"]
