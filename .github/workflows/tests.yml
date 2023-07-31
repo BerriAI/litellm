@@ -1,0 +1,23 @@
+name: Python Tests
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: 3.x # Replace 'x' with the desired version (e.g., 3.6, 3.7, 3.8)
+
+    - name: Install dependencies
+      run: pip install -r litellm/requirements.txt
+
+    - name: Run tests
+      run: pytest litellm/tests
