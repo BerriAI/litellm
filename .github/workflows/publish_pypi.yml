@@ -9,6 +9,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v2
+        with:
+          node-version: '16'
 
       - name: Set up Python
         uses: actions/setup-python@v2
