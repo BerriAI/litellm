@@ -2,4 +2,5 @@ openai
 cohere
 func_timeout
 anthropic
+replicate
 pytest
