@@ -10,6 +10,16 @@ litellm manages:
 - translating inputs to completion and embedding endpoints
 - guarantees consistent output, text responses will always be available at `['choices'][0]['message']['content']`
 # usage
+## installation
+```
+pip install litellm
+```
+
+Stable version
+```
+pip install litellm==0.1.1
+```
+
 * Code Sample: [Getting Started Notebook](https://colab.research.google.com/drive/1gR3pY-JzDZahzpVdbGBtrNGDBmzUNJaJ?usp=sharing)
 ```python
 from litellm import completion
@@ -28,11 +38,6 @@ response = completion("command-nightly", messages)
 
 # azure openai call
 response = completion("chatgpt-test", messages, azure=True)
-```
-
-# installation
-```
-pip install litellm
 ```
 
 # hosted version
