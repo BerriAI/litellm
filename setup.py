@@ -12,5 +12,6 @@ setup(
         'openai',
         'cohere',
         'func_timeout'
+        'pytest'
     ],
 )
