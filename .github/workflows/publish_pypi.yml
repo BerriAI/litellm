@@ -8,9 +8,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v2
-        with:
-          node-version: '16'
+        uses: actions/checkout@v3
+
 
       - name: Set up Python
         uses: actions/setup-python@v2
