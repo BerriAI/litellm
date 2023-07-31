@@ -27,8 +27,3 @@ print(response)
 response = completion("command-nightly", messages)
 print("\nCohere call")
 print(response)
-
-# openrouter call
-response = completion("google/palm-2-codechat-bison", messages)
-print("\OpenRouter call")
-print(response)
