@@ -8,10 +8,28 @@ import threading
 import dotenv
 import traceback
 import subprocess
+import uuid
+
 ####### ENVIRONMENT VARIABLES ###################
-# Loading env variables using dotenv
-dotenv.load_dotenv()
+dotenv.load_dotenv() # Loading env variables using dotenv
 set_verbose = False
+sentry_sdk_instance = None
+capture_exception = None
+add_breadcrumb = None
+posthog = None
+slack_app = None
+alerts_channel = None
+success_callback = []
+failure_callback = []
+callback_list = []
+user_logger_fn = None
+additional_details = {}
+
+## Set verbose to true -> ```litellm.verbose = True```    
+def print_verbose(print_statement):
+  if set_verbose:
+    print(f"LiteLLM: {print_statement}")
+    print("Get help - https://discord.com/invite/wuPM9dRgDw")
 
 ####### COMPLETION MODELS ###################
 open_ai_chat_completion_models = [
@@ -36,13 +54,39 @@ open_ai_embedding_models = [
     'text-embedding-ada-002'
 ]
 
-#############################################
+####### CLIENT ################### make it easy to log completion/embedding runs
+def client(original_function):
+    def function_setup(): #just run once to check if user wants to send their data anywhere
+      try: 
+        if len(success_callback) > 0 or len(failure_callback) > 0 and len(callback_list) == 0: 
+          callback_list = list(set(success_callback + failure_callback))
+          set_callbacks(callback_list=callback_list)
+      except: # DO NOT BLOCK running the function because of this
+        print_verbose(f"[Non-Blocking] {traceback.format_exc()}")
+      pass
 
+    def wrapper(*args, **kwargs):
+        # Code to be executed before the embedding function
+        try:
+          function_setup()
+          ## EMBEDDING CALL
+          result = original_function(*args, **kwargs)
+          ## LOG SUCCESS 
+          my_thread = threading.Thread(target=handle_success, args=(args, kwargs)) # don't interrupt execution of main thread
+          my_thread.start()
+          return result
+        except Exception as e:
+          traceback_exception = traceback.format_exc()
+          my_thread = threading.Thread(target=handle_failure, args=(e, traceback.format_exc(), args, kwargs)) # don't interrupt execution of main thread
+          my_thread.start()
+          raise e
+    return wrapper
 
 ####### COMPLETION ENDPOINTS ################
 #############################################
-@func_set_timeout(10, allowOverride=True) ## https://pypi.org/project/func-timeout/ - timeouts, in case calls hang (e.g. Azure)
-def completion(model, messages, max_tokens=None, forceTimeout=10, azure=False, logger_fn=None):
+@client
+@func_set_timeout(60, allowOverride=True) ## https://pypi.org/project/func-timeout/ - timeouts, in case calls hang (e.g. Azure)
+def completion(model, messages, max_tokens=None, *, forceTimeout=60, azure=False, logger_fn=None): # ,*,.. requires optional params like forceTimeout, azure and logger_fn to be passed in as keyword arguments
   try:
     if azure == True:
       # azure configs
@@ -64,7 +108,7 @@ def completion(model, messages, max_tokens=None, forceTimeout=10, azure=False, l
         replicate_api_token = os.environ.get("REPLICATE_API_KEY")
         os.environ["REPLICATE_API_TOKEN"] = replicate_api_token
       prompt = " ".join([message["content"] for message in messages])
-      input = [{"prompt": prompt}]
+      input = {"prompt": prompt}
       if max_tokens:
         input["max_length"] = max_tokens # for t5 models 
         input["max_new_tokens"] = max_tokens # for llama2 models 
@@ -127,7 +171,7 @@ def completion(model, messages, max_tokens=None, forceTimeout=10, azure=False, l
           }
         ]
       }
-      print(f"new response: {new_response}")
+      print_verbose(f"new response: {new_response}")
       response = new_response
     elif model in cohere_models:
       cohere_key = os.environ.get("COHERE_API_KEY")
@@ -188,6 +232,7 @@ def completion(model, messages, max_tokens=None, forceTimeout=10, azure=False, l
 
 
 ### EMBEDDING ENDPOINTS ####################
+@client
 @func_set_timeout(60, allowOverride=True) ## https://pypi.org/project/func-timeout/
 def embedding(model, input=[], azure=False, forceTimeout=60, logger_fn=None):
   response = None
@@ -214,170 +259,104 @@ def embedding(model, input=[], azure=False, forceTimeout=60, logger_fn=None):
     print_verbose(f"response_value: {str(response)[:50]}")
   else: 
     logging(model=model, input=input, azure=azure, logger_fn=logger_fn)
+    args = locals()
+    raise ValueError(f"No valid embedding model args passed in - {args}")
   
   return response
 
 
-### CLIENT CLASS #################### make it easy to push completion/embedding runs to different sources -> sentry/posthog/slack, etc.
-class litellm_client:
-  def __init__(self, success_callback=[], failure_callback=[], verbose=False):  # Constructor
-      set_verbose = verbose
-      self.success_callback = success_callback
-      self.failure_callback = failure_callback
-      self.logger_fn = None # if user passes in their own logging function
-      self.callback_list = list(set(self.success_callback + self.failure_callback))
-      self.set_callbacks()
-  
-  ## COMPLETION CALL 
-  def completion(self, model, messages, max_tokens=None, forceTimeout=10, azure=False, logger_fn=None, additional_details={}) -> Any:
-    try:
-      self.logger_fn = logger_fn
-      response = completion(model=model, messages=messages, max_tokens=max_tokens, forceTimeout=forceTimeout, azure=azure, logger_fn=self.handle_input)
-      my_thread = threading.Thread(target=self.handle_success, args=(model, messages, additional_details)) # don't interrupt execution of main thread
-      my_thread.start()
-      return response
-    except Exception as e: 
-      args = locals() # get all the param values
-      self.handle_failure(e, args)
-      raise e
+####### HELPER FUNCTIONS ################
 
-  ## EMBEDDING CALL 
-  def embedding(self, model, input=[], azure=False, logger_fn=None, forceTimeout=60, additional_details={}) -> Any:
-    try:
-      self.logger_fn = logger_fn
-      response = embedding(model, input, azure=azure, logger_fn=self.handle_input)
-      my_thread = threading.Thread(target=self.handle_success, args=(model, input, additional_details)) # don't interrupt execution of main thread
-      my_thread.start()
-      return response
-    except Exception as e:
-      args = locals() # get all the param values 
-      self.handle_failure(e, args)
-      raise e
-
-
-  def set_callbacks(self):  #instantiate any external packages
-    for callback in self.callback_list: # only install what's required
-      if callback == "sentry":
-        try:
+def set_callbacks(callback_list):
+  global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel
+  for callback in callback_list:
+    if callback == "sentry":
+      try:
           import sentry_sdk
-        except ImportError:
+      except ImportError:
           print_verbose("Package 'sentry_sdk' is missing. Installing it...")
           subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'sentry_sdk'])
           import sentry_sdk
-        self.sentry_sdk = sentry_sdk
-        self.sentry_sdk.init(dsn=os.environ.get("SENTRY_API_URL"), traces_sample_rate=float(os.environ.get("SENTRY_API_TRACE_RATE")))
-        self.capture_exception = self.sentry_sdk.capture_exception
-        self.add_breadcrumb = self.sentry_sdk.add_breadcrumb
-      elif callback == "posthog":
-        try:
+      sentry_sdk_instance = sentry_sdk
+      sentry_sdk_instance.init(dsn=os.environ.get("SENTRY_API_URL"), traces_sample_rate=float(os.environ.get("SENTRY_API_TRACE_RATE")))
+      capture_exception = sentry_sdk_instance.capture_exception
+      add_breadcrumb = sentry_sdk_instance.add_breadcrumb
+    elif callback == "posthog":
+      try:
           from posthog import Posthog
-        except:
+      except ImportError:
           print_verbose("Package 'posthog' is missing. Installing it...")
           subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'posthog'])
           from posthog import Posthog
-        self.posthog = Posthog(
-            project_api_key=os.environ.get("POSTHOG_API_KEY"),
-            host=os.environ.get("POSTHOG_API_URL"))
-      elif callback == "slack":
-        try:
+      posthog = Posthog(
+        project_api_key=os.environ.get("POSTHOG_API_KEY"),
+        host=os.environ.get("POSTHOG_API_URL"))
+    elif callback == "slack":
+      try:
           from slack_bolt import App
-        except ImportError:
+      except ImportError:
           print_verbose("Package 'slack_bolt' is missing. Installing it...")
           subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'slack_bolt'])
           from slack_bolt import App
-        self.slack_app = App(
-          token=os.environ.get("SLACK_API_TOKEN"),
-          signing_secret=os.environ.get("SLACK_API_SECRET")
-        )
-        self.alerts_channel = os.environ["SLACK_API_CHANNEL"]
+      slack_app = App(
+        token=os.environ.get("SLACK_API_TOKEN"),
+        signing_secret=os.environ.get("SLACK_API_SECRET")
+      )
+      alerts_channel = os.environ["SLACK_API_CHANNEL"]
+      print_verbose(f"Initialized Slack App: {slack_app}")
 
-  def handle_input(self, model_call_details={}):
-      if len(model_call_details.keys()) > 0:
-        model = model_call_details["model"] if "model" in model_call_details else None
-        if model:
-          for callback in self.callback_list:
-            if callback == "sentry": # add a sentry breadcrumb if user passed in sentry integration
-              self.add_breadcrumb(
-                category=f'{model}',
-                message='Trying request model {} input {}'.format(model, json.dumps(model_call_details)),
-                level='info',
-              )
-          if self.logger_fn and callable(self.logger_fn):
-            self.logger_fn(model_call_details)
-      pass
 
-  def handle_success(self, model, messages, additional_details):
-    success_handler = additional_details.pop("success_handler", None)
-    failure_handler = additional_details.pop("failure_handler", None)
-    additional_details["litellm_model"] = str(model)
-    additional_details["litellm_messages"] = str(messages)
-    for callback in self.success_callback:
-      try:
-        if callback == "posthog":
-          ph_obj = {}
-          for detail in additional_details:
-            ph_obj[detail] = additional_details[detail]
-          event_name = additional_details["successful_event"] if "successful_event" in additional_details else "litellm.succes_query"
-          if "user_id" in additional_details:
-            self.posthog.capture(additional_details["user_id"], event_name, ph_obj)
-          else: 
-            self.posthog.capture(event_name, ph_obj)
-          pass
-        elif callback == "slack":
-          slack_msg = "" 
-          if len(additional_details.keys()) > 0:
-            for detail in additional_details: 
-              slack_msg += f"{detail}: {additional_details[detail]}\n"
-          slack_msg += f"Successful call"
-          self.slack_app.client.chat_postMessage(channel=self.alerts_channel, text=slack_msg)
-      except:
-        pass
+def handle_failure(exception, traceback_exception, args, kwargs):
+    print_verbose(f"handle_failure args: {args}")
+    print_verbose(f"handle_failure kwargs: {kwargs}")
     
-    if success_handler and callable(success_handler):
-      call_details = {
-        "model": model,
-        "messages": messages,
-        "additional_details": additional_details
-      }
-      success_handler(call_details)
-    pass
-
-  def handle_failure(self, exception, args):
-    args.pop("self")
-    additional_details = args.pop("additional_details", {})
-
     success_handler = additional_details.pop("success_handler", None)
     failure_handler = additional_details.pop("failure_handler", None)
+    
+    additional_details["Event_Name"] = additional_details.pop("failed_event_name", "litellm.failed_query")
+    print_verbose(f"self.failure_callback: {failure_callback}")
 
-    for callback in self.failure_callback:
+    print_verbose(f"additional_details: {additional_details}")
+    for callback in failure_callback:
       try:
         if callback == "slack":
           slack_msg = "" 
-          for param in args: 
-            slack_msg += f"{param}: {args[param]}\n"
-          if len(additional_details.keys()) > 0:
-            for detail in additional_details: 
-              slack_msg += f"{detail}: {additional_details[detail]}\n"
-          slack_msg += f"Traceback: {traceback.format_exc()}"
-          self.slack_app.client.chat_postMessage(channel=self.alerts_channel, text=slack_msg)
+          if len(kwargs) > 0: 
+            for key in kwargs: 
+              slack_msg += f"{key}: {kwargs[key]}\n"
+          if len(args) > 0:
+            for i, arg in enumerate(args):
+              slack_msg += f"LiteLLM_Args_{str(i)}: {arg}"
+          for detail in additional_details: 
+            slack_msg += f"{detail}: {additional_details[detail]}\n"
+          slack_msg += f"Traceback: {traceback_exception}"
+          print_verbose(f"This is the slack message: {slack_msg}")
+          slack_app.client.chat_postMessage(channel=alerts_channel, text=slack_msg)
         elif callback == "sentry":
-          self.capture_exception(exception)
-        elif callback == "posthog":
-          if len(additional_details.keys()) > 0:
-            ph_obj = {}
-            for param in args: 
-              ph_obj[param] += args[param]
-            for detail in additional_details:
-              ph_obj[detail] = additional_details[detail]
-            event_name = additional_details["failed_event"] if "failed_event" in additional_details else "litellm.failed_query"
-            if "user_id" in additional_details:
-              self.posthog.capture(additional_details["user_id"], event_name, ph_obj)
-            else: 
-              self.posthog.capture(event_name, ph_obj)
-          else: 
-            pass
+          capture_exception(exception)
+        elif callback == "posthog": 
+          print_verbose(f"inside posthog, additional_details: {len(additional_details.keys())}")
+          ph_obj = {}
+          if len(kwargs) > 0: 
+            ph_obj = kwargs
+          if len(args) > 0:
+            for i, arg in enumerate(args):
+              ph_obj["litellm_args_" + str(i)] = arg
+          print_verbose(f"ph_obj: {ph_obj}")
+          for detail in additional_details:
+            ph_obj[detail] = additional_details[detail]
+          event_name = additional_details["Event_Name"]
+          print_verbose(f"PostHog Event Name: {event_name}")
+          if "user_id" in additional_details:
+            posthog.capture(additional_details["user_id"], event_name, ph_obj)
+          else: # PostHog calls require a unique id to identify a user - https://posthog.com/docs/libraries/python
+            print(f"ph_obj: {ph_obj})")
+            unique_id = str(uuid.uuid4())
+            posthog.capture(unique_id, event_name)
+            print_verbose(f"successfully logged to PostHog!")
       except:
-        print(f"got an error calling {callback} - {traceback.format_exc()}")
+        print_verbose(f"Error Occurred while logging failure: {traceback.format_exc()}")
+        pass
     
     if failure_handler and callable(failure_handler):
       call_details = {
@@ -386,7 +365,51 @@ class litellm_client:
       }
       failure_handler(call_details)
     pass
-####### HELPER FUNCTIONS ################
+
+
+def handle_input(model_call_details={}):
+      if len(model_call_details.keys()) > 0:
+        model = model_call_details["model"] if "model" in model_call_details else None
+        if model:
+          for callback in callback_list:
+            if callback == "sentry": # add a sentry breadcrumb if user passed in sentry integration
+              add_breadcrumb(
+                category=f'{model}',
+                message='Trying request model {} input {}'.format(model, json.dumps(model_call_details)),
+                level='info',
+              )
+          if user_logger_fn and callable(user_logger_fn):
+            user_logger_fn(model_call_details)
+      pass
+
+def handle_success(*args, **kwargs):
+  success_handler = additional_details.pop("success_handler", None)
+  failure_handler = additional_details.pop("failure_handler", None)
+  additional_details["Event_Name"] = additional_details.pop("successful_event_name", "litellm.succes_query")
+  for callback in success_callback:
+    try:
+      if callback == "posthog":
+        ph_obj = {}
+        for detail in additional_details:
+          ph_obj[detail] = additional_details[detail]
+        event_name = additional_details["Event_Name"]
+        if "user_id" in additional_details:
+          posthog.capture(additional_details["user_id"], event_name, ph_obj)
+        else: # PostHog calls require a unique id to identify a user - https://posthog.com/docs/libraries/python
+          unique_id = str(uuid.uuid4())
+          posthog.capture(unique_id, event_name, ph_obj)
+        pass
+      elif callback == "slack":
+        slack_msg = "" 
+        for detail in additional_details: 
+          slack_msg += f"{detail}: {additional_details[detail]}\n"
+        slack_app.client.chat_postMessage(channel=alerts_channel, text=slack_msg)
+    except:
+      pass
+  
+  if success_handler and callable(success_handler):
+    success_handler(args, kwargs)
+  pass
 
 #Logging function -> log the exact model details + what's being sent | Non-Blocking
 def logging(model, input, azure=False, additional_args={}, logger_fn=None):
@@ -395,35 +418,26 @@ def logging(model, input, azure=False, additional_args={}, logger_fn=None):
     model_call_details["model"] = model
     model_call_details["input"] = input
     model_call_details["azure"] = azure
+    # log additional call details -> api key, etc. 
+    if azure == True or model in open_ai_chat_completion_models or model in open_ai_chat_completion_models or model in open_ai_embedding_models:
+      model_call_details["api_type"] = openai.api_type
+      model_call_details["api_base"] = openai.api_base
+      model_call_details["api_version"] = openai.api_version
+      model_call_details["api_key"] = openai.api_key
+    elif "replicate" in model:
+      model_call_details["api_key"] = os.environ.get("REPLICATE_API_TOKEN")
+    elif model in anthropic_models:
+      model_call_details["api_key"] = os.environ.get("ANTHROPIC_API_KEY")
+    elif model in cohere_models:
+      model_call_details["api_key"] = os.environ.get("COHERE_API_KEY")
     model_call_details["additional_args"] = additional_args
+    ## Logging
+    print_verbose(f"Basic model call details: {model_call_details}")
     if logger_fn and callable(logger_fn):
       try:
-        # log additional call details -> api key, etc. 
-        if azure == True or model in open_ai_chat_completion_models or model in open_ai_chat_completion_models or model in open_ai_embedding_models:
-          model_call_details["api_type"] = openai.api_type
-          model_call_details["api_base"] = openai.api_base
-          model_call_details["api_version"] = openai.api_version
-          model_call_details["api_key"] = openai.api_key
-        elif "replicate" in model:
-          model_call_details["api_key"] = os.environ.get("REPLICATE_API_TOKEN")
-        elif model in anthropic_models:
-          model_call_details["api_key"] = os.environ.get("ANTHROPIC_API_KEY")
-        elif model in cohere_models:
-          model_call_details["api_key"] = os.environ.get("COHERE_API_KEY")
-        
         logger_fn(model_call_details) # Expectation: any logger function passed in by the user should accept a dict object
       except:
-        print_verbose(f"Basic model call details: {model_call_details}")
         print_verbose(f"[Non-Blocking] Exception occurred while logging {traceback.format_exc()}")
         pass
-    else:
-      print_verbose(f"Basic model call details: {model_call_details}")
-      pass
   except:
     pass
-
-## Set verbose to true -> ```litellm.verbose = True```    
-def print_verbose(print_statement):
-  if set_verbose:
-    print(f"LiteLLM: {print_statement}")
-    print("Get help - https://discord.com/invite/wuPM9dRgDw")

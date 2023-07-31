@@ -2,10 +2,9 @@ import sys, os
 import traceback
 sys.path.append('..')  # Adds the parent directory to the system path
 import main
-from main import litellm_client
-client = litellm_client(success_callback=["posthog"], failure_callback=["slack", "sentry", "posthog"], verbose=True)
-completion = client.completion
-embedding = client.embedding
+from main import embedding, completion
+main.success_callback = ["posthog"]
+main.failure_callback = ["slack", "sentry", "posthog"]
 
 main.set_verbose = True
 
