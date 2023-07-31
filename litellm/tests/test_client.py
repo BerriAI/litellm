@@ -2,26 +2,18 @@ import sys, os
 import traceback
 sys.path.append('..')  # Adds the parent directory to the system path
 import main
-from main import litellm_client
-client = litellm_client(success_callback=["posthog"], failure_callback=["slack", "sentry", "posthog"], verbose=True)
-completion = client.completion
-embedding = client.embedding
+from main import embedding, completion
+main.success_callback = ["posthog"]
+main.failure_callback = ["slack", "sentry", "posthog"]
 
-main.set_verbose = True
+# main.set_verbose = True
 
 def logger_fn(model_call_object: dict):
-    print(f"model call details: {model_call_object}")
+    # print(f"model call details: {model_call_object}")
+    pass
 
 user_message = "Hello, how are you?"
 messages = [{ "content": user_message,"role": "user"}]
-
-# test on openai completion call 
-try:
-    response = completion(model="gpt-3.5-turbo", messages=messages, logger_fn=logger_fn)
-except:
-    print(f"error occurred: {traceback.format_exc()}") 
-    pass
-
 
 # test on openai completion call 
 try:
