@@ -4,3 +4,4 @@ func_timeout
 anthropic
 replicate
 pytest
+dotenv
