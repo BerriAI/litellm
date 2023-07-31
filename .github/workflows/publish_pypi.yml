@@ -4,7 +4,6 @@ on:
     branches:
       - main  # You can change this to the branch you want to publish from
     paths:
-      - 'litellm/**'
       - 'setup.py'
 jobs:
   build:
