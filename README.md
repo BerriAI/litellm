@@ -1,6 +1,6 @@
 # *🚅 litellm*
 [![Publish to PyPI](https://github.com/BerriAI/litellm/actions/workflows/publish_pypi.yml/badge.svg?branch=main)](https://github.com/BerriAI/litellm/actions/workflows/publish_pypi.yml) 
-![PyPI Version](https://img.shields.io/pypi/v/litellm.svg)
+[![PyPI Version](https://img.shields.io/pypi/v/litellm.svg)](https://pypi.org/project/litellm/)
 
 [![](https://dcbadge.vercel.app/api/server/wuPM9dRgDw)](https://discord.gg/wuPM9dRgDw)
 
