@@ -19,12 +19,12 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
+          pip install twine
+          pip install wheel
+          pip install --upgrade setuptools
 
       - name: Build package
-        run: python setup.py sdist bdist_wheel
-
-      - name: Install twine
-        run: pip install twine
+        run: python setup.py sdist bdist_wheel    
 
       - name: Upload to PyPI
         env:
