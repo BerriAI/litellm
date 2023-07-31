@@ -1,0 +1,33 @@
+name: Publish to PyPI
+on:
+  push:
+    branches:
+      - master  # You can change this to the branch you want to publish from
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: 3.8  # You can change this to the Python version required for your package
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Build package
+        run: python setup.py sdist bdist_wheel
+
+      - name: Install twine
+        run: pip install twine
+
+      - name: Upload to PyPI
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
+        run: twine upload dist/*
