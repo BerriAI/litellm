@@ -10,6 +10,7 @@ setup(
     ],
     install_requires=[
         'openai',
-        'cohere'
+        'cohere',
+        'func_timeout'
     ],
 )
