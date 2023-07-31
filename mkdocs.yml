@@ -12,6 +12,6 @@ nav:
     - Troubleshooting & Help: troubleshoot.md
     - Contact Us: contact.md
   - Contributing:
-    - Contributing to liteLLM: contributing.md
+    - Contributing to Docs: contributing.md
 
 theme: readthedocs
