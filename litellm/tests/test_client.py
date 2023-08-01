@@ -3,6 +3,8 @@
 
 import sys, os
 import traceback
+import pytest
+
 sys.path.insert(0, os.path.abspath('../..'))  # Adds the parent directory to the system path
 import litellm
 from litellm import embedding, completion
@@ -19,37 +21,39 @@ def logger_fn(model_call_object: dict):
 user_message = "Hello, how are you?"
 messages = [{ "content": user_message,"role": "user"}]
 
-# test on openai completion call 
-try:
-    response = completion(model="gpt-3.5-turbo", messages=messages, logger_fn=logger_fn)
-except:
-    print(f"error occurred: {traceback.format_exc()}") 
-    pass
+def test_completion_openai():
+    try:
+        response = completion(model="gpt-3.5-turbo", messages=messages, logger_fn=logger_fn)
+        # Add any assertions here to check the response
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
-# test on non-openai completion call 
-try:
-    response = completion(model="claude-instant-1", messages=messages, logger_fn=logger_fn)
-except:
-    print(f"error occurred: {traceback.format_exc()}") 
-    pass
+def test_completion_non_openai():
+    try:
+        response = completion(model="claude-instant-1", messages=messages, logger_fn=logger_fn)
+        # Add any assertions here to check the response
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
-# test on openai embedding call 
-try: 
-    response = embedding(model='text-embedding-ada-002', input=[user_message], logger_fn=logger_fn)
-    print(f"response: {str(response)[:50]}")
-except:
-    traceback.print_exc()
+def test_embedding_openai():
+    try:
+        response = embedding(model='text-embedding-ada-002', input=[user_message], logger_fn=logger_fn)
+        # Add any assertions here to check the response
+        print(f"response: {str(response)[:50]}")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
-# test on bad azure openai embedding call -> missing azure flag and this isn't an embedding model
-try: 
-    response = embedding(model='chatgpt-test', input=[user_message], logger_fn=logger_fn)
-    print(f"response: {str(response)[:50]}")
-except:
-    traceback.print_exc()
-
-# test on good azure openai embedding call 
-try: 
-    response = embedding(model='azure-embedding-model', input=[user_message], azure=True, logger_fn=logger_fn)
-    print(f"response: {str(response)[:50]}")
-except:
-    traceback.print_exc()
+def test_bad_azure_embedding():
+    try:
+        response = embedding(model='chatgpt-test', input=[user_message], logger_fn=logger_fn)
+        # Add any assertions here to check the response
+        print(f"response: {str(response)[:50]}")
+    except Exception as e:
+        pass
+def test_good_azure_embedding():
+    try:
+        response = embedding(model='azure-embedding-model', input=[user_message], azure=True, logger_fn=logger_fn)
+        # Add any assertions here to check the response
+        print(f"response: {str(response)[:50]}")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
