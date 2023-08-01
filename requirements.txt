@@ -1,5 +1,5 @@
 openai==0.27.0
-cohere==valid_version
+cohere==4.18.0
 func_timeout==4.3.5
 anthropic==0.1.0
 replicate==0.4.1
