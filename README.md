@@ -19,12 +19,6 @@ Read the docs - https://litellm.readthedocs.io/en/latest/
 pip install litellm
 ```
 
-Stable version
-```
-pip install litellm==0.1.1
-```
-
-* Code Sample: [Getting Started Notebook](https://colab.research.google.com/drive/1gR3pY-JzDZahzpVdbGBtrNGDBmzUNJaJ?usp=sharing)
 ```python
 from litellm import completion
 
@@ -46,6 +40,12 @@ response = completion("chatgpt-test", messages, azure=True)
 
 # openrouter call
 response = completion("google/palm-2-codechat-bison", messages)
+```
+Code Sample: [Getting Started Notebook](https://colab.research.google.com/drive/1gR3pY-JzDZahzpVdbGBtrNGDBmzUNJaJ?usp=sharing)
+
+Stable version
+```
+pip install litellm==0.1.1
 ```
 
 # hosted version
