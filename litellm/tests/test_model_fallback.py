@@ -1,14 +1,18 @@
+#### What this tests ####
+#    This tests error handling + logging (esp. for sentry breadcrumbs)
+
 import sys, os
 import traceback
-sys.path.append('..')  # Adds the parent directory to the system path
-import main
-from main import embedding, completion
-main.success_callback = ["posthog"]
-main.failure_callback = ["slack", "sentry", "posthog"]
+sys.path.insert(0, os.path.abspath('../..'))  # Adds the parent directory to the system path
+import litellm
+from litellm import embedding, completion
 
-main.set_verbose = True
+litellm.success_callback = ["posthog"]
+litellm.failure_callback = ["slack", "sentry", "posthog"]
 
-model_fallback_list = ["replicate/llama-2-70b-chat:2c1608e18606fad2812020dc541930f2d0495ce32eee50074220b87300bc16e1", "claude-instant-1", "gpt-3.5-turbo"]
+litellm.set_verbose = True
+
+model_fallback_list = ["replicate/llama-2-70b-chat:2c1608e18606fad2812020dc541930f2d0495ce32eee50074220b87300bc16e1", "replicate/llama-2-70b-chat:2c1608e18606fad2812020dc541930f2d0495ce32eee50074220b87300bc16e1", "chatgpt-test"]
 
 user_message = "Hello, how are you?"
 messages = [{ "content": user_message,"role": "user"}]
@@ -16,10 +20,17 @@ messages = [{ "content": user_message,"role": "user"}]
 # for _ in range(10):
 for model in model_fallback_list:
     try:
+        response = embedding(model="text-embedding-ada-002", input=[user_message])
         response = completion(model=model, messages=messages)
         print(response)
+<<<<<<< HEAD
         if response != None:
             break
     except Exception as e:
+=======
+        # if response != None:
+        #     break
+    except:
+>>>>>>> bd42ec8 (clean up code files)
         print(f"error occurred: {traceback.format_exc()}") 
         raise e
