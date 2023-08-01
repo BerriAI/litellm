@@ -23,6 +23,6 @@ model_val = "krrish is a model"
 # test on empty
 try:
     response = completion(model=model_val, messages=messages)
-except:
-    print(f"error occurred: {traceback.format_exc()}") 
+except Exception as e:
+    print(f"error occurred: {e}") 
     pass

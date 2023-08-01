@@ -283,8 +283,8 @@ def completion(
           ],
       }
       response = new_response
-    else: 
-      logging(model=model, input=messages, azure=azure, logger_fn=logger_fn)
+    else:
+      raise Exception(f"Model '{model}' not found. Please check your model name and try again.")
     return response
   except Exception as e:
     logging(model=model, input=messages, azure=azure, additional_args={"max_tokens": max_tokens}, logger_fn=logger_fn)
