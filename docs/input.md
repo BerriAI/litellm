@@ -2,13 +2,16 @@
 ## Input - Request Body
 **`model`**
 <span style="color:gray; font-size: 0.8em;">string</span>  <span style="color:red; font-size: 0.8em;">Required</span><br>
-ID of the model to use. See the model endpoint compatibility table for details on which models work with the Chat API.
+ID of the model to use. See the <a href="/../supported" target="_blank" rel="noopener noreferrer">model endpoint compatibility</a>
+ table for details on which models work with the Chat API.
 
 ---
 
 **`messages`**
 <span style="color:gray; font-size: 0.8em;">array</span>  <span style="color:red; font-size: 0.8em;">Required</span><br>
-A list of messages comprising the conversation so far. 
+<a></a>
+A list of messages comprising the conversation so far. <a href="https://github.com/openai/openai-cookbook/blob/main/examples/How_to_format_inputs_to_ChatGPT_models.ipynb" target="_blank" rel="noopener noreferrer">Example Python Code</a>
+
 
 ---
 >> **`role`**
