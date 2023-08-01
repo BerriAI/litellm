@@ -25,6 +25,6 @@ open_ai_embedding_models = [
     'text-embedding-ada-002'
 ]
 
-from .utils import client, logging  # Import all the symbols from main.py
+from .utils import client, logging, exception_type  # Import all the symbols from main.py
 from .main import *  # Import all the symbols from main.py
 

@@ -6,7 +6,7 @@ import traceback
 import dotenv
 import traceback
 import litellm
-from litellm import client, logging
+from litellm import client, logging, exception_type
 from litellm import success_callback, failure_callback
 import random
 ####### ENVIRONMENT VARIABLES ###################
@@ -76,6 +76,7 @@ def completion(
       temperature=temperature, top_p=top_p, n=n, stream=stream, stop=stop, max_tokens=max_tokens,
       presence_penalty=presence_penalty, frequency_penalty=frequency_penalty, logit_bias=logit_bias, user=user
     )
+    print_verbose(f"os environment variables: {os.environ}")
     if azure == True:
       # azure configs
       openai.api_type = "azure"
@@ -120,7 +121,7 @@ def completion(
     elif "replicate" in model:
       # replicate defaults to os.environ.get("REPLICATE_API_TOKEN")
       # checking in case user set it to REPLICATE_API_KEY instead 
-      if not os.environ.get("REPLICATE_API_TOKEN") and  os.environ.get("REPLICATE_API_KEY"):
+      if not os.environ.get("REPLICATE_API_TOKEN") and os.environ.get("REPLICATE_API_KEY"):
         replicate_api_token = os.environ.get("REPLICATE_API_KEY")
         os.environ["REPLICATE_API_TOKEN"] = replicate_api_token
       prompt = " ".join([message["content"] for message in messages])
@@ -207,7 +208,7 @@ def completion(
                   "finish_reason": "stop",
                   "index": 0,
                   "message": {
-                      "content": response[0],
+                      "content": response[0].text,
                       "role": "assistant"
                   }
               }
@@ -246,8 +247,10 @@ def completion(
       raise ValueError(f"No valid completion model args passed in - {args}")
     return response
   except Exception as e:
-    logging(model=model, input=messages, azure=azure, additional_args={"max_tokens": max_tokens}, logger_fn=logger_fn)
-    raise e
+    # log the original exception
+    logging(model=model, input=messages, azure=azure, additional_args={"max_tokens": max_tokens}, logger_fn=logger_fn, exception=e)
+    ## Map to OpenAI Exception
+    raise exception_type(model=model, original_exception=e)
 
 
 ### EMBEDDING ENDPOINTS ####################
