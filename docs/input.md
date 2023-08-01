@@ -4,13 +4,13 @@ The Input params are **exactly the same** as the
 
 In addition, liteLLM allows you to pass in the following **Optional** liteLLM args:<br>
 `forceTimeout`, `azure`, `logger_fn`, `verbose`
+ <!-- TODO: Add info about the following params -->
 
 ## Input - Request Body
 
 **`model`**
 <span style="color:gray; font-size: 0.8em;">string</span>  <span style="color:red; font-size: 0.8em;">Required</span><br>
-ID of the model to use. See the <a href="/../supported" target="_blank" rel="noopener noreferrer">model endpoint compatibility</a>
- table for details on which models work with the Chat API.
+ID of the model to use. See the <a href="https://litellm.readthedocs.io/en/latest/supported" target="_blank" rel="noopener noreferrer">model endpoint compatibility</a> table for details on which models work with the Chat API.
 
 ---
 
