@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='litellm',
-    version='0.1.206',
+    version='0.1.207',
     description='Library to easily interface with LLM API providers',
     author='BerriAI',
     packages=[
@@ -11,11 +11,10 @@ setup(
     install_requires=[
         'openai',
         'cohere',
-        'func_timeout',
         'pytest',
         'anthropic',
         'replicate',
         'python-dotenv',
-        'openai[datalib]'
+        'openai[datalib]',
     ],
 )

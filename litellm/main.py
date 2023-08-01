@@ -6,8 +6,7 @@ import traceback
 import dotenv
 import traceback
 import litellm
-from litellm import client, logging, exception_type
-from litellm import success_callback, failure_callback
+from litellm import client, logging, exception_type, timeout, success_callback, failure_callback
 import random
 ####### ENVIRONMENT VARIABLES ###################
 dotenv.load_dotenv() # Loading env variables using dotenv
@@ -59,7 +58,7 @@ def get_optional_params(
 ####### COMPLETION ENDPOINTS ################
 #############################################
 @client
-@func_set_timeout(180, allowOverride=True) ## https://pypi.org/project/func-timeout/ - timeouts, in case calls hang (e.g. Azure)
+@timeout(60) ## set timeouts, in case calls hang (e.g. Azure)
 def completion(
     model, messages, # required params
     # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
@@ -67,7 +66,7 @@ def completion(
     temperature=1, top_p=1, n=1, stream=False, stop=None, max_tokens=float('inf'),
     presence_penalty=0, frequency_penalty=0, logit_bias={}, user="",
     # Optional liteLLM function params
-    *, forceTimeout=60, azure=False, logger_fn=None, verbose=False
+    *, force_timeout=60, azure=False, logger_fn=None, verbose=False
   ):
   try:
     # check if user passed in any of the OpenAI optional params
