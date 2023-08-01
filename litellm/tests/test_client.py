@@ -1,12 +1,16 @@
+#### What this tests ####
+#    This tests error logging (with custom user functions) for the `completion` + `embedding` endpoints w/ callbacks
+
 import sys, os
 import traceback
-sys.path.append('..')  # Adds the parent directory to the system path
-import main
-from main import embedding, completion
-main.success_callback = ["posthog"]
-main.failure_callback = ["slack", "sentry", "posthog"]
+sys.path.insert(0, os.path.abspath('../..'))  # Adds the parent directory to the system path
+import litellm
+from litellm import embedding, completion
 
-# main.set_verbose = True
+litellm.success_callback = ["posthog"]
+litellm.failure_callback = ["slack", "sentry", "posthog"]
+
+# litellm.set_verbose = True
 
 def logger_fn(model_call_object: dict):
     # print(f"model call details: {model_call_object}")
