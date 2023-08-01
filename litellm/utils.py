@@ -101,130 +101,139 @@ def client(original_function):
 ####### HELPER FUNCTIONS ################
 def set_callbacks(callback_list):
   global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel
-  for callback in callback_list:
-    if callback == "sentry":
-      try:
-          import sentry_sdk
-      except ImportError:
-          print_verbose("Package 'sentry_sdk' is missing. Installing it...")
-          subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'sentry_sdk'])
-          import sentry_sdk
-      sentry_sdk_instance = sentry_sdk
-      sentry_sdk_instance.init(dsn=os.environ.get("SENTRY_API_URL"), traces_sample_rate=float(os.environ.get("SENTRY_API_TRACE_RATE")))
-      capture_exception = sentry_sdk_instance.capture_exception
-      add_breadcrumb = sentry_sdk_instance.add_breadcrumb 
-    elif callback == "posthog":
-      try:
-          from posthog import Posthog
-      except ImportError:
-          print_verbose("Package 'posthog' is missing. Installing it...")
-          subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'posthog'])
-          from posthog import Posthog
-      posthog = Posthog(
-        project_api_key=os.environ.get("POSTHOG_API_KEY"),
-        host=os.environ.get("POSTHOG_API_URL"))
-    elif callback == "slack":
-      try:
-          from slack_bolt import App
-      except ImportError:
-          print_verbose("Package 'slack_bolt' is missing. Installing it...")
-          subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'slack_bolt'])
-          from slack_bolt import App
-      slack_app = App(
-        token=os.environ.get("SLACK_API_TOKEN"),
-        signing_secret=os.environ.get("SLACK_API_SECRET")
-      )
-      alerts_channel = os.environ["SLACK_API_CHANNEL"]
-      print_verbose(f"Initialized Slack App: {slack_app}")
+  try:
+    for callback in callback_list:
+      if callback == "sentry":
+        try:
+            import sentry_sdk
+        except ImportError:
+            print_verbose("Package 'sentry_sdk' is missing. Installing it...")
+            subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'sentry_sdk'])
+            import sentry_sdk
+        sentry_sdk_instance = sentry_sdk
+        sentry_sdk_instance.init(dsn=os.environ.get("SENTRY_API_URL"), traces_sample_rate=float(os.environ.get("SENTRY_API_TRACE_RATE")))
+        capture_exception = sentry_sdk_instance.capture_exception
+        add_breadcrumb = sentry_sdk_instance.add_breadcrumb 
+      elif callback == "posthog":
+        try:
+            from posthog import Posthog
+        except ImportError:
+            print_verbose("Package 'posthog' is missing. Installing it...")
+            subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'posthog'])
+            from posthog import Posthog
+        posthog = Posthog(
+          project_api_key=os.environ.get("POSTHOG_API_KEY"),
+          host=os.environ.get("POSTHOG_API_URL"))
+      elif callback == "slack":
+        try:
+            from slack_bolt import App
+        except ImportError:
+            print_verbose("Package 'slack_bolt' is missing. Installing it...")
+            subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'slack_bolt'])
+            from slack_bolt import App
+        slack_app = App(
+          token=os.environ.get("SLACK_API_TOKEN"),
+          signing_secret=os.environ.get("SLACK_API_SECRET")
+        )
+        alerts_channel = os.environ["SLACK_API_CHANNEL"]
+        print_verbose(f"Initialized Slack App: {slack_app}")
+  except:
+    pass
 
 
 def handle_failure(exception, traceback_exception, args, kwargs):
     global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel
-    print_verbose(f"handle_failure args: {args}")
-    print_verbose(f"handle_failure kwargs: {kwargs}")
-    
+    try:
+      print_verbose(f"handle_failure args: {args}")
+      print_verbose(f"handle_failure kwargs: {kwargs}")
+      
+      success_handler = additional_details.pop("success_handler", None)
+      failure_handler = additional_details.pop("failure_handler", None)
+      
+      additional_details["Event_Name"] = additional_details.pop("failed_event_name", "litellm.failed_query")
+      print_verbose(f"self.failure_callback: {litellm.failure_callback}")
+
+      print_verbose(f"additional_details: {additional_details}")
+      for callback in litellm.failure_callback:
+        try:
+          if callback == "slack":
+            slack_msg = "" 
+            if len(kwargs) > 0: 
+              for key in kwargs: 
+                slack_msg += f"{key}: {kwargs[key]}\n"
+            if len(args) > 0:
+              for i, arg in enumerate(args):
+                slack_msg += f"LiteLLM_Args_{str(i)}: {arg}"
+            for detail in additional_details: 
+              slack_msg += f"{detail}: {additional_details[detail]}\n"
+            slack_msg += f"Traceback: {traceback_exception}"
+            slack_app.client.chat_postMessage(channel=alerts_channel, text=slack_msg)
+          elif callback == "sentry":
+            capture_exception(exception)
+          elif callback == "posthog": 
+            print_verbose(f"inside posthog, additional_details: {len(additional_details.keys())}")
+            ph_obj = {}
+            if len(kwargs) > 0: 
+              ph_obj = kwargs
+            if len(args) > 0:
+              for i, arg in enumerate(args):
+                ph_obj["litellm_args_" + str(i)] = arg
+            for detail in additional_details:
+              ph_obj[detail] = additional_details[detail]
+            event_name = additional_details["Event_Name"]
+            print_verbose(f"ph_obj: {ph_obj}")
+            print_verbose(f"PostHog Event Name: {event_name}")
+            if "user_id" in additional_details:
+              posthog.capture(additional_details["user_id"], event_name, ph_obj)
+            else: # PostHog calls require a unique id to identify a user - https://posthog.com/docs/libraries/python
+              unique_id = str(uuid.uuid4())
+              posthog.capture(unique_id, event_name)
+              print_verbose(f"successfully logged to PostHog!")
+        except:
+          print_verbose(f"Error Occurred while logging failure: {traceback.format_exc()}")
+          pass
+      
+      if failure_handler and callable(failure_handler):
+        call_details = {
+          "exception": exception,
+          "additional_details": additional_details
+        }
+        failure_handler(call_details)
+      pass
+    except:
+      pass
+
+def handle_success(*args, **kwargs):
+  try:
     success_handler = additional_details.pop("success_handler", None)
     failure_handler = additional_details.pop("failure_handler", None)
-    
-    additional_details["Event_Name"] = additional_details.pop("failed_event_name", "litellm.failed_query")
-    print_verbose(f"self.failure_callback: {litellm.failure_callback}")
-
-    print_verbose(f"additional_details: {additional_details}")
-    for callback in litellm.failure_callback:
+    additional_details["Event_Name"] = additional_details.pop("successful_event_name", "litellm.succes_query")
+    for callback in litellm.success_callback:
       try:
-        if callback == "slack":
-          slack_msg = "" 
-          if len(kwargs) > 0: 
-            for key in kwargs: 
-              slack_msg += f"{key}: {kwargs[key]}\n"
-          if len(args) > 0:
-            for i, arg in enumerate(args):
-              slack_msg += f"LiteLLM_Args_{str(i)}: {arg}"
-          for detail in additional_details: 
-            slack_msg += f"{detail}: {additional_details[detail]}\n"
-          slack_msg += f"Traceback: {traceback_exception}"
-          slack_app.client.chat_postMessage(channel=alerts_channel, text=slack_msg)
-        elif callback == "sentry":
-          capture_exception(exception)
-        elif callback == "posthog": 
-          print_verbose(f"inside posthog, additional_details: {len(additional_details.keys())}")
+        if callback == "posthog":
           ph_obj = {}
-          if len(kwargs) > 0: 
-            ph_obj = kwargs
-          if len(args) > 0:
-            for i, arg in enumerate(args):
-              ph_obj["litellm_args_" + str(i)] = arg
           for detail in additional_details:
             ph_obj[detail] = additional_details[detail]
           event_name = additional_details["Event_Name"]
-          print_verbose(f"ph_obj: {ph_obj}")
-          print_verbose(f"PostHog Event Name: {event_name}")
           if "user_id" in additional_details:
             posthog.capture(additional_details["user_id"], event_name, ph_obj)
           else: # PostHog calls require a unique id to identify a user - https://posthog.com/docs/libraries/python
             unique_id = str(uuid.uuid4())
-            posthog.capture(unique_id, event_name)
-            print_verbose(f"successfully logged to PostHog!")
+            posthog.capture(unique_id, event_name, ph_obj)
+          pass
+        elif callback == "slack":
+          slack_msg = "" 
+          for detail in additional_details: 
+            slack_msg += f"{detail}: {additional_details[detail]}\n"
+          slack_app.client.chat_postMessage(channel=alerts_channel, text=slack_msg)
       except:
-        print_verbose(f"Error Occurred while logging failure: {traceback.format_exc()}")
         pass
-    
-    if failure_handler and callable(failure_handler):
-      call_details = {
-        "exception": exception,
-        "additional_details": additional_details
-      }
-      failure_handler(call_details)
-    pass
 
-def handle_success(*args, **kwargs):
-  success_handler = additional_details.pop("success_handler", None)
-  failure_handler = additional_details.pop("failure_handler", None)
-  additional_details["Event_Name"] = additional_details.pop("successful_event_name", "litellm.succes_query")
-  for callback in litellm.success_callback:
-    try:
-      if callback == "posthog":
-        ph_obj = {}
-        for detail in additional_details:
-          ph_obj[detail] = additional_details[detail]
-        event_name = additional_details["Event_Name"]
-        if "user_id" in additional_details:
-          posthog.capture(additional_details["user_id"], event_name, ph_obj)
-        else: # PostHog calls require a unique id to identify a user - https://posthog.com/docs/libraries/python
-          unique_id = str(uuid.uuid4())
-          posthog.capture(unique_id, event_name, ph_obj)
-        pass
-      elif callback == "slack":
-        slack_msg = "" 
-        for detail in additional_details: 
-          slack_msg += f"{detail}: {additional_details[detail]}\n"
-        slack_app.client.chat_postMessage(channel=alerts_channel, text=slack_msg)
-    except:
-      pass
-  
-  if success_handler and callable(success_handler):
-    success_handler(args, kwargs)
-  pass
+    if success_handler and callable(success_handler):
+      success_handler(args, kwargs)
+    pass
+  except:
+    pass
 
 
 def exception_type(model, original_exception):

@@ -10,8 +10,6 @@ import random
 ####### ENVIRONMENT VARIABLES ###################
 dotenv.load_dotenv() # Loading env variables using dotenv
 
-
-
 def get_optional_params(
     # 12 optional params
     functions = [],
