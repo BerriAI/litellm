@@ -1,3 +1,13 @@
+#### What this tests ####
+#    This tests exception mapping -> trigger an exception from an llm provider -> assert if output is of the expected type
+
+
+# # 5 providers -> OpenAI, Azure, Anthropic, Cohere, Replicate
+
+# # 3 main types of exceptions -> - Rate Limit Errors, Context Window Errors, Auth errors (incorrect/rotated key, etc.)
+
+# # Approach: Run each model through the test -> assert if the correct error (always the same one) is triggered
+
 # from openai.error import AuthenticationError, InvalidRequestError, RateLimitError, OpenAIError
 # import os 
 # import sys
@@ -6,15 +16,6 @@
 # import litellm
 # from litellm import embedding, completion
 # from concurrent.futures import ThreadPoolExecutor
-# #### What this tests ####
-# #    This tests exception mapping -> trigger an exception from an llm provider -> assert if output is of the expected type
-
-
-# # 5 providers -> OpenAI, Azure, Anthropic, Cohere, Replicate
-
-# # 3 main types of exceptions -> - Rate Limit Errors, Context Window Errors, Auth errors (incorrect/rotated key, etc.)
-
-# # Approach: Run each model through the test -> assert if the correct error (always the same one) is triggered
 
 # models = ["gpt-3.5-turbo", "chatgpt-test", "claude-instant-1", "command-nightly", "replicate/llama-2-70b-chat:2c1608e18606fad2812020dc541930f2d0495ce32eee50074220b87300bc16e1"]
 

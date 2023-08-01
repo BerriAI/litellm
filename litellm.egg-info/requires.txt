@@ -1,2 +1,7 @@
 openai
 cohere
+pytest
+anthropic
+replicate
+python-dotenv
+openai[datalib]
