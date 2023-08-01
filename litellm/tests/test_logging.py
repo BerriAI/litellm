@@ -1,10 +1,13 @@
+#### What this tests ####
+#    This tests error logging (with custom user functions) for the raw `completion` + `embedding` endpoints
+
 import sys, os
 import traceback
-sys.path.append('..')  # Adds the parent directory to the system path
-import main
-from main import completion, embedding
+sys.path.insert(0, os.path.abspath('../..'))  # Adds the parent directory to the system path
+import litellm
+from litellm import embedding, completion
 
-main.verbose = True ## Replace to: ```litellm.verbose = True``` when using pypi package
+litellm.set_verbose = True
 
 def logger_fn(model_call_object: dict):
     print(f"model call details: {model_call_object}")
