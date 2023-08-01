@@ -1,5 +1,5 @@
-# #### What this tests ####
-# #    This tests exception mapping -> trigger an exception from an llm provider -> assert if output is of the expected type
+#### What this tests ####
+#    This tests exception mapping -> trigger an exception from an llm provider -> assert if output is of the expected type
 
 
 # # 5 providers -> OpenAI, Azure, Anthropic, Cohere, Replicate
