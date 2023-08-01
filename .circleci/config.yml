@@ -51,9 +51,9 @@ jobs:
             echo "Building package"
             python setup.py sdist bdist_wheel
             echo "Twine upload to dist"
-            echo TWINE_USERNAME
-            echo TWINE_PASSWORD
-            echo PYPI_API_TOKEN
+            echo "$TWINE_USERNAME"
+            echo "$TWINE_PASSWORD"
+            echo "$PYPI_API_TOKEN"
             twine upload --verbose dist/*
             # else
             #   echo "No changes to setup.py. Skipping PyPI publish."
