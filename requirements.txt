@@ -1,4 +1,4 @@
-openai==new_version
+openai==0.27.8
 cohere==4.18.0
 func_timeout==4.3.5
 anthropic==0.3.7
