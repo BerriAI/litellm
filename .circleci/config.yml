@@ -52,7 +52,6 @@ workflows:
   build_and_test:
     jobs:
       - local_testing:
-          filters:
 
       - publish_to_pypi:
           filters:
