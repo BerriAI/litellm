@@ -6,8 +6,6 @@ jobs:
     working_directory: ~/project
 
     steps:
-      - checkout
-
       # Install dependencies from requirements.txt
       - run:
           name: Install Dependencies
@@ -34,36 +32,33 @@ jobs:
       PYPI_API_TOKEN: $PYPI_API_TOKEN  # Use the environment variable in the job
 
     steps:
-      - checkout
-
-      # Publish to PyPI using the environment variable
+      # Check if setup.py is modified and publish to PyPI
       - run:
-          name: Publish to PyPI
+          name: Check setup.py modification
           command: |
-            echo "Creating a PyPI token file..."
-            echo -e "[pypi]\nusername = __token__\npassword = $PYPI_API_TOKEN" > ~/.pypirc
-            python setup.py sdist
-            python -m pip install --upgrade twine
-            twine upload dist/*
+            if [ -n "$(git diff --name-only $CIRCLE_SHA1^..$CIRCLE_SHA1 | grep 'setup.py')" ]; then
+              echo "Creating a PyPI token file..."
+              echo -e "[pypi]\nusername = __token__\npassword = $PYPI_API_TOKEN" > ~/.pypirc
+              python setup.py sdist
+              python -m pip install --upgrade twine
+              twine upload dist/*
+            else
+              echo "No changes to setup.py. Skipping PyPI publish."
+              circleci step halt
+            fi
 
 workflows:
   version: 2
   build_and_test:
     jobs:
-      - local_testing
+      - local_testing:
+          filters:
+            branches:
+              ignore:
+                - main
+
       - publish_to_pypi:
           filters:
             branches:
               only:
                 - main
-          steps:
-            # Check if setup.py is modified and publish to PyPI
-            - run:
-                name: Check setup.py modification
-                command: |
-                  if [ -n "$(git diff --name-only $CIRCLE_SHA1^..$CIRCLE_SHA1 | grep 'setup.py')" ]; then
-                    echo "Publishing to PyPI..."
-                  else
-                    echo "No changes to setup.py. Skipping PyPI publish."
-                    circleci step halt
-                  fi
