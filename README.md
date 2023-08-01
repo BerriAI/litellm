@@ -2,8 +2,7 @@
 [![PyPI Version](https://img.shields.io/pypi/v/litellm.svg)](https://pypi.org/project/litellm/)
 [![PyPI Version](https://img.shields.io/badge/stable%20version-v0.1.1-blue?color=green&link=https://pypi.org/project/litellm/0.1.1/)](https://pypi.org/project/litellm/0.1.1/)
 [![CircleCI](https://dl.circleci.com/status-badge/img/gh/BerriAI/litellm/tree/main.svg?style=svg)](https://dl.circleci.com/status-badge/redirect/gh/BerriAI/litellm/tree/main)
-[![ New Relea Tests](https://github.com/BerriAI/litellm/actions/workflows/tests.yml/badge.svg)](https://github.com/BerriAI/litellm/actions/workflows/tests.yml)
-[![Publish to PyPI](https://github.com/BerriAI/litellm/actions/workflows/publish_pypi.yml/badge.svg?branch=main)](https://github.com/BerriAI/litellm/actions/workflows/publish_pypi.yml) ![Downloads](https://img.shields.io/pypi/dm/litellm)
+![Downloads](https://img.shields.io/pypi/dm/litellm)
 
 [![](https://dcbadge.vercel.app/api/server/wuPM9dRgDw)](https://discord.gg/wuPM9dRgDw)
 
