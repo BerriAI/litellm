@@ -48,6 +48,7 @@ jobs:
               pip install wheel
               pip install --upgrade setuptools
               python setup.py sdist bdist_wheel
+              echo "Twine upload to dist"
               twine upload dist/*
             else
               echo "No changes to setup.py. Skipping PyPI publish."
