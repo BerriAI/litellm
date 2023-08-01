@@ -30,7 +30,7 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
-        python-version: 3.x # Replace 'x' with the desired version (e.g., 3.6, 3.7, 3.8)
+        python-version: 3.9.6 # Replace 'x' with the desired version (e.g., 3.6, 3.7, 3.8)
 
     - name: Install dependencies
       run: pip install -r requirements.txt
