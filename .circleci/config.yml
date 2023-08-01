@@ -1,24 +1,28 @@
 version: 2.1
 jobs:
-  build_test:
+  build:
     docker:
-      - image: cimg/python:3.11.0
+      - image: circleci/python:3.10  # Use Python 3.10 image
+    working_directory: ~/project
+
     steps:
-      - checkout # checkout source code to working directory
+      - checkout
+
+      # Install dependencies from requirements.txt
       - run:
-          command: | # create whl and use pipenv to install dependencies
-            python3 setup.py sdist bdist_wheel
-            sudo add-apt-repository universe -y
-            sudo apt-get update
-            sudo apt install -y python3-pip
-            sudo pip install pipenv
-            pipenv install dist/convsn-0.0.3-py3-none-any.whl
-            pipenv install pytest
+          name: Install Dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+
+      # Run pytest
       - run:
-          command: | # Run test suite
-            pipenv run pytest
-  
+          name: Run Pytest
+          command: |
+            python -m pytest
+
 workflows:
-  build_test_publish:
+  version: 2
+  test_local_version:
     jobs:
-      - build_test
+      - build
