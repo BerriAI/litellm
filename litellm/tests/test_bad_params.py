@@ -26,13 +26,13 @@ litellm.failure_callback = ["slack", "sentry", "posthog"]
 
 user_message = "Hello, how are you?"
 messages = [{ "content": user_message,"role": "user"}]
-model_val = "krrish is a model"
+model_val = ""
 
 
 def test_completion_with_empty_model():
     # test on empty
     try:
-        response = completion(model=model_val, messages=messages)
+        response = completion(model="", messages=messages)
     except Exception as e:
         print(f"error occurred: {e}") 
         pass
