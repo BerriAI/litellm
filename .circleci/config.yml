@@ -30,19 +30,24 @@ jobs:
     working_directory: ~/project
 
     environment:
+      TWINE_USERNAME: __token__
+      TWINE_PASSWORD: $PYPI_API_TOKEN
       PYPI_API_TOKEN: $PYPI_API_TOKEN  # Use the environment variable in the job
 
     steps:
       - checkout
       # Check if setup.py is modified and publish to PyPI
       - run:
-          name: Check setup.py modification
+          name: PyPI publish
           command: |
             if [ -n "$(git diff --name-only $CIRCLE_SHA1^..$CIRCLE_SHA1 | grep 'setup.py')" ]; then
-              echo "Creating a PyPI token file..."
+              echo "setup.py modified"
               echo -e "[pypi]\nusername = __token__\npassword = $PYPI_API_TOKEN" > ~/.pypirc
-              python setup.py sdist
-              python -m pip install --upgrade twine
+              python -m pip install --upgrade pip
+              pip install twine
+              pip install wheel
+              pip install --upgrade setuptools
+              python setup.py sdist bdist_wheel
               twine upload dist/*
             else
               echo "No changes to setup.py. Skipping PyPI publish."
