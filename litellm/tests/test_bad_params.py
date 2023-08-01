@@ -20,9 +20,9 @@ main.set_verbose = True
 user_message = "Hello, how are you?"
 messages = [{ "content": user_message,"role": "user"}]
 model_val = "krrish is a model"
-# test on empty
-try:
-    response = completion(model=model_val, messages=messages)
-except Exception as e:
-    print(f"error occurred: {e}") 
-    pass
+# # test on empty
+# try:
+#     response = completion(model=model_val, messages=messages)
+# except Exception as e:
+#     print(f"error occurred: {e}") 
+#     pass
