@@ -1,5 +1,12 @@
 # Completion Function - completion()
+The Input params are **exactly the same** as the 
+<a href="https://platform.openai.com/docs/api-reference/chat/create" target="_blank" rel="noopener noreferrer">OpenAI Create chat completion</a>, and let you call **Azure OpenAI, Anthropic, Cohere, Replicate** models in the same format. 
+
+In addition, liteLLM allows you to pass in the following **Optional** liteLLM args:<br>
+`forceTimeout`, `azure`, `logger_fn`, `verbose`
+
 ## Input - Request Body
+
 **`model`**
 <span style="color:gray; font-size: 0.8em;">string</span>  <span style="color:red; font-size: 0.8em;">Required</span><br>
 ID of the model to use. See the <a href="/../supported" target="_blank" rel="noopener noreferrer">model endpoint compatibility</a>
@@ -11,6 +18,24 @@ ID of the model to use. See the <a href="/../supported" target="_blank" rel="noo
 <span style="color:gray; font-size: 0.8em;">array</span>  <span style="color:red; font-size: 0.8em;">Required</span><br>
 <a></a>
 A list of messages comprising the conversation so far. <a href="https://github.com/openai/openai-cookbook/blob/main/examples/How_to_format_inputs_to_ChatGPT_models.ipynb" target="_blank" rel="noopener noreferrer">Example Python Code</a>
+
+```python
+from litellm import completion
+
+messages=
+    [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "Knock knock."},
+        {"role": "assistant", "content": "Who's there?"},
+        {"role": "user", "content": "Orange."},
+    ]   
+
+# openai call
+response = completion(model="gpt-3.5-turbo", messages=messages, temperature=0)
+
+# cohere call
+response = completion(model="command-nightly", messages=messages, temperature=0)
+```
 
 
 ---
@@ -64,8 +89,8 @@ A list of functions the model may generate JSON inputs for.
 
 >> **`parameters`**
 >> <span style="color:gray; font-size: 0.8em;">object</span>  <span style="color:red; font-size: 0.8em;">Required</span><br>
->> The parameters the functions accept, described as a JSON Schema object. See the guide for examples, and the JSON Schema reference for documentation about the format.
->> To describe a function that accepts no parameters, provide the value {"type": "object", "properties": {}}.
+>> The parameters the functions accept, described as a JSON Schema object. 
+>> To describe a function that accepts no parameters, provide the value `{"type": "object", "properties": {}}`.
 >> <br>
 >> 
 >> ---
@@ -73,21 +98,21 @@ A list of functions the model may generate JSON inputs for.
 
 **`function_call`**
 <span style="color:gray; font-size: 0.8em;">string or object</span>  <span style="color:gray; font-size: 0.8em;">Optional</span><br>
-Controls how the model responds to function calls. "none" means the model does not call a function, and responds to the end-user. "auto" means the model can pick between an end-user or calling a function. Specifying a particular function via {"name": "my_function"} forces the model to call that function. "none" is the default when no functions are present. "auto" is the default if functions are present.
+Controls how the model responds to function calls. "none" means the model does not call a function, and responds to the end-user. "auto" means the model can pick between an end-user or calling a function. Specifying a particular function via `{"name": "my_function"}` forces the model to call that function. "none" is the default when no functions are present. "auto" is the default if functions are present.
 <br>
 
 ---
 
 **`temperature`**
 <span style="color:gray; font-size: 0.8em;">number</span>  <span style="color:gray; font-size: 0.8em;">Optional, Defaults to 1</span><br>
-What sampling temperature to use, between 0 and 2. Higher values like 0.8 will make the output more random, while lower values like 0.2 will make it more focused and deterministic. We generally recommend altering this or top_p but not both.
+What sampling temperature to use, between 0 and 2. Higher values like 0.8 will make the output more random, while lower values like 0.2 will make it more focused and deterministic. We generally recommend altering this or `top_p` but not both.
 <br>
 
 ---
 
 **`top_p`**
 <span style="color:gray; font-size: 0.8em;">number</span>  <span style="color:gray; font-size: 0.8em;">Optional, Defaults to 1</span><br>
-An alternative to sampling with temperature, called nucleus sampling, where the model considers the results of the tokens with top_p probability mass. So 0.1 means only the tokens comprising the top 10% probability mass are considered. We generally recommend altering this or temperature but not both.
+An alternative to sampling with temperature, called nucleus sampling, where the model considers the results of the tokens with top_p probability mass. So 0.1 means only the tokens comprising the top 10% probability mass are considered. We generally recommend altering this or 1temperature` but not both.
 <br>
 
 ---
@@ -101,7 +126,7 @@ How many chat completion choices to generate for each input message.
 
 **`stream`**
 <span style="color:gray; font-size: 0.8em;">boolean</span>  <span style="color:gray; font-size: 0.8em;">Optional, Defaults to false</span><br>
-If set, partial message deltas will be sent, like in ChatGPT. Tokens will be sent as data-only server-sent events as they become available, with the stream terminated by a data: [DONE] message. Example Python code.
+If set, partial message deltas will be sent, like in ChatGPT. Tokens will be sent as data-only server-sent events as they become available, with the stream terminated by a `data: [DONE]` message.
 <br>
 
 ---
@@ -115,21 +140,21 @@ Up to 4 sequences where the API will stop generating further tokens.
 
 **`max_tokens`**
 <span style="color:gray; font-size: 0.8em;">integer</span>  <span style="color:gray; font-size: 0.8em;">Optional, Defaults to inf</span><br>
-The maximum number of tokens to generate in the chat completion. The total length of input tokens and generated tokens is limited by the model's context length. Example Python code for counting tokens.
+The maximum number of tokens to generate in the chat completion. The total length of input tokens and generated tokens is limited by the model's context length
 <br>
 
 ---
 
 **`presence_penalty`**
 <span style="color:gray; font-size: 0.8em;">number</span>  <span style="color:gray; font-size: 0.8em;">Optional, Defaults to 0</span><br>
-Number between -2.0 and 2.0. Positive values penalize new tokens based on whether they appear in the text so far, increasing the model's likelihood to talk about new topics. See more information about frequency and presence penalties.
+Number between -2.0 and 2.0. Positive values penalize new tokens based on whether they appear in the text so far, increasing the model's likelihood to talk about new topics. 
 <br>
 
 ---
 
 **`frequency_penalty`**
 <span style="color:gray; font-size: 0.8em;">number</span>  <span style="color:gray; font-size: 0.8em;">Optional, Defaults to 0</span><br>
-Number between -2.0 and 2.0. Positive values penalize new tokens based on their existing frequency in the text so far, decreasing the model's likelihood to repeat the same line verbatim. See more information about frequency and presence penalties.
+Number between -2.0 and 2.0. Positive values penalize new tokens based on their existing frequency in the text so far, decreasing the model's likelihood to repeat the same line verbatim. 
 <br>
 
 ---
@@ -143,5 +168,5 @@ Modify the likelihood of specified tokens appearing in the completion. Accepts a
 
 **`user`**
 <span style="color:gray; font-size: 0.8em;">string</span>  <span style="color:gray; font-size: 0.8em;">Optional</span><br>
-A unique identifier representing your end-user, which can help OpenAI to monitor and detect abuse. Learn more.
+A unique identifier representing your end-user, which can help liteLLM to monitor and detect abuse. 
 
