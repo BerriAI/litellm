@@ -59,7 +59,6 @@ def get_optional_params(
 ####### COMPLETION ENDPOINTS ################
 #############################################
 @client
-<<<<<<< HEAD
 @func_set_timeout(180, allowOverride=True) ## https://pypi.org/project/func-timeout/ - timeouts, in case calls hang (e.g. Azure)
 def completion(
     model, messages, # required params
@@ -77,12 +76,6 @@ def completion(
       temperature=temperature, top_p=top_p, n=n, stream=stream, stop=stop, max_tokens=max_tokens,
       presence_penalty=presence_penalty, frequency_penalty=frequency_penalty, logit_bias=logit_bias, user=user
     )
-=======
-@func_set_timeout(60, allowOverride=True) ## https://pypi.org/project/func-timeout/ - timeouts, in case calls hang (e.g. Azure)
-def completion(model, messages, max_tokens=None, *, forceTimeout=60, azure=False, logger_fn=None): # ,*,.. if optional params like forceTimeout, azure and logger_fn are passed then they're keyword arguments
-  try:
-    response = None
->>>>>>> bd42ec8 (clean up code files)
     if azure == True:
       # azure configs
       openai.api_type = "azure"
@@ -97,7 +90,7 @@ def completion(model, messages, max_tokens=None, *, forceTimeout=60, azure=False
         messages = messages,
         **optional_params
       )
-    elif model in open_ai_chat_completion_models:
+    elif model in litellm.open_ai_chat_completion_models:
       openai.api_type = "openai"
       openai.api_base = "https://api.openai.com/v1"
       openai.api_version = None
@@ -111,7 +104,7 @@ def completion(model, messages, max_tokens=None, *, forceTimeout=60, azure=False
         messages = messages,
         **optional_params
       )
-    elif model in open_ai_text_completion_models:
+    elif model in litellm.open_ai_text_completion_models:
       openai.api_type = "openai"
       openai.api_base = "https://api.openai.com/v1"
       openai.api_version = None
@@ -221,10 +214,6 @@ def completion(model, messages, max_tokens=None, *, forceTimeout=60, azure=False
           ],
       }
       response = new_response
-<<<<<<< HEAD
-    else:
-      raise Exception(f"Model '{model}' not found. Please check your model name and try again.")
-=======
 
     elif model in litellm.open_ai_chat_completion_models:
       openai.api_type = "openai"
@@ -255,7 +244,6 @@ def completion(model, messages, max_tokens=None, *, forceTimeout=60, azure=False
       logging(model=model, input=messages, azure=azure, logger_fn=logger_fn)
       args = locals()
       raise ValueError(f"No valid completion model args passed in - {args}")
->>>>>>> bd42ec8 (clean up code files)
     return response
   except Exception as e:
     logging(model=model, input=messages, azure=azure, additional_args={"max_tokens": max_tokens}, logger_fn=logger_fn)

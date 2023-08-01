@@ -17,20 +17,10 @@ model_fallback_list = ["replicate/llama-2-70b-chat:2c1608e18606fad2812020dc54193
 user_message = "Hello, how are you?"
 messages = [{ "content": user_message,"role": "user"}]
 
-# for _ in range(10):
 for model in model_fallback_list:
     try:
         response = embedding(model="text-embedding-ada-002", input=[user_message])
         response = completion(model=model, messages=messages)
         print(response)
-<<<<<<< HEAD
-        if response != None:
-            break
     except Exception as e:
-=======
-        # if response != None:
-        #     break
-    except:
->>>>>>> bd42ec8 (clean up code files)
         print(f"error occurred: {traceback.format_exc()}") 
-        raise e
