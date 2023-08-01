@@ -3,7 +3,6 @@ jobs:
   local_testing:
     docker:
       - image: circleci/python:3.10
-    working_directory: ~/project
 
     steps:
       # Install dependencies from requirements.txt
