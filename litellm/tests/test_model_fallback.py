@@ -19,8 +19,8 @@ messages = [{ "content": user_message,"role": "user"}]
 
 for model in model_fallback_list:
     try:
-        response = embedding(model="text-embedding-ada-002", input=[user_message])
-        response = completion(model=model, messages=messages)
+        response = embedding(model="updated-model", input=[user_message])
+        response = completion(model="updated-model", messages=messages)
         print(response)
     except Exception as e:
-        print(f"error occurred: {traceback.format_exc()}") 
+        print(f"error occurred: {traceback.format_exc()}")
