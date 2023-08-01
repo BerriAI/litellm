@@ -128,7 +128,7 @@ def get_optional_params(
 ####### COMPLETION ENDPOINTS ################
 #############################################
 @client
-@func_set_timeout(60, allowOverride=True) ## https://pypi.org/project/func-timeout/ - timeouts, in case calls hang (e.g. Azure)
+@func_set_timeout(120, allowOverride=True) ## https://pypi.org/project/func-timeout/ - timeouts, in case calls hang (e.g. Azure)
 def completion(
     model, messages, # required params
     # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
@@ -136,7 +136,7 @@ def completion(
     temperature=1, top_p=1, n=1, stream=False, stop=None, max_tokens=float('inf'),
     presence_penalty=0, frequency_penalty=0, logit_bias={}, user="",
     # Optional liteLLM function params
-    azure=False, logger_fn=None, verbose=False
+    *, forceTimeout=60, azure=False, logger_fn=None, verbose=False
   ):
   try:
     # check if user passed in any of the OpenAI optional params
