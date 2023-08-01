@@ -31,8 +31,6 @@ jobs:
 
     environment:
       TWINE_USERNAME: __token__
-      TWINE_PASSWORD: $PYPI_API_TOKEN
-      PYPI_API_TOKEN: $PYPI_API_TOKEN  # Use the environment variable in the job
 
     steps:
       - checkout
