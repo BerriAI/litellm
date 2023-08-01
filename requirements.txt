@@ -4,5 +4,6 @@ func_timeout
 anthropic
 replicate
 pytest
+pytest
 python-dotenv
 openai[datalib]
