@@ -6,8 +6,18 @@ from main import completion
 
 main.set_verbose = True
 
-user_message = "Hello, how are you?"
+user_message = "Hello, whats the weather in San Francisco??"
 messages = [{ "content": user_message,"role": "user"}]
+
+
+################# Test 3 #################
+# test on Azure Openai Completion Call 
+try:
+    response = completion(model="chatgpt-test", messages=messages, azure=True)
+    print(response)
+except Exception as e:
+    print(f"error occurred: {traceback.format_exc()}") 
+    raise e
 
 ################# Test 1 #################
 # test on openai completion call, with model and messages
@@ -79,14 +89,7 @@ except Exception as e:
     raise e
 
 
-################# Test 3 #################
-# test on Azure Openai Completion Call 
-try:
-    response = completion(model="chatgpt-test", messages=messages, azure=True)
-    print(response)
-except Exception as e:
-    print(f"error occurred: {traceback.format_exc()}") 
-    raise e
+
 
 ################# Test 4 #################
 # test on Claude Completion Call 
