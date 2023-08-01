@@ -2,6 +2,8 @@ site_name: liteLLM
 nav:
   - ⚡ Getting Started:
     - Installation & Quick Start: index.md
+    - completion():
+      - input: input.md
   - 🤖 Supported LLM APIs: 
     - Supported Completion & Chat APIs: supported.md
     - Supported Embedding APIs: supported_embedding.md
