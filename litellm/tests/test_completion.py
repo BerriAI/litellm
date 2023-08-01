@@ -1,10 +1,10 @@
 import sys, os
 import traceback
-sys.path.append('..')  # Adds the parent directory to the system path
-import main
-from main import completion
+sys.path.insert(0, os.path.abspath('../..'))  # Adds the parent directory to the system path
+import litellm
+from litellm import embedding, completion
 
-main.set_verbose = True
+litellm.set_verbose = True
 
 user_message = "Hello, whats the weather in San Francisco??"
 messages = [{ "content": user_message,"role": "user"}]
