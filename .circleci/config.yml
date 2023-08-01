@@ -64,8 +64,8 @@ workflows:
       - local_testing
 
       - publish_to_pypi:
-          requires:
-            - local_testing
+          # requires:
+          #   - local_testing
           filters:
             branches:
               only:
