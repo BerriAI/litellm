@@ -1,6 +1,5 @@
 import os, openai, cohere, replicate, sys
 from typing import Any
-from func_timeout import func_set_timeout, FunctionTimedOut
 from anthropic import Anthropic, HUMAN_PROMPT, AI_PROMPT
 import traceback
 import dotenv
@@ -58,7 +57,7 @@ def get_optional_params(
 ####### COMPLETION ENDPOINTS ################
 #############################################
 @client
-@timeout(60) ## set timeouts, in case calls hang (e.g. Azure)
+@timeout(60) ## set timeouts, in case calls hang (e.g. Azure) - default is 60s, override with `force_timeout`
 def completion(
     model, messages, # required params
     # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
@@ -253,8 +252,8 @@ def completion(
 
 ### EMBEDDING ENDPOINTS ####################
 @client
-@func_set_timeout(60, allowOverride=True) ## https://pypi.org/project/func-timeout/
-def embedding(model, input=[], azure=False, forceTimeout=60, logger_fn=None):
+@timeout(60) ## set timeouts, in case calls hang (e.g. Azure) - default is 60s, override with `force_timeout`
+def embedding(model, input=[], azure=False, force_timeout=60, logger_fn=None):
   response = None
   if azure == True:
     # azure configs
