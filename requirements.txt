@@ -1,7 +1,7 @@
 openai==0.27.0
 cohere==4.18.0
 func_timeout==4.3.5
-anthropic==1.0.0
+anthropic==0.3.7
 replicate==0.4.1
 pytest==6.2.5
 pytest==6.2.5
