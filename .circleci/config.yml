@@ -39,24 +39,24 @@ jobs:
       - run:
           name: PyPI publish
           command: |
-            # if [ -n "$(git diff --name-only $CIRCLE_SHA1^..$CIRCLE_SHA1 | grep 'setup.py')" ]; then
-            echo "setup.py modified"
-            echo -e "[pypi]\nusername = __token__\npassword = $PYPI_API_TOKEN" > ~/.pypirc
-            python -m pip install --upgrade pip
-            pip install twine
-            pip install wheel
-            pip install --upgrade setuptools
-            echo "Building package"
-            python setup.py sdist bdist_wheel
-            echo "Twine upload to dist"
-            echo "$TWINE_USERNAME"
-            echo "$TWINE_PASSWORD"
-            echo "$PYPI_API_TOKEN"
-            twine upload --verbose dist/*
-            # else
-            #   echo "No changes to setup.py. Skipping PyPI publish."
-            #   circleci step halt
-            # fi
+            if [ -n "$(git diff --name-only $CIRCLE_SHA1^..$CIRCLE_SHA1 | grep 'setup.py')" ]; then
+              echo "setup.py modified"
+              echo -e "[pypi]\nusername = __token__\npassword = $PYPI_API_TOKEN" > ~/.pypirc
+              python -m pip install --upgrade pip
+              pip install twine
+              pip install wheel
+              pip install --upgrade setuptools
+              echo "Building package"
+              python setup.py sdist bdist_wheel
+              echo "Twine upload to dist"
+              echo "$TWINE_USERNAME"
+              echo "$TWINE_PASSWORD"
+              echo "$PYPI_API_TOKEN"
+              twine upload --verbose dist/*
+            else
+              echo "No changes to setup.py. Skipping PyPI publish."
+              circleci step halt
+            fi
 
 workflows:
   version: 2
@@ -65,8 +65,8 @@ workflows:
       - local_testing
 
       - publish_to_pypi:
-          # requires:
-          #   - local_testing
+          requires:
+            - local_testing
           filters:
             branches:
               only:
