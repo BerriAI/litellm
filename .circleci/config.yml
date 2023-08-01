@@ -47,6 +47,7 @@ jobs:
               pip install twine
               pip install wheel
               pip install --upgrade setuptools
+              echo "Building package"
               python setup.py sdist bdist_wheel
               echo "Twine upload to dist"
               twine upload dist/*
