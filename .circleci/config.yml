@@ -35,7 +35,9 @@ jobs:
       PYPI_API_TOKEN: $PYPI_API_TOKEN  # Use the environment variable in the job
 
     steps:
-      - checkout
+      - attach_workspace:
+          at: ~/project
+
       # Check if setup.py is modified and publish to PyPI
       - run:
           name: PyPI publish
@@ -62,7 +64,11 @@ workflows:
     jobs:
       - local_testing
 
+      - persist_to_workspace:
+          root: ~/project
       - publish_to_pypi:
+          requires:
+            - local_testing
           filters:
             branches:
               only:
