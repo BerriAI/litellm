@@ -186,7 +186,7 @@ def completion(
           model=model,
           prompt = prompt
       )
-    elif "replicate" in model: 
+    elif "replicate" in model:
       # replicate defaults to os.environ.get("REPLICATE_API_TOKEN")
       # checking in case user set it to REPLICATE_API_KEY instead 
       if not os.environ.get("REPLICATE_API_TOKEN") and  os.environ.get("REPLICATE_API_KEY"):
