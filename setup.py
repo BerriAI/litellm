@@ -11,7 +11,11 @@ setup(
     install_requires=[
         'openai',
         'cohere',
-        'func_timeout'
-        'pytest'
+        'func_timeout',
+        'pytest',
+        'anthropic',
+        'replicate',
+        'python-dotenv',
+        'openai[datalib]'
     ],
 )
