@@ -20,6 +20,6 @@ for model in model_fallback_list:
         print(response)
         if response != None:
             break
-    except:
+    except Exception as e:
         print(f"error occurred: {traceback.format_exc()}") 
-        pass
+        raise e
