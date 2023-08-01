@@ -1,8 +1,8 @@
 version: 2.1
 jobs:
-  build:
+  local_testing:
     docker:
-      - image: circleci/python:3.10  # Use Python 3.10 image
+      - image: circleci/python:3.10
     working_directory: ~/project
 
     steps:
@@ -15,17 +15,55 @@ jobs:
             python -m pip install --upgrade pip
             python -m pip install -r requirements.txt
 
-      # Run pytest
+      # Run pytest and generate JUnit XML report
       - run:
-          name: Run Pytest
+          name: Run Pytest with JUnit report
           command: |
-            python -m pytest
+            python -m pytest --junitxml=test-results/junit.xml
 
+      # Store test results
       - store_test_results:
           path: test-results
 
+  publish_to_pypi:
+    docker:
+      - image: circleci/python:3.10
+    working_directory: ~/project
+
+    environment:
+      PYPI_API_TOKEN: $PYPI_API_TOKEN  # Use the environment variable in the job
+
+    steps:
+      - checkout
+
+      # Publish to PyPI using the environment variable
+      - run:
+          name: Publish to PyPI
+          command: |
+            echo "Creating a PyPI token file..."
+            echo -e "[pypi]\nusername = __token__\npassword = $PYPI_API_TOKEN" > ~/.pypirc
+            python setup.py sdist
+            python -m pip install --upgrade twine
+            twine upload dist/*
+
 workflows:
   version: 2
-  test_local_version:
+  build_and_test:
     jobs:
-      - build
+      - local_testing
+      - publish_to_pypi:
+          filters:
+            branches:
+              only:
+                - main
+          steps:
+            # Check if setup.py is modified and publish to PyPI
+            - run:
+                name: Check setup.py modification
+                command: |
+                  if [ -n "$(git diff --name-only $CIRCLE_SHA1^..$CIRCLE_SHA1 | grep 'setup.py')" ]; then
+                    echo "Publishing to PyPI..."
+                  else
+                    echo "No changes to setup.py. Skipping PyPI publish."
+                    circleci step halt
+                  fi
