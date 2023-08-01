@@ -76,7 +76,6 @@ def completion(
       temperature=temperature, top_p=top_p, n=n, stream=stream, stop=stop, max_tokens=max_tokens,
       presence_penalty=presence_penalty, frequency_penalty=frequency_penalty, logit_bias=logit_bias, user=user
     )
-    print_verbose(f"os environment variables: {os.environ}")
     if azure == True:
       # azure configs
       openai.api_type = "azure"
