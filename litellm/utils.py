@@ -9,6 +9,7 @@ import litellm
 import os 
 import openai 
 import random
+from openai.error import AuthenticationError, InvalidRequestError, RateLimitError, ServiceUnavailableError, OpenAIError
 ####### ENVIRONMENT VARIABLES ###################
 dotenv.load_dotenv() # Loading env variables using dotenv
 sentry_sdk_instance = None
@@ -29,12 +30,15 @@ def print_verbose(print_statement):
 
 ####### LOGGING ###################
 #Logging function -> log the exact model details + what's being sent | Non-Blocking
-def logging(model, input, azure=False, additional_args={}, logger_fn=None):
+def logging(model, input, azure=False, additional_args={}, logger_fn=None, exception=None):
   try:
     model_call_details = {}
     model_call_details["model"] = model
     model_call_details["input"] = input
     model_call_details["azure"] = azure
+    # log exception details
+    if exception:
+      model_call_details["original_exception"] = exception
     # log additional call details -> api key, etc. 
     if azure == True or model in litellm.open_ai_chat_completion_models or model in litellm.open_ai_chat_completion_models or model in litellm.open_ai_embedding_models:
       model_call_details["api_type"] = openai.api_type
@@ -222,3 +226,42 @@ def handle_success(*args, **kwargs):
     success_handler(args, kwargs)
   pass
 
+
+def exception_type(model, original_exception):
+    if isinstance(original_exception, OpenAIError):
+        # Handle the OpenAIError
+        raise original_exception
+    elif model:
+      error_str = str(original_exception)
+      if isinstance(original_exception, BaseException):
+        exception_type = type(original_exception).__name__
+      else:
+        exception_type = ""
+      if "claude" in model: #one of the anthropics
+        print_verbose(f"status_code: {original_exception.status_code}")
+        if original_exception.status_code == 401:
+          raise AuthenticationError(f"AnthropicException - {original_exception.message}")
+        elif original_exception.status_code == 400:
+          raise InvalidRequestError(f"AnthropicException - {original_exception.message}", f"{model}")
+        elif original_exception.status_code == 429:
+          raise RateLimitError(f"AnthropicException - {original_exception.message}")
+      elif "replicate" in model:
+        if "Incorrect authentication token" in error_str:
+          raise AuthenticationError(f"ReplicateException - {error_str}")
+        elif exception_type == "ModelError":
+          raise InvalidRequestError(f"ReplicateException - {error_str}", f"{model}")
+        elif "Request was throttled" in error_str:
+          raise RateLimitError(f"ReplicateException - {error_str}")
+        elif exception_type == "ReplicateError": ## ReplicateError implies an error on Replicate server side, not user side
+          raise ServiceUnavailableError(f"ReplicateException - {error_str}")
+      elif model == "command-nightly": #Cohere
+        if "invalid api token" in error_str or "No API key provided." in error_str:
+          raise AuthenticationError(f"CohereException - {error_str}")
+        elif "too many tokens" in error_str:
+          raise InvalidRequestError(f"CohereException - {error_str}", f"{model}")
+        elif "CohereConnectionError" in exception_type: # cohere seems to fire these errors when we load test it (1k+ messages / min)
+          raise RateLimitError(f"CohereException - {original_exception.message}")
+      raise original_exception # base case - return the original exception
+    else:
+      raise original_exception
+                        
