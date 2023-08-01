@@ -23,7 +23,7 @@ messages = [{ "content": user_message,"role": "user"}]
 
 def test_completion_openai():
     try:
-        response = completion(model="gpt-3.5-turbo", messages=messages, logger_fn=logger_fn)
+        response = completion(model="updated-model", messages=messages, logger_fn=logger_fn)
         # Add any assertions here to check the response
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
@@ -37,7 +37,7 @@ def test_completion_non_openai():
 
 def test_embedding_openai():
     try:
-        response = embedding(model='text-embedding-ada-002', input=[user_message], logger_fn=logger_fn)
+        response = embedding(model='updated-model', input=[user_message], logger_fn=logger_fn)
         # Add any assertions here to check the response
         print(f"response: {str(response)[:50]}")
     except Exception as e:
