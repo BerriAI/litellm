@@ -8,16 +8,16 @@
 
 # # Approach: Run each model through the test -> assert if the correct error (always the same one) is triggered
 
-from openai.error import AuthenticationError, InvalidRequestError, RateLimitError, OpenAIError
-import os 
-import sys
-import traceback
-sys.path.insert(0, os.path.abspath('../..'))  # Adds the parent directory to the system path
-import litellm
-from litellm import embedding, completion
-from concurrent.futures import ThreadPoolExecutor
+# from openai.error import AuthenticationError, InvalidRequestError, RateLimitError, OpenAIError
+# import os 
+# import sys
+# import traceback
+# sys.path.insert(0, os.path.abspath('../..'))  # Adds the parent directory to the system path
+# import litellm
+# from litellm import embedding, completion
+# from concurrent.futures import ThreadPoolExecutor
 
-models = ["gpt-3.5-turbo", "chatgpt-test", "claude-instant-1", "command-nightly", "replicate/llama-2-70b-chat:2c1608e18606fad2812020dc541930f2d0495ce32eee50074220b87300bc16e1"]
+# models = ["gpt-3.5-turbo", "chatgpt-test", "claude-instant-1", "command-nightly", "replicate/llama-2-70b-chat:2c1608e18606fad2812020dc541930f2d0495ce32eee50074220b87300bc16e1"]
 
 # # Test 1: Rate Limit Errors 
 # def test_model(model):
