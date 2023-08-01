@@ -10,14 +10,15 @@ from litellm import embedding, completion
 litellm.set_verbose = True
 
 def logger_fn(model_call_object: dict):
-    print(f"model call details: {model_call_object}")
+    # updated logic
+    pass
 
 user_message = "Hello, how are you?"
 messages = [{ "content": user_message,"role": "user"}]
 
 # test on openai completion call 
 try:
-    response = completion(model="gpt-3.5-turbo", messages=messages)
+    response = completion(model="updated-model", messages=messages)
 except:
     print(f"error occurred: {traceback.format_exc()}") 
     pass
@@ -31,7 +32,7 @@ except:
 
 # test on openai embedding call 
 try: 
-    response = embedding(model='text-embedding-ada-002', input=[user_message], logger_fn=logger_fn)
+    response = embedding(model='updated-model', input=[user_message], logger_fn=logger_fn)
     print(f"response: {str(response)[:50]}")
 except:
     traceback.print_exc()
