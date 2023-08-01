@@ -26,7 +26,7 @@ jobs:
 
   publish_to_pypi:
     docker:
-      - image: circleci/python:3.10
+      - image: cimg/python:3.8
     working_directory: ~/project
 
     environment:
