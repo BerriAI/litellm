@@ -12,7 +12,7 @@ litellm.failure_callback = ["slack", "sentry", "posthog"]
 
 litellm.set_verbose = True
 
-model_fallback_list = ["replicate/llama-2-70b-chat:2c1608e18606fad2812020dc541930f2d0495ce32eee50074220b87300bc16e1", "replicate/llama-2-70b-chat:2c1608e18606fad2812020dc541930f2d0495ce32eee50074220b87300bc16e1", "chatgpt-test"]
+model_fallback_list = ["claude-instant-1", "gpt-3.5-turbo", "chatgpt-test"]
 
 user_message = "Hello, how are you?"
 messages = [{ "content": user_message,"role": "user"}]
@@ -21,6 +21,5 @@ for model in model_fallback_list:
     try:
         response = embedding(model="text-embedding-ada-002", input=[user_message])
         response = completion(model=model, messages=messages)
-        print(response)
     except Exception as e:
         print(f"error occurred: {traceback.format_exc()}") 
