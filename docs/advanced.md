@@ -40,3 +40,11 @@ os.environ['SENTRY_API_URL'] = "your-sentry-api-url"
 os.environ['POSTHOG_API_KEY'] = "your-posthog-api-key"
 os.environ['POSTHOG_API_URL'] = "your-posthog-api-url"
 ```
+
+### Calling Embeddings without the Client
+If you prefer not to use the `litellm_client`, you can call embeddings directly from the `litellm` module. Here is an example of how to do this:
+
+```python
+from litellm import embedding
+response = embedding(model="gpt-3.5-turbo", input=messages) 
+```
