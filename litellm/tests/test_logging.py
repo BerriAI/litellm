@@ -19,7 +19,7 @@ messages = [{ "content": user_message,"role": "user"}]
 
 # test on openai completion call 
 try:
-    response = completion(model="gpt-3.5-turbo", messages=messages)
+    response = completion(model="gpt-3.5-turbo", messages=messages, logger_fn=logger_fn)
     score +=1 
 except:
     print(f"error occurred: {traceback.format_exc()}") 

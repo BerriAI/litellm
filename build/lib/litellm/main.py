@@ -63,7 +63,7 @@ def completion(
     temperature=1, top_p=1, n=1, stream=False, stop=None, max_tokens=float('inf'),
     presence_penalty=0, frequency_penalty=0, logit_bias={}, user="",
     # Optional liteLLM function params
-    *, force_timeout=60, azure=False, logger_fn=None, verbose=False
+    *, api_key=None, force_timeout=60, azure=False, logger_fn=None, verbose=False
   ):
   try:
     # check if user passed in any of the OpenAI optional params
@@ -77,7 +77,7 @@ def completion(
       openai.api_type = "azure"
       openai.api_base = os.environ.get("AZURE_API_BASE")
       openai.api_version = os.environ.get("AZURE_API_VERSION")
-      openai.api_key = os.environ.get("AZURE_API_KEY")
+      openai.api_key = api_key if api_key is not None else os.environ.get("AZURE_API_KEY")
       ## LOGGING
       logging(model=model, input=messages, azure=azure, logger_fn=logger_fn)
       ## COMPLETION CALL
@@ -90,10 +90,9 @@ def completion(
       openai.api_type = "openai"
       openai.api_base = "https://api.openai.com/v1"
       openai.api_version = None
-      openai.api_key = os.environ.get("OPENAI_API_KEY")
+      openai.api_key = api_key if api_key is not None else os.environ.get("OPENAI_API_KEY")
       ## LOGGING
       logging(model=model, input=messages, azure=azure, logger_fn=logger_fn)
-
       ## COMPLETION CALL
       response = openai.ChatCompletion.create(
         model=model,
@@ -104,7 +103,7 @@ def completion(
       openai.api_type = "openai"
       openai.api_base = "https://api.openai.com/v1"
       openai.api_version = None
-      openai.api_key = os.environ.get("OPENAI_API_KEY")
+      openai.api_key = api_key if api_key is not None else os.environ.get("OPENAI_API_KEY")
       prompt = " ".join([message["content"] for message in messages])
       ## LOGGING
       logging(model=model, input=prompt, azure=azure, logger_fn=logger_fn)
@@ -119,6 +118,8 @@ def completion(
       if not os.environ.get("REPLICATE_API_TOKEN") and os.environ.get("REPLICATE_API_KEY"):
         replicate_api_token = os.environ.get("REPLICATE_API_KEY")
         os.environ["REPLICATE_API_TOKEN"] = replicate_api_token
+      elif api_key:
+         os.environ["REPLICATE_API_TOKEN"] = api_key
       prompt = " ".join([message["content"] for message in messages])
       input = {"prompt": prompt}
       if max_tokens != float('inf'):
@@ -148,6 +149,8 @@ def completion(
       response = new_response
     elif model in litellm.anthropic_models:
       #anthropic defaults to os.environ.get("ANTHROPIC_API_KEY")
+      if api_key:
+         os.environ["ANTHROPIC_API_KEY"] = api_key
       prompt = f"{HUMAN_PROMPT}" 
       for message in messages:
         if "role" in message:
@@ -187,7 +190,7 @@ def completion(
       print_verbose(f"new response: {new_response}")
       response = new_response
     elif model in litellm.cohere_models:
-      cohere_key = os.environ.get("COHERE_API_KEY")
+      cohere_key = api_key if api_key is not None else os.environ.get("COHERE_API_KEY")
       co = cohere.Client(cohere_key)
       prompt = " ".join([message["content"] for message in messages])
       ## LOGGING
@@ -210,32 +213,6 @@ def completion(
           ],
       }
       response = new_response
-
-    elif model in litellm.open_ai_chat_completion_models:
-      openai.api_type = "openai"
-      openai.api_base = "https://api.openai.com/v1"
-      openai.api_version = None
-      openai.api_key = os.environ.get("OPENAI_API_KEY")
-      ## LOGGING
-      logging(model=model, input=messages, azure=azure, logger_fn=logger_fn)
-      ## COMPLETION CALL
-      response = openai.ChatCompletion.create(
-          model=model,
-          messages = messages
-      )
-    elif model in litellm.open_ai_text_completion_models:
-      openai.api_type = "openai"
-      openai.api_base = "https://api.openai.com/v1"
-      openai.api_version = None
-      openai.api_key = os.environ.get("OPENAI_API_KEY")
-      prompt = " ".join([message["content"] for message in messages])
-      ## LOGGING
-      logging(model=model, input=prompt, azure=azure, logger_fn=logger_fn)
-      ## COMPLETION CALL
-      response = openai.Completion.create(
-          model=model,
-          prompt = prompt
-      )
     else: 
       logging(model=model, input=messages, azure=azure, logger_fn=logger_fn)
       args = locals()
