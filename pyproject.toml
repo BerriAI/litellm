@@ -1,0 +1,21 @@
+[tool.poetry]
+name = "litellm"
+version = "0.1.212"
+description = "Library to easily interface with LLM API providers"
+authors = ["BerriAI"]
+license = "MIT License"
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.9"
+openai = {extras = ["datalib"], version = "^0.27.8"}
+cohere = "^4.18.0"
+pytest = "^7.4.0"
+anthropic = "^0.3.7"
+replicate = "^0.10.0"
+python-dotenv = "^1.0.0"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
