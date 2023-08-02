@@ -1,14 +1,7 @@
-import dotenv
-import json
-import traceback
-import threading
-import traceback
-import subprocess
-import uuid
-import litellm
-import os 
-import openai 
-import random
+import dotenv, json, traceback, threading
+import subprocess, os 
+import litellm, openai 
+import random, uuid, requests
 from openai.error import AuthenticationError, InvalidRequestError, RateLimitError, ServiceUnavailableError, OpenAIError
 ####### ENVIRONMENT VARIABLES ###################
 dotenv.load_dotenv() # Loading env variables using dotenv
@@ -34,11 +27,15 @@ def logging(model, input, azure=False, additional_args={}, logger_fn=None, excep
   try:
     model_call_details = {}
     model_call_details["model"] = model
-    model_call_details["input"] = input
     model_call_details["azure"] = azure
     # log exception details
     if exception:
       model_call_details["original_exception"] = exception
+
+    if litellm.telemetry:
+      safe_crash_reporting(model=model, exception=exception, azure=azure) # log usage-crash details. Do not log any user details. If you want to turn this off, set `litellm.telemetry=False`.
+
+    model_call_details["input"] = input
     # log additional call details -> api key, etc. 
     if azure == True or model in litellm.open_ai_chat_completion_models or model in litellm.open_ai_chat_completion_models or model in litellm.open_ai_embedding_models:
       model_call_details["api_type"] = openai.api_type
@@ -273,4 +270,48 @@ def exception_type(model, original_exception):
       raise original_exception # base case - return the original exception
     else:
       raise original_exception
-                        
+
+def safe_crash_reporting(model=None, exception=None, azure=None):
+    data = {
+      "model": model,
+      "exception": str(exception),
+      "azure": azure
+    }
+    print(f"data in crash reporting: {data}")
+    threading.Thread(target=litellm_telemetry, args=(data,), daemon=True).start()
+
+def litellm_telemetry(data):
+    print(f"data in in litellm telemetry: {data}")
+    # Load or generate the UUID
+    uuid_file = 'litellm_uuid.txt'
+    try:
+        # Try to open the file and load the UUID
+        with open(uuid_file, 'r') as file:
+            uuid_value = file.read()
+            if uuid_value:
+                uuid_value = uuid_value.strip()
+                print(f"Loaded UUID: {uuid_value}")
+            else:
+                raise FileNotFoundError
+    except FileNotFoundError:
+        # Generate a new UUID if the file doesn't exist or is empty
+        new_uuid = uuid.uuid4()
+        uuid_value = str(new_uuid)
+        with open(uuid_file, 'w') as file:
+            file.write(uuid_value)
+        print(f"Generated and stored UUID: {uuid_value}")
+
+    # Prepare the data to send to localhost:3000
+    payload = {
+        'uuid': uuid_value,
+        'data': data
+    }
+    print_verbose(f"payload: {payload}")
+    try:
+      # Make the POST request to localhost:3000
+      response = requests.post('https://litellm.berri.ai/logging', json=payload)
+      response.raise_for_status()  # Raise an exception for HTTP errors
+      print('Request successfully sent!')
+    except requests.exceptions.RequestException as e:
+        # Handle any errors in the request
+        print(f'Error: {e}')

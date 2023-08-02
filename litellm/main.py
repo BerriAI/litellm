@@ -252,35 +252,40 @@ def completion(
 @client
 @timeout(60) ## set timeouts, in case calls hang (e.g. Azure) - default is 60s, override with `force_timeout`
 def embedding(model, input=[], azure=False, force_timeout=60, logger_fn=None):
-  response = None
-  if azure == True:
-    # azure configs
-    openai.api_type = "azure"
-    openai.api_base = os.environ.get("AZURE_API_BASE")
-    openai.api_version = os.environ.get("AZURE_API_VERSION")
-    openai.api_key = os.environ.get("AZURE_API_KEY")
-    ## LOGGING
-    logging(model=model, input=input, azure=azure, logger_fn=logger_fn)
-    ## EMBEDDING CALL
-    response = openai.Embedding.create(input=input, engine=model)
-    print_verbose(f"response_value: {str(response)[:50]}")
-  elif model in litellm.open_ai_embedding_models:
-    openai.api_type = "openai"
-    openai.api_base = "https://api.openai.com/v1"
-    openai.api_version = None
-    openai.api_key = os.environ.get("OPENAI_API_KEY")
-    ## LOGGING
-    logging(model=model, input=input, azure=azure, logger_fn=logger_fn)
-    ## EMBEDDING CALL
-    response = openai.Embedding.create(input=input, model=model)
-    print_verbose(f"response_value: {str(response)[:50]}")
-  else: 
-    logging(model=model, input=input, azure=azure, logger_fn=logger_fn)
-    args = locals()
-    raise ValueError(f"No valid embedding model args passed in - {args}")
-  
-  return response
-
+  try:
+    response = None
+    if azure == True:
+      # azure configs
+      openai.api_type = "azure"
+      openai.api_base = os.environ.get("AZURE_API_BASE")
+      openai.api_version = os.environ.get("AZURE_API_VERSION")
+      openai.api_key = os.environ.get("AZURE_API_KEY")
+      ## LOGGING
+      logging(model=model, input=input, azure=azure, logger_fn=logger_fn)
+      ## EMBEDDING CALL
+      response = openai.Embedding.create(input=input, engine=model)
+      print_verbose(f"response_value: {str(response)[:50]}")
+    elif model in litellm.open_ai_embedding_models:
+      openai.api_type = "openai"
+      openai.api_base = "https://api.openai.com/v1"
+      openai.api_version = None
+      openai.api_key = os.environ.get("OPENAI_API_KEY")
+      ## LOGGING
+      logging(model=model, input=input, azure=azure, logger_fn=logger_fn)
+      ## EMBEDDING CALL
+      response = openai.Embedding.create(input=input, model=model)
+      print_verbose(f"response_value: {str(response)[:50]}")
+    else: 
+      logging(model=model, input=input, azure=azure, logger_fn=logger_fn)
+      args = locals()
+      raise ValueError(f"No valid embedding model args passed in - {args}")
+    
+    return response
+  except Exception as e:
+    # log the original exception
+    logging(model=model, input=input, azure=azure, logger_fn=logger_fn, exception=e)
+    ## Map to OpenAI Exception
+    raise exception_type(model=model, original_exception=e)
 ####### HELPER FUNCTIONS ################
 ## Set verbose to true -> ```litellm.set_verbose = True```    
 def print_verbose(print_statement):
