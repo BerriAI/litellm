@@ -1,49 +1,77 @@
 import os, openai, cohere, replicate, sys
 from typing import Any
-from func_timeout import func_set_timeout, FunctionTimedOut
 from anthropic import Anthropic, HUMAN_PROMPT, AI_PROMPT
-import json
 import traceback
-import threading
 import dotenv
 import traceback
-import subprocess
+import litellm
+from litellm import client, logging, exception_type, timeout, success_callback, failure_callback
+import random
 ####### ENVIRONMENT VARIABLES ###################
-# Loading env variables using dotenv
-dotenv.load_dotenv()
-set_verbose = False
+dotenv.load_dotenv() # Loading env variables using dotenv
 
-####### COMPLETION MODELS ###################
-open_ai_chat_completion_models = [
-  'gpt-3.5-turbo', 
-  'gpt-4'
-]
-open_ai_text_completion_models = [
-    'text-davinci-003'
-]
-
-cohere_models = [
-    'command-nightly',
-]
-
-anthropic_models = [
-  "claude-2", 
-  "claude-instant-1"
-]
-
-####### EMBEDDING MODELS ###################
-open_ai_embedding_models = [
-    'text-embedding-ada-002'
-]
-
-#############################################
-
+def get_optional_params(
+    # 12 optional params
+    functions = [],
+    function_call = "",
+    temperature = 1,
+    top_p = 1,
+    n = 1,
+    stream = False,
+    stop = None,
+    max_tokens = float('inf'),
+    presence_penalty = 0,
+    frequency_penalty = 0,
+    logit_bias = {},
+    user = "",
+):
+  optional_params = {}
+  if functions != []:
+      optional_params["functions"] = functions
+  if function_call != "":
+      optional_params["function_call"] = function_call
+  if temperature != 1:
+      optional_params["temperature"] = temperature
+  if top_p != 1:
+      optional_params["top_p"] = top_p
+  if n != 1:
+      optional_params["n"] = n
+  if stream:
+      optional_params["stream"] = stream
+  if stop != None:
+      optional_params["stop"] = stop
+  if max_tokens != float('inf'):
+      optional_params["max_tokens"] = max_tokens
+  if presence_penalty != 0:
+      optional_params["presence_penalty"] = presence_penalty
+  if frequency_penalty != 0:
+      optional_params["frequency_penalty"] = frequency_penalty
+  if logit_bias != {}:
+      optional_params["logit_bias"] = logit_bias
+  if user != "":
+      optional_params["user"] = user
+  return optional_params
 
 ####### COMPLETION ENDPOINTS ################
 #############################################
-@func_set_timeout(10, allowOverride=True) ## https://pypi.org/project/func-timeout/ - timeouts, in case calls hang (e.g. Azure)
-def completion(model, messages, max_tokens=None, forceTimeout=10, azure=False, logger_fn=None):
+@client
+@timeout(60) ## set timeouts, in case calls hang (e.g. Azure) - default is 60s, override with `force_timeout`
+def completion(
+    model, messages, # required params
+    # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
+    functions=[], function_call="", # optional params
+    temperature=1, top_p=1, n=1, stream=False, stop=None, max_tokens=float('inf'),
+    presence_penalty=0, frequency_penalty=0, logit_bias={}, user="",
+    # Optional liteLLM function params
+    *, force_timeout=60, azure=False, logger_fn=None, verbose=False
+  ):
   try:
+    # check if user passed in any of the OpenAI optional params
+    optional_params = get_optional_params(
+      functions=functions, function_call=function_call, 
+      temperature=temperature, top_p=top_p, n=n, stream=stream, stop=stop, max_tokens=max_tokens,
+      presence_penalty=presence_penalty, frequency_penalty=frequency_penalty, logit_bias=logit_bias, user=user
+    )
     if azure == True:
       # azure configs
       openai.api_type = "azure"
@@ -51,21 +79,49 @@ def completion(model, messages, max_tokens=None, forceTimeout=10, azure=False, l
       openai.api_version = os.environ.get("AZURE_API_VERSION")
       openai.api_key = os.environ.get("AZURE_API_KEY")
       ## LOGGING
-      logging(model=model, input=input, azure=azure, logger_fn=logger_fn)
+      logging(model=model, input=messages, azure=azure, logger_fn=logger_fn)
       ## COMPLETION CALL
       response = openai.ChatCompletion.create(
         engine=model,
-        messages = messages
+        messages = messages,
+        **optional_params
       )
-    elif "replicate" in model: 
+    elif model in litellm.open_ai_chat_completion_models:
+      openai.api_type = "openai"
+      openai.api_base = "https://api.openai.com/v1"
+      openai.api_version = None
+      openai.api_key = os.environ.get("OPENAI_API_KEY")
+      ## LOGGING
+      logging(model=model, input=messages, azure=azure, logger_fn=logger_fn)
+
+      ## COMPLETION CALL
+      response = openai.ChatCompletion.create(
+        model=model,
+        messages = messages,
+        **optional_params
+      )
+    elif model in litellm.open_ai_text_completion_models:
+      openai.api_type = "openai"
+      openai.api_base = "https://api.openai.com/v1"
+      openai.api_version = None
+      openai.api_key = os.environ.get("OPENAI_API_KEY")
+      prompt = " ".join([message["content"] for message in messages])
+      ## LOGGING
+      logging(model=model, input=prompt, azure=azure, logger_fn=logger_fn)
+      ## COMPLETION CALL
+      response = openai.Completion.create(
+          model=model,
+          prompt = prompt
+      )
+    elif "replicate" in model:
       # replicate defaults to os.environ.get("REPLICATE_API_TOKEN")
       # checking in case user set it to REPLICATE_API_KEY instead 
-      if not os.environ.get("REPLICATE_API_TOKEN") and  os.environ.get("REPLICATE_API_KEY"):
+      if not os.environ.get("REPLICATE_API_TOKEN") and os.environ.get("REPLICATE_API_KEY"):
         replicate_api_token = os.environ.get("REPLICATE_API_KEY")
         os.environ["REPLICATE_API_TOKEN"] = replicate_api_token
       prompt = " ".join([message["content"] for message in messages])
-      input = [{"prompt": prompt}]
-      if max_tokens:
+      input = {"prompt": prompt}
+      if max_tokens != float('inf'):
         input["max_length"] = max_tokens # for t5 models 
         input["max_new_tokens"] = max_tokens # for llama2 models 
       ## LOGGING
@@ -90,7 +146,7 @@ def completion(model, messages, max_tokens=None, forceTimeout=10, azure=False, l
         ]
       }
       response = new_response
-    elif model in anthropic_models:
+    elif model in litellm.anthropic_models:
       #anthropic defaults to os.environ.get("ANTHROPIC_API_KEY")
       prompt = f"{HUMAN_PROMPT}" 
       for message in messages:
@@ -103,9 +159,10 @@ def completion(model, messages, max_tokens=None, forceTimeout=10, azure=False, l
           prompt += f"{HUMAN_PROMPT}{message['content']}"
       prompt += f"{AI_PROMPT}"
       anthropic = Anthropic()
-      if max_tokens:
+      # check if user passed in max_tokens != float('inf')
+      if max_tokens != float('inf'):
         max_tokens_to_sample = max_tokens
-      else: 
+      else:
         max_tokens_to_sample = 300 # default in Anthropic docs https://docs.anthropic.com/claude/reference/client-libraries
       ## LOGGING
       logging(model=model, input=prompt, azure=azure, additional_args={"max_tokens": max_tokens}, logger_fn=logger_fn)
@@ -127,9 +184,9 @@ def completion(model, messages, max_tokens=None, forceTimeout=10, azure=False, l
           }
         ]
       }
-      print(f"new response: {new_response}")
+      print_verbose(f"new response: {new_response}")
       response = new_response
-    elif model in cohere_models:
+    elif model in litellm.cohere_models:
       cohere_key = os.environ.get("COHERE_API_KEY")
       co = cohere.Client(cohere_key)
       prompt = " ".join([message["content"] for message in messages])
@@ -146,7 +203,7 @@ def completion(model, messages, max_tokens=None, forceTimeout=10, azure=False, l
                   "finish_reason": "stop",
                   "index": 0,
                   "message": {
-                      "content": response[0],
+                      "content": response[0].text,
                       "role": "assistant"
                   }
               }
@@ -154,7 +211,7 @@ def completion(model, messages, max_tokens=None, forceTimeout=10, azure=False, l
       }
       response = new_response
 
-    elif model in open_ai_chat_completion_models:
+    elif model in litellm.open_ai_chat_completion_models:
       openai.api_type = "openai"
       openai.api_base = "https://api.openai.com/v1"
       openai.api_version = None
@@ -166,7 +223,7 @@ def completion(model, messages, max_tokens=None, forceTimeout=10, azure=False, l
           model=model,
           messages = messages
       )
-    elif model in open_ai_text_completion_models:
+    elif model in litellm.open_ai_text_completion_models:
       openai.api_type = "openai"
       openai.api_base = "https://api.openai.com/v1"
       openai.api_version = None
@@ -181,249 +238,59 @@ def completion(model, messages, max_tokens=None, forceTimeout=10, azure=False, l
       )
     else: 
       logging(model=model, input=messages, azure=azure, logger_fn=logger_fn)
+      args = locals()
+      raise ValueError(f"No valid completion model args passed in - {args}")
     return response
   except Exception as e:
-    logging(model=model, input=messages, azure=azure, additional_args={"max_tokens": max_tokens}, logger_fn=logger_fn)
-    raise e
+    # log the original exception
+    logging(model=model, input=messages, azure=azure, additional_args={"max_tokens": max_tokens}, logger_fn=logger_fn, exception=e)
+    ## Map to OpenAI Exception
+    raise exception_type(model=model, original_exception=e)
 
 
 ### EMBEDDING ENDPOINTS ####################
-@func_set_timeout(60, allowOverride=True) ## https://pypi.org/project/func-timeout/
-def embedding(model, input=[], azure=False, forceTimeout=60, logger_fn=None):
-  response = None
-  if azure == True:
-    # azure configs
-    openai.api_type = "azure"
-    openai.api_base = os.environ.get("AZURE_API_BASE")
-    openai.api_version = os.environ.get("AZURE_API_VERSION")
-    openai.api_key = os.environ.get("AZURE_API_KEY")
-    ## LOGGING
-    logging(model=model, input=input, azure=azure, logger_fn=logger_fn)
-    ## EMBEDDING CALL
-    response = openai.Embedding.create(input=input, engine=model)
-    print_verbose(f"response_value: {str(response)[:50]}")
-  elif model in open_ai_embedding_models:
-    openai.api_type = "openai"
-    openai.api_base = "https://api.openai.com/v1"
-    openai.api_version = None
-    openai.api_key = os.environ.get("OPENAI_API_KEY")
-    ## LOGGING
-    logging(model=model, input=input, azure=azure, logger_fn=logger_fn)
-    ## EMBEDDING CALL
-    response = openai.Embedding.create(input=input, model=model)
-    print_verbose(f"response_value: {str(response)[:50]}")
-  else: 
-    logging(model=model, input=input, azure=azure, logger_fn=logger_fn)
-  
-  return response
-
-
-### CLIENT CLASS #################### make it easy to push completion/embedding runs to different sources -> sentry/posthog/slack, etc.
-class litellm_client:
-  def __init__(self, success_callback=[], failure_callback=[], verbose=False):  # Constructor
-      set_verbose = verbose
-      self.success_callback = success_callback
-      self.failure_callback = failure_callback
-      self.logger_fn = None # if user passes in their own logging function
-      self.callback_list = list(set(self.success_callback + self.failure_callback))
-      self.set_callbacks()
-  
-  ## COMPLETION CALL 
-  def completion(self, model, messages, max_tokens=None, forceTimeout=10, azure=False, logger_fn=None, additional_details={}) -> Any:
-    try:
-      self.logger_fn = logger_fn
-      response = completion(model=model, messages=messages, max_tokens=max_tokens, forceTimeout=forceTimeout, azure=azure, logger_fn=self.handle_input)
-      my_thread = threading.Thread(target=self.handle_success, args=(model, messages, additional_details)) # don't interrupt execution of main thread
-      my_thread.start()
-      return response
-    except Exception as e: 
-      args = locals() # get all the param values
-      self.handle_failure(e, args)
-      raise e
-
-  ## EMBEDDING CALL 
-  def embedding(self, model, input=[], azure=False, logger_fn=None, forceTimeout=60, additional_details={}) -> Any:
-    try:
-      self.logger_fn = logger_fn
-      response = embedding(model, input, azure=azure, logger_fn=self.handle_input)
-      my_thread = threading.Thread(target=self.handle_success, args=(model, input, additional_details)) # don't interrupt execution of main thread
-      my_thread.start()
-      return response
-    except Exception as e:
-      args = locals() # get all the param values 
-      self.handle_failure(e, args)
-      raise e
-
-
-  def set_callbacks(self):  #instantiate any external packages
-    for callback in self.callback_list: # only install what's required
-      if callback == "sentry":
-        try:
-          import sentry_sdk
-        except ImportError:
-          print_verbose("Package 'sentry_sdk' is missing. Installing it...")
-          subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'sentry_sdk'])
-          import sentry_sdk
-        self.sentry_sdk = sentry_sdk
-        self.sentry_sdk.init(dsn=os.environ.get("SENTRY_API_URL"), traces_sample_rate=float(os.environ.get("SENTRY_API_TRACE_RATE")))
-        self.capture_exception = self.sentry_sdk.capture_exception
-        self.add_breadcrumb = self.sentry_sdk.add_breadcrumb
-      elif callback == "posthog":
-        try:
-          from posthog import Posthog
-        except:
-          print_verbose("Package 'posthog' is missing. Installing it...")
-          subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'posthog'])
-          from posthog import Posthog
-        self.posthog = Posthog(
-            project_api_key=os.environ.get("POSTHOG_API_KEY"),
-            host=os.environ.get("POSTHOG_API_URL"))
-      elif callback == "slack":
-        try:
-          from slack_bolt import App
-        except ImportError:
-          print_verbose("Package 'slack_bolt' is missing. Installing it...")
-          subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'slack_bolt'])
-          from slack_bolt import App
-        self.slack_app = App(
-          token=os.environ.get("SLACK_API_TOKEN"),
-          signing_secret=os.environ.get("SLACK_API_SECRET")
-        )
-        self.alerts_channel = os.environ["SLACK_API_CHANNEL"]
-
-  def handle_input(self, model_call_details={}):
-      if len(model_call_details.keys()) > 0:
-        model = model_call_details["model"] if "model" in model_call_details else None
-        if model:
-          for callback in self.callback_list:
-            if callback == "sentry": # add a sentry breadcrumb if user passed in sentry integration
-              self.add_breadcrumb(
-                category=f'{model}',
-                message='Trying request model {} input {}'.format(model, json.dumps(model_call_details)),
-                level='info',
-              )
-          if self.logger_fn and callable(self.logger_fn):
-            self.logger_fn(model_call_details)
-      pass
-
-  def handle_success(self, model, messages, additional_details):
-    success_handler = additional_details.pop("success_handler", None)
-    failure_handler = additional_details.pop("failure_handler", None)
-    additional_details["litellm_model"] = str(model)
-    additional_details["litellm_messages"] = str(messages)
-    for callback in self.success_callback:
-      try:
-        if callback == "posthog":
-          ph_obj = {}
-          for detail in additional_details:
-            ph_obj[detail] = additional_details[detail]
-          event_name = additional_details["successful_event"] if "successful_event" in additional_details else "litellm.succes_query"
-          if "user_id" in additional_details:
-            self.posthog.capture(additional_details["user_id"], event_name, ph_obj)
-          else: 
-            self.posthog.capture(event_name, ph_obj)
-          pass
-        elif callback == "slack":
-          slack_msg = "" 
-          if len(additional_details.keys()) > 0:
-            for detail in additional_details: 
-              slack_msg += f"{detail}: {additional_details[detail]}\n"
-          slack_msg += f"Successful call"
-          self.slack_app.client.chat_postMessage(channel=self.alerts_channel, text=slack_msg)
-      except:
-        pass
-    
-    if success_handler and callable(success_handler):
-      call_details = {
-        "model": model,
-        "messages": messages,
-        "additional_details": additional_details
-      }
-      success_handler(call_details)
-    pass
-
-  def handle_failure(self, exception, args):
-    args.pop("self")
-    additional_details = args.pop("additional_details", {})
-
-    success_handler = additional_details.pop("success_handler", None)
-    failure_handler = additional_details.pop("failure_handler", None)
-
-    for callback in self.failure_callback:
-      try:
-        if callback == "slack":
-          slack_msg = "" 
-          for param in args: 
-            slack_msg += f"{param}: {args[param]}\n"
-          if len(additional_details.keys()) > 0:
-            for detail in additional_details: 
-              slack_msg += f"{detail}: {additional_details[detail]}\n"
-          slack_msg += f"Traceback: {traceback.format_exc()}"
-          self.slack_app.client.chat_postMessage(channel=self.alerts_channel, text=slack_msg)
-        elif callback == "sentry":
-          self.capture_exception(exception)
-        elif callback == "posthog":
-          if len(additional_details.keys()) > 0:
-            ph_obj = {}
-            for param in args: 
-              ph_obj[param] += args[param]
-            for detail in additional_details:
-              ph_obj[detail] = additional_details[detail]
-            event_name = additional_details["failed_event"] if "failed_event" in additional_details else "litellm.failed_query"
-            if "user_id" in additional_details:
-              self.posthog.capture(additional_details["user_id"], event_name, ph_obj)
-            else: 
-              self.posthog.capture(event_name, ph_obj)
-          else: 
-            pass
-      except:
-        print(f"got an error calling {callback} - {traceback.format_exc()}")
-    
-    if failure_handler and callable(failure_handler):
-      call_details = {
-        "exception": exception,
-        "additional_details": additional_details
-      }
-      failure_handler(call_details)
-    pass
-####### HELPER FUNCTIONS ################
-
-#Logging function -> log the exact model details + what's being sent | Non-Blocking
-def logging(model, input, azure=False, additional_args={}, logger_fn=None):
+@client
+@timeout(60) ## set timeouts, in case calls hang (e.g. Azure) - default is 60s, override with `force_timeout`
+def embedding(model, input=[], azure=False, force_timeout=60, logger_fn=None):
   try:
-    model_call_details = {}
-    model_call_details["model"] = model
-    model_call_details["input"] = input
-    model_call_details["azure"] = azure
-    model_call_details["additional_args"] = additional_args
-    if logger_fn and callable(logger_fn):
-      try:
-        # log additional call details -> api key, etc. 
-        if azure == True or model in open_ai_chat_completion_models or model in open_ai_chat_completion_models or model in open_ai_embedding_models:
-          model_call_details["api_type"] = openai.api_type
-          model_call_details["api_base"] = openai.api_base
-          model_call_details["api_version"] = openai.api_version
-          model_call_details["api_key"] = openai.api_key
-        elif "replicate" in model:
-          model_call_details["api_key"] = os.environ.get("REPLICATE_API_TOKEN")
-        elif model in anthropic_models:
-          model_call_details["api_key"] = os.environ.get("ANTHROPIC_API_KEY")
-        elif model in cohere_models:
-          model_call_details["api_key"] = os.environ.get("COHERE_API_KEY")
-        
-        logger_fn(model_call_details) # Expectation: any logger function passed in by the user should accept a dict object
-      except:
-        print_verbose(f"Basic model call details: {model_call_details}")
-        print_verbose(f"[Non-Blocking] Exception occurred while logging {traceback.format_exc()}")
-        pass
-    else:
-      print_verbose(f"Basic model call details: {model_call_details}")
-      pass
-  except:
-    pass
-
-## Set verbose to true -> ```litellm.verbose = True```    
+    response = None
+    if azure == True:
+      # azure configs
+      openai.api_type = "azure"
+      openai.api_base = os.environ.get("AZURE_API_BASE")
+      openai.api_version = os.environ.get("AZURE_API_VERSION")
+      openai.api_key = os.environ.get("AZURE_API_KEY")
+      ## LOGGING
+      logging(model=model, input=input, azure=azure, logger_fn=logger_fn)
+      ## EMBEDDING CALL
+      response = openai.Embedding.create(input=input, engine=model)
+      print_verbose(f"response_value: {str(response)[:50]}")
+    elif model in litellm.open_ai_embedding_models:
+      openai.api_type = "openai"
+      openai.api_base = "https://api.openai.com/v1"
+      openai.api_version = None
+      openai.api_key = os.environ.get("OPENAI_API_KEY")
+      ## LOGGING
+      logging(model=model, input=input, azure=azure, logger_fn=logger_fn)
+      ## EMBEDDING CALL
+      response = openai.Embedding.create(input=input, model=model)
+      print_verbose(f"response_value: {str(response)[:50]}")
+    else: 
+      logging(model=model, input=input, azure=azure, logger_fn=logger_fn)
+      args = locals()
+      raise ValueError(f"No valid embedding model args passed in - {args}")
+    
+    return response
+  except Exception as e:
+    # log the original exception
+    logging(model=model, input=input, azure=azure, logger_fn=logger_fn, exception=e)
+    ## Map to OpenAI Exception
+    raise exception_type(model=model, original_exception=e)
+####### HELPER FUNCTIONS ################
+## Set verbose to true -> ```litellm.set_verbose = True```    
 def print_verbose(print_statement):
-  if set_verbose:
+  if litellm.set_verbose:
     print(f"LiteLLM: {print_statement}")
-    print("Get help - https://discord.com/invite/wuPM9dRgDw")
+    if random.random() <= 0.3:
+      print("Get help - https://discord.com/invite/wuPM9dRgDw")
+
