@@ -1,7 +1,7 @@
 success_callback = []
 failure_callback = []
 set_verbose=False
-
+telemetry=True
 ####### COMPLETION MODELS ###################
 open_ai_chat_completion_models = [
   'gpt-3.5-turbo', 
