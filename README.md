@@ -3,7 +3,7 @@
 [![PyPI Version](https://img.shields.io/badge/stable%20version-v0.1.1-blue?color=green&link=https://pypi.org/project/litellm/0.1.1/)](https://pypi.org/project/litellm/0.1.1/)
 [![CircleCI](https://dl.circleci.com/status-badge/img/gh/BerriAI/litellm/tree/main.svg?style=svg)](https://dl.circleci.com/status-badge/redirect/gh/BerriAI/litellm/tree/main)
 ![Downloads](https://img.shields.io/pypi/dm/litellm)
-![](https://img.shields.io/badge/litellm%20%F0%9F%9A%85-8A2BE2)
+![https://github.com/BerriAI/litellm](https://img.shields.io/badge/%F0%9F%9A%85%20%20liteLLM-8A2BE2)
 
 [![](https://dcbadge.vercel.app/api/server/wuPM9dRgDw)](https://discord.gg/wuPM9dRgDw)
 
