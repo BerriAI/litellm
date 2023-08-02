@@ -5,7 +5,9 @@ telemetry=True
 ####### COMPLETION MODELS ###################
 open_ai_chat_completion_models = [
   'gpt-3.5-turbo', 
-  'gpt-4'
+  'gpt-4',
+  'gpt-3.5-turbo-16k-0613',
+  'gpt-3.5-turbo-16k'
 ]
 open_ai_text_completion_models = [
     'text-davinci-003'
