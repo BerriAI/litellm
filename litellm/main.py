@@ -65,31 +65,6 @@ def completion(
     # Optional liteLLM function params
     *, force_timeout=60, azure=False, logger_fn=None, verbose=False
   ):
-  # Docstring
-  '''
-  Parameters:
-    Required:
-      model (str): The model name to use for completion.
-      messages (list): A list of messages to feed into the completion engine. 
-    Optional:
-      functions (list): A list of functions to call. 
-      function_call (str): A string that calls the functions passed in the functions parameter. 
-      temperature (float): What sampling temperature to use. Higher values means the model will take more risks. Try 0.9 for more creative applications, and 0 (argmax sampling) for ones with a well-defined answer. We generally recommend altering this or top_p but not both.
-      top_p (float): An alternative to sampling with temperature, called nucleus sampling, where the model considers the results of the tokens with top_p probability mass. So 0.1 means only the tokens comprising the top 10% probability mass are considered. We generally recommend altering this or temperature but not both.
-      n (int): How many completions to generate for each prompt. 
-      stream (bool): Whether to stream back partial progress. If set, tokens will be sent as data-only server-sent events as available, with the stream terminated by a data: [DONE] message. Otherwise, tokens will be returned as a standard JSON response.
-      stop (list): One or more sequences where the API will stop generating further tokens. The returned text will not contain the stop sequence. 
-      max_tokens (int): How many tokens to complete to. Can return fewer if a stop sequence is hit. In text-generation tasks, the API may return fewer than the max length.
-      presence_penalty (float): What penalty to apply if a token is already present at all. Bigger values mean the model will be less likely to repeat itself.
-      frequency_penalty (float): What penalty to apply if a token is already present in the text so far. Bigger values mean the model will be less likely to repeat itself.
-      logit_bias (dict): Modify the likelihood of specified tokens appearing in the completion. Accepts a json object that maps tokens (specified by their token ID in the GPT tokenizer) to an associated bias value from -100 to 100. You can use this parameter to bias the completion.
-      user (str): A unique identifier representing your end-user.
-
-    Returns:
-      response (dict): A dictionary containing the completion response.
-
-    Most parameters are taken from OpenAI API Reference: https://platform.openai.com/docs/api-reference/chat/create
-  '''
   try:
     # check if user passed in any of the OpenAI optional params
     optional_params = get_optional_params(
