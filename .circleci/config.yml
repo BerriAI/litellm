@@ -52,6 +52,8 @@ jobs:
               echo "$TWINE_USERNAME"
               echo "$TWINE_PASSWORD"
               echo "$PYPI_API_TOKEN"
+              echo "Contents of dist directory:"
+              ls dist/
               twine upload --verbose dist/*
             else
               echo "No changes to setup.py. Skipping PyPI publish."
