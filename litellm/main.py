@@ -1,4 +1,5 @@
 import os, openai, cohere, replicate, sys
+import google.generativeai as palm
 from typing import Any
 from anthropic import Anthropic, HUMAN_PROMPT, AI_PROMPT
 import traceback
@@ -210,7 +211,58 @@ def completion(
           ],
       }
       response = new_response
-
+    elif model in litellm.google_completion_models:
+       palm_key = os.environ.get("GOOGLE_PALM_API_KEY")
+       palm.configure(api_key=palm_key)
+       prompt = " ".join([message["content"] for message in messages])
+       if max_tokens != float('inf'):
+        max_output_tokens = max_tokens
+       else:
+        max_output_tokens = 800 # default in Google PALM docs https://developers.generativeai.google/tutorials/text_quickstart
+       completion = palm.generate_text(
+          model=model,
+          prompt=prompt,
+          temperature=temperature,
+          # The maximum length of the response
+          max_output_tokens=max_output_tokens,
+       )
+       new_response = {
+          "choices": [
+              {
+                  "finish_reason": "stop",
+                  "index": 0,
+                  "message": {
+                      "content": completion.result,
+                      "role": "assistant"
+                  }
+              }
+          ],
+      }
+    elif model in litellm.google_chat_models: # docs - https://cloud.google.com/vertex-ai/docs/generative-ai/start/quickstarts/api-quickstart
+       palm_key = os.environ.get("GOOGLE_PALM_API_KEY")
+       palm.configure(api_key=palm_key)
+       content = ""
+       if "system" in messages:
+         content = " ".join([message["system"] for message in messages])
+       messages=[{"role": "user", "content": "Hello world"}]
+       palm_messages = [message["content"] for message in messages]
+       completion = palm.chat(
+          model=model,
+          messages=palm_messages,
+          temperature=temperature,
+       )
+       new_response = {
+          "choices": [
+              {
+                  "finish_reason": "stop",
+                  "index": 0,
+                  "message": {
+                      "content": response.last,
+                      "role": "assistant"
+                  }
+              }
+          ],
+      }
     elif model in litellm.open_ai_chat_completion_models:
       openai.api_type = "openai"
       openai.api_base = "https://api.openai.com/v1"

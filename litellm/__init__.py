@@ -20,9 +20,20 @@ anthropic_models = [
   "claude-instant-1"
 ]
 
+google_chat_models = [
+    "chat-bison-001"
+]
+
+google_completion_models = [
+    "text-bison-001",
+]
 ####### EMBEDDING MODELS ###################
 open_ai_embedding_models = [
     'text-embedding-ada-002'
+]
+
+google_embedding_models = [
+    "embedding-gecko-001"
 ]
 
 from .timeout import timeout
