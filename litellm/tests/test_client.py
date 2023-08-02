@@ -57,3 +57,4 @@ def test_good_azure_embedding():
         print(f"response: {str(response)[:50]}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
