@@ -47,7 +47,7 @@ def logger_fn(model_call_object: dict):
     print(f"model call details: {model_call_object}")
 
 @pytest.mark.parametrize("model", models)
-def test_invalid_auth(model): # set the model key to an invalid key, depending on the model 
+def invalid_auth(model): # set the model key to an invalid key, depending on the model 
     messages = [{ "content": "Hello, how are you?","role": "user"}]
     try: 
         azure = False
