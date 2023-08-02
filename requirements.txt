@@ -3,6 +3,5 @@ cohere
 anthropic
 replicate
 pytest
-pytest
 python-dotenv
 openai[datalib]
