@@ -15,13 +15,14 @@ def logger_fn(model_call_object: dict):
 user_message = "Hello, how are you?"
 messages = [{ "content": user_message,"role": "user"}]
 
+print(os.environ)
 temp_key = os.environ.get("OPENAI_API_KEY")
 os.environ["OPENAI_API_KEY"] = "bad-key"
 # test on openai completion call 
 try:
     response = completion(model="gpt-3.5-turbo", messages=messages, logger_fn=logger_fn, api_key=temp_key)
+    print(f"response: {response}")
 except:
     print(f"error occurred: {traceback.format_exc()}") 
     pass
-
 os.environ["OPENAI_API_KEY"] = temp_key

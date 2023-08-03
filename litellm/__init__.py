@@ -3,6 +3,7 @@ failure_callback = []
 set_verbose=False
 telemetry=True
 max_tokens = 256 # OpenAI Defaults
+retry = True # control tenacity retries. 
 ####### PROXY PARAMS ################### configurable params if you use proxy models like Helicone
 api_base = None
 headers = None
