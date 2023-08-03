@@ -7,6 +7,7 @@ import traceback
 import litellm
 from litellm import client, logging, exception_type, timeout, success_callback, failure_callback
 import random
+import asyncio
 from tenacity import (
     retry,
     stop_after_attempt,
@@ -69,7 +70,7 @@ def completion(
     temperature=1, top_p=1, n=1, stream=False, stop=None, max_tokens=float('inf'),
     presence_penalty=0, frequency_penalty=0, logit_bias={}, user="",
     # Optional liteLLM function params
-    *, api_key=None, force_timeout=60, azure=False, logger_fn=None, verbose=False
+    *, return_async=False, api_key=None, force_timeout=60, azure=False, logger_fn=None, verbose=False
   ):
   try:
     # check if user passed in any of the OpenAI optional params
@@ -253,6 +254,12 @@ def completion(
     ## Map to OpenAI Exception
     raise exception_type(model=model, original_exception=e)
 
+
+async def acompletion(*args, **kwargs):
+  loop = asyncio.get_event_loop()
+  
+  # Call the synchronous function using run_in_executor()
+  return loop.run_in_executor(None, completion, *args, **kwargs)
 
 ### EMBEDDING ENDPOINTS ####################
 @client
