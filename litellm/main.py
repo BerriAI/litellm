@@ -30,6 +30,7 @@ def get_optional_params(
     frequency_penalty = 0,
     logit_bias = {},
     user = "",
+    deployment_id = None
 ):
   optional_params = {}
   if functions != []:
@@ -56,6 +57,8 @@ def get_optional_params(
       optional_params["logit_bias"] = logit_bias
   if user != "":
       optional_params["user"] = user
+  if deployment_id != None:
+      optional_params["deployment_id"] = user
   return optional_params
 
 ####### COMPLETION ENDPOINTS ################
@@ -68,7 +71,7 @@ def completion(
     # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
     functions=[], function_call="", # optional params
     temperature=1, top_p=1, n=1, stream=False, stop=None, max_tokens=float('inf'),
-    presence_penalty=0, frequency_penalty=0, logit_bias={}, user="",
+    presence_penalty=0, frequency_penalty=0, logit_bias={}, user="", deployment_id=None,
     # Optional liteLLM function params
     *, return_async=False, api_key=None, force_timeout=60, azure=False, logger_fn=None, verbose=False
   ):
@@ -77,7 +80,7 @@ def completion(
     optional_params = get_optional_params(
       functions=functions, function_call=function_call, 
       temperature=temperature, top_p=top_p, n=n, stream=stream, stop=stop, max_tokens=max_tokens,
-      presence_penalty=presence_penalty, frequency_penalty=frequency_penalty, logit_bias=logit_bias, user=user
+      presence_penalty=presence_penalty, frequency_penalty=frequency_penalty, logit_bias=logit_bias, user=user, deployment_id=deployment_id
     )
     if azure == True:
       # azure configs
