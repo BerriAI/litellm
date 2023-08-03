@@ -2,6 +2,10 @@ success_callback = []
 failure_callback = []
 set_verbose=False
 telemetry=True
+
+####### PROXY PARAMS ################### configurable params if you use proxy models like Helicone
+api_base = None
+headers = None
 ####### COMPLETION MODELS ###################
 open_ai_chat_completion_models = [
   'gpt-3.5-turbo', 
