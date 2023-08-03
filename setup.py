@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='litellm',
-    version='0.1.2291',
+    version='0.1.230',
     description='Library to easily interface with LLM API providers',
     author='BerriAI',
     packages=[

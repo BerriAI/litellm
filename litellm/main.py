@@ -6,7 +6,7 @@ from functools import partial
 import dotenv
 import traceback
 import litellm
-from litellm import client, logging, exception_type, timeout, success_callback, failure_callback
+from litellm import client, logging, exception_type, timeout
 import random
 import asyncio
 from tenacity import (
@@ -97,7 +97,12 @@ def completion(
       openai.api_type = "azure"
       openai.api_base = litellm.api_base if litellm.api_base is not None else os.environ.get("AZURE_API_BASE")
       openai.api_version = os.environ.get("AZURE_API_VERSION")
-      openai.api_key = api_key if api_key is not None else os.environ.get("AZURE_API_KEY")
+      if api_key:
+          openai.api_key = api_key
+      elif litellm.azure_key:
+          openai.api_key = litellm.azure_key
+      else:
+          openai.api_key = os.environ.get("AZURE_API_KEY")
       ## LOGGING
       logging(model=model, input=messages, azure=azure, logger_fn=logger_fn)
       ## COMPLETION CALL
@@ -118,7 +123,12 @@ def completion(
       openai.api_type = "openai"
       openai.api_base = litellm.api_base if litellm.api_base is not None else "https://api.openai.com/v1"
       openai.api_version = None
-      openai.api_key = api_key if api_key is not None else os.environ.get("OPENAI_API_KEY")
+      if api_key:
+          openai.api_key = api_key
+      elif litellm.openai_key:
+          openai.api_key = litellm.openai_key
+      else:
+          openai.api_key = os.environ.get("OPENAI_API_KEY")
       ## LOGGING
       logging(model=model, input=messages, azure=azure, logger_fn=logger_fn)
       ## COMPLETION CALL
@@ -139,7 +149,12 @@ def completion(
       openai.api_type = "openai"
       openai.api_base = litellm.api_base if litellm.api_base is not None else "https://api.openai.com/v1"
       openai.api_version = None
-      openai.api_key = api_key if api_key is not None else os.environ.get("OPENAI_API_KEY")
+      if api_key:
+          openai.api_key = api_key
+      elif litellm.openai_key:
+          openai.api_key = litellm.openai_key
+      else:
+          openai.api_key = os.environ.get("OPENAI_API_KEY")
       prompt = " ".join([message["content"] for message in messages])
       ## LOGGING
       logging(model=model, input=prompt, azure=azure, logger_fn=logger_fn)
@@ -163,6 +178,9 @@ def completion(
         os.environ["REPLICATE_API_TOKEN"] = replicate_api_token
       elif api_key:
          os.environ["REPLICATE_API_TOKEN"] = api_key
+      elif litellm.replicate_key:
+         os.environ["REPLICATE_API_TOKEN"] = litellm.replicate_key
+
       prompt = " ".join([message["content"] for message in messages])
       input = {"prompt": prompt}
       if max_tokens != float('inf'):
@@ -194,6 +212,8 @@ def completion(
       #anthropic defaults to os.environ.get("ANTHROPIC_API_KEY")
       if api_key:
          os.environ["ANTHROPIC_API_KEY"] = api_key
+      elif litellm.anthropic_key:
+         os.environ["ANTHROPIC_API_TOKEN"] = litellm.anthropic_key
       prompt = f"{HUMAN_PROMPT}" 
       for message in messages:
         if "role" in message:
@@ -233,7 +253,12 @@ def completion(
       print_verbose(f"new response: {new_response}")
       response = new_response
     elif model in litellm.cohere_models:
-      cohere_key = api_key if api_key is not None else os.environ.get("COHERE_API_KEY")
+      if api_key:
+        cohere_key = api_key
+      elif litellm.api_key:
+        cohere_key = litellm.api_key
+      else:
+        cohere_key = os.environ.get("COHERE_API_KEY")
       co = cohere.Client(cohere_key)
       prompt = " ".join([message["content"] for message in messages])
       ## LOGGING
