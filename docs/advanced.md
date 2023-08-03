@@ -1,21 +1,27 @@
-# Advanced - liteLLM client
+# Advanced - Callbacks
 
-## Use liteLLM client to send Output Data to Posthog, Sentry etc
-liteLLM allows you to create `completion_client` and `embedding_client` to send successfull / error LLM API call data to Posthog, Sentry, Slack etc
+## Use Callbacks to send Output Data to Posthog, Sentry etc
+liteLLM provides `success_callbacks` and `failure_callbacks`, making it easy for you to send data to a particular provider depending on the status of your responses. 
+
+liteLLM supports: 
+
+- [Helicone](https://docs.helicone.ai/introduction)
+- [Sentry](https://docs.sentry.io/platforms/python/) 
+- [PostHog](https://posthog.com/docs/libraries/python)
+- [Slack](https://slack.dev/bolt-python/concepts)
 
 ### Quick Start
 ```python
-from main import litellm_client
-import os
+from litellm import completion
+
+# set callbacks
+litellm.success_callback=["posthog", "helicone"]
+litellm.failure_callback=["sentry"]
 
 ## set env variables
-os.environ['SENTRY_API_URL'] = ""
+os.environ['SENTRY_API_URL'], os.environ['SENTRY_API_TRACE_RATE']= ""
 os.environ['POSTHOG_API_KEY'], os.environ['POSTHOG_API_URL'] = "api-key", "api-url"
-
-# init liteLLM client
-client = litellm_client(success_callback=["posthog"], failure_callback=["sentry", "posthog"])
-completion = client.completion
-embedding = client.embedding
+os.environ["HELICONE_API_KEY"] = "" 
 
 response = completion(model="gpt-3.5-turbo", messages=messages) 
 ```

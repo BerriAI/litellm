@@ -2,6 +2,7 @@ import dotenv, json, traceback, threading
 import subprocess, os 
 import litellm, openai 
 import random, uuid, requests
+import datetime
 from openai.error import AuthenticationError, InvalidRequestError, RateLimitError, ServiceUnavailableError, OpenAIError
 ####### ENVIRONMENT VARIABLES ###################
 dotenv.load_dotenv() # Loading env variables using dotenv
@@ -11,6 +12,7 @@ add_breadcrumb = None
 posthog = None
 slack_app = None
 alerts_channel = None
+heliconeLogger = None
 callback_list = []
 user_logger_fn = None
 additional_details = {}
@@ -68,7 +70,7 @@ def client(original_function):
         global callback_list, add_breadcrumb
         if (len(litellm.success_callback) > 0 or len(litellm.failure_callback) > 0) and len(callback_list) == 0: 
           callback_list = list(set(litellm.success_callback + litellm.failure_callback))
-          set_callbacks(callback_list=callback_list)
+          set_callbacks(callback_list=callback_list,)
         if add_breadcrumb:
           add_breadcrumb(
                 category="litellm.llm_call",
@@ -83,9 +85,11 @@ def client(original_function):
         try:
           function_setup(args, kwargs)
           ## MODEL CALL
+          start_time = datetime.datetime.now()
           result = original_function(*args, **kwargs)
+          end_time = datetime.datetime.now()
           ## LOG SUCCESS 
-          my_thread = threading.Thread(target=handle_success, args=(args, kwargs)) # don't interrupt execution of main thread
+          my_thread = threading.Thread(target=handle_success, args=(args, kwargs, result, start_time, end_time)) # don't interrupt execution of main thread
           my_thread.start()
           return result
         except Exception as e:
@@ -97,7 +101,7 @@ def client(original_function):
 
 ####### HELPER FUNCTIONS ################
 def set_callbacks(callback_list):
-  global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel
+  global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, heliconeLogger
   try:
     for callback in callback_list:
       if callback == "sentry":
@@ -134,6 +138,10 @@ def set_callbacks(callback_list):
         )
         alerts_channel = os.environ["SLACK_API_CHANNEL"]
         print_verbose(f"Initialized Slack App: {slack_app}")
+      elif callback == "helicone":
+        from .integrations.helicone import HeliconeLogger
+
+        heliconeLogger = HeliconeLogger()
   except:
     pass
 
@@ -200,7 +208,8 @@ def handle_failure(exception, traceback_exception, args, kwargs):
     except:
       pass
 
-def handle_success(*args, **kwargs):
+def handle_success(args, kwargs, result, start_time, end_time):
+  global heliconeLogger
   try:
     success_handler = additional_details.pop("success_handler", None)
     failure_handler = additional_details.pop("failure_handler", None)
@@ -223,6 +232,11 @@ def handle_success(*args, **kwargs):
           for detail in additional_details: 
             slack_msg += f"{detail}: {additional_details[detail]}\n"
           slack_app.client.chat_postMessage(channel=alerts_channel, text=slack_msg)
+        elif callback == "helicone":
+          print_verbose("reaches helicone for logging!")
+          model = args[0] if len(args) > 0 else kwargs["model"]
+          messages = args[1] if len(args) > 1 else kwargs["messages"]
+          heliconeLogger.log_success(model=model, messages=messages, response_obj=result, start_time=start_time, end_time=end_time)
       except:
         pass
 
