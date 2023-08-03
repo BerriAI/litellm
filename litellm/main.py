@@ -2,6 +2,7 @@ import os, openai, cohere, replicate, sys
 from typing import Any
 from anthropic import Anthropic, HUMAN_PROMPT, AI_PROMPT
 import traceback
+from functools import partial
 import dotenv
 import traceback
 import litellm
@@ -261,8 +262,11 @@ def completion(
 async def acompletion(*args, **kwargs):
   loop = asyncio.get_event_loop()
   
-  # Call the synchronous function using run_in_executor()
-  return loop.run_in_executor(None, completion, *args, **kwargs)
+  # Use a partial function to pass your keyword arguments
+  func = partial(completion, *args, **kwargs)
+
+  # Call the synchronous function using run_in_executor
+  return await loop.run_in_executor(None, func)
 
 ### EMBEDDING ENDPOINTS ####################
 @client
