@@ -9,10 +9,10 @@ sys.path.insert(0, os.path.abspath('../..'))  # Adds the parent directory to the
 import litellm
 from litellm import embedding, completion
 
-litellm.success_callback = ["posthog"]
+litellm.success_callback = ["posthog", "helicone"]
 litellm.failure_callback = ["slack", "sentry", "posthog"]
 
-# litellm.set_verbose = True
+litellm.set_verbose = True
 
 def logger_fn(model_call_object: dict):
     # print(f"model call details: {model_call_object}")
@@ -23,11 +23,14 @@ messages = [{ "content": user_message,"role": "user"}]
 
 def test_completion_openai():
     try:
+        print("running query")
         response = completion(model="gpt-3.5-turbo", messages=messages, logger_fn=logger_fn)
+        print(f"response: {response}")
         # Add any assertions here to check the response
     except Exception as e:
+        traceback.print_exc()
         pytest.fail(f"Error occurred: {e}")
-
+test_completion_openai()
 def test_completion_non_openai():
     try:
         response = completion(model="claude-instant-1", messages=messages, logger_fn=logger_fn)
