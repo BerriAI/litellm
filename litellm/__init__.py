@@ -4,6 +4,11 @@ set_verbose=False
 telemetry=True
 max_tokens = 256 # OpenAI Defaults
 retry = True # control tenacity retries. 
+openai_key = None 
+azure_key = None 
+anthropic_key = None 
+replicate_key = None 
+cohere_key = None 
 ####### PROXY PARAMS ################### configurable params if you use proxy models like Helicone
 api_base = None
 headers = None
@@ -35,7 +40,11 @@ anthropic_models = [
   "claude-instant-1"
 ]
 
-model_list = open_ai_chat_completion_models + open_ai_text_completion_models + cohere_models + anthropic_models
+replicate_models = [
+    "replicate/"
+] # placeholder, to make sure we accept any replicate model in our model_list 
+
+model_list = open_ai_chat_completion_models + open_ai_text_completion_models + cohere_models + anthropic_models + replicate_models
 
 ####### EMBEDDING MODELS ###################
 open_ai_embedding_models = [
