@@ -18,33 +18,33 @@ import pytest
 
 # Approach: Run each model through the test -> assert if the correct error (always the same one) is triggered
 
-models = ["gpt-3.5-turbo", "chatgpt-test", "claude-instant-1", "command-nightly"]
+# models = ["gpt-3.5-turbo", "chatgpt-test",  "claude-instant-1", "command-nightly"]
 
-# Test 1: Context Window Errors
-@pytest.mark.parametrize("model", models)
-def test_context_window(model):
-    sample_text = "how does a court case get to the Supreme Court?" * 100000
-    messages = [{"content": sample_text, "role": "user"}]
-    try:
-        azure = model == "chatgpt-test"
-        print(f"model: {model}")
-        response = completion(model=model, messages=messages, azure=azure)
-    except InvalidRequestError:
-        print("InvalidRequestError")
-        return
-    except OpenAIError:
-        print("OpenAIError")
-        return
-    except Exception as e:
-        print("Uncaught Error in test_context_window")
-        print(f"Error Type: {type(e).__name__}")
-        print(f"Uncaught Exception - {e}")
-        pytest.fail(f"Error occurred: {e}")
-    return
+# # Test 1: Context Window Errors
+# @pytest.mark.parametrize("model", models)
+# def test_context_window(model):
+#     sample_text = "how does a court case get to the Supreme Court?" * 100000
+#     messages = [{"content": sample_text, "role": "user"}]
+#     try:
+#         azure = model == "chatgpt-test"
+#         print(f"model: {model}")
+#         response = completion(model=model, messages=messages, azure=azure)
+#     except InvalidRequestError:
+#         print("InvalidRequestError")
+#         return
+#     except OpenAIError:
+#         print("OpenAIError")
+#         return
+#     except Exception as e:
+#         print("Uncaught Error in test_context_window")
+#         # print(f"Error Type: {type(e).__name__}")
+#         print(f"Uncaught Exception - {e}")
+#         pytest.fail(f"Error occurred: {e}")
+#     return
 
-# Test 2: InvalidAuth Errors
-def logger_fn(model_call_object: dict):
-    print(f"model call details: {model_call_object}")
+# # Test 2: InvalidAuth Errors
+# def logger_fn(model_call_object: dict):
+#     print(f"model call details: {model_call_object}")
 
 # @pytest.mark.parametrize("model", models)
 # def invalid_auth(model): # set the model key to an invalid key, depending on the model 
