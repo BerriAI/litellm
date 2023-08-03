@@ -5,3 +5,4 @@ replicate
 pytest
 python-dotenv
 openai[datalib]
+tenacity
