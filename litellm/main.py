@@ -75,43 +75,66 @@ def completion(
     if azure == True:
       # azure configs
       openai.api_type = "azure"
-      openai.api_base = os.environ.get("AZURE_API_BASE")
+      openai.api_base = litellm.api_base if litellm.api_base is not None else os.environ.get("AZURE_API_BASE")
       openai.api_version = os.environ.get("AZURE_API_VERSION")
       openai.api_key = api_key if api_key is not None else os.environ.get("AZURE_API_KEY")
       ## LOGGING
       logging(model=model, input=messages, azure=azure, logger_fn=logger_fn)
       ## COMPLETION CALL
-      response = openai.ChatCompletion.create(
-        engine=model,
-        messages = messages,
-        **optional_params
-      )
+      if litellm.headers:
+         response = openai.ChatCompletion.create(
+            engine=model,
+            messages = messages,
+            headers = litellm.headers,
+            **optional_params,
+          )
+      else:
+        response = openai.ChatCompletion.create(
+          engine=model,
+          messages = messages,
+          **optional_params
+        )
     elif model in litellm.open_ai_chat_completion_models:
       openai.api_type = "openai"
-      openai.api_base = "https://api.openai.com/v1"
+      openai.api_base = litellm.api_base if litellm.api_base is not None else "https://api.openai.com/v1"
       openai.api_version = None
       openai.api_key = api_key if api_key is not None else os.environ.get("OPENAI_API_KEY")
       ## LOGGING
       logging(model=model, input=messages, azure=azure, logger_fn=logger_fn)
       ## COMPLETION CALL
-      response = openai.ChatCompletion.create(
-        model=model,
-        messages = messages,
-        **optional_params
-      )
+      if litellm.headers:
+         response = openai.ChatCompletion.create(
+          model=model,
+          messages = messages,
+          headers = litellm.headers,
+          **optional_params
+        )
+      else:
+        response = openai.ChatCompletion.create(
+          model=model,
+          messages = messages,
+          **optional_params
+        )
     elif model in litellm.open_ai_text_completion_models:
       openai.api_type = "openai"
-      openai.api_base = "https://api.openai.com/v1"
+      openai.api_base = litellm.api_base if litellm.api_base is not None else "https://api.openai.com/v1"
       openai.api_version = None
       openai.api_key = api_key if api_key is not None else os.environ.get("OPENAI_API_KEY")
       prompt = " ".join([message["content"] for message in messages])
       ## LOGGING
       logging(model=model, input=prompt, azure=azure, logger_fn=logger_fn)
       ## COMPLETION CALL
-      response = openai.Completion.create(
+      if litellm.headers:
+        response = openai.Completion.create(
           model=model,
-          prompt = prompt
-      )
+          prompt = prompt,
+          headers = litellm.headers,
+        )
+      else:
+        response = openai.Completion.create(
+            model=model,
+            prompt = prompt
+        )
     elif "replicate" in model:
       # replicate defaults to os.environ.get("REPLICATE_API_TOKEN")
       # checking in case user set it to REPLICATE_API_KEY instead 
@@ -171,10 +194,10 @@ def completion(
       logging(model=model, input=prompt, azure=azure, additional_args={"max_tokens": max_tokens}, logger_fn=logger_fn)
       ## COMPLETION CALL
       completion = anthropic.completions.create(
-          model=model,
-          prompt=prompt,
-          max_tokens_to_sample=max_tokens_to_sample
-      )
+            model=model,
+            prompt=prompt,
+            max_tokens_to_sample=max_tokens_to_sample
+        )
       new_response = {
         "choices": [
           {
