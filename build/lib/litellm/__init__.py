@@ -22,6 +22,8 @@ anthropic_models = [
   "claude-instant-1"
 ]
 
+model_list = open_ai_chat_completion_models + open_ai_text_completion_models + cohere_models + anthropic_models
+
 ####### EMBEDDING MODELS ###################
 open_ai_embedding_models = [
     'text-embedding-ada-002'
