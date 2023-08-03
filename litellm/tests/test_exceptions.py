@@ -46,34 +46,34 @@ def test_context_window(model):
 def logger_fn(model_call_object: dict):
     print(f"model call details: {model_call_object}")
 
-@pytest.mark.parametrize("model", models)
-def invalid_auth(model): # set the model key to an invalid key, depending on the model 
-    messages = [{ "content": "Hello, how are you?","role": "user"}]
-    try: 
-        azure = False
-        if model == "gpt-3.5-turbo":
-            os.environ["OPENAI_API_KEY"] = "bad-key"
-        elif model == "chatgpt-test":
-            os.environ["AZURE_API_KEY"] = "bad-key"
-            azure = True
-        elif model == "claude-instant-1":
-            os.environ["ANTHROPIC_API_KEY"] = "bad-key"
-        elif model == "command-nightly":
-            os.environ["COHERE_API_KEY"] = "bad-key"
-        elif model == "replicate/llama-2-70b-chat:2c1608e18606fad2812020dc541930f2d0495ce32eee50074220b87300bc16e1":
-            os.environ["REPLICATE_API_KEY"] = "bad-key"
-            os.environ["REPLICATE_API_TOKEN"] = "bad-key"
-        print(f"model: {model}")
-        response = completion(model=model, messages=messages, azure=azure, logger_fn=logger_fn)
-        print(f"response: {response}")
-    except AuthenticationError as e:
-        return
-    except OpenAIError: # is at least an openai error -> in case of random model errors - e.g. overloaded server
-        return
-    except Exception as e:
-        print(f"Uncaught Exception - {e}")
-        pytest.fail(f"Error occurred: {e}")
-    return
+# @pytest.mark.parametrize("model", models)
+# def invalid_auth(model): # set the model key to an invalid key, depending on the model 
+#     messages = [{ "content": "Hello, how are you?","role": "user"}]
+#     try: 
+#         azure = False
+#         if model == "gpt-3.5-turbo":
+#             os.environ["OPENAI_API_KEY"] = "bad-key"
+#         elif model == "chatgpt-test":
+#             os.environ["AZURE_API_KEY"] = "bad-key"
+#             azure = True
+#         elif model == "claude-instant-1":
+#             os.environ["ANTHROPIC_API_KEY"] = "bad-key"
+#         elif model == "command-nightly":
+#             os.environ["COHERE_API_KEY"] = "bad-key"
+#         elif model == "replicate/llama-2-70b-chat:2c1608e18606fad2812020dc541930f2d0495ce32eee50074220b87300bc16e1":
+#             os.environ["REPLICATE_API_KEY"] = "bad-key"
+#             os.environ["REPLICATE_API_TOKEN"] = "bad-key"
+#         print(f"model: {model}")
+#         response = completion(model=model, messages=messages, azure=azure, logger_fn=logger_fn)
+#         print(f"response: {response}")
+#     except AuthenticationError as e:
+#         return
+#     except OpenAIError: # is at least an openai error -> in case of random model errors - e.g. overloaded server
+#         return
+#     except Exception as e:
+#         print(f"Uncaught Exception - {e}")
+#         pytest.fail(f"Error occurred: {e}")
+#     return
 
 
 # # Test 3: Rate Limit Errors 
