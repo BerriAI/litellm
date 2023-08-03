@@ -18,11 +18,16 @@ from litellm import completion
 
 ## set env variables
 os.environ["HELICONE_API_KEY"] = "your-helicone-key" 
+os.environ["OPENAI_API_KEY"], os.environ["COHERE_API_KEY"] = "", ""
 
 # set callbacks
 litellm.success_callback=["helicone"]
 
-response = completion(model="gpt-3.5-turbo", messages=messages) 
+#openai call
+response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}]) 
+
+#cohere call
+response = completion(model="command-nightly", messages=[{"role": "user", "content": "Hi 👋 - i'm cohere"}]) 
 ```
 
 ### Approach 2: [OpenAI + Azure only] Use Helicone as a proxy
