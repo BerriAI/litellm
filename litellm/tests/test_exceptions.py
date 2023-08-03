@@ -8,6 +8,7 @@ from litellm import embedding, completion
 from concurrent.futures import ThreadPoolExecutor
 import pytest
 
+# litellm.set_verbose = True
 #### What this tests ####
 #    This tests exception mapping -> trigger an exception from an llm provider -> assert if output is of the expected type
 
@@ -19,29 +20,32 @@ import pytest
 # Approach: Run each model through the test -> assert if the correct error (always the same one) is triggered
 
 # models = ["gpt-3.5-turbo", "chatgpt-test",  "claude-instant-1", "command-nightly"]
-
-# # Test 1: Context Window Errors
-# @pytest.mark.parametrize("model", models)
-# def test_context_window(model):
-#     sample_text = "how does a court case get to the Supreme Court?" * 100000
-#     messages = [{"content": sample_text, "role": "user"}]
-#     try:
-#         azure = model == "chatgpt-test"
-#         print(f"model: {model}")
-#         response = completion(model=model, messages=messages, azure=azure)
-#     except InvalidRequestError:
-#         print("InvalidRequestError")
-#         return
-#     except OpenAIError:
-#         print("OpenAIError")
-#         return
-#     except Exception as e:
-#         print("Uncaught Error in test_context_window")
-#         # print(f"Error Type: {type(e).__name__}")
-#         print(f"Uncaught Exception - {e}")
-#         pytest.fail(f"Error occurred: {e}")
-#     return
-
+models = ["command-nightly"]
+def logging_fn(model_call_dict):
+    print(f"model_call_dict: {model_call_dict['model']}")
+# Test 1: Context Window Errors
+@pytest.mark.parametrize("model", models)
+def test_context_window(model):
+    sample_text = "how does a court case get to the Supreme Court?" * 100000
+    messages = [{"content": sample_text, "role": "user"}]
+    try:
+        azure = model == "chatgpt-test"
+        print(f"model: {model}")
+        response = completion(model=model, messages=messages, azure=azure, logger_fn=logging_fn)
+        print(f"response: {response}")
+    except InvalidRequestError:
+        print("InvalidRequestError")
+        return
+    except OpenAIError:
+        print("OpenAIError")
+        return
+    except Exception as e:
+        print("Uncaught Error in test_context_window")
+        # print(f"Error Type: {type(e).__name__}")
+        print(f"Uncaught Exception - {e}")
+        pytest.fail(f"Error occurred: {e}")
+    return
+test_context_window("command-nightly")
 # # Test 2: InvalidAuth Errors
 # def logger_fn(model_call_object: dict):
 #     print(f"model call details: {model_call_object}")
@@ -64,7 +68,7 @@ import pytest
 #             os.environ["REPLICATE_API_KEY"] = "bad-key"
 #             os.environ["REPLICATE_API_TOKEN"] = "bad-key"
 #         print(f"model: {model}")
-#         response = completion(model=model, messages=messages, azure=azure, logger_fn=logger_fn)
+#         response = completion(model=model, messages=messages, azure=azure)
 #         print(f"response: {response}")
 #     except AuthenticationError as e:
 #         return
@@ -74,7 +78,6 @@ import pytest
 #         print(f"Uncaught Exception - {e}")
 #         pytest.fail(f"Error occurred: {e}")
 #     return
-
 
 # # Test 3: Rate Limit Errors 
 # def test_model(model):

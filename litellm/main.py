@@ -74,7 +74,7 @@ async def acompletion(*args, **kwargs):
   return await loop.run_in_executor(None, func)
 
 @client
-@retry(wait=wait_random_exponential(min=1, max=60), stop=stop_after_attempt(2), reraise=True, retry_error_callback=lambda retry_state: setattr(retry_state.outcome, 'retry_variable', litellm.retry)) # retry call, turn this off by setting `litellm.retry = False`
+# @retry(wait=wait_random_exponential(min=1, max=60), stop=stop_after_attempt(2), reraise=True, retry_error_callback=lambda retry_state: setattr(retry_state.outcome, 'retry_variable', litellm.retry)) # retry call, turn this off by setting `litellm.retry = False`
 @timeout(60) ## set timeouts, in case calls hang (e.g. Azure) - default is 60s, override with `force_timeout`
 def completion(
     model, messages, # required params
@@ -255,8 +255,8 @@ def completion(
     elif model in litellm.cohere_models:
       if api_key:
         cohere_key = api_key
-      elif litellm.api_key:
-        cohere_key = litellm.api_key
+      elif litellm.cohere_key:
+        cohere_key = litellm.cohere_key
       else:
         cohere_key = os.environ.get("COHERE_API_KEY")
       co = cohere.Client(cohere_key)
@@ -330,6 +330,7 @@ def embedding(model, input=[], azure=False, force_timeout=60, logger_fn=None):
     logging(model=model, input=input, azure=azure, logger_fn=logger_fn, exception=e)
     ## Map to OpenAI Exception
     raise exception_type(model=model, original_exception=e)
+    raise e
 ####### HELPER FUNCTIONS ################
 ## Set verbose to true -> ```litellm.set_verbose = True```    
 def print_verbose(print_statement):
