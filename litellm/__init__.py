@@ -41,7 +41,6 @@ model_list = open_ai_chat_completion_models + open_ai_text_completion_models + c
 open_ai_embedding_models = [
     'text-embedding-ada-002'
 ]
-
 from .timeout import timeout
 from .utils import client, logging, exception_type  # Import all the symbols from main.py
 from .main import *  # Import all the symbols from main.py

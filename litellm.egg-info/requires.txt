@@ -5,3 +5,4 @@ anthropic
 replicate
 python-dotenv
 openai[datalib]
+tenacity
