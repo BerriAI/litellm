@@ -112,6 +112,7 @@ def set_callbacks(callback_list):
             subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'sentry_sdk'])
             import sentry_sdk
         sentry_sdk_instance = sentry_sdk
+        sentry_trace_rate = os.environ.get("SENTRY_API_TRACE_RATE") if "SENTRY_API_TRACE_RATE" in os.environ else "1.0"
         sentry_sdk_instance.init(dsn=os.environ.get("SENTRY_API_URL"), traces_sample_rate=float(os.environ.get("SENTRY_API_TRACE_RATE")))
         capture_exception = sentry_sdk_instance.capture_exception
         add_breadcrumb = sentry_sdk_instance.add_breadcrumb 
@@ -236,14 +237,16 @@ def handle_success(args, kwargs, result, start_time, end_time):
           print_verbose("reaches helicone for logging!")
           model = args[0] if len(args) > 0 else kwargs["model"]
           messages = args[1] if len(args) > 1 else kwargs["messages"]
-          heliconeLogger.log_success(model=model, messages=messages, response_obj=result, start_time=start_time, end_time=end_time)
+          heliconeLogger.log_success(model=model, messages=messages, response_obj=result, start_time=start_time, end_time=end_time, print_verbose=print_verbose)
       except:
+        print_verbose(f"Success Callback Error - {traceback.format_exc()}")
         pass
 
     if success_handler and callable(success_handler):
       success_handler(args, kwargs)
     pass
   except:
+    print_verbose(f"Success Callback Error - {traceback.format_exc()}")
     pass
 
 

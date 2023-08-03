@@ -1,6 +1,6 @@
 Metadata-Version: 2.1
 Name: litellm
-Version: 0.1.222
+Version: 0.1.226
 Summary: Library to easily interface with LLM API providers
 Author: BerriAI
 License-File: LICENSE

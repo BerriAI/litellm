@@ -11,3 +11,5 @@ litellm.egg-info/SOURCES.txt
 litellm.egg-info/dependency_links.txt
 litellm.egg-info/requires.txt
 litellm.egg-info/top_level.txt
+litellm/integrations/__init__.py
+litellm/integrations/helicone.py
