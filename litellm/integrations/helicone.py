@@ -2,6 +2,7 @@
 #    On success, logs events to Helicone
 import dotenv, os
 import requests
+from anthropic import HUMAN_PROMPT, AI_PROMPT
 dotenv.load_dotenv() # Loading env variables using dotenv
 import traceback
 class HeliconeLogger:
@@ -11,12 +12,32 @@ class HeliconeLogger:
         # Instance variables
         self.provider_url = "https://api.openai.com/v1"
         self.key = os.getenv('HELICONE_API_KEY')
+
+    def claude_mapping(self, model, messages, response_obj):
+        prompt = f"{HUMAN_PROMPT}" 
+        for message in messages:
+            if "role" in message:
+                if message["role"] == "user":
+                    prompt += f"{HUMAN_PROMPT}{message['content']}"
+                else:
+                    prompt += f"{AI_PROMPT}{message['content']}"
+            else:
+                prompt += f"{HUMAN_PROMPT}{message['content']}"
+        prompt += f"{AI_PROMPT}"
+        claude_provider_request = {"model": model, "prompt": prompt}
+
+        claude_response_obj = {"completion": response_obj['choices'][0]['message']['content'], "model": model, "stop_reason": "stop_sequence"}
+
+        return claude_provider_request, claude_response_obj
         
     def log_success(self, model, messages, response_obj, start_time, end_time):
         # Method definition
         try:
             model = model if any(accepted_model in model for accepted_model in self.helicone_model_list) else "gpt-3.5-turbo"
             provider_request = {"model": model, "messages": messages}
+
+            if "claude" in model: 
+                provider_request, response_obj = self.claude_mapping(model=model, messages=messages, response_obj=response_obj)
 
             providerResponse = {
                 "json": response_obj, 

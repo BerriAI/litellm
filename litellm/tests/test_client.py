@@ -30,10 +30,18 @@ def test_completion_openai():
     except Exception as e:
         traceback.print_exc()
         pytest.fail(f"Error occurred: {e}")
-test_completion_openai()
-def test_completion_non_openai():
+
+
+def test_completion_claude():
     try:
         response = completion(model="claude-instant-1", messages=messages, logger_fn=logger_fn)
+        # Add any assertions here to check the response
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+def test_completion_non_openai():
+    try:
+        response = completion(model="command-nightly", messages=messages, logger_fn=logger_fn)
         # Add any assertions here to check the response
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
