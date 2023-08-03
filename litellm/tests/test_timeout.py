@@ -18,7 +18,8 @@ start_time = time.time()
 
 try:
   stop_after_10_s(force_timeout=1)
-except:
+except Exception as e:
+  print(e)
   pass
 
 end_time = time.time()

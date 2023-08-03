@@ -4,7 +4,8 @@
 
 import sys, os
 import traceback
-
+from dotenv import load_dotenv
+load_dotenv()
 # Get the current directory of the script
 current_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -19,7 +20,7 @@ import litellm
 from litellm import embedding, completion
 
 
-
+litellm.set_verbose = True
 litellm.success_callback = ["posthog"]
 litellm.failure_callback = ["slack", "sentry", "posthog"]
 
@@ -36,3 +37,16 @@ def test_completion_with_empty_model():
     except Exception as e:
         print(f"error occurred: {e}") 
         pass
+
+
+#bad key
+temp_key = os.environ.get("OPENAI_API_KEY")
+os.environ["OPENAI_API_KEY"] = "bad-key"
+# test on openai completion call 
+try:
+    response = completion(model="gpt-3.5-turbo", messages=messages)
+    print(f"response: {response}")
+except:
+    print(f"error occurred: {traceback.format_exc()}") 
+    pass
+os.environ["OPENAI_API_KEY"] = temp_key
