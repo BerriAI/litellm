@@ -64,6 +64,15 @@ def get_optional_params(
 
 ####### COMPLETION ENDPOINTS ################
 #############################################
+async def acompletion(*args, **kwargs):
+  loop = asyncio.get_event_loop()
+  
+  # Use a partial function to pass your keyword arguments
+  func = partial(completion, *args, **kwargs)
+
+  # Call the synchronous function using run_in_executor
+  return await loop.run_in_executor(None, func)
+
 @client
 @retry(wait=wait_random_exponential(min=1, max=60), stop=stop_after_attempt(2), reraise=True, retry_error_callback=lambda retry_state: setattr(retry_state.outcome, 'retry_variable', litellm.retry)) # retry call, turn this off by setting `litellm.retry = False`
 @timeout(60) ## set timeouts, in case calls hang (e.g. Azure) - default is 60s, override with `force_timeout`
@@ -257,16 +266,6 @@ def completion(
     logging(model=model, input=messages, azure=azure, additional_args={"max_tokens": max_tokens}, logger_fn=logger_fn, exception=e)
     ## Map to OpenAI Exception
     raise exception_type(model=model, original_exception=e)
-
-
-async def acompletion(*args, **kwargs):
-  loop = asyncio.get_event_loop()
-  
-  # Use a partial function to pass your keyword arguments
-  func = partial(completion, *args, **kwargs)
-
-  # Call the synchronous function using run_in_executor
-  return await loop.run_in_executor(None, func)
 
 ### EMBEDDING ENDPOINTS ####################
 @client

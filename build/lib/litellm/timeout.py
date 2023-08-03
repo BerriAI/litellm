@@ -37,26 +37,29 @@ def timeout(
             thread = _LoopWrapper()
             thread.start()
             future = asyncio.run_coroutine_threadsafe(async_func(), thread.loop)
+            local_timeout_duration = timeout_duration
+            if "force_timeout" in kwargs:
+                local_timeout_duration = kwargs["force_timeout"]
             try:
-                local_timeout_duration = timeout_duration
-                if "force_timeout" in kwargs:
-                    local_timeout_duration = kwargs["force_timeout"]
                 result = future.result(timeout=local_timeout_duration)
             except futures.TimeoutError:
                 thread.stop_loop()
-                raise exception_to_raise()
+                raise exception_to_raise(f"A timeout error occurred. The function call took longer than {local_timeout_duration} second(s).")
             thread.stop_loop()
             return result
 
         @wraps(func)
         async def async_wrapper(*args, **kwargs):
+            local_timeout_duration = timeout_duration
+            if "force_timeout" in kwargs:
+                local_timeout_duration = kwargs["force_timeout"]
             try:
                 value = await asyncio.wait_for(
                     func(*args, **kwargs), timeout=timeout_duration
                 )
                 return value
             except asyncio.TimeoutError:
-                raise exception_to_raise()
+                raise exception_to_raise(f"A timeout error occurred. The function call took longer than {local_timeout_duration} second(s).")
 
         if iscoroutinefunction(func):
             return async_wrapper

@@ -3,13 +3,22 @@ failure_callback = []
 set_verbose=False
 telemetry=True
 max_tokens = 256 # OpenAI Defaults
+retry = True # control tenacity retries. 
 ####### PROXY PARAMS ################### configurable params if you use proxy models like Helicone
 api_base = None
 headers = None
 ####### COMPLETION MODELS ###################
 open_ai_chat_completion_models = [
+  "gpt-4",
+  "gpt-4-0613",
+  "gpt-4-32k",
+  "gpt-4-32k-0613",
+  #################
+  "gpt-3.5-turbo",
+  "gpt-3.5-turbo-16k",
+  "gpt-3.5-turbo-0613",
+  "gpt-3.5-turbo-16k-0613",
   'gpt-3.5-turbo', 
-  'gpt-4',
   'gpt-3.5-turbo-16k-0613',
   'gpt-3.5-turbo-16k'
 ]
@@ -32,7 +41,6 @@ model_list = open_ai_chat_completion_models + open_ai_text_completion_models + c
 open_ai_embedding_models = [
     'text-embedding-ada-002'
 ]
-
 from .timeout import timeout
 from .utils import client, logging, exception_type  # Import all the symbols from main.py
 from .main import *  # Import all the symbols from main.py
