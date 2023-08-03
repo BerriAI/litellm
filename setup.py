@@ -19,5 +19,6 @@ setup(
         'replicate',
         'python-dotenv',
         'openai[datalib]',
+        'tenacity'
     ],
 )
