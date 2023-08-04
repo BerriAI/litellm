@@ -47,6 +47,10 @@ open_ai_text_completion_models = [
 
 cohere_models = [
     'command-nightly',
+    "command", 
+    "command-light", 
+    "command-medium-beta", 
+    "command-xlarge-beta"
 ]
 
 anthropic_models = [

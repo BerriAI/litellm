@@ -12,5 +12,5 @@
     "text-bison-001": {"max_tokens": 8192, "input_cost_per_token": 0.000004, "output_cost_per_token": 0.000004},
     "chat-bison-001": {"max_tokens": 4096, "input_cost_per_token": 0.000002, "output_cost_per_token": 0.000002},
     "command-nightly": {"max_tokens": 4096, "input_cost_per_token": 0.000015, "output_cost_per_token": 0.000015},
-    "replicate/llama-2-70b-chat:2c1608e18606fad2812020dc541930f2d0495ce32eee50074220b87300bc16e1": {"max_tokens": 4096, "input_cost_per_token": 0.00000608, "output_cost_per_token": 0.00000608},
+    "replicate/llama-2-70b-chat:2c1608e18606fad2812020dc541930f2d0495ce32eee50074220b87300bc16e1": {"max_tokens": 4096, "input_cost_per_token": 0.00000608, "output_cost_per_token": 0.00000608}
 }}
