@@ -7,6 +7,8 @@ nav:
   - 🤖 Supported LLM APIs: 
     - Supported Completion & Chat APIs: supported.md
     - Supported Embedding APIs: supported_embedding.md
+  - 🏃‍♂️ Fetching Inputs: 
+    - Secret Managers: secret.md
   - 💾 Callbacks - Logging Output: 
     - Quick Start: advanced.md
     - Output Integrations: client_integrations.md
