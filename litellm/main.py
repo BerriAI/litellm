@@ -19,6 +19,7 @@ dotenv.load_dotenv() # Loading env variables using dotenv
 
 # TODO move this to utils.py
 # TODO add translations
+# TODO see if this worked - model_name == krrish
 def get_optional_params(
     # 12 optional params
     functions = [],
