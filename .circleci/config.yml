@@ -43,26 +43,26 @@ jobs:
       - run:
           name: PyPI publish
           command: |
-            # if [ -n "$(git diff --name-only $CIRCLE_SHA1^..$CIRCLE_SHA1 | grep 'setup.py')" ]; then
-            echo "setup.py modified"
-            echo -e "[pypi]\nusername = __token__\npassword = $PYPI_API_TOKEN" > ~/.pypirc
-            python -m pip install --upgrade pip
-            pip install build
-            pip install wheel
-            pip install --upgrade twine setuptools
-            rm -rf build dist
+            if [ -n "$(git diff --name-only $CIRCLE_SHA1^..$CIRCLE_SHA1 | grep 'setup.py')" ]; then
+              echo "setup.py modified"
+              echo -e "[pypi]\nusername = __token__\npassword = $PYPI_API_TOKEN" > ~/.pypirc
+              python -m pip install --upgrade pip
+              pip install build
+              pip install wheel
+              pip install --upgrade twine setuptools
+              rm -rf build dist
 
-            echo "Building package"
-            python -m build
+              echo "Building package"
+              python -m build
 
-            echo "Twine upload to dist"
-            echo "Contents of dist directory:"
-            ls dist/
-            twine upload --verbose dist/*
-            # else
-            #   echo "No changes to setup.py. Skipping PyPI publish."
-            #   circleci step halt
-            # fi
+              echo "Twine upload to dist"
+              echo "Contents of dist directory:"
+              ls dist/
+              twine upload --verbose dist/*
+            else
+              echo "No changes to setup.py. Skipping PyPI publish."
+              circleci step halt
+            fi
 
 workflows:
   version: 2
