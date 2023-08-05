@@ -43,8 +43,8 @@ jobs:
       - run:
           name: PyPI publish
           command: |
-            if [ -n "$(git diff --name-only $CIRCLE_SHA1^..$CIRCLE_SHA1 | grep 'setup.py')" ]; then
-              echo "setup.py modified"
+            if [ -n "$(git diff --name-only $CIRCLE_SHA1^..$CIRCLE_SHA1 | grep 'pyproject.toml')" ]; then
+              echo "pyproject.toml modified"
               echo -e "[pypi]\nusername = __token__\npassword = $PYPI_API_TOKEN" > ~/.pypirc
               python -m pip install --upgrade pip
               pip install build
@@ -60,7 +60,7 @@ jobs:
               ls dist/
               twine upload --verbose dist/*
             else
-              echo "No changes to setup.py. Skipping PyPI publish."
+              echo "No changes to pyproject.toml. Skipping PyPI publish."
               circleci step halt
             fi
 
