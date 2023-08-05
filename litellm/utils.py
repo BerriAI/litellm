@@ -404,3 +404,20 @@ def litellm_telemetry(data):
     except requests.exceptions.RequestException as e:
         # Handle any errors in the request
         pass
+
+######### Secret Manager ############################
+# checks if user has passed in a secret manager client
+# if passed in then checks the secret there
+def get_secret(secret_name):
+  if litellm.secret_manager_client != None:
+     # TODO: check which secret manager is being used
+     # currently only supports Infisical
+     secret = litellm.secret_manager_client.get_secret(secret_name).secret_value
+     if secret != None:
+        # if secret manager fails default to using .env variables
+        os.environ[secret_name] = secret # set to env to be safe
+        return secret
+     else:
+      return os.environ.get(secret_name)
+  else:
+    return os.environ.get(secret_name)
