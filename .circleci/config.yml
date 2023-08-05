@@ -35,6 +35,10 @@ jobs:
     steps:
       - checkout
 
+      - run:
+          name: Checkout code
+          command: git checkout $CIRCLE_SHA1
+
       # Check if setup.py is modified and publish to PyPI
       - run:
           name: PyPI publish
