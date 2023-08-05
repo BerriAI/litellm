@@ -43,9 +43,9 @@ jobs:
             echo "setup.py modified"
             echo -e "[pypi]\nusername = __token__\npassword = $PYPI_API_TOKEN" > ~/.pypirc
             python -m pip install --upgrade pip
-            pip install twine
             pip install wheel
-            pip install --upgrade setuptools
+            pip install --upgrade twine setuptools
+            rm -rf build dist
             echo "Building package"
             python setup.py sdist bdist_wheel
             echo "Twine upload to dist"
