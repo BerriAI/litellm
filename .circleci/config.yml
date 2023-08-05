@@ -50,8 +50,10 @@ jobs:
             pip install wheel
             pip install --upgrade twine setuptools
             rm -rf build dist
+
             echo "Building package"
-            python setup.py sdist bdist_wheel
+            python -m build
+
             echo "Twine upload to dist"
             echo "Contents of dist directory:"
             ls dist/
