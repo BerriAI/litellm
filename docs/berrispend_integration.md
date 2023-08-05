@@ -33,4 +33,4 @@ response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content
 response = completion(model="chatgpt-test", messages=[{"role": "user", "content": "Hi 👋 - i'm a bad call to test error logging"}]) 
 ```
 
-Then go to https://litellm-ui.vercel.app/<your_email_id> to view your logs and cost 😊
+Then go to https://litellm-ui.vercel.app/**your_email_id** to view your logs and cost 😊
