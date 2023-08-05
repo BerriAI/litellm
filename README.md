@@ -51,7 +51,7 @@ Stable version
 pip install litellm==0.1.1
 ```
 
-Streaming Queries
+## streaming Queries
 liteLLM supports streaming the model response back, pass `stream=True` to get a streaming iterator in response.
 ```
 response = completion(model="gpt-3.5-turbo", messages=messages, stream=True)
