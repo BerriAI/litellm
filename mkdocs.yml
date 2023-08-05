@@ -14,6 +14,7 @@ nav:
     - Quick Start: advanced.md
     - Output Integrations: client_integrations.md
     - Helicone Tutorial: helicone_integration.md
+    - BerriSpend Tutorial: berrispend_integration.md
   - 💡 Support:
     - Troubleshooting & Help: troubleshoot.md
     - Contact Us: contact.md
