@@ -18,6 +18,7 @@ from tenacity import (
 dotenv.load_dotenv() # Loading env variables using dotenv
 
 # TODO move this to utils.py
+# TODO add translations
 def get_optional_params(
     # 12 optional params
     functions = [],
