@@ -2,7 +2,10 @@ import dotenv, json, traceback, threading
 import subprocess, os 
 import litellm, openai 
 import random, uuid, requests
-import datetime
+import datetime, time
+from anthropic import Anthropic
+import tiktoken
+encoding = tiktoken.get_encoding("cl100k_base")
 from openai.error import AuthenticationError, InvalidRequestError, RateLimitError, ServiceUnavailableError, OpenAIError
 ####### ENVIRONMENT VARIABLES ###################
 dotenv.load_dotenv() # Loading env variables using dotenv
@@ -13,6 +16,8 @@ posthog = None
 slack_app = None
 alerts_channel = None
 heliconeLogger = None
+aispendLogger = None
+berrispendLogger = None
 callback_list = []
 user_logger_fn = None
 additional_details = {}
@@ -89,6 +94,7 @@ def client(original_function):
       pass
 
     def wrapper(*args, **kwargs):
+        start_time = None
         try:
           function_setup(*args, **kwargs)
           ## MODEL CALL
@@ -101,7 +107,8 @@ def client(original_function):
           return result
         except Exception as e:
           traceback_exception = traceback.format_exc()
-          my_thread = threading.Thread(target=handle_failure, args=(e, traceback_exception, args, kwargs)) # don't interrupt execution of main thread
+          end_time = datetime.datetime.now()
+          my_thread = threading.Thread(target=handle_failure, args=(e, traceback_exception, start_time, end_time, args, kwargs)) # don't interrupt execution of main thread
           my_thread.start()
           raise e
     return wrapper
@@ -153,7 +160,7 @@ def get_optional_params(
   return optional_params
 
 def set_callbacks(callback_list):
-  global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, heliconeLogger
+  global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, heliconeLogger, aispendLogger, berrispendLogger
   try:
     for callback in callback_list:
       if callback == "sentry":
@@ -193,14 +200,19 @@ def set_callbacks(callback_list):
         print_verbose(f"Initialized Slack App: {slack_app}")
       elif callback == "helicone":
         from .integrations.helicone import HeliconeLogger
-
         heliconeLogger = HeliconeLogger()
+      elif callback == "aispend":
+        from .integrations.aispend import AISpendLogger
+        aispendLogger = AISpendLogger()
+      elif callback == "berrispend": 
+        from .integrations.berrispend import BerriSpendLogger
+        berrispendLogger = BerriSpendLogger()
   except:
     pass
 
 
-def handle_failure(exception, traceback_exception, args, kwargs):
-    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel
+def handle_failure(exception, traceback_exception, start_time, end_time, args, kwargs):
+    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, aispendLogger, berrispendLogger
     try:
       # print_verbose(f"handle_failure args: {args}")
       # print_verbose(f"handle_failure kwargs: {kwargs}")
@@ -248,6 +260,33 @@ def handle_failure(exception, traceback_exception, args, kwargs):
               unique_id = str(uuid.uuid4())
               posthog.capture(unique_id, event_name)
               print_verbose(f"successfully logged to PostHog!")
+          elif callback == "berrispend": 
+              print_verbose("reaches berrispend for logging!")
+              model = args[0] if len(args) > 0 else kwargs["model"]
+              messages = args[1] if len(args) > 1 else kwargs["messages"]
+              result = {
+                 "model": model,
+                 "created": time.time(),
+                 "error": traceback_exception,
+                 "usage": {
+                    "prompt_tokens": prompt_token_calculator(model, messages=messages),
+                    "completion_tokens": 0
+                 }
+              }
+              berrispendLogger.log_event(model=model, messages=messages, response_obj=result, start_time=start_time, end_time=end_time, print_verbose=print_verbose)
+          elif callback == "aispend":
+              print_verbose("reaches aispend for logging!")
+              model = args[0] if len(args) > 0 else kwargs["model"]
+              messages = args[1] if len(args) > 1 else kwargs["messages"]
+              result = {
+                 "model": model,
+                 "created": time.time(),
+                 "usage": {
+                    "prompt_tokens": prompt_token_calculator(model, messages=messages),
+                    "completion_tokens": 0
+                 }
+              }
+              aispendLogger.log_event(model=model, response_obj=result, start_time=start_time, end_time=end_time, print_verbose=print_verbose)
         except:
           print_verbose(f"Error Occurred while logging failure: {traceback.format_exc()}")
           pass
@@ -264,8 +303,21 @@ def handle_failure(exception, traceback_exception, args, kwargs):
       logging(logger_fn=user_logger_fn, exception=e)
       pass
 
+def prompt_token_calculator(model, messages):
+  # use tiktoken or anthropic's tokenizer depending on the model
+  text = " ".join(message["content"] for message in messages)
+  num_tokens = 0
+  if "claude" in model:
+    anthropic = Anthropic()
+    num_tokens = anthropic.count_tokens(text)
+  else:
+    num_tokens = len(encoding.encode(text))
+  return num_tokens
+  
+      
+
 def handle_success(args, kwargs, result, start_time, end_time):
-  global heliconeLogger
+  global heliconeLogger, aispendLogger
   try:
     success_handler = additional_details.pop("success_handler", None)
     failure_handler = additional_details.pop("failure_handler", None)
@@ -293,8 +345,19 @@ def handle_success(args, kwargs, result, start_time, end_time):
           model = args[0] if len(args) > 0 else kwargs["model"]
           messages = args[1] if len(args) > 1 else kwargs["messages"]
           heliconeLogger.log_success(model=model, messages=messages, response_obj=result, start_time=start_time, end_time=end_time, print_verbose=print_verbose)
-      except:
-        print_verbose(f"Success Callback Error - {traceback.format_exc()}")
+        elif callback == "aispend":
+          print_verbose("reaches aispend for logging!")
+          model = args[0] if len(args) > 0 else kwargs["model"]
+          aispendLogger.log_event(model=model, response_obj=result, start_time=start_time, end_time=end_time, print_verbose=print_verbose)
+        elif callback == "berrispend":
+          print_verbose("reaches berrispend for logging!")
+          model = args[0] if len(args) > 0 else kwargs["model"]
+          messages = args[1] if len(args) > 1 else kwargs["messages"]
+          berrispendLogger.log_event(model=model, messages=messages, response_obj=result, start_time=start_time, end_time=end_time, print_verbose=print_verbose)
+      except Exception as e:
+        ## LOGGING
+        logging(logger_fn=user_logger_fn, exception=e)
+        print_verbose(f"[Non-Blocking] Success Callback Error - {traceback.format_exc()}")
         pass
 
     if success_handler and callable(success_handler):
@@ -303,7 +366,7 @@ def handle_success(args, kwargs, result, start_time, end_time):
   except Exception as e:
     ## LOGGING
     logging(logger_fn=user_logger_fn, exception=e)
-    print_verbose(f"Success Callback Error - {traceback.format_exc()}")
+    print_verbose(f"[Non-Blocking] Success Callback Error - {traceback.format_exc()}")
     pass
 
 
