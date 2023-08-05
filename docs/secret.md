@@ -4,7 +4,7 @@ liteLLM reads secrets from yoour secret manager, .env file
 - [Infisical Secret Manager](#infisical-secret-manager)
 - [.env Files](#env-files)
 
-For expected format of secrets see [supported LLM models](./supported.mdsupported)
+For expected format of secrets see [supported LLM models](https://litellm.readthedocs.io/en/latest/supported)
 
 ## Infisical Secret Manager
 Integrates with [Infisical's Secret Manager](https://infisical.com/) for secure storage and retrieval of API keys and sensitive data.
