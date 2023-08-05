@@ -51,11 +51,19 @@ Stable version
 pip install litellm==0.1.1
 ```
 
+Streaming Queries
+liteLLM supports streaming the model response back, pass `stream=True` to get a streaming iterator in response.
+```
+response = completion(model="gpt-3.5-turbo", messages=messages, stream=True)
+for chunk in response:
+    print(chunk['choices'][0]['delta'])
+```
+
 # hosted version
 - [Grab time if you want access 👋](https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version)
 
-# why did I build this 
-- **Need for simplicity**: My code started to get extremely complicated managing & translating calls between Azure, OpenAI, Cohere
+# why did we build this 
+- **Need for simplicity**: Our code started to get extremely complicated managing & translating calls between Azure, OpenAI, Cohere
 
 # Support
 Contact us at ishaan@berri.ai / krrish@berri.ai
