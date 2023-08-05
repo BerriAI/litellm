@@ -51,9 +51,9 @@ Stable version
 pip install litellm==0.1.1
 ```
 
-## streaming queries
+## Streaming Queries
 liteLLM supports streaming the model response back, pass `stream=True` to get a streaming iterator in response.
-```
+```python
 response = completion(model="gpt-3.5-turbo", messages=messages, stream=True)
 for chunk in response:
     print(chunk['choices'][0]['delta'])
