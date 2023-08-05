@@ -26,6 +26,8 @@ MAX_TOKENS = {
 ####### PROXY PARAMS ################### configurable params if you use proxy models like Helicone
 api_base = None
 headers = None
+####### Secret Manager #####################
+secret_manager_client = None
 ####### COMPLETION MODELS ###################
 open_ai_chat_completion_models = [
   "gpt-4",
