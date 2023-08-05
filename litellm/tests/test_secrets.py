@@ -17,6 +17,14 @@ litellm.secret_manager_client = InfisicalClient(token=infisical_token)
 user_message = "Hello, whats the weather in San Francisco??"
 messages = [{ "content": user_message,"role": "user"}]
 
+def test_completion_azure():
+    try:
+        response = completion(model="chatgpt-test", messages=messages, azure=True)
+        # Add any assertions here to check the response
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
 def test_completion_openai():
     try:
         response = completion(model="gpt-3.5-turbo", messages=messages)
