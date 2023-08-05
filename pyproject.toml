@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "litellm"
-version = "0.1.331"
+version = "0.1.341"
 description = "Library to easily interface with LLM API providers"
 authors = ["BerriAI"]
 license = "MIT License"
@@ -15,6 +15,7 @@ anthropic = "^0.3.7"
 replicate = "^0.10.0"
 python-dotenv = "^1.0.0"
 tenacity = "^8.0.1"
+tiktoken = "^0.4.0"
 
 [build-system]
 requires = ["poetry-core"]

@@ -1,14 +1,13 @@
 import os, openai, cohere, replicate, sys
 from typing import Any
 from anthropic import Anthropic, HUMAN_PROMPT, AI_PROMPT
-import traceback
 from functools import partial
-import dotenv
-import traceback
+import dotenv, traceback, random, asyncio, time
+from copy import deepcopy
 import litellm
 from litellm import client, logging, exception_type, timeout, get_optional_params
-import random
-import asyncio
+import tiktoken
+encoding = tiktoken.get_encoding("cl100k_base")
 from tenacity import (
     retry,
     stop_after_attempt,
@@ -17,6 +16,17 @@ from tenacity import (
 ####### ENVIRONMENT VARIABLES ###################
 dotenv.load_dotenv() # Loading env variables using dotenv
 
+new_response = {
+        "choices": [
+          {
+            "finish_reason": "stop",
+            "index": 0,
+            "message": {
+                "role": "assistant"
+            }
+          }
+        ]
+      }
 # TODO move this to utils.py
 # TODO add translations
 # TODO see if this worked - model_name == krrish
@@ -44,6 +54,8 @@ def completion(
     *, return_async=False, api_key=None, force_timeout=60, azure=False, logger_fn=None, verbose=False
   ):
   try:
+    global new_response
+    model_response = deepcopy(new_response) # deep copy the default response format so we can mutate it and it's thread-safe. 
     # check if user passed in any of the OpenAI optional params
     optional_params = get_optional_params(
       functions=functions, function_call=function_call, 
@@ -128,6 +140,15 @@ def completion(
             model=model,
             prompt = prompt
         )
+      completion_response = response["choices"]["text"]
+      ## LOGGING
+      logging(model=model, input=prompt, azure=azure, additional_args={"max_tokens": max_tokens, "original_response": completion_response}, logger_fn=logger_fn)
+      ## RESPONSE OBJECT
+      model_response["choices"][0]["message"]["content"] = completion_response
+      model_response["created"] = response["created"]
+      model_response["model"] = model
+      model_response["usage"] = response["usage"]
+      response = model_response
     elif "replicate" in model:
       # replicate defaults to os.environ.get("REPLICATE_API_TOKEN")
       # checking in case user set it to REPLICATE_API_KEY instead 
@@ -153,19 +174,21 @@ def completion(
       response = ""
       for item in output: 
         response += item
-      new_response = {
-        "choices": [
-          {
-            "finish_reason": "stop",
-            "index": 0,
-            "message": {
-                "content": response,
-                "role": "assistant"
-            }
-          }
-        ]
-      }
-      response = new_response
+      completion_response = response
+      ## LOGGING
+      logging(model=model, input=prompt, azure=azure, additional_args={"max_tokens": max_tokens, "original_response": completion_response}, logger_fn=logger_fn)
+      prompt_tokens = len(encoding.encode(prompt))
+      completion_tokens = len(encoding.encode(completion_response))
+      ## RESPONSE OBJECT
+      model_response["choices"][0]["message"]["content"] = completion_response
+      model_response["created"] = time.time()
+      model_response["model"] = model
+      model_response["usage"] = {
+          "prompt_tokens": prompt_tokens,
+          "completion_tokens": completion_tokens,
+          "total_tokens": prompt_tokens + completion_tokens
+        }
+      response = model_response
     elif model in litellm.anthropic_models:
       #anthropic defaults to os.environ.get("ANTHROPIC_API_KEY")
       if api_key:
@@ -183,7 +206,6 @@ def completion(
           prompt += f"{HUMAN_PROMPT}{message['content']}"
       prompt += f"{AI_PROMPT}"
       anthropic = Anthropic()
-      # check if user passed in max_tokens != float('inf')
       if max_tokens != float('inf'):
         max_tokens_to_sample = max_tokens
       else:
@@ -196,20 +218,22 @@ def completion(
             prompt=prompt,
             max_tokens_to_sample=max_tokens_to_sample
         )
-      new_response = {
-        "choices": [
-          {
-            "finish_reason": "stop",
-            "index": 0,
-            "message": {
-                "content": completion.completion,
-                "role": "assistant"
-            }
-          }
-        ]
-      }
-      print_verbose(f"new response: {new_response}")
-      response = new_response
+      completion_response = completion.completion
+      ## LOGGING
+      logging(model=model, input=prompt, azure=azure, additional_args={"max_tokens": max_tokens, "original_response": completion_response}, logger_fn=logger_fn)
+      prompt_tokens = anthropic.count_tokens(prompt)
+      completion_tokens = anthropic.count_tokens(completion_response)
+      ## RESPONSE OBJECT
+      print(f"model_response: {model_response}")
+      model_response["choices"][0]["message"]["content"] = completion_response
+      model_response["created"] = time.time()
+      model_response["model"] = model
+      model_response["usage"] = {
+          "prompt_tokens": prompt_tokens,
+          "completion_tokens": completion_tokens,
+          "total_tokens": prompt_tokens + completion_tokens
+        }
+      response = model_response
     elif model in litellm.cohere_models:
       if api_key:
         cohere_key = api_key
@@ -226,19 +250,21 @@ def completion(
         model=model,
         prompt = prompt
       )
-      new_response = {
-          "choices": [
-              {
-                  "finish_reason": "stop",
-                  "index": 0,
-                  "message": {
-                      "content": response[0].text,
-                      "role": "assistant"
-                  }
-              }
-          ],
-      }
-      response = new_response
+      completion_response = response[0].text
+      ## LOGGING
+      logging(model=model, input=prompt, azure=azure, additional_args={"max_tokens": max_tokens, "original_response": completion_response}, logger_fn=logger_fn)
+      prompt_tokens = len(encoding.encode(prompt))
+      completion_tokens = len(encoding.encode(completion_response))
+      ## RESPONSE OBJECT
+      model_response["choices"][0]["message"]["content"] = completion_response
+      model_response["created"] = time.time()
+      model_response["model"] = model
+      model_response["usage"] = {
+          "prompt_tokens": prompt_tokens,
+          "completion_tokens": completion_tokens,
+          "total_tokens": prompt_tokens + completion_tokens
+        }
+      response = model_response
     else: 
       ## LOGGING
       logging(model=model, input=messages, azure=azure, logger_fn=logger_fn)
