@@ -33,13 +33,16 @@ def logging(model=None, input=None, azure=False, additional_args={}, logger_fn=N
     if azure:
       model_call_details["azure"] = azure
     if exception:
-      model_call_details["original_exception"] = exception
+      model_call_details["exception"] = exception
 
     if litellm.telemetry:
       safe_crash_reporting(model=model, exception=exception, azure=azure) # log usage-crash details. Do not log any user details. If you want to turn this off, set `litellm.telemetry=False`.
 
     if input:
       model_call_details["input"] = input
+    
+    if len(additional_args):
+       model_call_details["additional_args"] = additional_args
     # log additional call details -> api key, etc. 
     if model:
       if azure == True or model in litellm.open_ai_chat_completion_models or model in litellm.open_ai_chat_completion_models or model in litellm.open_ai_embedding_models:
@@ -53,7 +56,6 @@ def logging(model=None, input=None, azure=False, additional_args={}, logger_fn=N
         model_call_details["api_key"] = os.environ.get("ANTHROPIC_API_KEY")
       elif model in litellm.cohere_models:
         model_call_details["api_key"] = os.environ.get("COHERE_API_KEY")
-      model_call_details["additional_args"] = additional_args
     ## User Logging -> if you pass in a custom logging function or want to use sentry breadcrumbs
     print_verbose(f"Logging Details: logger_fn - {logger_fn} | callable(logger_fn) - {callable(logger_fn)}")
     if logger_fn and callable(logger_fn):
@@ -318,6 +320,7 @@ def exception_type(model, original_exception):
           exception_type = type(original_exception).__name__
         else:
           exception_type = ""
+        logging(model=model, additional_args={"error_str": error_str, "exception_type": exception_type, "original_exception": original_exception}, logger_fn=user_logger_fn)
         if "claude" in model: #one of the anthropics
           if "status_code" in original_exception:
             print_verbose(f"status_code: {original_exception.status_code}")
@@ -357,7 +360,7 @@ def exception_type(model, original_exception):
         raise original_exception
     except Exception as e:
       ## LOGGING
-      logging(logger_fn=user_logger_fn, additional_args={"original_exception": original_exception}, exception=e) 
+      logging(logger_fn=user_logger_fn, additional_args={"exception_mapping_worked": exception_mapping_worked, "original_exception": original_exception}, exception=e) 
       if exception_mapping_worked:
         raise e
       else: # don't let an error with mapping interrupt the user from receiving an error from the llm api calls 

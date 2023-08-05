@@ -6,3 +6,4 @@ pytest
 python-dotenv
 openai[datalib]
 tenacity
+tiktoken

@@ -8,10 +8,13 @@ import pytest
 import litellm
 from litellm import embedding, completion
 
-litellm.set_verbose = True
+# litellm.set_verbose = True
 
 user_message = "Hello, whats the weather in San Francisco??"
 messages = [{ "content": user_message,"role": "user"}]
+
+def logger_fn(user_model_dict):
+    print(f"user_model_dict: {user_model_dict}")
 
 def test_completion_openai():
     try:
@@ -83,7 +86,7 @@ def test_completion_azure():
 
 def test_completion_claude():
     try:
-        response = completion(model="claude-instant-1", messages=messages)
+        response = completion(model="claude-instant-1", messages=messages, logger_fn=logger_fn)
         # Add any assertions here to check the response
         print(response)
     except Exception as e:
@@ -97,7 +100,8 @@ def test_completion_cohere():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-
+# Replicate API endpoints are unstable -> throw random CUDA errors -> this means our tests can fail even if our tests weren't incorrect. 
+# [TODO] improve our try-except block to handle for these
 # def test_completion_replicate_llama():
 #     model_name = "replicate/llama-2-70b-chat:2c1608e18606fad2812020dc541930f2d0495ce32eee50074220b87300bc16e1"
 #     try:
