@@ -1,6 +1,6 @@
 #### What this tests ####
 #    This tests if logging to the helicone integration actually works
-
+# pytest mistakes intentional bad calls as failed tests -> [TODO] fix this
 # import sys, os
 # import traceback
 # import pytest
