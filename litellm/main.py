@@ -94,6 +94,8 @@ def completion(
       openai.api_type = "openai"
       openai.api_base = litellm.api_base if litellm.api_base is not None else "https://api.openai.com/v1"
       openai.api_version = None
+      if litellm.organization:
+        openai.organization = litellm.organization
       if api_key:
           openai.api_key = api_key
       elif litellm.openai_key:
@@ -126,6 +128,8 @@ def completion(
           openai.api_key = litellm.openai_key
       else:
           openai.api_key = get_secret("OPENAI_API_KEY")
+      if litellm.organization:
+        openai.organization = litellm.organization
       prompt = " ".join([message["content"] for message in messages])
       ## LOGGING
       logging(model=model, input=prompt, azure=azure, logger_fn=logger_fn)
