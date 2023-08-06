@@ -75,7 +75,7 @@ def completion(
       else:
           openai.api_key = get_secret("AZURE_API_KEY")
       ## LOGGING
-      logging(model=model, input=messages, azure=azure, logger_fn=logger_fn)
+      logging(model=model, input=messages, additional_args=optional_params, azure=azure, logger_fn=logger_fn)
       ## COMPLETION CALL
       if litellm.headers:
          response = openai.ChatCompletion.create(
@@ -86,7 +86,7 @@ def completion(
           )
       else:
         response = openai.ChatCompletion.create(
-          engine=model,
+          model=model,
           messages = messages,
           **optional_params
         )
@@ -103,7 +103,7 @@ def completion(
       else:
           openai.api_key = get_secret("OPENAI_API_KEY")
       ## LOGGING
-      logging(model=model, input=messages, azure=azure, logger_fn=logger_fn)
+      logging(model=model, input=messages, additional_args=optional_params, azure=azure, logger_fn=logger_fn)
       ## COMPLETION CALL
       if litellm.headers:
          response = openai.ChatCompletion.create(
@@ -132,7 +132,7 @@ def completion(
         openai.organization = litellm.organization
       prompt = " ".join([message["content"] for message in messages])
       ## LOGGING
-      logging(model=model, input=prompt, azure=azure, logger_fn=logger_fn)
+      logging(model=model, input=prompt, additional_args=optional_params, azure=azure, logger_fn=logger_fn)
       ## COMPLETION CALL
       if litellm.headers:
         response = openai.Completion.create(

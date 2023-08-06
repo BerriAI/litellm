@@ -161,7 +161,7 @@ def get_optional_params(
   if user != "":
       optional_params["user"] = user
   if deployment_id != None:
-      optional_params["deployment_id"] = user
+      optional_params["deployment_id"] = deployment_id
   return optional_params
 
 def set_callbacks(callback_list):
