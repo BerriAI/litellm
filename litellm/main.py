@@ -67,7 +67,7 @@ def completion(
       # azure configs
       openai.api_type = "azure"
       openai.api_base = litellm.api_base if litellm.api_base is not None else get_secret("AZURE_API_BASE")
-      openai.api_version = get_secret("AZURE_API_VERSION")
+      openai.api_version = litellm.api_version if litellm.api_version is not None else get_secret("AZURE_API_VERSION")
       if api_key:
           openai.api_key = api_key
       elif litellm.azure_key:
