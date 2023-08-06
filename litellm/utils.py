@@ -6,6 +6,10 @@ import datetime, time
 from anthropic import Anthropic
 import tiktoken
 encoding = tiktoken.get_encoding("cl100k_base")
+from .integrations.helicone import HeliconeLogger
+from .integrations.aispend import AISpendLogger
+from .integrations.berrispend import BerriSpendLogger
+from .integrations.supabase import Supabase
 from openai.error import AuthenticationError, InvalidRequestError, RateLimitError, ServiceUnavailableError, OpenAIError
 ####### ENVIRONMENT VARIABLES ###################
 dotenv.load_dotenv() # Loading env variables using dotenv
@@ -18,6 +22,7 @@ alerts_channel = None
 heliconeLogger = None
 aispendLogger = None
 berrispendLogger = None
+supabaseClient = None
 callback_list = []
 user_logger_fn = None
 additional_details = {}
@@ -160,7 +165,7 @@ def get_optional_params(
   return optional_params
 
 def set_callbacks(callback_list):
-  global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, heliconeLogger, aispendLogger, berrispendLogger
+  global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient
   try:
     for callback in callback_list:
       if callback == "sentry":
@@ -199,16 +204,15 @@ def set_callbacks(callback_list):
         alerts_channel = os.environ["SLACK_API_CHANNEL"]
         print_verbose(f"Initialized Slack App: {slack_app}")
       elif callback == "helicone":
-        from .integrations.helicone import HeliconeLogger
         heliconeLogger = HeliconeLogger()
       elif callback == "aispend":
-        from .integrations.aispend import AISpendLogger
         aispendLogger = AISpendLogger()
       elif callback == "berrispend": 
-        from .integrations.berrispend import BerriSpendLogger
         berrispendLogger = BerriSpendLogger()
-  except:
-    pass
+      elif callback == "supabase":
+         supabaseClient = Supabase()
+  except Exception as e:
+    raise e
 
 
 def handle_failure(exception, traceback_exception, start_time, end_time, args, kwargs):
@@ -287,6 +291,22 @@ def handle_failure(exception, traceback_exception, start_time, end_time, args, k
                  }
               }
               aispendLogger.log_event(model=model, response_obj=result, start_time=start_time, end_time=end_time, print_verbose=print_verbose)
+          elif callback == "supabase":
+              print_verbose("reaches supabase for logging!")
+              model = args[0] if len(args) > 0 else kwargs["model"]
+              messages = args[1] if len(args) > 1 else kwargs["messages"]
+              result = {
+                 "model": model,
+                 "created": time.time(),
+                 "error": traceback_exception,
+                 "usage": {
+                    "prompt_tokens": prompt_token_calculator(model, messages=messages),
+                    "completion_tokens": 0
+                 }
+              }
+              print(f"litellm._thread_context: {litellm._thread_context}")
+              supabaseClient.log_event(model=model, messages=messages, end_user=litellm._thread_context.user, response_obj=result, start_time=start_time, end_time=end_time, print_verbose=print_verbose)
+
         except:
           print_verbose(f"Error Occurred while logging failure: {traceback.format_exc()}")
           pass
@@ -354,6 +374,12 @@ def handle_success(args, kwargs, result, start_time, end_time):
           model = args[0] if len(args) > 0 else kwargs["model"]
           messages = args[1] if len(args) > 1 else kwargs["messages"]
           berrispendLogger.log_event(model=model, messages=messages, response_obj=result, start_time=start_time, end_time=end_time, print_verbose=print_verbose)
+        elif callback == "supabase":
+          print_verbose("reaches supabase for logging!")
+          model = args[0] if len(args) > 0 else kwargs["model"]
+          messages = args[1] if len(args) > 1 else kwargs["messages"]
+          print(f"litellm._thread_context: {litellm._thread_context}")
+          supabaseClient.log_event(model=model, messages=messages, end_user=litellm._thread_context.user, response_obj=result, start_time=start_time, end_time=end_time, print_verbose=print_verbose)
       except Exception as e:
         ## LOGGING
         logging(logger_fn=user_logger_fn, exception=e)
@@ -369,6 +395,12 @@ def handle_success(args, kwargs, result, start_time, end_time):
     print_verbose(f"[Non-Blocking] Success Callback Error - {traceback.format_exc()}")
     pass
 
+# integration helper function 
+def modify_integration(integration_name, integration_params):
+   global supabaseClient
+   if integration_name == "supabase":
+      if "table_name" in integration_params:
+         Supabase.supabase_table_name = integration_params["table_name"]
 
 def exception_type(model, original_exception):
     global user_logger_fn
