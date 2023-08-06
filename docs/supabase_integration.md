@@ -61,6 +61,7 @@ response = completion(model="chatgpt-test", messages=[{"role": "user", "content"
 ### Additional Controls 
 
 **Different Table name**
+
 If you modified your table name, here's how to pass the new name.
 
 ```python 
@@ -68,6 +69,7 @@ litellm.modify_integration("supabase",{"table_name": "litellm_logs"})
 ```
 
 **Identify end-user**
+
 Here's how to map your llm call to an end-user 
 
 ```python
