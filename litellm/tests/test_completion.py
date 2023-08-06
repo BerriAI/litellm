@@ -78,7 +78,7 @@ def test_completion_openai_with_functions():
 
 def test_completion_azure():
     try:
-        response = completion(model="chatgpt-test", messages=messages, azure=True)
+        response = completion(model="gpt-3.5-turbo", deployment_id="chatgpt-test", messages=messages, azure=True)
         # Add any assertions here to check the response
         print(response)
     except Exception as e:
