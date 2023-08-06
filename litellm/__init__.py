@@ -23,6 +23,7 @@ def identify(event_details):
 ####### PROXY PARAMS ################### configurable params if you use proxy models like Helicone
 api_base = None
 headers = None
+api_version = None
 ####### Secret Manager #####################
 secret_manager_client = None
 ####### COMPLETION MODELS ###################
