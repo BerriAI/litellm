@@ -20,10 +20,11 @@ def identify(event_details):
     # Store user in thread local data
     if "user" in event_details:
         _thread_context.user = event_details["user"]
-####### PROXY PARAMS ################### configurable params if you use proxy models like Helicone
+####### ADDITIONAL PARAMS ################### configurable params if you use proxy models like Helicone, map spend to org id, etc.
 api_base = None
 headers = None
 api_version = None
+organization = None
 ####### Secret Manager #####################
 secret_manager_client = None
 ####### COMPLETION MODELS ###################
