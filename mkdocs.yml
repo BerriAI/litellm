@@ -4,6 +4,7 @@ nav:
     - Installation & Quick Start: index.md
     - completion():
       - Input - Request Body: input.md
+      - Output - Response Object: output.md
       - Streaming & Async Calls: stream.md
   - 🤖 Supported LLM APIs: 
     - Supported Completion & Chat APIs: supported.md

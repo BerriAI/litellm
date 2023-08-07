@@ -7,7 +7,7 @@ a light 100 line package to simplify calling OpenAI, Azure, Cohere, Anthropic AP
 * Consistent Exceptions for all LLM APIs, we map RateLimit, Context Window, and Authentication Error exceptions across all providers to their OpenAI equivalents. [see Code](https://github.com/BerriAI/litellm/blob/ba1079ff6698ef238c5c7f771dd2b698ec76f8d9/litellm/utils.py#L250)
 
 ###### observability:
-* Logging - see exactly what the raw model request/response is `completion(.., logger_fn=your_logging_fn)`
+* Logging - see exactly what the raw model request/response is by plugging in your own function `completion(.., logger_fn=your_logging_fn)` and/or print statements from the package `litellm.set_verbose=True`
 * Callbacks - automatically send your data to Helicone, Sentry, Posthog, Slack - `litellm.success_callbacks`, `litellm.failure_callbacks` [see Callbacks](https://litellm.readthedocs.io/en/latest/advanced/)
 
 ## Quick Start
