@@ -1,10 +1,10 @@
-from openai.error import AuthenticationError, InvalidRequestError, RateLimitError, OpenAIError
+# from openai.error import AuthenticationError, InvalidRequestError, RateLimitError, OpenAIError
 import os 
 import sys
 import traceback
 sys.path.insert(0, os.path.abspath('../..'))  # Adds the parent directory to the system path
 import litellm
-from litellm import embedding, completion
+from litellm import embedding, completion, AuthenticationError, InvalidRequestError, RateLimitError, ServiceUnavailableError, OpenAIError
 from concurrent.futures import ThreadPoolExecutor
 import pytest
 
