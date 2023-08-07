@@ -15,14 +15,27 @@ def logger_fn(model_call_object: dict):
 user_message = "Hello, how are you?"
 messages = [{ "content": user_message,"role": "user"}]
 
-print(os.environ)
-temp_key = os.environ.get("OPENAI_API_KEY")
-os.environ["OPENAI_API_KEY"] = "bad-key"
+## Test 1: Setting key dynamically
+temp_key = os.environ.get("ANTHROPIC_API_KEY")
+os.environ["ANTHROPIC_API_KEY"] = "bad-key"
 # test on openai completion call 
 try:
-    response = completion(model="gpt-3.5-turbo", messages=messages, logger_fn=logger_fn, api_key=temp_key)
+    response = completion(model="claude-instant-1", messages=messages, logger_fn=logger_fn, api_key=temp_key)
     print(f"response: {response}")
 except:
     print(f"error occurred: {traceback.format_exc()}") 
     pass
-os.environ["OPENAI_API_KEY"] = temp_key
+os.environ["ANTHROPIC_API_KEY"] = temp_key
+
+
+## Test 2: Setting key via __init__ params
+litellm.anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
+os.environ.pop("ANTHROPIC_API_KEY")
+# test on openai completion call 
+try:
+    response = completion(model="claude-instant-1", messages=messages, logger_fn=logger_fn)
+    print(f"response: {response}")
+except:
+    print(f"error occurred: {traceback.format_exc()}") 
+    pass
+os.environ["ANTHROPIC_API_KEY"] = temp_key

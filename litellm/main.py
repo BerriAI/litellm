@@ -164,7 +164,6 @@ def completion(
          os.environ["REPLICATE_API_TOKEN"] = api_key
       elif litellm.replicate_key:
          os.environ["REPLICATE_API_TOKEN"] = litellm.replicate_key
-
       prompt = " ".join([message["content"] for message in messages])
       input = {"prompt": prompt}
       if max_tokens != float('inf'):
@@ -199,7 +198,7 @@ def completion(
       if api_key:
          os.environ["ANTHROPIC_API_KEY"] = api_key
       elif litellm.anthropic_key:
-         os.environ["ANTHROPIC_API_TOKEN"] = litellm.anthropic_key
+         os.environ["ANTHROPIC_API_KEY"] = litellm.anthropic_key
       prompt = f"{HUMAN_PROMPT}" 
       for message in messages:
         if "role" in message:
