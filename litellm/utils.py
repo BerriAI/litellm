@@ -417,7 +417,7 @@ def exception_type(model, original_exception):
           exception_type = ""
         logging(model=model, additional_args={"error_str": error_str, "exception_type": exception_type, "original_exception": original_exception}, logger_fn=user_logger_fn)
         if "claude" in model: #one of the anthropics
-          if "status_code" in original_exception:
+          if hasattr(original_exception, "status_code"):
             print_verbose(f"status_code: {original_exception.status_code}")
             if original_exception.status_code == 401:
               exception_mapping_worked = True
@@ -428,6 +428,9 @@ def exception_type(model, original_exception):
             elif original_exception.status_code == 429:
               exception_mapping_worked = True
               raise RateLimitError(f"AnthropicException - {original_exception.message}")
+          elif "Could not resolve authentication method. Expected either api_key or auth_token to be set." in error_str:
+            exception_mapping_worked = True
+            raise AuthenticationError(f"AnthropicException - {error_str}")
         elif "replicate" in model:
           if "Incorrect authentication token" in error_str:
             exception_mapping_worked = True
