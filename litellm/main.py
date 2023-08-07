@@ -229,7 +229,7 @@ def completion(
       prompt_tokens = anthropic.count_tokens(prompt)
       completion_tokens = anthropic.count_tokens(completion_response)
       ## RESPONSE OBJECT
-      print(f"model_response: {model_response}")
+      print_verbose(f"raw model_response: {model_response}")
       model_response["choices"][0]["message"]["content"] = completion_response
       model_response["created"] = time.time()
       model_response["model"] = model
