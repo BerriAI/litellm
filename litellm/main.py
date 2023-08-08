@@ -11,6 +11,19 @@ from litellm.utils import get_secret, install_and_import
 ####### ENVIRONMENT VARIABLES ###################
 dotenv.load_dotenv() # Loading env variables using dotenv
 
+# TODO this will evolve to accepting models
+# replicate/anthropic/cohere
+class CustomStreamWrapper:
+    def __init__(self, completion_stream):
+        self.completion_stream = completion_stream
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        chunk = next(self.completion_stream)
+        return {"choices": [{"delta": chunk.completion}]}
+
 new_response = {
         "choices": [
           {
@@ -54,7 +67,8 @@ def completion(
     optional_params = get_optional_params(
       functions=functions, function_call=function_call, 
       temperature=temperature, top_p=top_p, n=n, stream=stream, stop=stop, max_tokens=max_tokens,
-      presence_penalty=presence_penalty, frequency_penalty=frequency_penalty, logit_bias=logit_bias, user=user, deployment_id=deployment_id
+      presence_penalty=presence_penalty, frequency_penalty=frequency_penalty, logit_bias=logit_bias, user=user, deployment_id=deployment_id,
+      model=model
     )
     if azure == True:
       # azure configs
@@ -222,8 +236,14 @@ def completion(
       completion = anthropic.completions.create(
             model=model,
             prompt=prompt,
-            max_tokens_to_sample=max_tokens_to_sample
+            max_tokens_to_sample=max_tokens_to_sample,
+            **optional_params
         )
+      if optional_params['stream'] == True:
+        # don't try to access stream object,
+        response = CustomStreamWrapper(completion)
+        return response
+
       completion_response = completion.completion
       ## LOGGING
       logging(model=model, input=prompt, azure=azure, additional_args={"max_tokens": max_tokens, "original_response": completion_response}, logger_fn=logger_fn)

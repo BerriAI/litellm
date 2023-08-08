@@ -26,6 +26,19 @@ def test_completion_claude():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+def test_completion_claude_stream():
+    try:
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "how does a court case get to the Supreme Court?"}
+        ]
+        response = completion(model="claude-2", messages=messages, stream=True)
+        # Add any assertions here to check the response
+        for chunk in response:
+            print(chunk['choices'][0]['delta']) # same as openai format
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
 def test_completion_hf_api():
     try:
         user_message = "write some code to find the sum of two numbers"

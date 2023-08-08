@@ -146,36 +146,49 @@ def get_optional_params(
     frequency_penalty = 0,
     logit_bias = {},
     user = "",
-    deployment_id = None
+    deployment_id = None,
+    model = None,
 ):
   optional_params = {}
-  if functions != []:
-      optional_params["functions"] = functions
-  if function_call != "":
-      optional_params["function_call"] = function_call
-  if temperature != 1:
-      optional_params["temperature"] = temperature
-  if top_p != 1:
-      optional_params["top_p"] = top_p
-  if n != 1:
-      optional_params["n"] = n
-  if stream:
+  if model in litellm.anthropic_models:
+    # handle anthropic params
+    if stream:
       optional_params["stream"] = stream
-  if stop != None:
-      optional_params["stop"] = stop
-  if max_tokens != float('inf'):
-      optional_params["max_tokens"] = max_tokens
-  if presence_penalty != 0:
-      optional_params["presence_penalty"] = presence_penalty
-  if frequency_penalty != 0:
-      optional_params["frequency_penalty"] = frequency_penalty
-  if logit_bias != {}:
-      optional_params["logit_bias"] = logit_bias
-  if user != "":
-      optional_params["user"] = user
-  if deployment_id != None:
-      optional_params["deployment_id"] = deployment_id
-  return optional_params
+    if stop != None:
+        optional_params["stop_sequences"] = stop
+    if temperature != 1:
+        optional_params["temperature"] = temperature
+    if top_p != 1:
+        optional_params["top_p"] = top_p
+    return optional_params
+  else:# assume passing in params for openai/azure openai
+    if functions != []:
+        optional_params["functions"] = functions
+    if function_call != "":
+        optional_params["function_call"] = function_call
+    if temperature != 1:
+        optional_params["temperature"] = temperature
+    if top_p != 1:
+        optional_params["top_p"] = top_p
+    if n != 1:
+        optional_params["n"] = n
+    if stream:
+        optional_params["stream"] = stream
+    if stop != None:
+        optional_params["stop"] = stop
+    if max_tokens != float('inf'):
+        optional_params["max_tokens"] = max_tokens
+    if presence_penalty != 0:
+        optional_params["presence_penalty"] = presence_penalty
+    if frequency_penalty != 0:
+        optional_params["frequency_penalty"] = frequency_penalty
+    if logit_bias != {}:
+        optional_params["logit_bias"] = logit_bias
+    if user != "":
+        optional_params["user"] = user
+    if deployment_id != None:
+        optional_params["deployment_id"] = deployment_id
+    return optional_params
 
 def set_callbacks(callback_list):
   global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient
