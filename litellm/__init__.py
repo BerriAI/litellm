@@ -10,6 +10,8 @@ azure_key = None
 anthropic_key = None 
 replicate_key = None 
 cohere_key = None 
+
+hugging_api_token = None
 ####### THREAD-SPECIFIC DATA ###################
 class MyLocal(threading.local):
     def __init__(self):
