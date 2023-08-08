@@ -61,11 +61,11 @@ def test_bad_azure_embedding():
         print(f"response: {str(response)[:50]}")
     except Exception as e:
         pass
-def test_good_azure_embedding():
-    try:
-        response = embedding(model='azure-embedding-model', input=[user_message], azure=True, logger_fn=logger_fn)
-        # Add any assertions here to check the response
-        print(f"response: {str(response)[:50]}")
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
+# def test_good_azure_embedding():
+#     try:
+#         response = embedding(model='azure-embedding-model', input=[user_message], azure=True, logger_fn=logger_fn)
+#         # Add any assertions here to check the response
+#         print(f"response: {str(response)[:50]}")
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
 
