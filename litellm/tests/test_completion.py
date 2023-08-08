@@ -26,6 +26,16 @@ def test_completion_claude():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+def test_completion_hf_api():
+    try:
+        user_message = "write some code to find the sum of two numbers"
+        messages = [{ "content": user_message,"role": "user"}]
+        response = completion(model="stabilityai/stablecode-completion-alpha-3b-4k", messages=messages, hugging_face=True)
+        # Add any assertions here to check the response
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
 def test_completion_cohere():
     try:
         response = completion(model="command-nightly", messages=messages, max_tokens=500)
