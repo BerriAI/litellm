@@ -56,6 +56,7 @@ Streaming is supported for OpenAI, Azure, Anthropic models
 response = completion(model="gpt-3.5-turbo", messages=messages, stream=True)
 for chunk in response:
     print(chunk['choices'][0]['delta'])
+
 # claude 2
 result = litellm.completion('claude-2', messages, stream=True)
 for chunk in result:
