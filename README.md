@@ -58,7 +58,7 @@ for chunk in response:
     print(chunk['choices'][0]['delta'])
 
 # claude 2
-result = litellm.completion('claude-2', messages, stream=True)
+result = completion('claude-2', messages, stream=True)
 for chunk in result:
   print(chunk['choices'][0]['delta'])
 ```
