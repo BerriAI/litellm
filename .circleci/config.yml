@@ -15,6 +15,7 @@ jobs:
             python -m pip install -r requirements.txt
             pip install infisical
             pip install pytest
+            pip install openai[datalib]
 
       # Run pytest and generate JUnit XML report
       - run:
