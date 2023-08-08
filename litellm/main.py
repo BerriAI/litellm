@@ -300,6 +300,7 @@ def completion(
           "completion_tokens": completion_tokens,
           "total_tokens": prompt_tokens + completion_tokens
         }
+      response = model_response
     else: 
       ## LOGGING
       logging(model=model, input=messages, azure=azure, logger_fn=logger_fn)
