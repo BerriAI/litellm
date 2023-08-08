@@ -13,6 +13,8 @@ jobs:
           command: |
             python -m pip install --upgrade pip
             python -m pip install -r requirements.txt
+            pip install infisical
+            pip install pytest
 
       # Run pytest and generate JUnit XML report
       - run:

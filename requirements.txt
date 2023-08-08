@@ -1,8 +1,5 @@
 # used by CI/CD testing
 openai
-pytest
 python-dotenv
-openai[datalib]
-tenacity
+openai
 tiktoken
-infisical
