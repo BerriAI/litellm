@@ -25,11 +25,6 @@ pip install litellm
 ```python
 from litellm import completion
 
-## set ENV variables
-# ENV variables can be set in .env file, too. Example in .env.example
-os.environ["OPENAI_API_KEY"] = "openai key"
-os.environ["COHERE_API_KEY"] = "cohere key"
-
 messages = [{ "content": "Hello, how are you?","role": "user"}]
 
 # openai call
@@ -40,6 +35,9 @@ response = completion("command-nightly", messages)
 
 # azure openai call
 response = completion("chatgpt-test", messages, azure=True)
+
+# hugging face call
+response = completion(model="stabilityai/stablecode-completion-alpha-3b-4k", messages=messages, hugging_face=True)
 
 # openrouter call
 response = completion("google/palm-2-codechat-bison", messages)
