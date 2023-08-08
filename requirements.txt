@@ -1,8 +1,5 @@
-pydantic
+# used by CI/CD testing
 openai
-cohere
-anthropic
-replicate
 pytest
 python-dotenv
 openai[datalib]
