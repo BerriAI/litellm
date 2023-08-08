@@ -36,3 +36,16 @@
 | claude-instant-1  | `completion('claude-instant-1', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
 | claude-v2  | `completion('claude-v2', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
 
+### Hugging Face Inference API
+All `text2text-generation`, `text-generation` are supported by liteLLM
+In order to use models on hugging face inference:
+* copy the `model repo` from hugging face and set it as the `model` parameter in the completion call.
+* set `hugging_face` to `True`
+
+| Model Name       | Function Call                              | Required OS Variables                |
+|------------------|--------------------------------------------|--------------------------------------|
+| <a href="https://huggingface.co/stabilityai/stablecode-completion-alpha-3b-4k" target="_blank">stabilityai/stablecode-completion-alpha-3b-4k</a>  | `completion(model="stabilityai/stablecode-completion-alpha-3b-4k", messages=messages, hugging_face=True) | `os.environ['HF_TOKEN']`       |
+| <a href="https://huggingface.co/google/flan-t5-xxl" target="_blank">google/flan-t5-xxl</a>  | `completion(model="google/flan-t5-xxl", messages=messages, hugging_face=True) | `os.environ['HF_TOKEN']`       |
+
+
+
