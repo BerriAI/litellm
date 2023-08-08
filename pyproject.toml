@@ -9,12 +9,8 @@ readme = "README.md"
 [tool.poetry.dependencies]
 python = "^3.8"
 openai = "^0.27.8"
-
 pytest = "^7.4.0"
-
-
 python-dotenv = "^1.0.0"
-tenacity = "^8.0.1"
 tiktoken = "^0.4.0"
 
 [build-system]
