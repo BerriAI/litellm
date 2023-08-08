@@ -26,6 +26,14 @@ def test_completion_claude():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+def test_completion_cohere():
+    try:
+        response = completion(model="command-nightly", messages=messages, max_tokens=500)
+        # Add any assertions here to check the response
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
 def test_completion_openai():
     try:
         response = completion(model="gpt-3.5-turbo", messages=messages)
@@ -94,13 +102,7 @@ def test_completion_azure():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-def test_completion_cohere():
-    try:
-        response = completion(model="command-nightly", messages=messages, max_tokens=500)
-        # Add any assertions here to check the response
-        print(response)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
+
 
 # Replicate API endpoints are unstable -> throw random CUDA errors -> this means our tests can fail even if our tests weren't incorrect. 
 # [TODO] improve our try-except block to handle for these

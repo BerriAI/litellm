@@ -156,6 +156,7 @@ def completion(
     elif "replicate" in model:
       # import replicate/if it fails then pip install replicate
       install_and_import("replicate")
+      import replicate
       # replicate defaults to os.environ.get("REPLICATE_API_TOKEN")
       # checking in case user set it to REPLICATE_API_KEY instead 
       if not get_secret("REPLICATE_API_TOKEN") and get_secret("REPLICATE_API_KEY"):
@@ -246,6 +247,7 @@ def completion(
     elif model in litellm.cohere_models:
       # import cohere/if it fails then pip install cohere
       install_and_import("cohere")
+      import cohere
       if api_key:
         cohere_key = api_key
       elif litellm.cohere_key:
