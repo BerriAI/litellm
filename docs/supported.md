@@ -34,7 +34,7 @@
 | Model Name       | Function Call                              | Required OS Variables                |
 |------------------|--------------------------------------------|--------------------------------------|
 | claude-instant-1  | `completion('claude-instant-1', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
-| claude-v2  | `completion('claude-v2', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
+| claude-2  | `completion('claude-2', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
 
 ### Hugging Face Inference API
 
