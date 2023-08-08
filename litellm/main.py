@@ -239,7 +239,7 @@ def completion(
             max_tokens_to_sample=max_tokens_to_sample,
             **optional_params
         )
-      if optional_params['stream'] == True:
+      if 'stream' in optional_params and optional_params['stream'] == True:
         # don't try to access stream object,
         response = CustomStreamWrapper(completion)
         return response
