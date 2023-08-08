@@ -37,15 +37,22 @@
 | claude-v2  | `completion('claude-v2', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
 
 ### Hugging Face Inference API
-All `text2text-generation`, `text-generation` are supported by liteLLM
-In order to use models on hugging face inference:
-* copy the `model repo` from hugging face and set it as the `model` parameter in the completion call.
-* set `hugging_face` to `True`
 
-| Model Name       | Function Call                              | Required OS Variables                |
-|------------------|--------------------------------------------|--------------------------------------|
-| <a href="https://huggingface.co/stabilityai/stablecode-completion-alpha-3b-4k" target="_blank">stabilityai/stablecode-completion-alpha-3b-4k</a>  | `completion(model="stabilityai/stablecode-completion-alpha-3b-4k", messages=messages, hugging_face=True) | `os.environ['HF_TOKEN']`       |
-| <a href="https://huggingface.co/google/flan-t5-xxl" target="_blank">google/flan-t5-xxl</a>  | `completion(model="google/flan-t5-xxl", messages=messages, hugging_face=True) | `os.environ['HF_TOKEN']`       |
+All [`text2text-generation`](https://huggingface.co/models?library=transformers&pipeline_tag=text2text-generation&sort=downloads) and [`text-generation`](https://huggingface.co/models?library=transformers&pipeline_tag=text-generation&sort=downloads) models are supported by liteLLM. You can use any text model from Hugging Face with the following steps:
+1. Copy the `model repo` URL from Hugging Face and set it as the `model` parameter in the completion call.
+2. Set `hugging_face` parameter to `True`.
+3. Make sure to set the hugging face API key
+
+Here are some examples of supported models:
+**Note that the models mentioned in the table are examples, and you can use any text model available on Hugging Face by following the steps above.**
+
+| Model Name       | Function Call                                                                       | Required OS Variables                |
+|------------------|-------------------------------------------------------------------------------------|--------------------------------------|
+| [stabilityai/stablecode-completion-alpha-3b-4k](https://huggingface.co/stabilityai/stablecode-completion-alpha-3b-4k)  | `completion(model="stabilityai/stablecode-completion-alpha-3b-4k", messages=messages, hugging_face=True)` | `os.environ['HF_TOKEN']`       |
+| [bigcode/starcoder](https://huggingface.co/bigcode/starcoder)                           | `completion(model="bigcode/starcoder", messages=messages, hugging_face=True)`          | `os.environ['HF_TOKEN']`       |
+| [google/flan-t5-xxl](https://huggingface.co/google/flan-t5-xxl)                         | `completion(model="google/flan-t5-xxl", messages=messages, hugging_face=True)`         | `os.environ['HF_TOKEN']`       |
+| [google/flan-t5-large](https://huggingface.co/google/flan-t5-large)                     | `completion(model="google/flan-t5-large", messages=messages, hugging_face=True)`       | `os.environ['HF_TOKEN']`       |
+
 
 
 
