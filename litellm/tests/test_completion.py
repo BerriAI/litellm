@@ -7,14 +7,24 @@ sys.path.insert(0, os.path.abspath('../..'))  # Adds the parent directory to the
 import pytest
 import litellm
 from litellm import embedding, completion
+from infisical import InfisicalClient
 
 # litellm.set_verbose = True
+litellm.secret_manager_client = InfisicalClient(token=os.environ["INFISICAL_TOKEN"])
 
 user_message = "Hello, whats the weather in San Francisco??"
 messages = [{ "content": user_message,"role": "user"}]
 
 def logger_fn(user_model_dict):
     print(f"user_model_dict: {user_model_dict}")
+
+def test_completion_claude():
+    try:
+        response = completion(model="claude-instant-1", messages=messages, logger_fn=logger_fn)
+        # Add any assertions here to check the response
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 def test_completion_openai():
     try:
@@ -79,14 +89,6 @@ def test_completion_openai_with_functions():
 def test_completion_azure():
     try:
         response = completion(model="gpt-3.5-turbo", deployment_id="chatgpt-test", messages=messages, azure=True)
-        # Add any assertions here to check the response
-        print(response)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-def test_completion_claude():
-    try:
-        response = completion(model="claude-instant-1", messages=messages, logger_fn=logger_fn)
         # Add any assertions here to check the response
         print(response)
     except Exception as e:

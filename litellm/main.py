@@ -1,6 +1,5 @@
-import os, openai, cohere, replicate, sys
+import os, openai, sys
 from typing import Any
-from anthropic import Anthropic, HUMAN_PROMPT, AI_PROMPT
 from functools import partial
 import dotenv, traceback, random, asyncio, time
 from copy import deepcopy
@@ -13,7 +12,7 @@ from tenacity import (
     stop_after_attempt,
     wait_random_exponential,
 )  # for exponential backoff
-from litellm.utils import get_secret
+from litellm.utils import get_secret, install_and_import
 ####### ENVIRONMENT VARIABLES ###################
 dotenv.load_dotenv() # Loading env variables using dotenv
 
@@ -28,9 +27,7 @@ new_response = {
           }
         ]
       }
-# TODO move this to utils.py
 # TODO add translations
-# TODO see if this worked - model_name == krrish
 ####### COMPLETION ENDPOINTS ################
 #############################################
 async def acompletion(*args, **kwargs):
@@ -68,6 +65,7 @@ def completion(
       openai.api_type = "azure"
       openai.api_base = litellm.api_base if litellm.api_base is not None else get_secret("AZURE_API_BASE")
       openai.api_version = litellm.api_version if litellm.api_version is not None else get_secret("AZURE_API_VERSION")
+      # set key
       if api_key:
           openai.api_key = api_key
       elif litellm.azure_key:
@@ -92,6 +90,7 @@ def completion(
         )
     elif model in litellm.open_ai_chat_completion_models:
       openai.api_type = "openai"
+      # note: if a user sets a custom base - we should ensure this works
       openai.api_base = litellm.api_base if litellm.api_base is not None else "https://api.openai.com/v1"
       openai.api_version = None
       if litellm.organization:
@@ -155,6 +154,8 @@ def completion(
       model_response["usage"] = response["usage"]
       response = model_response
     elif "replicate" in model:
+      # import replicate/if it fails then pip install replicate
+      install_and_import("replicate")
       # replicate defaults to os.environ.get("REPLICATE_API_TOKEN")
       # checking in case user set it to REPLICATE_API_KEY instead 
       if not get_secret("REPLICATE_API_TOKEN") and get_secret("REPLICATE_API_KEY"):
@@ -194,6 +195,10 @@ def completion(
         }
       response = model_response
     elif model in litellm.anthropic_models:
+      # import anthropic/if it fails then pip install anthropic
+      install_and_import("anthropic")
+      from anthropic import Anthropic, HUMAN_PROMPT, AI_PROMPT
+
       #anthropic defaults to os.environ.get("ANTHROPIC_API_KEY")
       if api_key:
          os.environ["ANTHROPIC_API_KEY"] = api_key
@@ -239,6 +244,8 @@ def completion(
         }
       response = model_response
     elif model in litellm.cohere_models:
+      # import cohere/if it fails then pip install cohere
+      install_and_import("cohere")
       if api_key:
         cohere_key = api_key
       elif litellm.cohere_key:

@@ -4,7 +4,6 @@ import subprocess, os
 import litellm, openai 
 import random, uuid, requests
 import datetime, time
-from anthropic import Anthropic
 import tiktoken
 encoding = tiktoken.get_encoding("cl100k_base")
 from .integrations.helicone import HeliconeLogger
@@ -33,6 +32,19 @@ def print_verbose(print_statement):
     print(f"LiteLLM: {print_statement}")
     if random.random() <= 0.3:
       print("Get help - https://discord.com/invite/wuPM9dRgDw")
+
+####### Package Import Handler ###################
+import importlib
+import subprocess
+def install_and_import(package):
+    try:
+        importlib.import_module(package)
+    except ImportError:
+        print(f"{package} is not installed. Installing...")
+        subprocess.call([sys.executable, '-m', 'pip', 'install', package])
+    finally:
+        globals()[package] = importlib.import_module(package)
+##################################################
 
 ####### LOGGING ###################
 #Logging function -> log the exact model details + what's being sent | Non-Blocking
@@ -329,6 +341,8 @@ def prompt_token_calculator(model, messages):
   text = " ".join(message["content"] for message in messages)
   num_tokens = 0
   if "claude" in model:
+    install_and_import('anthropic')
+    from anthropic import Anthropic, HUMAN_PROMPT, AI_PROMPT
     anthropic = Anthropic()
     num_tokens = anthropic.count_tokens(text)
   else:
