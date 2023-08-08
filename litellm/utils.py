@@ -1,3 +1,4 @@
+import sys
 import dotenv, json, traceback, threading
 import subprocess, os 
 import litellm, openai 
