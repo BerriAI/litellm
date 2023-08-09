@@ -14,7 +14,7 @@ litellm manages:
 - guarantees consistent output, text responses will always be available at `['choices'][0]['message']['content']`
 
 # usage
-
+Demo - https://litellm.ai/ \
 Read the docs - https://litellm.readthedocs.io/en/latest/
 
 ## quick start
