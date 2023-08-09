@@ -164,8 +164,8 @@ def test_completion_replicate_stability_stream():
     try:
         response = completion(model=model_name, messages=messages, stream=True, replicate=True)
         # Add any assertions here to check the response
-        for result in response:
-            print(result)
+        for chunk in response:
+            print(chunk['choices'][0]['delta'])
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
