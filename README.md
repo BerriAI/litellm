@@ -7,7 +7,7 @@
 
 Get Support / Join the community 👉 [![](https://dcbadge.vercel.app/api/server/wuPM9dRgDw)](https://discord.gg/wuPM9dRgDw)
 
-a simple & light package to call OpenAI, Azure, Cohere, Anthropic API Endpoints 
+a simple & light package to call OpenAI, Azure, Cohere, Anthropic, Huggingface API Endpoints 
 
 litellm manages:
 - translating inputs to completion and embedding endpoints
