@@ -148,6 +148,8 @@ def get_optional_params(
     user = "",
     deployment_id = None,
     model = None,
+    replicate = False,
+    hugging_face = False,
 ):
   optional_params = {}
   if model in litellm.anthropic_models:
@@ -170,7 +172,12 @@ def get_optional_params(
     if max_tokens != float('inf'):
         optional_params["max_tokens"] = max_tokens
     return optional_params
-
+  elif replicate == True:
+    # any replicate models
+    # TODO: handle translating remaining replicate params
+    if stream:
+      optional_params["stream"] = stream
+      return optional_params
   else:# assume passing in params for openai/azure openai
     if functions != []:
         optional_params["functions"] = functions
@@ -199,6 +206,7 @@ def get_optional_params(
     if deployment_id != None:
         optional_params["deployment_id"] = deployment_id
     return optional_params
+  return optional_params
 
 def set_callbacks(callback_list):
   global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient
@@ -557,3 +565,30 @@ def get_secret(secret_name):
       return os.environ.get(secret_name)
   else:
     return os.environ.get(secret_name)
+
+######## Streaming Class ############################
+# wraps the completion stream to return the correct format for the model
+# replicate/anthropic/cohere
+class CustomStreamWrapper:
+    def __init__(self, completion_stream, model):
+        self.model = model
+        if model in litellm.cohere_models:
+           # cohere does not return an iterator, so we need to wrap it in one
+           self.completion_stream = iter(completion_stream)
+        else: 
+          self.completion_stream = completion_stream
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self.model in litellm.anthropic_models:
+          chunk = next(self.completion_stream)
+          return {"choices": [{"delta": chunk.completion}]}
+        elif self.model == "replicate":
+           chunk = next(self.completion_stream)
+           return {"choices": [{"delta": chunk}]}
+        elif self.model in litellm.cohere_models:
+          chunk = next(self.completion_stream)
+          return {"choices": [{"delta": chunk.text}]}
+
