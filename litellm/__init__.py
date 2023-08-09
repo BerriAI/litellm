@@ -4,13 +4,34 @@ failure_callback = []
 set_verbose=False
 telemetry=True
 max_tokens = 256 # OpenAI Defaults
-retry = True # control tenacity retries. 
+retry = True
 openai_key = None 
 azure_key = None 
 anthropic_key = None 
 replicate_key = None 
 cohere_key = None 
 openrouter_key = None
+
+hugging_api_token = None
+
+model_cost = {
+    "gpt-3.5-turbo": {"max_tokens": 4000, "input_cost_per_token": 0.0000015, "output_cost_per_token": 0.000002},
+    "gpt-35-turbo": {"max_tokens": 4000, "input_cost_per_token": 0.0000015, "output_cost_per_token": 0.000002}, # azure model name
+    "gpt-3.5-turbo-0613": {"max_tokens": 4000, "input_cost_per_token": 0.0000015, "output_cost_per_token": 0.000002},
+    "gpt-3.5-turbo-0301": {"max_tokens": 4000, "input_cost_per_token": 0.0000015, "output_cost_per_token": 0.000002},
+    "gpt-3.5-turbo-16k": {"max_tokens": 16000, "input_cost_per_token": 0.000003, "output_cost_per_token": 0.000004},
+    "gpt-35-turbo-16k": {"max_tokens": 16000, "input_cost_per_token": 0.000003, "output_cost_per_token": 0.000004}, # azure model name
+    "gpt-3.5-turbo-16k-0613": {"max_tokens": 16000, "input_cost_per_token": 0.000003, "output_cost_per_token": 0.000004},
+    "gpt-4": {"max_tokens": 8000, "input_cost_per_token": 0.000003, "output_cost_per_token": 0.00006},
+    "gpt-4-0613": {"max_tokens": 8000, "input_cost_per_token": 0.000003, "output_cost_per_token": 0.00006},
+    "gpt-4-32k": {"max_tokens": 8000, "input_cost_per_token": 0.00006, "output_cost_per_token": 0.00012},
+    "claude-instant-1": {"max_tokens": 100000, "input_cost_per_token": 0.00000163, "output_cost_per_token": 0.00000551},
+    "claude-2": {"max_tokens": 100000, "input_cost_per_token": 0.00001102, "output_cost_per_token": 0.00003268},
+    "text-bison-001": {"max_tokens": 8192, "input_cost_per_token": 0.000004, "output_cost_per_token": 0.000004},
+    "chat-bison-001": {"max_tokens": 4096, "input_cost_per_token": 0.000002, "output_cost_per_token": 0.000002},
+    "command-nightly": {"max_tokens": 4096, "input_cost_per_token": 0.000015, "output_cost_per_token": 0.000015},
+}
+
 ####### THREAD-SPECIFIC DATA ###################
 class MyLocal(threading.local):
     def __init__(self):
@@ -83,7 +104,7 @@ open_ai_embedding_models = [
     'text-embedding-ada-002'
 ]
 from .timeout import timeout
-from .utils import client, logging, exception_type, get_optional_params, modify_integration
+from .utils import client, logging, exception_type, get_optional_params, modify_integration, token_counter, cost_per_token, completion_cost
 from .main import *  # Import all the symbols from main.py
 from .integrations import *
 from openai.error import AuthenticationError, InvalidRequestError, RateLimitError, ServiceUnavailableError, OpenAIError

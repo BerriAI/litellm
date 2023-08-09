@@ -4,7 +4,6 @@ import subprocess, os
 import litellm, openai 
 import random, uuid, requests
 import datetime, time
-from anthropic import Anthropic
 import tiktoken
 encoding = tiktoken.get_encoding("cl100k_base")
 from .integrations.helicone import HeliconeLogger
@@ -33,6 +32,19 @@ def print_verbose(print_statement):
     print(f"LiteLLM: {print_statement}")
     if random.random() <= 0.3:
       print("Get help - https://discord.com/invite/wuPM9dRgDw")
+
+####### Package Import Handler ###################
+import importlib
+import subprocess
+def install_and_import(package):
+    try:
+        importlib.import_module(package)
+    except ImportError:
+        print(f"{package} is not installed. Installing...")
+        subprocess.call([sys.executable, '-m', 'pip', 'install', package])
+    finally:
+        globals()[package] = importlib.import_module(package)
+##################################################
 
 ####### LOGGING ###################
 #Logging function -> log the exact model details + what's being sent | Non-Blocking
@@ -119,6 +131,51 @@ def client(original_function):
           raise e
     return wrapper
 
+####### USAGE CALCULATOR ################
+
+def token_counter(model, text):
+  # use tiktoken or anthropic's tokenizer depending on the model
+  num_tokens = 0
+  if "claude" in model:
+    install_and_import('anthropic')
+    from anthropic import Anthropic, HUMAN_PROMPT, AI_PROMPT
+    anthropic = Anthropic()
+    num_tokens = anthropic.count_tokens(text)
+  else:
+    num_tokens = len(encoding.encode(text))
+  return num_tokens
+
+
+def cost_per_token(model="gpt-3.5-turbo", prompt_tokens = 0, completion_tokens = 0):
+   ## given 
+  prompt_tokens_cost_usd_dollar = 0
+  completion_tokens_cost_usd_dollar = 0
+  model_cost_ref = litellm.model_cost
+  if model in model_cost_ref:
+    prompt_tokens_cost_usd_dollar = model_cost_ref[model]["input_cost_per_token"] * prompt_tokens
+    completion_tokens_cost_usd_dollar = model_cost_ref[model]["output_cost_per_token"] * completion_tokens
+    return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
+  else:
+    # calculate average input cost 
+    input_cost_sum = 0
+    output_cost_sum = 0
+    model_cost_ref = litellm.model_cost
+    for model in model_cost_ref:
+        input_cost_sum += model_cost_ref[model]["input_cost_per_token"]
+        output_cost_sum += model_cost_ref[model]["output_cost_per_token"]
+    avg_input_cost = input_cost_sum / len(model_cost_ref.keys())
+    avg_output_cost = output_cost_sum / len(model_cost_ref.keys())
+    prompt_tokens_cost_usd_dollar = avg_input_cost * prompt_tokens
+    completion_tokens_cost_usd_dollar = avg_output_cost * completion_tokens
+    return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
+    
+
+def completion_cost(model="gpt-3.5-turbo", prompt="", completion=""):
+   prompt_tokens = tokenizer(model=model, text=prompt)
+   completion_tokens = tokenizer(model=model, text=completion)
+   prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar = cost_per_token(model=model, prompt_tokens = prompt_tokens, completion_tokens = completion_tokens)
+   return prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar
+
 ####### HELPER FUNCTIONS ################
 def get_optional_params(
     # 12 optional params
@@ -134,35 +191,66 @@ def get_optional_params(
     frequency_penalty = 0,
     logit_bias = {},
     user = "",
-    deployment_id = None
+    deployment_id = None,
+    model = None,
+    replicate = False,
+    hugging_face = False,
 ):
   optional_params = {}
-  if functions != []:
-      optional_params["functions"] = functions
-  if function_call != "":
-      optional_params["function_call"] = function_call
-  if temperature != 1:
-      optional_params["temperature"] = temperature
-  if top_p != 1:
-      optional_params["top_p"] = top_p
-  if n != 1:
-      optional_params["n"] = n
-  if stream:
+  if model in litellm.anthropic_models:
+    # handle anthropic params
+    if stream:
       optional_params["stream"] = stream
-  if stop != None:
-      optional_params["stop"] = stop
-  if max_tokens != float('inf'):
-      optional_params["max_tokens"] = max_tokens
-  if presence_penalty != 0:
-      optional_params["presence_penalty"] = presence_penalty
-  if frequency_penalty != 0:
-      optional_params["frequency_penalty"] = frequency_penalty
-  if logit_bias != {}:
-      optional_params["logit_bias"] = logit_bias
-  if user != "":
-      optional_params["user"] = user
-  if deployment_id != None:
-      optional_params["deployment_id"] = deployment_id
+    if stop != None:
+        optional_params["stop_sequences"] = stop
+    if temperature != 1:
+        optional_params["temperature"] = temperature
+    if top_p != 1:
+        optional_params["top_p"] = top_p
+    return optional_params
+  elif model in litellm.cohere_models:
+     # handle cohere params
+    if stream:
+      optional_params["stream"] = stream
+    if temperature != 1:
+        optional_params["temperature"] = temperature
+    if max_tokens != float('inf'):
+        optional_params["max_tokens"] = max_tokens
+    return optional_params
+  elif replicate == True:
+    # any replicate models
+    # TODO: handle translating remaining replicate params
+    if stream:
+      optional_params["stream"] = stream
+      return optional_params
+  else:# assume passing in params for openai/azure openai
+    if functions != []:
+        optional_params["functions"] = functions
+    if function_call != "":
+        optional_params["function_call"] = function_call
+    if temperature != 1:
+        optional_params["temperature"] = temperature
+    if top_p != 1:
+        optional_params["top_p"] = top_p
+    if n != 1:
+        optional_params["n"] = n
+    if stream:
+        optional_params["stream"] = stream
+    if stop != None:
+        optional_params["stop"] = stop
+    if max_tokens != float('inf'):
+        optional_params["max_tokens"] = max_tokens
+    if presence_penalty != 0:
+        optional_params["presence_penalty"] = presence_penalty
+    if frequency_penalty != 0:
+        optional_params["frequency_penalty"] = frequency_penalty
+    if logit_bias != {}:
+        optional_params["logit_bias"] = logit_bias
+    if user != "":
+        optional_params["user"] = user
+    if deployment_id != None:
+        optional_params["deployment_id"] = deployment_id
+    return optional_params
   return optional_params
 
 def set_callbacks(callback_list):
@@ -324,19 +412,6 @@ def handle_failure(exception, traceback_exception, start_time, end_time, args, k
       logging(logger_fn=user_logger_fn, exception=e)
       pass
 
-def prompt_token_calculator(model, messages):
-  # use tiktoken or anthropic's tokenizer depending on the model
-  text = " ".join(message["content"] for message in messages)
-  num_tokens = 0
-  if "claude" in model:
-    anthropic = Anthropic()
-    num_tokens = anthropic.count_tokens(text)
-  else:
-    num_tokens = len(encoding.encode(text))
-  return num_tokens
-  
-      
-
 def handle_success(args, kwargs, result, start_time, end_time):
   global heliconeLogger, aispendLogger
   try:
@@ -395,6 +470,19 @@ def handle_success(args, kwargs, result, start_time, end_time):
     logging(logger_fn=user_logger_fn, exception=e)
     print_verbose(f"[Non-Blocking] Success Callback Error - {traceback.format_exc()}")
     pass
+
+def prompt_token_calculator(model, messages):
+  # use tiktoken or anthropic's tokenizer depending on the model
+  text = " ".join(message["content"] for message in messages)
+  num_tokens = 0
+  if "claude" in model:
+    install_and_import('anthropic')
+    from anthropic import Anthropic, HUMAN_PROMPT, AI_PROMPT
+    anthropic = Anthropic()
+    num_tokens = anthropic.count_tokens(text)
+  else:
+    num_tokens = len(encoding.encode(text))
+  return num_tokens
 
 # integration helper function 
 def modify_integration(integration_name, integration_params):
@@ -520,3 +608,30 @@ def get_secret(secret_name):
       return os.environ.get(secret_name)
   else:
     return os.environ.get(secret_name)
+
+######## Streaming Class ############################
+# wraps the completion stream to return the correct format for the model
+# replicate/anthropic/cohere
+class CustomStreamWrapper:
+    def __init__(self, completion_stream, model):
+        self.model = model
+        if model in litellm.cohere_models:
+           # cohere does not return an iterator, so we need to wrap it in one
+           self.completion_stream = iter(completion_stream)
+        else: 
+          self.completion_stream = completion_stream
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self.model in litellm.anthropic_models:
+          chunk = next(self.completion_stream)
+          return {"choices": [{"delta": chunk.completion}]}
+        elif self.model == "replicate":
+           chunk = next(self.completion_stream)
+           return {"choices": [{"delta": chunk}]}
+        elif self.model in litellm.cohere_models:
+          chunk = next(self.completion_stream)
+          return {"choices": [{"delta": chunk.text}]}
+

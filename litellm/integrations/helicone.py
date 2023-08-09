@@ -2,7 +2,6 @@
 #    On success, logs events to Helicone
 import dotenv, os
 import requests
-from anthropic import HUMAN_PROMPT, AI_PROMPT
 dotenv.load_dotenv() # Loading env variables using dotenv
 import traceback
 class HeliconeLogger:
@@ -14,6 +13,7 @@ class HeliconeLogger:
         self.key = os.getenv('HELICONE_API_KEY')
 
     def claude_mapping(self, model, messages, response_obj):
+        from anthropic import HUMAN_PROMPT, AI_PROMPT
         prompt = f"{HUMAN_PROMPT}" 
         for message in messages:
             if "role" in message:
