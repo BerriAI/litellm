@@ -26,7 +26,6 @@ def test_completion_claude():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_completion_claude()
 def test_completion_claude_stream():
     try:
         messages = [
@@ -40,7 +39,6 @@ def test_completion_claude_stream():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_completion_claude_stream()
 def test_completion_hf_api():
     try:
         user_message = "write some code to find the sum of two numbers"
@@ -196,6 +194,16 @@ def test_completion_replicate_stability():
         # Add any assertions here to check the response
         for result in response:
             print(result)
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+######## Test TogetherAI ########
+def test_completion_together_ai():
+    model_name = "togethercomputer/mpt-30b-chat"
+    try:
+        response = completion(model=model_name, messages=messages, together_ai=True)
+        # Add any assertions here to check the response
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")

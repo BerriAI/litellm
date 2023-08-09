@@ -216,6 +216,7 @@ def get_optional_params(
     model = None,
     replicate = False,
     hugging_face = False,
+    together_ai = False,
 ):
   optional_params = {}
   if model in litellm.anthropic_models:
@@ -244,6 +245,18 @@ def get_optional_params(
     if stream:
       optional_params["stream"] = stream
       return optional_params
+  elif together_ai == True:
+      if stream:
+        optional_params["stream"] = stream
+      if temperature != 1:
+          optional_params["temperature"] = temperature
+      if top_p != 1:
+        optional_params["top_p"] = top_p
+      if max_tokens != float('inf'):
+        optional_params["max_tokens"] = max_tokens
+      if frequency_penalty != 0:
+        optional_params["frequency_penalty"] = frequency_penalty
+
   else:# assume passing in params for openai/azure openai
     if functions != []:
         optional_params["functions"] = functions
