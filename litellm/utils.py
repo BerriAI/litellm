@@ -161,6 +161,16 @@ def get_optional_params(
     if top_p != 1:
         optional_params["top_p"] = top_p
     return optional_params
+  elif model in litellm.cohere_models:
+     # handle cohere params
+    if stream:
+      optional_params["stream"] = stream
+    if temperature != 1:
+        optional_params["temperature"] = temperature
+    if max_tokens != float('inf'):
+        optional_params["max_tokens"] = max_tokens
+    return optional_params
+
   else:# assume passing in params for openai/azure openai
     if functions != []:
         optional_params["functions"] = functions
