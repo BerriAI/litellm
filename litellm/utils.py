@@ -131,6 +131,46 @@ def client(original_function):
           raise e
     return wrapper
 
+####### USAGE CALCULATOR ################
+
+def prompt_token_calculator(model, messages):
+  # use tiktoken or anthropic's tokenizer depending on the model
+  text = " ".join(message["content"] for message in messages)
+  num_tokens = 0
+  if "claude" in model:
+    install_and_import('anthropic')
+    from anthropic import Anthropic, HUMAN_PROMPT, AI_PROMPT
+    anthropic = Anthropic()
+    num_tokens = anthropic.count_tokens(text)
+  else:
+    num_tokens = len(encoding.encode(text))
+  return num_tokens
+
+
+def cost_per_token(model="gpt-3.5-turbo", prompt_tokens = 0, completion_tokens = 0):
+   ## given 
+  prompt_tokens_cost_usd_dollar = 0
+  completion_tokens_cost_usd_dollar = 0
+  model_cost_ref = litellm.model_cost
+  if model in model_cost_ref:
+    prompt_tokens_cost_usd_dollar = model_cost_ref[model]["input_cost_per_token"] * prompt_tokens
+    completion_tokens_cost_usd_dollar = model_cost_ref[model]["output_cost_per_token"] * completion_tokens
+    return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
+  else:
+    # calculate average input cost 
+    input_cost_sum = 0
+    output_cost_sum = 0
+    model_cost_ref = litellm.model_cost
+    for model in model_cost_ref:
+        input_cost_sum += model_cost_ref[model]["input_cost_per_token"]
+        output_cost_sum += model_cost_ref[model]["output_cost_per_token"]
+    avg_input_cost = input_cost_sum / len(model_cost_ref.keys())
+    avg_output_cost = output_cost_sum / len(model_cost_ref.keys())
+    prompt_tokens_cost_usd_dollar = avg_input_cost * prompt_tokens
+    completion_tokens_cost_usd_dollar = avg_output_cost * completion_tokens
+  return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
+    
+
 ####### HELPER FUNCTIONS ################
 def get_optional_params(
     # 12 optional params
@@ -366,21 +406,6 @@ def handle_failure(exception, traceback_exception, start_time, end_time, args, k
       ## LOGGING
       logging(logger_fn=user_logger_fn, exception=e)
       pass
-
-def prompt_token_calculator(model, messages):
-  # use tiktoken or anthropic's tokenizer depending on the model
-  text = " ".join(message["content"] for message in messages)
-  num_tokens = 0
-  if "claude" in model:
-    install_and_import('anthropic')
-    from anthropic import Anthropic, HUMAN_PROMPT, AI_PROMPT
-    anthropic = Anthropic()
-    num_tokens = anthropic.count_tokens(text)
-  else:
-    num_tokens = len(encoding.encode(text))
-  return num_tokens
-  
-      
 
 def handle_success(args, kwargs, result, start_time, end_time):
   global heliconeLogger, aispendLogger
