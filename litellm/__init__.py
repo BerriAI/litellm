@@ -78,7 +78,8 @@ cohere_models = [
 
 anthropic_models = [
   "claude-2", 
-  "claude-instant-1"
+  "claude-instant-1",
+  "claude-instant-1.2"
 ]
 
 replicate_models = [
