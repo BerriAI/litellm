@@ -7,12 +7,12 @@
 
 Get Support / Join the community 👉 [![](https://dcbadge.vercel.app/api/server/wuPM9dRgDw)](https://discord.gg/wuPM9dRgDw)
 
-a simple & light package to call OpenAI, Azure, Cohere, Anthropic, Huggingface API Endpoints 
+a light package to simplify calling OpenAI, Azure, Cohere, Anthropic, Huggingface API Endpoints 
 
 litellm manages:
-- translating inputs to completion and embedding endpoints
-- guarantees consistent output, text responses will always be available at `['choices'][0]['message']['content']`
-
+- translating inputs to the provider's completion and embedding endpoints
+- guarantees [consistent output](https://litellm.readthedocs.io/en/latest/output/), text responses will always be available at `['choices'][0]['message']['content']`
+- exception mapping - common exceptions across providers are mapped to the [OpenAI exception types](https://help.openai.com/en/articles/6897213-openai-library-error-types-guidance)
 # usage
 Demo - https://litellm.ai/ \
 Read the docs - https://litellm.readthedocs.io/en/latest/
