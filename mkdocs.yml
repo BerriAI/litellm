@@ -6,6 +6,8 @@ nav:
       - Input - Request Body: input.md
       - Output - Response Object: output.md
       - Streaming & Async Calls: stream.md
+    - token usage:
+      - Helper Functions: token_usage.md
   - 🤖 Supported LLM APIs: 
     - Supported Completion & Chat APIs: supported.md
     - Supported Embedding APIs: supported_embedding.md

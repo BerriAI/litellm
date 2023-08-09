@@ -89,7 +89,7 @@ open_ai_embedding_models = [
     'text-embedding-ada-002'
 ]
 from .timeout import timeout
-from .utils import client, logging, exception_type, get_optional_params, modify_integration
+from .utils import client, logging, exception_type, get_optional_params, modify_integration, token_counter, cost_per_token, completion_cost
 from .main import *  # Import all the symbols from main.py
 from .integrations import *
 from openai.error import AuthenticationError, InvalidRequestError, RateLimitError, ServiceUnavailableError, OpenAIError
