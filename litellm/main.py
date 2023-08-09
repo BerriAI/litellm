@@ -44,7 +44,7 @@ def completion(
     presence_penalty=0, frequency_penalty=0, logit_bias={}, user="", deployment_id=None,
     # Optional liteLLM function params
     *, return_async=False, api_key=None, force_timeout=60, azure=False, logger_fn=None, verbose=False,
-    hugging_face = False, replicate=False,
+    hugging_face = False, replicate=False,together_ai = False
   ):
   try:
     global new_response
@@ -55,7 +55,7 @@ def completion(
       temperature=temperature, top_p=top_p, n=n, stream=stream, stop=stop, max_tokens=max_tokens,
       presence_penalty=presence_penalty, frequency_penalty=frequency_penalty, logit_bias=logit_bias, user=user, deployment_id=deployment_id,
       # params to identify the model
-      model=model, replicate=replicate, hugging_face=hugging_face
+      model=model, replicate=replicate, hugging_face=hugging_face, together_ai=together_ai
     )
     if azure == True:
       # azure configs
@@ -362,6 +362,40 @@ def completion(
           "total_tokens": prompt_tokens + completion_tokens
         }
       response = model_response
+    elif together_ai == True:
+      import requests
+      TOGETHER_AI_TOKEN = get_secret("TOGETHER_AI_TOKEN")
+      headers = {"Authorization": f"Bearer {TOGETHER_AI_TOKEN}"}
+      endpoint = 'https://api.together.xyz/inference'
+      prompt = " ".join([message["content"] for message in messages]) # TODO: Add chat support for together AI
+      
+      ## LOGGING
+      logging(model=model, input=prompt, azure=azure, logger_fn=logger_fn)
+      res = requests.post(endpoint, json={
+          "model": model,
+          "prompt": prompt,
+          "request_type": "language-model-inference",
+        }, 
+        headers=headers
+      )
+
+      completion_response = res.json()['output']['choices'][0]['text']
+
+      ## LOGGING
+      logging(model=model, input=prompt, azure=azure, additional_args={"max_tokens": max_tokens, "original_response": completion_response}, logger_fn=logger_fn)
+      prompt_tokens = len(encoding.encode(prompt))
+      completion_tokens = len(encoding.encode(completion_response))
+      ## RESPONSE OBJECT
+      model_response["choices"][0]["message"]["content"] = completion_response
+      model_response["created"] = time.time()
+      model_response["model"] = model
+      model_response["usage"] = {
+          "prompt_tokens": prompt_tokens,
+          "completion_tokens": completion_tokens,
+          "total_tokens": prompt_tokens + completion_tokens
+        }
+      response = model_response
+
     else: 
       ## LOGGING
       logging(model=model, input=messages, azure=azure, logger_fn=logger_fn)
