@@ -7,10 +7,10 @@ sys.path.insert(0, os.path.abspath('../..'))  # Adds the parent directory to the
 import pytest
 import litellm
 from litellm import embedding, completion
-from infisical import InfisicalClient
+# from infisical import InfisicalClient
 
 # litellm.set_verbose = True
-litellm.secret_manager_client = InfisicalClient(token=os.environ["INFISICAL_TOKEN"])
+# litellm.secret_manager_client = InfisicalClient(token=os.environ["INFISICAL_TOKEN"])
 
 user_message = "Hello, whats the weather in San Francisco??"
 messages = [{ "content": user_message,"role": "user"}]
@@ -26,6 +26,7 @@ def test_completion_claude():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+test_completion_claude()
 def test_completion_claude_stream():
     try:
         messages = [
@@ -39,6 +40,7 @@ def test_completion_claude_stream():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+test_completion_claude_stream()
 def test_completion_hf_api():
     try:
         user_message = "write some code to find the sum of two numbers"

@@ -5,6 +5,8 @@ import litellm, openai
 import random, uuid, requests
 import datetime, time
 import tiktoken
+import pkg_resources
+from pkg_resources import DistributionNotFound, VersionConflict
 encoding = tiktoken.get_encoding("cl100k_base")
 from .integrations.helicone import HeliconeLogger
 from .integrations.aispend import AISpendLogger
@@ -36,14 +38,33 @@ def print_verbose(print_statement):
 ####### Package Import Handler ###################
 import importlib
 import subprocess
-def install_and_import(package):
+def install_and_import(package: str):
     try:
-        importlib.import_module(package)
-    except ImportError:
+        # Import the module 
+        module = importlib.import_module(package)
+        
+        # Get the package's information
+        dist = pkg_resources.get_distribution(package)
+        required = [req for req in pkg_resources.get_distribution(package).requires()]
+        
+        # Check if there are dependencies
+        if required:
+            for req in required:
+                install_and_import(req.project_name)
+        else:
+            print(f"{package} has been successfully installed with no dependencies.")
+
+    except (DistributionNotFound, ImportError):
         print(f"{package} is not installed. Installing...")
-        subprocess.call([sys.executable, '-m', 'pip', 'install', package])
-    finally:
+        subprocess.call([sys.executable, "-m", "pip", "install", package])
         globals()[package] = importlib.import_module(package)
+    except VersionConflict as vc:
+        print(f"Detected version conflict for {package}. Upgrading...")
+        subprocess.call([sys.executable, "-m", "pip", "install", "--upgrade", package])
+        globals()[package] = importlib.import_module(package)
+    finally:
+        if package not in globals().keys():
+            globals()[package] = importlib.import_module(package)
 ##################################################
 
 ####### LOGGING ###################
