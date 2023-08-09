@@ -625,13 +625,16 @@ class CustomStreamWrapper:
         return self
 
     def __next__(self):
+        completion_obj ={ "role": "assistant", "content": ""}
         if self.model in litellm.anthropic_models:
           chunk = next(self.completion_stream)
-          return {"choices": [{"delta": chunk.completion}]}
+          completion_obj["content"] = chunk.completion
         elif self.model == "replicate":
            chunk = next(self.completion_stream)
-           return {"choices": [{"delta": chunk}]}
+           completion_obj["content"] = chunk
         elif self.model in litellm.cohere_models:
           chunk = next(self.completion_stream)
-          return {"choices": [{"delta": chunk.text}]}
+          completion_obj["content"] = chunk.text
+        # return this for all models
+        return {"choices": [{"delta": completion_obj}]}
 
