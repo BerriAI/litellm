@@ -87,14 +87,13 @@ def test_completion_openai_with_optional_params():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-# TODO: Fix this test
-# def test_completion_openrouter():
-#     try:
-#         response = completion(model="google/palm-2-chat-bison", messages=messages, temperature=0.5, top_p=0.1, user="ishaan_dev@berri.ai")
-#         # Add any assertions here to check the response
-#         print(response)
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
+def test_completion_openrouter():
+    try:
+        response = completion(model="google/palm-2-chat-bison", messages=messages, temperature=0.5, top_p=0.1, user="ishaan_dev@berri.ai")
+        # Add any assertions here to check the response
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 def test_completion_openai_with_more_optional_params():
     try:

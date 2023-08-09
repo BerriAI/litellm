@@ -277,13 +277,21 @@ def completion(
           **optional_params
         )
       else:
+        openrouter_site_url = get_secret("OR_SITE_URL")
+        openrouter_app_name = get_secret("OR_APP_NAME")
+        # if openrouter_site_url is None, set it to https://litellm.ai
+        if openrouter_site_url is None:
+          openrouter_site_url = "https://litellm.ai"
+        # if openrouter_app_name is None, set it to liteLLM
+        if openrouter_app_name is None:
+          openrouter_app_name = "liteLLM"
         response = openai.ChatCompletion.create(
           model=model,
           messages = messages,
           headers = 
           {
-             "HTTP-Referer": os.environ.get("OR_SITE_URL"), # To identify your app
-             "X-Title": os.environ.get("OR_APP_NAME")
+             "HTTP-Referer": openrouter_site_url, # To identify your site
+             "X-Title": openrouter_app_name # To identify your app
           },
           **optional_params
         )
