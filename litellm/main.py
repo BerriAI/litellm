@@ -252,6 +252,41 @@ def completion(
           "total_tokens": prompt_tokens + completion_tokens
         }
       response = model_response
+
+    elif model in litellm.openrouter_models:
+      openai.api_type = "openai"
+      # not sure if this will work after someone first uses another API
+      openai.api_base = litellm.api_base if litellm.api_base is not None else "https://openrouter.ai/api/v1"
+      openai.api_version = None
+      if litellm.organization:
+        openai.organization = litellm.organization
+      if api_key:
+          openai.api_key = api_key
+      elif litellm.openrouter_key:
+          openai.api_key = litellm.openrouter_key
+      else:
+          openai.api_key = get_secret("OPENROUTER_API_KEY")
+      ## LOGGING
+      logging(model=model, input=messages, additional_args=optional_params, azure=azure, logger_fn=logger_fn)
+      ## COMPLETION CALL
+      if litellm.headers:
+         response = openai.ChatCompletion.create(
+          model=model,
+          messages = messages,
+          headers = litellm.headers,
+          **optional_params
+        )
+      else:
+        response = openai.ChatCompletion.create(
+          model=model,
+          messages = messages,
+          headers = 
+          {
+             "HTTP-Referer": os.environ.get("OR_SITE_URL"), # To identify your app
+             "X-Title": os.environ.get("OR_APP_NAME")
+          },
+          **optional_params
+        )
     elif model in litellm.cohere_models:
       # import cohere/if it fails then pip install cohere
       install_and_import("cohere")
