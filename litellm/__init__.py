@@ -10,6 +10,8 @@ azure_key = None
 anthropic_key = None 
 replicate_key = None 
 cohere_key = None 
+openrouter_key = None
+
 hugging_api_token = None
 
 model_cost = {
@@ -29,6 +31,7 @@ model_cost = {
     "chat-bison-001": {"max_tokens": 4096, "input_cost_per_token": 0.000002, "output_cost_per_token": 0.000002},
     "command-nightly": {"max_tokens": 4096, "input_cost_per_token": 0.000015, "output_cost_per_token": 0.000015},
 }
+
 ####### THREAD-SPECIFIC DATA ###################
 class MyLocal(threading.local):
     def __init__(self):
@@ -82,7 +85,19 @@ replicate_models = [
     "replicate/"
 ] # placeholder, to make sure we accept any replicate model in our model_list 
 
-model_list = open_ai_chat_completion_models + open_ai_text_completion_models + cohere_models + anthropic_models + replicate_models
+openrouter_models = [
+    'google/palm-2-codechat-bison',
+    'google/palm-2-chat-bison',
+    'openai/gpt-3.5-turbo',
+    'openai/gpt-3.5-turbo-16k',
+    'openai/gpt-4-32k',
+    'anthropic/claude-2',
+    'anthropic/claude-instant-v1',
+    'meta-llama/llama-2-13b-chat',
+    'meta-llama/llama-2-70b-chat'
+]
+
+model_list = open_ai_chat_completion_models + open_ai_text_completion_models + cohere_models + anthropic_models + replicate_models + openrouter_models
 
 ####### EMBEDDING MODELS ###################
 open_ai_embedding_models = [

@@ -87,6 +87,14 @@ def test_completion_openai_with_optional_params():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+def test_completion_openrouter():
+    try:
+        response = completion(model="google/palm-2-chat-bison", messages=messages, temperature=0.5, top_p=0.1, user="ishaan_dev@berri.ai")
+        # Add any assertions here to check the response
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
 def test_completion_openai_with_more_optional_params():
     try:
         response = completion(model="gpt-3.5-turbo", messages=messages, temperature=0.5, top_p=0.1, n=2, max_tokens=150, presence_penalty=0.5, frequency_penalty=-0.5, logit_bias={123: 5}, user="ishaan_dev@berri.ai")
@@ -161,6 +169,23 @@ def test_completion_replicate_stability_stream():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
+# Replicate API endpoints are unstable -> throw random CUDA errors -> this means our tests can fail even if our tests weren't incorrect. 
+# [TODO] improve our try-except block to handle for these
+# def test_completion_replicate_llama():
+#     model_name = "replicate/llama-2-70b-chat:2c1608e18606fad2812020dc541930f2d0495ce32eee50074220b87300bc16e1"
+#     try:
+#         response = completion(model=model_name, messages=messages, max_tokens=500)
+#         # Add any assertions here to check the response
+#         print(response)
+#     except Exception as e:
+#         print(f"in replicate llama, got error {e}")
+#         pass
+#         if e == "FunctionTimedOut":
+#             pass
+#         else:
+#             pytest.fail(f"Error occurred: {e}")
 
 def test_completion_replicate_stability():
     model_name = "stability-ai/stablelm-tuned-alpha-7b:c49dae362cbaecd2ceabb5bd34fdb68413c4ff775111fea065d259d577757beb"
