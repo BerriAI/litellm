@@ -200,10 +200,21 @@ def test_completion_replicate_stability():
 
 ######## Test TogetherAI ########
 def test_completion_together_ai():
-    model_name = "togethercomputer/mpt-30b-chat"
+    model_name = "togethercomputer/llama-2-70b-chat"
     try:
         response = completion(model=model_name, messages=messages, together_ai=True)
         # Add any assertions here to check the response
         print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+def test_completion_together_ai_stream():
+    model_name = "togethercomputer/llama-2-70b-chat"
+    try:
+        response = completion(model=model_name, messages=messages, together_ai=True, stream=True)
+        # Add any assertions here to check the response
+        print(response)
+        for chunk in response:
+            print(chunk['choices'][0]['delta']) # same as openai format
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")

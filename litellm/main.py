@@ -375,9 +375,13 @@ def completion(
           "model": model,
           "prompt": prompt,
           "request_type": "language-model-inference",
+          **optional_params
         }, 
         headers=headers
       )
+      if stream == True:
+        response = CustomStreamWrapper(res, "together_ai")
+        return response
 
       completion_response = res.json()['output']['choices'][0]['text']
 
