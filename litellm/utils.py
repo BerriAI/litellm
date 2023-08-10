@@ -247,7 +247,7 @@ def get_optional_params(
       return optional_params
   elif together_ai == True:
       if stream:
-        optional_params["stream"] = stream
+        optional_params["stream_tokens"] = stream
       if temperature != 1:
           optional_params["temperature"] = temperature
       if top_p != 1:
@@ -652,11 +652,24 @@ class CustomStreamWrapper:
         if model in litellm.cohere_models:
            # cohere does not return an iterator, so we need to wrap it in one
            self.completion_stream = iter(completion_stream)
+        elif model == "together_ai":
+            self.completion_stream = iter(completion_stream)
         else: 
           self.completion_stream = completion_stream
 
     def __iter__(self):
         return self
+
+    def handle_together_ai_chunk(self, chunk): 
+      chunk = chunk.decode("utf-8")
+      text_index = chunk.find('"text":"') # this checks if text: exists
+      text_start = text_index + len('"text":"')
+      text_end = chunk.find('"}', text_start)
+      if text_index != -1 and text_end != -1: 
+          extracted_text = chunk[text_start:text_end]
+          return extracted_text
+      else:
+          return ""
 
     def __next__(self):
         completion_obj ={ "role": "assistant", "content": ""}
@@ -666,9 +679,14 @@ class CustomStreamWrapper:
         elif self.model == "replicate":
            chunk = next(self.completion_stream)
            completion_obj["content"] = chunk
+        elif self.model == "together_ai":
+          chunk = next(self.completion_stream)
+          text_data =  self.handle_together_ai_chunk(chunk)
+          if text_data == "":
+             return self.__next__()
+          completion_obj["content"] = text_data
         elif self.model in litellm.cohere_models:
           chunk = next(self.completion_stream)
           completion_obj["content"] = chunk.text
         # return this for all models
         return {"choices": [{"delta": completion_obj}]}
-
