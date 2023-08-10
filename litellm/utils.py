@@ -48,20 +48,24 @@ def install_and_import(package: str):
         required = [req for req in pkg_resources.get_distribution(package).requires()]
         
         # Print the version of the package
-        print(f"{package} version: {dist.version}")
+        # print(f"{package} version: {dist.version}")
         # Check if there are dependencies
         if required:
             for req in required:
                 install_and_import(req.project_name)
         else:
-            print(f"{package} has been successfully installed with no dependencies.")
-
+            print_verbose(f"{package} has been successfully installed with no dependencies.")
+    
+    except (ModuleNotFoundError, ImportError):
+        print_verbose(f"{package} is not installed. Installing...")
+        subprocess.call([sys.executable, "-m", "pip", "install", package])
+        globals()[package] = importlib.import_module(package)
     except (DistributionNotFound, ImportError):
-        print(f"{package} is not installed. Installing...")
+        print_verbose(f"{package} is not installed. Installing...")
         subprocess.call([sys.executable, "-m", "pip", "install", package])
         globals()[package] = importlib.import_module(package)
     except VersionConflict as vc:
-        print(f"Detected version conflict for {package}. Upgrading...")
+        print_verbose(f"Detected version conflict for {package}. Upgrading...")
         subprocess.call([sys.executable, "-m", "pip", "install", "--upgrade", package])
         globals()[package] = importlib.import_module(package)
     finally:
