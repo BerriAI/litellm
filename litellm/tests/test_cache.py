@@ -40,3 +40,5 @@ def test_completion_with_cache_gpt4():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+litellm.cache = False
