@@ -39,23 +39,12 @@ def print_verbose(print_statement):
 import importlib
 import subprocess
 def install_and_import(package: str):
+    if package in globals().keys():
+      print_verbose(f"{package} has already been imported.")
+      return
     try:
         # Import the module 
         module = importlib.import_module(package)
-        
-        # Get the package's information
-        dist = pkg_resources.get_distribution(package)
-        required = [req for req in pkg_resources.get_distribution(package).requires()]
-        
-        # Print the version of the package
-        # print(f"{package} version: {dist.version}")
-        # Check if there are dependencies
-        if required:
-            for req in required:
-                install_and_import(req.project_name)
-        else:
-            print_verbose(f"{package} has been successfully installed with no dependencies.")
-    
     except (ModuleNotFoundError, ImportError):
         print_verbose(f"{package} is not installed. Installing...")
         subprocess.call([sys.executable, "-m", "pip", "install", package])
@@ -85,8 +74,8 @@ def logging(model=None, input=None, azure=False, additional_args={}, logger_fn=N
     if exception:
       model_call_details["exception"] = exception
 
-    if litellm.telemetry:
-      safe_crash_reporting(model=model, exception=exception, azure=azure) # log usage-crash details. Do not log any user details. If you want to turn this off, set `litellm.telemetry=False`.
+    # if litellm.telemetry:
+    #   safe_crash_reporting(model=model, exception=exception, azure=azure) # log usage-crash details. Do not log any user details. If you want to turn this off, set `litellm.telemetry=False`.
 
     if input:
       model_call_details["input"] = input
@@ -138,6 +127,17 @@ def client(original_function):
         print_verbose(f"[Non-Blocking] {traceback.format_exc()}")
       pass
 
+    def crash_reporting(*args, **kwargs):
+      if litellm.telemetry:
+        try:
+          model = args[0] if len(args) > 0 else kwargs["model"]
+          exception = kwargs["exception"] if "exception" in kwargs else None
+          azure = kwargs["azure"] if "azure" in kwargs else None
+          safe_crash_reporting(model=model, exception=exception, azure=azure) # log usage-crash details. Do not log any user details. If you want to turn this off, set `litellm.telemetry=False`.
+        except:
+           #[Non-Blocking Error]
+           pass
+
     def wrapper(*args, **kwargs):
         start_time = None
         try:
@@ -147,11 +147,13 @@ def client(original_function):
           result = original_function(*args, **kwargs)
           end_time = datetime.datetime.now()
           ## LOG SUCCESS 
+          crash_reporting(*args, **kwargs)
           my_thread = threading.Thread(target=handle_success, args=(args, kwargs, result, start_time, end_time)) # don't interrupt execution of main thread
           my_thread.start()
           return result
         except Exception as e:
           traceback_exception = traceback.format_exc()
+          crash_reporting(*args, **kwargs, exception=traceback_exception)
           end_time = datetime.datetime.now()
           my_thread = threading.Thread(target=handle_failure, args=(e, traceback_exception, start_time, end_time, args, kwargs)) # don't interrupt execution of main thread
           my_thread.start()
@@ -198,8 +200,8 @@ def cost_per_token(model="gpt-3.5-turbo", prompt_tokens = 0, completion_tokens =
     
 
 def completion_cost(model="gpt-3.5-turbo", prompt="", completion=""):
-   prompt_tokens = tokenizer(model=model, text=prompt)
-   completion_tokens = tokenizer(model=model, text=completion)
+   prompt_tokens = token_counter(model=model, text=prompt)
+   completion_tokens = token_counter(model=model, text=completion)
    prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar = cost_per_token(model=model, prompt_tokens = prompt_tokens, completion_tokens = completion_tokens)
    return prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar
 
@@ -599,7 +601,7 @@ def safe_crash_reporting(model=None, exception=None, azure=None):
       "exception": str(exception),
       "azure": azure
     }
-    threading.Thread(target=litellm_telemetry, args=(data,), daemon=True).start()
+    threading.Thread(target=litellm_telemetry, args=(data,)).start()
 
 def litellm_telemetry(data):
     # Load or generate the UUID
@@ -618,19 +620,23 @@ def litellm_telemetry(data):
         uuid_value = str(new_uuid)
         with open(uuid_file, 'w') as file:
             file.write(uuid_value)
-
-    # Prepare the data to send to localhost:3000
-    payload = {
-        'uuid': uuid_value,
-        'data': data
-    }
+    except:
+      # [Non-Blocking Error]
+      return
+    
     try:
-      # Make the POST request to localhost:3000
-      response = requests.post('https://litellm.berri.ai/logging', json=payload)
+      # Prepare the data to send to litellm logging api
+      payload = {
+          'uuid': uuid_value,
+          'data': data,
+          'version': pkg_resources.get_distribution("litellm").version
+      }
+      # Make the POST request to litellm logging api
+      response = requests.post('https://litellm.berri.ai/logging', headers={"Content-Type": "application/json"}, json=payload)
       response.raise_for_status()  # Raise an exception for HTTP errors
-    except requests.exceptions.RequestException as e:
-        # Handle any errors in the request
-        pass
+    except:
+        # [Non-Blocking Error]
+        return
 
 ######### Secret Manager ############################
 # checks if user has passed in a secret manager client
