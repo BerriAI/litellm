@@ -104,6 +104,13 @@ model_list = open_ai_chat_completion_models + open_ai_text_completion_models + c
 open_ai_embedding_models = [
     'text-embedding-ada-002'
 ]
+
+####### Caching #####################
+cache = False # don't cache by default
+cache_collection = None
+cache_similarity_threshold = 1.0 # don't cache by default
+
+
 from .timeout import timeout
 from .utils import client, logging, exception_type, get_optional_params, modify_integration, token_counter, cost_per_token, completion_cost
 from .main import *  # Import all the symbols from main.py
