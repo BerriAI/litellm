@@ -12,10 +12,11 @@ jobs:
           name: Install Dependencies
           command: |
             python -m pip install --upgrade pip
-            python -m pip install -r requirements.txt
+            python -m pip install -r .circleci/requirements.txt
             pip install infisical
             pip install pytest
             pip install openai[datalib]
+            pip install chromadb
 
       # Run pytest and generate JUnit XML report
       - run:
