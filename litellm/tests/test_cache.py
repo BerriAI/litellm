@@ -41,3 +41,4 @@ def test_completion_gpt():
         pytest.fail(f"Error occurred: {e}")
 
 
+litellm.cache = False # rest to False for the next test

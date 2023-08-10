@@ -722,6 +722,8 @@ def message_to_user_question(messages):
 
 def add_cache(messages, model_response):
   global cache_collection
+  if cache_collection == None:
+    make_collection()
   user_question = message_to_user_question(messages)
   cache_collection.add(
     documents=[user_question],
