@@ -47,6 +47,8 @@ def install_and_import(package: str):
         dist = pkg_resources.get_distribution(package)
         required = [req for req in pkg_resources.get_distribution(package).requires()]
         
+        # Print the version of the package
+        print(f"{package} version: {dist.version}")
         # Check if there are dependencies
         if required:
             for req in required:
