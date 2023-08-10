@@ -16,7 +16,8 @@ jobs:
             pip install infisical
             pip install pytest
             pip install openai[datalib]
-            pip install -Uq chromadb
+            pip install -Uq chromadb==0.3.29
+  
 
       # Run pytest and generate JUnit XML report
       - run:
