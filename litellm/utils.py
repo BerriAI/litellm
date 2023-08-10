@@ -724,24 +724,29 @@ def add_cache(messages, model_response):
   global cache_collection
   if cache_collection == None:
     make_collection()
+  print("cache collection in add cache", cache_collection)
   user_question = message_to_user_question(messages)
   cache_collection.add(
     documents=[user_question],
     metadatas=[{"model_response": str(model_response)}],
     ids = [ str(uuid.uuid4())]
   )
+  print("in add cache, peek()", cache_collection.peek())
   return
 
 def get_cache(messages):
+  print("in get cache")
   try:
     global cache_collection
     if cache_collection == None:
       make_collection()
+    print("cache collection", cache_collection)
     user_question = message_to_user_question(messages)
     results = cache_collection.query(
       query_texts=[user_question],
       n_results=1
     )
+    print("query cache result", results)
     distance = results['distances'][0][0]
     sim = (1 - distance)
     if sim >= litellm.cache_similarity_threshold:
@@ -751,5 +756,6 @@ def get_cache(messages):
     else:
       # no hit 
       return None
-  except:
+  except Exception as e:
+     print("error in get cache", e)
      return None
