@@ -1,5 +1,0 @@
-# used by CI/CD testing
-openai
-python-dotenv
-openai
-tiktoken
