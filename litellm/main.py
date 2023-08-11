@@ -350,10 +350,9 @@ def completion(
       logging(model=model, input=prompt, azure=azure, logger_fn=logger_fn)
       input_payload = {"inputs": prompt}
       response = requests.post(API_URL, headers=headers, json=input_payload)
-  
-      completion_response = response.json()[0]['generated_text']
       ## LOGGING
-      logging(model=model, input=prompt, azure=azure, additional_args={"max_tokens": max_tokens, "original_response": completion_response}, logger_fn=logger_fn)
+      logging(model=model, input=prompt, azure=azure, additional_args={"max_tokens": max_tokens, "original_response": response.text}, logger_fn=logger_fn)
+      completion_response = response.json()[0]['generated_text']
       prompt_tokens = len(encoding.encode(prompt))
       completion_tokens = len(encoding.encode(completion_response))
       ## RESPONSE OBJECT
@@ -383,14 +382,13 @@ def completion(
         }, 
         headers=headers
       )
+      ## LOGGING
+      logging(model=model, input=prompt, azure=azure, additional_args={"max_tokens": max_tokens, "original_response": res.text}, logger_fn=logger_fn)
       if stream == True:
         response = CustomStreamWrapper(res, "together_ai")
         return response
 
       completion_response = res.json()['output']['choices'][0]['text']
-
-      ## LOGGING
-      logging(model=model, input=prompt, azure=azure, additional_args={"max_tokens": max_tokens, "original_response": completion_response}, logger_fn=logger_fn)
       prompt_tokens = len(encoding.encode(prompt))
       completion_tokens = len(encoding.encode(completion_response))
       ## RESPONSE OBJECT
