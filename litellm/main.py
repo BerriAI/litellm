@@ -7,7 +7,7 @@ import litellm
 from litellm import client, logging, exception_type, timeout, get_optional_params
 import tiktoken
 encoding = tiktoken.get_encoding("cl100k_base")
-from litellm.utils import get_secret, install_and_import, CustomStreamWrapper, add_cache, get_cache
+from litellm.utils import get_secret, install_and_import, CustomStreamWrapper
 ####### ENVIRONMENT VARIABLES ###################
 dotenv.load_dotenv() # Loading env variables using dotenv
 new_response = {
@@ -48,10 +48,6 @@ def completion(
   ):
   try:
     global new_response
-    if litellm.cache:
-      cache_result = get_cache(messages)
-      if cache_result != None:
-        return cache_result
     model_response = deepcopy(new_response) # deep copy the default response format so we can mutate it and it's thread-safe. 
     # check if user passed in any of the OpenAI optional params
     optional_params = get_optional_params(
@@ -407,8 +403,6 @@ def completion(
       logging(model=model, input=messages, azure=azure, logger_fn=logger_fn)
       args = locals()
       raise ValueError(f"No valid completion model args passed in - {args}")
-    if litellm.cache:
-      add_cache(messages, response)
     return response
   except Exception as e:
     ## LOGGING
