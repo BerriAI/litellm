@@ -1,17 +1,26 @@
+<<<<<<< HEAD
 # Proxy Server for Azure, Llama2, OpenAI, Claude, Hugging Face, Replicate Models
 [![PyPI Version](https://img.shields.io/pypi/v/litellm.svg)](https://pypi.org/project/litellm/)
 [![PyPI Version](https://img.shields.io/badge/stable%20version-v0.1.345-blue?color=green&link=https://pypi.org/project/litellm/0.1.1/)](https://pypi.org/project/litellm/0.1.1/)
 ![Downloads](https://img.shields.io/pypi/dm/litellm)
 [![litellm](https://img.shields.io/badge/%20%F0%9F%9A%85%20liteLLM-OpenAI%7CAzure%7CAnthropic%7CPalm%7CCohere%7CReplicate%7CHugging%20Face-blue?color=green)](https://github.com/BerriAI/litellm)
+=======
+# Proxy Server for Chat API
+>>>>>>> d1ff082 (new v litellm for render)
 
-[![](https://dcbadge.vercel.app/api/server/wuPM9dRgDw)](https://discord.gg/wuPM9dRgDw)
+This repository contains a proxy server that interacts with OpenAI's Chat API and other similar APIs to facilitate chat-based language models. The server allows you to easily integrate chat completion capabilities into your applications. The server is built using Python and the Flask framework.
 
+<<<<<<< HEAD
 # Proxy Server for Chat API
 
 This repository contains a proxy server that interacts with OpenAI's Chat API and other similar APIs to facilitate chat-based language models. The server allows you to easily integrate chat completion capabilities into your applications. The server is built using Python and the Flask framework.
 
 ## Installation
 
+=======
+## Installation
+
+>>>>>>> d1ff082 (new v litellm for render)
 To set up and run the proxy server locally, follow these steps:
 
 1. Clone this repository to your local machine:
@@ -90,4 +99,8 @@ google/palm-2-chat-bison
 Vertex Models:
 chat-bison
 chat-bison@001
+<<<<<<< HEAD
 Refer to the model endpoint compatibility table for more details.
+=======
+Refer to the model endpoint compatibility table for more details.
+>>>>>>> d1ff082 (new v litellm for render)
