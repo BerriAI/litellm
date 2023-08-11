@@ -397,7 +397,32 @@ def completion(
           "total_tokens": prompt_tokens + completion_tokens
         }
       response = model_response
+    elif model in litellm.vertex_models:
+      # import vertexai/if it fails then pip install vertexai# import cohere/if it fails then pip install cohere
+      install_and_import("vertexai")
+      import vertexai
+      from vertexai.preview.language_models import ChatModel, InputOutputTextPair
+      vertexai.init(project=litellm.vertex_project, location=litellm.vertex_location)
+      # vertexai does not use an API key, it looks for credentials.json in the environment
 
+      prompt = " ".join([message["content"] for message in messages])
+      ## LOGGING
+      logging(model=model, input=prompt, azure=azure, logger_fn=logger_fn)
+
+      chat_model = ChatModel.from_pretrained(model)
+
+
+      chat = chat_model.start_chat()
+      completion_response = chat.send_message(prompt, **optional_params)
+
+      ## LOGGING
+      logging(model=model, input=prompt, azure=azure, additional_args={"max_tokens": max_tokens, "original_response": completion_response}, logger_fn=logger_fn)
+
+      ## RESPONSE OBJECT
+      model_response["choices"][0]["message"]["content"] = completion_response
+      model_response["created"] = time.time()
+      model_response["model"] = model
+      response = model_response
     else: 
       ## LOGGING
       logging(model=model, input=messages, azure=azure, logger_fn=logger_fn)
