@@ -44,7 +44,7 @@ def completion(
     presence_penalty=0, frequency_penalty=0, logit_bias={}, user="", deployment_id=None,
     # Optional liteLLM function params
     *, return_async=False, api_key=None, force_timeout=60, azure=False, logger_fn=None, verbose=False,
-    hugging_face = False, replicate=False,together_ai = False
+    hugging_face = False, replicate=False,together_ai = False, llm_provider=None
   ):
   try:
     global new_response
@@ -85,7 +85,7 @@ def completion(
           messages = messages,
           **optional_params
         )
-    elif model in litellm.open_ai_chat_completion_models:
+    elif model in litellm.open_ai_chat_completion_models or llm_provider == "custom": # allow user to make an openai call with a custom base
       openai.api_type = "openai"
       # note: if a user sets a custom base - we should ensure this works
       openai.api_base = litellm.api_base if litellm.api_base is not None else "https://api.openai.com/v1"
