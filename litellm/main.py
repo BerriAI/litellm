@@ -44,7 +44,7 @@ def completion(
     presence_penalty=0, frequency_penalty=0, logit_bias={}, user="", deployment_id=None,
     # Optional liteLLM function params
     *, return_async=False, api_key=None, force_timeout=60, azure=False, logger_fn=None, verbose=False,
-    hugging_face = False, replicate=False,together_ai = False, llm_provider=None
+    hugging_face = False, replicate=False,together_ai = False, llm_provider=None, custom_api_base=None
   ):
   try:
     global new_response
@@ -88,7 +88,8 @@ def completion(
     elif model in litellm.open_ai_chat_completion_models or llm_provider == "custom": # allow user to make an openai call with a custom base
       openai.api_type = "openai"
       # note: if a user sets a custom base - we should ensure this works
-      openai.api_base = litellm.api_base if litellm.api_base is not None else "https://api.openai.com/v1"
+      api_base = custom_api_base if custom_api_base is not None else litellm.api_base # allow for the setting of dynamic and stateful api-bases
+      openai.api_base = api_base if api_base is not None else "https://api.openai.com/v1"
       openai.api_version = None
       if litellm.organization:
         openai.organization = litellm.organization
@@ -100,6 +101,8 @@ def completion(
           openai.api_key = get_secret("OPENAI_API_KEY")
       ## LOGGING
       logging(model=model, input=messages, additional_args=optional_params, azure=azure, logger_fn=logger_fn)
+      if custom_api_base: # reset after call, if a dynamic api base was passsed
+        openai.api_base = "https://api.openai.com/v1"
       ## COMPLETION CALL
       if litellm.headers:
          response = openai.ChatCompletion.create(
