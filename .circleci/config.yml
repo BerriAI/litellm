@@ -73,14 +73,7 @@ workflows:
   version: 2
   build_and_test:
     jobs:
-      - local_testing:
-          filters:
-            paths:
-              ignore:
-                - "README.md"
-                - "docs"
-                - "cookbook"
-
+      - local_testing
       - publish_to_pypi:
           requires:
             - local_testing
