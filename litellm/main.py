@@ -8,7 +8,7 @@ from litellm import client, logging, exception_type, timeout, get_optional_param
 import tiktoken
 from concurrent.futures import ThreadPoolExecutor
 encoding = tiktoken.get_encoding("cl100k_base")
-from litellm.utils import get_secret, install_and_import, CustomStreamWrapper
+from litellm.utils import get_secret, install_and_import, CustomStreamWrapper, read_config_args
 ####### ENVIRONMENT VARIABLES ###################
 dotenv.load_dotenv() # Loading env variables using dotenv
 new_response = {
@@ -38,7 +38,7 @@ async def acompletion(*args, **kwargs):
 # @retry(wait=wait_random_exponential(min=1, max=60), stop=stop_after_attempt(2), reraise=True, retry_error_callback=lambda retry_state: setattr(retry_state.outcome, 'retry_variable', litellm.retry)) # retry call, turn this off by setting `litellm.retry = False`
 @timeout(60) ## set timeouts, in case calls hang (e.g. Azure) - default is 60s, override with `force_timeout`
 def completion(
-    model, messages, # required params
+    messages, model="gpt-3.5-turbo",# required params
     # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
     functions=[], function_call="", # optional params
     temperature=1, top_p=1, n=1, stream=False, stop=None, max_tokens=float('inf'),
@@ -504,3 +504,10 @@ def print_verbose(print_statement):
     if random.random() <= 0.3:
       print("Get help - https://discord.com/invite/wuPM9dRgDw")
 
+def config_completion(**kwargs):
+  if litellm.config_path != None:
+    config_args = read_config_args(litellm.config_path)
+    # overwrite any args passed in with config args
+    return completion(**kwargs, **config_args)
+  else:
+    raise ValueError("No config path set, please set a config path using `litellm.config_path = 'path/to/config.json'`")
