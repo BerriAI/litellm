@@ -2,7 +2,7 @@
 [Supabase](https://supabase.com/) is an open source Firebase alternative.
 Start your project with a Postgres database, Authentication, instant APIs, Edge Functions, Realtime subscriptions, Storage, and Vector embeddings.
 
-## Use Supabase to see total spend across all LLM Providers (OpenAI, Azure, Anthropic, Cohere, Replicate, PaLM)
+## Use Supabase to log requests and see total spend across all LLM Providers (OpenAI, Azure, Anthropic, Cohere, Replicate, PaLM)
 liteLLM provides `success_callbacks` and `failure_callbacks`, making it easy for you to send data to a particular provider depending on the status of your responses. 
 
 In this case, we want to log requests to Supabase in both scenarios - when it succeeds and fails. 
@@ -43,8 +43,11 @@ Complete code
 from litellm import completion
 
 ## set env variables
+### SUPABASE
 os.environ["SUPABASE_URL"] = "your-supabase-url" 
-os.environ["SUPABASE_key"] = "your-supabase-key" 
+os.environ["SUPABASE_KEY"] = "your-supabase-key" 
+
+## LLM API KEY
 os.environ["OPENAI_API_KEY"] = ""
 
 # set callbacks
