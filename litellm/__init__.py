@@ -11,6 +11,9 @@ anthropic_key = None
 replicate_key = None 
 cohere_key = None 
 openrouter_key = None
+vertex_project = None
+vertex_location = None
+
 hugging_api_token = None
 model_cost = {
     "gpt-3.5-turbo": {"max_tokens": 4000, "input_cost_per_token": 0.0000015, "output_cost_per_token": 0.000002},
@@ -96,7 +99,12 @@ openrouter_models = [
     'meta-llama/llama-2-70b-chat'
 ]
 
-model_list = open_ai_chat_completion_models + open_ai_text_completion_models + cohere_models + anthropic_models + replicate_models + openrouter_models
+vertex_models = [
+    "chat-bison",
+    "chat-bison@001"
+]
+
+model_list = open_ai_chat_completion_models + open_ai_text_completion_models + cohere_models + anthropic_models + replicate_models + openrouter_models + vertex_models
 
 ####### EMBEDDING MODELS ###################
 open_ai_embedding_models = [

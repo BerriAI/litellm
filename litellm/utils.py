@@ -264,6 +264,13 @@ def get_optional_params(
         optional_params["max_tokens"] = max_tokens
       if frequency_penalty != 0:
         optional_params["frequency_penalty"] = frequency_penalty
+  elif model == "chat-bison": # chat-bison has diff args from chat-bison@001 ty Google
+     if temperature != 1:
+        optional_params["temperature"] = temperature
+     if top_p != 1:
+        optional_params["top_p"] = top_p
+     if max_tokens != float('inf'):
+        optional_params["max_output_tokens"] = max_tokens
 
   else:# assume passing in params for openai/azure openai
     if functions != []:
