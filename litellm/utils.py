@@ -709,3 +709,19 @@ class CustomStreamWrapper:
           completion_obj["content"] = chunk.text
         # return this for all models
         return {"choices": [{"delta": completion_obj}]}
+
+
+
+########## Reading Config File ############################
+def read_config_args(config_path):
+    try:
+        import os
+        current_path = os.getcwd()
+        with open(config_path, "r") as config_file:
+            config = json.load(config_file)
+
+        # read keys/ values from config file and return them
+        return config
+    except Exception as e:
+        print("An error occurred while reading config:", str(e))
+        raise e

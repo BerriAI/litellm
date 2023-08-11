@@ -218,3 +218,18 @@ def test_completion_together_ai_stream():
             print(chunk['choices'][0]['delta']) # same as openai format
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+# test config file with completion # 
+def test_completion_openai_config():
+    try:
+        litellm.config_path = "../config.json"
+        litellm.set_verbose = True
+        response = litellm.config_completion(messages=messages)
+        # Add any assertions here to check the response
+        print(response)
+        litellm.config_path = None
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+
