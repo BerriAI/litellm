@@ -1,6 +1,6 @@
 # Completion Function - completion()
 The Input params are **exactly the same** as the 
-<a href="https://platform.openai.com/docs/api-reference/chat/create" target="_blank" rel="noopener noreferrer">OpenAI Create chat completion</a>, and let you call **Azure OpenAI, Anthropic, Cohere, Replicate** models in the same format. 
+<a href="https://platform.openai.com/docs/api-reference/chat/create" target="_blank" rel="noopener noreferrer">OpenAI Create chat completion</a>, and let you call **Azure OpenAI, Anthropic, Cohere, Replicate, OpenRouter** models in the same format. 
 
 In addition, liteLLM allows you to pass in the following **Optional** liteLLM args:<br>
 `forceTimeout`, `azure`, `logger_fn`, `verbose`
