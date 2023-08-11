@@ -11,9 +11,7 @@ anthropic_key = None
 replicate_key = None 
 cohere_key = None 
 openrouter_key = None
-
 hugging_api_token = None
-
 model_cost = {
     "gpt-3.5-turbo": {"max_tokens": 4000, "input_cost_per_token": 0.0000015, "output_cost_per_token": 0.000002},
     "gpt-35-turbo": {"max_tokens": 4000, "input_cost_per_token": 0.0000015, "output_cost_per_token": 0.000002}, # azure model name
@@ -104,12 +102,6 @@ model_list = open_ai_chat_completion_models + open_ai_text_completion_models + c
 open_ai_embedding_models = [
     'text-embedding-ada-002'
 ]
-
-####### Caching #####################
-cache = False # don't cache by default
-cache_collection = None
-cache_similarity_threshold = 1.0 # don't cache by default
-
 
 from .timeout import timeout
 from .utils import client, logging, exception_type, get_optional_params, modify_integration, token_counter, cost_per_token, completion_cost
