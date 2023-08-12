@@ -766,11 +766,9 @@ async def get_ollama_response_stream(api_base="http://localhost:11434", model="l
                             if chunk.strip() != "":
                                 j = json.loads(chunk)
                                 if "response" in j:
-                                    print(j["response"])
-                                    yield {
-                                        "role": "assistant",
-                                        "content": j["response"]
-                                    }
+                                    completion_obj ={ "role": "assistant", "content": ""}
+                                    completion_obj["content"] = j["response"]
+                                    yield {"choices": [{"delta": completion_obj}]}
                                     # self.responses.append(j["response"])
                                     # yield "blank"
                     except Exception as e:
