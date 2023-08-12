@@ -75,10 +75,6 @@ def logging(model=None, input=None, custom_llm_provider=None, azure=False, addit
        model_call_details["custom_llm_provider"] = custom_llm_provider
     if exception:
       model_call_details["exception"] = exception
-
-    # if litellm.telemetry:
-    #   safe_crash_reporting(model=model, exception=exception, azure=azure) # log usage-crash details. Do not log any user details. If you want to turn this off, set `litellm.telemetry=False`.
-
     if input:
       model_call_details["input"] = input
     
@@ -134,8 +130,8 @@ def client(original_function):
         try:
           model = args[0] if len(args) > 0 else kwargs["model"]
           exception = kwargs["exception"] if "exception" in kwargs else None
-          azure = kwargs["azure"] if "azure" in kwargs else None
-          safe_crash_reporting(model=model, exception=exception, azure=azure) # log usage-crash details. Do not log any user details. If you want to turn this off, set `litellm.telemetry=False`.
+          custom_llm_provider = kwargs["custom_llm_provider"] if "custom_llm_provider" in kwargs else None
+          safe_crash_reporting(model=model, exception=exception, custom_llm_provider=custom_llm_provider) # log usage-crash details. Do not log any user details. If you want to turn this off, set `litellm.telemetry=False`.
         except:
            #[Non-Blocking Error]
            pass
@@ -647,11 +643,11 @@ def exception_type(model, original_exception):
       else: # don't let an error with mapping interrupt the user from receiving an error from the llm api calls 
          raise original_exception
 
-def safe_crash_reporting(model=None, exception=None, azure=None):
+def safe_crash_reporting(model=None, exception=None, custom_llm_provider=None):
     data = {
       "model": model,
       "exception": str(exception),
-      "azure": azure
+      "custom_llm_provider": custom_llm_provider
     }
     threading.Thread(target=litellm_telemetry, args=(data,)).start()
 

@@ -37,7 +37,7 @@ def test_context_window(model):
     try:
         azure = model == "chatgpt-test"
         print(f"model: {model}")
-        response = completion(model=model, messages=messages, azure=azure, logger_fn=logging_fn)
+        response = completion(model=model, messages=messages, custom_llm_provider=custom_llm_provider, logger_fn=logging_fn)
         print(f"response: {response}")
     except InvalidRequestError:
         print("InvalidRequestError")
@@ -59,14 +59,14 @@ def invalid_auth(model): # set the model key to an invalid key, depending on the
     messages = [{ "content": "Hello, how are you?","role": "user"}]
     temporary_key = None
     try: 
-        azure = False
+        custom_llm_provider = None
         if model == "gpt-3.5-turbo":
             temporary_key = os.environ["OPENAI_API_KEY"]
             os.environ["OPENAI_API_KEY"] = "bad-key"
         elif model == "chatgpt-test":
             temporary_key = os.environ["AZURE_API_KEY"]
             os.environ["AZURE_API_KEY"] = "bad-key"
-            azure = True
+            custom_llm_provider = "azure"
         elif model == "claude-instant-1":
             temporary_key = os.environ["ANTHROPIC_API_KEY"]
             os.environ["ANTHROPIC_API_KEY"] = "bad-key"
@@ -77,7 +77,7 @@ def invalid_auth(model): # set the model key to an invalid key, depending on the
             temporary_key = os.environ["REPLICATE_API_KEY"] 
             os.environ["REPLICATE_API_KEY"] = "bad-key"
         print(f"model: {model}")
-        response = completion(model=model, messages=messages, azure=azure)
+        response = completion(model=model, messages=messages, custom_llm_provider=custom_llm_provider)
         print(f"response: {response}")
     except AuthenticationError as e:
         print(f"AuthenticationError Caught Exception - {e}")
@@ -107,11 +107,11 @@ invalid_auth("command-nightly")
 #     try: 
 #         sample_text = "how does a court case get to the Supreme Court?" * 50000
 #         messages = [{ "content": sample_text,"role": "user"}]
-#         azure = False
+#         custom_llm_provider = None
 #         if model == "chatgpt-test":
-#             azure = True
+#             custom_llm_provider = "azure"
 #         print(f"model: {model}")
-#         response = completion(model=model, messages=messages, azure=azure)
+#         response = completion(model=model, messages=messages, custom_llm_provider=custom_llm_provider)
 #     except RateLimitError:
 #         return True
 #     except OpenAIError: # is at least an openai error -> in case of random model errors - e.g. overloaded server
