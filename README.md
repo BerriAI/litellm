@@ -13,7 +13,7 @@ a light package to simplify calling OpenAI, Azure, Cohere, Anthropic, Huggingfac
 - exception mapping - common exceptions across providers are mapped to the [OpenAI exception types](https://help.openai.com/en/articles/6897213-openai-library-error-types-guidance)
 # usage
 Demo - https://litellm.ai/ \
-Read the docs - https://litellm.readthedocs.io/en/latest/
+Read the docs - https://docs.litellm.ai/docs/
 
 ## quick start
 ```
