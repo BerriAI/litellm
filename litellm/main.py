@@ -36,7 +36,7 @@ async def acompletion(*args, **kwargs):
 
 @client
 # @retry(wait=wait_random_exponential(min=1, max=60), stop=stop_after_attempt(2), reraise=True, retry_error_callback=lambda retry_state: setattr(retry_state.outcome, 'retry_variable', litellm.retry)) # retry call, turn this off by setting `litellm.retry = False`
-@timeout(60) ## set timeouts, in case calls hang (e.g. Azure) - default is 60s, override with `force_timeout`
+@timeout(600) ## set timeouts, in case calls hang (e.g. Azure) - default is 60s, override with `force_timeout`
 def completion(
     messages, model="gpt-3.5-turbo",# required params
     # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
@@ -44,7 +44,7 @@ def completion(
     temperature=1, top_p=1, n=1, stream=False, stop=None, max_tokens=float('inf'),
     presence_penalty=0, frequency_penalty=0, logit_bias={}, user="", deployment_id=None,
     # Optional liteLLM function params
-    *, return_async=False, api_key=None, force_timeout=60, azure=False, logger_fn=None, verbose=False,
+    *, return_async=False, api_key=None, force_timeout=600, azure=False, logger_fn=None, verbose=False,
     hugging_face = False, replicate=False,together_ai = False, custom_llm_provider=None, custom_api_base=None
   ):
   try:
