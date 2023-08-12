@@ -22,6 +22,10 @@ pip install litellm
 
 ```python
 from litellm import completion
+import os
+
+# set API keys
+os.environ['OPENAI_API_KEY'] = "<your key>"
 
 messages = [{ "content": "Hello, how are you?","role": "user"}]
 
