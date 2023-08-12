@@ -37,7 +37,7 @@ def test_context_window(model):
     try:
         azure = model == "chatgpt-test"
         print(f"model: {model}")
-        response = completion(model=model, messages=messages, custom_llm_provider=custom_llm_provider, logger_fn=logging_fn)
+        response = completion(model=model, messages=messages, custom_llm_provider="azure", logger_fn=logging_fn)
         print(f"response: {response}")
     except InvalidRequestError:
         print("InvalidRequestError")
