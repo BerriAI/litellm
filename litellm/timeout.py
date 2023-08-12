@@ -38,7 +38,7 @@ def timeout(
             thread.start()
             future = asyncio.run_coroutine_threadsafe(async_func(), thread.loop)
             local_timeout_duration = timeout_duration
-            if "force_timeout" in kwargs:
+            if "force_timeout" in kwargs and kwargs["force_timeout"] is not None:
                 local_timeout_duration = kwargs["force_timeout"]
             try:
                 result = future.result(timeout=local_timeout_duration)
