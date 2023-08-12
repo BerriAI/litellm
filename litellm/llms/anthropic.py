@@ -1,4 +1,4 @@
-import os, json, sseclient
+import os, json
 from enum import Enum
 import requests
 from litellm import logging
