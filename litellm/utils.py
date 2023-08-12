@@ -64,13 +64,15 @@ def install_and_import(package: str):
 
 ####### LOGGING ###################
 #Logging function -> log the exact model details + what's being sent | Non-Blocking
-def logging(model=None, input=None, azure=False, additional_args={}, logger_fn=None, exception=None):
+def logging(model=None, input=None, custom_llm_provider=None, azure=False, additional_args={}, logger_fn=None, exception=None):
   try:
     model_call_details = {}
     if model:
       model_call_details["model"] = model
     if azure:
       model_call_details["azure"] = azure
+    if custom_llm_provider:
+       model_call_details["custom_llm_provider"] = custom_llm_provider
     if exception:
       model_call_details["exception"] = exception
 
@@ -206,6 +208,32 @@ def completion_cost(model="gpt-3.5-turbo", prompt="", completion=""):
    return prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar
 
 ####### HELPER FUNCTIONS ################
+def get_litellm_params(
+    return_async=False,
+    api_key=None, 
+    force_timeout=600, 
+    azure=False, 
+    logger_fn=None, 
+    verbose=False,
+    hugging_face=False, 
+    replicate=False,
+    together_ai=False, 
+    custom_llm_provider=None, 
+    custom_api_base=None
+): 
+    litellm_params = {
+        "return_async": return_async,
+        "api_key": api_key,
+        "force_timeout": force_timeout,
+        "logger_fn": logger_fn,
+        "verbose": verbose,
+        "custom_llm_provider": custom_llm_provider,
+        "custom_api_base": custom_api_base
+    }
+    
+    return litellm_params
+
+
 def get_optional_params(
     # 12 optional params
     functions = [],
@@ -222,9 +250,7 @@ def get_optional_params(
     user = "",
     deployment_id = None,
     model = None,
-    replicate = False,
-    hugging_face = False,
-    together_ai = False,
+    custom_llm_provider = ""
 ):
   optional_params = {}
   if model in litellm.anthropic_models:
@@ -247,13 +273,13 @@ def get_optional_params(
     if max_tokens != float('inf'):
         optional_params["max_tokens"] = max_tokens
     return optional_params
-  elif replicate == True:
+  elif custom_llm_provider == "replicate":
     # any replicate models
     # TODO: handle translating remaining replicate params
     if stream:
       optional_params["stream"] = stream
       return optional_params
-  elif together_ai == True:
+  elif custom_llm_provider == "together_ai":
       if stream:
         optional_params["stream_tokens"] = stream
       if temperature != 1:
@@ -698,6 +724,13 @@ class CustomStreamWrapper:
     def __iter__(self):
         return self
 
+    def handle_anthropic_chunk(self, chunk):
+      str_line = chunk.decode('utf-8')  # Convert bytes to string
+      if str_line.startswith('data:'):
+          data_json = json.loads(str_line[5:])
+          return data_json.get("completion", "")
+      return ""
+
     def handle_together_ai_chunk(self, chunk): 
       chunk = chunk.decode("utf-8")
       text_index = chunk.find('"text":"') # this checks if text: exists
@@ -713,7 +746,7 @@ class CustomStreamWrapper:
         completion_obj ={ "role": "assistant", "content": ""}
         if self.model in litellm.anthropic_models:
           chunk = next(self.completion_stream)
-          completion_obj["content"] = chunk.completion
+          completion_obj["content"] = self.handle_anthropic_chunk(chunk)
         elif self.model == "replicate":
            chunk = next(self.completion_stream)
            completion_obj["content"] = chunk
