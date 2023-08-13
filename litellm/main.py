@@ -10,6 +10,8 @@ from .llms.anthropic import AnthropicLLM
 import tiktoken
 from concurrent.futures import ThreadPoolExecutor
 encoding = tiktoken.get_encoding("cl100k_base")
+from litellm.utils import get_secret, install_and_import, CustomStreamWrapper, read_config_args
+from litellm.utils import get_ollama_response_stream, stream_to_string
 ####### ENVIRONMENT VARIABLES ###################
 dotenv.load_dotenv() # Loading env variables using dotenv
 new_response = {
@@ -388,6 +390,15 @@ def completion(
       model_response["created"] = time.time()
       model_response["model"] = model
       response = model_response
+    elif custom_llm_provider == "ollama":
+      endpoint = litellm.api_base if litellm.api_base is not None else custom_api_base
+      prompt = " ".join([message["content"] for message in messages])
+
+      ## LOGGING
+      logging(model=model, input=prompt, azure=azure, logger_fn=logger_fn)
+      generator = get_ollama_response_stream(endpoint, model, prompt)
+      # assume all responses are streamed
+      return generator
     else: 
       ## LOGGING
       logging(model=model, input=messages, custom_llm_provider=custom_llm_provider, logger_fn=logger_fn)
