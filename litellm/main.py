@@ -208,7 +208,7 @@ def completion(
       response = model_response
     elif model in litellm.anthropic_models:
       anthropic_key = api_key if api_key is not None else litellm.anthropic_key
-      anthropic_client = AnthropicLLM(default_max_tokens_to_sample=litellm.max_tokens, api_key=anthropic_key)
+      anthropic_client = AnthropicLLM(encoding=encoding, default_max_tokens_to_sample=litellm.max_tokens, api_key=anthropic_key)
       model_response = anthropic_client.completion(model=model, messages=messages, model_response=model_response, print_verbose=print_verbose, optional_params=optional_params, litellm_params=litellm_params, logger_fn=logger_fn)
       if 'stream' in optional_params and optional_params['stream'] == True:
         # don't try to access stream object,

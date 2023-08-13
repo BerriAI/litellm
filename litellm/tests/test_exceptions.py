@@ -21,7 +21,8 @@ litellm.failure_callback = ["sentry"]
 # Approach: Run each model through the test -> assert if the correct error (always the same one) is triggered
 
 # models = ["gpt-3.5-turbo", "chatgpt-test",  "claude-instant-1", "command-nightly"]
-models = ["command-nightly"]
+test_model = "claude-instant-1"
+models = ["claude-instant-1"]
 def logging_fn(model_call_dict):
     if "model" in model_call_dict: 
         print(f"model_call_dict: {model_call_dict['model']}")
@@ -35,7 +36,7 @@ def test_context_window(model):
     sample_text = "how does a court case get to the Supreme Court?" * 5000
     messages = [{"content": sample_text, "role": "user"}]
     try:
-        azure = model == "chatgpt-test"
+        model = "chatgpt-test"
         print(f"model: {model}")
         response = completion(model=model, messages=messages, custom_llm_provider="azure", logger_fn=logging_fn)
         print(f"response: {response}")
@@ -51,7 +52,7 @@ def test_context_window(model):
         print(f"Uncaught Exception - {e}")
         pytest.fail(f"Error occurred: {e}")
     return
-test_context_window("command-nightly")
+test_context_window(test_model)
 
 # Test 2: InvalidAuth Errors
 @pytest.mark.parametrize("model", models)
@@ -101,7 +102,7 @@ def invalid_auth(model): # set the model key to an invalid key, depending on the
         elif model == "replicate/llama-2-70b-chat:2c1608e18606fad2812020dc541930f2d0495ce32eee50074220b87300bc16e1":
             os.environ["REPLICATE_API_KEY"] = temporary_key
     return
-invalid_auth("command-nightly")
+invalid_auth(test_model)
 # # Test 3: Rate Limit Errors 
 # def test_model(model):
 #     try: 

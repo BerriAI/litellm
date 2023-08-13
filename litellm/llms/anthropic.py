@@ -4,13 +4,20 @@ import requests
 from litellm import logging
 import time 
 from typing import Callable
+
 class AnthropicConstants(Enum):
     HUMAN_PROMPT = "\n\nHuman:"
     AI_PROMPT = "\n\nAssistant:"
 
+class AnthropicError(Exception):
+    def __init__(self, status_code, message):
+        self.status_code = status_code
+        self.message = message
+
 class AnthropicLLM: 
     
-    def __init__(self, default_max_tokens_to_sample, api_key=None):
+    def __init__(self, encoding, default_max_tokens_to_sample, api_key=None):
+        self.encoding = encoding
         self.default_max_tokens_to_sample = default_max_tokens_to_sample
         self.completion_url = "https://api.anthropic.com/v1/complete"
         self.validate_environment(api_key=api_key)
@@ -32,9 +39,6 @@ class AnthropicLLM:
         except:
             raise ValueError("Missing Anthropic API Key - A call is being made to anthropic but no key is set either in the environment variables or via params")
         pass  
-
-    def _stream(self): # logic for handling streaming with the LLM API 
-        pass
 
     def completion(self, model: str, messages: list, model_response: dict, print_verbose: Callable, optional_params=None, litellm_params=None, logger_fn=None): # logic for parsing in - calling - parsing out model completion calls
         model = model
@@ -73,12 +77,13 @@ class AnthropicLLM:
             completion_response = response.json()
             print(f"completion_response: {completion_response}")
             if "error" in completion_response:
-                raise Exception(completion_response["error"])
+                raise AnthropicError(message=completion_response["error"], status_code=response.status_code)
             else:
                 model_response["choices"][0]["message"]["content"] = completion_response["completion"]    
+            
             ## CALCULATING USAGE
-            prompt_tokens = 0
-            completion_tokens = 0
+            prompt_tokens = len(self.encoding.encode(prompt)) ##[TODO] use the anthropic tokenizer here
+            completion_tokens = len(self.encoding.encode(model_response["choices"][0]["message"]["content"])) ##[TODO] use the anthropic tokenizer here
             
             
             model_response["created"] = time.time()
@@ -92,6 +97,3 @@ class AnthropicLLM:
     
     def embedding(): # logic for parsing in - calling - parsing out model embedding calls
         pass 
-    
-    def stream(): # logic for how to parse in-out model completion streams
-        pass
