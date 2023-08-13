@@ -45,10 +45,12 @@ def completion(
     temperature=1, top_p=1, n=1, stream=False, stop=None, max_tokens=float('inf'),
     presence_penalty=0, frequency_penalty=0, logit_bias={}, user="", deployment_id=None,
     # Optional liteLLM function params
-    *, return_async=False, api_key=None, force_timeout=600, logger_fn=None, verbose=False, custom_llm_provider=None, custom_api_base=None
+    *, return_async=False, api_key=None, force_timeout=600, logger_fn=None, verbose=False, azure=False, custom_llm_provider=None, custom_api_base=None
   ):
   try:
     global new_response
+    if azure: # this flag is deprecated, remove once notebooks are also updated.
+      custom_llm_provider="azure"
     args = locals()
     model_response = deepcopy(new_response) # deep copy the default response format so we can mutate it and it's thread-safe. 
     # check if user passed in any of the OpenAI optional params
