@@ -773,3 +773,43 @@ def read_config_args(config_path):
     except Exception as e:
         print("An error occurred while reading config:", str(e))
         raise e
+
+
+########## ollama implementation ############################
+import aiohttp
+async def get_ollama_response_stream(api_base="http://localhost:11434", model="llama2", prompt="Why is the sky blue?"):
+    session = aiohttp.ClientSession()
+    url = f'{api_base}/api/generate'
+    data = {
+        "model": model,
+        "prompt": prompt,
+    }
+    try:
+        async with session.post(url, json=data) as resp:
+            async for line in resp.content.iter_any():
+                if line:
+                    try:
+                        json_chunk = line.decode("utf-8")
+                        chunks = json_chunk.split("\n")
+                        for chunk in chunks:
+                            if chunk.strip() != "":
+                                j = json.loads(chunk)
+                                if "response" in j:
+                                    completion_obj ={ "role": "assistant", "content": ""}
+                                    completion_obj["content"] = j["response"]
+                                    yield {"choices": [{"delta": completion_obj}]}
+                                    # self.responses.append(j["response"])
+                                    # yield "blank"
+                    except Exception as e:
+                        print(f"Error decoding JSON: {e}")
+    finally:
+        await session.close()
+
+
+async def stream_to_string(generator):
+   response = ""
+   async for chunk in generator:
+      response += chunk["content"]
+   return response
+
+   
