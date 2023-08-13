@@ -43,7 +43,7 @@ def test_completion_hf_api():
     try:
         user_message = "write some code to find the sum of two numbers"
         messages = [{ "content": user_message,"role": "user"}]
-        response = completion(model="stabilityai/stablecode-completion-alpha-3b-4k", messages=messages, hugging_face=True)
+        response = completion(model="stabilityai/stablecode-completion-alpha-3b-4k", messages=messages, custom_llm_provider="huggingface")
         # Add any assertions here to check the response
         print(response)
     except Exception as e:
@@ -141,7 +141,7 @@ def test_completion_openai_with_functions():
 
 def test_completion_azure():
     try:
-        response = completion(model="gpt-3.5-turbo", deployment_id="chatgpt-test", messages=messages, azure=True)
+        response = completion(model="gpt-3.5-turbo", deployment_id="chatgpt-test", messages=messages, custom_llm_provider="azure")
         # Add any assertions here to check the response
         print(response)
     except Exception as e:
@@ -162,7 +162,7 @@ def test_completion_replicate_llama_stream():
 def test_completion_replicate_stability_stream():
     model_name = "stability-ai/stablelm-tuned-alpha-7b:c49dae362cbaecd2ceabb5bd34fdb68413c4ff775111fea065d259d577757beb"
     try:
-        response = completion(model=model_name, messages=messages, stream=True, replicate=True)
+        response = completion(model=model_name, messages=messages, stream=True, custom_llm_provider="replicate")
         # Add any assertions here to check the response
         for chunk in response:
             print(chunk['choices'][0]['delta'])
@@ -170,27 +170,10 @@ def test_completion_replicate_stability_stream():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-
-# Replicate API endpoints are unstable -> throw random CUDA errors -> this means our tests can fail even if our tests weren't incorrect. 
-# [TODO] improve our try-except block to handle for these
-# def test_completion_replicate_llama():
-#     model_name = "replicate/llama-2-70b-chat:2c1608e18606fad2812020dc541930f2d0495ce32eee50074220b87300bc16e1"
-#     try:
-#         response = completion(model=model_name, messages=messages, max_tokens=500)
-#         # Add any assertions here to check the response
-#         print(response)
-#     except Exception as e:
-#         print(f"in replicate llama, got error {e}")
-#         pass
-#         if e == "FunctionTimedOut":
-#             pass
-#         else:
-#             pytest.fail(f"Error occurred: {e}")
-
 def test_completion_replicate_stability():
     model_name = "stability-ai/stablelm-tuned-alpha-7b:c49dae362cbaecd2ceabb5bd34fdb68413c4ff775111fea065d259d577757beb"
     try:
-        response = completion(model=model_name, messages=messages, replicate=True)
+        response = completion(model=model_name, messages=messages, custom_llm_provider="replicate")
         # Add any assertions here to check the response
         for result in response:
             print(result)
@@ -202,7 +185,7 @@ def test_completion_replicate_stability():
 def test_completion_together_ai():
     model_name = "togethercomputer/llama-2-70b-chat"
     try:
-        response = completion(model=model_name, messages=messages, together_ai=True)
+        response = completion(model=model_name, messages=messages, custom_llm_provider="together_ai")
         # Add any assertions here to check the response
         print(response)
     except Exception as e:
@@ -211,7 +194,7 @@ def test_completion_together_ai():
 def test_completion_together_ai_stream():
     model_name = "togethercomputer/llama-2-70b-chat"
     try:
-        response = completion(model=model_name, messages=messages, together_ai=True, stream=True)
+        response = completion(model=model_name, messages=messages, custom_llm_provider="together_ai", stream=True)
         # Add any assertions here to check the response
         print(response)
         for chunk in response:
