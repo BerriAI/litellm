@@ -4,7 +4,9 @@ from functools import partial
 import dotenv, traceback, random, asyncio, time
 from copy import deepcopy
 import litellm
-from litellm import client, logging, exception_type, timeout, get_optional_params
+from litellm import client, logging, exception_type, timeout, get_optional_params, get_litellm_params
+from litellm.utils import get_secret, install_and_import, CustomStreamWrapper, read_config_args
+from .llms.anthropic import AnthropicLLM
 import tiktoken
 from concurrent.futures import ThreadPoolExecutor
 encoding = tiktoken.get_encoding("cl100k_base")
@@ -39,17 +41,18 @@ async def acompletion(*args, **kwargs):
 # @retry(wait=wait_random_exponential(min=1, max=60), stop=stop_after_attempt(2), reraise=True, retry_error_callback=lambda retry_state: setattr(retry_state.outcome, 'retry_variable', litellm.retry)) # retry call, turn this off by setting `litellm.retry = False`
 @timeout(600) ## set timeouts, in case calls hang (e.g. Azure) - default is 60s, override with `force_timeout`
 def completion(
-    messages, model="gpt-3.5-turbo",# required params
+    model, messages,# required params
     # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
     functions=[], function_call="", # optional params
     temperature=1, top_p=1, n=1, stream=False, stop=None, max_tokens=float('inf'),
     presence_penalty=0, frequency_penalty=0, logit_bias={}, user="", deployment_id=None,
     # Optional liteLLM function params
-    *, return_async=False, api_key=None, force_timeout=600, azure=False, logger_fn=None, verbose=False,
-    hugging_face = False, replicate=False,together_ai = False, custom_llm_provider=None, custom_api_base=None
+    *, return_async=False, api_key=None, force_timeout=600, logger_fn=None, verbose=False, azure=False, custom_llm_provider=None, custom_api_base=None
   ):
   try:
     global new_response
+    if azure: # this flag is deprecated, remove once notebooks are also updated.
+      custom_llm_provider="azure"
     args = locals()
     model_response = deepcopy(new_response) # deep copy the default response format so we can mutate it and it's thread-safe. 
     # check if user passed in any of the OpenAI optional params
@@ -58,9 +61,15 @@ def completion(
       temperature=temperature, top_p=top_p, n=n, stream=stream, stop=stop, max_tokens=max_tokens,
       presence_penalty=presence_penalty, frequency_penalty=frequency_penalty, logit_bias=logit_bias, user=user, deployment_id=deployment_id,
       # params to identify the model
-      model=model, replicate=replicate, hugging_face=hugging_face, together_ai=together_ai
+      model=model, custom_llm_provider=custom_llm_provider
     )
-    if azure == True or custom_llm_provider == "azure": # [TODO]: remove azure=True flag, move to 'custom_llm_provider' approach
+    # For logging - save the values of the litellm-specific params passed in
+    litellm_params = get_litellm_params(
+      return_async=return_async, api_key=api_key, force_timeout=force_timeout, 
+      logger_fn=logger_fn, verbose=verbose, custom_llm_provider=custom_llm_provider, 
+      custom_api_base=custom_api_base)
+    
+    if custom_llm_provider == "azure":
       # azure configs
       openai.api_type = "azure"
       openai.api_base = litellm.api_base if litellm.api_base is not None else get_secret("AZURE_API_BASE")
@@ -73,7 +82,7 @@ def completion(
       else:
           openai.api_key = get_secret("AZURE_API_KEY")
       ## LOGGING
-      logging(model=model, input=messages, additional_args=optional_params, azure=azure, logger_fn=logger_fn)
+      logging(model=model, input=messages, additional_args=optional_params, custom_llm_provider=custom_llm_provider, logger_fn=logger_fn)
       ## COMPLETION CALL
       if litellm.headers:
          response = openai.ChatCompletion.create(
@@ -103,7 +112,7 @@ def completion(
       else:
           openai.api_key = get_secret("OPENAI_API_KEY")
       ## LOGGING
-      logging(model=model, input=messages, additional_args=args, azure=azure, logger_fn=logger_fn)
+      logging(model=model, input=messages, additional_args=args, custom_llm_provider=custom_llm_provider, logger_fn=logger_fn)
       ## COMPLETION CALL
       if litellm.headers:
          response = openai.ChatCompletion.create(
@@ -132,7 +141,7 @@ def completion(
         openai.organization = litellm.organization
       prompt = " ".join([message["content"] for message in messages])
       ## LOGGING
-      logging(model=model, input=prompt, additional_args=optional_params, azure=azure, logger_fn=logger_fn)
+      logging(model=model, input=prompt, additional_args=optional_params, custom_llm_provider=custom_llm_provider, logger_fn=logger_fn)
       ## COMPLETION CALL
       if litellm.headers:
         response = openai.Completion.create(
@@ -147,14 +156,14 @@ def completion(
         )
       completion_response = response["choices"]["text"]
       ## LOGGING
-      logging(model=model, input=prompt, azure=azure, additional_args={"max_tokens": max_tokens, "original_response": completion_response}, logger_fn=logger_fn)
+      logging(model=model, input=prompt, custom_llm_provider=custom_llm_provider, additional_args={"max_tokens": max_tokens, "original_response": completion_response}, logger_fn=logger_fn)
       ## RESPONSE OBJECT
       model_response["choices"][0]["message"]["content"] = completion_response
       model_response["created"] = response["created"]
       model_response["model"] = model
       model_response["usage"] = response["usage"]
       response = model_response
-    elif "replicate" in model or replicate == True or custom_llm_provider == "replicate":
+    elif "replicate" in model or custom_llm_provider == "replicate":
       # import replicate/if it fails then pip install replicate
       install_and_import("replicate")
       import replicate
@@ -169,11 +178,11 @@ def completion(
          os.environ["REPLICATE_API_TOKEN"] = litellm.replicate_key
       prompt = " ".join([message["content"] for message in messages])
       input = {"prompt": prompt}
-      if max_tokens != float('inf'):
+      if "max_tokens" in optional_params:
         input["max_length"] = max_tokens # for t5 models 
         input["max_new_tokens"] = max_tokens # for llama2 models 
       ## LOGGING
-      logging(model=model, input=input, azure=azure, additional_args={"max_tokens": max_tokens}, logger_fn=logger_fn)
+      logging(model=model, input=input, custom_llm_provider=custom_llm_provider, additional_args={"max_tokens": max_tokens}, logger_fn=logger_fn)
       ## COMPLETION CALL
       output = replicate.run(
         model,
@@ -188,7 +197,7 @@ def completion(
         response += item
       completion_response = response
       ## LOGGING
-      logging(model=model, input=prompt, azure=azure, additional_args={"max_tokens": max_tokens, "original_response": completion_response}, logger_fn=logger_fn)
+      logging(model=model, input=prompt, custom_llm_provider=custom_llm_provider, additional_args={"max_tokens": max_tokens, "original_response": completion_response}, logger_fn=logger_fn)
       prompt_tokens = len(encoding.encode(prompt))
       completion_tokens = len(encoding.encode(completion_response))
       ## RESPONSE OBJECT
@@ -202,59 +211,13 @@ def completion(
         }
       response = model_response
     elif model in litellm.anthropic_models:
-      # import anthropic/if it fails then pip install anthropic
-      install_and_import("anthropic")
-      from anthropic import Anthropic, HUMAN_PROMPT, AI_PROMPT
-
-      #anthropic defaults to os.environ.get("ANTHROPIC_API_KEY")
-      if api_key:
-         os.environ["ANTHROPIC_API_KEY"] = api_key
-      elif litellm.anthropic_key:
-         os.environ["ANTHROPIC_API_KEY"] = litellm.anthropic_key
-      prompt = f"{HUMAN_PROMPT}" 
-      for message in messages:
-        if "role" in message:
-          if message["role"] == "user":
-            prompt += f"{HUMAN_PROMPT}{message['content']}"
-          else:
-            prompt += f"{AI_PROMPT}{message['content']}"
-        else:
-          prompt += f"{HUMAN_PROMPT}{message['content']}"
-      prompt += f"{AI_PROMPT}"
-      anthropic = Anthropic()
-      if max_tokens != float('inf'):
-        max_tokens_to_sample = max_tokens
-      else:
-        max_tokens_to_sample = litellm.max_tokens # default in Anthropic docs https://docs.anthropic.com/claude/reference/client-libraries
-      ## LOGGING
-      logging(model=model, input=prompt, azure=azure, additional_args={"max_tokens": max_tokens}, logger_fn=logger_fn)
-      ## COMPLETION CALL
-      completion = anthropic.completions.create(
-            model=model,
-            prompt=prompt,
-            max_tokens_to_sample=max_tokens_to_sample,
-            **optional_params
-        )
+      anthropic_key = api_key if api_key is not None else litellm.anthropic_key
+      anthropic_client = AnthropicLLM(encoding=encoding, default_max_tokens_to_sample=litellm.max_tokens, api_key=anthropic_key)
+      model_response = anthropic_client.completion(model=model, messages=messages, model_response=model_response, print_verbose=print_verbose, optional_params=optional_params, litellm_params=litellm_params, logger_fn=logger_fn)
       if 'stream' in optional_params and optional_params['stream'] == True:
         # don't try to access stream object,
-        response = CustomStreamWrapper(completion, model)
+        response = CustomStreamWrapper(model_response, model)
         return response
-
-      completion_response = completion.completion
-      ## LOGGING
-      logging(model=model, input=prompt, azure=azure, additional_args={"max_tokens": max_tokens, "original_response": completion_response}, logger_fn=logger_fn)
-      prompt_tokens = anthropic.count_tokens(prompt)
-      completion_tokens = anthropic.count_tokens(completion_response)
-      ## RESPONSE OBJECT
-      print_verbose(f"raw model_response: {model_response}")
-      model_response["choices"][0]["message"]["content"] = completion_response
-      model_response["created"] = time.time()
-      model_response["model"] = model
-      model_response["usage"] = {
-          "prompt_tokens": prompt_tokens,
-          "completion_tokens": completion_tokens,
-          "total_tokens": prompt_tokens + completion_tokens
-        }
       response = model_response
 
     elif model in litellm.openrouter_models or custom_llm_provider == "openrouter":
@@ -271,7 +234,7 @@ def completion(
       else:
           openai.api_key = get_secret("OPENROUTER_API_KEY")
       ## LOGGING
-      logging(model=model, input=messages, additional_args=optional_params, azure=azure, logger_fn=logger_fn)
+      logging(model=model, input=messages, additional_args=optional_params, custom_llm_provider=custom_llm_provider, logger_fn=logger_fn)
       ## COMPLETION CALL
       if litellm.headers:
          response = openai.ChatCompletion.create(
@@ -312,7 +275,7 @@ def completion(
       co = cohere.Client(cohere_key)
       prompt = " ".join([message["content"] for message in messages])
       ## LOGGING
-      logging(model=model, input=prompt, azure=azure, logger_fn=logger_fn)
+      logging(model=model, input=prompt, custom_llm_provider=custom_llm_provider, logger_fn=logger_fn)
       ## COMPLETION CALL
       response = co.generate(  
         model=model,
@@ -326,7 +289,7 @@ def completion(
 
       completion_response = response[0].text
       ## LOGGING
-      logging(model=model, input=prompt, azure=azure, additional_args={"max_tokens": max_tokens, "original_response": completion_response}, logger_fn=logger_fn)
+      logging(model=model, input=prompt, custom_llm_provider=custom_llm_provider, additional_args={"max_tokens": max_tokens, "original_response": completion_response}, logger_fn=logger_fn)
       prompt_tokens = len(encoding.encode(prompt))
       completion_tokens = len(encoding.encode(completion_response))
       ## RESPONSE OBJECT
@@ -339,7 +302,7 @@ def completion(
           "total_tokens": prompt_tokens + completion_tokens
         }
       response = model_response
-    elif hugging_face == True or custom_llm_provider == "huggingface":
+    elif custom_llm_provider == "huggingface":
       import requests
       API_URL = f"https://api-inference.huggingface.co/models/{model}"
       HF_TOKEN = get_secret("HF_TOKEN")
@@ -347,11 +310,11 @@ def completion(
 
       prompt = " ".join([message["content"] for message in messages])
       ## LOGGING
-      logging(model=model, input=prompt, azure=azure, logger_fn=logger_fn)
+      logging(model=model, input=prompt, custom_llm_provider=custom_llm_provider, logger_fn=logger_fn)
       input_payload = {"inputs": prompt}
       response = requests.post(API_URL, headers=headers, json=input_payload)
       ## LOGGING
-      logging(model=model, input=prompt, azure=azure, additional_args={"max_tokens": max_tokens, "original_response": response.text}, logger_fn=logger_fn)
+      logging(model=model, input=prompt, custom_llm_provider=custom_llm_provider, additional_args={"max_tokens": max_tokens, "original_response": response.text}, logger_fn=logger_fn)
       completion_response = response.json()[0]['generated_text']
       prompt_tokens = len(encoding.encode(prompt))
       completion_tokens = len(encoding.encode(completion_response))
@@ -365,7 +328,7 @@ def completion(
           "total_tokens": prompt_tokens + completion_tokens
         }
       response = model_response
-    elif together_ai == True or custom_llm_provider == "together_ai":
+    elif custom_llm_provider == "together_ai":
       import requests
       TOGETHER_AI_TOKEN = get_secret("TOGETHER_AI_TOKEN")
       headers = {"Authorization": f"Bearer {TOGETHER_AI_TOKEN}"}
@@ -373,7 +336,7 @@ def completion(
       prompt = " ".join([message["content"] for message in messages]) # TODO: Add chat support for together AI
       
       ## LOGGING
-      logging(model=model, input=prompt, azure=azure, logger_fn=logger_fn)
+      logging(model=model, input=prompt, custom_llm_provider=custom_llm_provider, logger_fn=logger_fn)
       res = requests.post(endpoint, json={
           "model": model,
           "prompt": prompt,
@@ -383,7 +346,7 @@ def completion(
         headers=headers
       )
       ## LOGGING
-      logging(model=model, input=prompt, azure=azure, additional_args={"max_tokens": max_tokens, "original_response": res.text}, logger_fn=logger_fn)
+      logging(model=model, input=prompt, custom_llm_provider=custom_llm_provider, additional_args={"max_tokens": max_tokens, "original_response": res.text}, logger_fn=logger_fn)
       if stream == True:
         response = CustomStreamWrapper(res, "together_ai")
         return response
@@ -411,7 +374,7 @@ def completion(
 
       prompt = " ".join([message["content"] for message in messages])
       ## LOGGING
-      logging(model=model, input=prompt, azure=azure, logger_fn=logger_fn)
+      logging(model=model, input=prompt, custom_llm_provider=custom_llm_provider, logger_fn=logger_fn)
 
       chat_model = ChatModel.from_pretrained(model)
 
@@ -420,7 +383,7 @@ def completion(
       completion_response = chat.send_message(prompt, **optional_params)
 
       ## LOGGING
-      logging(model=model, input=prompt, azure=azure, additional_args={"max_tokens": max_tokens, "original_response": completion_response}, logger_fn=logger_fn)
+      logging(model=model, input=prompt, custom_llm_provider=custom_llm_provider, additional_args={"max_tokens": max_tokens, "original_response": completion_response}, logger_fn=logger_fn)
 
       ## RESPONSE OBJECT
       model_response["choices"][0]["message"]["content"] = completion_response
@@ -438,13 +401,13 @@ def completion(
       return generator
     else: 
       ## LOGGING
-      logging(model=model, input=messages, azure=azure, logger_fn=logger_fn)
+      logging(model=model, input=messages, custom_llm_provider=custom_llm_provider, logger_fn=logger_fn)
       args = locals()
       raise ValueError(f"Invalid completion model args passed in. Check your input - {args}")
     return response
   except Exception as e:
     ## LOGGING
-    logging(model=model, input=messages, azure=azure, additional_args={"max_tokens": max_tokens}, logger_fn=logger_fn, exception=e)
+    logging(model=model, input=messages, custom_llm_provider=custom_llm_provider, additional_args={"max_tokens": max_tokens}, logger_fn=logger_fn, exception=e)
     ## Map to OpenAI Exception
     raise exception_type(model=model, original_exception=e)
 
