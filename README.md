@@ -22,10 +22,10 @@ pip install litellm
 
 ```python
 from litellm import completion
-import os
 
-# set API keys
-os.environ['OPENAI_API_KEY'] = "<your key>"
+## set ENV variables
+os.environ["OPENAI_API_KEY"] = "openai key"
+os.environ["COHERE_API_KEY"] = "cohere key"
 
 messages = [{ "content": "Hello, how are you?","role": "user"}]
 
@@ -34,15 +34,6 @@ response = completion(model="gpt-3.5-turbo", messages=messages)
 
 # cohere call
 response = completion("command-nightly", messages)
-
-# azure openai call
-response = completion("chatgpt-test", messages, azure=True)
-
-# hugging face call
-response = completion(model="stabilityai/stablecode-completion-alpha-3b-4k", messages=messages, hugging_face=True)
-
-# openrouter call
-response = completion("google/palm-2-codechat-bison", messages)
 ```
 Code Sample: [Getting Started Notebook](https://colab.research.google.com/drive/1gR3pY-JzDZahzpVdbGBtrNGDBmzUNJaJ?usp=sharing)
 
