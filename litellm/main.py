@@ -298,7 +298,7 @@ def completion(
           "total_tokens": prompt_tokens + completion_tokens
         }
       response = model_response
-    elif hugging_face == True or custom_llm_provider == "huggingface":
+    elif custom_llm_provider == "huggingface":
       import requests
       API_URL = f"https://api-inference.huggingface.co/models/{model}"
       HF_TOKEN = get_secret("HF_TOKEN")
