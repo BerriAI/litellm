@@ -213,6 +213,16 @@ def test_completion_together_ai_stream():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+#### Test A121 ###################
+def test_completion_ai21():
+    model_name = "j2-light"
+    try:
+        response = completion(model=model_name, messages=messages)
+        # Add any assertions here to check the response
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
 # test config file with completion # 
 # def test_completion_openai_config():
 #     try:
