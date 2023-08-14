@@ -4,10 +4,13 @@
 ## Call Llama2 with Huggingface Inference Endpoints 
 LiteLLM makes it easy to call your public, private or the default huggingface endpoints. 
 
-In this case, let's try and call 3 models: 
-- `deepset/deberta-v3-large-squad2`: calls the default huggingface endpoint
-- `meta-llama/Llama-2-7b-hf`: calls a public endpoint
-- `meta-llama/Llama-2-7b-chat-hf`: call your privat endpoint
+In this case, let's try and call 3 models:  
+
+| Model                                   | Type of Endpoint |
+| --------------------------------------- | ---------------- |
+| deepset/deberta-v3-large-squad2         | [Default Huggingface Endpoint](#case-1-call-default-huggingface-endpoint) |
+| meta-llama/Llama-2-7b-hf                | [Public Endpoint](#case-2-call-llama2-public-huggingface-endpoint)              |
+| meta-llama/Llama-2-7b-chat-hf           | [Private Endpoint](#case-3-call-llama2-private-huggingface-endpoint)             |
 
 ### Case 1: Call default huggingface endpoint
 
