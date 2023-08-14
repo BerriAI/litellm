@@ -399,6 +399,29 @@ def completion(
       model_response["created"] = time.time()
       model_response["model"] = model
       response = model_response
+    elif model in litellm.ai21_models:
+      install_and_import("ai21")
+      import ai21
+      ai21.api_key = get_secret("AI21_API_KEY")
+
+      prompt = " ".join([message["content"] for message in messages])
+      ## LOGGING
+      logging(model=model, input=prompt, custom_llm_provider=custom_llm_provider, logger_fn=logger_fn)
+
+      ai21_response = ai21.Completion.execute(
+        model=model,
+        prompt=prompt,
+      )
+      completion_response = ai21_response['completions'][0]['data']['text']
+
+      ## LOGGING
+      logging(model=model, input=prompt, custom_llm_provider=custom_llm_provider, additional_args={"max_tokens": max_tokens, "original_response": completion_response}, logger_fn=logger_fn)
+
+      ## RESPONSE OBJECT
+      model_response["choices"][0]["message"]["content"] = completion_response
+      model_response["created"] = time.time()
+      model_response["model"] = model
+      response = model_response
     elif custom_llm_provider == "ollama":
       endpoint = litellm.api_base if litellm.api_base is not None else custom_api_base
       prompt = " ".join([message["content"] for message in messages])

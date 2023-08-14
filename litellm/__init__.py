@@ -124,7 +124,14 @@ huggingface_models = [
     "meta-llama/Llama-2-70b-chat",
 ] # these have been tested on extensively. But by default all text2text-generation and text-generation models are supported by liteLLM. - https://docs.litellm.ai/docs/completion/supported
 
-model_list = open_ai_chat_completion_models + open_ai_text_completion_models + cohere_models + anthropic_models + replicate_models + openrouter_models + huggingface_models + vertex_chat_models + vertex_text_models
+ai21_models = [
+    "j2-ultra",
+    "j2-mid",
+    "j2-light"
+]
+
+model_list = open_ai_chat_completion_models + open_ai_text_completion_models + cohere_models + anthropic_models + replicate_models + openrouter_models + huggingface_models + vertex_chat_models + vertex_text_models + ai21_models
+
 
 ####### EMBEDDING MODELS ###################
 open_ai_embedding_models = [
