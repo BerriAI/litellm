@@ -13,6 +13,7 @@ class AnthropicError(Exception):
     def __init__(self, status_code, message):
         self.status_code = status_code
         self.message = message
+        super().__init__(self.message) # Call the base class constructor with the parameters it needs
 
 class AnthropicLLM: 
     
@@ -75,7 +76,6 @@ class AnthropicLLM:
             print_verbose(f"raw model_response: {response.text}")
             ## RESPONSE OBJECT
             completion_response = response.json()
-            print(f"completion_response: {completion_response}")
             if "error" in completion_response:
                 raise AnthropicError(message=completion_response["error"], status_code=response.status_code)
             else:

@@ -22,7 +22,7 @@ const sidebars = {
     {
       type: 'category',
       label: 'completion_function',
-      items: ['completion/input', 'completion/supported','completion/output'],
+      items: ['completion/input', 'completion/supported','completion/output', 'completion/huggingface_tutorial'],
     },
     {
       type: 'category',

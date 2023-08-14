@@ -589,7 +589,7 @@ def modify_integration(integration_name, integration_params):
       if "table_name" in integration_params:
          Supabase.supabase_table_name = integration_params["table_name"]
 
-def exception_type(model, original_exception):
+def exception_type(model, original_exception, custom_llm_provider):
     global user_logger_fn
     exception_mapping_worked = False
     try:
@@ -640,6 +640,17 @@ def exception_type(model, original_exception):
           elif "CohereConnectionError" in exception_type: # cohere seems to fire these errors when we load test it (1k+ messages / min)
             exception_mapping_worked = True
             raise RateLimitError(f"CohereException - {original_exception.message}")
+        elif custom_llm_provider == "huggingface":
+           if hasattr(original_exception, "status_code"):
+              if original_exception.status_code == 401:
+                exception_mapping_worked = True
+                raise AuthenticationError(f"HuggingfaceException - {original_exception.message}")
+              elif original_exception.status_code == 400:
+                exception_mapping_worked = True
+                raise InvalidRequestError(f"HuggingfaceException - {original_exception.message}", f"{model}")
+              elif original_exception.status_code == 429:
+                exception_mapping_worked = True
+                raise RateLimitError(f"HuggingfaceException - {original_exception.message}")
         raise original_exception # base case - return the original exception
       else:
         raise original_exception
@@ -715,8 +726,9 @@ def get_secret(secret_name):
 # wraps the completion stream to return the correct format for the model
 # replicate/anthropic/cohere
 class CustomStreamWrapper:
-    def __init__(self, completion_stream, model):
+    def __init__(self, completion_stream, model, custom_llm_provider=None):
         self.model = model
+        self.custom_llm_provider = custom_llm_provider
         if model in litellm.cohere_models:
            # cohere does not return an iterator, so we need to wrap it in one
            self.completion_stream = iter(completion_stream)
@@ -745,6 +757,16 @@ class CustomStreamWrapper:
           return extracted_text
       else:
           return ""
+    
+    def handle_huggingface_chunk(self, chunk): 
+      chunk = chunk.decode("utf-8")
+      if chunk.startswith('data:'):
+          data_json = json.loads(chunk[5:])
+          if "token" in data_json and "text" in data_json["token"]:
+             return data_json["token"]["text"]
+          else:
+             return ""
+      return ""
 
     def __next__(self):
         completion_obj ={ "role": "assistant", "content": ""}
@@ -763,6 +785,9 @@ class CustomStreamWrapper:
         elif self.model in litellm.cohere_models:
           chunk = next(self.completion_stream)
           completion_obj["content"] = chunk.text
+        elif self.custom_llm_provider and self.custom_llm_provider == "huggingface":
+           chunk = next(self.completion_stream)
+           completion_obj["content"] = self.handle_huggingface_chunk(chunk)
         # return this for all models
         return {"choices": [{"delta": completion_obj}]}
 
