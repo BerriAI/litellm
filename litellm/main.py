@@ -315,6 +315,8 @@ def completion(
       response = requests.post(API_URL, headers=headers, json=input_payload)
       ## LOGGING
       logging(model=model, input=prompt, custom_llm_provider=custom_llm_provider, additional_args={"max_tokens": max_tokens, "original_response": response.text}, logger_fn=logger_fn)
+      if isinstance(response, dict) and "error" in response:
+        raise Exception(response["error"])
       completion_response = response.json()[0]['generated_text']
       prompt_tokens = len(encoding.encode(prompt))
       completion_tokens = len(encoding.encode(completion_response))
