@@ -11,6 +11,7 @@ anthropic_key = None
 replicate_key = None 
 cohere_key = None 
 openrouter_key = None
+huggingface_key = None
 vertex_project = None
 vertex_location = None
 
@@ -62,9 +63,6 @@ open_ai_chat_completion_models = [
   "gpt-3.5-turbo-16k",
   "gpt-3.5-turbo-0613",
   "gpt-3.5-turbo-16k-0613",
-  'gpt-3.5-turbo', 
-  'gpt-3.5-turbo-16k-0613',
-  'gpt-3.5-turbo-16k'
 ]
 open_ai_text_completion_models = [
     'text-davinci-003'
@@ -111,7 +109,22 @@ vertex_text_models = [
     "text-bison@001"
 ]
 
-model_list = open_ai_chat_completion_models + open_ai_text_completion_models + cohere_models + anthropic_models + replicate_models + openrouter_models + vertex_chat_models + vertex_text_models
+huggingface_models = [
+    "meta-llama/Llama-2-7b-hf",
+    "meta-llama/Llama-2-7b-chat-hf",
+    "meta-llama/Llama-2-13b-hf",
+    "meta-llama/Llama-2-13b-chat-hf",
+    "meta-llama/Llama-2-70b-hf",
+    "meta-llama/Llama-2-70b-chat-hf",
+    "meta-llama/Llama-2-7b",
+    "meta-llama/Llama-2-7b-chat",
+    "meta-llama/Llama-2-13b",
+    "meta-llama/Llama-2-13b-chat",
+    "meta-llama/Llama-2-70b",
+    "meta-llama/Llama-2-70b-chat",
+] # these have been tested on extensively. But by default all text2text-generation and text-generation models are supported by liteLLM. - https://docs.litellm.ai/docs/completion/supported
+
+model_list = open_ai_chat_completion_models + open_ai_text_completion_models + cohere_models + anthropic_models + replicate_models + openrouter_models + huggingface_models + vertex_chat_models + vertex_text_models
 
 ####### EMBEDDING MODELS ###################
 open_ai_embedding_models = [
