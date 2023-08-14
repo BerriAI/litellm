@@ -320,7 +320,11 @@ def completion(
       logging(model=model, input=prompt, custom_llm_provider=custom_llm_provider, additional_args={"max_tokens": max_tokens, "original_response": response.text}, logger_fn=logger_fn)
       if isinstance(response, dict) and "error" in response:
         raise Exception(response["error"])
-      completion_response = response.json()[0]['generated_text']
+      json_response = response.json()
+      if 'error' in json_response: # raise HF errors when they exist
+        raise Exception(json_response['error'])
+
+      completion_response = json_response[0]['generated_text']
       prompt_tokens = len(encoding.encode(prompt))
       completion_tokens = len(encoding.encode(completion_response))
       ## RESPONSE OBJECT
