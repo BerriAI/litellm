@@ -75,7 +75,6 @@ Here are some examples of supported models:
 |------------------|--------------------------------------------|--------------------------------------|
 | j2-light  | `completion('j2-light', messages)` | `os.environ['AI21_API_KEY']`       |
 | j2-mid  | `completion('j2-mid', messages)` | `os.environ['AI21_API_KEY']`       |
-
 | j2-ultra  | `completion('j2-ultra', messages)` | `os.environ['AI21_API_KEY']`       |
 
 
