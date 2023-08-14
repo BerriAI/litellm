@@ -22,12 +22,17 @@ const sidebars = {
     {
       type: 'category',
       label: 'completion_function',
-      items: ['completion/input', 'completion/supported','completion/output', 'completion/huggingface_tutorial'],
+      items: ['completion/input', 'completion/supported','completion/output'],
     },
     {
       type: 'category',
       label: 'embedding_function',
       items: ['embedding/supported_embedding'],
+    },
+    {
+      type: 'category',
+      label: 'Tutorials',
+      items: ['tutorials/huggingface_tutorial'],
     },
     'token_usage',
     'stream',
