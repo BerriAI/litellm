@@ -246,7 +246,8 @@ def get_optional_params(
     user = "",
     deployment_id = None,
     model = None,
-    custom_llm_provider = ""
+    custom_llm_provider = "",
+    top_k = 40,
 ):
   optional_params = {}
   if model in litellm.anthropic_models:
@@ -293,6 +294,13 @@ def get_optional_params(
         optional_params["top_p"] = top_p
      if max_tokens != float('inf'):
         optional_params["max_output_tokens"] = max_tokens
+  elif model in litellm.vertex_text_models:
+      # required params for all text vertex calls
+      # temperature=0.2, top_p=0.1, top_k=20
+      # always set temperature, top_p, top_k else, text bison fails
+      optional_params["temperature"] = temperature
+      optional_params["top_p"] = top_p
+      optional_params["top_k"] = top_k
 
   else:# assume passing in params for openai/azure openai
     if functions != []:

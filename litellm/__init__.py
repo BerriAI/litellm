@@ -100,12 +100,18 @@ openrouter_models = [
     'meta-llama/llama-2-70b-chat'
 ]
 
-vertex_models = [
+vertex_chat_models = [
     "chat-bison",
     "chat-bison@001"
 ]
 
-model_list = open_ai_chat_completion_models + open_ai_text_completion_models + cohere_models + anthropic_models + replicate_models + openrouter_models + vertex_models
+
+vertex_text_models = [
+    "text-bison",
+    "text-bison@001"
+]
+
+model_list = open_ai_chat_completion_models + open_ai_text_completion_models + cohere_models + anthropic_models + replicate_models + openrouter_models + vertex_chat_models + vertex_text_models
 
 ####### EMBEDDING MODELS ###################
 open_ai_embedding_models = [
