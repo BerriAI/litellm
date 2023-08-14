@@ -49,10 +49,10 @@ Here are some examples of supported models:
 
 | Model Name       | Function Call                                                                       | Required OS Variables                |
 |------------------|-------------------------------------------------------------------------------------|--------------------------------------|
-| [stabilityai/stablecode-completion-alpha-3b-4k](https://huggingface.co/stabilityai/stablecode-completion-alpha-3b-4k)  | `completion(model="stabilityai/stablecode-completion-alpha-3b-4k", messages=messages, hugging_face=True)` | `os.environ['HF_TOKEN']`       |
-| [bigcode/starcoder](https://huggingface.co/bigcode/starcoder)                           | `completion(model="bigcode/starcoder", messages=messages, hugging_face=True)`          | `os.environ['HF_TOKEN']`       |
-| [google/flan-t5-xxl](https://huggingface.co/google/flan-t5-xxl)                         | `completion(model="google/flan-t5-xxl", messages=messages, hugging_face=True)`         | `os.environ['HF_TOKEN']`       |
-| [google/flan-t5-large](https://huggingface.co/google/flan-t5-large)                     | `completion(model="google/flan-t5-large", messages=messages, hugging_face=True)`       | `os.environ['HF_TOKEN']`       |
+| [stabilityai/stablecode-completion-alpha-3b-4k](https://huggingface.co/stabilityai/stablecode-completion-alpha-3b-4k)  | `completion(model="stabilityai/stablecode-completion-alpha-3b-4k", messages=messages, custom_llm_provider="huggingface")` | `os.environ['HF_TOKEN']`       |
+| [bigcode/starcoder](https://huggingface.co/bigcode/starcoder)                           | `completion(model="bigcode/starcoder", messages=messages, custom_llm_provider="huggingface")`          | `os.environ['HF_TOKEN']`       |
+| [google/flan-t5-xxl](https://huggingface.co/google/flan-t5-xxl)                         | `completion(model="google/flan-t5-xxl", messages=messages, custom_llm_provider="huggingface")`         | `os.environ['HF_TOKEN']`       |
+| [google/flan-t5-large](https://huggingface.co/google/flan-t5-large)                     | `completion(model="google/flan-t5-large", messages=messages, custom_llm_provider="huggingface")`       | `os.environ['HF_TOKEN']`       |
 
 ### OpenRouter Completion Models
 
