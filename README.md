@@ -12,6 +12,8 @@ a light package to simplify calling OpenAI, Azure, Cohere, Anthropic, Huggingfac
 - guarantees [consistent output](https://litellm.readthedocs.io/en/latest/output/), text responses will always be available at `['choices'][0]['message']['content']`
 - exception mapping - common exceptions across providers are mapped to the [OpenAI exception types](https://help.openai.com/en/articles/6897213-openai-library-error-types-guidance)
 # usage
+<a href='https://docs.litellm.ai/docs/completion/supported' target="_blank"><img alt='None' src='https://img.shields.io/badge/Supported_LLMs-100000?style=for-the-badge&logo=None&logoColor=000000&labelColor=000000&color=8400EA'/></a>
+
 Demo - https://litellm.ai/ \
 Read the docs - https://docs.litellm.ai/docs/
 
