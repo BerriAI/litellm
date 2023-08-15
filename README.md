@@ -46,7 +46,7 @@ pip install litellm==0.1.345
 
 ## Streaming Queries
 liteLLM supports streaming the model response back, pass `stream=True` to get a streaming iterator in response.
-Streaming is supported for OpenAI, Azure, Anthropic models
+Streaming is supported for OpenAI, Azure, Anthropic, Huggingface models
 ```python
 response = completion(model="gpt-3.5-turbo", messages=messages, stream=True)
 for chunk in response:
