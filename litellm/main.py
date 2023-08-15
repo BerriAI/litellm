@@ -460,21 +460,19 @@ def completion(
       url = "https://chat.petals.dev/api/v1/generate"
       import requests
       prompt = " ".join([message["content"] for message in messages])
-      response = requests.post(url, data={"inputs": prompt, "max_new_tokens": 100, "model": model})
 
       ## LOGGING
-      #logging(model=model, input=prompt, custom_llm_provider=custom_llm_provider, additional_args={"max_tokens": max_tokens, "original_response": completion_response}, logger_fn=logger_fn)
-
-      #response.text
-      print("got response", response.json())
-      print("got response text", response.text)
-      # Embeddings & prompts are on your device, transformer blocks are distributed across the Internet
-
-      ## RESPONSE OBJECT
-      # model_response["choices"][0]["message"]["content"] = completion_response
-      # model_response["created"] = time.time()
-      # model_response["model"] = model
-      # response = model_response
+      logging(model=model, input=prompt, custom_llm_provider=custom_llm_provider, logger_fn=logger_fn)
+      response = requests.post(url, data={"inputs": prompt, "max_new_tokens": 100, "model": model})
+      ## LOGGING
+      logging(model=model, input=prompt, custom_llm_provider=custom_llm_provider, additional_args={"max_tokens": max_tokens, "original_response": response}, logger_fn=logger_fn)
+      completion_response = response.json()["outputs"]
+      
+      # RESPONSE OBJECT
+      model_response["choices"][0]["message"]["content"] = completion_response
+      model_response["created"] = time.time()
+      model_response["model"] = model
+      response = model_response
     else:
       ## LOGGING
       logging(model=model, input=messages, custom_llm_provider=custom_llm_provider, logger_fn=logger_fn)
