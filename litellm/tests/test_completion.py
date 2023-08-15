@@ -231,6 +231,7 @@ def test_baseten_falcon_7bcompletion_withbase():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+    litellm.api_base = None
 
 
 
