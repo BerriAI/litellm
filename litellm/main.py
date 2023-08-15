@@ -431,7 +431,37 @@ def completion(
       generator = get_ollama_response_stream(endpoint, model, prompt)
       # assume all responses are streamed
       return generator
-    else: 
+    elif custom_llm_provider == "petals":
+      install_and_import("transformers")
+      from transformers import AutoTokenizer
+      from petals import AutoDistributedModelForCausalLM
+
+      tokenizer = AutoTokenizer.from_pretrained(model)
+      model = AutoDistributedModelForCausalLM.from_pretrained(model)
+
+      print("got model", model)
+      # Embeddings & prompts are on your device, transformer blocks are distributed across the Internet
+
+      inputs = tokenizer(prompt, return_tensors="pt")["input_ids"]
+
+      outputs = model.generate(
+            inputs=inputs,
+            temperature=1.0
+        )
+      
+      print("got output", outputs)
+      completion_response = tokenizer.decode(outputs[0])
+
+      print("got output text", completion_response)
+      ## LOGGING
+      logging(model=model, input=prompt, custom_llm_provider=custom_llm_provider, additional_args={"max_tokens": max_tokens, "original_response": completion_response}, logger_fn=logger_fn)
+
+      ## RESPONSE OBJECT
+      model_response["choices"][0]["message"]["content"] = completion_response
+      model_response["created"] = time.time()
+      model_response["model"] = model
+      response = model_response
+    else:
       ## LOGGING
       logging(model=model, input=messages, custom_llm_provider=custom_llm_provider, logger_fn=logger_fn)
       args = locals()
