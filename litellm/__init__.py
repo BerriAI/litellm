@@ -5,6 +5,7 @@ set_verbose=False
 telemetry=True
 max_tokens = 256 # OpenAI Defaults
 retry = True
+api_key = None
 openai_key = None 
 azure_key = None 
 anthropic_key = None 

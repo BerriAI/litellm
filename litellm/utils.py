@@ -717,10 +717,10 @@ def get_secret(secret_name):
         # if secret manager fails default to using .env variables
         os.environ[secret_name] = secret # set to env to be safe
         return secret
+     elif litellm.api_key != None: # if users use litellm default key
+      return litellm.api_key
      else:
       return os.environ.get(secret_name)
-  else:
-    return os.environ.get(secret_name)
 
 ######## Streaming Class ############################
 # wraps the completion stream to return the correct format for the model
