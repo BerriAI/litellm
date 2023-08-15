@@ -68,21 +68,30 @@ Here are some examples of supported models:
 | [bigcode/starcoder](https://huggingface.co/bigcode/starcoder)                           | `completion(model="bigcode/starcoder", messages=messages, custom_llm_provider="huggingface")`          | `os.environ['HF_TOKEN']`       |
 | [google/flan-t5-xxl](https://huggingface.co/google/flan-t5-xxl)                         | `completion(model="google/flan-t5-xxl", messages=messages, custom_llm_provider="huggingface")`         | `os.environ['HF_TOKEN']`       |
 | [google/flan-t5-large](https://huggingface.co/google/flan-t5-large)                     | `completion(model="google/flan-t5-large", messages=messages, custom_llm_provider="huggingface")`       | `os.environ['HF_TOKEN']`       |
-
 ### AI21 Models
 
 | Model Name       | Function Call                              | Required OS Variables                |
 |------------------|--------------------------------------------|--------------------------------------|
-| j2-light  | `completion('j2-light', messages)` | `os.environ['AI21_API_KEY']`       |
-| j2-mid  | `completion('j2-mid', messages)` | `os.environ['AI21_API_KEY']`       |
-| j2-ultra  | `completion('j2-ultra', messages)` | `os.environ['AI21_API_KEY']`       |
-
+| j2-light         | `completion('j2-light', messages)`         | `os.environ['AI21_API_KEY']`         |
+| j2-mid           | `completion('j2-mid', messages)`           | `os.environ['AI21_API_KEY']`         |
+| j2-ultra         | `completion('j2-ultra', messages)`         | `os.environ['AI21_API_KEY']`         |
 
 ### Cohere Models
 
 | Model Name       | Function Call                              | Required OS Variables                |
 |------------------|--------------------------------------------|--------------------------------------|
-| command-nightly  | `completion('command-nightly', messages)` | `os.environ['COHERE_API_KEY']`       |
+| command-nightly  | `completion('command-nightly', messages)`  | `os.environ['COHERE_API_KEY']`       |
+
+### BaseTen Models
+Baseten provides infrastructure to deploy and serve ML models https://www.baseten.co/. Use liteLLM to easily call models deployed on Baseten.
+
+
+| Model Name       | Function Call                                  | Required OS Variables              |
+|------------------|--------------------------------------------|------------------------------------|
+| Falcon 7B        | `completion(model='<your model version id>', messages=messages, custom_llm_provider="baseten")`         | `os.environ['BASETEN_API_KEY']`     |
+| Wizard LM        | `completion(model='<your model version id>', messages=messages, custom_llm_provider="baseten")`         | `os.environ['BASETEN_API_KEY']`     |
+| MPT 7B Base      | `completion(model='<your model version id>', messages=messages, custom_llm_provider="baseten")`         | `os.environ['BASETEN_API_KEY']`     |
+
 
 ### OpenRouter Completion Models
 
