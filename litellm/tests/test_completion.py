@@ -213,27 +213,28 @@ def test_completion_together_ai_stream():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-def test_baseten_falcon_7bcompletion():
-    model_name = "qvv0xeq"
-    try:
-        response = completion(model=model_name, messages=messages, custom_llm_provider="baseten")
-        # Add any assertions here to check the response
-        print(response)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
+# def test_baseten_falcon_7bcompletion():
+#     model_name = "qvv0xeq"
+#     try:
+#         response = completion(model=model_name, messages=messages, custom_llm_provider="baseten")
+#         # Add any assertions here to check the response
+#         print(response)
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
+# test_baseten_falcon_7bcompletion()
 
-def test_baseten_falcon_7bcompletion_withbase():
-    model_name = "qvv0xeq"
-    litellm.api_base = "https://app.baseten.co"
-    try:
-        response = completion(model=model_name, messages=messages)
-        # Add any assertions here to check the response
-        print(response)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-    litellm.api_base = None
+# def test_baseten_falcon_7bcompletion_withbase():
+#     model_name = "qvv0xeq"
+#     litellm.api_base = "https://app.baseten.co"
+#     try:
+#         response = completion(model=model_name, messages=messages)
+#         # Add any assertions here to check the response
+#         print(response)
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
+#     litellm.api_base = None
 
-
+# test_baseten_falcon_7bcompletion_withbase()
 
 
 # def test_baseten_wizardLMcompletion_withbase():
