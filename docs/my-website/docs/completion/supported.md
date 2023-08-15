@@ -9,7 +9,7 @@
 | gpt-3.5-turbo-16k-0613    | `completion('gpt-3.5-turbo-16k-0613', messages)` | `os.environ['OPENAI_API_KEY']`       |
 | gpt-4            | `completion('gpt-4', messages)`         | `os.environ['OPENAI_API_KEY']`       |
 
-## Azure OpenAI Chat Completion Models
+### Azure OpenAI Chat Completion Models
 
 | Model Name       | Function Call                           | Required OS Variables                     |
 |------------------|-----------------------------------------|-------------------------------------------|
