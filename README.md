@@ -7,7 +7,7 @@
 
 [![](https://dcbadge.vercel.app/api/server/wuPM9dRgDw)](https://discord.gg/wuPM9dRgDw)
 
-a light package to simplify calling OpenAI, Azure, Cohere, Anthropic, Huggingface API Endpoints. It manages:
+a light package to simplify calling OpenAI, Azure, Cohere, Anthropic, Huggingface API Endpoints. It manages: 
 - translating inputs to the provider's completion and embedding endpoints
 - guarantees [consistent output](https://litellm.readthedocs.io/en/latest/output/), text responses will always be available at `['choices'][0]['message']['content']`
 - exception mapping - common exceptions across providers are mapped to the [OpenAI exception types](https://help.openai.com/en/articles/6897213-openai-library-error-types-guidance)
