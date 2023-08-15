@@ -51,7 +51,7 @@ def completion(
     *, return_async=False, api_key=None, force_timeout=600, logger_fn=None, verbose=False, azure=False, custom_llm_provider=None, custom_api_base=None,
     # model specific optional params
     # used by text-bison only
-    top_k=40, 
+    top_k=40, request_timeout=0, # unused var for old version of OpenAI API
   ):
   try:
     global new_response
