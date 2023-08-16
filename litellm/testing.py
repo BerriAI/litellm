@@ -27,16 +27,17 @@ def testing_batch_completion(*args, **kwargs):
                 else:
                     kwargs_modified["messages"] = message_list
                     future = executor.submit(litellm.completion, *args_modified, **kwargs_modified)
-            completions.append(future)
+                completions.append((future, message_list))
     
     # Retrieve the results and calculate elapsed time for each completion call
-    for future in completions:
+    for completion in completions:
+        future, message_list = completion
         start_time = time.time()
         try:
             result = future.result()
             end_time = time.time()
             elapsed_time = end_time - start_time
-            result_dict = {"status": "succeeded", "response": future.result(), "response_time": elapsed_time}
+            result_dict = {"status": "succeeded", "response": future.result(), "prompt": message_list, "response_time": elapsed_time}
             results.append(result_dict)
         except Exception as e:
             end_time = time.time()
