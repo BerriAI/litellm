@@ -32,7 +32,7 @@ const sidebars = {
     {
       type: 'category',
       label: 'Tutorials',
-      items: ['tutorials/huggingface_tutorial'],
+      items: ['tutorials/huggingface_tutorial', 'tutorials/TogetherAI_liteLLM'],
     },
     'token_usage',
     'stream',
