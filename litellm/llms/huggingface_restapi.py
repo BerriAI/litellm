@@ -67,10 +67,10 @@ class HuggingfaceRestAPILLM():
             print_verbose(f"raw model_response: {response.text}")
             ## RESPONSE OBJECT
             completion_response = response.json()
-            print(f"response: {completion_response}")
+            print_verbose(f"response: {completion_response}")
             if isinstance(completion_response, dict) and "error" in completion_response:
-                print(f"completion error: {completion_response['error']}")
-                print(f"response.status_code: {response.status_code}")
+                print_verbose(f"completion error: {completion_response['error']}")
+                print_verbose(f"response.status_code: {response.status_code}")
                 raise HuggingfaceError(message=completion_response["error"], status_code=response.status_code)
             else:
                 model_response["choices"][0]["message"]["content"] = completion_response[0]["generated_text"]    
