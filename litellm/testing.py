@@ -43,7 +43,7 @@ def testing_batch_completion(*args, **kwargs):
         except Exception as e:
             end_time = time.time()
             elapsed_time = end_time - start_time
-            result_dict = {"status": "succeeded", "response": e, "response_time": elapsed_time}
+            result_dict = {"status": "failed", "response": e, "response_time": elapsed_time}
             results.append(result_dict)
     return results
   except:
