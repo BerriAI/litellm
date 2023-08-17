@@ -282,9 +282,9 @@ def completion(
         response = CustomStreamWrapper(model_response, model, custom_llm_provider="huggingface")
         return response
       response = model_response
-    elif custom_llm_provider == "together_ai":
+    elif custom_llm_provider == "together_ai" or ("togethercomputer" in model):
       import requests
-      TOGETHER_AI_TOKEN = get_secret("TOGETHER_AI_TOKEN") or get_secret("TOGETHERAI_API_KEY")
+      TOGETHER_AI_TOKEN = get_secret("TOGETHER_AI_TOKEN") or get_secret("TOGETHERAI_API_KEY") or api_key or litellm.togetherai_api_key
       headers = {"Authorization": f"Bearer {TOGETHER_AI_TOKEN}"}
       endpoint = 'https://api.together.xyz/inference'
       prompt = " ".join([message["content"] for message in messages]) # TODO: Add chat support for together AI
