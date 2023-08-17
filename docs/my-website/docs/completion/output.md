@@ -24,6 +24,13 @@ Here's the exact json output and type you can expect from all litellm `completio
 
 ```
 
+You can access the response as a dictionary or as a class object, just as OpenAI allows you
+```python
+print(response.choices[0].message.content)
+print(response['choices'][0]['message']['content'])
+
+```
+
 Here's what an example response looks like 
 ```python
 {
