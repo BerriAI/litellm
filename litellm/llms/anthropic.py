@@ -27,7 +27,7 @@ class AnthropicLLM:
         # set the api key 
         if self.api_key == None:
             raise ValueError("Missing Anthropic API Key - A call is being made to anthropic but no key is set either in the environment variables or via params")
-
+        self.api_key = api_key
         self.headers = {
             "accept": "application/json",
             "anthropic-version": "2023-06-01",
