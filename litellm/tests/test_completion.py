@@ -232,7 +232,7 @@ def test_completion_replicate_stability():
 def test_completion_together_ai():
     model_name = "togethercomputer/llama-2-70b-chat"
     try:
-        response = completion(model=model_name, messages=messages, custom_llm_provider="together_ai")
+        response = completion(model=model_name, messages=messages)
         # Add any assertions here to check the response
         print(response)
     except Exception as e:

@@ -22,12 +22,17 @@ const sidebars = {
     {
       type: 'category',
       label: 'completion_function',
-      items: ['completion/input', 'completion/supported','completion/output'],
+      items: ['completion/input','completion/output'],
     },
     {
       type: 'category',
       label: 'embedding_function',
       items: ['embedding/supported_embedding'],
+    },
+    {
+      type: 'category',
+      label: 'Supported Chat, Completion Models',
+      items: ['completion/supported'],
     },
     {
       type: 'category',

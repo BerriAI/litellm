@@ -17,6 +17,7 @@ vertex_project = None
 vertex_location = None
 caching = False
 hugging_api_token = None
+togetherai_api_key = None
 model_cost = {
     "gpt-3.5-turbo": {"max_tokens": 4000, "input_cost_per_token": 0.0000015, "output_cost_per_token": 0.000002},
     "gpt-35-turbo": {"max_tokens": 4000, "input_cost_per_token": 0.0000015, "output_cost_per_token": 0.000002}, # azure model name
