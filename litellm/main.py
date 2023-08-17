@@ -324,7 +324,7 @@ def completion(
 
       ## LOGGING
       logging(model=model, input=prompt, custom_llm_provider=custom_llm_provider, logger_fn=logger_fn)
-      if stream == True or optional_params['stream_tokens'] == True:
+      if stream == True:
         return together_ai_completion_streaming({
           "model": model,
           "prompt": prompt,
