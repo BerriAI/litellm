@@ -28,7 +28,6 @@ You can access the response as a dictionary or as a class object, just as OpenAI
 ```python
 print(response.choices[0].message.content)
 print(response['choices'][0]['message']['content'])
-
 ```
 
 Here's what an example response looks like 
