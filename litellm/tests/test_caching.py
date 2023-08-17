@@ -24,4 +24,5 @@ try:
 except Exception as e:
     print(f"error occurred: {traceback.format_exc()}") 
     pytest.fail(f"Error occurred: {e}")
+litellm.caching = False
 
