@@ -22,7 +22,7 @@ class HuggingfaceRestAPILLM():
             "content-type": "application/json",
         }
         # get the api key if it exists in the environment or is passed in, but don't require it
-        self.api_key = os.getenv("HF_TOKEN") if "HF_TOKEN" in os.environ else api_key
+        self.api_key = api_key
         if self.api_key != None:
             self.headers["Authorization"] = f"Bearer {self.api_key}" 
 

@@ -6,6 +6,7 @@ import random, uuid, requests
 import datetime, time
 import tiktoken
 encoding = tiktoken.get_encoding("cl100k_base")
+import pkg_resources
 from .integrations.helicone import HeliconeLogger
 from .integrations.aispend import AISpendLogger
 from .integrations.berrispend import BerriSpendLogger
