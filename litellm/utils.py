@@ -5,7 +5,6 @@ import litellm, openai
 import random, uuid, requests
 import datetime, time
 import tiktoken
-from pkg_resources import DistributionNotFound, VersionConflict
 encoding = tiktoken.get_encoding("cl100k_base")
 from .integrations.helicone import HeliconeLogger
 from .integrations.aispend import AISpendLogger
@@ -111,7 +110,7 @@ class ModelResponse:
       choices_str = ",\n".join(str(choice) for choice in self.choices)
       result = f"{{\n  'choices': [\n{choices_str}\n  ],\n  'created': {self.created},\n  'model': '{self.model}',\n  'usage': {self.usage}\n}}"
       return result
-
+############################################################
 def print_verbose(print_statement):
   if litellm.set_verbose:
     print(f"LiteLLM: {print_statement}")
