@@ -1,10 +1,12 @@
 # Supported Chat, Completion Models
 
 ## API Keys 
-liteLLM reads keys set in the environment variables or your Key Manager
-liteLLM standardizes naming keys in the following format
-`PROVIDER_API_KEY` for example `OPENAI_API_KEY` or `TOGETHERAI_API_KEY` or `HUGGINGFACE_API_KEY`. In addition to this liteLLM also allows you to use the provider specificed naming conventions for keys
-Example Both `HF_TOKEN` and `HUGGINGFACE_API_KEY` will work for Hugging Face models
+liteLLM reads key naming, all keys should be named in the following format:
+`<PROVIDER>_API_KEY` for example
+* `OPENAI_API_KEY` Provider = OpenAI
+* `TOGETHERAI_API_KEY` Provider = TogetherAI
+* `HUGGINGFACE_API_KEY` Provider = HuggingFace
+
 
 ### OpenAI Chat Completion Models
 
