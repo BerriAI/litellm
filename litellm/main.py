@@ -11,21 +11,10 @@ from .llms.huggingface_restapi import HuggingfaceRestAPILLM
 import tiktoken
 from concurrent.futures import ThreadPoolExecutor
 encoding = tiktoken.get_encoding("cl100k_base")
-from litellm.utils import get_secret, install_and_import, CustomStreamWrapper, read_config_args
+from litellm.utils import get_secret, install_and_import, CustomStreamWrapper, ModelResponse, read_config_args
 from litellm.utils import get_ollama_response_stream, stream_to_string, together_ai_completion_streaming
 ####### ENVIRONMENT VARIABLES ###################
 dotenv.load_dotenv() # Loading env variables using dotenv
-new_response = {
-        "choices": [
-          {
-            "finish_reason": "stop",
-            "index": 0,
-            "message": {
-                "role": "assistant"
-            }
-          }
-        ]
-      }
 # TODO add translations
 ####### COMPLETION ENDPOINTS ################
 #############################################
@@ -54,7 +43,8 @@ def completion(
     top_k=40, request_timeout=0, # unused var for old version of OpenAI API
   ):
   try:
-    global new_response
+    new_response = ModelResponse()
+    print(new_response)
     if azure: # this flag is deprecated, remove once notebooks are also updated.
       custom_llm_provider="azure"
     args = locals()

@@ -30,6 +30,51 @@ user_logger_fn = None
 additional_details = {}
 local_cache = {}
 
+######## Model Response #########################
+# All liteLLM Model responses will be in this format, Follows the OpenAI Format
+# https://docs.litellm.ai/docs/completion/output
+# {
+#   'choices': [
+#      {
+#         'finish_reason': 'stop',
+#         'index': 0,
+#         'message': {
+#            'role': 'assistant',
+#             'content': " I'm doing well, thank you for asking. I am Claude, an AI assistant created by Anthropic."
+#         }
+#       }
+#     ],
+#  'created': 1691429984.3852863,
+#  'model': 'claude-instant-1',
+#  'usage': {'prompt_tokens': 18, 'completion_tokens': 23, 'total_tokens': 41}
+# }
+
+class ModelResponse:
+    def __init__(self):
+        self.choices = [
+          {
+            "finish_reason": "stop",
+            "index": 0,
+            "message": {
+                "role": "assistant"
+            }
+          }
+        ]
+        self.created = None
+        self.model = None
+        self.usage = {
+            "prompt_tokens": None,
+            "completion_tokens": None,
+            "total_tokens": None
+        }
+
+    def __getitem__(self, key):
+        return getattr(self, key)
+
+    def __setitem__(self, key, value):
+        setattr(self, key, value)
+
+
 def print_verbose(print_statement):
   if litellm.set_verbose:
     print(f"LiteLLM: {print_statement}")
