@@ -213,7 +213,7 @@ def test_completion_together_ai_stream():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-
+test_completion_together_ai_stream()
 def test_petals():
     model_name = "stabilityai/StableBeluga2"
     try:
