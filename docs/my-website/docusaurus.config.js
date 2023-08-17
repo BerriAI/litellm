@@ -86,7 +86,7 @@ const config = {
               },
               {
                 label: 'Twitter',
-                href: 'https://twitter.com/LiteLLM,
+                href: 'https://twitter.com/LiteLLM',
               },
             ],
           },
