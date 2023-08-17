@@ -133,7 +133,7 @@ ai21_models = [
 
 model_list = open_ai_chat_completion_models + open_ai_text_completion_models + cohere_models + anthropic_models + replicate_models + openrouter_models + huggingface_models + vertex_chat_models + vertex_text_models + ai21_models
 
-
+provider_list = ["openai", "cohere", "anthropic", "replicate", "huggingface", "together_ai", "openrouter", "vertex_ai", "ai21"]
 ####### EMBEDDING MODELS ###################
 open_ai_embedding_models = [
     'text-embedding-ada-002'
