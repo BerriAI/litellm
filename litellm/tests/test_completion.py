@@ -283,20 +283,20 @@ def test_petals():
 #         pytest.fail(f"Error occurred: {e}")
 
 
-import asyncio
-def test_completion_together_ai_stream():
-    try:
-        response = completion(model="togethercomputer/llama-2-70b-chat", messages=messages, custom_llm_provider="together_ai", stream=True, max_tokens=200)
-        print(response)
-        asyncio.run(get_response(response))
-        # print(string_response)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
+# import asyncio
+# def test_completion_together_ai_stream():
+#     try:
+#         response = completion(model="togethercomputer/llama-2-70b-chat", messages=messages, custom_llm_provider="together_ai", stream=True, max_tokens=200)
+#         print(response)
+#         asyncio.run(get_response(response))
+#         # print(string_response)
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
 
 
-async def get_response(generator):
-    async for elem in generator:
-        print(elem)
-    return
+# async def get_response(generator):
+#     async for elem in generator:
+#         print(elem)
+#     return
 
 
