@@ -90,6 +90,14 @@ def test_completion_openai():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+def test_completion_text_openai():
+    try:
+        response = completion(model="text-davinci-003", messages=messages)
+        # Add any assertions here to check the response
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
 def test_completion_openai_with_optional_params():
     try:
         response = completion(model="gpt-3.5-turbo", messages=messages, temperature=0.5, top_p=0.1, user="ishaan_dev@berri.ai")
