@@ -62,12 +62,18 @@ def test_completion_claude_stream():
 
 def test_completion_cohere():
     try:
-        response = completion(model="command-nightly", messages=messages, max_tokens=500)
+        response = completion(model="command-nightly", messages=messages, max_tokens=100)
         # Add any assertions here to check the response
         print(response)
+        response_str = response['choices'][0]['message']['content']
+        print(f"str response{response_str}")
+        response_str_2 = response.choices[0].message.content
+        if type(response_str) != str:
+            pytest.fail(f"Error occurred: {e}")
+        if type(response_str_2) != str:
+            pytest.fail(f"Error occurred: {e}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-
 
 def test_completion_cohere_stream():
     try:
@@ -85,6 +91,15 @@ def test_completion_cohere_stream():
 def test_completion_openai():
     try:
         response = completion(model="gpt-3.5-turbo", messages=messages)
+
+        response_str = response['choices'][0]['message']['content']
+        response_str_2 = response.choices[0].message.content
+        print(response_str)
+        print(response_str_2)
+        if type(response_str) != str:
+            pytest.fail(f"Error occurred: {e}")
+        if type(response_str_2) != str:
+            pytest.fail(f"Error occurred: {e}")
         # Add any assertions here to check the response
         print(response)
     except Exception as e:
@@ -197,18 +212,21 @@ def test_completion_replicate_stability_stream():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-# def test_completion_replicate_stability():
-#     model_name = "stability-ai/stablelm-tuned-alpha-7b:c49dae362cbaecd2ceabb5bd34fdb68413c4ff775111fea065d259d577757beb"
-#     try:
-#         response = completion(model=model_name, messages=messages, custom_llm_provider="replicate")
-#         # Add any assertions here to check the response
-#         print(response)
-#         for result in response:
-#             print(result)
-#         print(response)
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
-# test_completion_replicate_stability()
+def test_completion_replicate_stability():
+    model_name = "stability-ai/stablelm-tuned-alpha-7b:c49dae362cbaecd2ceabb5bd34fdb68413c4ff775111fea065d259d577757beb"
+    try:
+        response = completion(model=model_name, messages=messages, custom_llm_provider="replicate")
+        # Add any assertions here to check the response
+        response_str = response['choices'][0]['message']['content']
+        response_str_2 = response.choices[0].message.content
+        print(response_str)
+        print(response_str_2)
+        if type(response_str) != str:
+            pytest.fail(f"Error occurred: {e}")
+        if type(response_str_2) != str:
+            pytest.fail(f"Error occurred: {e}")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 ######## Test TogetherAI ########
 def test_completion_together_ai():

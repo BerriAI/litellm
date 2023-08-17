@@ -43,12 +43,10 @@ def completion(
     top_k=40, request_timeout=0, # unused var for old version of OpenAI API
   ):
   try:
-    new_response = ModelResponse()
-    print(new_response)
+    model_response = ModelResponse()
     if azure: # this flag is deprecated, remove once notebooks are also updated.
       custom_llm_provider="azure"
     args = locals()
-    model_response = deepcopy(new_response) # deep copy the default response format so we can mutate it and it's thread-safe. 
     # check if user passed in any of the OpenAI optional params
     optional_params = get_optional_params(
       functions=functions, function_call=function_call, 
