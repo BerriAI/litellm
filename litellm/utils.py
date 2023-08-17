@@ -28,6 +28,7 @@ supabaseClient = None
 callback_list = []
 user_logger_fn = None
 additional_details = {}
+local_cache = {}
 
 def print_verbose(print_statement):
   if litellm.set_verbose:
@@ -138,12 +139,22 @@ def client(original_function):
 
     def wrapper(*args, **kwargs):
         start_time = None
+        result = None
         try:
           function_setup(*args, **kwargs)
           ## MODEL CALL
           start_time = datetime.datetime.now()
-          result = original_function(*args, **kwargs)
+          ## CHECK CACHE RESPONSES 
+          messages = args[1] if len(args) > 1 else kwargs["messages"]
+          prompt = " ".join(message["content"] for message in messages) 
+          if litellm.caching and prompt in local_cache:
+            result = local_cache[prompt]
+          else:
+            result = original_function(*args, **kwargs)
           end_time = datetime.datetime.now()
+          ## CACHE RESPONSES 
+          if litellm.caching:
+            local_cache[prompt] = result
           ## LOG SUCCESS 
           crash_reporting(*args, **kwargs)
           my_thread = threading.Thread(target=handle_success, args=(args, kwargs, result, start_time, end_time)) # don't interrupt execution of main thread

@@ -15,7 +15,7 @@ openrouter_key = None
 huggingface_key = None
 vertex_project = None
 vertex_location = None
-
+caching = False
 hugging_api_token = None
 model_cost = {
     "gpt-3.5-turbo": {"max_tokens": 4000, "input_cost_per_token": 0.0000015, "output_cost_per_token": 0.000002},
