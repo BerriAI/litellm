@@ -3,8 +3,8 @@
 ## API Keys 
 liteLLM reads key naming, all keys should be named in the following format:
 `<PROVIDER>_API_KEY` for example
-* `OPENAI_API_KEY` Provider = OpenAI
-* `TOGETHERAI_API_KEY` Provider = TogetherAI
+* `OPENAI_API_KEY`      Provider = OpenAI
+* `TOGETHERAI_API_KEY`  Provider = TogetherAI
 * `HUGGINGFACE_API_KEY` Provider = HuggingFace
 
 
