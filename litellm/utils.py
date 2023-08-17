@@ -833,10 +833,8 @@ def get_secret(secret_name):
      # TODO: check which secret manager is being used
      # currently only supports Infisical
      secret = litellm.secret_manager_client.get_secret(secret_name).secret_value
-     if secret != None: # failsafe when secret manager fails
-        # if secret manager fails default to using .env variables
-        os.environ[secret_name] = secret # set to env to be safe
-        return secret
+     if secret != None:
+        return secret # if secret found in secret manager return it
   elif litellm.api_key != None: # if users use litellm default key
     return litellm.api_key
   else:
