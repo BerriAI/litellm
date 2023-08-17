@@ -856,4 +856,42 @@ async def stream_to_string(generator):
       response += chunk["content"]
    return response
 
+
+########## Together AI streaming #############################
+async def together_ai_completion_streaming(json_data, headers):
+    session = aiohttp.ClientSession()
+    url = 'https://api.together.xyz/inference'
+    # headers = {
+    #     'Authorization': f'Bearer {together_ai_token}',
+    #     'Content-Type': 'application/json'
+    # }
+
+    # data = {
+    #     "model": "togethercomputer/llama-2-70b-chat",
+    #     "prompt": "write 1 page on the topic of the history of the united state",
+    #     "max_tokens": 1000,
+    #     "temperature": 0.7,
+    #     "top_p": 0.7,
+    #     "top_k": 50,
+    #     "repetition_penalty": 1,
+    #     "stream_tokens": True
+    # }
+    try:
+        async with session.post(url, json=json_data, headers=headers) as resp:
+            async for line in resp.content.iter_any():
+                # print(line)
+                if line:
+                    try:
+                        json_chunk = line.decode("utf-8")
+                        json_string = json_chunk.split('data: ')[1]
+                        # Convert the JSON string to a dictionary
+                        data_dict = json.loads(json_string)
+                        completion_response = data_dict['choices'][0]['text']
+                        completion_obj ={ "role": "assistant", "content": ""}
+                        completion_obj["content"] = completion_response
+                        yield {"choices": [{"delta": completion_obj}]}
+                    except:
+                        pass
+    finally:
+        await session.close()
    
