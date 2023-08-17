@@ -25,21 +25,15 @@ class AnthropicLLM:
     
     def validate_environment(self, api_key): # set up the environment required to run the model 
         # set the api key 
-        try:
-            self.api_key = os.getenv("ANTHROPIC_API_KEY") if "ANTHROPIC_API_KEY" in os.environ else api_key
-            if self.api_key == None:
-                raise Exception
-            
-            self.headers = {
-                "accept": "application/json",
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-                "x-api-key": self.api_key 
-            }
-
-        except:
+        if self.api_key == None:
             raise ValueError("Missing Anthropic API Key - A call is being made to anthropic but no key is set either in the environment variables or via params")
-        pass  
+
+        self.headers = {
+            "accept": "application/json",
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+            "x-api-key": self.api_key 
+        }
 
     def completion(self, model: str, messages: list, model_response: dict, print_verbose: Callable, optional_params=None, litellm_params=None, logger_fn=None): # logic for parsing in - calling - parsing out model completion calls
         model = model
