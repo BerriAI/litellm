@@ -158,7 +158,7 @@ def completion(
             model=model,
             prompt = prompt
         )
-      completion_response = response["choices"]["text"]
+      completion_response = response["choices"][0]["text"]
       ## LOGGING
       logging(model=model, input=prompt, custom_llm_provider=custom_llm_provider, additional_args={"max_tokens": max_tokens, "original_response": completion_response}, logger_fn=logger_fn)
       ## RESPONSE OBJECT
