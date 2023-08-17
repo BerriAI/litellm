@@ -8,7 +8,7 @@ jobs:
     steps:
       - checkout
 
-       - run:
+      - run:
           name: Check if litellm dir was updated or if pyproject.toml was modified
           command: |
             if [ -n "$(git diff --name-only $CIRCLE_SHA1^..$CIRCLE_SHA1 | grep -E 'pyproject\.toml|litellm/')" ]; then
