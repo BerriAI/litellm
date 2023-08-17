@@ -12,7 +12,7 @@ import tiktoken
 from concurrent.futures import ThreadPoolExecutor
 encoding = tiktoken.get_encoding("cl100k_base")
 from litellm.utils import get_secret, install_and_import, CustomStreamWrapper, read_config_args
-from litellm.utils import get_ollama_response_stream, stream_to_string
+from litellm.utils import get_ollama_response_stream, stream_to_string, together_ai_completion_streaming
 ####### ENVIRONMENT VARIABLES ###################
 dotenv.load_dotenv() # Loading env variables using dotenv
 new_response = {
@@ -321,9 +321,17 @@ def completion(
       headers = {"Authorization": f"Bearer {TOGETHER_AI_TOKEN}"}
       endpoint = 'https://api.together.xyz/inference'
       prompt = " ".join([message["content"] for message in messages]) # TODO: Add chat support for together AI
-      
+
       ## LOGGING
       logging(model=model, input=prompt, custom_llm_provider=custom_llm_provider, logger_fn=logger_fn)
+      if stream == True or optional_params['stream_tokens'] == True:
+        return together_ai_completion_streaming({
+          "model": model,
+          "prompt": prompt,
+          "request_type": "language-model-inference",
+          **optional_params
+        },
+        headers=headers)
       res = requests.post(endpoint, json={
           "model": model,
           "prompt": prompt,
@@ -334,9 +342,6 @@ def completion(
       )
       ## LOGGING
       logging(model=model, input=prompt, custom_llm_provider=custom_llm_provider, additional_args={"max_tokens": max_tokens, "original_response": res.text}, logger_fn=logger_fn)
-      if stream == True:
-        response = CustomStreamWrapper(res, "together_ai")
-        return response
 
       completion_response = res.json()['output']['choices'][0]['text']
       prompt_tokens = len(encoding.encode(prompt))
