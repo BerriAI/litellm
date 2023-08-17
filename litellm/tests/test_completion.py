@@ -202,18 +202,7 @@ def test_completion_together_ai():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-def test_completion_together_ai_stream():
-    model_name = "togethercomputer/llama-2-70b-chat"
-    try:
-        response = completion(model=model_name, messages=messages, custom_llm_provider="together_ai", stream=True)
-        # Add any assertions here to check the response
-        print(response)
-        for chunk in response:
-            print(chunk['choices'][0]['delta']) # same as openai format
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
-test_completion_together_ai_stream()
 def test_petals():
     model_name = "stabilityai/StableBeluga2"
     try:
@@ -294,20 +283,20 @@ def test_petals():
 #         pytest.fail(f"Error occurred: {e}")
 
 
-# import asyncio
-# def test_completion_together_ai_stream():
-#     try:
-#         response = completion(model="togethercomputer/llama-2-70b-chat", messages=messages, custom_llm_provider="together_ai", stream=True, max_tokens=200)
-#         print(response)
-#         asyncio.run(get_response(response))
-#         # print(string_response)
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
+import asyncio
+def test_completion_together_ai_stream():
+    try:
+        response = completion(model="togethercomputer/llama-2-70b-chat", messages=messages, custom_llm_provider="together_ai", stream=True, max_tokens=200)
+        print(response)
+        asyncio.run(get_response(response))
+        # print(string_response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 
-# async def get_response(generator):
-#     async for elem in generator:
-#         print(elem)
-#     return
+async def get_response(generator):
+    async for elem in generator:
+        print(elem)
+    return
 
 
