@@ -94,7 +94,8 @@ Here are some examples of supported models:
 ### Together AI Models
 liteLLM supports `non-streaming` and `streaming` requests to all models on https://api.together.xyz/
 
-# Example TogetherAI Usage - Note: liteLLM supports all models deployed on TogetherAI
+Example TogetherAI Usage - Note: liteLLM supports all models deployed on TogetherAI
+
 | Model Name                        | Function Call                                                          | Required OS Variables           |
 |-----------------------------------|------------------------------------------------------------------------|---------------------------------|
 | togethercomputer/llama-2-70b-chat  | `completion('togethercomputer/llama-2-70b-chat', messages)`            | `os.environ['TOGETHERAI_API_KEY']` |
@@ -107,7 +108,8 @@ liteLLM supports `non-streaming` and `streaming` requests to all models on https
 ### Baseten Models
 Baseten provides infrastructure to deploy and serve ML models https://www.baseten.co/. Use liteLLM to easily call models deployed on Baseten.
 
-# Example Baseten Usage - Note: liteLLM supports all models deployed on Basten
+Example Baseten Usage - Note: liteLLM supports all models deployed on Basten
+
 | Model Name       | Function Call                                  | Required OS Variables              |
 |------------------|--------------------------------------------|------------------------------------|
 | Falcon 7B        | `completion(model='<your model version id>', messages=messages, custom_llm_provider="baseten")`         | `os.environ['BASETEN_API_KEY']`     |
