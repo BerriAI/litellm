@@ -137,6 +137,36 @@ def client(original_function):
            #[Non-Blocking Error]
            pass
 
+    def get_prompt(*args, **kwargs):
+      # make this safe checks, it should not throw any exceptions
+      if len(args) > 1:
+        messages = args[1]
+        prompt = " ".join(message["content"] for message in messages) 
+        return prompt
+      if "messages" in kwargs:
+        messages = kwargs["messages"]
+        prompt = " ".join(message["content"] for message in messages) 
+        return prompt
+      return None
+
+    def check_cache(*args, **kwargs):
+      try: # never block execution
+        prompt = get_prompt(*args, **kwargs)
+        if prompt != None and prompt in local_cache: # check if messages / prompt exists
+          result = local_cache[prompt]
+          return result
+        else:
+          return None
+      except:
+        return None
+ 
+    def add_cache(result, *args, **kwargs):
+      try: # never block execution
+        prompt = get_prompt(*args, **kwargs)
+        local_cache[prompt] = result
+      except:
+        pass
+
     def wrapper(*args, **kwargs):
         start_time = None
         result = None
@@ -144,17 +174,14 @@ def client(original_function):
           function_setup(*args, **kwargs)
           ## MODEL CALL
           start_time = datetime.datetime.now()
-          ## CHECK CACHE RESPONSES 
-          messages = args[1] if len(args) > 1 else kwargs["messages"]
-          prompt = " ".join(message["content"] for message in messages) 
-          if litellm.caching and prompt in local_cache:
-            result = local_cache[prompt]
+          if litellm.caching and (cached_result := check_cache(*args, **kwargs)) is not None:
+              result = cached_result
           else:
-            result = original_function(*args, **kwargs)
+              result = original_function(*args, **kwargs)
           end_time = datetime.datetime.now()
-          ## CACHE RESPONSES 
+          ## Add response to CACHE 
           if litellm.caching:
-            local_cache[prompt] = result
+            add_cache(result, *args, **kwargs)
           ## LOG SUCCESS 
           crash_reporting(*args, **kwargs)
           my_thread = threading.Thread(target=handle_success, args=(args, kwargs, result, start_time, end_time)) # don't interrupt execution of main thread
