@@ -40,11 +40,11 @@ def test_context_window(model):
         print(f"model: {model}")
         response = completion(model=model, messages=messages, custom_llm_provider="azure", logger_fn=logging_fn)
         print(f"response: {response}")
-    except InvalidRequestError:
-        print("InvalidRequestError")
+    except InvalidRequestError as e:
+        print(f"InvalidRequestError: {e.llm_provider}")
         return
-    except OpenAIError:
-        print("OpenAIError")
+    except OpenAIError as e:
+        print(f"OpenAIError: {e.llm_provider}")
         return
     except Exception as e:
         print("Uncaught Error in test_context_window")
@@ -81,7 +81,7 @@ def invalid_auth(model): # set the model key to an invalid key, depending on the
         response = completion(model=model, messages=messages, custom_llm_provider=custom_llm_provider)
         print(f"response: {response}")
     except AuthenticationError as e:
-        print(f"AuthenticationError Caught Exception - {e}")
+        print(f"AuthenticationError Caught Exception - {e.llm_provider}")
     except OpenAIError: # is at least an openai error -> in case of random model errors - e.g. overloaded server
         print(f"OpenAIError Caught Exception - {e}")
     except Exception as e:
