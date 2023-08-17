@@ -15,7 +15,6 @@ from litellm.utils import get_secret, install_and_import, CustomStreamWrapper, M
 from litellm.utils import get_ollama_response_stream, stream_to_string, together_ai_completion_streaming
 ####### ENVIRONMENT VARIABLES ###################
 dotenv.load_dotenv() # Loading env variables using dotenv
-# TODO add translations
 ####### COMPLETION ENDPOINTS ################
 #############################################
 async def acompletion(*args, **kwargs):
