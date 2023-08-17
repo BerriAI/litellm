@@ -21,10 +21,11 @@ class AnthropicLLM:
         self.encoding = encoding
         self.default_max_tokens_to_sample = default_max_tokens_to_sample
         self.completion_url = "https://api.anthropic.com/v1/complete"
+        self.api_key = api_key
         self.validate_environment(api_key=api_key)
     
     def validate_environment(self, api_key): # set up the environment required to run the model 
-        # set the api key 
+        # set the api key
         if self.api_key == None:
             raise ValueError("Missing Anthropic API Key - A call is being made to anthropic but no key is set either in the environment variables or via params")
         self.api_key = api_key
