@@ -21,19 +21,15 @@ const sidebars = {
     'index',
     {
       type: 'category',
-      label: 'completion_function',
+      label: 'Completion()',
       items: ['completion/input','completion/output'],
     },
     {
       type: 'category',
-      label: 'embedding_function',
+      label: 'Embedding()',
       items: ['embedding/supported_embedding'],
     },
-    {
-      type: 'category',
-      label: 'Supported Chat, Completion Models',
-      items: ['completion/supported'],
-    },
+    'completion/supported',
     {
       type: 'category',
       label: 'Tutorials',
