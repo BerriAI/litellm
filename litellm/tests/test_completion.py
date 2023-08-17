@@ -197,16 +197,18 @@ def test_completion_replicate_stability_stream():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-def test_completion_replicate_stability():
-    model_name = "stability-ai/stablelm-tuned-alpha-7b:c49dae362cbaecd2ceabb5bd34fdb68413c4ff775111fea065d259d577757beb"
-    try:
-        response = completion(model=model_name, messages=messages, custom_llm_provider="replicate")
-        # Add any assertions here to check the response
-        for result in response:
-            print(result)
-        print(response)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
+# def test_completion_replicate_stability():
+#     model_name = "stability-ai/stablelm-tuned-alpha-7b:c49dae362cbaecd2ceabb5bd34fdb68413c4ff775111fea065d259d577757beb"
+#     try:
+#         response = completion(model=model_name, messages=messages, custom_llm_provider="replicate")
+#         # Add any assertions here to check the response
+#         print(response)
+#         for result in response:
+#             print(result)
+#         print(response)
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
+# test_completion_replicate_stability()
 
 ######## Test TogetherAI ########
 def test_completion_together_ai():

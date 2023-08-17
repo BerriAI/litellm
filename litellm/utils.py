@@ -68,10 +68,22 @@ class ModelResponse:
         }
 
     def __getitem__(self, key):
-        return getattr(self, key)
+      return getattr(self, key)
 
     def __setitem__(self, key, value):
-        setattr(self, key, value)
+      setattr(self, key, value)
+
+    def __iter__(self):
+        return iter(vars(self))
+
+    def __str__(self):
+      result = f"""
+                {self.choices}\n
+                {self.created}\n
+                {self.model}\n
+                {self.usage}\n
+                """
+      return result
 
 
 def print_verbose(print_statement):
