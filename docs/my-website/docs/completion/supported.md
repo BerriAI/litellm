@@ -136,6 +136,7 @@ All the text models from [OpenRouter](https://openrouter.ai/docs) are supported 
 
 ### Petals Models
 Supported models on https://chat.petals.dev/
+
 | Model Name           | Function Call                                                          | Required OS Variables          |
 |----------------------|------------------------------------------------------------------------|--------------------------------|
 | stabilityai/StableBeluga2 | `completion(model='stabilityai/StableBeluga2', messages, custom_llm_provider="petals")` | No API Key required          |
