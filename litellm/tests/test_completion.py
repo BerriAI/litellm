@@ -119,6 +119,14 @@ def test_completion_openai_with_more_optional_params():
         response = completion(model="gpt-3.5-turbo", messages=messages, temperature=0.5, top_p=0.1, n=2, max_tokens=150, presence_penalty=0.5, frequency_penalty=-0.5, logit_bias={123: 5}, user="ishaan_dev@berri.ai")
         # Add any assertions here to check the response
         print(response)
+        response_str = response['choices'][0]['message']['content']
+        response_str_2 = response.choices[0].message.content
+        print(response['choices'][0]['message']['content'])
+        print(response.choices[0].message.content)
+        if type(response_str) != str:
+            pytest.fail(f"Error occurred: {e}")
+        if type(response_str_2) != str:
+            pytest.fail(f"Error occurred: {e}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
