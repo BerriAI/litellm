@@ -24,7 +24,7 @@ Here's the exact json output and type you can expect from all litellm `completio
 
 ```
 
-Here's what an example liteLLMresponse looks like 
+Here's what an example response looks like 
 ```python
 {
   'choices': [
