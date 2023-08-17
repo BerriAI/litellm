@@ -51,7 +51,6 @@ headers = None
 api_version = None
 organization = None
 config_path = None
-api_type = None
 ####### Secret Manager #####################
 secret_manager_client = None
 ####### COMPLETION MODELS ###################
