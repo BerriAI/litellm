@@ -5,8 +5,7 @@ import litellm, openai
 import random, uuid, requests
 import datetime, time
 import tiktoken
-import pkg_resources
-from pkg_resources import DistributionNotFound, VersionConflict
+from importlib_metadata import DistributionNotFound, VersionConflict
 encoding = tiktoken.get_encoding("cl100k_base")
 from .integrations.helicone import HeliconeLogger
 from .integrations.aispend import AISpendLogger
