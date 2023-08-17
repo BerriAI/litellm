@@ -5,6 +5,7 @@ import litellm, openai
 import random, uuid, requests
 import datetime, time
 import tiktoken
+from pkg_resources import DistributionNotFound, VersionConflict
 encoding = tiktoken.get_encoding("cl100k_base")
 from .integrations.helicone import HeliconeLogger
 from .integrations.aispend import AISpendLogger
@@ -12,6 +13,7 @@ from .integrations.berrispend import BerriSpendLogger
 from .integrations.supabase import Supabase
 from openai.error import OpenAIError as OriginalError
 from .exceptions import AuthenticationError, InvalidRequestError, RateLimitError, ServiceUnavailableError, OpenAIError
+from typing import List, Dict, Union
 ####### ENVIRONMENT VARIABLES ###################
 dotenv.load_dotenv() # Loading env variables using dotenv
 sentry_sdk_instance = None
@@ -48,20 +50,49 @@ local_cache = {}
 #  'usage': {'prompt_tokens': 18, 'completion_tokens': 23, 'total_tokens': 41}
 # }
 
+class Message:
+    def __init__(self):
+        self.content: str = "default"
+        self.role: str = "assistant"
+
+    def __getitem__(self, key):
+      return getattr(self, key)
+
+    def __setitem__(self, key, value):
+      setattr(self, key, value)
+
+    def __iter__(self):
+        return iter(vars(self))
+
+    def __str__(self):
+        result = f"{{\n  'role': '{self.role}',\n  'content': \"{self.content}\"\n}}"
+        return result
+
+class Choices:
+    def __init__(self):
+        self.finish_reason: str = "stop"
+        self.index: int = 0
+        self.message: Message = Message()
+
+    def __getitem__(self, key):
+      return getattr(self, key)
+
+    def __setitem__(self, key, value):
+      setattr(self, key, value)
+
+    def __iter__(self):
+        return iter(vars(self))
+
+    def __str__(self):
+        result = f"{{\n  'finish_reason': '{self.finish_reason}',\n  'index': {self.index},\n  'message': {self.message}\n}}"
+        return result
+
 class ModelResponse:
     def __init__(self):
-        self.choices = [
-          {
-            "finish_reason": "stop",
-            "index": 0,
-            "message": {
-                "role": "assistant"
-            }
-          }
-        ]
-        self.created = None
-        self.model = None
-        self.usage = {
+        self.choices: List[Choices] = [Choices()]
+        self.created: str = None
+        self.model: str = None
+        self.usage: Dict[str, Union[int, None]] = {
             "prompt_tokens": None,
             "completion_tokens": None,
             "total_tokens": None
@@ -77,14 +108,9 @@ class ModelResponse:
         return iter(vars(self))
 
     def __str__(self):
-      result = f"""
-                {self.choices}\n
-                {self.created}\n
-                {self.model}\n
-                {self.usage}\n
-                """
+      choices_str = ",\n".join(str(choice) for choice in self.choices)
+      result = f"{{\n  'choices': [\n{choices_str}\n  ],\n  'created': {self.created},\n  'model': '{self.model}',\n  'usage': {self.usage}\n}}"
       return result
-
 
 def print_verbose(print_statement):
   if litellm.set_verbose:
