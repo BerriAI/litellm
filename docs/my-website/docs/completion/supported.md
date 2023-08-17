@@ -133,3 +133,26 @@ All the text models from [OpenRouter](https://openrouter.ai/docs) are supported 
 | google/palm-2-codechat-bison | `completion('google/palm-2-codechat-bison', messages)` | `os.environ['OR_SITE_URL']`,`os.environ['OR_APP_NAME']`,`os.environ['OPENROUTER_API_KEY']`       |
 | meta-llama/llama-2-13b-chat | `completion('meta-llama/llama-2-13b-chat', messages)` | `os.environ['OR_SITE_URL']`,`os.environ['OR_APP_NAME']`,`os.environ['OPENROUTER_API_KEY']`       |
 | meta-llama/llama-2-70b-chat | `completion('meta-llama/llama-2-70b-chat', messages)` | `os.environ['OR_SITE_URL']`,`os.environ['OR_APP_NAME']`,`os.environ['OPENROUTER_API_KEY']`       |
+
+### Petals Models
+Supported models on https://chat.petals.dev/
+| Model Name           | Function Call                                                          | Required OS Variables          |
+|----------------------|------------------------------------------------------------------------|--------------------------------|
+| stabilityai/StableBeluga2 | `completion(model='stabilityai/StableBeluga2', messages, custom_llm_provider="petals")` | No API Key required          |
+| enoch/llama-65b-hf   | `completion(model='enoch/llama-65b-hf', messages, custom_llm_provider="petals")` | No API Key required          |
+| bigscience/bloomz    | `completion(model='bigscience/bloomz', messages, custom_llm_provider="petals")` | No API Key required          |
+
+### Ollama Models
+Ollama supported models: https://github.com/jmorganca/ollama
+
+| Model Name           | Function Call                                                                     | Required OS Variables          |
+|----------------------|-----------------------------------------------------------------------------------|--------------------------------|
+| Llama2 7B            | `completion(model='llama2', messages, custom_api_base="http://localhost:11434", custom_llm_provider="ollama", stream=True)` | No API Key required |
+| Llama2 13B           | `completion(model='llama2:13b', messages, custom_api_base="http://localhost:11434", custom_llm_provider="ollama", stream=True)` | No API Key required |
+| Llama2 70B           | `completion(model='llama2:70b', messages, custom_api_base="http://localhost:11434", custom_llm_provider="ollama", stream=True)` | No API Key required |
+| Llama2 Uncensored    | `completion(model='llama2-uncensored', messages, custom_api_base="http://localhost:11434", custom_llm_provider="ollama", stream=True)` | No API Key required |
+| Orca Mini            | `completion(model='orca-mini', messages, custom_api_base="http://localhost:11434", custom_llm_provider="ollama", stream=True)` | No API Key required |
+| Vicuna               | `completion(model='vicuna', messages, custom_api_base="http://localhost:11434", custom_llm_provider="ollama", stream=True)` | No API Key required |
+| Nous-Hermes          | `completion(model='nous-hermes', messages, custom_api_base="http://localhost:11434", custom_llm_provider="ollama", stream=True)` | No API Key required |
+| Nous-Hermes 13B      | `completion(model='nous-hermes:13b', messages, custom_api_base="http://localhost:11434", custom_llm_provider="ollama", stream=True)` | No API Key required |
+| Wizard Vicuna Uncensored | `completion(model='wizard-vicuna', messages, custom_api_base="http://localhost:11434", custom_llm_provider="ollama", stream=True)` | No API Key required |
