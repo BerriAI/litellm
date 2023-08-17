@@ -1,20 +1,25 @@
 # Output Format - completion()
-Here's the exact json output you can expect from all litellm `completion` calls for all models
+Here's the exact json output and type you can expect from all litellm `completion` calls for all models
 
 ```python 
 {
   'choices': [
-     {
-        'finish_reason': 'stop',
-        'index': 0,
-        'message': {
-           'role': 'assistant',
-            'content': " I'm doing well, thank you for asking. I am Claude, an AI assistant created by Anthropic."
-        }
+    {
+      'finish_reason': str,       # String: 'stop'
+      'index': int,               # Integer: 0
+      'message': {                # Dictionary [str, str]
+        'role': str,              # String: 'assistant'
+        'content': str            # String: "default message"
       }
-    ],
- 'created': 1691429984.3852863,
- 'model': 'claude-instant-1',
- 'usage': {'prompt_tokens': 18, 'completion_tokens': 23, 'total_tokens': 41}
+    }
+  ],
+  'created': str,               # String: None
+  'model': str,                 # String: None
+  'usage': {                    # Dictionary [str, int]
+    'prompt_tokens': int,       # Integer
+    'completion_tokens': int,   # Integer
+    'total_tokens': int         # Integer
+  }
 }
+
 ```
