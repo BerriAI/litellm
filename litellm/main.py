@@ -265,8 +265,8 @@ def completion(
                     or api_key
                     or litellm.replicate_key
                 )
-                # set replicate kye
-                os.environ["REPLICATE_API_TOKEN"] = replicate_key
+                # set replicate key
+                os.environ["REPLICATE_API_TOKEN"]: str = replicate_key
             prompt = " ".join([message["content"] for message in messages])
             input = {"prompt": prompt}
             if "max_tokens" in optional_params:

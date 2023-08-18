@@ -21,7 +21,7 @@ from .exceptions import (
     ServiceUnavailableError,
     OpenAIError,
 )
-from typing import List, Dict, Union
+from typing import List, Dict, Union, Optional
 
 ####### ENVIRONMENT VARIABLES ###################
 dotenv.load_dotenv()  # Loading env variables using dotenv
@@ -35,10 +35,10 @@ heliconeLogger = None
 aispendLogger = None
 berrispendLogger = None
 supabaseClient = None
-callback_list = []
+callback_list: Optional[List[str]] = []
 user_logger_fn = None
-additional_details = {}
-local_cache = {}
+additional_details: Optional[Dict[str, str]] = {}
+local_cache: Optional[Dict[str, str]] = {}
 
 ######## Model Response #########################
 # All liteLLM Model responses will be in this format, Follows the OpenAI Format

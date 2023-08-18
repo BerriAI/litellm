@@ -22,7 +22,7 @@ messages = [{"content": user_message, "role": "user"}]
 
 ## Test 1: Setting key dynamically
 temp_key = os.environ.get("ANTHROPIC_API_KEY")
-os.environ["ANTHROPIC_API_KEY"] = "bad-key"
+os.environ["ANTHROPIC_API_KEY"]: str = "bad-key"
 # test on openai completion call
 try:
     response = completion(
@@ -39,7 +39,7 @@ os.environ["ANTHROPIC_API_KEY"] = temp_key
 
 
 ## Test 2: Setting key via __init__ params
-litellm.anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
+litellm.anthropic_key: str = os.environ.get("ANTHROPIC_API_KEY")
 os.environ.pop("ANTHROPIC_API_KEY")
 # test on openai completion call
 try:

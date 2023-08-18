@@ -101,7 +101,7 @@ def duration_test_model(original_function):
 
 
 @duration_test_model
-def load_test_model(models: list, prompt: str = None, num_calls: int = None):
+def load_test_model(models: list, prompt: str = "", num_calls: int = 0):
     test_calls = 100
     if num_calls:
         test_calls = num_calls
