@@ -6,6 +6,7 @@ from litellm import logging
 import time
 from typing import Callable
 from litellm.utils import ModelResponse
+from typing import Optional
 
 
 class HuggingfaceError(Exception):
@@ -45,7 +46,7 @@ class HuggingfaceRestAPILLM:
         logger_fn=None,
     ):  # logic for parsing in - calling - parsing out model completion calls
         if custom_api_base:
-            completion_url = custom_api_base
+            completion_url: Optional[str] = custom_api_base
         elif "HF_API_BASE" in os.environ:
             completion_url = os.getenv("HF_API_BASE")
         else:
@@ -136,5 +137,5 @@ class HuggingfaceRestAPILLM:
             return model_response
         pass
 
-    def embedding():  # logic for parsing in - calling - parsing out model embedding calls
+    def embedding(self):  # logic for parsing in - calling - parsing out model embedding calls
         pass

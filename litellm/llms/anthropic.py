@@ -141,5 +141,5 @@ class AnthropicLLM:
             }
             return model_response
 
-    def embedding():  # logic for parsing in - calling - parsing out model embedding calls
+    def embedding(self):  # logic for parsing in - calling - parsing out model embedding calls
         pass
