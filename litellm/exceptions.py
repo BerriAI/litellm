@@ -8,7 +8,7 @@ from openai.error import (
 )
 
 
-class AuthenticationError(AuthenticationError):
+class AuthenticationError(AuthenticationError): # type: ignore
     def __init__(self, message, llm_provider):
         self.status_code = 401
         self.message = message
@@ -18,7 +18,7 @@ class AuthenticationError(AuthenticationError):
         )  # Call the base class constructor with the parameters it needs
 
 
-class InvalidRequestError(InvalidRequestError):
+class InvalidRequestError(InvalidRequestError): # type: ignore
     def __init__(self, message, model, llm_provider):
         self.status_code = 400
         self.message = message
@@ -29,7 +29,7 @@ class InvalidRequestError(InvalidRequestError):
         )  # Call the base class constructor with the parameters it needs
 
 
-class RateLimitError(RateLimitError):
+class RateLimitError(RateLimitError): # type: ignore
     def __init__(self, message, llm_provider):
         self.status_code = 429
         self.message = message
@@ -39,7 +39,7 @@ class RateLimitError(RateLimitError):
         )  # Call the base class constructor with the parameters it needs
 
 
-class ServiceUnavailableError(ServiceUnavailableError):
+class ServiceUnavailableError(ServiceUnavailableError): # type: ignore
     def __init__(self, message, llm_provider):
         self.status_code = 500
         self.message = message
@@ -49,7 +49,7 @@ class ServiceUnavailableError(ServiceUnavailableError):
         )  # Call the base class constructor with the parameters it needs
 
 
-class OpenAIError(OpenAIError):
+class OpenAIError(OpenAIError): # type: ignore
     def __init__(self, original_exception):
         self.status_code = original_exception.http_status
         super().__init__(
