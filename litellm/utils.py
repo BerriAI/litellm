@@ -440,7 +440,7 @@ def set_callbacks(callback_list):
   global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient
   try:
     for callback in callback_list:
-      if callback == "sentry":
+      if callback == "sentry" or "SENTRY_API_URL" in os.environ:
         try:
             import sentry_sdk
         except ImportError:
@@ -449,7 +449,7 @@ def set_callbacks(callback_list):
             import sentry_sdk
         sentry_sdk_instance = sentry_sdk
         sentry_trace_rate = os.environ.get("SENTRY_API_TRACE_RATE") if "SENTRY_API_TRACE_RATE" in os.environ else "1.0"
-        sentry_sdk_instance.init(dsn=os.environ.get("SENTRY_API_URL"), traces_sample_rate=float(os.environ.get("SENTRY_API_TRACE_RATE")))
+        sentry_sdk_instance.init(dsn=os.environ.get("SENTRY_API_URL"), traces_sample_rate=float(sentry_trace_rate))
         capture_exception = sentry_sdk_instance.capture_exception
         add_breadcrumb = sentry_sdk_instance.add_breadcrumb 
       elif callback == "posthog":
