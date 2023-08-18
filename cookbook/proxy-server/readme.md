@@ -156,3 +156,11 @@ This project includes a `Dockerfile` allowing you to build and deploy a Docker P
 - Our emails ✉️ ishaan@berri.ai / krrish@berri.ai
 
 
+## Roadmap
+- [ ] Support hosted db (e.g. Supabase)
+- [ ] Easily send data to places like posthog and sentry.
+- [ ] Add a hot-cache for project spend logs - enables fast checks for user + project limitings
+- [ ] Implement user-based rate-limiting
+- [ ] Spending controls per project - expose key creation endpoint
+- [ ] Need to store a keys db -> mapping created keys to their alias (i.e. project name)
+- [ ] Easily add new models as backups / as the entry-point (add this to the available model list)
