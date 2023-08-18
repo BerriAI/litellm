@@ -93,7 +93,6 @@ def completion(
         openai.organization = litellm.organization
       # set API KEY
       openai.api_key = api_key or litellm.openai_key or get_secret("OPENAI_API_KEY")
-      print(f"value of set openai key {openai.api_key}")
 
       ## LOGGING
       logging(model=model, input=messages, additional_args=args, custom_llm_provider=custom_llm_provider, logger_fn=logger_fn)
