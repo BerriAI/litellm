@@ -392,7 +392,7 @@ def get_optional_params(
     if stream:
       optional_params["stream"] = stream
       return optional_params
-  elif custom_llm_provider == "together_ai":
+  elif custom_llm_provider == "together_ai" or ("togethercomputer" in model):
       if stream:
         optional_params["stream_tokens"] = stream
       if temperature != 1:
@@ -897,7 +897,7 @@ class CustomStreamWrapper:
         elif self.model == "replicate":
            chunk = next(self.completion_stream)
            completion_obj["content"] = chunk
-        elif self.model == "together_ai":
+        elif (self.model == "together_ai") or ("togethercomputer" in self.model):
           chunk = next(self.completion_stream)
           text_data =  self.handle_together_ai_chunk(chunk)
           if text_data == "":
