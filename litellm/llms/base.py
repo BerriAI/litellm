@@ -5,8 +5,12 @@ class BaseLLM:
     def validate_environment(self):  # set up the environment required to run the model
         pass
 
-    def completion(self):  # logic for parsing in - calling - parsing out model completion calls
+    def completion(
+        self,
+    ):  # logic for parsing in - calling - parsing out model completion calls
         pass
 
-    def embedding(self):  # logic for parsing in - calling - parsing out model embedding calls
+    def embedding(
+        self,
+    ):  # logic for parsing in - calling - parsing out model embedding calls
         pass

@@ -45,10 +45,11 @@ class HuggingfaceRestAPILLM:
         litellm_params=None,
         logger_fn=None,
     ):  # logic for parsing in - calling - parsing out model completion calls
+        completion_url: str = ""
         if custom_api_base:
-            completion_url: Optional[str] = custom_api_base
+            completion_url = custom_api_base
         elif "HF_API_BASE" in os.environ:
-            completion_url = os.getenv("HF_API_BASE")
+            completion_url = os.getenv("HF_API_BASE", "")
         else:
             completion_url = f"https://api-inference.huggingface.co/models/{model}"
         prompt = ""
@@ -137,5 +138,7 @@ class HuggingfaceRestAPILLM:
             return model_response
         pass
 
-    def embedding(self):  # logic for parsing in - calling - parsing out model embedding calls
+    def embedding(
+        self,
+    ):  # logic for parsing in - calling - parsing out model embedding calls
         pass

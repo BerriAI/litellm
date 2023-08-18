@@ -1,24 +1,25 @@
 import threading
+from typing import Callable, List, Optional
 
-success_callback = []
-failure_callback = []
+success_callback: List[str] = []
+failure_callback: List[str] = []
 set_verbose = False
 telemetry = True
 max_tokens = 256  # OpenAI Defaults
 retry = True
-api_key = None
-openai_key = None
-azure_key = None
-anthropic_key = None
-replicate_key = None
-cohere_key = None
-openrouter_key = None
-huggingface_key = None
-vertex_project = None
-vertex_location = None
+api_key: Optional[str] = None
+openai_key: Optional[str] = None
+azure_key: Optional[str] = None
+anthropic_key: Optional[str] = None
+replicate_key: Optional[str] = None
+cohere_key: Optional[str] = None
+openrouter_key: Optional[str] = None
+huggingface_key: Optional[str] = None
+vertex_project: Optional[str] = None
+vertex_location: Optional[str] = None
+hugging_api_token: Optional[str] = None
+togetherai_api_key: Optional[str] = None
 caching = False
-hugging_api_token = None
-togetherai_api_key = None
 model_cost = {
     "gpt-3.5-turbo": {
         "max_tokens": 4000,
@@ -223,7 +224,7 @@ from .utils import (
     completion_cost,
     get_litellm_params,
 )
-from .main import *  # Import all the symbols from main.py
+from .main import *  # type: ignore
 from .integrations import *
 from openai.error import (
     AuthenticationError,

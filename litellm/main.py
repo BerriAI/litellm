@@ -4,7 +4,7 @@ from functools import partial
 import dotenv, traceback, random, asyncio, time
 from copy import deepcopy
 import litellm
-from litellm import (
+from litellm import (  # type: ignore
     client,
     logging,
     exception_type,
@@ -55,7 +55,7 @@ async def acompletion(*args, **kwargs):
 
 @client
 # @retry(wait=wait_random_exponential(min=1, max=60), stop=stop_after_attempt(2), reraise=True, retry_error_callback=lambda retry_state: setattr(retry_state.outcome, 'retry_variable', litellm.retry)) # retry call, turn this off by setting `litellm.retry = False`
-@timeout(
+@timeout(  # type: ignore
     600
 )  ## set timeouts, in case calls hang (e.g. Azure) - default is 60s, override with `force_timeout`
 def completion(
@@ -266,7 +266,7 @@ def completion(
                     or litellm.replicate_key
                 )
                 # set replicate key
-                os.environ["REPLICATE_API_TOKEN"]: str = replicate_key
+                os.environ["REPLICATE_API_TOKEN"] = str(replicate_key)
             prompt = " ".join([message["content"] for message in messages])
             input = {"prompt": prompt}
             if "max_tokens" in optional_params:
@@ -807,7 +807,7 @@ def batch_completion(*args, **kwargs):
 
 ### EMBEDDING ENDPOINTS ####################
 @client
-@timeout(
+@timeout(  # type: ignore
     60
 )  ## set timeouts, in case calls hang (e.g. Azure) - default is 60s, override with `force_timeout`
 def embedding(model, input=[], azure=False, force_timeout=60, logger_fn=None):
