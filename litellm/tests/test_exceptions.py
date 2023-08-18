@@ -1,10 +1,21 @@
 # from openai.error import AuthenticationError, InvalidRequestError, RateLimitError, OpenAIError
-import os 
+import os
 import sys
 import traceback
-sys.path.insert(0, os.path.abspath('../..'))  # Adds the parent directory to the system path
+
+sys.path.insert(
+    0, os.path.abspath("../..")
+)  # Adds the parent directory to the system path
 import litellm
-from litellm import embedding, completion, AuthenticationError, InvalidRequestError, RateLimitError, ServiceUnavailableError, OpenAIError
+from litellm import (
+    embedding,
+    completion,
+    AuthenticationError,
+    InvalidRequestError,
+    RateLimitError,
+    ServiceUnavailableError,
+    OpenAIError,
+)
 from concurrent.futures import ThreadPoolExecutor
 import pytest
 
@@ -23,8 +34,10 @@ litellm.failure_callback = ["sentry"]
 # models = ["gpt-3.5-turbo", "chatgpt-test",  "claude-instant-1", "command-nightly"]
 test_model = "claude-instant-1"
 models = ["claude-instant-1"]
+
+
 def logging_fn(model_call_dict):
-    if "model" in model_call_dict: 
+    if "model" in model_call_dict:
         print(f"model_call_dict: {model_call_dict['model']}")
     else:
         print(f"model_call_dict: {model_call_dict}")
@@ -38,7 +51,12 @@ def test_context_window(model):
     try:
         model = "chatgpt-test"
         print(f"model: {model}")
-        response = completion(model=model, messages=messages, custom_llm_provider="azure", logger_fn=logging_fn)
+        response = completion(
+            model=model,
+            messages=messages,
+            custom_llm_provider="azure",
+            logger_fn=logging_fn,
+        )
         print(f"response: {response}")
     except InvalidRequestError as e:
         print(f"InvalidRequestError: {e.llm_provider}")
@@ -52,14 +70,17 @@ def test_context_window(model):
         print(f"Uncaught Exception - {e}")
         pytest.fail(f"Error occurred: {e}")
     return
+
+
 test_context_window(test_model)
+
 
 # Test 2: InvalidAuth Errors
 @pytest.mark.parametrize("model", models)
-def invalid_auth(model): # set the model key to an invalid key, depending on the model 
-    messages = [{ "content": "Hello, how are you?","role": "user"}]
+def invalid_auth(model):  # set the model key to an invalid key, depending on the model
+    messages = [{"content": "Hello, how are you?", "role": "user"}]
     temporary_key = None
-    try: 
+    try:
         custom_llm_provider = None
         if model == "gpt-3.5-turbo":
             temporary_key = os.environ["OPENAI_API_KEY"]
@@ -74,22 +95,29 @@ def invalid_auth(model): # set the model key to an invalid key, depending on the
         elif model == "command-nightly":
             temporary_key = os.environ["COHERE_API_KEY"]
             os.environ["COHERE_API_KEY"] = "bad-key"
-        elif model == "replicate/llama-2-70b-chat:2c1608e18606fad2812020dc541930f2d0495ce32eee50074220b87300bc16e1":
-            temporary_key = os.environ["REPLICATE_API_KEY"] 
+        elif (
+            model
+            == "replicate/llama-2-70b-chat:2c1608e18606fad2812020dc541930f2d0495ce32eee50074220b87300bc16e1"
+        ):
+            temporary_key = os.environ["REPLICATE_API_KEY"]
             os.environ["REPLICATE_API_KEY"] = "bad-key"
         print(f"model: {model}")
-        response = completion(model=model, messages=messages, custom_llm_provider=custom_llm_provider)
+        response = completion(
+            model=model, messages=messages, custom_llm_provider=custom_llm_provider
+        )
         print(f"response: {response}")
     except AuthenticationError as e:
         print(f"AuthenticationError Caught Exception - {e.llm_provider}")
-    except OpenAIError: # is at least an openai error -> in case of random model errors - e.g. overloaded server
+    except (
+        OpenAIError
+    ):  # is at least an openai error -> in case of random model errors - e.g. overloaded server
         print(f"OpenAIError Caught Exception - {e}")
     except Exception as e:
         print(type(e))
         print(e.__class__.__name__)
         print(f"Uncaught Exception - {e}")
         pytest.fail(f"Error occurred: {e}")
-    if temporary_key != None: # reset the key
+    if temporary_key != None:  # reset the key
         if model == "gpt-3.5-turbo":
             os.environ["OPENAI_API_KEY"] = temporary_key
         elif model == "chatgpt-test":
@@ -99,13 +127,18 @@ def invalid_auth(model): # set the model key to an invalid key, depending on the
             os.environ["ANTHROPIC_API_KEY"] = temporary_key
         elif model == "command-nightly":
             os.environ["COHERE_API_KEY"] = temporary_key
-        elif model == "replicate/llama-2-70b-chat:2c1608e18606fad2812020dc541930f2d0495ce32eee50074220b87300bc16e1":
+        elif (
+            model
+            == "replicate/llama-2-70b-chat:2c1608e18606fad2812020dc541930f2d0495ce32eee50074220b87300bc16e1"
+        ):
             os.environ["REPLICATE_API_KEY"] = temporary_key
     return
+
+
 invalid_auth(test_model)
-# # Test 3: Rate Limit Errors 
+# # Test 3: Rate Limit Errors
 # def test_model(model):
-#     try: 
+#     try:
 #         sample_text = "how does a court case get to the Supreme Court?" * 50000
 #         messages = [{ "content": sample_text,"role": "user"}]
 #         custom_llm_provider = None
@@ -142,5 +175,3 @@ invalid_auth(test_model)
 
 # accuracy_score = counts[True]/(counts[True] + counts[False])
 # print(f"accuracy_score: {accuracy_score}")
-
-

@@ -3,9 +3,13 @@
 
 import sys, os
 import traceback
-sys.path.insert(0, os.path.abspath('../..'))  # Adds the parent directory to the system path
+
+sys.path.insert(
+    0, os.path.abspath("../..")
+)  # Adds the parent directory to the system path
 import time
 from litellm import timeout
+
 
 @timeout(10)
 def stop_after_10_s(force_timeout=60):
@@ -14,13 +18,13 @@ def stop_after_10_s(force_timeout=60):
     return
 
 
-start_time = time.time() 
+start_time = time.time()
 
 try:
-  stop_after_10_s(force_timeout=1)
+    stop_after_10_s(force_timeout=1)
 except Exception as e:
-  print(e)
-  pass
+    print(e)
+    pass
 
 end_time = time.time()
 
