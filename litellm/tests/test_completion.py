@@ -321,8 +321,10 @@ def test_petals():
 
 # import asyncio
 # def test_completion_together_ai_stream():
+#     user_message = "Write 1pg about YC & litellm"
+#     messages = [{ "content": user_message,"role": "user"}]
 #     try:
-#         response = completion(model="togethercomputer/llama-2-70b-chat", messages=messages, custom_llm_provider="together_ai", stream=True, max_tokens=200)
+#         response = completion(model="togethercomputer/llama-2-70b-chat", messages=messages, stream=True, max_tokens=800)
 #         print(response)
 #         asyncio.run(get_response(response))
 #         # print(string_response)
@@ -335,4 +337,5 @@ def test_petals():
 #         print(elem)
 #     return
 
+# test_completion_together_ai_stream()
 
