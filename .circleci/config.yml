@@ -25,8 +25,19 @@ jobs:
             python -m pip install -r .circleci/requirements.txt
             pip install infisical
             pip install pytest
+            pip install mypy
             pip install openai[datalib]
             pip install -Uq chromadb==0.3.29
+
+      - run:
+          name: Linting Testing
+          command: |
+            cd litellm
+            if ! python -m mypy . --ignore-missing-imports; then
+              echo "mypy detected errors"
+              exit 1
+            fi
+            cd ..
   
 
       # Run pytest and generate JUnit XML report
@@ -83,11 +94,10 @@ workflows:
   version: 2
   build_and_test:
     jobs:
-      - local_testing
+      - linting
+      - local_testing:
+        requires:
+          - linting
       - publish_to_pypi:
           requires:
             - local_testing
-          filters:
-            branches:
-              only:
-                - main
