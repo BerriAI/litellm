@@ -20,6 +20,7 @@ vertex_location: Optional[str] = None
 hugging_api_token: Optional[str] = None
 togetherai_api_key: Optional[str] = None
 caching = False
+caching_with_models = False # if you want the caching key to be model + prompt
 model_cost = {
     "gpt-3.5-turbo": {
         "max_tokens": 4000,
