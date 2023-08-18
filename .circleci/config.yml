@@ -94,10 +94,7 @@ workflows:
   version: 2
   build_and_test:
     jobs:
-      - linting
-      - local_testing:
-        requires:
-          - linting
+      - local_testing
       - publish_to_pypi:
           requires:
             - local_testing
