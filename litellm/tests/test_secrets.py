@@ -24,7 +24,9 @@ def test_completion_openai():
         # Add any assertions here to check the response
         print(response)
     except Exception as e:
+        litellm.secret_manager_client = None
         pytest.fail(f"Error occurred: {e}")
+    litellm.secret_manager_client = None
 
 test_completion_openai()
 
