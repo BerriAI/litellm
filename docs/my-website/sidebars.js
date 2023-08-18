@@ -38,6 +38,7 @@ const sidebars = {
     'token_usage',
     'stream',
     'secret',
+    'caching',
     {
       type: 'category',
       label: 'Logging & Observability',
