@@ -836,6 +836,8 @@ def get_secret(secret_name):
      secret = litellm.secret_manager_client.get_secret(secret_name).secret_value
      if secret != None:
         return secret # if secret found in secret manager return it
+     else:
+        raise ValueError(f"Secret '{secret_name}' not found in secret manager")
   elif litellm.api_key != None: # if users use litellm default key
     return litellm.api_key
   else:
