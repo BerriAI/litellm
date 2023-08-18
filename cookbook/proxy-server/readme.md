@@ -8,6 +8,8 @@
 
 [![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/template/DYqQAW?referralCode=t3ukrU)
 
+![4BC6491E-86D0-4833-B061-9F54524B2579](https://github.com/BerriAI/litellm/assets/17561003/f5dd237b-db5e-42e1-b1ac-f05683b1d724)
+
 ## What does liteLLM proxy do
 - Make `/chat/completions` requests for 50+ LLM models **Azure, OpenAI, Replicate, Anthropic, Hugging Face**
   
