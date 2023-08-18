@@ -504,11 +504,11 @@ def get_optional_params(
 
 def load_test_model(
     model: str,
-    custom_llm_provider: str = None,
-    custom_api_base: str = None,
-    prompt: str = None,
-    num_calls: int = None,
-    force_timeout: int = None,
+    custom_llm_provider: str = "",
+    custom_api_base: str = "",
+    prompt: str = "",
+    num_calls: int = 0,
+    force_timeout: int = 0,
 ):
     test_prompt = "Hey, how's it going"
     test_calls = 100

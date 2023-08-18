@@ -11,7 +11,7 @@ from threading import Thread
 from openai.error import Timeout
 
 
-def timeout(timeout_duration: float = None, exception_to_raise=Timeout):
+def timeout(timeout_duration: float = 0.0, exception_to_raise=Timeout):
     """
     Wraps a function to raise the specified exception if execution time
     is greater than the specified timeout.
