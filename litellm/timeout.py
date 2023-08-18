@@ -11,9 +11,7 @@ from threading import Thread
 from openai.error import Timeout
 
 
-def timeout(
-    timeout_duration: float = None, exception_to_raise = Timeout
-):
+def timeout(timeout_duration: float = None, exception_to_raise=Timeout):
     """
     Wraps a function to raise the specified exception if execution time
     is greater than the specified timeout.
@@ -44,7 +42,9 @@ def timeout(
                 result = future.result(timeout=local_timeout_duration)
             except futures.TimeoutError:
                 thread.stop_loop()
-                raise exception_to_raise(f"A timeout error occurred. The function call took longer than {local_timeout_duration} second(s).")
+                raise exception_to_raise(
+                    f"A timeout error occurred. The function call took longer than {local_timeout_duration} second(s)."
+                )
             thread.stop_loop()
             return result
 
@@ -59,7 +59,9 @@ def timeout(
                 )
                 return value
             except asyncio.TimeoutError:
-                raise exception_to_raise(f"A timeout error occurred. The function call took longer than {local_timeout_duration} second(s).")
+                raise exception_to_raise(
+                    f"A timeout error occurred. The function call took longer than {local_timeout_duration} second(s)."
+                )
 
         if iscoroutinefunction(func):
             return async_wrapper

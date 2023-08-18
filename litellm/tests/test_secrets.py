@@ -4,7 +4,10 @@
 
 import sys, os
 import traceback
-sys.path.insert(0, os.path.abspath('../..'))  # Adds the parent directory to the system path
+
+sys.path.insert(
+    0, os.path.abspath("../..")
+)  # Adds the parent directory to the system path
 import litellm
 from litellm import embedding, completion
 from infisical import InfisicalClient
@@ -15,7 +18,7 @@ infisical_token = os.environ["INFISICAL_TOKEN"]
 litellm.secret_manager_client = InfisicalClient(token=infisical_token)
 
 user_message = "Hello, whats the weather in San Francisco??"
-messages = [{ "content": user_message,"role": "user"}]
+messages = [{"content": user_message, "role": "user"}]
 
 
 def test_completion_openai():
@@ -28,5 +31,5 @@ def test_completion_openai():
         pytest.fail(f"Error occurred: {e}")
     litellm.secret_manager_client = None
 
-test_completion_openai()
 
+test_completion_openai()

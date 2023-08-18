@@ -1,16 +1,19 @@
 import sys, os
 import traceback
 from dotenv import load_dotenv
+
 load_dotenv()
 import os
-sys.path.insert(0, os.path.abspath('../..'))  # Adds the parent directory to the system path
+
+sys.path.insert(
+    0, os.path.abspath("../..")
+)  # Adds the parent directory to the system path
 import pytest
 import litellm
 from litellm import embedding, completion
 
 litellm.caching = True
 messages = [{"role": "user", "content": "who is ishaan Github?  "}]
-
 
 
 # test if response cached
@@ -27,9 +30,5 @@ def test_caching():
             pytest.fail(f"Error occurred: {e}")
     except Exception as e:
         litellm.caching = False
-        print(f"error occurred: {traceback.format_exc()}") 
+        print(f"error occurred: {traceback.format_exc()}")
         pytest.fail(f"Error occurred: {e}")
-
-
-
-
