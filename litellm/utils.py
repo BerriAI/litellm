@@ -51,67 +51,35 @@ local_cache = {}
 #  'usage': {'prompt_tokens': 18, 'completion_tokens': 23, 'total_tokens': 41}
 # }
 
-class Message:
-    def __init__(self):
-        self.content: str = "default"
-        self.role: str = "assistant"
+class Message(OpenAIObject):
+    def __init__(self, content="default", role="assistant", **params):
+        super(Message, self).__init__(**params)
+        self.content = content
+        self.role = role
 
-    def __getitem__(self, key):
-      return getattr(self, key)
+class Choices(OpenAIObject):
+    def __init__(self, finish_reason="stop", index=0, message=Message(), **params):
+        super(Choices, self).__init__(**params)
+        self.finish_reason = finish_reason
+        self.index = index
+        self.message = message
 
-    def __setitem__(self, key, value):
-      setattr(self, key, value)
-
-    def __iter__(self):
-        return iter(vars(self))
-
-    def __str__(self):
-        result = f"{{\n  'role': '{self.role}',\n  'content': \"{self.content}\"\n}}"
-        return result
-
-class Choices:
-    def __init__(self):
-        self.finish_reason: str = "stop"
-        self.index: int = 0
-        self.message: Message = Message()
-
-    def __getitem__(self, key):
-      return getattr(self, key)
-
-    def __setitem__(self, key, value):
-      setattr(self, key, value)
-
-    def __iter__(self):
-        return iter(vars(self))
-
-    def __str__(self):
-        result = f"{{\n  'finish_reason': '{self.finish_reason}',\n  'index': {self.index},\n  'message': {self.message}\n}}"
-        return result
-
-class ModelResponse(dict):
-    def __init__(self):
-        self.choices: List[Choices] = [Choices()]
-        self.created: str = None
-        self.model: str = None
-        self.usage: Dict[str, Union[int, None]] = {
+class ModelResponse(OpenAIObject):
+    def __init__(self, choices=None, created=None, model=None, usage=None, **params):
+        super(ModelResponse, self).__init__(**params)
+        self.choices = choices if choices else [Choices()]
+        self.created = created
+        self.model = model
+        self.usage = usage if usage else {
             "prompt_tokens": None,
             "completion_tokens": None,
             "total_tokens": None
         }
 
-    def __getitem__(self, key):
-      return getattr(self, key)
-
-    def __setitem__(self, key, value):
-      setattr(self, key, value)
-
-    def __iter__(self):
-        return iter(vars(self))
-
-    def __str__(self):
-      choices_str = ",\n".join(str(choice) for choice in self.choices)
-      result = f"{{\n  'choices': [\n{choices_str}\n  ],\n  'created': {self.created},\n  'model': '{self.model}',\n  'usage': {self.usage}\n}}"
-      return result
+    def to_dict_recursive(self):
+        d = super().to_dict_recursive()
+        d['choices'] = [choice.to_dict_recursive() for choice in self.choices]
+        return d
 ############################################################
 def print_verbose(print_statement):
   if litellm.set_verbose:
