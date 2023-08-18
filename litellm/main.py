@@ -40,7 +40,7 @@ def completion(
     # model specific optional params
     # used by text-bison only
     top_k=40, request_timeout=0, # unused var for old version of OpenAI API
-  ):
+  ) -> ModelResponse:
   try:
     model_response = ModelResponse()
     if azure: # this flag is deprecated, remove once notebooks are also updated.

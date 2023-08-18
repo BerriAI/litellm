@@ -94,14 +94,9 @@ def test_completion_openai():
 
         response_str = response['choices'][0]['message']['content']
         response_str_2 = response.choices[0].message.content
-        print(response_str)
-        print(response_str_2)
-        if type(response_str) != str:
-            pytest.fail(f"Error occurred: {e}")
-        if type(response_str_2) != str:
-            pytest.fail(f"Error occurred: {e}")
-        # Add any assertions here to check the response
-        print(response)
+        assert response_str == response_str_2
+        assert type(response_str) == str
+        assert len(response_str) > 1
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 

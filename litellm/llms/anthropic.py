@@ -4,6 +4,7 @@ import requests
 from litellm import logging
 import time 
 from typing import Callable
+from litellm.utils import ModelResponse
 
 class AnthropicConstants(Enum):
     HUMAN_PROMPT = "\n\nHuman:"
@@ -36,7 +37,7 @@ class AnthropicLLM:
             "x-api-key": self.api_key 
         }
 
-    def completion(self, model: str, messages: list, model_response: dict, print_verbose: Callable, optional_params=None, litellm_params=None, logger_fn=None): # logic for parsing in - calling - parsing out model completion calls
+    def completion(self, model: str, messages: list, model_response: ModelResponse, print_verbose: Callable, optional_params=None, litellm_params=None, logger_fn=None): # logic for parsing in - calling - parsing out model completion calls
         model = model
         prompt = f"{AnthropicConstants.HUMAN_PROMPT.value}"
         for message in messages:
