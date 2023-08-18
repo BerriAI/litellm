@@ -50,4 +50,4 @@ try:
 except:
     print(f"error occurred: {traceback.format_exc()}")
     pass
-os.environ["OPENAI_API_KEY"] = temp_key # this fails linting
+os.environ["OPENAI_API_KEY"] = temp_key # this fails linting#1
