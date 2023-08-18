@@ -129,6 +129,7 @@ def test_completion_openrouter():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+
 def test_completion_openai_with_more_optional_params():
     try:
         response = completion(model="gpt-3.5-turbo", messages=messages, temperature=0.5, top_p=0.1, n=2, max_tokens=150, presence_penalty=0.5, frequency_penalty=-0.5, logit_bias={123: 5}, user="ishaan_dev@berri.ai")
@@ -237,7 +238,6 @@ def test_completion_together_ai():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-
 
 def test_petals():
     model_name = "stabilityai/StableBeluga2"

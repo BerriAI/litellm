@@ -208,7 +208,7 @@ def completion(
       elif litellm.openrouter_key:
           openai.api_key = litellm.openrouter_key
       else:
-          openai.api_key = get_secret("OPENROUTER_API_KEY")
+          openai.api_key = get_secret("OPENROUTER_API_KEY") or get_secret("OR_API_KEY")
       ## LOGGING
       logging(model=model, input=messages, additional_args=optional_params, custom_llm_provider=custom_llm_provider, logger_fn=logger_fn)
       ## COMPLETION CALL
@@ -311,7 +311,11 @@ def completion(
       ## LOGGING
       logging(model=model, input=prompt, custom_llm_provider=custom_llm_provider, additional_args={"max_tokens": max_tokens, "original_response": res.text}, logger_fn=logger_fn)
 
-      completion_response = res.json()['output']['choices'][0]['text']
+      # make this safe for reading, if output does not exist raise an error
+      json_response = res.json()
+      if "output" not in json_response:
+        raise Exception(f"liteLLM: Error Making TogetherAI request, JSON Response {json_response}")
+      completion_response = json_response['output']['choices'][0]['text']
       prompt_tokens = len(encoding.encode(prompt))
       completion_tokens = len(encoding.encode(completion_response))
       ## RESPONSE OBJECT
