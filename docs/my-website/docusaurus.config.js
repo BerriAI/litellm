@@ -6,8 +6,9 @@ const darkCodeTheme = require('prism-react-renderer/themes/dracula');
 
 /** @type {import('@docusaurus/types').Config} */
 const config = {
-  title: 'LiteLLM',
+  title: 'liteLLM',
   tagline: 'Simplify LLM API Calls',
+  favicon: 'static/img/favicon.ico', 
 
   // Set the production url of your site here
   url: 'https://litellm.vercel.app/',
