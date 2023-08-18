@@ -41,7 +41,7 @@ Code Sample: [Getting Started Notebook](https://colab.research.google.com/drive/
 
 Stable version
 ```
-pip install litellm==0.1.345
+pip install litellm==0.1.411
 ```
 
 ## Streaming Queries
