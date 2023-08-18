@@ -433,7 +433,7 @@ def completion(
       model_response["model"] = model
       response = model_response
 
-    elif custom_llm_provider == "petals" or "chat.petals.dev" in litellm.api_base:
+    elif custom_llm_provider == "petals" or (litellm.api_base and "chat.petals.dev" in litellm.api_base):
       url = "https://chat.petals.dev/api/v1/generate"
       import requests
       prompt = " ".join([message["content"] for message in messages])
