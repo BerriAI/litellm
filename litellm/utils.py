@@ -263,8 +263,17 @@ def client(original_function):
             if (
                 prompt != None and prompt in local_cache
             ):  # check if messages / prompt exists
-                result = local_cache[prompt]
-                return result
+                if litellm.caching_with_models:
+                    # if caching with model names is enabled, key is prompt + model name
+                    if (
+                        "model" in kwargs
+                        and kwargs["model"] in local_cache[prompt]["models"]
+                    ):
+                        cache_key = prompt + kwargs["model"]
+                        return local_cache[cache_key]
+                else:  # caching only with prompts
+                    result = local_cache[prompt]
+                    return result
             else:
                 return None
         except:
@@ -273,7 +282,15 @@ def client(original_function):
     def add_cache(result, *args, **kwargs):
         try:  # never block execution
             prompt = get_prompt(*args, **kwargs)
-            local_cache[prompt] = result
+            if litellm.caching_with_models:  # caching with model + prompt
+                if (
+                    "model" in kwargs
+                    and kwargs["model"] in local_cache[prompt]["models"]
+                ):
+                    cache_key = prompt + kwargs["model"]
+                    local_cache[cache_key] = result
+            else:  # caching based only on prompts
+                local_cache[prompt] = result
         except:
             pass
 
@@ -284,10 +301,9 @@ def client(original_function):
             function_setup(*args, **kwargs)
             ## MODEL CALL
             start_time = datetime.datetime.now()
-            if (
-                litellm.caching
-                and (cached_result := check_cache(*args, **kwargs)) is not None
-            ):
+            if (litellm.caching or litellm.caching_with_models) and (
+                cached_result := check_cache(*args, **kwargs)
+            ) is not None:
                 result = cached_result
             else:
                 result = original_function(*args, **kwargs)
