@@ -5,6 +5,7 @@ import requests
 from litellm import logging
 import time 
 from typing import Callable
+from litellm.utils import ModelResponse
 
 class HuggingfaceError(Exception):
     def __init__(self, status_code, message):
@@ -26,7 +27,7 @@ class HuggingfaceRestAPILLM():
         if self.api_key != None:
             self.headers["Authorization"] = f"Bearer {self.api_key}" 
 
-    def completion(self, model: str, messages: list, custom_api_base: str, model_response: dict, print_verbose: Callable, optional_params=None, litellm_params=None, logger_fn=None): # logic for parsing in - calling - parsing out model completion calls
+    def completion(self, model: str, messages: list, custom_api_base: str, model_response: ModelResponse, print_verbose: Callable, optional_params=None, litellm_params=None, logger_fn=None): # logic for parsing in - calling - parsing out model completion calls
         if custom_api_base:
             completion_url = custom_api_base
         elif "HF_API_BASE" in os.environ:
