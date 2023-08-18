@@ -12,6 +12,7 @@ from .integrations.aispend import AISpendLogger
 from .integrations.berrispend import BerriSpendLogger
 from .integrations.supabase import Supabase
 from openai.error import OpenAIError as OriginalError
+from openai.openai_object import OpenAIObject
 from .exceptions import AuthenticationError, InvalidRequestError, RateLimitError, ServiceUnavailableError, OpenAIError
 from typing import List, Dict, Union
 ####### ENVIRONMENT VARIABLES ###################
@@ -87,7 +88,7 @@ class Choices:
         result = f"{{\n  'finish_reason': '{self.finish_reason}',\n  'index': {self.index},\n  'message': {self.message}\n}}"
         return result
 
-class ModelResponse:
+class ModelResponse(dict):
     def __init__(self):
         self.choices: List[Choices] = [Choices()]
         self.created: str = None
