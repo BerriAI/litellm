@@ -844,7 +844,7 @@ def embedding(model, input=[], azure=False, force_timeout=60, logger_fn=None):
         # log the original exception
         logging(model=model, input=input, azure=azure, logger_fn=logger_fn, exception=e)
         ## Map to OpenAI Exception
-        raise exception_type(model=model, original_exception=e)
+        raise exception_type(model=model, original_exception=e, custom_llm_provider="azure" if azure==True else None)
         raise e
 
 
