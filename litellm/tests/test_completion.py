@@ -77,7 +77,7 @@ def test_completion_claude_stream():
 def test_completion_cohere():
     try:
         response = completion(
-            model="command-nightly", messages=messages, max_tokens=100
+            model="command-nightly", messages=messages, max_tokens=100, logit_bias={40: 10}
         )
         # Add any assertions here to check the response
         print(response)
@@ -90,7 +90,6 @@ def test_completion_cohere():
             pytest.fail(f"Error occurred: {e}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-
 
 def test_completion_cohere_stream():
     try:
