@@ -97,6 +97,8 @@ def completion(
         elif model.split("/", 1)[0] in litellm.provider_list: # allow custom provider to be passed in via the model name "azure/chatgpt-test"
             custom_llm_provider = model.split("/", 1)[0]
             model = model.split("/", 1)[1]
+            if "replicate" == custom_llm_provider and "/" not in model: # handle the "replicate/llama2..." edge-case
+                model = custom_llm_provider + "/" + model
         args = locals()
         # check if user passed in any of the OpenAI optional params
         optional_params = get_optional_params(
