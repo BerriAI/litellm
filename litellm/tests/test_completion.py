@@ -25,6 +25,18 @@ def logger_fn(user_model_dict):
     print(f"user_model_dict: {user_model_dict}")
 
 
+def test_completion_custom_provider_model_name():
+    try:
+        response = completion(
+            model="together_ai/togethercomputer/llama-2-70b-chat", messages=messages, logger_fn=logger_fn
+        )
+        # Add any assertions here to check the response
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+test_completion_custom_provider_model_name()
+
 def test_completion_claude():
     try:
         response = completion(

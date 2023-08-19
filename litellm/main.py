@@ -94,6 +94,9 @@ def completion(
         model_response = ModelResponse()
         if azure:  # this flag is deprecated, remove once notebooks are also updated.
             custom_llm_provider = "azure"
+        elif model.split("/", 1)[0] in litellm.provider_list: # allow custom provider to be passed in via the model name "azure/chatgpt-test"
+            custom_llm_provider = model.split("/", 1)[0]
+            model = model.split("/", 1)[1]
         args = locals()
         # check if user passed in any of the OpenAI optional params
         optional_params = get_optional_params(
