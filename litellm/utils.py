@@ -452,6 +452,8 @@ def get_optional_params(
             optional_params["temperature"] = temperature
         if max_tokens != float("inf"):
             optional_params["max_tokens"] = max_tokens
+        if logit_bias != {}:
+            optional_params["logit_bias"] = logit_bias
         return optional_params
     elif custom_llm_provider == "replicate":
         # any replicate models
