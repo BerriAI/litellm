@@ -676,9 +676,10 @@ def batch_completion(*args, **kwargs):
 @timeout(  # type: ignore
     60
 )  ## set timeouts, in case calls hang (e.g. Azure) - default is 60s, override with `force_timeout`
-def embedding(model, input=[], azure=False, force_timeout=60, logger_fn=None):
+def embedding(model, input=[], azure=False, force_timeout=60, litellm_call_id=None, logger_fn=None):
     try:
         response = None
+        logging = Logging(model=model, messages=input, optional_params={}, litellm_params={"azure": azure, "force_timeout": force_timeout, "logger_fn": logger_fn, "litellm_call_id": litellm_call_id})
         if azure == True:
             # azure configs
             openai.api_type = "azure"
@@ -686,7 +687,7 @@ def embedding(model, input=[], azure=False, force_timeout=60, logger_fn=None):
             openai.api_version = get_secret("AZURE_API_VERSION")
             openai.api_key = get_secret("AZURE_API_KEY")
             ## LOGGING
-            logging.pre_call(model=model, input=input, azure=azure, logger_fn=logger_fn)
+            logging.pre_call(input=input, api_key=openai.api_key, additional_args={"api_type": openai.api_type, "api_base": openai.api_base, "api_version": openai.api_version})
             ## EMBEDDING CALL
             response = openai.Embedding.create(input=input, engine=model)
             print_verbose(f"response_value: {str(response)[:50]}")
@@ -696,19 +697,16 @@ def embedding(model, input=[], azure=False, force_timeout=60, logger_fn=None):
             openai.api_version = None
             openai.api_key = get_secret("OPENAI_API_KEY")
             ## LOGGING
-            logging(model=model, input=input, azure=azure, logger_fn=logger_fn)
+            logging.pre_call(input=input, api_key=openai.api_key, additional_args={"api_type": openai.api_type, "api_base": openai.api_base, "api_version": openai.api_version})
             ## EMBEDDING CALL
             response = openai.Embedding.create(input=input, model=model)
             print_verbose(f"response_value: {str(response)[:50]}")
         else:
-            logging(model=model, input=input, azure=azure, logger_fn=logger_fn)
             args = locals()
             raise ValueError(f"No valid embedding model args passed in - {args}")
 
         return response
     except Exception as e:
-        # log the original exception
-        logging(model=model, input=input, azure=azure, logger_fn=logger_fn, exception=e)
         ## Map to OpenAI Exception
         raise exception_type(model=model, original_exception=e, custom_llm_provider="azure" if azure==True else None)
         raise e
