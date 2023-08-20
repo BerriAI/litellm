@@ -1,5 +1,5 @@
 # #### What this tests ####
-# #    This tests if logging to the supabase integration actually works
+# #    This tests if logging to the litedebugger integration actually works
 # # pytest mistakes intentional bad calls as failed tests -> [TODO] fix this
 # import sys, os
 # import traceback
@@ -9,11 +9,9 @@
 # import litellm
 # from litellm import embedding, completion
 
-# litellm.input_callback = ["supabase"]
-# litellm.success_callback = ["supabase"]
-# litellm.failure_callback = ["supabase"]
-
-# # litellm.modify_integration("supabase",{"table_name": "test_table"})
+# litellm.input_callback = ["lite_debugger"]
+# litellm.success_callback = ["lite_debugger"]
+# litellm.failure_callback = ["lite_debugger"]
 
 # litellm.set_verbose = True
 

@@ -707,9 +707,10 @@ def embedding(model, input=[], azure=False, force_timeout=60, litellm_call_id=No
 
         return response
     except Exception as e:
+        ## LOGGING
+        logging.post_call(input=input, api_key=openai.api_key, original_response=e)
         ## Map to OpenAI Exception
         raise exception_type(model=model, original_exception=e, custom_llm_provider="azure" if azure==True else None)
-        raise e
 
 
 ####### HELPER FUNCTIONS ################

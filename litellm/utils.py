@@ -12,6 +12,7 @@ from .integrations.helicone import HeliconeLogger
 from .integrations.aispend import AISpendLogger
 from .integrations.berrispend import BerriSpendLogger
 from .integrations.supabase import Supabase
+from .integrations.litedebugger import LiteDebugger
 from openai.error import OpenAIError as OriginalError
 from openai.openai_object import OpenAIObject
 from .exceptions import (
@@ -35,6 +36,7 @@ heliconeLogger = None
 aispendLogger = None
 berrispendLogger = None
 supabaseClient = None
+liteDebuggerClient = None
 callback_list: Optional[List[str]] = []
 user_logger_fn = None
 additional_details: Optional[Dict[str, str]] = {}
@@ -136,7 +138,7 @@ def install_and_import(package: str):
 ####### LOGGING ###################
 # Logging function -> log the exact model details + what's being sent | Non-Blocking
 class Logging:
-    global supabaseClient
+    global supabaseClient, liteDebuggerClient
     def __init__(self, model, messages, optional_params, litellm_params):
         self.model = model
         self.messages = messages
@@ -178,7 +180,7 @@ class Logging:
                         print_verbose("reaches supabase for logging!")
                         model = self.model
                         messages = self.messages
-                        print(f"litellm._thread_context: {litellm._thread_context}")
+                        print(f"supabaseClient: {supabaseClient}")
                         supabaseClient.input_log_event(
                             model=model,
                             messages=messages,
@@ -186,8 +188,20 @@ class Logging:
                             litellm_call_id=self.litellm_params["litellm_call_id"],
                             print_verbose=print_verbose,
                         )
+                    elif callback == "lite_debugger":
+                        print_verbose("reaches litedebugger for logging!")
+                        model = self.model
+                        messages = self.messages
+                        print(f"liteDebuggerClient: {liteDebuggerClient}")
+                        liteDebuggerClient.input_log_event(
+                            model=model,
+                            messages=messages,
+                            end_user=litellm._thread_context.user,
+                            litellm_call_id=self.litellm_params["litellm_call_id"],
+                            print_verbose=print_verbose,
+                        )
                 except Exception as e:
-                    print_verbose(f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging with integrations {traceback.format_exc}")
+                    print_verbose(f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while input logging with integrations {traceback.format_exc()}")
                     print_verbose(
                         f"LiteLLM.Logging: is sentry capture exception initialized {capture_exception}"
                     )
@@ -635,7 +649,7 @@ def load_test_model(
 
 
 def set_callbacks(callback_list):
-    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient
+    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient
     try:
         for callback in callback_list:
             print(f"callback: {callback}")
@@ -697,12 +711,15 @@ def set_callbacks(callback_list):
             elif callback == "supabase":
                 print(f"instantiating supabase")
                 supabaseClient = Supabase()
+            elif callback == "lite_debugger":
+                print(f"instantiating lite_debugger")
+                liteDebuggerClient = LiteDebugger()
     except Exception as e:
         raise e
 
 
 def handle_failure(exception, traceback_exception, start_time, end_time, args, kwargs):
-    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, aispendLogger, berrispendLogger, supabaseClient
+    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient
     try:
         # print_verbose(f"handle_failure args: {args}")
         # print_verbose(f"handle_failure kwargs: {kwargs}")
@@ -827,6 +844,32 @@ def handle_failure(exception, traceback_exception, start_time, end_time, args, k
                         litellm_call_id=kwargs["litellm_call_id"],
                         print_verbose=print_verbose,
                     )
+                elif callback == "lite_debugger":
+                    print_verbose("reaches lite_debugger for logging!")
+                    print_verbose(f"liteDebuggerClient: {liteDebuggerClient}")
+                    model = args[0] if len(args) > 0 else kwargs["model"]
+                    messages = args[1] if len(args) > 1 else kwargs["messages"]
+                    result = {
+                        "model": model,
+                        "created": time.time(),
+                        "error": traceback_exception,
+                        "usage": {
+                            "prompt_tokens": prompt_token_calculator(
+                                model, messages=messages
+                            ),
+                            "completion_tokens": 0,
+                        },
+                    }
+                    liteDebuggerClient.log_event(
+                        model=model,
+                        messages=messages,
+                        end_user=litellm._thread_context.user,
+                        response_obj=result,
+                        start_time=start_time,
+                        end_time=end_time,
+                        litellm_call_id=kwargs["litellm_call_id"],
+                        print_verbose=print_verbose,
+                    )
             except:
                 print_verbose(
                     f"Error Occurred while logging failure: {traceback.format_exc()}"
@@ -847,7 +890,7 @@ def handle_failure(exception, traceback_exception, start_time, end_time, args, k
 
 
 def handle_success(args, kwargs, result, start_time, end_time):
-    global heliconeLogger, aispendLogger, supabaseClient
+    global heliconeLogger, aispendLogger, supabaseClient, liteDebuggerClient
     try:
         success_handler = additional_details.pop("success_handler", None)
         failure_handler = additional_details.pop("failure_handler", None)
@@ -916,6 +959,21 @@ def handle_success(args, kwargs, result, start_time, end_time):
                     messages = args[1] if len(args) > 1 else kwargs["messages"]
                     print(f"supabaseClient: {supabaseClient}")
                     supabaseClient.log_event(
+                        model=model,
+                        messages=messages,
+                        end_user=litellm._thread_context.user,
+                        response_obj=result,
+                        start_time=start_time,
+                        end_time=end_time,
+                        litellm_call_id=kwargs["litellm_call_id"],
+                        print_verbose=print_verbose,
+                    )
+                elif callback == "lite_debugger":
+                    print_verbose("reaches lite_debugger for logging!")
+                    model = args[0] if len(args) > 0 else kwargs["model"]
+                    messages = args[1] if len(args) > 1 else kwargs["messages"]
+                    print(f"liteDebuggerClient: {liteDebuggerClient}")
+                    liteDebuggerClient.log_event(
                         model=model,
                         messages=messages,
                         end_user=litellm._thread_context.user,
