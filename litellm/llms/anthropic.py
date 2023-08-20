@@ -85,15 +85,6 @@ class AnthropicLLM:
 
         ## LOGGING
         self.logging_obj.pre_call(input=prompt, api_key=self.api_key, additional_args={"complete_input_dict": data})
-        logging(
-            model=model,
-            input=prompt,
-            additional_args={
-                "litellm_params": litellm_params,
-                "optional_params": optional_params,
-            },
-            logger_fn=logger_fn,
-        )
         ## COMPLETION CALL
         response = requests.post(
             self.completion_url, headers=self.headers, data=json.dumps(data)
