@@ -7,7 +7,7 @@ import datetime, time
 import tiktoken
 
 encoding = tiktoken.get_encoding("cl100k_base")
-import pkg_resources
+import importlib.metadata
 from .integrations.helicone import HeliconeLogger
 from .integrations.aispend import AISpendLogger
 from .integrations.berrispend import BerriSpendLogger
@@ -1077,7 +1077,7 @@ def litellm_telemetry(data):
         payload = {
             "uuid": uuid_value,
             "data": data,
-            "version": pkg_resources.get_distribution("litellm").version,
+            "version:": importlib.metadata.version("litellm"),
         }
         # Make the POST request to litellm logging api
         response = requests.post(
