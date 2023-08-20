@@ -35,7 +35,7 @@ messages = [{ "content": "Hello, how are you?","role": "user"}]
 response = completion(model="gpt-3.5-turbo", messages=messages)
 
 # cohere call
-response = completion("command-nightly", messages)
+response = completion(model="command-nightly", messages)
 ```
 Code Sample: [Getting Started Notebook](https://colab.research.google.com/drive/1gR3pY-JzDZahzpVdbGBtrNGDBmzUNJaJ?usp=sharing)
 

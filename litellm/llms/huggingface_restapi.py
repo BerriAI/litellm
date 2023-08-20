@@ -2,7 +2,6 @@
 import os, json
 from enum import Enum
 import requests
-from litellm import logging
 import time
 from typing import Callable
 from litellm.utils import ModelResponse
@@ -19,8 +18,9 @@ class HuggingfaceError(Exception):
 
 
 class HuggingfaceRestAPILLM:
-    def __init__(self, encoding, api_key=None) -> None:
+    def __init__(self, encoding, logging_obj, api_key=None) -> None:
         self.encoding = encoding
+        self.logging_obj = logging_obj
         self.validate_environment(api_key=api_key)
 
     def validate_environment(
@@ -74,18 +74,10 @@ class HuggingfaceRestAPILLM:
             optional_params["max_new_tokens"] = value
         data = {
             "inputs": prompt,
-            # "parameters": optional_params
+            "parameters": optional_params
         }
         ## LOGGING
-        logging(
-            model=model,
-            input=prompt,
-            additional_args={
-                "litellm_params": litellm_params,
-                "optional_params": optional_params,
-            },
-            logger_fn=logger_fn,
-        )
+        self.logging_obj.pre_call(input=prompt, api_key=self.api_key, additional_args={"complete_input_dict": data})
         ## COMPLETION CALL
         response = requests.post(
             completion_url, headers=self.headers, data=json.dumps(data)
@@ -94,17 +86,7 @@ class HuggingfaceRestAPILLM:
             return response.iter_lines()
         else:
             ## LOGGING
-            logging(
-                model=model,
-                input=prompt,
-                additional_args={
-                    "litellm_params": litellm_params,
-                    "optional_params": optional_params,
-                    "original_response": response.text,
-                },
-                logger_fn=logger_fn,
-            )
-            print_verbose(f"raw model_response: {response.text}")
+            self.logging_obj.post_call(input=prompt, api_key=self.api_key, original_response=response.text, additional_args={"complete_input_dict": data})
             ## RESPONSE OBJECT
             completion_response = response.json()
             print_verbose(f"response: {completion_response}")

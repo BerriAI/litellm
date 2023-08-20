@@ -25,6 +25,18 @@ def logger_fn(user_model_dict):
     print(f"user_model_dict: {user_model_dict}")
 
 
+def test_completion_custom_provider_model_name():
+    try:
+        response = completion(
+            model="together_ai/togethercomputer/llama-2-70b-chat", messages=messages, logger_fn=logger_fn
+        )
+        # Add any assertions here to check the response
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+test_completion_custom_provider_model_name()
+
 def test_completion_claude():
     try:
         response = completion(
@@ -77,7 +89,7 @@ def test_completion_claude_stream():
 def test_completion_cohere():
     try:
         response = completion(
-            model="command-nightly", messages=messages, max_tokens=100
+            model="command-nightly", messages=messages, max_tokens=100, logit_bias={40: 10}
         )
         # Add any assertions here to check the response
         print(response)
@@ -90,7 +102,6 @@ def test_completion_cohere():
             pytest.fail(f"Error occurred: {e}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-
 
 def test_completion_cohere_stream():
     try:

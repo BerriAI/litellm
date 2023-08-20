@@ -9,10 +9,11 @@
 # import litellm
 # from litellm import embedding, completion
 
+# litellm.input_callback = ["supabase"]
 # litellm.success_callback = ["supabase"]
 # litellm.failure_callback = ["supabase"]
 
-# litellm.modify_integration("supabase",{"table_name": "litellm_logs"})
+# litellm.modify_integration("supabase",{"table_name": "test_table"})
 
 # litellm.set_verbose = True
 

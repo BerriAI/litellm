@@ -1,6 +1,6 @@
 import threading
 from typing import Callable, List, Optional
-
+input_callback: List[str] = []
 success_callback: List[str] = []
 failure_callback: List[str] = []
 set_verbose = False
@@ -216,7 +216,6 @@ from .timeout import timeout
 from .testing import *
 from .utils import (
     client,
-    logging,
     exception_type,
     get_optional_params,
     modify_integration,
@@ -224,6 +223,7 @@ from .utils import (
     cost_per_token,
     completion_cost,
     get_litellm_params,
+    Logging
 )
 from .main import *  # type: ignore
 from .integrations import *
