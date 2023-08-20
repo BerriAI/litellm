@@ -77,7 +77,7 @@ class HuggingfaceRestAPILLM:
             "parameters": optional_params
         }
         ## LOGGING
-        logging.pre_call(input=prompt, api_key=self.api_key, additional_args={"complete_input_dict": data})
+        self.logging_obj.pre_call(input=prompt, api_key=self.api_key, additional_args={"complete_input_dict": data})
         ## COMPLETION CALL
         response = requests.post(
             completion_url, headers=self.headers, data=json.dumps(data)
@@ -86,7 +86,7 @@ class HuggingfaceRestAPILLM:
             return response.iter_lines()
         else:
             ## LOGGING
-            logging.post_call(input=prompt, api_key=self.api_key, original_response=response.text, additional_args={"complete_input_dict": data})
+            self.logging_obj.post_call(input=prompt, api_key=self.api_key, original_response=response.text, additional_args={"complete_input_dict": data})
             ## RESPONSE OBJECT
             completion_response = response.json()
             print_verbose(f"response: {completion_response}")
