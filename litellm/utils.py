@@ -185,12 +185,22 @@ class Logging:
                             litellm_call_id=self.litellm_params["litellm_call_id"],
                             print_verbose=print_verbose,
                         )
-                except:
+                except Exception as e:
                     print_verbose(f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging with integrations {traceback.format_exc}")
+                    print_verbose(
+                        f"LiteLLM.Logging: is sentry capture exception initialized {capture_exception}"
+                    )
+                    if capture_exception: # log this error to sentry for debugging 
+                        capture_exception(e)
         except:
             print_verbose(
                 f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {traceback.format_exc()}"
             )
+            print_verbose(
+                f"LiteLLM.Logging: is sentry capture exception initialized {capture_exception}"
+            )
+            if capture_exception: # log this error to sentry for debugging 
+                capture_exception(e)
         
     def post_call(self, input, api_key, original_response, additional_args={}):
         # Do something here
