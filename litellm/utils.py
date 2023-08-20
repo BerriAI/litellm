@@ -136,6 +136,7 @@ def install_and_import(package: str):
 ####### LOGGING ###################
 # Logging function -> log the exact model details + what's being sent | Non-Blocking
 class Logging:
+    global supabaseClient
     def __init__(self, model, messages, optional_params, litellm_params):
         self.model = model
         self.messages = messages
@@ -701,7 +702,7 @@ def set_callbacks(callback_list):
 
 
 def handle_failure(exception, traceback_exception, start_time, end_time, args, kwargs):
-    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, aispendLogger, berrispendLogger
+    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, aispendLogger, berrispendLogger, supabaseClient
     try:
         # print_verbose(f"handle_failure args: {args}")
         # print_verbose(f"handle_failure kwargs: {kwargs}")
@@ -802,6 +803,7 @@ def handle_failure(exception, traceback_exception, start_time, end_time, args, k
                     )
                 elif callback == "supabase":
                     print_verbose("reaches supabase for logging!")
+                    print_verbose(f"supabaseClient: {supabaseClient}")
                     model = args[0] if len(args) > 0 else kwargs["model"]
                     messages = args[1] if len(args) > 1 else kwargs["messages"]
                     result = {
@@ -845,7 +847,7 @@ def handle_failure(exception, traceback_exception, start_time, end_time, args, k
 
 
 def handle_success(args, kwargs, result, start_time, end_time):
-    global heliconeLogger, aispendLogger
+    global heliconeLogger, aispendLogger, supabaseClient
     try:
         success_handler = additional_details.pop("success_handler", None)
         failure_handler = additional_details.pop("failure_handler", None)
@@ -912,7 +914,7 @@ def handle_success(args, kwargs, result, start_time, end_time):
                     print_verbose("reaches supabase for logging!")
                     model = args[0] if len(args) > 0 else kwargs["model"]
                     messages = args[1] if len(args) > 1 else kwargs["messages"]
-                    print(f"litellm._thread_context: {litellm._thread_context}")
+                    print(f"supabaseClient: {supabaseClient}")
                     supabaseClient.log_event(
                         model=model,
                         messages=messages,
