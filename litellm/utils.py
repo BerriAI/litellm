@@ -185,14 +185,12 @@ class Logging:
                             litellm_call_id=self.litellm_params["litellm_call_id"],
                             print_verbose=print_verbose,
                         )
-                    pass
                 except:
-                    pass
+                    print_verbose(f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging with integrations {traceback.format_exc}")
         except:
             print_verbose(
                 f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {traceback.format_exc()}"
             )
-            pass
         
     def post_call(self, input, api_key, original_response, additional_args={}):
         # Do something here
