@@ -1,7 +1,6 @@
 import os, json
 from enum import Enum
 import requests
-from litellm import logging
 import time
 from typing import Callable
 from litellm.utils import ModelResponse
@@ -22,11 +21,12 @@ class AnthropicError(Exception):
 
 
 class AnthropicLLM:
-    def __init__(self, encoding, default_max_tokens_to_sample, api_key=None):
+    def __init__(self, encoding, default_max_tokens_to_sample, logging_obj, api_key=None):
         self.encoding = encoding
         self.default_max_tokens_to_sample = default_max_tokens_to_sample
         self.completion_url = "https://api.anthropic.com/v1/complete"
         self.api_key = api_key
+        self.logging_obj = logging_obj
         self.validate_environment(api_key=api_key)
 
     def validate_environment(
@@ -84,6 +84,7 @@ class AnthropicLLM:
         }
 
         ## LOGGING
+        self.logging_obj.pre_call(input=prompt, api_key=self.api_key, additional_args={"complete_input_dict": data})
         logging(
             model=model,
             input=prompt,
@@ -101,16 +102,7 @@ class AnthropicLLM:
             return response.iter_lines()
         else:
             ## LOGGING
-            logging(
-                model=model,
-                input=prompt,
-                additional_args={
-                    "litellm_params": litellm_params,
-                    "optional_params": optional_params,
-                    "original_response": response.text,
-                },
-                logger_fn=logger_fn,
-            )
+            self.logging_obj.post_call(input=prompt, api_key=self.api_key, original_response=response.text, additional_args={"complete_input_dict": data})
             print_verbose(f"raw model_response: {response.text}")
             ## RESPONSE OBJECT
             completion_response = response.json()
