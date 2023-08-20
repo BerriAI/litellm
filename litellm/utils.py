@@ -135,48 +135,105 @@ def install_and_import(package: str):
 
 ####### LOGGING ###################
 # Logging function -> log the exact model details + what's being sent | Non-Blocking
-def logging(
-    model=None,
-    input=None,
-    custom_llm_provider=None,
-    azure=False,
+class Logging:
+    def __init__(self, model, messages, optional_params, litellm_params):
+        self.model = model
+        self.messages = messages
+        self.optional_params = optional_params
+        self.litellm_params = litellm_params
+        self.logger_fn = litellm_params["logger_fn"]
+        self.model_call_details = {
+            "model": model, 
+            "messages": messages, 
+            "optional_params": self.optional_params,
+            "litellm_params": self.litellm_params,
+        }
+        
+    def pre_call(self, input, api_key, additional_args={}):
+        try:
+            print(f"logging pre call for model: {self.model}")
+            self.model_call_details["input"] = input
+            self.model_call_details["api_key"] = api_key
+            self.model_call_details["additional_args"] = additional_args
+            
+            ## User Logging -> if you pass in a custom logging function
+            print_verbose(
+                f"Logging Details: logger_fn - {self.logger_fn} | callable(logger_fn) - {callable(self.logger_fn)}"
+            )
+            if self.logger_fn and callable(self.logger_fn):
+                try:
+                    self.logger_fn(
+                        self.model_call_details
+                    )  # Expectation: any logger function passed in by the user should accept a dict object
+                except Exception as e:
+                    print_verbose(
+                        f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {traceback.format_exc()}"
+                    )
+
+            ## Input Integration Logging -> If you want to log the fact that an attempt to call the model was made 
+            for callback in litellm.input_callback:
+                try:
+                    if callback == "supabase":
+                        print_verbose("reaches supabase for logging!")
+                        model = self.model
+                        messages = self.messages
+                        print(f"litellm._thread_context: {litellm._thread_context}")
+                        supabaseClient.input_log_event(
+                            model=model,
+                            messages=messages,
+                            end_user=litellm._thread_context.user,
+                            litellm_call_id=self.litellm_params["litellm_call_id"],
+                            print_verbose=print_verbose,
+                        )
+                    pass
+                except:
+                    pass
+        except:
+            print_verbose(
+                f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {traceback.format_exc()}"
+            )
+            pass
+        
+    def post_call(self, input, api_key, original_response, additional_args={}):
+        # Do something here
+        try:
+            self.model_call_details["input"] = input
+            self.model_call_details["api_key"] = api_key
+            self.model_call_details["original_response"] = original_response
+            self.model_call_details["additional_args"] = additional_args
+            
+            ## User Logging -> if you pass in a custom logging function
+            print_verbose(
+                f"Logging Details: logger_fn - {self.logger_fn} | callable(logger_fn) - {callable(self.logger_fn)}"
+            )
+            if self.logger_fn and callable(self.logger_fn):
+                try:
+                    self.logger_fn(
+                        self.model_call_details
+                    )  # Expectation: any logger function passed in by the user should accept a dict object
+                except Exception as e:
+                    print_verbose(
+                        f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {traceback.format_exc()}"
+                    )
+        except:
+            print_verbose(
+                f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {traceback.format_exc()}"
+            )
+            pass
+    
+    # Add more methods as needed
+    
+
+def exception_logging(
     additional_args={},
     logger_fn=None,
     exception=None,
 ):
     try:
         model_call_details = {}
-        if model:
-            model_call_details["model"] = model
-        if azure:
-            model_call_details["azure"] = azure
-        if custom_llm_provider:
-            model_call_details["custom_llm_provider"] = custom_llm_provider
         if exception:
             model_call_details["exception"] = exception
-        if input:
-            model_call_details["input"] = input
-
-        if len(additional_args):
-            model_call_details["additional_args"] = additional_args
-        # log additional call details -> api key, etc.
-        if model:
-            if (
-                azure == True
-                or model in litellm.open_ai_chat_completion_models
-                or model in litellm.open_ai_chat_completion_models
-                or model in litellm.open_ai_embedding_models
-            ):
-                model_call_details["api_type"] = openai.api_type
-                model_call_details["api_base"] = openai.api_base
-                model_call_details["api_version"] = openai.api_version
-                model_call_details["api_key"] = openai.api_key
-            elif "replicate" in model:
-                model_call_details["api_key"] = os.environ.get("REPLICATE_API_TOKEN")
-            elif model in litellm.anthropic_models:
-                model_call_details["api_key"] = os.environ.get("ANTHROPIC_API_KEY")
-            elif model in litellm.cohere_models:
-                model_call_details["api_key"] = os.environ.get("COHERE_API_KEY")
+        model_call_details["additional_args"] = additional_args
         ## User Logging -> if you pass in a custom logging function or want to use sentry breadcrumbs
         print_verbose(
             f"Logging Details: logger_fn - {logger_fn} | callable(logger_fn) - {callable(logger_fn)}"
@@ -206,10 +263,10 @@ def client(original_function):
         try:
             global callback_list, add_breadcrumb, user_logger_fn
             if (
-                len(litellm.success_callback) > 0 or len(litellm.failure_callback) > 0
+                len(litellm.input_callback) > 0 or len(litellm.success_callback) > 0 or len(litellm.failure_callback) > 0
             ) and len(callback_list) == 0:
                 callback_list = list(
-                    set(litellm.success_callback + litellm.failure_callback)
+                    set(litellm.input_callback + litellm.success_callback + litellm.failure_callback)
                 )
                 set_callbacks(
                     callback_list=callback_list,
@@ -299,13 +356,16 @@ def client(original_function):
         result = None
         try:
             function_setup(*args, **kwargs)
-            ## MODEL CALL
+            litellm_call_id = str(uuid.uuid4())
+            kwargs["litellm_call_id"] = litellm_call_id
+            ## [OPTIONAL] CHECK CACHE
             start_time = datetime.datetime.now()
             if (litellm.caching or litellm.caching_with_models) and (
                 cached_result := check_cache(*args, **kwargs)
             ) is not None:
                 result = cached_result
             else:
+                ## MODEL CALL
                 result = original_function(*args, **kwargs)
             end_time = datetime.datetime.now()
             ## Add response to CACHE
@@ -399,6 +459,7 @@ def get_litellm_params(
     together_ai=False,
     custom_llm_provider=None,
     custom_api_base=None,
+    litellm_call_id=None,
 ):
     litellm_params = {
         "return_async": return_async,
@@ -408,6 +469,7 @@ def get_litellm_params(
         "verbose": verbose,
         "custom_llm_provider": custom_llm_provider,
         "custom_api_base": custom_api_base,
+        "litellm_call_id": litellm_call_id
     }
 
     return litellm_params
@@ -567,7 +629,8 @@ def set_callbacks(callback_list):
     global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient
     try:
         for callback in callback_list:
-            if callback == "sentry" or "SENTRY_API_URL" in os.environ:
+            print(f"callback: {callback}")
+            if callback == "sentry":
                 try:
                     import sentry_sdk
                 except ImportError:
@@ -623,6 +686,7 @@ def set_callbacks(callback_list):
             elif callback == "berrispend":
                 berrispendLogger = BerriSpendLogger()
             elif callback == "supabase":
+                print(f"instantiating supabase")
                 supabaseClient = Supabase()
     except Exception as e:
         raise e
@@ -743,7 +807,6 @@ def handle_failure(exception, traceback_exception, start_time, end_time, args, k
                             "completion_tokens": 0,
                         },
                     }
-                    print(f"litellm._thread_context: {litellm._thread_context}")
                     supabaseClient.log_event(
                         model=model,
                         messages=messages,
@@ -751,9 +814,9 @@ def handle_failure(exception, traceback_exception, start_time, end_time, args, k
                         response_obj=result,
                         start_time=start_time,
                         end_time=end_time,
+                        litellm_call_id=kwargs["litellm_call_id"],
                         print_verbose=print_verbose,
                     )
-
             except:
                 print_verbose(
                     f"Error Occurred while logging failure: {traceback.format_exc()}"
@@ -769,7 +832,7 @@ def handle_failure(exception, traceback_exception, start_time, end_time, args, k
         pass
     except Exception as e:
         ## LOGGING
-        logging(logger_fn=user_logger_fn, exception=e)
+        exception_logging(logger_fn=user_logger_fn, exception=e)
         pass
 
 
@@ -849,11 +912,12 @@ def handle_success(args, kwargs, result, start_time, end_time):
                         response_obj=result,
                         start_time=start_time,
                         end_time=end_time,
+                        litellm_call_id=kwargs["litellm_call_id"],
                         print_verbose=print_verbose,
                     )
             except Exception as e:
                 ## LOGGING
-                logging(logger_fn=user_logger_fn, exception=e)
+                exception_logging(logger_fn=user_logger_fn, exception=e)
                 print_verbose(
                     f"[Non-Blocking] Success Callback Error - {traceback.format_exc()}"
                 )
@@ -864,7 +928,7 @@ def handle_success(args, kwargs, result, start_time, end_time):
         pass
     except Exception as e:
         ## LOGGING
-        logging(logger_fn=user_logger_fn, exception=e)
+        exception_logging(logger_fn=user_logger_fn, exception=e)
         print_verbose(
             f"[Non-Blocking] Success Callback Error - {traceback.format_exc()}"
         )
@@ -912,15 +976,6 @@ def exception_type(model, original_exception, custom_llm_provider):
                 exception_type = type(original_exception).__name__
             else:
                 exception_type = ""
-            logging(
-                model=model,
-                additional_args={
-                    "error_str": error_str,
-                    "exception_type": exception_type,
-                    "original_exception": original_exception,
-                },
-                logger_fn=user_logger_fn,
-            )
             if "claude" in model:  # one of the anthropics
                 if hasattr(original_exception, "status_code"):
                     print_verbose(f"status_code: {original_exception.status_code}")
@@ -1030,7 +1085,7 @@ def exception_type(model, original_exception, custom_llm_provider):
             raise original_exception
     except Exception as e:
         ## LOGGING
-        logging(
+        exception_logging(
             logger_fn=user_logger_fn,
             additional_args={
                 "exception_mapping_worked": exception_mapping_worked,
