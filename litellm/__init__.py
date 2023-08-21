@@ -185,6 +185,18 @@ huggingface_models = [
 
 ai21_models = ["j2-ultra", "j2-mid", "j2-light"]
 
+together_ai_models = [
+    "togethercomputer/llama-2-70b-chat",
+    "togethercomputer/Llama-2-7B-32K-Instruct",
+    "togethercomputer/llama-2-7b"
+]
+
+baseten_models = [
+    "qvv0xeq", # FALCON 7B
+    "q841o8w", # WizardLM
+    "31dxrj3" # Mosaic ML
+]
+
 model_list = (
     open_ai_chat_completion_models
     + open_ai_text_completion_models
@@ -196,6 +208,8 @@ model_list = (
     + vertex_chat_models
     + vertex_text_models
     + ai21_models
+    + together_ai_models
+    + baseten_models
 )
 
 provider_list = [
@@ -208,7 +222,23 @@ provider_list = [
     "openrouter",
     "vertex_ai",
     "ai21",
+    "baseten"
 ]
+
+models_by_provider = {
+    "openai": open_ai_chat_completion_models
+    + open_ai_text_completion_models,
+    "cohere": cohere_models,
+    "anthropic": anthropic_models,
+    "replicate": replicate_models,
+    "huggingface": huggingface_models,
+    "together_ai": together_ai_models,
+    "baseten": baseten_models,
+    "openrouter": openrouter_models,
+    "vertex_ai": vertex_chat_models + vertex_text_models,
+    "ai21": ai21_models,
+}
+
 ####### EMBEDDING MODELS ###################
 open_ai_embedding_models = ["text-embedding-ada-002"]
 
