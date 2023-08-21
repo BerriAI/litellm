@@ -243,9 +243,6 @@ class Logging:
                 f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {traceback.format_exc()}"
             )
             pass
-    
-    # Add more methods as needed
-    
 
 def exception_logging(
     additional_args={},
@@ -1026,6 +1023,17 @@ def prompt_token_calculator(model, messages):
     return num_tokens
 
 
+def valid_model(model):
+    try:
+        # for a given model name, check if the user has the right permissions to access the model 
+        if model in litellm.open_ai_chat_completion_models or model in litellm.open_ai_text_completion_models:
+            openai.Model.retrieve(model)
+        else:
+            messages = [{"role": "user", "content": "Hello World"}]
+            litellm.completion(model=model, messages=messages)
+    except:
+        raise InvalidRequestError(message="", model=model, llm_provider="")    
+
 # integration helper function
 def modify_integration(integration_name, integration_params):
     global supabaseClient
@@ -1034,6 +1042,7 @@ def modify_integration(integration_name, integration_params):
             Supabase.supabase_table_name = integration_params["table_name"]
 
 
+####### EXCEPTION MAPPING ################
 def exception_type(model, original_exception, custom_llm_provider):
     global user_logger_fn, liteDebuggerClient
     exception_mapping_worked = False
@@ -1175,6 +1184,7 @@ def exception_type(model, original_exception, custom_llm_provider):
             raise original_exception
 
 
+####### CRASH REPORTING ################
 def safe_crash_reporting(model=None, exception=None, custom_llm_provider=None):
     data = {
         "model": model,
@@ -1373,7 +1383,7 @@ async def stream_to_string(generator):
     return response
 
 
-########## Together AI streaming #############################
+########## Together AI streaming ############################# [TODO] move together ai to it's own llm class 
 async def together_ai_completion_streaming(json_data, headers):
     session = aiohttp.ClientSession()
     url = "https://api.together.xyz/inference"
