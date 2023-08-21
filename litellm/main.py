@@ -166,6 +166,7 @@ def completion(
                 response = openai.ChatCompletion.create(
                     engine=model, messages=messages, **optional_params
                 )
+            
             ## LOGGING
             logging.post_call(input=messages, api_key=openai.api_key, original_response=response, additional_args={"headers": litellm.headers, "api_version": openai.api_version, "api_base": openai.api_base})
         elif (
