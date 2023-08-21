@@ -280,6 +280,7 @@ def exception_logging(
 ####### CLIENT ###################
 # make it easy to log if completion/embedding runs succeeded or failed + see what happened | Non-Blocking
 def client(original_function):
+    global liteDebuggerClient
     def function_setup(
         *args, **kwargs
     ):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
@@ -410,6 +411,9 @@ def client(original_function):
                 args=(e, traceback_exception, start_time, end_time, args, kwargs),
             )  # don't interrupt execution of main thread
             my_thread.start()
+            if hasattr(e, "message"):
+                if liteDebuggerClient and liteDebuggerClient.dashboard_url != None: # make it easy to get to the debugger logs if you've initialized it
+                    e.message += f"\n Check the log in your dashboard - {liteDebuggerClient.dashboard_url}"
             raise e
 
     return wrapper
@@ -1027,7 +1031,7 @@ def modify_integration(integration_name, integration_params):
 
 
 def exception_type(model, original_exception, custom_llm_provider):
-    global user_logger_fn
+    global user_logger_fn, liteDebuggerClient
     exception_mapping_worked = False
     try:
         if isinstance(original_exception, OriginalError):
