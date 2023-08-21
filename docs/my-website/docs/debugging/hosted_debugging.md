@@ -5,7 +5,7 @@ LiteLLM offers a free hosted debugger UI for your api calls (https://admin.litel
 
 **Needs litellm>=0.1.438***
 
-You can enable this setting `lite_debugger` as a callback. 
+You can enable this setting `litellm.debugger=True`.
 
 <Image img={require('../../img/dashboard.png')} alt="Dashboard" />
 

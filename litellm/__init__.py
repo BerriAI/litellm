@@ -17,7 +17,6 @@ openrouter_key: Optional[str] = None
 huggingface_key: Optional[str] = None
 vertex_project: Optional[str] = None
 vertex_location: Optional[str] = None
-hugging_api_token: Optional[str] = None
 togetherai_api_key: Optional[str] = None
 caching = False
 caching_with_models = False # if you want the caching key to be model + prompt
