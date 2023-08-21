@@ -186,7 +186,7 @@ def completion(
             # set API KEY
             if not api_key and litellm.openai_key:
                 api_key = litellm.openai_key
-            elif not api_key and get_secret("AZURE_API_KEY"):
+            elif not api_key and get_secret("OPENAI_API_KEY"):
                 api_key = get_secret("OPENAI_API_KEY")
 
             openai.api_key = api_key
@@ -218,7 +218,7 @@ def completion(
             # set API KEY
             if not api_key and litellm.openai_key:
                 api_key = litellm.openai_key
-            elif not api_key and get_secret("AZURE_API_KEY"):
+            elif not api_key and get_secret("OPENAI_API_KEY"):
                 api_key = get_secret("OPENAI_API_KEY")
 
             openai.api_key = api_key
