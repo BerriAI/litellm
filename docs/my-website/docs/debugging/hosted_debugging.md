@@ -3,6 +3,8 @@ import Image from '@theme/IdealImage';
 # Debugging Dashboard
 LiteLLM offers a free hosted debugger UI for your api calls (https://admin.litellm.ai/). Useful if you're testing your LiteLLM server and need to see if the API calls were made successfully.
 
+**Needs litellm>=0.1.438***
+
 You can enable this setting `lite_debugger` as a callback. 
 
 <Image img={require('../../img/dashboard.png')} alt="Dashboard" />
@@ -11,7 +13,7 @@ See our live dashboard 👉 [admin.litellm.ai](https://admin.litellm.ai/)
 
 ## Setup
 
-By default, your dashboard is viewable at `admin.litellm.ai/<your_email>`
+By default, your dashboard is viewable at `admin.litellm.ai/<your_email>`. 
 
 ```
  ## Set your email
