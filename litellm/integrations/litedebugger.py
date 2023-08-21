@@ -2,6 +2,7 @@ import requests, traceback, json, os
 
 class LiteDebugger:
     user_email = None
+    dashboard_url = None
     def __init__(self):
         self.api_url = "https://api.litellm.ai/debugger"
         self.validate_environment()
@@ -10,7 +11,8 @@ class LiteDebugger:
     def validate_environment(self):
         try:
             self.user_email = os.getenv("LITELLM_EMAIL")
-            print(f"Here's your free Dashboard 👉 {'https://admin.litellm.ai/' + self.user_email}")
+            self.dashboard_url = 'https://admin.litellm.ai/' + self.user_email
+            print(f"Here's your free Dashboard 👉 {self.dashboard_url}")
             if self.user_email == None:
                 raise Exception("[Non-Blocking Error] LiteLLMDebugger: Missing LITELLM_EMAIL. Set it in your environment. Eg.: os.environ['LITELLM_EMAIL']= <your_email>")
         except Exception as e:
