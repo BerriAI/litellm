@@ -91,6 +91,7 @@ def completion(
     top_k=40,
     request_timeout=0,  # unused var for old version of OpenAI API
 ) -> ModelResponse:
+    args = locals()
     try:
         model_response = ModelResponse()
         if azure:  # this flag is deprecated, remove once notebooks are also updated.
@@ -100,7 +101,6 @@ def completion(
             model = model.split("/", 1)[1]
             if "replicate" == custom_llm_provider and "/" not in model: # handle the "replicate/llama2..." edge-case
                 model = custom_llm_provider + "/" + model
-        args = locals()
         # check if user passed in any of the OpenAI optional params
         optional_params = get_optional_params(
             functions=functions,
@@ -637,7 +637,6 @@ def completion(
             model_response["model"] = model
             response = model_response
         else:
-            args = locals()
             raise ValueError(
                 f"Unable to map your input to a model. Check your input - {args}"
             )
