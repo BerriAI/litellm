@@ -192,7 +192,7 @@ class Logging:
                         print_verbose("reaches litedebugger for logging!")
                         model = self.model
                         messages = self.messages
-                        print(f"liteDebuggerClient: {liteDebuggerClient}")
+                        print_verbose(f"liteDebuggerClient: {liteDebuggerClient}")
                         liteDebuggerClient.input_log_event(
                             model=model,
                             messages=messages,
@@ -977,7 +977,7 @@ def handle_success(args, kwargs, result, start_time, end_time):
                     print_verbose("reaches lite_debugger for logging!")
                     model = args[0] if len(args) > 0 else kwargs["model"]
                     messages = args[1] if len(args) > 1 else kwargs["messages"]
-                    print(f"liteDebuggerClient: {liteDebuggerClient}")
+                    print_verbose(f"liteDebuggerClient: {liteDebuggerClient}")
                     liteDebuggerClient.log_event(
                         model=model,
                         messages=messages,
