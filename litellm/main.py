@@ -153,7 +153,7 @@ def completion(
             # set key
             openai.api_key = api_key
             ## LOGGING
-            logging.pre_call(input=messages, api_key=openai.api_key, additional_args={"headers": litellm.headers, "api_version": openai.api_version, "api_base": openai.api_base})
+            logging.pre_call(input=messages, api_key=openai.api_key, additional_args={"litellm.headers": litellm.headers, "api_version": openai.api_version, "api_base": openai.api_base})
             ## COMPLETION CALL
             if litellm.headers:
                 response = openai.ChatCompletion.create(
