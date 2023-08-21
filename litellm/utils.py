@@ -154,7 +154,7 @@ class Logging:
         
     def pre_call(self, input, api_key, additional_args={}):
         try:
-            print(f"logging pre call for model: {self.model}")
+            print_verbose(f"logging pre call for model: {self.model}")
             self.model_call_details["input"] = input
             self.model_call_details["api_key"] = api_key
             self.model_call_details["additional_args"] = additional_args
