@@ -1,4 +1,12 @@
-# Generation/Completion/Chat Completion Models
+# Supported Chat, Completion Models
+
+## API Keys 
+liteLLM reads key naming, all keys should be named in the following format:
+`<PROVIDER>_API_KEY` for example
+* `OPENAI_API_KEY`      Provider = OpenAI
+* `TOGETHERAI_API_KEY`  Provider = TogetherAI
+* `HUGGINGFACE_API_KEY` Provider = HuggingFace
+
 
 ### OpenAI Chat Completion Models
 
@@ -49,6 +57,7 @@ VertexAI requires you to set `application_default_credentials.json`, this can be
 | Model Name       | Function Call                              | Required OS Variables                |
 |------------------|--------------------------------------------|--------------------------------------|
 | claude-instant-1  | `completion('claude-instant-1', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
+| claude-instant-1.2  | `completion('claude-instant-1.2', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
 | claude-2  | `completion('claude-2', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
 
 ### Hugging Face Inference API
@@ -64,10 +73,10 @@ Here are some examples of supported models:
 
 | Model Name       | Function Call                                                                       | Required OS Variables                |
 |------------------|-------------------------------------------------------------------------------------|--------------------------------------|
-| [stabilityai/stablecode-completion-alpha-3b-4k](https://huggingface.co/stabilityai/stablecode-completion-alpha-3b-4k)  | `completion(model="stabilityai/stablecode-completion-alpha-3b-4k", messages=messages, custom_llm_provider="huggingface")` | `os.environ['HF_TOKEN']`       |
-| [bigcode/starcoder](https://huggingface.co/bigcode/starcoder)                           | `completion(model="bigcode/starcoder", messages=messages, custom_llm_provider="huggingface")`          | `os.environ['HF_TOKEN']`       |
-| [google/flan-t5-xxl](https://huggingface.co/google/flan-t5-xxl)                         | `completion(model="google/flan-t5-xxl", messages=messages, custom_llm_provider="huggingface")`         | `os.environ['HF_TOKEN']`       |
-| [google/flan-t5-large](https://huggingface.co/google/flan-t5-large)                     | `completion(model="google/flan-t5-large", messages=messages, custom_llm_provider="huggingface")`       | `os.environ['HF_TOKEN']`       |
+| [stabilityai/stablecode-completion-alpha-3b-4k](https://huggingface.co/stabilityai/stablecode-completion-alpha-3b-4k)  | `completion(model="stabilityai/stablecode-completion-alpha-3b-4k", messages=messages, custom_llm_provider="huggingface")` | `os.environ['HUGGINGFACE_API_KEY']`       |
+| [bigcode/starcoder](https://huggingface.co/bigcode/starcoder)                           | `completion(model="bigcode/starcoder", messages=messages, custom_llm_provider="huggingface")`          | `os.environ['HUGGINGFACE_API_KEY']`       |
+| [google/flan-t5-xxl](https://huggingface.co/google/flan-t5-xxl)                         | `completion(model="google/flan-t5-xxl", messages=messages, custom_llm_provider="huggingface")`         | `os.environ['HUGGINGFACE_API_KEY']`       |
+| [google/flan-t5-large](https://huggingface.co/google/flan-t5-large)                     | `completion(model="google/flan-t5-large", messages=messages, custom_llm_provider="huggingface")`       | `os.environ['HUGGINGFACE_API_KEY']`       |
 ### AI21 Models
 
 | Model Name       | Function Call                              | Required OS Variables                |
@@ -82,9 +91,24 @@ Here are some examples of supported models:
 |------------------|--------------------------------------------|--------------------------------------|
 | command-nightly  | `completion('command-nightly', messages)`  | `os.environ['COHERE_API_KEY']`       |
 
-### BaseTen Models
+### Together AI Models
+liteLLM supports `non-streaming` and `streaming` requests to all models on https://api.together.xyz/
+
+Example TogetherAI Usage - Note: liteLLM supports all models deployed on TogetherAI
+
+| Model Name                        | Function Call                                                          | Required OS Variables           |
+|-----------------------------------|------------------------------------------------------------------------|---------------------------------|
+| togethercomputer/llama-2-70b-chat  | `completion('togethercomputer/llama-2-70b-chat', messages)`            | `os.environ['TOGETHERAI_API_KEY']` |
+| togethercomputer/LLaMA-2-13b-chat  | `completion('togethercomputer/LLaMA-2-13b-chat', messages)`            | `os.environ['TOGETHERAI_API_KEY']` |
+| togethercomputer/code-and-talk-v1 | `completion('togethercomputer/code-and-talk-v1', messages)`           | `os.environ['TOGETHERAI_API_KEY']` |
+| togethercomputer/creative-v1      | `completion('togethercomputer/creative-v1', messages)`                | `os.environ['TOGETHERAI_API_KEY']` |
+| togethercomputer/yourmodel        | `completion('togethercomputer/yourmodel', messages)`                  | `os.environ['TOGETHERAI_API_KEY']` |
+
+
+### Baseten Models
 Baseten provides infrastructure to deploy and serve ML models https://www.baseten.co/. Use liteLLM to easily call models deployed on Baseten.
 
+Example Baseten Usage - Note: liteLLM supports all models deployed on Basten
 
 | Model Name       | Function Call                                  | Required OS Variables              |
 |------------------|--------------------------------------------|------------------------------------|
@@ -99,13 +123,37 @@ All the text models from [OpenRouter](https://openrouter.ai/docs) are supported 
 
 | Model Name       | Function Call                              | Required OS Variables                |
 |------------------|--------------------------------------------|--------------------------------------|
-| openai/gpt-3.5-turbo | `completion('openai/gpt-3.5-turbo', messages)` | `os.environ['OR_SITE_URL']`,`os.environ['OR_APP_NAME']`,`os.environ['OR_API_KEY']`       |
-| openai/gpt-3.5-turbo-16k | `completion('openai/gpt-3.5-turbo-16k', messages)` | `os.environ['OR_SITE_URL']`,`os.environ['OR_APP_NAME']`,`os.environ['OR_API_KEY']`       |
-| openai/gpt-4 | `completion('openai/gpt-4', messages)` | `os.environ['OR_SITE_URL']`,`os.environ['OR_APP_NAME']`,`os.environ['OR_API_KEY']`       |
-| openai/gpt-4-32k | `completion('openai/gpt-4-32k', messages)` | `os.environ['OR_SITE_URL']`,`os.environ['OR_APP_NAME']`,`os.environ['OR_API_KEY']`       |
-| anthropic/claude-2 | `completion('anthropic/claude-2', messages)` | `os.environ['OR_SITE_URL']`,`os.environ['OR_APP_NAME']`,`os.environ['OR_API_KEY']`       |
-| anthropic/claude-instant-v1 | `completion('anthropic/claude-instant-v1', messages)` | `os.environ['OR_SITE_URL']`,`os.environ['OR_APP_NAME']`,`os.environ['OR_API_KEY']`       |
-| google/palm-2-chat-bison | `completion('google/palm-2-chat-bison', messages)` | `os.environ['OR_SITE_URL']`,`os.environ['OR_APP_NAME']`,`os.environ['OR_API_KEY']`       |
-| google/palm-2-codechat-bison | `completion('google/palm-2-codechat-bison', messages)` | `os.environ['OR_SITE_URL']`,`os.environ['OR_APP_NAME']`,`os.environ['OR_API_KEY']`       |
-| meta-llama/llama-2-13b-chat | `completion('meta-llama/llama-2-13b-chat', messages)` | `os.environ['OR_SITE_URL']`,`os.environ['OR_APP_NAME']`,`os.environ['OR_API_KEY']`       |
-| meta-llama/llama-2-70b-chat | `completion('meta-llama/llama-2-70b-chat', messages)` | `os.environ['OR_SITE_URL']`,`os.environ['OR_APP_NAME']`,`os.environ['OR_API_KEY']`       |
+| openai/gpt-3.5-turbo | `completion('openai/gpt-3.5-turbo', messages)` | `os.environ['OR_SITE_URL']`,`os.environ['OR_APP_NAME']`,`os.environ['OPENROUTER_API_KEY']`       |
+| openai/gpt-3.5-turbo-16k | `completion('openai/gpt-3.5-turbo-16k', messages)` | `os.environ['OR_SITE_URL']`,`os.environ['OR_APP_NAME']`,`os.environ['OPENROUTER_API_KEY']`       |
+| openai/gpt-4 | `completion('openai/gpt-4', messages)` | `os.environ['OR_SITE_URL']`,`os.environ['OR_APP_NAME']`,`os.environ['OPENROUTER_API_KEY']`       |
+| openai/gpt-4-32k | `completion('openai/gpt-4-32k', messages)` | `os.environ['OR_SITE_URL']`,`os.environ['OR_APP_NAME']`,`os.environ['OPENROUTER_API_KEY']`       |
+| anthropic/claude-2 | `completion('anthropic/claude-2', messages)` | `os.environ['OR_SITE_URL']`,`os.environ['OR_APP_NAME']`,`os.environ['OPENROUTER_API_KEY']`       |
+| anthropic/claude-instant-v1 | `completion('anthropic/claude-instant-v1', messages)` | `os.environ['OR_SITE_URL']`,`os.environ['OR_APP_NAME']`,`os.environ['OPENROUTER_API_KEY']`       |
+| google/palm-2-chat-bison | `completion('google/palm-2-chat-bison', messages)` | `os.environ['OR_SITE_URL']`,`os.environ['OR_APP_NAME']`,`os.environ['OPENROUTER_API_KEY']`       |
+| google/palm-2-codechat-bison | `completion('google/palm-2-codechat-bison', messages)` | `os.environ['OR_SITE_URL']`,`os.environ['OR_APP_NAME']`,`os.environ['OPENROUTER_API_KEY']`       |
+| meta-llama/llama-2-13b-chat | `completion('meta-llama/llama-2-13b-chat', messages)` | `os.environ['OR_SITE_URL']`,`os.environ['OR_APP_NAME']`,`os.environ['OPENROUTER_API_KEY']`       |
+| meta-llama/llama-2-70b-chat | `completion('meta-llama/llama-2-70b-chat', messages)` | `os.environ['OR_SITE_URL']`,`os.environ['OR_APP_NAME']`,`os.environ['OPENROUTER_API_KEY']`       |
+
+### Petals Models
+Supported models on https://chat.petals.dev/
+
+| Model Name           | Function Call                                                          | Required OS Variables          |
+|----------------------|------------------------------------------------------------------------|--------------------------------|
+| stabilityai/StableBeluga2 | `completion(model='stabilityai/StableBeluga2', messages, custom_llm_provider="petals")` | No API Key required          |
+| enoch/llama-65b-hf   | `completion(model='enoch/llama-65b-hf', messages, custom_llm_provider="petals")` | No API Key required          |
+| bigscience/bloomz    | `completion(model='bigscience/bloomz', messages, custom_llm_provider="petals")` | No API Key required          |
+
+### Ollama Models
+Ollama supported models: https://github.com/jmorganca/ollama
+
+| Model Name           | Function Call                                                                     | Required OS Variables          |
+|----------------------|-----------------------------------------------------------------------------------|--------------------------------|
+| Llama2 7B            | `completion(model='llama2', messages, custom_api_base="http://localhost:11434", custom_llm_provider="ollama", stream=True)` | No API Key required |
+| Llama2 13B           | `completion(model='llama2:13b', messages, custom_api_base="http://localhost:11434", custom_llm_provider="ollama", stream=True)` | No API Key required |
+| Llama2 70B           | `completion(model='llama2:70b', messages, custom_api_base="http://localhost:11434", custom_llm_provider="ollama", stream=True)` | No API Key required |
+| Llama2 Uncensored    | `completion(model='llama2-uncensored', messages, custom_api_base="http://localhost:11434", custom_llm_provider="ollama", stream=True)` | No API Key required |
+| Orca Mini            | `completion(model='orca-mini', messages, custom_api_base="http://localhost:11434", custom_llm_provider="ollama", stream=True)` | No API Key required |
+| Vicuna               | `completion(model='vicuna', messages, custom_api_base="http://localhost:11434", custom_llm_provider="ollama", stream=True)` | No API Key required |
+| Nous-Hermes          | `completion(model='nous-hermes', messages, custom_api_base="http://localhost:11434", custom_llm_provider="ollama", stream=True)` | No API Key required |
+| Nous-Hermes 13B      | `completion(model='nous-hermes:13b', messages, custom_api_base="http://localhost:11434", custom_llm_provider="ollama", stream=True)` | No API Key required |
+| Wizard Vicuna Uncensored | `completion(model='wizard-vicuna', messages, custom_api_base="http://localhost:11434", custom_llm_provider="ollama", stream=True)` | No API Key required |

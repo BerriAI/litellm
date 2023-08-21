@@ -8,6 +8,8 @@
 
 [![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/template/DYqQAW?referralCode=t3ukrU)
 
+![4BC6491E-86D0-4833-B061-9F54524B2579](https://github.com/BerriAI/litellm/assets/17561003/f5dd237b-db5e-42e1-b1ac-f05683b1d724)
+
 ## What does liteLLM proxy do
 - Make `/chat/completions` requests for 50+ LLM models **Azure, OpenAI, Replicate, Anthropic, Hugging Face**
   
@@ -156,3 +158,11 @@ This project includes a `Dockerfile` allowing you to build and deploy a Docker P
 - Our emails ✉️ ishaan@berri.ai / krrish@berri.ai
 
 
+## Roadmap
+- [ ] Support hosted db (e.g. Supabase)
+- [ ] Easily send data to places like posthog and sentry.
+- [ ] Add a hot-cache for project spend logs - enables fast checks for user + project limitings
+- [ ] Implement user-based rate-limiting
+- [ ] Spending controls per project - expose key creation endpoint
+- [ ] Need to store a keys db -> mapping created keys to their alias (i.e. project name)
+- [ ] Easily add new models as backups / as the entry-point (add this to the available model list)

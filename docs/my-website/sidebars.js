@@ -21,14 +21,15 @@ const sidebars = {
     'index',
     {
       type: 'category',
-      label: 'completion_function',
-      items: ['completion/input', 'completion/supported','completion/output'],
+      label: 'Completion()',
+      items: ['completion/input','completion/output'],
     },
     {
       type: 'category',
-      label: 'embedding_function',
+      label: 'Embedding()',
       items: ['embedding/supported_embedding'],
     },
+    'completion/supported',
     {
       type: 'category',
       label: 'Tutorials',
@@ -37,6 +38,7 @@ const sidebars = {
     'token_usage',
     'stream',
     'secret',
+    'caching',
     {
       type: 'category',
       label: 'Logging & Observability',
