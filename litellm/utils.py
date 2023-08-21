@@ -718,7 +718,7 @@ def set_callbacks(callback_list):
                 supabaseClient = Supabase()
             elif callback == "lite_debugger":
                 print(f"instantiating lite_debugger")
-                liteDebuggerClient = LiteDebugger()
+                liteDebuggerClient = LiteDebugger(email=litellm.email)
     except Exception as e:
         raise e
 
@@ -1008,6 +1008,9 @@ def handle_success(args, kwargs, result, start_time, end_time):
         pass
 
 
+def acreate(*args, **kwargs): ## Thin client to handle the acreate langchain call
+    return litellm.acompletion(*args, **kwargs)
+
 def prompt_token_calculator(model, messages):
     # use tiktoken or anthropic's tokenizer depending on the model
     text = " ".join(message["content"] for message in messages)
@@ -1021,7 +1024,6 @@ def prompt_token_calculator(model, messages):
     else:
         num_tokens = len(encoding.encode(text))
     return num_tokens
-
 
 def valid_model(model):
     try:

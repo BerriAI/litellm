@@ -4,6 +4,8 @@ input_callback: List[str] = []
 success_callback: List[str] = []
 failure_callback: List[str] = []
 set_verbose = False
+debugger = False # Learn more - https://docs.litellm.ai/docs/debugging/hosted_debugging
+email = None # for debugging dashboard
 telemetry = True
 max_tokens = 256  # OpenAI Defaults
 retry = True
@@ -20,7 +22,6 @@ vertex_location: Optional[str] = None
 togetherai_api_key: Optional[str] = None
 caching = False
 caching_with_models = False # if you want the caching key to be model + prompt
-debugger = False
 model_cost = {
     "gpt-3.5-turbo": {
         "max_tokens": 4000,
@@ -262,7 +263,8 @@ from .utils import (
     cost_per_token,
     completion_cost,
     get_litellm_params,
-    Logging
+    Logging,
+    acreate
 )
 from .main import *  # type: ignore
 from .integrations import *
