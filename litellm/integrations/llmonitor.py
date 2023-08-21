@@ -57,14 +57,14 @@ class LLMonitorLogger:
             messages=None,
             user_id=None,
             response_obj=None,
-            time=datetime.datetime.now(),
+            start_time=datetime.datetime.now(),
+            end_time=datetime.datetime.now(),
             error=None,
     ):
         # Method definition
         try:
             print_verbose(
-                f"LLMonitor Logging - Enters logging function for model {model}"
-            )
+                f"LLMonitor Logging - Logging request for model {model}")
 
             if response_obj:
                 usage = parse_usage(response_obj['usage'])
@@ -73,27 +73,41 @@ class LLMonitorLogger:
                 usage = None
                 output = None
 
-            print(type, run_id, model, messages, usage, output, time, user_id,
-                  error)
+            if error:
+                error_obj = {'stack': error}
 
-            headers = {'Content-Type': 'application/json'}
+            else:
+                error_obj = None
 
-            data = {
+            data = [{
                 "type": "llm",
                 "name": model,
                 "runId": run_id,
                 "app": self.app_id,
-                "error": error,
-                "event": type,
-                "timestamp": time.isoformat(),
+                'event': 'start',
+                "timestamp": start_time.isoformat(),
                 "userId": user_id,
                 "input": parse_messages(messages),
-                "usage": usage,
+            }, {
+                "type": "llm",
+                "runId": run_id,
+                "app": self.app_id,
+                "event": type,
+                "error": error_obj,
+                "timestamp": end_time.isoformat(),
+                "userId": user_id,
                 "output": parse_messages(output),
-            }
+                "tokensUsage": usage,
+            }]
 
-            print_verbose(f"LLMonitor Logging - final data object: {data}")
-            # response = requests.post(url, headers=headers, json=data)
+            # print_verbose(f"LLMonitor Logging - final data object: {data}")
+
+            response = requests.post(
+                self.api_url + '/api/report',
+                headers={'Content-Type': 'application/json'},
+                json={'events': data})
+
+            print_verbose(f"LLMonitor Logging - response: {response}")
         except:
             # traceback.print_exc()
             print_verbose(

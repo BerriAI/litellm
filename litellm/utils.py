@@ -209,19 +209,7 @@ class Logging:
                             litellm_params["litellm_call_id"],
                             print_verbose=print_verbose,
                         )
-                    elif callback == "llmonitor":
-                        print_verbose("reaches llmonitor for logging!")
-                        model = self.model
-                        messages = self.messages
-                        print(f"liteDebuggerClient: {liteDebuggerClient}")
-                        llmonitorLogger.log_event(
-                            type="start",
-                            model=model,
-                            messages=messages,
-                            user_id=litellm._thread_context.user,
-                            run_id=self.litellm_params["litellm_call_id"],
-                            print_verbose=print_verbose,
-                        )
+
                     elif callback == "lite_debugger":
                         print_verbose("reaches litedebugger for logging!")
                         model = self.model
@@ -426,6 +414,7 @@ def client(original_function):
                 add_cache(result, *args, **kwargs)
             # LOG SUCCESS
             crash_reporting(*args, **kwargs)
+
             my_thread = threading.Thread(
                 target=handle_success,
                 args=(args, kwargs, result, start_time,
@@ -433,6 +422,7 @@ def client(original_function):
             my_thread.start()
             return result
         except Exception as e:
+
             traceback_exception = traceback.format_exc()
             crash_reporting(*args, **kwargs, exception=traceback_exception)
             end_time = datetime.datetime.now()
@@ -855,21 +845,15 @@ def handle_failure(exception, traceback_exception, start_time, end_time, args,
                     print_verbose("reaches llmonitor for logging!")
                     model = args[0] if len(args) > 0 else kwargs["model"]
                     messages = args[1] if len(args) > 1 else kwargs["messages"]
-                    usage = {
-                        "prompt_tokens":
-                        prompt_token_calculator(model, messages=messages),
-                        "completion_tokens":
-                        0,
-                    }
+
                     llmonitorLogger.log_event(
                         type="error",
                         user_id=litellm._thread_context.user,
                         model=model,
                         error=traceback_exception,
-                        response_obj=result,
                         run_id=kwargs["litellm_call_id"],
-                        timestamp=end_time,
-                        usage=usage,
+                        start_time=start_time,
+                        end_time=end_time,
                         print_verbose=print_verbose,
                     )
                 elif callback == "supabase":
@@ -992,7 +976,8 @@ def handle_success(args, kwargs, result, start_time, end_time):
                         messages=messages,
                         user_id=litellm._thread_context.user,
                         response_obj=result,
-                        time=end_time,
+                        start_time=start_time,
+                        end_time=end_time,
                         run_id=kwargs["litellm_call_id"],
                         print_verbose=print_verbose,
                     )
