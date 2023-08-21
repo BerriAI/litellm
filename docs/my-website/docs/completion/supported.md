@@ -21,8 +21,8 @@ liteLLM reads key naming, all keys should be named in the following format:
 
 | Model Name       | Function Call                           | Required OS Variables                     |
 |------------------|-----------------------------------------|-------------------------------------------|
-| gpt-3.5-turbo    | `completion('gpt-3.5-turbo', messages, azure=True)` | `os.environ['AZURE_API_KEY']`,`os.environ['AZURE_API_BASE']`,`os.environ['AZURE_API_VERSION']` |
-| gpt-4            | `completion('gpt-4', messages, azure=True)`         | `os.environ['AZURE_API_KEY']`,`os.environ['AZURE_API_BASE']`,`os.environ['AZURE_API_VERSION']` |
+| gpt-3.5-turbo    | `completion('gpt-3.5-turbo', messages, custom_llm_provider="azure")` | `os.environ['AZURE_API_KEY']`,`os.environ['AZURE_API_BASE']`,`os.environ['AZURE_API_VERSION']` |
+| gpt-4            | `completion('gpt-4', messages, custom_llm_provider="azure")`         | `os.environ['AZURE_API_KEY']`,`os.environ['AZURE_API_BASE']`,`os.environ['AZURE_API_VERSION']` |
 
 ### OpenAI Text Completion Models
 
