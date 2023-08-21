@@ -32,7 +32,7 @@ By default, your dashboard is viewable at `admin.litellm.ai/<your_email>`
  import os 
 
  ## Set ENV variable 
- os.environ["LITELLM_EMAIL"] = "your_user_email"
+ os.environ["LITELLM_EMAIL"] = "your_email"
  
  ## LOG ON ALL 3 EVENTS
  litellm.input_callback = ["lite_debugger"]
