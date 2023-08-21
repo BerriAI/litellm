@@ -1,3 +1,7 @@
+---
+displayed_sidebar: tutorialSidebar
+---
+
 # litellm
 
 [![PyPI Version](https://img.shields.io/pypi/v/litellm.svg)](https://pypi.org/project/litellm/)
