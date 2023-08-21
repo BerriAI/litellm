@@ -22,11 +22,13 @@ create table
     messages json null default '{}'::json,
     response json null default '{}'::json,
     end_user text null default ''::text,
+    status text null default ''::text,
     error json null default '{}'::json,
     response_time real null default '0'::real,
     total_cost real null,
     additional_details json null default '{}'::json,
-    constraint request_logs_pkey primary key (id)
+    litellm_call_id text unique,
+    primary key (id)
   ) tablespace pg_default;
 ```
 

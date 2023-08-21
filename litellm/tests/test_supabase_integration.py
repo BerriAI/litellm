@@ -1,5 +1,5 @@
 # #### What this tests ####
-# #    This tests if logging to the helicone integration actually works
+# #    This tests if logging to the supabase integration actually works
 # # pytest mistakes intentional bad calls as failed tests -> [TODO] fix this
 # import sys, os
 # import traceback
@@ -9,10 +9,11 @@
 # import litellm
 # from litellm import embedding, completion
 
+# litellm.input_callback = ["supabase"]
 # litellm.success_callback = ["supabase"]
 # litellm.failure_callback = ["supabase"]
 
-# litellm.modify_integration("supabase",{"table_name": "litellm_logs"})
+# # litellm.modify_integration("supabase",{"table_name": "test_table"})
 
 # litellm.set_verbose = True
 
@@ -21,7 +22,7 @@
 
 
 # #openai call
-# response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}]) 
+# response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])
 
 # #bad request call
-# response = completion(model="chatgpt-test", messages=[{"role": "user", "content": "Hi 👋 - i'm a bad request"}]) 
+# response = completion(model="chatgpt-test", messages=[{"role": "user", "content": "Hi 👋 - i'm a bad request"}])

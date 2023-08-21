@@ -53,7 +53,6 @@
 # # # return this generator to the client for streaming requests
 
 
-
 # # async def get_response():
 # #     global generator
 # #     async for elem in generator:

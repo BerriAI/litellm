@@ -9,14 +9,36 @@ jobs:
       - checkout
 
       - run:
+          name: Check if litellm dir was updated or if pyproject.toml was modified
+          command: |
+            if [ -n "$(git diff --name-only $CIRCLE_SHA1^..$CIRCLE_SHA1 | grep -E 'pyproject\.toml|litellm/')" ]; then
+              echo "litellm updated"
+            else
+              echo "No changes to litellm or pyproject.toml. Skipping tests."
+              circleci step halt
+            fi
+
+      - run:
           name: Install Dependencies
           command: |
             python -m pip install --upgrade pip
             python -m pip install -r .circleci/requirements.txt
             pip install infisical
             pip install pytest
+            pip install mypy
             pip install openai[datalib]
             pip install -Uq chromadb==0.3.29
+
+      - run:
+          name: Linting Testing
+          command: |
+            cd litellm
+            python -m pip install types-requests types-setuptools
+            if ! python -m mypy . --ignore-missing-imports; then
+              echo "mypy detected errors"
+              exit 1
+            fi
+            cd ..
   
 
       # Run pytest and generate JUnit XML report
@@ -77,7 +99,3 @@ workflows:
       - publish_to_pypi:
           requires:
             - local_testing
-          filters:
-            branches:
-              only:
-                - main

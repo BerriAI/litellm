@@ -12,7 +12,6 @@
 # import asyncio
 
 
-
 # user_message = "respond in 20 words. who are you?"
 # messages = [{ "content": user_message,"role": "user"}]
 
@@ -45,8 +44,3 @@
 #         pytest.fail(f"Error occurred: {e}")
 
 # test_completion_ollama_stream()
-
-
-
-
-

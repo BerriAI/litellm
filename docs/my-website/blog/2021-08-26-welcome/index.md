@@ -1,25 +1,43 @@
----
-slug: welcome
-title: Welcome
-authors: [slorber, yangshun]
-tags: [facebook, hello, docusaurus]
----
+# 🚅 litellm
+a light 100 line package to simplify calling OpenAI, Azure, Cohere, Anthropic APIs 
 
-[Docusaurus blogging features](https://docusaurus.io/docs/blog) are powered by the [blog plugin](https://docusaurus.io/docs/api/plugins/@docusaurus/plugin-content-blog).
+###### litellm manages:
+* Calling all LLM APIs using the OpenAI format - `completion(model, messages)`
+* Consistent output for all LLM APIs, text responses will always be available at `['choices'][0]['message']['content']`
+* Consistent Exceptions for all LLM APIs, we map RateLimit, Context Window, and Authentication Error exceptions across all providers to their OpenAI equivalents. [see Code](https://github.com/BerriAI/litellm/blob/ba1079ff6698ef238c5c7f771dd2b698ec76f8d9/litellm/utils.py#L250)
 
-Simply add Markdown files (or folders) to the `blog` directory.
+###### observability:
+* Logging - see exactly what the raw model request/response is by plugging in your own function `completion(.., logger_fn=your_logging_fn)` and/or print statements from the package `litellm.set_verbose=True`
+* Callbacks - automatically send your data to Helicone, Sentry, Posthog, Slack - `litellm.success_callbacks`, `litellm.failure_callbacks` [see Callbacks](https://litellm.readthedocs.io/en/latest/advanced/)
 
-Regular blog authors can be added to `authors.yml`.
+## Quick Start
+Go directly to code: [Getting Started Notebook](https://colab.research.google.com/drive/1gR3pY-JzDZahzpVdbGBtrNGDBmzUNJaJ?usp=sharing)
+### Installation
+```
+pip install litellm
+```
 
-The blog post date can be extracted from filenames, such as:
+### Usage
+```python
+from litellm import completion
 
-- `2019-05-30-welcome.md`
-- `2019-05-30-welcome/index.md`
+## set ENV variables
+os.environ["OPENAI_API_KEY"] = "openai key"
+os.environ["COHERE_API_KEY"] = "cohere key"
 
-A blog post folder can be convenient to co-locate blog post images:
+messages = [{ "content": "Hello, how are you?","role": "user"}]
 
-![Docusaurus Plushie](./docusaurus-plushie-banner.jpeg)
+# openai call
+response = completion(model="gpt-3.5-turbo", messages=messages)
 
-The blog supports tags as well!
+# cohere call
+response = completion("command-nightly", messages)
+```
+Need Help / Support : [see troubleshooting](https://litellm.readthedocs.io/en/latest/troubleshoot)
 
-**And if you don't want a blog**: just delete this directory, and use `blog: false` in your Docusaurus config.
+## Why did we build liteLLM 
+- **Need for simplicity**: Our code started to get extremely complicated managing & translating calls between Azure, OpenAI, Cohere
+
+## Support
+* [Meet with us 👋](https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version)
+* Contact us at ishaan@berri.ai / krrish@berri.ai
