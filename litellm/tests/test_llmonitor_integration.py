@@ -15,12 +15,21 @@ litellm.error_callback = ["llmonitor"]
 
 litellm.set_verbose = True
 
-# openai call
+os.environ[
+    "OPENAI_API_KEY"] = "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"
+
+print(os.environ["OPENAI_API_KEY"])
+
+# def my_custom_logging_fn(model_call_dict):
+#     print(f"model call details: {model_call_dict}")
+
+# # openai call
 # response = completion(model="gpt-3.5-turbo",
 #                       messages=[{
 #                           "role": "user",
 #                           "content": "Hi 👋 - i'm openai"
-#                       }])
+#                       }],
+#                       logger_fn=my_custom_logging_fn)
 
 # print(response)
 

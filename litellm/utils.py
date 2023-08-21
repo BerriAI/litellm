@@ -986,7 +986,6 @@ def handle_success(args, kwargs, result, start_time, end_time):
                     print_verbose("reaches llmonitor for logging!")
                     model = args[0] if len(args) > 0 else kwargs["model"]
                     messages = args[1] if len(args) > 1 else kwargs["messages"]
-                    usage = kwargs["usage"]
                     llmonitorLogger.log_event(
                         type="end",
                         model=model,
@@ -994,7 +993,6 @@ def handle_success(args, kwargs, result, start_time, end_time):
                         user_id=litellm._thread_context.user,
                         response_obj=result,
                         time=end_time,
-                        usage=usage,
                         run_id=kwargs["litellm_call_id"],
                         print_verbose=print_verbose,
                     )
