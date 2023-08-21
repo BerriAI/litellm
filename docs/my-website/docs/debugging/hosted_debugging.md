@@ -16,14 +16,13 @@ See our live dashboard 👉 [admin.litellm.ai](https://admin.litellm.ai/)
 By default, your dashboard is viewable at `admin.litellm.ai/<your_email>`. 
 
 ```
+import litellm, os 
+
  ## Set your email
  os.environ["LITELLM_EMAIL"] = "your_user_email"
  
- ## LOG ON ALL 3 EVENTS
- litellm.input_callback = ["lite_debugger"]
- litellm.success_callback = ["lite_debugger"]
- litellm.failure_callback = ["lite_debugger"]
-
+## Set debugger to true
+litellm.debugger = True
 ```
 
 ## Example Usage
@@ -36,12 +35,8 @@ By default, your dashboard is viewable at `admin.litellm.ai/<your_email>`.
  ## Set ENV variable 
  os.environ["LITELLM_EMAIL"] = "your_email"
  
- ## LOG ON ALL 3 EVENTS
- litellm.input_callback = ["lite_debugger"]
- litellm.success_callback = ["lite_debugger"]
- litellm.failure_callback = ["lite_debugger"]
-
- litellm.set_verbose = True
+ ## Set debugger to true
+ litellm.debugger = True
 
  user_message = "Hello, how are you?"
  messages = [{ "content": user_message,"role": "user"}]
@@ -52,6 +47,5 @@ By default, your dashboard is viewable at `admin.litellm.ai/<your_email>`.
 
  # bad request call
  response = completion(model="chatgpt-test", messages=[{"role": "user", "content": "Hi 👋 - i'm a bad request"}])
-
 ```
 
