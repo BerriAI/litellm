@@ -9,11 +9,7 @@
 # import litellm
 # from litellm import embedding, completion
 
-# litellm.input_callback = ["lite_debugger"]
-# litellm.success_callback = ["lite_debugger"]
-# litellm.failure_callback = ["lite_debugger"]
-
-# litellm.set_verbose = True
+# litellm.debugger = True
 
 # user_message = "Hello, how are you?"
 # messages = [{ "content": user_message,"role": "user"}]

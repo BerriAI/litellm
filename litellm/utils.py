@@ -286,6 +286,10 @@ def client(original_function):
     ):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
         try:
             global callback_list, add_breadcrumb, user_logger_fn
+            if litellm.debugger: # add to input, success and failure callbacks if user sets debugging to true
+                litellm.input_callback.append("lite_debugger")
+                litellm.success_callback.append("lite_debugger")
+                litellm.failure_callback.append("lite_debugger")
             if (
                 len(litellm.input_callback) > 0 or len(litellm.success_callback) > 0 or len(litellm.failure_callback) > 0
             ) and len(callback_list) == 0:
