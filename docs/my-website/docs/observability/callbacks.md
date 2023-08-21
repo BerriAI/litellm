@@ -6,8 +6,8 @@ liteLLM provides `success_callbacks` and `failure_callbacks`, making it easy for
 
 liteLLM supports:
 
-- [Helicone](https://docs.helicone.ai/introduction)
 - [LLMonitor](https://llmonitor.com/docs)
+- [Helicone](https://docs.helicone.ai/introduction)
 - [Sentry](https://docs.sentry.io/platforms/python/)
 - [PostHog](https://posthog.com/docs/libraries/python)
 - [Slack](https://slack.dev/bolt-python/concepts)
