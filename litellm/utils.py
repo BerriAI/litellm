@@ -1019,10 +1019,11 @@ def get_model_list():
         if time_delta > 300 or last_fetched_at == None:
             # make the api call 
             last_fetched_at = time.time()
+            print(f"last_fetched_at: {last_fetched_at}")
             response = requests.get(url="http://api.litellm.ai/get_model_list", headers={"content-type": "application/json"}, data=json.dumps({"user_email": user_email}))
             print_verbose(f"get_model_list response: {response.text}")
             model_list = response.json()["model_list"]
-            return model_list
+            litellm.model_list = model_list # update the user's current litellm model list 
     # return litellm model list by default
     return litellm.model_list
 
