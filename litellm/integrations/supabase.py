@@ -144,23 +144,25 @@ class Supabase:
             )
         return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
 
-    def input_log_event(self, model, messages, end_user, litellm_call_id, print_verbose):
+    def input_log_event(
+        self, model, messages, end_user, litellm_call_id, print_verbose
+    ):
         try:
             print_verbose(
                 f"Supabase Logging - Enters input logging function for model {model}"
             )
             supabase_data_obj = {
-                "model": model, 
-                "messages": messages, 
-                "end_user": end_user, 
+                "model": model,
+                "messages": messages,
+                "end_user": end_user,
                 "status": "initiated",
-                "litellm_call_id": litellm_call_id
+                "litellm_call_id": litellm_call_id,
             }
             data, count = (
-                    self.supabase_client.table(self.supabase_table_name)
-                    .insert(supabase_data_obj)
-                    .execute()
-                )
+                self.supabase_client.table(self.supabase_table_name)
+                .insert(supabase_data_obj)
+                .execute()
+            )
             print(f"data: {data}")
         except:
             print_verbose(f"Supabase Logging Error - {traceback.format_exc()}")
@@ -200,7 +202,7 @@ class Supabase:
                     "response": response_obj["choices"][0]["message"]["content"],
                     "end_user": end_user,
                     "litellm_call_id": litellm_call_id,
-                    "status": "success"
+                    "status": "success",
                 }
                 print_verbose(
                     f"Supabase Logging - final data object: {supabase_data_obj}"
@@ -221,7 +223,7 @@ class Supabase:
                     "error": response_obj["error"],
                     "end_user": end_user,
                     "litellm_call_id": litellm_call_id,
-                    "status": "failure"
+                    "status": "failure",
                 }
                 print_verbose(
                     f"Supabase Logging - final data object: {supabase_data_obj}"

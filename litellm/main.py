@@ -10,7 +10,7 @@ from litellm import (  # type: ignore
     timeout,
     get_optional_params,
     get_litellm_params,
-    Logging
+    Logging,
 )
 from litellm.utils import (
     get_secret,
@@ -96,10 +96,14 @@ def completion(
         model_response = ModelResponse()
         if azure:  # this flag is deprecated, remove once notebooks are also updated.
             custom_llm_provider = "azure"
-        elif model.split("/", 1)[0] in litellm.provider_list: # allow custom provider to be passed in via the model name "azure/chatgpt-test"
+        elif (
+            model.split("/", 1)[0] in litellm.provider_list
+        ):  # allow custom provider to be passed in via the model name "azure/chatgpt-test"
             custom_llm_provider = model.split("/", 1)[0]
             model = model.split("/", 1)[1]
-            if "replicate" == custom_llm_provider and "/" not in model: # handle the "replicate/llama2..." edge-case
+            if (
+                "replicate" == custom_llm_provider and "/" not in model
+            ):  # handle the "replicate/llama2..." edge-case
                 model = custom_llm_provider + "/" + model
         # check if user passed in any of the OpenAI optional params
         optional_params = get_optional_params(
@@ -130,9 +134,14 @@ def completion(
             verbose=verbose,
             custom_llm_provider=custom_llm_provider,
             custom_api_base=custom_api_base,
-            litellm_call_id=litellm_call_id
+            litellm_call_id=litellm_call_id,
         )
-        logging = Logging(model=model, messages=messages, optional_params=optional_params, litellm_params=litellm_params)
+        logging = Logging(
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+        )
         if custom_llm_provider == "azure":
             # azure configs
             openai.api_type = "azure"
@@ -153,7 +162,15 @@ def completion(
             # set key
             openai.api_key = api_key
             ## LOGGING
-            logging.pre_call(input=messages, api_key=openai.api_key, additional_args={"litellm.headers": litellm.headers, "api_version": openai.api_version, "api_base": openai.api_base})
+            logging.pre_call(
+                input=messages,
+                api_key=openai.api_key,
+                additional_args={
+                    "headers": litellm.headers,
+                    "api_version": openai.api_version,
+                    "api_base": openai.api_base,
+                },
+            )
             ## COMPLETION CALL
             if litellm.headers:
                 response = openai.ChatCompletion.create(
@@ -168,7 +185,16 @@ def completion(
                 )
             
             ## LOGGING
-            logging.post_call(input=messages, api_key=openai.api_key, original_response=response, additional_args={"headers": litellm.headers, "api_version": openai.api_version, "api_base": openai.api_base})
+            logging.post_call(
+                input=messages,
+                api_key=openai.api_key,
+                original_response=response,
+                additional_args={
+                    "headers": litellm.headers,
+                    "api_version": openai.api_version,
+                    "api_base": openai.api_base,
+                },
+            )
         elif (
             model in litellm.open_ai_chat_completion_models
             or custom_llm_provider == "custom_openai"
@@ -193,7 +219,11 @@ def completion(
             openai.api_key = api_key
 
             ## LOGGING
-            logging.pre_call(input=messages, api_key=api_key, additional_args={"headers": litellm.headers, "api_base": api_base})
+            logging.pre_call(
+                input=messages,
+                api_key=api_key,
+                additional_args={"headers": litellm.headers, "api_base": api_base},
+            )
             ## COMPLETION CALL
             if litellm.headers:
                 response = openai.ChatCompletion.create(
@@ -207,7 +237,12 @@ def completion(
                     model=model, messages=messages, **optional_params
                 )
             ## LOGGING
-            logging.post_call(input=messages, api_key=api_key, original_response=response, additional_args={"headers": litellm.headers})
+            logging.post_call(
+                input=messages,
+                api_key=api_key,
+                original_response=response,
+                additional_args={"headers": litellm.headers},
+            )
         elif model in litellm.open_ai_text_completion_models:
             openai.api_type = "openai"
             openai.api_base = (
@@ -228,7 +263,16 @@ def completion(
                 openai.organization = litellm.organization
             prompt = " ".join([message["content"] for message in messages])
             ## LOGGING
-            logging.pre_call(input=prompt, api_key=api_key, additional_args={"openai_organization": litellm.organization, "headers": litellm.headers, "api_base": openai.api_base, "api_type": openai.api_type})
+            logging.pre_call(
+                input=prompt,
+                api_key=api_key,
+                additional_args={
+                    "openai_organization": litellm.organization,
+                    "headers": litellm.headers,
+                    "api_base": openai.api_base,
+                    "api_type": openai.api_type,
+                },
+            )
             ## COMPLETION CALL
             if litellm.headers:
                 response = openai.Completion.create(
@@ -239,7 +283,17 @@ def completion(
             else:
                 response = openai.Completion.create(model=model, prompt=prompt)
             ## LOGGING
-            logging.post_call(input=prompt, api_key=api_key, original_response=response, additional_args={"openai_organization": litellm.organization, "headers": litellm.headers, "api_base": openai.api_base, "api_type": openai.api_type})
+            logging.post_call(
+                input=prompt,
+                api_key=api_key,
+                original_response=response,
+                additional_args={
+                    "openai_organization": litellm.organization,
+                    "headers": litellm.headers,
+                    "api_base": openai.api_base,
+                    "api_type": openai.api_type,
+                },
+            )
             ## RESPONSE OBJECT
             completion_response = response["choices"][0]["text"]
             model_response["choices"][0]["message"]["content"] = completion_response
@@ -270,7 +324,14 @@ def completion(
                 input["max_length"] = max_tokens  # for t5 models
                 input["max_new_tokens"] = max_tokens  # for llama2 models
             ## LOGGING
-            logging.pre_call(input=prompt, api_key=replicate_key, additional_args={"complete_input_dict": input, "max_tokens": max_tokens})
+            logging.pre_call(
+                input=prompt,
+                api_key=replicate_key,
+                additional_args={
+                    "complete_input_dict": input,
+                    "max_tokens": max_tokens,
+                },
+            )
             ## COMPLETION CALL
             output = replicate.run(model, input=input)
             if "stream" in optional_params and optional_params["stream"] == True:
@@ -283,7 +344,15 @@ def completion(
                 response += item
             completion_response = response
             ## LOGGING
-            logging.post_call(input=prompt, api_key=replicate_key, original_response=completion_response, additional_args={"complete_input_dict": input, "max_tokens": max_tokens})
+            logging.post_call(
+                input=prompt,
+                api_key=replicate_key,
+                original_response=completion_response,
+                additional_args={
+                    "complete_input_dict": input,
+                    "max_tokens": max_tokens,
+                },
+            )
             ## USAGE
             prompt_tokens = len(encoding.encode(prompt))
             completion_tokens = len(encoding.encode(completion_response))
@@ -305,7 +374,7 @@ def completion(
                 encoding=encoding,
                 default_max_tokens_to_sample=litellm.max_tokens,
                 api_key=anthropic_key,
-                logging_obj = logging # model call logging done inside the class as we make need to modify I/O to fit anthropic's requirements
+                logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit anthropic's requirements
             )
             model_response = anthropic_client.completion(
                 model=model,
@@ -369,7 +438,9 @@ def completion(
                     **optional_params,
                 )
             ## LOGGING
-            logging.post_call(input=messages, api_key=openai.api_key, original_response=response)
+            logging.post_call(
+                input=messages, api_key=openai.api_key, original_response=response
+            )
         elif model in litellm.cohere_models:
             # import cohere/if it fails then pip install cohere
             install_and_import("cohere")
@@ -392,7 +463,9 @@ def completion(
                 response = CustomStreamWrapper(response, model)
                 return response
             ## LOGGING
-            logging.post_call(input=prompt, api_key=cohere_key, original_response=response)
+            logging.post_call(
+                input=prompt, api_key=cohere_key, original_response=response
+            )
             ## USAGE
             completion_response = response[0].text
             prompt_tokens = len(encoding.encode(prompt))
@@ -475,7 +548,9 @@ def completion(
                 headers=headers,
             )
             ## LOGGING
-            logging.post_call(input=prompt, api_key=TOGETHER_AI_TOKEN, original_response=res.text)
+            logging.post_call(
+                input=prompt, api_key=TOGETHER_AI_TOKEN, original_response=res.text
+            )
             # make this safe for reading, if output does not exist raise an error
             json_response = res.json()
             if "output" not in json_response:
@@ -516,7 +591,9 @@ def completion(
             completion_response = chat.send_message(prompt, **optional_params)
 
             ## LOGGING
-            logging.post_call(input=prompt, api_key=None, original_response=completion_response)
+            logging.post_call(
+                input=prompt, api_key=None, original_response=completion_response
+            )
 
             ## RESPONSE OBJECT
             model_response["choices"][0]["message"]["content"] = completion_response
@@ -541,7 +618,9 @@ def completion(
             completion_response = vertex_model.predict(prompt, **optional_params)
 
             ## LOGGING
-            logging.post_call(input=prompt, api_key=None, original_response=completion_response)
+            logging.post_call(
+                input=prompt, api_key=None, original_response=completion_response
+            )
             ## RESPONSE OBJECT
             model_response["choices"][0]["message"]["content"] = completion_response
             model_response["created"] = time.time()
@@ -564,7 +643,11 @@ def completion(
             completion_response = ai21_response["completions"][0]["data"]["text"]
 
             ## LOGGING
-            logging.post_call(input=prompt, api_key=ai21.api_key, original_response=completion_response)
+            logging.post_call(
+                input=prompt,
+                api_key=ai21.api_key,
+                original_response=completion_response,
+            )
 
             ## RESPONSE OBJECT
             model_response["choices"][0]["message"]["content"] = completion_response
@@ -578,7 +661,9 @@ def completion(
             prompt = " ".join([message["content"] for message in messages])
 
             ## LOGGING
-            logging.pre_call(input=prompt, api_key=None, additional_args={"endpoint": endpoint})
+            logging.pre_call(
+                input=prompt, api_key=None, additional_args={"endpoint": endpoint}
+            )
 
             generator = get_ollama_response_stream(endpoint, model, prompt)
             # assume all responses are streamed
@@ -605,7 +690,11 @@ def completion(
                     completion_response = completion_response["generated_text"]
 
             ## LOGGING
-            logging.post_call(input=prompt, api_key=base_ten_key, original_response=completion_response)
+            logging.post_call(
+                input=prompt,
+                api_key=base_ten_key,
+                original_response=completion_response,
+            )
 
             ## RESPONSE OBJECT
             model_response["choices"][0]["message"]["content"] = completion_response
@@ -622,13 +711,22 @@ def completion(
             prompt = " ".join([message["content"] for message in messages])
 
             ## LOGGING
-            logging.pre_call(input=prompt, api_key=None, additional_args={"url": url, "max_new_tokens": 100})
+            logging.pre_call(
+                input=prompt,
+                api_key=None,
+                additional_args={"url": url, "max_new_tokens": 100},
+            )
 
             response = requests.post(
                 url, data={"inputs": prompt, "max_new_tokens": 100, "model": model}
             )
             ## LOGGING
-            logging.post_call(input=prompt, api_key=None, original_response=response.text, additional_args={"url": url, "max_new_tokens": 100})
+            logging.post_call(
+                input=prompt,
+                api_key=None,
+                original_response=response.text,
+                additional_args={"url": url, "max_new_tokens": 100},
+            )
 
             completion_response = response.json()["outputs"]
 
@@ -676,10 +774,22 @@ def batch_completion(*args, **kwargs):
 @timeout(  # type: ignore
     60
 )  ## set timeouts, in case calls hang (e.g. Azure) - default is 60s, override with `force_timeout`
-def embedding(model, input=[], azure=False, force_timeout=60, litellm_call_id=None, logger_fn=None):
+def embedding(
+    model, input=[], azure=False, force_timeout=60, litellm_call_id=None, logger_fn=None
+):
     try:
         response = None
-        logging = Logging(model=model, messages=input, optional_params={}, litellm_params={"azure": azure, "force_timeout": force_timeout, "logger_fn": logger_fn, "litellm_call_id": litellm_call_id})
+        logging = Logging(
+            model=model,
+            messages=input,
+            optional_params={},
+            litellm_params={
+                "azure": azure,
+                "force_timeout": force_timeout,
+                "logger_fn": logger_fn,
+                "litellm_call_id": litellm_call_id,
+            },
+        )
         if azure == True:
             # azure configs
             openai.api_type = "azure"
@@ -687,7 +797,15 @@ def embedding(model, input=[], azure=False, force_timeout=60, litellm_call_id=No
             openai.api_version = get_secret("AZURE_API_VERSION")
             openai.api_key = get_secret("AZURE_API_KEY")
             ## LOGGING
-            logging.pre_call(input=input, api_key=openai.api_key, additional_args={"api_type": openai.api_type, "api_base": openai.api_base, "api_version": openai.api_version})
+            logging.pre_call(
+                input=input,
+                api_key=openai.api_key,
+                additional_args={
+                    "api_type": openai.api_type,
+                    "api_base": openai.api_base,
+                    "api_version": openai.api_version,
+                },
+            )
             ## EMBEDDING CALL
             response = openai.Embedding.create(input=input, engine=model)
             print_verbose(f"response_value: {str(response)[:50]}")
@@ -697,7 +815,15 @@ def embedding(model, input=[], azure=False, force_timeout=60, litellm_call_id=No
             openai.api_version = None
             openai.api_key = get_secret("OPENAI_API_KEY")
             ## LOGGING
-            logging.pre_call(input=input, api_key=openai.api_key, additional_args={"api_type": openai.api_type, "api_base": openai.api_base, "api_version": openai.api_version})
+            logging.pre_call(
+                input=input,
+                api_key=openai.api_key,
+                additional_args={
+                    "api_type": openai.api_type,
+                    "api_base": openai.api_base,
+                    "api_version": openai.api_version,
+                },
+            )
             ## EMBEDDING CALL
             response = openai.Embedding.create(input=input, model=model)
             print_verbose(f"response_value: {str(response)[:50]}")
@@ -710,7 +836,11 @@ def embedding(model, input=[], azure=False, force_timeout=60, litellm_call_id=No
         ## LOGGING
         logging.post_call(input=input, api_key=openai.api_key, original_response=e)
         ## Map to OpenAI Exception
-        raise exception_type(model=model, original_exception=e, custom_llm_provider="azure" if azure==True else None)
+        raise exception_type(
+            model=model,
+            original_exception=e,
+            custom_llm_provider="azure" if azure == True else None,
+        )
 
 
 ####### HELPER FUNCTIONS ################
