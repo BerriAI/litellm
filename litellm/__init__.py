@@ -1,4 +1,5 @@
 import threading
+from litellm._version import version as __version__
 from typing import Callable, List, Optional
 input_callback: List[str] = []
 success_callback: List[str] = []
