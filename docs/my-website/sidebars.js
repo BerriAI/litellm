@@ -34,7 +34,7 @@ const sidebars = {
     {
       type: 'category',
       label: 'Tutorials',
-      items: ['tutorials/huggingface_tutorial', 'tutorials/TogetherAI_liteLLM', 'tutorials/fallbacks'],
+      items: ['tutorials/huggingface_tutorial', 'tutorials/TogetherAI_liteLLM', 'tutorials/fallbacks', 'tutorials/finetuned_chat_gpt'],
     },
     'token_usage',
     'stream',
