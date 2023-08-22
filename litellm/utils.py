@@ -281,16 +281,15 @@ def exception_logging(
 ####### CLIENT ###################
 # make it easy to log if completion/embedding runs succeeded or failed + see what happened | Non-Blocking
 def client(original_function):
-    global liteDebuggerClient
+    global liteDebuggerClient, get_all_keys
 
     def function_setup(
         *args, **kwargs
     ):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
         try:
             global callback_list, add_breadcrumb, user_logger_fn
-            if (
-                litellm.debugger or os.getenv("LITELLM_EMAIL", None) != None
-            ):  # add to input, success and failure callbacks if user sets debugging to true
+            if litellm.email is not None or os.getenv("LITELLM_EMAIL", None) is not None:  # add to input, success and failure callbacks if user is using hosted product
+                get_all_keys()
                 litellm.input_callback.append("lite_debugger")
                 litellm.success_callback.append("lite_debugger")
                 litellm.failure_callback.append("lite_debugger")
@@ -1091,6 +1090,61 @@ def modify_integration(integration_name, integration_params):
     if integration_name == "supabase":
         if "table_name" in integration_params:
             Supabase.supabase_table_name = integration_params["table_name"]
+
+####### [BETA] HOSTED PRODUCT ################ - https://docs.litellm.ai/docs/debugging/hosted_debugging
+
+def get_all_keys():
+    try:
+        global last_fetched_at
+        # if user is using hosted product -> instantiate their env with their hosted api keys - refresh every 5 minutes
+        user_email = os.getenv("LITELLM_EMAIL") or litellm.email
+        if user_email:
+            time_delta = 0
+            if last_fetched_at != None:
+                current_time = time.time()
+                time_delta = current_time - last_fetched_at
+            if time_delta > 300 or last_fetched_at == None:
+                # make the api call
+                last_fetched_at = time.time()
+                print(f"last_fetched_at: {last_fetched_at}")
+                response = requests.post(url="http://api.litellm.ai/get_all_keys", headers={"content-type": "application/json"}, data=json.dumps({"user_email": user_email}))
+                print_verbose(f"get model key response: {response.text}")
+                data = response.json()
+                # update model list
+                for key, value in data["model_keys"].items(): # follows the LITELLM API KEY format - <UPPERCASE_PROVIDER_NAME>_API_KEY - e.g. HUGGINGFACE_API_KEY
+                    os.environ[key] = value
+                return "it worked!"
+            return None
+        # return None by default
+        return None
+    except:
+        print_verbose(f"[Non-Blocking Error] get_all_keys error - {traceback.format_exc()}")
+        pass
+
+def get_model_list():
+    global last_fetched_at
+    try:
+        # if user is using hosted product -> get their updated model list - refresh every 5 minutes
+        user_email = os.getenv("LITELLM_EMAIL") or litellm.email
+        if user_email:
+            time_delta = 0
+            if last_fetched_at != None:
+                current_time = time.time()
+                time_delta = current_time - last_fetched_at
+            if time_delta > 300 or last_fetched_at == None:
+                # make the api call
+                last_fetched_at = time.time()
+                print(f"last_fetched_at: {last_fetched_at}")
+                response = requests.post(url="http://api.litellm.ai/get_model_list", headers={"content-type": "application/json"}, data=json.dumps({"user_email": user_email}))
+                print_verbose(f"get_model_list response: {response.text}")
+                data = response.json()
+                # update model list
+                model_list = data["model_list"]
+                return model_list
+            return None
+        return None # return None by default
+    except:
+        print_verbose(f"[Non-Blocking Error] get_all_keys error - {traceback.format_exc()}")
 
 
 ####### EXCEPTION MAPPING ################
