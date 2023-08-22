@@ -260,11 +260,8 @@ from .utils import (
     completion_cost,
     get_litellm_params,
     Logging,
-<<<<<<< HEAD
     acreate,
     get_model_list
-=======
->>>>>>> 878f1a6 (formatting fixes)
 )
 from .main import *  # type: ignore
 from .integrations import *
