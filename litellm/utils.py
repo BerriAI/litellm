@@ -1021,35 +1021,6 @@ def handle_success(args, kwargs, result, start_time, end_time):
         )
         pass
 
-
-def get_model_list():
-    global last_fetched_at
-    # if user is using hosted product -> get their updated model list - refresh every 5 minutes
-    user_email = os.getenv("LITELLM_EMAIL") or litellm.email
-    if user_email:
-        time_delta = 0
-        if last_fetched_at != None:
-            current_time = time.time()
-            time_delta = current_time - last_fetched_at
-        if time_delta > 300 or last_fetched_at == None:
-            # make the api call
-            last_fetched_at = time.time()
-            print(f"last_fetched_at: {last_fetched_at}")
-            response = requests.post(
-                url="http://api.litellm.ai/get_model_list",
-                headers={"content-type": "application/json"},
-                data=json.dumps({"user_email": user_email}),
-            )
-            print_verbose(f"get_model_list response: {response.text}")
-            data = response.json()
-            # update model list
-            model_list = data["model_list"]
-            return model_list
-        return None
-    # return None by default
-    return None
-
-
 def acreate(*args, **kwargs):  ## Thin client to handle the acreate langchain call
     return litellm.acompletion(*args, **kwargs)
 

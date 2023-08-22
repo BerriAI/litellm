@@ -11,7 +11,7 @@ python = "^3.8"
 openai = "^0.27.8"
 python-dotenv = "^1.0.0"
 tiktoken = "^0.4.0"
-importlib_metadata
+importlib_metadata = "^6.8.0"
 
 [build-system]
 requires = ["poetry-core"]
