@@ -11,6 +11,7 @@ sys.path.insert(
 import pytest
 import litellm
 from litellm import embedding, completion
+
 litellm.debugger = True
 
 # from infisical import InfisicalClient
@@ -349,13 +350,10 @@ def test_petals():
 
 
 def test_completion_with_fallbacks():
-    fallbacks = ['gpt-3.5-turb', 'gpt-3.5-turbo', 'command-nightly']
+    fallbacks = ["gpt-3.5-turb", "gpt-3.5-turbo", "command-nightly"]
     try:
         response = completion(
-            model='bad-model',
-            messages=messages,
-            force_timeout=120,
-            fallbacks=fallbacks
+            model="bad-model", messages=messages, force_timeout=120, fallbacks=fallbacks
         )
         # Add any assertions here to check the response
         print(response)

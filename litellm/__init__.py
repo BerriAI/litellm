@@ -5,7 +5,7 @@ input_callback: List[str] = []
 success_callback: List[str] = []
 failure_callback: List[str] = []
 set_verbose = False
-email = None # for hosted dashboard. Learn more - https://docs.litellm.ai/docs/debugging/hosted_debugging
+email = None  # for hosted dashboard. Learn more - https://docs.litellm.ai/docs/debugging/hosted_debugging
 telemetry = True
 max_tokens = 256  # OpenAI Defaults
 retry = True
@@ -261,7 +261,7 @@ from .utils import (
     get_litellm_params,
     Logging,
     acreate,
-    get_model_list
+    get_model_list,
 )
 from .main import *  # type: ignore
 from .integrations import *

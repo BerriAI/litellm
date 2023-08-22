@@ -288,7 +288,9 @@ def client(original_function):
     ):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
         try:
             global callback_list, add_breadcrumb, user_logger_fn
-            if litellm.email or os.getenv("LITELLM_EMAIL", None) != None: # add to input, success and failure callbacks if user sets debugging to true
+            if (
+                litellm.debugger or os.getenv("LITELLM_EMAIL", None) != None
+            ):  # add to input, success and failure callbacks if user sets debugging to true
                 litellm.input_callback.append("lite_debugger")
                 litellm.success_callback.append("lite_debugger")
                 litellm.failure_callback.append("lite_debugger")
@@ -1020,34 +1022,43 @@ def handle_success(args, kwargs, result, start_time, end_time):
         )
         pass
 
+
 def get_model_list():
     global last_fetched_at
     # if user is using hosted product -> get their updated model list - refresh every 5 minutes
-    user_email = (os.getenv("LITELLM_EMAIL") or litellm.email)
+    user_email = os.getenv("LITELLM_EMAIL") or litellm.email
     if user_email:
         time_delta = 0
         if last_fetched_at != None:
-            current_time = time.time() 
+            current_time = time.time()
             time_delta = current_time - last_fetched_at
         if time_delta > 300 or last_fetched_at == None:
-            # make the api call 
+            # make the api call
             last_fetched_at = time.time()
             print(f"last_fetched_at: {last_fetched_at}")
-            response = requests.get(url="http://api.litellm.ai/get_model_list", headers={"content-type": "application/json"}, data=json.dumps({"user_email": user_email}))
+            response = requests.get(
+                url="http://api.litellm.ai/get_model_list",
+                headers={"content-type": "application/json"},
+                data=json.dumps({"user_email": user_email}),
+            )
             print_verbose(f"get_model_list response: {response.text}")
             data = response.json()
             # update model list
             model_list = data["model_list"]
-            # set environment variables 
+            # set environment variables
             env_dict = data["model_keys"]
             for key, value in env_dict.items():
                 os.environ[key] = value
-            litellm.model_list = model_list # update the user's current litellm model list 
+            litellm.model_list = (
+                model_list  # update the user's current litellm model list
+            )
     # return litellm model list by default
     return litellm.model_list
 
-def acreate(*args, **kwargs): ## Thin client to handle the acreate langchain call
+
+def acreate(*args, **kwargs):  ## Thin client to handle the acreate langchain call
     return litellm.acompletion(*args, **kwargs)
+
 
 def prompt_token_calculator(model, messages):
     # use tiktoken or anthropic's tokenizer depending on the model
@@ -1062,6 +1073,7 @@ def prompt_token_calculator(model, messages):
     else:
         num_tokens = len(encoding.encode(text))
     return num_tokens
+
 
 def valid_model(model):
     try:
@@ -1471,22 +1483,29 @@ def completion_with_fallbacks(**kwargs):
     rate_limited_models = set()
     model_expiration_times = {}
     start_time = time.time()
-    fallbacks = [kwargs['model']] + kwargs['fallbacks']
-    del kwargs['fallbacks'] # remove fallbacks so it's not recursive
+    fallbacks = [kwargs["model"]] + kwargs["fallbacks"]
+    del kwargs["fallbacks"]  # remove fallbacks so it's not recursive
 
     while response == None and time.time() - start_time < 45:
         for model in fallbacks:
-        # loop thru all models
+            # loop thru all models
             try:
-                if model in rate_limited_models: # check if model is currently cooling down
-                    if model_expiration_times.get(model) and time.time() >= model_expiration_times[model]:
-                        rate_limited_models.remove(model) # check if it's been 60s of cool down and remove model
+                if (
+                    model in rate_limited_models
+                ):  # check if model is currently cooling down
+                    if (
+                        model_expiration_times.get(model)
+                        and time.time() >= model_expiration_times[model]
+                    ):
+                        rate_limited_models.remove(
+                            model
+                        )  # check if it's been 60s of cool down and remove model
                     else:
-                        continue # skip model
-                
+                        continue  # skip model
+
                 # delete model from kwargs if it exists
-                if kwargs.get('model'):
-                    del kwargs['model']
+                if kwargs.get("model"):
+                    del kwargs["model"]
 
                 print("making completion call", model)
                 response = litellm.completion(**kwargs, model=model)
@@ -1497,7 +1516,9 @@ def completion_with_fallbacks(**kwargs):
             except Exception as e:
                 print(f"got exception {e} for model {model}")
                 rate_limited_models.add(model)
-                model_expiration_times[model] = time.time() + 60 # cool down this selected model
-                #print(f"rate_limited_models {rate_limited_models}")
+                model_expiration_times[model] = (
+                    time.time() + 60
+                )  # cool down this selected model
+                # print(f"rate_limited_models {rate_limited_models}")
                 pass
     return response
