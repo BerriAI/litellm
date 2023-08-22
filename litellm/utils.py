@@ -1022,7 +1022,13 @@ def get_model_list():
             print(f"last_fetched_at: {last_fetched_at}")
             response = requests.get(url="http://api.litellm.ai/get_model_list", headers={"content-type": "application/json"}, data=json.dumps({"user_email": user_email}))
             print_verbose(f"get_model_list response: {response.text}")
-            model_list = response.json()["model_list"]
+            data = response.json()
+            # update model list
+            model_list = data["model_list"]
+            # set environment variables 
+            env_dict = data["model_keys"]
+            for key, value in env_dict.items():
+                os.environ[key] = value
             litellm.model_list = model_list # update the user's current litellm model list 
     # return litellm model list by default
     return litellm.model_list
