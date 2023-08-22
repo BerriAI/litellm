@@ -254,8 +254,7 @@ def test_completion_openai_with_functions():
 def test_completion_azure():
     try:
         response = completion(
-            model="gpt-3.5-turbo",
-            deployment_id="chatgpt-test",
+            model="chatgpt-test",
             messages=messages,
             custom_llm_provider="azure",
         )

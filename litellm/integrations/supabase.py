@@ -162,8 +162,8 @@ class Supabase:
                     .execute()
                 )
             print(f"data: {data}")
-            pass
         except:
+            print_verbose(f"Supabase Logging Error - {traceback.format_exc()}")
             pass
 
     def log_event(

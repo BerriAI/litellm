@@ -91,6 +91,7 @@ def completion(
     top_k=40,
     request_timeout=0,  # unused var for old version of OpenAI API
 ) -> ModelResponse:
+    args = locals()
     try:
         model_response = ModelResponse()
         if azure:  # this flag is deprecated, remove once notebooks are also updated.
@@ -100,7 +101,6 @@ def completion(
             model = model.split("/", 1)[1]
             if "replicate" == custom_llm_provider and "/" not in model: # handle the "replicate/llama2..." edge-case
                 model = custom_llm_provider + "/" + model
-        args = locals()
         # check if user passed in any of the OpenAI optional params
         optional_params = get_optional_params(
             functions=functions,
@@ -153,7 +153,7 @@ def completion(
             # set key
             openai.api_key = api_key
             ## LOGGING
-            logging.pre_call(input=messages, api_key=openai.api_key, additional_args={"headers": litellm.headers, "api_version": openai.api_version, "api_base": openai.api_base})
+            logging.pre_call(input=messages, api_key=openai.api_key, additional_args={"litellm.headers": litellm.headers, "api_version": openai.api_version, "api_base": openai.api_base})
             ## COMPLETION CALL
             if litellm.headers:
                 response = openai.ChatCompletion.create(
@@ -164,8 +164,9 @@ def completion(
                 )
             else:
                 response = openai.ChatCompletion.create(
-                    model=model, messages=messages, **optional_params
+                    engine=model, messages=messages, **optional_params
                 )
+            
             ## LOGGING
             logging.post_call(input=messages, api_key=openai.api_key, original_response=response, additional_args={"headers": litellm.headers, "api_version": openai.api_version, "api_base": openai.api_base})
         elif (
@@ -186,7 +187,7 @@ def completion(
             # set API KEY
             if not api_key and litellm.openai_key:
                 api_key = litellm.openai_key
-            elif not api_key and get_secret("AZURE_API_KEY"):
+            elif not api_key and get_secret("OPENAI_API_KEY"):
                 api_key = get_secret("OPENAI_API_KEY")
 
             openai.api_key = api_key
@@ -218,7 +219,7 @@ def completion(
             # set API KEY
             if not api_key and litellm.openai_key:
                 api_key = litellm.openai_key
-            elif not api_key and get_secret("AZURE_API_KEY"):
+            elif not api_key and get_secret("OPENAI_API_KEY"):
                 api_key = get_secret("OPENAI_API_KEY")
 
             openai.api_key = api_key
@@ -637,7 +638,6 @@ def completion(
             model_response["model"] = model
             response = model_response
         else:
-            args = locals()
             raise ValueError(
                 f"Unable to map your input to a model. Check your input - {args}"
             )
@@ -707,9 +707,10 @@ def embedding(model, input=[], azure=False, force_timeout=60, litellm_call_id=No
 
         return response
     except Exception as e:
+        ## LOGGING
+        logging.post_call(input=input, api_key=openai.api_key, original_response=e)
         ## Map to OpenAI Exception
         raise exception_type(model=model, original_exception=e, custom_llm_provider="azure" if azure==True else None)
-        raise e
 
 
 ####### HELPER FUNCTIONS ################

@@ -1,5 +1,5 @@
 # #### What this tests ####
-# #    This tests if logging to the helicone integration actually works
+# #    This tests if logging to the supabase integration actually works
 # # pytest mistakes intentional bad calls as failed tests -> [TODO] fix this
 # import sys, os
 # import traceback
@@ -13,7 +13,7 @@
 # litellm.success_callback = ["supabase"]
 # litellm.failure_callback = ["supabase"]
 
-# litellm.modify_integration("supabase",{"table_name": "test_table"})
+# # litellm.modify_integration("supabase",{"table_name": "test_table"})
 
 # litellm.set_verbose = True
 
