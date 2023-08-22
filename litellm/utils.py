@@ -842,14 +842,21 @@ def handle_failure(exception, traceback_exception, start_time, end_time, args,
                         print_verbose=print_verbose,
                     )
                 elif callback == "llmonitor":
-                    print_verbose("reaches llmonitor for logging!")
+                    print_verbose("reaches llmonitor for logging error!")
+
                     model = args[0] if len(args) > 0 else kwargs["model"]
-                    messages = args[1] if len(args) > 1 else kwargs["messages"]
+
+                    input = args[1] if len(args) > 1 else kwargs.get(
+                        "messages", kwargs.get("input", None))
+
+                    type = 'embed' if 'input' in kwargs else 'llm'
 
                     llmonitorLogger.log_event(
-                        type="error",
+                        type=type,
+                        event="error",
                         user_id=litellm._thread_context.user,
                         model=model,
+                        input=input,
                         error=traceback_exception,
                         run_id=kwargs["litellm_call_id"],
                         start_time=start_time,
@@ -969,11 +976,18 @@ def handle_success(args, kwargs, result, start_time, end_time):
                 elif callback == "llmonitor":
                     print_verbose("reaches llmonitor for logging!")
                     model = args[0] if len(args) > 0 else kwargs["model"]
-                    messages = args[1] if len(args) > 1 else kwargs["messages"]
+
+                    input = args[1] if len(args) > 1 else kwargs.get(
+                        "messages", kwargs.get("input", None))
+
+                    #if contains input, it's 'embedding', otherwise 'llm'
+                    type = 'embed' if 'input' in kwargs else 'llm'
+
                     llmonitorLogger.log_event(
-                        type="end",
+                        type=type,
+                        event="end",
                         model=model,
-                        messages=messages,
+                        input=input,
                         user_id=litellm._thread_context.user,
                         response_obj=result,
                         start_time=start_time,
