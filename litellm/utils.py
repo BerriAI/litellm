@@ -1022,6 +1022,7 @@ def handle_success(args, kwargs, result, start_time, end_time):
         )
         pass
 
+
 def get_model_list():
     global last_fetched_at
     # if user is using hosted product -> get their updated model list - refresh every 5 minutes
@@ -1035,7 +1036,11 @@ def get_model_list():
             # make the api call
             last_fetched_at = time.time()
             print(f"last_fetched_at: {last_fetched_at}")
-            response = requests.post(url="http://api.litellm.ai/get_model_list", headers={"content-type": "application/json"}, data=json.dumps({"user_email": user_email}))
+            response = requests.post(
+                url="http://api.litellm.ai/get_model_list",
+                headers={"content-type": "application/json"},
+                data=json.dumps({"user_email": user_email}),
+            )
             print_verbose(f"get_model_list response: {response.text}")
             data = response.json()
             # update model list
