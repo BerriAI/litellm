@@ -5,17 +5,11 @@ This tutorial demonstrates how to employ the `completion()` function with model 
 ## Usage 
 To use fallback models with `completion()`, specify a list of models in the `fallbacks` parameter. 
 
-Example
 ```python
-try:
-    response = completion(
-        model="bad-model",
-        messages=messages,
-        fallbacks=["gpt-3.5-turbo", "command-nightly"]
-    )
+response = completion(model="bad-model", messages=messages, fallbacks=["gpt-3.5-turbo" "command-nightly"])
 ```
 
-Output
+### Output from calls
 ```
 Completion with 'bad-model': got exception Unable to map your input to a model. Check your input - {'model': 'bad-model'
 
