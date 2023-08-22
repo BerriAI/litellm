@@ -1298,11 +1298,8 @@ class CustomStreamWrapper:
         return self
 
     def handle_anthropic_chunk(self, chunk):
-        str_line = chunk.decode("utf-8")  # Convert bytes to string
-        if str_line.startswith("data:"):
-            data_json = json.loads(str_line[5:])
-            return data_json.get("completion", "")
-        return ""
+        str_line = chunk.completion
+        return str_line
 
     def handle_together_ai_chunk(self, chunk):
         chunk = chunk.decode("utf-8")
