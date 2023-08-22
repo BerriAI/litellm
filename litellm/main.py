@@ -17,7 +17,7 @@ from litellm.utils import (
     install_and_import,
     CustomStreamWrapper,
     read_config_args,
-    completion_with_fallbacks
+    completion_with_fallbacks,
 )
 from .llms.anthropic import AnthropicLLM
 from .llms.huggingface_restapi import HuggingfaceRestAPILLM
@@ -187,7 +187,7 @@ def completion(
                 response = openai.ChatCompletion.create(
                     engine=model, messages=messages, **optional_params
                 )
-            
+
             ## LOGGING
             logging.post_call(
                 input=messages,
