@@ -1,3 +1,5 @@
 import importlib_metadata
-
-version = importlib_metadata.version("litellm")
+try:
+    version = importlib_metadata.version("litellm")
+except:
+    pass
