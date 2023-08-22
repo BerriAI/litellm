@@ -1022,7 +1022,6 @@ def handle_success(args, kwargs, result, start_time, end_time):
         )
         pass
 
-
 def get_model_list():
     global last_fetched_at
     # if user is using hosted product -> get their updated model list - refresh every 5 minutes
@@ -1036,24 +1035,15 @@ def get_model_list():
             # make the api call
             last_fetched_at = time.time()
             print(f"last_fetched_at: {last_fetched_at}")
-            response = requests.get(
-                url="http://api.litellm.ai/get_model_list",
-                headers={"content-type": "application/json"},
-                data=json.dumps({"user_email": user_email}),
-            )
+            response = requests.post(url="http://api.litellm.ai/get_model_list", headers={"content-type": "application/json"}, data=json.dumps({"user_email": user_email}))
             print_verbose(f"get_model_list response: {response.text}")
             data = response.json()
             # update model list
             model_list = data["model_list"]
-            # set environment variables
-            env_dict = data["model_keys"]
-            for key, value in env_dict.items():
-                os.environ[key] = value
-            litellm.model_list = (
-                model_list  # update the user's current litellm model list
-            )
-    # return litellm model list by default
-    return litellm.model_list
+            return model_list
+        return None
+    # return None by default
+    return None
 
 
 def acreate(*args, **kwargs):  ## Thin client to handle the acreate langchain call
