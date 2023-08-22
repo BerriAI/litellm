@@ -1,2 +1,3 @@
 import importlib_metadata
-version = importlib_metadata.version('litellm')
+
+version = importlib_metadata.version("litellm")
