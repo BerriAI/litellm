@@ -17,6 +17,7 @@ from litellm.utils import (
     install_and_import,
     CustomStreamWrapper,
     read_config_args,
+    completion_with_fallbacks
 )
 from .llms.anthropic import AnthropicLLM
 from .llms.huggingface_restapi import HuggingfaceRestAPILLM
@@ -90,9 +91,12 @@ def completion(
     # used by text-bison only
     top_k=40,
     request_timeout=0,  # unused var for old version of OpenAI API
+    fallbacks=[],
 ) -> ModelResponse:
     args = locals()
     try:
+        if fallbacks != []:
+            return completion_with_fallbacks(**args)
         model_response = ModelResponse()
         if azure:  # this flag is deprecated, remove once notebooks are also updated.
             custom_llm_provider = "azure"

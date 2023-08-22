@@ -11,6 +11,7 @@ sys.path.insert(
 import pytest
 import litellm
 from litellm import embedding, completion
+litellm.debugger = True
 
 # from infisical import InfisicalClient
 
@@ -38,7 +39,7 @@ def test_completion_custom_provider_model_name():
         pytest.fail(f"Error occurred: {e}")
 
 
-test_completion_custom_provider_model_name()
+# test_completion_custom_provider_model_name()
 
 
 def test_completion_claude():
@@ -340,6 +341,21 @@ def test_petals():
             messages=messages,
             custom_llm_provider="petals",
             force_timeout=120,
+        )
+        # Add any assertions here to check the response
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+def test_completion_with_fallbacks():
+    fallbacks = ['gpt-3.5-turb', 'gpt-3.5-turbo', 'command-nightly']
+    try:
+        response = completion(
+            model='bad-model',
+            messages=messages,
+            force_timeout=120,
+            fallbacks=fallbacks
         )
         # Add any assertions here to check the response
         print(response)

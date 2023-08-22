@@ -1464,3 +1464,40 @@ async def together_ai_completion_streaming(json_data, headers):
                         pass
     finally:
         await session.close()
+
+
+def completion_with_fallbacks(**kwargs):
+    response = None
+    rate_limited_models = set()
+    model_expiration_times = {}
+    start_time = time.time()
+    fallbacks = [kwargs['model']] + kwargs['fallbacks']
+    del kwargs['fallbacks'] # remove fallbacks so it's not recursive
+
+    while response == None and time.time() - start_time < 45:
+        for model in fallbacks:
+        # loop thru all models
+            try:
+                if model in rate_limited_models: # check if model is currently cooling down
+                    if model_expiration_times.get(model) and time.time() >= model_expiration_times[model]:
+                        rate_limited_models.remove(model) # check if it's been 60s of cool down and remove model
+                    else:
+                        continue # skip model
+                
+                # delete model from kwargs if it exists
+                if kwargs.get('model'):
+                    del kwargs['model']
+
+                print("making completion call", model)
+                response = litellm.completion(**kwargs, model=model)
+
+                if response != None:
+                    return response
+
+            except Exception as e:
+                print(f"got exception {e} for model {model}")
+                rate_limited_models.add(model)
+                model_expiration_times[model] = time.time() + 60 # cool down this selected model
+                #print(f"rate_limited_models {rate_limited_models}")
+                pass
+    return response
