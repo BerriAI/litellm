@@ -74,7 +74,6 @@ class LLMonitorLogger:
                 f"LLMonitor Logging - Logging request for model {model}")
 
             if response_obj:
-                print(response_obj)
                 usage = parse_usage(
                     response_obj['usage']) if 'usage' in response_obj else None
                 output = response_obj[
@@ -109,8 +108,6 @@ class LLMonitorLogger:
                 "output": parse_messages(output),
                 "tokensUsage": usage,
             }]
-
-            print(data)
 
             # print_verbose(f"LLMonitor Logging - final data object: {data}")
 

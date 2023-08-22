@@ -14,14 +14,19 @@ litellm.failure_callback = ["llmonitor"]
 
 litellm.set_verbose = True
 
-# openai call
-# first_success_test = completion(model="gpt-3.5-turbo",
-#                                 messages=[{
-#                                     "role": "user",
-#                                     "content": "Hi 👋 - i'm openai"
-#                                 }])
 
-# print(first_success_test)
+def test_chat_openai():
+    try:
+        response = completion(model="gpt-3.5-turbo",
+                              messages=[{
+                                  "role": "user",
+                                  "content": "Hi 👋 - i'm openai"
+                              }])
+
+        print(response)
+
+    except Exception as e:
+        print(e)
 
 
 def test_embedding_openai():
@@ -31,7 +36,7 @@ def test_embedding_openai():
         print(f"response: {str(response)[:50]}")
     except Exception as e:
         print(e)
-        # pytest.fail(f"Error occurred: {e}")
 
 
+test_chat_openai()
 test_embedding_openai()
