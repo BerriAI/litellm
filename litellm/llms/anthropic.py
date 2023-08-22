@@ -21,7 +21,9 @@ class AnthropicError(Exception):
 
 
 class AnthropicLLM:
-    def __init__(self, encoding, default_max_tokens_to_sample, logging_obj, api_key=None):
+    def __init__(
+        self, encoding, default_max_tokens_to_sample, logging_obj, api_key=None
+    ):
         self.encoding = encoding
         self.default_max_tokens_to_sample = default_max_tokens_to_sample
         self.completion_url = "https://api.anthropic.com/v1/complete"
@@ -84,7 +86,11 @@ class AnthropicLLM:
         }
 
         ## LOGGING
-        self.logging_obj.pre_call(input=prompt, api_key=self.api_key, additional_args={"complete_input_dict": data})
+        self.logging_obj.pre_call(
+            input=prompt,
+            api_key=self.api_key,
+            additional_args={"complete_input_dict": data},
+        )
         ## COMPLETION CALL
         response = requests.post(
             self.completion_url, headers=self.headers, data=json.dumps(data)
@@ -93,7 +99,12 @@ class AnthropicLLM:
             return response.iter_lines()
         else:
             ## LOGGING
-            self.logging_obj.post_call(input=prompt, api_key=self.api_key, original_response=response.text, additional_args={"complete_input_dict": data})
+            self.logging_obj.post_call(
+                input=prompt,
+                api_key=self.api_key,
+                original_response=response.text,
+                additional_args={"complete_input_dict": data},
+            )
             print_verbose(f"raw model_response: {response.text}")
             ## RESPONSE OBJECT
             completion_response = response.json()

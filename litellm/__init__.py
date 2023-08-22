@@ -1,5 +1,6 @@
 import threading
 from typing import Callable, List, Optional
+
 input_callback: List[str] = []
 success_callback: List[str] = []
 failure_callback: List[str] = []
@@ -20,7 +21,8 @@ vertex_project: Optional[str] = None
 vertex_location: Optional[str] = None
 togetherai_api_key: Optional[str] = None
 caching = False
-caching_with_models = False # if you want the caching key to be model + prompt
+caching_with_models = False  # if you want the caching key to be model + prompt
+debugger = False
 model_cost = {
     "gpt-3.5-turbo": {
         "max_tokens": 4000,
@@ -156,7 +158,7 @@ replicate_models = [
     "a16z-infra/llama-2-7b-chat:7b0bfc9aff140d5b75bacbed23e91fd3c34b01a1e958d32132de6e0a19796e2c",
     "replicate/vicuna-13b:6282abe6a492de4145d7bb601023762212f9ddbbe78278bd6771c8b3b2f2a13b",
     "daanelson/flan-t5-large:ce962b3f6792a57074a601d3979db5839697add2e4e02696b3ced4c022d4767f",
-    "replit/replit-code-v1-3b:b84f4c074b807211cd75e3e8b1589b6399052125b4c27106e43d47189e8415ad"
+    "replit/replit-code-v1-3b:b84f4c074b807211cd75e3e8b1589b6399052125b4c27106e43d47189e8415ad",
 ]  # placeholder, to make sure we accept any replicate model in our model_list
 
 openrouter_models = [
@@ -196,14 +198,10 @@ ai21_models = ["j2-ultra", "j2-mid", "j2-light"]
 together_ai_models = [
     "togethercomputer/llama-2-70b-chat",
     "togethercomputer/Llama-2-7B-32K-Instruct",
-    "togethercomputer/llama-2-7b"
+    "togethercomputer/llama-2-7b",
 ]
 
-baseten_models = [
-    "qvv0xeq", # FALCON 7B
-    "q841o8w", # WizardLM
-    "31dxrj3" # Mosaic ML
-]
+baseten_models = ["qvv0xeq", "q841o8w", "31dxrj3"]  # FALCON 7B  # WizardLM  # Mosaic ML
 
 model_list = (
     open_ai_chat_completion_models
@@ -231,12 +229,11 @@ provider_list = [
     "openrouter",
     "vertex_ai",
     "ai21",
-    "baseten"
+    "baseten",
 ]
 
 models_by_provider = {
-    "openai": open_ai_chat_completion_models
-    + open_ai_text_completion_models,
+    "openai": open_ai_chat_completion_models + open_ai_text_completion_models,
     "cohere": cohere_models,
     "anthropic": anthropic_models,
     "replicate": replicate_models,
@@ -263,8 +260,11 @@ from .utils import (
     completion_cost,
     get_litellm_params,
     Logging,
+<<<<<<< HEAD
     acreate,
     get_model_list
+=======
+>>>>>>> 878f1a6 (formatting fixes)
 )
 from .main import *  # type: ignore
 from .integrations import *

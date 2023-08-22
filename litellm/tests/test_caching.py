@@ -34,7 +34,6 @@ def test_caching():
         pytest.fail(f"Error occurred: {e}")
 
 
-
 def test_caching_with_models():
     litellm.caching_with_models = True
     response2 = completion(model="gpt-3.5-turbo", messages=messages)
@@ -47,6 +46,3 @@ def test_caching_with_models():
         print(f"response2: {response2}")
         print(f"response3: {response3}")
         pytest.fail(f"Error occurred: {e}")
-
-
-

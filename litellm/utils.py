@@ -139,6 +139,7 @@ def install_and_import(package: str):
 # Logging function -> log the exact model details + what's being sent | Non-Blocking
 class Logging:
     global supabaseClient, liteDebuggerClient
+
     def __init__(self, model, messages, optional_params, litellm_params):
         self.model = model
         self.messages = messages
@@ -146,19 +147,19 @@ class Logging:
         self.litellm_params = litellm_params
         self.logger_fn = litellm_params["logger_fn"]
         self.model_call_details = {
-            "model": model, 
-            "messages": messages, 
+            "model": model,
+            "messages": messages,
             "optional_params": self.optional_params,
             "litellm_params": self.litellm_params,
         }
-        
+
     def pre_call(self, input, api_key, additional_args={}):
         try:
             print_verbose(f"logging pre call for model: {self.model}")
             self.model_call_details["input"] = input
             self.model_call_details["api_key"] = api_key
             self.model_call_details["additional_args"] = additional_args
-            
+
             ## User Logging -> if you pass in a custom logging function
             print_verbose(
                 f"Logging Details: logger_fn - {self.logger_fn} | callable(logger_fn) - {callable(self.logger_fn)}"
@@ -173,7 +174,7 @@ class Logging:
                         f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {traceback.format_exc()}"
                     )
 
-            ## Input Integration Logging -> If you want to log the fact that an attempt to call the model was made 
+            ## Input Integration Logging -> If you want to log the fact that an attempt to call the model was made
             for callback in litellm.input_callback:
                 try:
                     if callback == "supabase":
@@ -201,11 +202,13 @@ class Logging:
                             print_verbose=print_verbose,
                         )
                 except Exception as e:
-                    print_verbose(f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while input logging with integrations {traceback.format_exc()}")
+                    print_verbose(
+                        f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while input logging with integrations {traceback.format_exc()}"
+                    )
                     print_verbose(
                         f"LiteLLM.Logging: is sentry capture exception initialized {capture_exception}"
                     )
-                    if capture_exception: # log this error to sentry for debugging 
+                    if capture_exception:  # log this error to sentry for debugging
                         capture_exception(e)
         except:
             print_verbose(
@@ -214,9 +217,9 @@ class Logging:
             print_verbose(
                 f"LiteLLM.Logging: is sentry capture exception initialized {capture_exception}"
             )
-            if capture_exception: # log this error to sentry for debugging 
+            if capture_exception:  # log this error to sentry for debugging
                 capture_exception(e)
-        
+
     def post_call(self, input, api_key, original_response, additional_args={}):
         # Do something here
         try:
@@ -224,7 +227,7 @@ class Logging:
             self.model_call_details["api_key"] = api_key
             self.model_call_details["original_response"] = original_response
             self.model_call_details["additional_args"] = additional_args
-            
+
             ## User Logging -> if you pass in a custom logging function
             print_verbose(
                 f"Logging Details: logger_fn - {self.logger_fn} | callable(logger_fn) - {callable(self.logger_fn)}"
@@ -243,6 +246,7 @@ class Logging:
                 f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {traceback.format_exc()}"
             )
             pass
+
 
 def exception_logging(
     additional_args={},
@@ -278,6 +282,7 @@ def exception_logging(
 # make it easy to log if completion/embedding runs succeeded or failed + see what happened | Non-Blocking
 def client(original_function):
     global liteDebuggerClient
+
     def function_setup(
         *args, **kwargs
     ):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
@@ -288,10 +293,16 @@ def client(original_function):
                 litellm.success_callback.append("lite_debugger")
                 litellm.failure_callback.append("lite_debugger")
             if (
-                len(litellm.input_callback) > 0 or len(litellm.success_callback) > 0 or len(litellm.failure_callback) > 0
+                len(litellm.input_callback) > 0
+                or len(litellm.success_callback) > 0
+                or len(litellm.failure_callback) > 0
             ) and len(callback_list) == 0:
                 callback_list = list(
-                    set(litellm.input_callback + litellm.success_callback + litellm.failure_callback)
+                    set(
+                        litellm.input_callback
+                        + litellm.success_callback
+                        + litellm.failure_callback
+                    )
                 )
                 set_callbacks(
                     callback_list=callback_list,
@@ -413,7 +424,9 @@ def client(original_function):
             )  # don't interrupt execution of main thread
             my_thread.start()
             if hasattr(e, "message"):
-                if liteDebuggerClient and liteDebuggerClient.dashboard_url != None: # make it easy to get to the debugger logs if you've initialized it
+                if (
+                    liteDebuggerClient and liteDebuggerClient.dashboard_url != None
+                ):  # make it easy to get to the debugger logs if you've initialized it
                     e.message += f"\n Check the log in your dashboard - {liteDebuggerClient.dashboard_url}"
             raise e
 
@@ -497,7 +510,7 @@ def get_litellm_params(
         "verbose": verbose,
         "custom_llm_provider": custom_llm_provider,
         "custom_api_base": custom_api_base,
-        "litellm_call_id": litellm_call_id
+        "litellm_call_id": litellm_call_id,
     }
 
     return litellm_params
@@ -1052,14 +1065,18 @@ def prompt_token_calculator(model, messages):
 
 def valid_model(model):
     try:
-        # for a given model name, check if the user has the right permissions to access the model 
-        if model in litellm.open_ai_chat_completion_models or model in litellm.open_ai_text_completion_models:
+        # for a given model name, check if the user has the right permissions to access the model
+        if (
+            model in litellm.open_ai_chat_completion_models
+            or model in litellm.open_ai_text_completion_models
+        ):
             openai.Model.retrieve(model)
         else:
             messages = [{"role": "user", "content": "Hello World"}]
             litellm.completion(model=model, messages=messages)
     except:
-        raise InvalidRequestError(message="", model=model, llm_provider="")    
+        raise InvalidRequestError(message="", model=model, llm_provider="")
+
 
 # integration helper function
 def modify_integration(integration_name, integration_params):
@@ -1410,7 +1427,7 @@ async def stream_to_string(generator):
     return response
 
 
-########## Together AI streaming ############################# [TODO] move together ai to it's own llm class 
+########## Together AI streaming ############################# [TODO] move together ai to it's own llm class
 async def together_ai_completion_streaming(json_data, headers):
     session = aiohttp.ClientSession()
     url = "https://api.together.xyz/inference"
