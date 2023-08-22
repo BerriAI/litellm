@@ -1,4 +1,4 @@
-Using completion() with Fallbacks for Reliability
+# Using completion() with Fallbacks for Reliability
 
 This tutorial demonstrates how to employ the `completion()` function with model fallbacks to ensure reliability. LLM APIs can be unstable, completion() with fallbacks ensures you'll always get a response from your calls
 
