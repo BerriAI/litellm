@@ -229,30 +229,30 @@ model_list = (
 )
 
 provider_list = [
-    "openai",
-    "azure",
-    "cohere",
-    "anthropic",
-    "replicate",
-    "huggingface",
-    "together_ai",
-    "openrouter",
-    "vertex_ai",
-    "ai21",
-    "baseten",
+    "OpenAI",
+    "Azure",
+    "Cohere",
+    "Anthropic",
+    "Replicate",
+    "Huggingface",
+    "Together_ai",
+    "Openrouter",
+    "Vertex_ai",
+    "AI21",
+    "Baseten",
 ]
 
 models_by_provider = {
-    "openai": open_ai_chat_completion_models + open_ai_text_completion_models,
-    "cohere": cohere_models,
-    "anthropic": anthropic_models,
-    "replicate": replicate_models,
-    "huggingface": huggingface_models,
-    "together_ai": together_ai_models,
-    "baseten": baseten_models,
-    "openrouter": openrouter_models,
-    "vertex_ai": vertex_chat_models + vertex_text_models,
-    "ai21": ai21_models,
+    "OpenAI": open_ai_chat_completion_models + open_ai_text_completion_models,
+    "Cohere": cohere_models,
+    "Anthropic": anthropic_models,
+    "Replicate": replicate_models,
+    "Huggingface": huggingface_models,
+    "Together_ai": together_ai_models,
+    "Baseten": baseten_models,
+    "Openrouter": openrouter_models,
+    "Vertex_ai": vertex_chat_models + vertex_text_models,
+    "AI21": ai21_models,
 }
 
 ####### EMBEDDING MODELS ###################
