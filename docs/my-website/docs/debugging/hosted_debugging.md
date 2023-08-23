@@ -20,7 +20,6 @@ See our live dashboard 👉 [admin.litellm.ai](https://admin.litellm.ai/)
 ## Code Setup
 ```python
  import litellm
- from litellm import embedding, completion
  
  ## Setup for activating / using the litellm dashboard
  litellm.email = "test_email@test.com"
@@ -29,6 +28,12 @@ See our live dashboard 👉 [admin.litellm.ai](https://admin.litellm.ai/)
 
 ## Calling Completion() with the LiteLLM Dashboard
 ```python
+import litellm
+from litellm import completion
+
+## Setup for activating / using the litellm dashboard
+litellm.email = "test_email@test.com"
+
 user_message = "Hello, how are you?"
 messages = [{ "content": user_message,"role": "user"}]
 
