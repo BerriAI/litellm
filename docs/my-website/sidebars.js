@@ -21,7 +21,7 @@ const sidebars = {
     {
       type: "category",
       label: "Completion()",
-      items: ["completion/input", "completion/output"],
+      items: ["completion/input", "completion/output", "completion/reliable_completions"],
     },
     {
       type: "category",
