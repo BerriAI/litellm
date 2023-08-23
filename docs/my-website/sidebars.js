@@ -29,8 +29,8 @@ const sidebars = {
       items: ["embedding/supported_embedding"],
     },
     'completion/supported',
-    'debugging/local_debugging',
     'debugging/hosted_debugging',
+    'debugging/local_debugging',
     {
       type: 'category',
       label: 'Tutorials',
