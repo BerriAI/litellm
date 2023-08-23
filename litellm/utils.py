@@ -1153,7 +1153,7 @@ def get_model_list():
             # update model list
             model_list = data["model_list"]
             return model_list
-        return None # return None by default
+        return [] # return empty list by default
     except:
         print_verbose(f"[Non-Blocking Error] get_all_keys error - {traceback.format_exc()}")
 
