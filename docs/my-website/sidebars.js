@@ -17,16 +17,16 @@ const sidebars = {
 
   // But you can create a sidebar manually
   tutorialSidebar: [
-    { type: "doc", id: "index" },  // NEW
+    { type: "doc", id: "index" }, // NEW
     {
-      type: 'category',
-      label: 'Completion()',
-      items: ['completion/input','completion/output'],
+      type: "category",
+      label: "Completion()",
+      items: ["completion/input", "completion/output"],
     },
     {
-      type: 'category',
-      label: 'Embedding()',
-      items: ['embedding/supported_embedding'],
+      type: "category",
+      label: "Embedding()",
+      items: ["embedding/supported_embedding"],
     },
     'completion/supported',
     'debugging/local_debugging',
@@ -36,18 +36,24 @@ const sidebars = {
       label: 'Tutorials',
       items: ['tutorials/huggingface_tutorial', 'tutorials/TogetherAI_liteLLM', 'tutorials/fallbacks', 'tutorials/finetuned_chat_gpt'],
     },
-    'token_usage',
-    'stream',
-    'secret',
-    'caching',
+    "token_usage",
+    "stream",
+    "secret",
+    "caching",
     {
-      type: 'category',
-      label: 'Logging & Observability',
-      items: ['observability/callbacks', 'observability/integrations', 'observability/helicone_integration', 'observability/supabase_integration'],
+      type: "category",
+      label: "Logging & Observability",
+      items: [
+        "observability/callbacks",
+        "observability/integrations",
+        "observability/llmonitor_integration",
+        "observability/helicone_integration",
+        "observability/supabase_integration",
+      ],
     },
-    'troubleshoot',
-    'contributing',
-    'contact'
+    "troubleshoot",
+    "contributing",
+    "contact",
   ],
 };
 
