@@ -19,29 +19,41 @@ See our live dashboard 👉 [admin.litellm.ai](https://admin.litellm.ai/)
 
 ## Code Setup
 ```python
- import litellm
- 
- ## Setup for activating / using the litellm dashboard
- litellm.email = "test_email@test.com"
-
-```
-
-## Calling Completion() with the LiteLLM Dashboard
-```python
 import litellm
-from litellm import completion
 
 ## Setup for activating / using the litellm dashboard
 litellm.email = "test_email@test.com"
 
-user_message = "Hello, how are you?"
-messages = [{ "content": user_message,"role": "user"}]
+```
 
+## Using LiteLLM Dashboard - Add New LLMs
+LiteLLM allows you to add a new model using the liteLLM Dashboard 
+Go to `admin.litellm.ai/<your_email>`
+Navigate to the 'Add New LLM' Section
+<Image img={require('../../img/add_model.png')} alt="Dashboard" />
+- Select Provider
+- Select your LLM 
+- Add your LLM Key
+
+### Using your new LLM - Completion() with the LiteLLM Dashboard
+```python
+from litellm import embedding, completion
+# keys set in admin.litellm.ai/<your_email> or .env OPENAI_API_KEY
+messages = [{ "content": "Hello, how are you?" ,"role": "user"}]
 
 # openai call
 response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])
-
-# bad request call
-response = completion(model="chatgpt-test", messages=[{"role": "user", "content": "Hi 👋 - i'm a bad request"}])
-
 ```
+
+## Using LiteLLM Dashboard - Debug your Call Logs 
+
+```python
+from litellm import embedding, completion
+# keys set in admin.litellm.ai/<your_email> or .env OPENAI_API_KEY
+messages = [{ "content": "Hello, how are you?" ,"role": "user"}]
+
+# openai call
+response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])
+```
+
+See your Logs below
