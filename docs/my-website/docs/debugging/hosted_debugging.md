@@ -31,6 +31,7 @@ LiteLLM allows you to add a new model using the liteLLM Dashboard
 Go to `admin.litellm.ai/<your_email>`
 Navigate to the 'Add New LLM' Section
 <Image img={require('../../img/add_model.png')} alt="Dashboard" />
+
 - Select Provider
 - Select your LLM 
 - Add your LLM Key
