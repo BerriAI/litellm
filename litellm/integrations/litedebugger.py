@@ -88,6 +88,26 @@ class LiteDebugger:
                     headers={"content-type": "application/json"},
                     data=json.dumps(litellm_data_obj),
                 )
+            elif "embedding" in response_obj:
+                litellm_data_obj = {
+                    "response_time": response_time,
+                    "model": response_obj["model"],
+                    "total_cost": total_cost,
+                    "messages": messages,
+                    "response": response_obj["embedding"][:5],
+                    "end_user": end_user,
+                    "litellm_call_id": litellm_call_id,
+                    "status": "success",
+                    "user_email": self.user_email,
+                }
+                print_verbose(
+                    f"LiteDebugger: Logging - final data object: {litellm_data_obj}"
+                )
+                response = requests.post(
+                    url=self.api_url,
+                    headers={"content-type": "application/json"},
+                    data=json.dumps(litellm_data_obj),
+                )
             elif "error" in response_obj:
                 if "Unable to map your input to a model." in response_obj["error"]:
                     total_cost = 0

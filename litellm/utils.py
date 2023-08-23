@@ -293,8 +293,8 @@ def exception_logging(
 # make it easy to log if completion/embedding runs succeeded or failed + see what happened | Non-Blocking
 def client(original_function):
     global liteDebuggerClient, get_all_keys
-
-      def function_setup(
+    
+    def function_setup(
         *args, **kwargs
     ):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
         try:
@@ -899,7 +899,7 @@ def handle_failure(exception, traceback_exception, start_time, end_time, args,
                     print_verbose("reaches lite_debugger for logging!")
                     print_verbose(f"liteDebuggerClient: {liteDebuggerClient}")
                     model = args[0] if len(args) > 0 else kwargs["model"]
-                    messages = args[1] if len(args) > 1 else kwargs["messages"]
+                    messages = args[1] if len(args) > 1 else kwargs.get("messages", {"role": "user", "content": kwargs.get("input", "")})
                     result = {
                         "model": model,
                         "created": time.time(),
@@ -943,6 +943,8 @@ def handle_failure(exception, traceback_exception, start_time, end_time, args,
 def handle_success(args, kwargs, result, start_time, end_time):
     global heliconeLogger, aispendLogger, supabaseClient, liteDebuggerClient, llmonitorLogger
     try:
+        model = args[0] if len(args) > 0 else kwargs["model"]
+        input = args[1] if len(args) > 1 else kwargs.get("messages", kwargs.get("input", None))
         success_handler = additional_details.pop("success_handler", None)
         failure_handler = additional_details.pop("failure_handler", None)
         additional_details["Event_Name"] = additional_details.pop(
@@ -1011,22 +1013,10 @@ def handle_success(args, kwargs, result, start_time, end_time):
                         end_time=end_time,
                         print_verbose=print_verbose,
                     )
-                elif callback == "berrispend":
-                    print_verbose("reaches berrispend for logging!")
-                    model = args[0] if len(args) > 0 else kwargs["model"]
-                    messages = args[1] if len(args) > 1 else kwargs["messages"]
-                    berrispendLogger.log_event(
-                        model=model,
-                        messages=messages,
-                        response_obj=result,
-                        start_time=start_time,
-                        end_time=end_time,
-                        print_verbose=print_verbose,
-                    )
                 elif callback == "supabase":
                     print_verbose("reaches supabase for logging!")
                     model = args[0] if len(args) > 0 else kwargs["model"]
-                    messages = args[1] if len(args) > 1 else kwargs["messages"]
+                    messages = args[1] if len(args) > 1 else kwargs.get("messages", {"role": "user", "content": ""})
                     print(f"supabaseClient: {supabaseClient}")
                     supabaseClient.log_event(
                         model=model,
@@ -1040,9 +1030,8 @@ def handle_success(args, kwargs, result, start_time, end_time):
                     )
                 elif callback == "lite_debugger":
                     print_verbose("reaches lite_debugger for logging!")
-                    model = args[0] if len(args) > 0 else kwargs["model"]
-                    messages = args[1] if len(args) > 1 else kwargs["messages"]
                     print_verbose(f"liteDebuggerClient: {liteDebuggerClient}")
+                    messages = args[1] if len(args) > 1 else kwargs.get("messages", {"role": "user", "content": kwargs.get("input")}) 
                     liteDebuggerClient.log_event(
                         model=model,
                         messages=messages,
