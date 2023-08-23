@@ -16,6 +16,7 @@ nav:
   - 💾 Callbacks - Logging Output: 
     - Quick Start: advanced.md
     - Output Integrations: client_integrations.md
+    - LLMonitor Tutorial: llmonitor_integration.md
     - Helicone Tutorial: helicone_integration.md
     - Supabase Tutorial: supabase_integration.md
     - BerriSpend Tutorial: berrispend_integration.md

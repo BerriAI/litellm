@@ -24,6 +24,7 @@ from .exceptions import (
 )
 from typing import List, Dict, Union, Optional
 
+
 ####### ENVIRONMENT VARIABLES ####################
 dotenv.load_dotenv()  # Loading env variables using dotenv
 sentry_sdk_instance = None
@@ -63,6 +64,7 @@ last_fetched_at = None
 
 
 class Message(OpenAIObject):
+
     def __init__(self, content="default", role="assistant", **params):
         super(Message, self).__init__(**params)
         self.content = content
@@ -70,7 +72,12 @@ class Message(OpenAIObject):
 
 
 class Choices(OpenAIObject):
-    def __init__(self, finish_reason="stop", index=0, message=Message(), **params):
+
+    def __init__(self,
+                 finish_reason="stop",
+                 index=0,
+                 message=Message(),
+                 **params):
         super(Choices, self).__init__(**params)
         self.finish_reason = finish_reason
         self.index = index
@@ -78,20 +85,22 @@ class Choices(OpenAIObject):
 
 
 class ModelResponse(OpenAIObject):
-    def __init__(self, choices=None, created=None, model=None, usage=None, **params):
+
+    def __init__(self,
+                 choices=None,
+                 created=None,
+                 model=None,
+                 usage=None,
+                 **params):
         super(ModelResponse, self).__init__(**params)
         self.choices = choices if choices else [Choices()]
         self.created = created
         self.model = model
-        self.usage = (
-            usage
-            if usage
-            else {
-                "prompt_tokens": None,
-                "completion_tokens": None,
-                "total_tokens": None,
-            }
-        )
+        self.usage = (usage if usage else {
+            "prompt_tokens": None,
+            "completion_tokens": None,
+            "total_tokens": None,
+        })
 
     def to_dict_recursive(self):
         d = super().to_dict_recursive()
@@ -108,8 +117,6 @@ def print_verbose(print_statement):
 
 
 ####### Package Import Handler ###################
-import importlib
-import subprocess
 
 
 def install_and_import(package: str):
@@ -160,7 +167,7 @@ class Logging:
             self.model_call_details["api_key"] = api_key
             self.model_call_details["additional_args"] = additional_args
 
-            ## User Logging -> if you pass in a custom logging function
+            # User Logging -> if you pass in a custom logging function
             print_verbose(
                 f"Logging Details: logger_fn - {self.logger_fn} | callable(logger_fn) - {callable(self.logger_fn)}"
             )
@@ -174,7 +181,7 @@ class Logging:
                         f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {traceback.format_exc()}"
                     )
 
-            ## Input Integration Logging -> If you want to log the fact that an attempt to call the model was made
+            # Input Integration Logging -> If you want to log the fact that an attempt to call the model was made
             for callback in litellm.input_callback:
                 try:
                     if callback == "supabase":
@@ -186,9 +193,11 @@ class Logging:
                             model=model,
                             messages=messages,
                             end_user=litellm._thread_context.user,
-                            litellm_call_id=self.litellm_params["litellm_call_id"],
+                            litellm_call_id=self.
+                            litellm_params["litellm_call_id"],
                             print_verbose=print_verbose,
                         )
+
                     elif callback == "lite_debugger":
                         print_verbose("reaches litedebugger for logging!")
                         model = self.model
@@ -198,7 +207,8 @@ class Logging:
                             model=model,
                             messages=messages,
                             end_user=litellm._thread_context.user,
-                            litellm_call_id=self.litellm_params["litellm_call_id"],
+                            litellm_call_id=self.
+                            litellm_params["litellm_call_id"],
                             print_verbose=print_verbose,
                         )
                 except Exception as e:
@@ -228,7 +238,7 @@ class Logging:
             self.model_call_details["original_response"] = original_response
             self.model_call_details["additional_args"] = additional_args
 
-            ## User Logging -> if you pass in a custom logging function
+            # User Logging -> if you pass in a custom logging function
             print_verbose(
                 f"Logging Details: logger_fn - {self.logger_fn} | callable(logger_fn) - {callable(self.logger_fn)}"
             )
@@ -247,6 +257,7 @@ class Logging:
             )
             pass
 
+    # Add more methods as needed
 
 def exception_logging(
     additional_args={},
@@ -258,7 +269,7 @@ def exception_logging(
         if exception:
             model_call_details["exception"] = exception
         model_call_details["additional_args"] = additional_args
-        ## User Logging -> if you pass in a custom logging function or want to use sentry breadcrumbs
+        # User Logging -> if you pass in a custom logging function or want to use sentry breadcrumbs
         print_verbose(
             f"Logging Details: logger_fn - {logger_fn} | callable(logger_fn) - {callable(logger_fn)}"
         )
@@ -283,7 +294,7 @@ def exception_logging(
 def client(original_function):
     global liteDebuggerClient, get_all_keys
 
-    def function_setup(
+      def function_setup(
         *args, **kwargs
     ):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
         try:
@@ -325,12 +336,11 @@ def client(original_function):
         if litellm.telemetry:
             try:
                 model = args[0] if len(args) > 0 else kwargs["model"]
-                exception = kwargs["exception"] if "exception" in kwargs else None
-                custom_llm_provider = (
-                    kwargs["custom_llm_provider"]
-                    if "custom_llm_provider" in kwargs
-                    else None
-                )
+                exception = kwargs[
+                    "exception"] if "exception" in kwargs else None
+                custom_llm_provider = (kwargs["custom_llm_provider"]
+                                       if "custom_llm_provider" in kwargs else
+                                       None)
                 safe_crash_reporting(
                     model=model,
                     exception=exception,
@@ -355,15 +365,12 @@ def client(original_function):
     def check_cache(*args, **kwargs):
         try:  # never block execution
             prompt = get_prompt(*args, **kwargs)
-            if (
-                prompt != None and prompt in local_cache
-            ):  # check if messages / prompt exists
+            if (prompt != None and prompt
+                    in local_cache):  # check if messages / prompt exists
                 if litellm.caching_with_models:
                     # if caching with model names is enabled, key is prompt + model name
-                    if (
-                        "model" in kwargs
-                        and kwargs["model"] in local_cache[prompt]["models"]
-                    ):
+                    if ("model" in kwargs and kwargs["model"]
+                            in local_cache[prompt]["models"]):
                         cache_key = prompt + kwargs["model"]
                         return local_cache[cache_key]
                 else:  # caching only with prompts
@@ -378,10 +385,8 @@ def client(original_function):
         try:  # never block execution
             prompt = get_prompt(*args, **kwargs)
             if litellm.caching_with_models:  # caching with model + prompt
-                if (
-                    "model" in kwargs
-                    and kwargs["model"] in local_cache[prompt]["models"]
-                ):
+                if ("model" in kwargs
+                        and kwargs["model"] in local_cache[prompt]["models"]):
                     cache_key = prompt + kwargs["model"]
                     local_cache[cache_key] = result
             else:  # caching based only on prompts
@@ -396,33 +401,36 @@ def client(original_function):
             function_setup(*args, **kwargs)
             litellm_call_id = str(uuid.uuid4())
             kwargs["litellm_call_id"] = litellm_call_id
-            ## [OPTIONAL] CHECK CACHE
+            # [OPTIONAL] CHECK CACHE
             start_time = datetime.datetime.now()
             if (litellm.caching or litellm.caching_with_models) and (
-                cached_result := check_cache(*args, **kwargs)
-            ) is not None:
+                    cached_result := check_cache(*args, **kwargs)) is not None:
                 result = cached_result
             else:
-                ## MODEL CALL
+                # MODEL CALL
                 result = original_function(*args, **kwargs)
             end_time = datetime.datetime.now()
-            ## Add response to CACHE
+            # Add response to CACHE
             if litellm.caching:
                 add_cache(result, *args, **kwargs)
-            ## LOG SUCCESS
+            # LOG SUCCESS
             crash_reporting(*args, **kwargs)
+
             my_thread = threading.Thread(
-                target=handle_success, args=(args, kwargs, result, start_time, end_time)
-            )  # don't interrupt execution of main thread
+                target=handle_success,
+                args=(args, kwargs, result, start_time,
+                      end_time))  # don't interrupt execution of main thread
             my_thread.start()
             return result
         except Exception as e:
+
             traceback_exception = traceback.format_exc()
             crash_reporting(*args, **kwargs, exception=traceback_exception)
             end_time = datetime.datetime.now()
             my_thread = threading.Thread(
                 target=handle_failure,
-                args=(e, traceback_exception, start_time, end_time, args, kwargs),
+                args=(e, traceback_exception, start_time, end_time, args,
+                      kwargs),
             )  # don't interrupt execution of main thread
             my_thread.start()
             if hasattr(e, "message"):
@@ -452,18 +460,18 @@ def token_counter(model, text):
     return num_tokens
 
 
-def cost_per_token(model="gpt-3.5-turbo", prompt_tokens=0, completion_tokens=0):
-    ## given
+def cost_per_token(model="gpt-3.5-turbo",
+                   prompt_tokens=0,
+                   completion_tokens=0):
+    # given
     prompt_tokens_cost_usd_dollar = 0
     completion_tokens_cost_usd_dollar = 0
     model_cost_ref = litellm.model_cost
     if model in model_cost_ref:
         prompt_tokens_cost_usd_dollar = (
-            model_cost_ref[model]["input_cost_per_token"] * prompt_tokens
-        )
+            model_cost_ref[model]["input_cost_per_token"] * prompt_tokens)
         completion_tokens_cost_usd_dollar = (
-            model_cost_ref[model]["output_cost_per_token"] * completion_tokens
-        )
+            model_cost_ref[model]["output_cost_per_token"] * completion_tokens)
         return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
     else:
         # calculate average input cost
@@ -484,8 +492,9 @@ def completion_cost(model="gpt-3.5-turbo", prompt="", completion=""):
     prompt_tokens = token_counter(model=model, text=prompt)
     completion_tokens = token_counter(model=model, text=completion)
     prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar = cost_per_token(
-        model=model, prompt_tokens=prompt_tokens, completion_tokens=completion_tokens
-    )
+        model=model,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens)
     return prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar
 
 
@@ -577,9 +586,8 @@ def get_optional_params(
             optional_params["max_tokens"] = max_tokens
         if frequency_penalty != 0:
             optional_params["frequency_penalty"] = frequency_penalty
-    elif (
-        model == "chat-bison"
-    ):  # chat-bison has diff args from chat-bison@001 ty Google
+    elif (model == "chat-bison"
+          ):  # chat-bison has diff args from chat-bison@001 ty Google
         if temperature != 1:
             optional_params["temperature"] = temperature
         if top_p != 1:
@@ -639,7 +647,10 @@ def load_test_model(
         test_prompt = prompt
     if num_calls:
         test_calls = num_calls
-    messages = [[{"role": "user", "content": test_prompt}] for _ in range(test_calls)]
+    messages = [[{
+        "role": "user",
+        "content": test_prompt
+    }] for _ in range(test_calls)]
     start_time = time.time()
     try:
         litellm.batch_completion(
@@ -669,7 +680,7 @@ def load_test_model(
 
 
 def set_callbacks(callback_list):
-    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient
+    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, llmonitorLogger
     try:
         for callback in callback_list:
             print(f"callback: {callback}")
@@ -677,17 +688,15 @@ def set_callbacks(callback_list):
                 try:
                     import sentry_sdk
                 except ImportError:
-                    print_verbose("Package 'sentry_sdk' is missing. Installing it...")
+                    print_verbose(
+                        "Package 'sentry_sdk' is missing. Installing it...")
                     subprocess.check_call(
-                        [sys.executable, "-m", "pip", "install", "sentry_sdk"]
-                    )
+                        [sys.executable, "-m", "pip", "install", "sentry_sdk"])
                     import sentry_sdk
                 sentry_sdk_instance = sentry_sdk
-                sentry_trace_rate = (
-                    os.environ.get("SENTRY_API_TRACE_RATE")
-                    if "SENTRY_API_TRACE_RATE" in os.environ
-                    else "1.0"
-                )
+                sentry_trace_rate = (os.environ.get("SENTRY_API_TRACE_RATE")
+                                     if "SENTRY_API_TRACE_RATE" in os.environ
+                                     else "1.0")
                 sentry_sdk_instance.init(
                     dsn=os.environ.get("SENTRY_API_URL"),
                     traces_sample_rate=float(sentry_trace_rate),
@@ -698,10 +707,10 @@ def set_callbacks(callback_list):
                 try:
                     from posthog import Posthog
                 except ImportError:
-                    print_verbose("Package 'posthog' is missing. Installing it...")
+                    print_verbose(
+                        "Package 'posthog' is missing. Installing it...")
                     subprocess.check_call(
-                        [sys.executable, "-m", "pip", "install", "posthog"]
-                    )
+                        [sys.executable, "-m", "pip", "install", "posthog"])
                     from posthog import Posthog
                 posthog = Posthog(
                     project_api_key=os.environ.get("POSTHOG_API_KEY"),
@@ -711,10 +720,10 @@ def set_callbacks(callback_list):
                 try:
                     from slack_bolt import App
                 except ImportError:
-                    print_verbose("Package 'slack_bolt' is missing. Installing it...")
+                    print_verbose(
+                        "Package 'slack_bolt' is missing. Installing it...")
                     subprocess.check_call(
-                        [sys.executable, "-m", "pip", "install", "slack_bolt"]
-                    )
+                        [sys.executable, "-m", "pip", "install", "slack_bolt"])
                     from slack_bolt import App
                 slack_app = App(
                     token=os.environ.get("SLACK_API_TOKEN"),
@@ -724,6 +733,8 @@ def set_callbacks(callback_list):
                 print_verbose(f"Initialized Slack App: {slack_app}")
             elif callback == "helicone":
                 heliconeLogger = HeliconeLogger()
+            elif callback == "llmonitor":
+                llmonitorLogger = LLMonitorLogger()
             elif callback == "aispend":
                 aispendLogger = AISpendLogger()
             elif callback == "berrispend":
@@ -738,7 +749,8 @@ def set_callbacks(callback_list):
         raise e
 
 
-def handle_failure(exception, traceback_exception, start_time, end_time, args, kwargs):
+def handle_failure(exception, traceback_exception, start_time, end_time, args,
+                   kwargs):
     global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient
     try:
         # print_verbose(f"handle_failure args: {args}")
@@ -748,8 +760,7 @@ def handle_failure(exception, traceback_exception, start_time, end_time, args, k
         failure_handler = additional_details.pop("failure_handler", None)
 
         additional_details["Event_Name"] = additional_details.pop(
-            "failed_event_name", "litellm.failed_query"
-        )
+            "failed_event_name", "litellm.failed_query")
         print_verbose(f"self.failure_callback: {litellm.failure_callback}")
 
         # print_verbose(f"additional_details: {additional_details}")
@@ -766,9 +777,8 @@ def handle_failure(exception, traceback_exception, start_time, end_time, args, k
                     for detail in additional_details:
                         slack_msg += f"{detail}: {additional_details[detail]}\n"
                     slack_msg += f"Traceback: {traceback_exception}"
-                    slack_app.client.chat_postMessage(
-                        channel=alerts_channel, text=slack_msg
-                    )
+                    slack_app.client.chat_postMessage(channel=alerts_channel,
+                                                      text=slack_msg)
                 elif callback == "sentry":
                     capture_exception(exception)
                 elif callback == "posthog":
@@ -787,9 +797,8 @@ def handle_failure(exception, traceback_exception, start_time, end_time, args, k
                     print_verbose(f"ph_obj: {ph_obj}")
                     print_verbose(f"PostHog Event Name: {event_name}")
                     if "user_id" in additional_details:
-                        posthog.capture(
-                            additional_details["user_id"], event_name, ph_obj
-                        )
+                        posthog.capture(additional_details["user_id"],
+                                        event_name, ph_obj)
                     else:  # PostHog calls require a unique id to identify a user - https://posthog.com/docs/libraries/python
                         unique_id = str(uuid.uuid4())
                         posthog.capture(unique_id, event_name)
@@ -803,10 +812,10 @@ def handle_failure(exception, traceback_exception, start_time, end_time, args, k
                         "created": time.time(),
                         "error": traceback_exception,
                         "usage": {
-                            "prompt_tokens": prompt_token_calculator(
-                                model, messages=messages
-                            ),
-                            "completion_tokens": 0,
+                            "prompt_tokens":
+                            prompt_token_calculator(model, messages=messages),
+                            "completion_tokens":
+                            0,
                         },
                     }
                     berrispendLogger.log_event(
@@ -825,15 +834,37 @@ def handle_failure(exception, traceback_exception, start_time, end_time, args, k
                         "model": model,
                         "created": time.time(),
                         "usage": {
-                            "prompt_tokens": prompt_token_calculator(
-                                model, messages=messages
-                            ),
-                            "completion_tokens": 0,
+                            "prompt_tokens":
+                            prompt_token_calculator(model, messages=messages),
+                            "completion_tokens":
+                            0,
                         },
                     }
                     aispendLogger.log_event(
                         model=model,
                         response_obj=result,
+                        start_time=start_time,
+                        end_time=end_time,
+                        print_verbose=print_verbose,
+                    )
+                elif callback == "llmonitor":
+                    print_verbose("reaches llmonitor for logging error!")
+
+                    model = args[0] if len(args) > 0 else kwargs["model"]
+
+                    input = args[1] if len(args) > 1 else kwargs.get(
+                        "messages", kwargs.get("input", None))
+
+                    type = 'embed' if 'input' in kwargs else 'llm'
+
+                    llmonitorLogger.log_event(
+                        type=type,
+                        event="error",
+                        user_id=litellm._thread_context.user,
+                        model=model,
+                        input=input,
+                        error=traceback_exception,
+                        run_id=kwargs["litellm_call_id"],
                         start_time=start_time,
                         end_time=end_time,
                         print_verbose=print_verbose,
@@ -848,10 +879,10 @@ def handle_failure(exception, traceback_exception, start_time, end_time, args, k
                         "created": time.time(),
                         "error": traceback_exception,
                         "usage": {
-                            "prompt_tokens": prompt_token_calculator(
-                                model, messages=messages
-                            ),
-                            "completion_tokens": 0,
+                            "prompt_tokens":
+                            prompt_token_calculator(model, messages=messages),
+                            "completion_tokens":
+                            0,
                         },
                     }
                     supabaseClient.log_event(
@@ -874,10 +905,10 @@ def handle_failure(exception, traceback_exception, start_time, end_time, args, k
                         "created": time.time(),
                         "error": traceback_exception,
                         "usage": {
-                            "prompt_tokens": prompt_token_calculator(
-                                model, messages=messages
-                            ),
-                            "completion_tokens": 0,
+                            "prompt_tokens":
+                            prompt_token_calculator(model, messages=messages),
+                            "completion_tokens":
+                            0,
                         },
                     }
                     liteDebuggerClient.log_event(
@@ -904,19 +935,18 @@ def handle_failure(exception, traceback_exception, start_time, end_time, args, k
             failure_handler(call_details)
         pass
     except Exception as e:
-        ## LOGGING
+        # LOGGING
         exception_logging(logger_fn=user_logger_fn, exception=e)
         pass
 
 
 def handle_success(args, kwargs, result, start_time, end_time):
-    global heliconeLogger, aispendLogger, supabaseClient, liteDebuggerClient
+    global heliconeLogger, aispendLogger, supabaseClient, liteDebuggerClient, llmonitorLogger
     try:
         success_handler = additional_details.pop("success_handler", None)
         failure_handler = additional_details.pop("failure_handler", None)
         additional_details["Event_Name"] = additional_details.pop(
-            "successful_event_name", "litellm.succes_query"
-        )
+            "successful_event_name", "litellm.succes_query")
         for callback in litellm.success_callback:
             try:
                 if callback == "posthog":
@@ -925,9 +955,8 @@ def handle_success(args, kwargs, result, start_time, end_time):
                         ph_obj[detail] = additional_details[detail]
                     event_name = additional_details["Event_Name"]
                     if "user_id" in additional_details:
-                        posthog.capture(
-                            additional_details["user_id"], event_name, ph_obj
-                        )
+                        posthog.capture(additional_details["user_id"],
+                                        event_name, ph_obj)
                     else:  # PostHog calls require a unique id to identify a user - https://posthog.com/docs/libraries/python
                         unique_id = str(uuid.uuid4())
                         posthog.capture(unique_id, event_name, ph_obj)
@@ -936,9 +965,8 @@ def handle_success(args, kwargs, result, start_time, end_time):
                     slack_msg = ""
                     for detail in additional_details:
                         slack_msg += f"{detail}: {additional_details[detail]}\n"
-                    slack_app.client.chat_postMessage(
-                        channel=alerts_channel, text=slack_msg
-                    )
+                    slack_app.client.chat_postMessage(channel=alerts_channel,
+                                                      text=slack_msg)
                 elif callback == "helicone":
                     print_verbose("reaches helicone for logging!")
                     model = args[0] if len(args) > 0 else kwargs["model"]
@@ -949,6 +977,28 @@ def handle_success(args, kwargs, result, start_time, end_time):
                         response_obj=result,
                         start_time=start_time,
                         end_time=end_time,
+                        print_verbose=print_verbose,
+                    )
+                elif callback == "llmonitor":
+                    print_verbose("reaches llmonitor for logging!")
+                    model = args[0] if len(args) > 0 else kwargs["model"]
+
+                    input = args[1] if len(args) > 1 else kwargs.get(
+                        "messages", kwargs.get("input", None))
+
+                    #if contains input, it's 'embedding', otherwise 'llm'
+                    type = 'embed' if 'input' in kwargs else 'llm'
+
+                    llmonitorLogger.log_event(
+                        type=type,
+                        event="end",
+                        model=model,
+                        input=input,
+                        user_id=litellm._thread_context.user,
+                        response_obj=result,
+                        start_time=start_time,
+                        end_time=end_time,
+                        run_id=kwargs["litellm_call_id"],
                         print_verbose=print_verbose,
                     )
                 elif callback == "aispend":
@@ -1004,7 +1054,7 @@ def handle_success(args, kwargs, result, start_time, end_time):
                         print_verbose=print_verbose,
                     )
             except Exception as e:
-                ## LOGGING
+                # LOGGING
                 exception_logging(logger_fn=user_logger_fn, exception=e)
                 print_verbose(
                     f"[Non-Blocking] Success Callback Error - {traceback.format_exc()}"
@@ -1015,7 +1065,7 @@ def handle_success(args, kwargs, result, start_time, end_time):
             success_handler(args, kwargs)
         pass
     except Exception as e:
-        ## LOGGING
+        # LOGGING
         exception_logging(logger_fn=user_logger_fn, exception=e)
         print_verbose(
             f"[Non-Blocking] Success Callback Error - {traceback.format_exc()}"
@@ -1140,33 +1190,36 @@ def exception_type(model, original_exception, custom_llm_provider):
                 exception_type = ""
             if "claude" in model:  # one of the anthropics
                 if hasattr(original_exception, "status_code"):
-                    print_verbose(f"status_code: {original_exception.status_code}")
+                    print_verbose(
+                        f"status_code: {original_exception.status_code}")
                     if original_exception.status_code == 401:
                         exception_mapping_worked = True
                         raise AuthenticationError(
-                            message=f"AnthropicException - {original_exception.message}",
+                            message=
+                            f"AnthropicException - {original_exception.message}",
                             llm_provider="anthropic",
                         )
                     elif original_exception.status_code == 400:
                         exception_mapping_worked = True
                         raise InvalidRequestError(
-                            message=f"AnthropicException - {original_exception.message}",
+                            message=
+                            f"AnthropicException - {original_exception.message}",
                             model=model,
                             llm_provider="anthropic",
                         )
                     elif original_exception.status_code == 429:
                         exception_mapping_worked = True
                         raise RateLimitError(
-                            message=f"AnthropicException - {original_exception.message}",
+                            message=
+                            f"AnthropicException - {original_exception.message}",
                             llm_provider="anthropic",
                         )
-                elif (
-                    "Could not resolve authentication method. Expected either api_key or auth_token to be set."
-                    in error_str
-                ):
+                elif ("Could not resolve authentication method. Expected either api_key or auth_token to be set."
+                      in error_str):
                     exception_mapping_worked = True
                     raise AuthenticationError(
-                        message=f"AnthropicException - {original_exception.message}",
+                        message=
+                        f"AnthropicException - {original_exception.message}",
                         llm_provider="anthropic",
                     )
             elif "replicate" in model:
@@ -1190,35 +1243,36 @@ def exception_type(model, original_exception, custom_llm_provider):
                         llm_provider="replicate",
                     )
                 elif (
-                    exception_type == "ReplicateError"
-                ):  ## ReplicateError implies an error on Replicate server side, not user side
+                        exception_type == "ReplicateError"
+                ):  # ReplicateError implies an error on Replicate server side, not user side
                     raise ServiceUnavailableError(
                         message=f"ReplicateException - {error_str}",
                         llm_provider="replicate",
                     )
             elif model == "command-nightly":  # Cohere
-                if (
-                    "invalid api token" in error_str
-                    or "No API key provided." in error_str
-                ):
+                if ("invalid api token" in error_str
+                        or "No API key provided." in error_str):
                     exception_mapping_worked = True
                     raise AuthenticationError(
-                        message=f"CohereException - {original_exception.message}",
+                        message=
+                        f"CohereException - {original_exception.message}",
                         llm_provider="cohere",
                     )
                 elif "too many tokens" in error_str:
                     exception_mapping_worked = True
                     raise InvalidRequestError(
-                        message=f"CohereException - {original_exception.message}",
+                        message=
+                        f"CohereException - {original_exception.message}",
                         model=model,
                         llm_provider="cohere",
                     )
                 elif (
-                    "CohereConnectionError" in exception_type
+                        "CohereConnectionError" in exception_type
                 ):  # cohere seems to fire these errors when we load test it (1k+ messages / min)
                     exception_mapping_worked = True
                     raise RateLimitError(
-                        message=f"CohereException - {original_exception.message}",
+                        message=
+                        f"CohereException - {original_exception.message}",
                         llm_provider="cohere",
                     )
             elif custom_llm_provider == "huggingface":
@@ -1226,27 +1280,30 @@ def exception_type(model, original_exception, custom_llm_provider):
                     if original_exception.status_code == 401:
                         exception_mapping_worked = True
                         raise AuthenticationError(
-                            message=f"HuggingfaceException - {original_exception.message}",
+                            message=
+                            f"HuggingfaceException - {original_exception.message}",
                             llm_provider="huggingface",
                         )
                     elif original_exception.status_code == 400:
                         exception_mapping_worked = True
                         raise InvalidRequestError(
-                            message=f"HuggingfaceException - {original_exception.message}",
+                            message=
+                            f"HuggingfaceException - {original_exception.message}",
                             model=model,
                             llm_provider="huggingface",
                         )
                     elif original_exception.status_code == 429:
                         exception_mapping_worked = True
                         raise RateLimitError(
-                            message=f"HuggingfaceException - {original_exception.message}",
+                            message=
+                            f"HuggingfaceException - {original_exception.message}",
                             llm_provider="huggingface",
                         )
             raise original_exception  # base case - return the original exception
         else:
             raise original_exception
     except Exception as e:
-        ## LOGGING
+        # LOGGING
         exception_logging(
             logger_fn=user_logger_fn,
             additional_args={
@@ -1271,7 +1328,7 @@ def safe_crash_reporting(model=None, exception=None, custom_llm_provider=None):
         "exception": str(exception),
         "custom_llm_provider": custom_llm_provider,
     }
-    threading.Thread(target=litellm_telemetry, args=(data,)).start()
+    threading.Thread(target=litellm_telemetry, args=(data, )).start()
 
 
 def litellm_telemetry(data):
@@ -1321,11 +1378,13 @@ def get_secret(secret_name):
     if litellm.secret_manager_client != None:
         # TODO: check which secret manager is being used
         # currently only supports Infisical
-        secret = litellm.secret_manager_client.get_secret(secret_name).secret_value
+        secret = litellm.secret_manager_client.get_secret(
+            secret_name).secret_value
         if secret != None:
             return secret  # if secret found in secret manager return it
         else:
-            raise ValueError(f"Secret '{secret_name}' not found in secret manager")
+            raise ValueError(
+                f"Secret '{secret_name}' not found in secret manager")
     elif litellm.api_key != None:  # if users use litellm default key
         return litellm.api_key
     else:
@@ -1336,6 +1395,7 @@ def get_secret(secret_name):
 # wraps the completion stream to return the correct format for the model
 # replicate/anthropic/cohere
 class CustomStreamWrapper:
+
     def __init__(self, completion_stream, model, custom_llm_provider=None):
         self.model = model
         self.custom_llm_provider = custom_llm_provider
@@ -1386,7 +1446,8 @@ class CustomStreamWrapper:
         elif self.model == "replicate":
             chunk = next(self.completion_stream)
             completion_obj["content"] = chunk
-        elif (self.model == "together_ai") or ("togethercomputer" in self.model):
+        elif (self.model == "together_ai") or ("togethercomputer"
+                                               in self.model):
             chunk = next(self.completion_stream)
             text_data = self.handle_together_ai_chunk(chunk)
             if text_data == "":
@@ -1419,12 +1480,11 @@ def read_config_args(config_path):
 
 
 ########## ollama implementation ############################
-import aiohttp
 
 
-async def get_ollama_response_stream(
-    api_base="http://localhost:11434", model="llama2", prompt="Why is the sky blue?"
-):
+async def get_ollama_response_stream(api_base="http://localhost:11434",
+                                     model="llama2",
+                                     prompt="Why is the sky blue?"):
     session = aiohttp.ClientSession()
     url = f"{api_base}/api/generate"
     data = {
@@ -1447,7 +1507,11 @@ async def get_ollama_response_stream(
                                         "content": "",
                                     }
                                     completion_obj["content"] = j["response"]
-                                    yield {"choices": [{"delta": completion_obj}]}
+                                    yield {
+                                        "choices": [{
+                                            "delta": completion_obj
+                                        }]
+                                    }
                                     # self.responses.append(j["response"])
                                     # yield "blank"
                     except Exception as e:
