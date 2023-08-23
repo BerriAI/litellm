@@ -229,8 +229,7 @@ model_list = (
 )
 
 provider_list = [
-    "open",
-    "azure",
+    "openai",
     "cohere",
     "anthropic",
     "replicate",
@@ -240,6 +239,7 @@ provider_list = [
     "vertex_ai",
     "ai21",
     "baseten",
+    "azure",
 ]
 
 models_by_provider = {
