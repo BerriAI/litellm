@@ -12,6 +12,8 @@ import pytest
 import litellm
 from litellm import embedding, completion
 
+litellm.debugger = True
+
 # from infisical import InfisicalClient
 
 # litellm.set_verbose = True
@@ -28,14 +30,18 @@ def logger_fn(user_model_dict):
 def test_completion_custom_provider_model_name():
     try:
         response = completion(
-            model="together_ai/togethercomputer/llama-2-70b-chat", messages=messages, logger_fn=logger_fn
+            model="together_ai/togethercomputer/llama-2-70b-chat",
+            messages=messages,
+            logger_fn=logger_fn,
         )
         # Add any assertions here to check the response
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_completion_custom_provider_model_name()
+
+# test_completion_custom_provider_model_name()
+
 
 def test_completion_claude():
     try:
@@ -89,7 +95,10 @@ def test_completion_claude_stream():
 def test_completion_cohere():
     try:
         response = completion(
-            model="command-nightly", messages=messages, max_tokens=100, logit_bias={40: 10}
+            model="command-nightly",
+            messages=messages,
+            max_tokens=100,
+            logit_bias={40: 10},
         )
         # Add any assertions here to check the response
         print(response)
@@ -102,6 +111,7 @@ def test_completion_cohere():
             pytest.fail(f"Error occurred: {e}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
 
 def test_completion_cohere_stream():
     try:
@@ -254,8 +264,7 @@ def test_completion_openai_with_functions():
 def test_completion_azure():
     try:
         response = completion(
-            model="gpt-3.5-turbo",
-            deployment_id="chatgpt-test",
+            model="chatgpt-test",
             messages=messages,
             custom_llm_provider="azure",
         )
@@ -333,6 +342,18 @@ def test_petals():
             messages=messages,
             custom_llm_provider="petals",
             force_timeout=120,
+        )
+        # Add any assertions here to check the response
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+def test_completion_with_fallbacks():
+    fallbacks = ["gpt-3.5-turb", "gpt-3.5-turbo", "command-nightly"]
+    try:
+        response = completion(
+            model="bad-model", messages=messages, force_timeout=120, fallbacks=fallbacks
         )
         # Add any assertions here to check the response
         print(response)

@@ -9,11 +9,9 @@
 # import litellm
 # from litellm import embedding, completion
 
-# litellm.input_callback = ["lite_debugger"]
-# litellm.success_callback = ["lite_debugger"]
-# litellm.failure_callback = ["lite_debugger"]
-
 # litellm.set_verbose = True
+
+# litellm.email = "krrish@berri.ai"
 
 # user_message = "Hello, how are you?"
 # messages = [{ "content": user_message,"role": "user"}]
@@ -21,6 +19,6 @@
 
 # #openai call
 # response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])
-
+# print(f"response: {response}")
 # #bad request call
-# response = completion(model="chatgpt-test", messages=[{"role": "user", "content": "Hi 👋 - i'm a bad request"}])
+# # response = completion(model="chatgpt-test", messages=[{"role": "user", "content": "Hi 👋 - i'm a bad request"}])
