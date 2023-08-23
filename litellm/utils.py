@@ -24,7 +24,7 @@ from .exceptions import (
 )
 from typing import List, Dict, Union, Optional
 
-####### ENVIRONMENT VARIABLES ###################
+####### ENVIRONMENT VARIABLES ####################
 dotenv.load_dotenv()  # Loading env variables using dotenv
 sentry_sdk_instance = None
 capture_exception = None
