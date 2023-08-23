@@ -2,6 +2,10 @@
 
 [LLMonitor](https://llmonitor.com/) is an open source observability platform that provides cost tracking, user tracking and powerful agent tracing.
 
+<video controls width='900' >
+  <source src='https://llmonitor.com/videos/demo-annotated.mp4'/>
+</video>
+
 ## Use LLMonitor to log requests across all LLM Providers (OpenAI, Azure, Anthropic, Cohere, Replicate, PaLM)
 
 liteLLM provides `callbacks`, making it easy for you to log data depending on the status of your responses.
