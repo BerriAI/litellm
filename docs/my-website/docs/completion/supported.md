@@ -128,9 +128,9 @@ Example Baseten Usage - Note: liteLLM supports all models deployed on Basten
 
 | Model Name       | Function Call                                  | Required OS Variables              |
 |------------------|--------------------------------------------|------------------------------------|
-| Falcon 7B        | `completion(model='<your model version id>', messages=messages, custom_llm_provider="baseten")`         | `os.environ['BASETEN_API_KEY']`     |
-| Wizard LM        | `completion(model='<your model version id>', messages=messages, custom_llm_provider="baseten")`         | `os.environ['BASETEN_API_KEY']`     |
-| MPT 7B Base      | `completion(model='<your model version id>', messages=messages, custom_llm_provider="baseten")`         | `os.environ['BASETEN_API_KEY']`     |
+| Falcon 7B        | `completion(model='baseten/qvv0xeq', messages=messages)`         | `os.environ['BASETEN_API_KEY']`     |
+| Wizard LM        | `completion(model='baseten/q841o8w', messages=messages)`         | `os.environ['BASETEN_API_KEY']`     |
+| MPT 7B Base      | `completion(model='baseten/31dxrj3', messages=messages)`         | `os.environ['BASETEN_API_KEY']`     |
 
 
 ### OpenRouter Completion Models
