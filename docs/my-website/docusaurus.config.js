@@ -38,6 +38,9 @@ const config = {
         disableInDev: false,
       },
     ],
+    [ require.resolve('docusaurus-lunr-search'), {
+      languages: ['en'] // language codes
+    }]
   ],
 
   presets: [
