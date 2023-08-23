@@ -1,4 +1,4 @@
-import os, json
+import json
 from enum import Enum
 import requests
 import time
@@ -29,9 +29,11 @@ class AnthropicLLM:
 
     def validate_environment(self, api_key):  # set up the environment required to run the model
         # set the api key
-        if self.api_key == None:
+        if self.api_key is None:
             raise ValueError(
-                "Missing Anthropic API Key - A call is being made to anthropic but no key is set either in the environment variables or via params"
+                "Missing Anthropic API Key -"
+                + " A call is being made to anthropic but no key is set either"
+                + " in the environment variables or via params"
             )
         self.api_key = api_key
         self.headers = {
@@ -73,22 +75,22 @@ class AnthropicLLM:
             **optional_params,
         }
 
-        ## LOGGING
+        # LOGGING
         self.logging_obj.pre_call(
             input=prompt,
             api_key=self.api_key,
             additional_args={"complete_input_dict": data},
         )
-        ## COMPLETION CALL
+        # COMPLETION CALL
         response = requests.post(
             self.completion_url, headers=self.headers, data=json.dumps(data), stream=optional_params["stream"]
         )
         print(optional_params)
-        if "stream" in optional_params and optional_params["stream"] == True:
+        if "stream" in optional_params and optional_params["stream"] is True:
             print("IS STREAMING")
             return response.iter_lines()
         else:
-            ## LOGGING
+            # LOGGING
             self.logging_obj.post_call(
                 input=prompt,
                 api_key=self.api_key,
@@ -96,7 +98,7 @@ class AnthropicLLM:
                 additional_args={"complete_input_dict": data},
             )
             print_verbose(f"raw model_response: {response.text}")
-            ## RESPONSE OBJECT
+            # RESPONSE OBJECT
             completion_response = response.json()
             if "error" in completion_response:
                 raise AnthropicError(
@@ -106,11 +108,11 @@ class AnthropicLLM:
             else:
                 model_response["choices"][0]["message"]["content"] = completion_response["completion"]
 
-            ## CALCULATING USAGE
-            prompt_tokens = len(self.encoding.encode(prompt))  ##[TODO] use the anthropic tokenizer here
+            # CALCULATING USAGE
+            prompt_tokens = len(self.encoding.encode(prompt))  # [TODO] use the anthropic tokenizer here
             completion_tokens = len(
                 self.encoding.encode(model_response["choices"][0]["message"]["content"])
-            )  ##[TODO] use the anthropic tokenizer here
+            )  # [TODO] use the anthropic tokenizer here
 
             model_response["created"] = time.time()
             model_response["model"] = model
