@@ -290,9 +290,10 @@ def client(original_function):
             global callback_list, add_breadcrumb, user_logger_fn
             if litellm.email is not None or os.getenv("LITELLM_EMAIL", None) is not None:  # add to input, success and failure callbacks if user is using hosted product
                 get_all_keys()
-                litellm.input_callback.append("lite_debugger")
-                litellm.success_callback.append("lite_debugger")
-                litellm.failure_callback.append("lite_debugger")
+                if "lite_debugger" not in callback_list:
+                    litellm.input_callback.append("lite_debugger")
+                    litellm.success_callback.append("lite_debugger")
+                    litellm.failure_callback.append("lite_debugger")
             if (
                 len(litellm.input_callback) > 0
                 or len(litellm.success_callback) > 0
@@ -1064,7 +1065,7 @@ def modify_integration(integration_name, integration_params):
 
 ####### [BETA] HOSTED PRODUCT ################ - https://docs.litellm.ai/docs/debugging/hosted_debugging
 
-def get_all_keys():
+def get_all_keys(llm_provider=None):
     try:
         global last_fetched_at
         # if user is using hosted product -> instantiate their env with their hosted api keys - refresh every 5 minutes
@@ -1074,7 +1075,7 @@ def get_all_keys():
             if last_fetched_at != None:
                 current_time = time.time()
                 time_delta = current_time - last_fetched_at
-            if time_delta > 300 or last_fetched_at == None:
+            if time_delta > 300 or last_fetched_at == None or llm_provider: # if the llm provider is passed in , assume this happening due to an AuthError for that provider
                 # make the api call
                 last_fetched_at = time.time()
                 print(f"last_fetched_at: {last_fetched_at}")
@@ -1254,6 +1255,9 @@ def exception_type(model, original_exception, custom_llm_provider):
             },
             exception=e,
         )
+        ## AUTH ERROR 
+        if isinstance(e, AuthenticationError) and (litellm.email or "LITELLM_EMAIL" in os.environ):
+            threading.Thread(target=get_all_keys, args=(e.llm_provider,)).start()
         if exception_mapping_worked:
             raise e
         else:  # don't let an error with mapping interrupt the user from receiving an error from the llm api calls
