@@ -6,7 +6,8 @@ class LiteDebugger:
     dashboard_url = None
 
     def __init__(self, email=None):
-        self.api_url = "https://api.litellm.ai/debugger"
+        # self.api_url = "https://api.litellm.ai/debugger"
+        self.api_url = "http://0.0.0.0:4000/debugger"
         self.validate_environment(email)
         pass
 
@@ -88,13 +89,14 @@ class LiteDebugger:
                     headers={"content-type": "application/json"},
                     data=json.dumps(litellm_data_obj),
                 )
-            elif "embedding" in response_obj:
+            elif "data" in response_obj and isinstance(response_obj["data"], list) and len(response_obj["data"]) > 0 and "embedding" in response_obj["data"][0]:
+                print(f"messages: {messages}")
                 litellm_data_obj = {
                     "response_time": response_time,
                     "model": response_obj["model"],
                     "total_cost": total_cost,
                     "messages": messages,
-                    "response": response_obj["embedding"][:5],
+                    "response": str(response_obj["data"][0]["embedding"][:5]),
                     "end_user": end_user,
                     "litellm_call_id": litellm_call_id,
                     "status": "success",

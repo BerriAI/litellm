@@ -815,7 +815,7 @@ def embedding(
             )
             ## EMBEDDING CALL
             response = openai.Embedding.create(input=input, engine=model)
-            print_verbose(f"response_value: {str(response)[:50]}")
+            print_verbose(f"response_value: {str(response)[:100]}")
         elif model in litellm.open_ai_embedding_models:
             openai.api_type = "openai"
             openai.api_base = "https://api.openai.com/v1"
@@ -833,7 +833,7 @@ def embedding(
             )
             ## EMBEDDING CALL
             response = openai.Embedding.create(input=input, model=model)
-            print_verbose(f"response_value: {str(response)[:50]}")
+            print_verbose(f"response_value: {str(response)[:100]}")
         else:
             args = locals()
             raise ValueError(f"No valid embedding model args passed in - {args}")
