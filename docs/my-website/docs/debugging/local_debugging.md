@@ -55,3 +55,9 @@ response = completion(model="gpt-3.5-turbo", messages=messages, logger_fn=my_cus
 # cohere call
 response = completion("command-nightly", messages, logger_fn=my_custom_logging_fn)
 ```
+
+## Still Seeing Issues? 
+
+Text us @ +17708783106 or Join the [Discord](https://discord.com/invite/wuPM9dRgDw). 
+
+We promise to help you in `lite`ning speed ❤️

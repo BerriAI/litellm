@@ -1,4 +1,4 @@
-## liteLLM Together AI Tutorial
+# liteLLM Together AI Tutorial
 https://together.ai/
 
 
