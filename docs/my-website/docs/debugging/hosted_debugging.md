@@ -1,7 +1,7 @@
 import Image from '@theme/IdealImage';
 
 # LiteLLM Client - Debugging Dashboard
-LiteLLM offers a UI to
+LiteLLM offers a UI to:
 * Add New LLMs - Store your API Keys, Model Configurations
 * Debug your Call Logs 
 
@@ -22,17 +22,21 @@ See our live dashboard 👉 [admin.litellm.ai](https://admin.litellm.ai/)
  import litellm
  from litellm import embedding, completion
  
- ## Set your email
+ ## Setup for activating / using the litellm dashboard
  litellm.email = "test_email@test.com"
 
- user_message = "Hello, how are you?"
- messages = [{ "content": user_message,"role": "user"}]
-
-
- # openai call
- response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])
-
- # bad request call
- response = completion(model="chatgpt-test", messages=[{"role": "user", "content": "Hi 👋 - i'm a bad request"}])
 ```
 
+## Calling Completion() with the LiteLLM Dashboard
+```python
+user_message = "Hello, how are you?"
+messages = [{ "content": user_message,"role": "user"}]
+
+
+# openai call
+response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])
+
+# bad request call
+response = completion(model="chatgpt-test", messages=[{"role": "user", "content": "Hi 👋 - i'm a bad request"}])
+
+```
