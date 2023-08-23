@@ -24,6 +24,16 @@ caching = False
 caching_with_models = False  # if you want the caching key to be model + prompt
 debugger = False
 model_cost = {
+    "babbage-002": {
+        "max_tokens": 16384,
+        "input_cost_per_token": 0.0000004,
+        "output_cost_per_token": 0.0000004,
+    },
+    "davinci-002": {
+        "max_tokens": 16384,
+        "input_cost_per_token": 0.000002,
+        "output_cost_per_token": 0.000002,
+    },
     "gpt-3.5-turbo": {
         "max_tokens": 4000,
         "input_cost_per_token": 0.0000015,
@@ -137,7 +147,7 @@ open_ai_chat_completion_models = [
     "gpt-3.5-turbo-0613",
     "gpt-3.5-turbo-16k-0613",
 ]
-open_ai_text_completion_models = ["text-davinci-003"]
+open_ai_text_completion_models = ["text-davinci-003", "babbage-002", "davinci-002"]
 
 cohere_models = [
     "command-nightly",

@@ -248,7 +248,9 @@ def completion(
                 original_response=response,
                 additional_args={"headers": litellm.headers},
             )
-        elif model in litellm.open_ai_text_completion_models:
+        elif (model in litellm.open_ai_text_completion_models or 
+              "ft:babbage-002" in model or # support for finetuned completion models
+              "ft:davinci-002" in model):
             openai.api_type = "openai"
             openai.api_base = (
                 litellm.api_base
