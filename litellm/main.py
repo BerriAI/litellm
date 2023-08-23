@@ -755,6 +755,10 @@ def completion(
             model=model, custom_llm_provider=custom_llm_provider, original_exception=e
         )
 
+def completion_with_retries(*args, **kwargs):
+    import tenacity
+    retryer = tenacity.Retrying(stop=tenacity.stop_after_attempt(3), reraise=True)
+    return retryer(completion, *args, **kwargs)
 
 def batch_completion(*args, **kwargs):
     batch_messages = args[1] if len(args) > 1 else kwargs.get("messages")
