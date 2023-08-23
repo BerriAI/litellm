@@ -899,7 +899,7 @@ def handle_failure(exception, traceback_exception, start_time, end_time, args,
                     print_verbose("reaches lite_debugger for logging!")
                     print_verbose(f"liteDebuggerClient: {liteDebuggerClient}")
                     model = args[0] if len(args) > 0 else kwargs["model"]
-                    messages = args[1] if len(args) > 1 else kwargs.get("messages", {"role": "user", "content": kwargs.get("input", "")})
+                    messages = args[1] if len(args) > 1 else kwargs.get("messages", [{"role": "user", "content": ' '.join(kwargs.get("input", ""))}])
                     result = {
                         "model": model,
                         "created": time.time(),
@@ -1031,7 +1031,7 @@ def handle_success(args, kwargs, result, start_time, end_time):
                 elif callback == "lite_debugger":
                     print_verbose("reaches lite_debugger for logging!")
                     print_verbose(f"liteDebuggerClient: {liteDebuggerClient}")
-                    messages = args[1] if len(args) > 1 else kwargs.get("messages", {"role": "user", "content": kwargs.get("input")}) 
+                    messages = args[1] if len(args) > 1 else kwargs.get("messages", [{"role": "user", "content": ' '.join(kwargs.get("input", ""))}])
                     liteDebuggerClient.log_event(
                         model=model,
                         messages=messages,
