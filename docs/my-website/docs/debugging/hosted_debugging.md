@@ -44,8 +44,11 @@ Here's your LiteLLM Dashboard 👉 https://admin.litellm.ai/88911906-d786-44f2-8
 Once created, your dashboard is viewable at - `admin.litellm.ai/<your_email>` [👋 Tell us if you need better privacy controls](https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version?month=2023-08)
 See our live dashboard 👉 [admin.litellm.ai](https://admin.litellm.ai/)
 
-
-
+## Opt-Out of using LiteLLM Client
+If you want to opt out of using LiteLLM client you can set
+```python
+litellm.use_client = True
+```
 ## Persisting your dashboard
 If you want to use the same dashboard for your project set
 `litellm.token` in code or your .env as `LITELLM_TOKEN`
