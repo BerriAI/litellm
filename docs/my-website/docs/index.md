@@ -2,7 +2,6 @@
 displayed_sidebar: tutorialSidebar
 ---
 # litellm
-
 import QueryParamReader from './QueryParamReader';
 
 [![PyPI Version](https://img.shields.io/pypi/v/litellm.svg)](https://pypi.org/project/litellm/)
