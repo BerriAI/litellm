@@ -26,16 +26,18 @@
   <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
 </a>
 </h4>
+<h4 align="center">
+  <a href="https://docs.litellm.ai/docs/completion/supported">100+ Supported Models</a> |
+  <a href="https://docs.litellm.ai/docs/">Docs</a> |
+  <a href="https://litellm.ai/playground">Demo Website</a>
+</h4>
 LiteLLM manages
 
 - translating inputs to the provider's completion and embedding endpoints
 - guarantees [consistent output](https://litellm.readthedocs.io/en/latest/output/), text responses will always be available at `['choices'][0]['message']['content']`
 - exception mapping - common exceptions across providers are mapped to the [OpenAI exception types](https://help.openai.com/en/articles/6897213-openai-library-error-types-guidance)
 # usage
-<a href='https://docs.litellm.ai/docs/completion/supported' target="_blank"><img alt='None' src='https://img.shields.io/badge/100+_Supported_LLMs_liteLLM-100000?style=for-the-badge&logo=None&logoColor=000000&labelColor=000000&color=8400EA'/></a>
 
-Demo - https://litellm.ai/playground  
-Docs - https://docs.litellm.ai/docs/  
 **Free** Dashboard - https://docs.litellm.ai/docs/debugging/hosted_debugging
 
 ## Quick Start
