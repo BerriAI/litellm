@@ -6,9 +6,6 @@
 
 [![](https://dcbadge.vercel.app/api/server/wuPM9dRgDw)](https://discord.gg/wuPM9dRgDw)
 
-![pika-1692887776948-1x](https://github.com/BerriAI/litellm/assets/29436595/44f40714-abdc-4c53-9642-6ba3654209d5)
-
-
 a light package to simplify calling OpenAI, Azure, Cohere, Anthropic, Huggingface API Endpoints. It manages: 
 - translating inputs to the provider's completion and embedding endpoints
 - guarantees [consistent output](https://litellm.readthedocs.io/en/latest/output/), text responses will always be available at `['choices'][0]['message']['content']`
@@ -41,6 +38,7 @@ response = completion(model="gpt-3.5-turbo", messages=messages)
 response = completion(model="command-nightly", messages)
 ```
 Code Sample: [Getting Started Notebook](https://colab.research.google.com/drive/1gR3pY-JzDZahzpVdbGBtrNGDBmzUNJaJ?usp=sharing)
+![pika-1692887776948-1x](https://github.com/BerriAI/litellm/assets/29436595/44f40714-abdc-4c53-9642-6ba3654209d5)
 
 Stable version
 ```
