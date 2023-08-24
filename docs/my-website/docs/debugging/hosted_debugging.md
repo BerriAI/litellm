@@ -58,21 +58,20 @@ LiteLLM allows you to add a new model using the liteLLM Dashboard
 
 Navigate to the 'Add New LLM' Section
 <Image img={require('../../img/add_model.png')} alt="Dashboard" />
-- Select Provider
-- Select your LLM 
-- Add your LLM Key
+
+* Select Provider
+* Select your LLM 
+* Add your LLM Key
 
 ## LiteLLM Dashboard - Debug Logs 
 All your `completion()` and `embedding()` call logs are available on `admin.litellm.ai/<your-token>`
-See your Logs below
 
-### Using your new LLM - Completion() with the LiteLLM Dashboard
-```python
-from litellm import embedding, completion
-# keys set in admin.litellm.ai/<your_email> or .env OPENAI_API_KEY
-messages = [{ "content": "Hello, how are you?" ,"role": "user"}]
 
-# openai call
-response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])
-```
+`completion()` and `embedding()` debug logs
+<Image img={require('../../img/lite_logs.png')} alt="Dashboard" />
+
+Viewing Errors on debug logs
+<Image img={require('../../img/lite_logs2.png')} alt="Dashboard" />
+
+
 
