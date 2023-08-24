@@ -12,8 +12,6 @@ import pytest
 import litellm
 from litellm import embedding, completion
 
-litellm.debugger = True
-
 # from infisical import InfisicalClient
 
 # litellm.set_verbose = True

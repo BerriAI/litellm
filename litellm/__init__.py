@@ -24,7 +24,7 @@ togetherai_api_key: Optional[str] = None
 caching = False
 caching_with_models = False  # if you want the caching key to be model + prompt
 model_alias_map: Dict[str, str] = {}
-debugger = False
+client = True
 model_cost = {
     "babbage-002": {
         "max_tokens": 16384,
