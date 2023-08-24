@@ -15,7 +15,10 @@ class LiteDebugger:
         try:
             self.user_email = os.getenv("LITELLM_EMAIL") or email
             self.dashboard_url = "https://admin.litellm.ai/" + self.user_email
-            print(f"Here's your free Dashboard 👉 {self.dashboard_url}")
+            try:
+                print(f"\033[92mHere's your LiteLLM Dashboard 👉 \033[94m\033[4m{self.dashboard_url}\033[0m")
+            except:
+                print(f"Here's your LiteLLM Dashboard 👉 {self.dashboard_url}")
             if self.user_email == None:
                 raise Exception(
                     "[Non-Blocking Error] LiteLLMDebugger: Missing LITELLM_EMAIL. Set it in your environment. Eg.: os.environ['LITELLM_EMAIL']= <your_email>"
