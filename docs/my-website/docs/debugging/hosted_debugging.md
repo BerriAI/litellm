@@ -46,7 +46,7 @@ See our live dashboard 👉 [admin.litellm.ai](https://admin.litellm.ai/)
 
 ## Persisting your dashboard
 If you want to use the same dashboard for your project set
-`litellm.token` in code or your .env as `LITELLM_TOKEN
+`litellm.token` in code or your .env as `LITELLM_TOKEN`
 All generated dashboards come with a token
 ```python
 import litellm
@@ -60,7 +60,22 @@ Navigate to the 'Add New LLM' Section:
 * Select Provider
 * Select your LLM 
 * Add your LLM Key
+
 <Image img={require('../../img/add_model.png')} alt="Dashboard" />
+
+After adding your new LLM, LiteLLM securely stores your API key and model configs. 
+## Using `completion() with LiteLLM Client
+Once you've added your selected models LiteLLM allows you to make `completion` calls
+
+```python
+import litellm
+from litellm import completion
+litellm.token = "80888ede-4881-4876-ab3f-765d47282e66" # set your token 
+messages = [{ "content": "Hello, how are you?" ,"role": "user"}]
+
+# no need to set key, LiteLLM Client reads your set key 
+response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])
+```
 
 
 ## LiteLLM Dashboard - Debug Logs 
