@@ -8,8 +8,8 @@ LiteLLM offers a UI to:
 <Image img={require('../../img/dashboard.png')} alt="Dashboard" />
 
 ## Getting Started
-<a target="_blank" href="https://colab.research.google.com/github/https://colab.research.google.com/drive/1y2ChqxJOwEByThibxYMEpY5P6_RTNjj4?usp=sharing">
-    <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
+<a target="_blank" href="https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/liteLLM_OpenAI.ipynb">
+  <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
 </a>
 
 * Make a `litellm.completion()` call 👉 get your debugging dashboard  
