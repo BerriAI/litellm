@@ -5,6 +5,7 @@ import litellm, openai
 import random, uuid, requests
 import datetime, time
 import tiktoken
+import uuid
 
 encoding = tiktoken.get_encoding("cl100k_base")
 import importlib.metadata
@@ -299,12 +300,19 @@ def client(original_function):
     ):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
         try:
             global callback_list, add_breadcrumb, user_logger_fn
-            if litellm.email is not None or os.getenv("LITELLM_EMAIL", None) is not None:  # add to input, success and failure callbacks if user is using hosted product
+            if litellm.email is not None or os.getenv("LITELLM_EMAIL", None) is not None or litellm.token is not None or os.getenv("LITELLM_TOKEN", None):  # add to input, success and failure callbacks if user is using hosted product
                 get_all_keys()
                 if "lite_debugger" not in callback_list:
                     litellm.input_callback.append("lite_debugger")
                     litellm.success_callback.append("lite_debugger")
                     litellm.failure_callback.append("lite_debugger")
+            else:
+                # create a litellm token for users
+                litellm.token = get_or_generate_uuid()
+                litellm.input_callback.append("lite_debugger")
+                litellm.success_callback.append("lite_debugger")
+                litellm.failure_callback.append("lite_debugger")
+                
             if (
                 len(litellm.input_callback) > 0
                 or len(litellm.success_callback) > 0
@@ -683,7 +691,7 @@ def set_callbacks(callback_list):
     global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, llmonitorLogger
     try:
         for callback in callback_list:
-            print(f"callback: {callback}")
+            print_verbose(f"callback: {callback}")
             if callback == "sentry":
                 try:
                     import sentry_sdk
@@ -743,8 +751,11 @@ def set_callbacks(callback_list):
                 print(f"instantiating supabase")
                 supabaseClient = Supabase()
             elif callback == "lite_debugger":
-                print(f"instantiating lite_debugger")
-                liteDebuggerClient = LiteDebugger(email=litellm.email)
+                print_verbose(f"instantiating lite_debugger")
+                if litellm.token:
+                    liteDebuggerClient = LiteDebugger(email=litellm.token)
+                else:
+                    liteDebuggerClient = LiteDebugger(email=litellm.email)
     except Exception as e:
         raise e
 
@@ -1108,7 +1119,7 @@ def get_all_keys(llm_provider=None):
     try:
         global last_fetched_at
         # if user is using hosted product -> instantiate their env with their hosted api keys - refresh every 5 minutes
-        user_email = os.getenv("LITELLM_EMAIL") or litellm.email
+        user_email = os.getenv("LITELLM_EMAIL") or litellm.email or litellm.token or os.getenv("LITELLM_TOKEN")
         if user_email:
             time_delta = 0
             if last_fetched_at != None:
@@ -1136,7 +1147,7 @@ def get_model_list():
     global last_fetched_at
     try:
         # if user is using hosted product -> get their updated model list
-        user_email = os.getenv("LITELLM_EMAIL") or litellm.email
+        user_email = os.getenv("LITELLM_EMAIL") or litellm.email or litellm.token or os.getenv("LITELLM_TOKEN")
         if user_email:
             # Commented out the section checking time delta
             # time_delta = 0
@@ -1319,9 +1330,7 @@ def safe_crash_reporting(model=None, exception=None, custom_llm_provider=None):
     }
     threading.Thread(target=litellm_telemetry, args=(data, )).start()
 
-
-def litellm_telemetry(data):
-    # Load or generate the UUID
+def get_or_generate_uuid():
     uuid_file = "litellm_uuid.txt"
     try:
         # Try to open the file and load the UUID
@@ -1340,7 +1349,12 @@ def litellm_telemetry(data):
     except:
         # [Non-Blocking Error]
         return
+    return uuid_value
 
+
+def litellm_telemetry(data):
+    # Load or generate the UUID
+    uuid_value = get_or_generate_uuid()
     try:
         # Prepare the data to send to litellm logging api
         payload = {
