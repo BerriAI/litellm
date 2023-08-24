@@ -1,36 +1,38 @@
 <h1 align="center">
-    🚅 LiteLLM
-</h1>
-<p align="center">
-  <p align="center">Call all LLM APIs using the OpenAI format [Anthropic, Huggingface, Cohere, Azure OpenAI etc.]</p>
-</p>
+        🚅 LiteLLM
+    </h1>
+    <p align="center">
+        <p align="center">Call all LLM APIs using the OpenAI format [Anthropic, Huggingface, Cohere, Azure OpenAI etc.]</p>
+    </p>
 
 <h4 align="center">
-    <a href="https://pypi.org/project/litellm/">
+    <a href="https://pypi.org/project/litellm/" target="_blank">
         <img src="https://img.shields.io/pypi/v/litellm.svg" alt="PyPI Version">
     </a>
-    <a href="https://pypi.org/project/litellm/0.1.1/">
+    <a href="https://pypi.org/project/litellm/0.1.1/" target="_blank">
         <img src="https://img.shields.io/badge/stable%20version-v0.1.424-blue?color=green&link=https://pypi.org/project/litellm/0.1.1/" alt="Stable Version">
     </a>
-    <a href="https://dl.circleci.com/status-badge/redirect/gh/BerriAI/litellm/tree/main">
+    <a href="https://dl.circleci.com/status-badge/redirect/gh/BerriAI/litellm/tree/main" target="_blank">
         <img src="https://dl.circleci.com/status-badge/img/gh/BerriAI/litellm/tree/main.svg?style=svg" alt="CircleCI">
     </a>
     <img src="https://img.shields.io/pypi/dm/litellm" alt="Downloads">
-    <a href="https://discord.gg/wuPM9dRgDw">
+    <a href="https://discord.gg/wuPM9dRgDw" target="_blank">
         <img src="https://dcbadge.vercel.app/api/server/wuPM9dRgDw?style=flat">
     </a>
 </h4>
 
 <h4 align="center">
-<a target="_blank" href="https://colab.research.google.com/github/https://colab.research.google.com/drive/1y2ChqxJOwEByThibxYMEpY5P6_RTNjj4?usp=sharing">
-  <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
-</a>
+    <a target="_blank" href="https://colab.research.google.com/github/https://colab.research.google.com/drive/1y2ChqxJOwEByThibxYMEpY5P6_RTNjj4?usp=sharing">
+        <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
+    </a>
 </h4>
+
 <h4 align="center">
-  <a href="https://docs.litellm.ai/docs/completion/supported">100+ Supported Models</a> |
-  <a href="https://docs.litellm.ai/docs/">Docs</a> |
-  <a href="https://litellm.ai/playground">Demo Website</a>
+    <a href="https://docs.litellm.ai/docs/completion/supported" target="_blank">100+ Supported Models</a> |
+    <a href="https://docs.litellm.ai/docs/" target="_blank">Docs</a> |
+    <a href="https://litellm.ai/playground" target="_blank">Demo Website</a>
 </h4>
+
 LiteLLM manages
 
 - Translating inputs to the provider's completion and embedding endpoints
