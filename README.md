@@ -33,9 +33,9 @@
 </h4>
 LiteLLM manages
 
-- translating inputs to the provider's completion and embedding endpoints
-- guarantees [consistent output](https://litellm.readthedocs.io/en/latest/output/), text responses will always be available at `['choices'][0]['message']['content']`
-- exception mapping - common exceptions across providers are mapped to the [OpenAI exception types](https://help.openai.com/en/articles/6897213-openai-library-error-types-guidance)
+- Translating inputs to the provider's completion and embedding endpoints
+- Guarantees [consistent output](https://litellm.readthedocs.io/en/latest/output/), text responses will always be available at `['choices'][0]['message']['content']`
+- Exception mapping - common exceptions across providers are mapped to the [OpenAI exception types](https://help.openai.com/en/articles/6897213-openai-library-error-types-guidance)
 # usage
 
 **Free** Dashboard - https://docs.litellm.ai/docs/debugging/hosted_debugging
