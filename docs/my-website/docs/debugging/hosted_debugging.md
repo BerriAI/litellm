@@ -7,10 +7,30 @@ LiteLLM offers a UI to:
 
 <Image img={require('../../img/dashboard.png')} alt="Dashboard" />
 
+## Getting Started
+All LiteLLM completion() calls auto-create a LiteLLM Client Dashboard
+Example code snippet to create your dashboard:
+```python
+from litellm import completion
+messages = [{ "content": "Hello, how are you?" ,"role": "user"}]
+response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])
+```
+
+### Output with dashboard
+All completion calls link to your session dashboard
+```
+Here's your LiteLLM Dashboard 👉 https://admin.litellm.ai/88911906-d786-44f2-87c7-9720e6031b45
+<OpenAIObject chat.completion id=chatcmpl-7r6LtlUXYYu0QayfhS3S0OzroiCel at 0x7fb307375030> JSON: {
+  "id": "chatcmpl-7r6LtlUXYYu0QayfhS3S0OzroiCel",
+  "object": "chat.completion",
+  "created": 1692890157,
+  "model": "gpt-3.5-turbo-0613",
+..............
+
+```
+
 Once created, your dashboard is viewable at - `admin.litellm.ai/<your_email>` [👋 Tell us if you need better privacy controls](https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version?month=2023-08)
 See our live dashboard 👉 [admin.litellm.ai](https://admin.litellm.ai/)
-
-<Image img={require('../../img/dashboard.png')} alt="Dashboard" />
 
 ## Usage
 ### Requirements
