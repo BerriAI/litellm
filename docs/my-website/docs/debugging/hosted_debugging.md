@@ -11,6 +11,7 @@ LiteLLM offers a UI to:
 <a target="_blank" href="https://colab.research.google.com/github/https://colab.research.google.com/drive/1y2ChqxJOwEByThibxYMEpY5P6_RTNjj4?usp=sharing">
     <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
 </a>
+
 * Make a `litellm.completion()` call 👉 get your debugging dashboard  
 
 Example Code: Regular `litellm.completion()` call:
