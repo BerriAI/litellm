@@ -5,6 +5,8 @@ LiteLLM offers a UI to:
 * 1-Click Deploy LLMs - the client stores your api keys + model configurations
 * Debug your Call Logs 
 
+👉 Jump to our sample LiteLLM Dashboard: https://admin.litellm.ai/krrish@berri.ai
+
 <Image img={require('../../img/dashboard.png')} alt="Dashboard" />
 
 ## Getting Started
