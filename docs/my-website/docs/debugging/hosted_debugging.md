@@ -8,8 +8,9 @@ LiteLLM offers a UI to:
 <Image img={require('../../img/dashboard.png')} alt="Dashboard" />
 
 ## Getting Started
-All LiteLLM completion() calls auto-create a LiteLLM Client Dashboard
-Example code snippet to create your dashboard:
+Make a `litellm.completion()` call 👉 get your debugging dashboard  
+
+Example Code - Normal `litellm.completion()` call:
 ```python
 from litellm import completion
 messages = [{ "content": "Hello, how are you?" ,"role": "user"}]
@@ -17,8 +18,11 @@ response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content
 ```
 
 ### Output with dashboard
-All completion calls link to your session dashboard
-```
+All `completion()` calls print with a link to your session dashboard
+
+<Image img={require('../../img/dash_output.png')} alt="Dashboard" />
+
+```bash
 Here's your LiteLLM Dashboard 👉 https://admin.litellm.ai/88911906-d786-44f2-87c7-9720e6031b45
 <OpenAIObject chat.completion id=chatcmpl-7r6LtlUXYYu0QayfhS3S0OzroiCel at 0x7fb307375030> JSON: {
   "id": "chatcmpl-7r6LtlUXYYu0QayfhS3S0OzroiCel",
