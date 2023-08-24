@@ -1,9 +1,11 @@
 import Image from '@theme/IdealImage';
 
-# LiteLLM Client - Add LLMs, Debug Logs
+# LiteLLM Client: Debug Logs + Instant LLM Deploys
 LiteLLM offers a UI to:
-* Add New LLMs - Store your API Keys, Model Configurations
+* 1-Click Deploy LLMs - the client stores your api keys + model configurations
 * Debug your Call Logs 
+
+<Image img={require('../../img/dashboard.png')} alt="Dashboard" />
 
 Once created, your dashboard is viewable at - `admin.litellm.ai/<your_email>` [👋 Tell us if you need better privacy controls](https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version?month=2023-08)
 See our live dashboard 👉 [admin.litellm.ai](https://admin.litellm.ai/)
