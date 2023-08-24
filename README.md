@@ -38,7 +38,7 @@ LiteLLM manages
 - Translating inputs to the provider's completion and embedding endpoints
 - Guarantees [consistent output](https://litellm.readthedocs.io/en/latest/output/), text responses will always be available at `['choices'][0]['message']['content']`
 - Exception mapping - common exceptions across providers are mapped to the [OpenAI exception types](https://help.openai.com/en/articles/6897213-openai-library-error-types-guidance)
-# usage
+# Usage
 
 <a target="_blank" href="https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/liteLLM_OpenAI.ipynb">
   <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
@@ -81,7 +81,7 @@ Debugging Dashboard 👉 https://docs.litellm.ai/docs/debugging/hosted_debugging
 ![pika-1692887776948-1x](https://github.com/BerriAI/litellm/assets/29436595/44f40714-abdc-4c53-9642-6ba3654209d5)
 
 
-## streaming
+## Streaming
 liteLLM supports streaming the model response back, pass `stream=True` to get a streaming iterator in response.
 Streaming is supported for OpenAI, Azure, Anthropic, Huggingface models
 ```python
