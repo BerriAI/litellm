@@ -22,9 +22,9 @@
 </h4>
 
 <h4 align="center">
-    <a target="_blank" href="https://colab.research.google.com/github/https://colab.research.google.com/drive/1y2ChqxJOwEByThibxYMEpY5P6_RTNjj4?usp=sharing">
-        <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
-    </a>
+<a target="_blank" href="https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/liteLLM_OpenAI.ipynb">
+  <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
+</a>    
 </h4>
 
 <h4 align="center">
@@ -40,7 +40,7 @@ LiteLLM manages
 - Exception mapping - common exceptions across providers are mapped to the [OpenAI exception types](https://help.openai.com/en/articles/6897213-openai-library-error-types-guidance)
 # usage
 
-<a target="_blank" href="https://colab.research.google.com/github/https://colab.research.google.com/drive/1y2ChqxJOwEByThibxYMEpY5P6_RTNjj4?usp=sharing">
+<a target="_blank" href="https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/liteLLM_OpenAI.ipynb">
   <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
 </a>
 
