@@ -1,8 +1,9 @@
 ---
 displayed_sidebar: tutorialSidebar
 ---
-
 # litellm
+
+import QueryParamReader from './QueryParamReader';
 
 [![PyPI Version](https://img.shields.io/pypi/v/litellm.svg)](https://pypi.org/project/litellm/)
 [![PyPI Version](https://img.shields.io/badge/stable%20version-v0.1.345-blue?color=green&link=https://pypi.org/project/litellm/0.1.1/)](https://pypi.org/project/litellm/0.1.1/)
@@ -31,21 +32,7 @@ Read the docs - https://docs.litellm.ai/docs/
 pip install litellm
 ```
 
-```python
-from litellm import completion
-
-## set ENV variables
-os.environ["OPENAI_API_KEY"] = "openai key"
-os.environ["COHERE_API_KEY"] = "cohere key"
-
-messages = [{ "content": "Hello, how are you?","role": "user"}]
-
-# openai call
-response = completion(model="gpt-3.5-turbo", messages=messages)
-
-# cohere call
-response = completion("command-nightly", messages)
-```
+<QueryParamReader/>
 
 Code Sample: [Getting Started Notebook](https://colab.research.google.com/drive/1gR3pY-JzDZahzpVdbGBtrNGDBmzUNJaJ?usp=sharing)
 
