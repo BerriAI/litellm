@@ -16,9 +16,12 @@
         <img src="https://dl.circleci.com/status-badge/img/gh/BerriAI/litellm/tree/main.svg?style=svg" alt="CircleCI">
     </a>
     <img src="https://img.shields.io/pypi/dm/litellm" alt="Downloads">
+    <a href="https://discord.gg/wuPM9dRgDw">
+        <img src="https://dcbadge.vercel.app/api/server/wuPM9dRgDw?style=flat">
+    </a>
 </h4>
 
-[![](https://dcbadge.vercel.app/api/server/wuPM9dRgDw)](https://discord.gg/wuPM9dRgDw)
+
 
 a light package to simplify calling OpenAI, Azure, Cohere, Anthropic, Huggingface API Endpoints. It manages: 
 - translating inputs to the provider's completion and embedding endpoints
