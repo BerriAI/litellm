@@ -1,6 +1,6 @@
 import Image from '@theme/IdealImage';
 
-# LiteLLM Client - Debugging Dashboard
+# LiteLLM Client - Add LLMs, Debug Logs
 LiteLLM offers a UI to:
 * Add New LLMs - Store your API Keys, Model Configurations
 * Debug your Call Logs 
