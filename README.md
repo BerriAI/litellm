@@ -6,6 +6,10 @@
 
 [![](https://dcbadge.vercel.app/api/server/wuPM9dRgDw)](https://discord.gg/wuPM9dRgDw)
 
+![liteLLM UI](https://github.com/BerriAI/litellm/assets/29436595/c32ebafc-b4d8-440f-987f-08069c803189)
+![pika-1692887776948-1x](https://github.com/BerriAI/litellm/assets/29436595/44f40714-abdc-4c53-9642-6ba3654209d5)
+
+
 a light package to simplify calling OpenAI, Azure, Cohere, Anthropic, Huggingface API Endpoints. It manages: 
 - translating inputs to the provider's completion and embedding endpoints
 - guarantees [consistent output](https://litellm.readthedocs.io/en/latest/output/), text responses will always be available at `['choices'][0]['message']['content']`
