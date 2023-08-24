@@ -38,10 +38,7 @@ LiteLLM manages
 - Translating inputs to the provider's completion and embedding endpoints
 - Guarantees [consistent output](https://litellm.readthedocs.io/en/latest/output/), text responses will always be available at `['choices'][0]['message']['content']`
 - Exception mapping - common exceptions across providers are mapped to the [OpenAI exception types](https://help.openai.com/en/articles/6897213-openai-library-error-types-guidance)
-# usage
-
-**Free** Dashboard - https://docs.litellm.ai/docs/debugging/hosted_debugging
-
+# Usage
 ## Quick Start
 <a target="_blank" href="https://colab.research.google.com/github/https://colab.research.google.com/drive/1y2ChqxJOwEByThibxYMEpY5P6_RTNjj4?usp=sharing">
   <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
@@ -67,6 +64,10 @@ response = completion(model="gpt-3.5-turbo", messages=messages)
 # cohere call
 response = completion(model="command-nightly", messages)
 ```
+All LiteLLM users get a LiteLLM Dashboard - View logs + Add new LLMs on the dashboard
+
+<a href="https://docs.litellm.ai/docs/debugging/hosted_debugging" target="_blank">Tutorial</a>
+
 ![pika-1692887776948-1x](https://github.com/BerriAI/litellm/assets/29436595/44f40714-abdc-4c53-9642-6ba3654209d5)
 
 Stable version
@@ -88,7 +89,7 @@ for chunk in result:
   print(chunk['choices'][0]['delta'])
 ```
 
-# support / talk with founders
+# Support / talk with founders
 - [Our calendar 👋](https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version)
 - [Community Discord 💭](https://discord.gg/wuPM9dRgDw)
 - Our numbers 📞 +1 (770) 8783-106 / ‭+1 (412) 618-6238‬
