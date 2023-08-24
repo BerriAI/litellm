@@ -44,33 +44,33 @@ See our live dashboard 👉 [admin.litellm.ai](https://admin.litellm.ai/)
 
 
 
-## Code Setup
+## Persisting your dashboard
+If you want to use the same dashboard for your project set
+`litellm.token` in code or your .env as `LITELLM_TOKEN
+All generated dashboards come with a token
 ```python
 import litellm
-
-## Setup for activating / using the litellm dashboard
-litellm.email = "test_email@test.com"
-
+litellm.token = "80888ede-4881-4876-ab3f-765d47282e66"
 ```
 
 ## LiteLLM Dashboard - 1-Click Deploy LLMs
 LiteLLM allows you to add a new model using the liteLLM Dashboard 
 
-Navigate to the 'Add New LLM' Section
-<Image img={require('../../img/add_model.png')} alt="Dashboard" />
-
+Navigate to the 'Add New LLM' Section:
 * Select Provider
 * Select your LLM 
 * Add your LLM Key
+<Image img={require('../../img/add_model.png')} alt="Dashboard" />
+
 
 ## LiteLLM Dashboard - Debug Logs 
 All your `completion()` and `embedding()` call logs are available on `admin.litellm.ai/<your-token>`
 
 
-`completion()` and `embedding()` debug logs
+### Debug Logs for `completion()` and `embedding()`
 <Image img={require('../../img/lite_logs.png')} alt="Dashboard" />
 
-Viewing Errors on debug logs
+### Viewing Errors on debug logs
 <Image img={require('../../img/lite_logs2.png')} alt="Dashboard" />
 
 
