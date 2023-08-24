@@ -29,7 +29,7 @@ class LiteDebugger:
             )
 
     def input_log_event(
-        self, model, messages, end_user, litellm_call_id, print_verbose
+        self, model, messages, end_user, litellm_call_id, print_verbose, litellm_params, optional_params
     ):
         try:
             print_verbose(
@@ -42,6 +42,8 @@ class LiteDebugger:
                 "status": "initiated",
                 "litellm_call_id": litellm_call_id,
                 "user_email": self.user_email,
+                "litellm_params": litellm_params,
+                "optional_params": optional_params
             }
             response = requests.post(
                 url=self.api_url,

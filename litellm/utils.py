@@ -154,6 +154,7 @@ class Logging:
         self.optional_params = optional_params
         self.litellm_params = litellm_params
         self.logger_fn = litellm_params["logger_fn"]
+        print_verbose(f"self.optional_params: {self.optional_params}")
         self.model_call_details = {
             "model": model,
             "messages": messages,
@@ -214,6 +215,8 @@ class Logging:
                             end_user=litellm._thread_context.user,
                             litellm_call_id=self.
                             litellm_params["litellm_call_id"],
+                            litellm_params=self.model_call_details["litellm_params"],
+                            optional_params=self.model_call_details["optional_params"],
                             print_verbose=print_verbose,
                         )
                 except Exception as e:
@@ -539,7 +542,7 @@ def get_litellm_params(
     return litellm_params
 
 
-def get_optional_params(
+def get_optional_params( # use the openai defaults
     # 12 optional params
     functions=[],
     function_call="",
@@ -552,6 +555,7 @@ def get_optional_params(
     presence_penalty=0,
     frequency_penalty=0,
     logit_bias={},
+    num_beams=1, 
     user="",
     deployment_id=None,
     model=None,
@@ -613,7 +617,13 @@ def get_optional_params(
         optional_params["temperature"] = temperature
         optional_params["top_p"] = top_p
         optional_params["top_k"] = top_k
-
+    elif custom_llm_provider == "baseten":
+        optional_params["temperature"] = temperature
+        optional_params["top_p"] = top_p
+        optional_params["top_k"] = top_k
+        optional_params["num_beams"] = num_beams
+        if max_tokens != float("inf"):
+            optional_params["max_new_tokens"] = max_tokens
     else:  # assume passing in params for openai/azure openai
         if functions != []:
             optional_params["functions"] = functions
