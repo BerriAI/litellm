@@ -21,6 +21,12 @@
     </a>
 </h4>
 
+<h4 align="center">
+<a target="_blank" href="https://colab.research.google.com/github/https://colab.research.google.com/drive/1y2ChqxJOwEByThibxYMEpY5P6_RTNjj4?usp=sharing">
+  <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
+</a>
+</h4>
+
 
 
 a light package to simplify calling OpenAI, Azure, Cohere, Anthropic, Huggingface API Endpoints. It manages: 
@@ -34,7 +40,12 @@ Demo - https://litellm.ai/playground
 Docs - https://docs.litellm.ai/docs/  
 **Free** Dashboard - https://docs.litellm.ai/docs/debugging/hosted_debugging
 
-## quick start
+## Quick Start
+<a target="_blank" href="https://colab.research.google.com/github/https://colab.research.google.com/drive/1y2ChqxJOwEByThibxYMEpY5P6_RTNjj4?usp=sharing">
+  <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
+</a>
+
+
 ```
 pip install litellm
 ```
@@ -54,7 +65,6 @@ response = completion(model="gpt-3.5-turbo", messages=messages)
 # cohere call
 response = completion(model="command-nightly", messages)
 ```
-Code Sample: [Getting Started Notebook](https://colab.research.google.com/drive/1gR3pY-JzDZahzpVdbGBtrNGDBmzUNJaJ?usp=sharing)
 ![pika-1692887776948-1x](https://github.com/BerriAI/litellm/assets/29436595/44f40714-abdc-4c53-9642-6ba3654209d5)
 
 Stable version
