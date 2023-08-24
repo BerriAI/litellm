@@ -58,7 +58,7 @@ async def acompletion(*args, **kwargs):
 # @retry(wait=wait_random_exponential(min=1, max=60), stop=stop_after_attempt(2), reraise=True, retry_error_callback=lambda retry_state: setattr(retry_state.outcome, 'retry_variable', litellm.retry)) # retry call, turn this off by setting `litellm.retry = False`
 @timeout(  # type: ignore
     600
-)  ## set timeouts, in case calls hang (e.g. Azure) - default is 60s, override with `force_timeout`
+)  ## set timeouts, in case calls hang (e.g. Azure) - default is 600s, override with `force_timeout`
 def completion(
     model,
     messages,  # required params
@@ -97,6 +97,8 @@ def completion(
     try:
         if fallbacks != []:
             return completion_with_fallbacks(**args)
+        if litellm.model_alias_map and model in litellm.model_alias_map:
+            model = litellm.model_alias_map[model] # update the model to the actual value if an alias has been passed in
         model_response = ModelResponse()
         if azure:  # this flag is deprecated, remove once notebooks are also updated.
             custom_llm_provider = "azure"
@@ -686,7 +688,7 @@ def completion(
 
             prompt = " ".join([message["content"] for message in messages])
             ## LOGGING
-            logging.pre_call(input=prompt, api_key=base_ten_key)
+            logging.pre_call(input=prompt, api_key=base_ten_key, model=model)
 
             base_ten__model = baseten.deployed_model_version_id(model)
 
