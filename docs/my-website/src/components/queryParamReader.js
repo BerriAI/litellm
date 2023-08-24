@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 
 const CodeBlock = ({ token }) => {
   const codeWithToken = `
+import os
 from litellm import completion
 
 # set ENV variables 
