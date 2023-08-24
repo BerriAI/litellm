@@ -304,7 +304,7 @@ def client(original_function):
     ):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
         try:
             global callback_list, add_breadcrumb, user_logger_fn
-            if litellm.client: # enable users to opt-out of the debugging dashboard by setting `litellm.client = False`
+            if litellm.use_client: # enable users to opt-out of the debugging dashboard by setting `litellm.client = False`
                 if litellm.email is not None or os.getenv("LITELLM_EMAIL", None) is not None or litellm.token is not None or os.getenv("LITELLM_TOKEN", None):  # add to input, success and failure callbacks if user is using hosted product
                     get_all_keys()
                     if "lite_debugger" not in callback_list:
