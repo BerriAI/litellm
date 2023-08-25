@@ -1197,8 +1197,15 @@ def get_model_list():
             data = response.json()
             # update model list
             model_list = data["model_list"]
+            # check if all model providers are in environment
+            model_providers = data["model_providers"]
+            missing_llm_provider = None
+            for item in model_providers:
+                if f"{item.upper()}_API_KEY" not in os.environ:
+                    missing_llm_provider = item
+                    break
             # update environment - if required 
-            threading.Thread(target=get_all_keys, args=()).start()
+            threading.Thread(target=get_all_keys, args=(missing_llm_provider)).start()
             return model_list
         return [] # return empty list by default
     except:
