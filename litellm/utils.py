@@ -260,6 +260,30 @@ class Logging:
                     print_verbose(
                         f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {traceback.format_exc()}"
                     )
+            
+            # Input Integration Logging -> If you want to log the fact that an attempt to call the model was made
+            for callback in litellm.input_callback:
+                try:
+                    if callback == "lite_debugger":
+                        print_verbose("reaches litedebugger for post-call logging!")
+                        model = self.model_call_details["model"]
+                        messages = self.model_call_details["input"]
+                        print_verbose(f"liteDebuggerClient: {liteDebuggerClient}")
+                        liteDebuggerClient.post_call_log_event(
+                            original_response=original_response,
+                            litellm_call_id=self.
+                            litellm_params["litellm_call_id"],
+                            print_verbose=print_verbose,
+                        )
+                except:
+                    print_verbose(
+                        f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while post-call logging with integrations {traceback.format_exc()}"
+                    )
+                    print_verbose(
+                        f"LiteLLM.Logging: is sentry capture exception initialized {capture_exception}"
+                    )
+                    if capture_exception:  # log this error to sentry for debugging
+                        capture_exception(e)
         except:
             print_verbose(
                 f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {traceback.format_exc()}"
@@ -788,8 +812,6 @@ def handle_failure(exception, traceback_exception, start_time, end_time, args,
         additional_details["Event_Name"] = additional_details.pop(
             "failed_event_name", "litellm.failed_query")
         print_verbose(f"self.failure_callback: {litellm.failure_callback}")
-
-        # print_verbose(f"additional_details: {additional_details}")
         for callback in litellm.failure_callback:
             try:
                 if callback == "slack":
@@ -1143,8 +1165,8 @@ def get_all_keys(llm_provider=None):
                 time_delta = current_time - last_fetched_at_keys
             if time_delta > 300 or last_fetched_at_keys == None or llm_provider: # if the llm provider is passed in , assume this happening due to an AuthError for that provider
                 # make the api call
-                last_fetched_at_keys = time.time()
-                print_verbose(f"last_fetched_at_keys: {last_fetched_at_keys}")
+                last_fetched_at = time.time()
+                print_verbose(f"last_fetched_at: {last_fetched_at}")
                 response = requests.post(url="http://api.litellm.ai/get_all_keys", headers={"content-type": "application/json"}, data=json.dumps({"user_email": user_email}))
                 print_verbose(f"get model key response: {response.text}")
                 data = response.json()
@@ -1175,6 +1197,8 @@ def get_model_list():
             data = response.json()
             # update model list
             model_list = data["model_list"]
+            # update environment - if required 
+            threading.Thread(target=get_all_keys, args=()).start()
             return model_list
         return [] # return empty list by default
     except:
