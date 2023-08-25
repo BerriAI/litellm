@@ -56,6 +56,27 @@ class LiteDebugger:
                 f"[Non-Blocking Error] LiteDebugger: Logging Error - {traceback.format_exc()}"
             )
             pass
+    
+    def post_call_log_event(
+        self, original_response, litellm_call_id, print_verbose
+    ):
+        try:
+            litellm_data_obj = {
+                "status": "succeeded",
+                "additional_details": {"original_response": original_response},
+                "litellm_call_id": litellm_call_id,
+                "user_email": self.user_email,
+            }
+            response = requests.post(
+                url=self.api_url,
+                headers={"content-type": "application/json"},
+                data=json.dumps(litellm_data_obj),
+            )
+            print_verbose(f"LiteDebugger: api response - {response.text}")
+        except:
+            print_verbose(
+                f"[Non-Blocking Error] LiteDebugger: Logging Error - {traceback.format_exc()}"
+            )
 
     def log_event(
         self,
