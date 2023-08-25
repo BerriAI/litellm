@@ -527,6 +527,7 @@ def completion(
             TOGETHER_AI_TOKEN = (
                 get_secret("TOGETHER_AI_TOKEN")
                 or get_secret("TOGETHERAI_API_KEY")
+                or get_secret("TOGETHER_AI_API_KEY")
                 or api_key
                 or litellm.togetherai_api_key
             )
