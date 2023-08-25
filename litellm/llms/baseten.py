@@ -100,12 +100,15 @@ class BasetenLLM:
                 )
             else:
                 if "model_output" in completion_response:
-                    if isinstance(completion_response["model_output"], str):
-                        model_response["choices"][0]["message"]["content"] = completion_response["model_output"]
-                    elif isinstance(completion_response["model_output"], dict) and "data" in completion_response["model_output"] and isinstance(completion_response["model_output"]["data"], list):
+                    if isinstance(completion_response["model_output"], dict) and "data" in completion_response["model_output"] and isinstance(completion_response["model_output"]["data"], list):
                         model_response["choices"][0]["message"]["content"] = completion_response["model_output"]["data"][0]
-                    else:
-                        raise ValueError(f"Unable to parse response. Original response: {response.text}")
+                    elif isinstance(completion_response["model_output"], str):
+                        model_response["choices"][0]["message"]["content"] = completion_response["model_output"]
+                elif "completion" in completion_response and isinstance(completion_response["completion"], str):
+                    model_response["choices"][0]["message"]["content"] = completion_response["completion"]
+                else:
+                    raise ValueError(f"Unable to parse response. Original response: {response.text}")
+
             ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here. 
             prompt_tokens = len(
                 self.encoding.encode(prompt)
