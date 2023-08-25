@@ -62,7 +62,7 @@ class LiteDebugger:
     ):
         try:
             litellm_data_obj = {
-                "status": "succeeded",
+                "status": "success",
                 "additional_details": {"original_response": original_response},
                 "litellm_call_id": litellm_call_id,
                 "user_email": self.user_email,
