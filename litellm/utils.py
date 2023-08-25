@@ -552,6 +552,7 @@ def get_litellm_params(
     custom_llm_provider=None,
     custom_api_base=None,
     litellm_call_id=None,
+    model_alias_map=None
 ):
     litellm_params = {
         "return_async": return_async,
@@ -562,6 +563,7 @@ def get_litellm_params(
         "custom_llm_provider": custom_llm_provider,
         "custom_api_base": custom_api_base,
         "litellm_call_id": litellm_call_id,
+        "model_alias_map": model_alias_map
     }
 
     return litellm_params

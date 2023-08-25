@@ -143,6 +143,7 @@ def completion(
             custom_llm_provider=custom_llm_provider,
             custom_api_base=custom_api_base,
             litellm_call_id=litellm_call_id,
+            model_alias_map=litellm.model_alias_map
         )
         logging = Logging(
             model=model,
