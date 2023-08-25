@@ -1174,6 +1174,7 @@ def get_model_list():
             data = response.json()
             # update model list
             model_list = data["model_list"]
+            get_all_keys()
             return model_list
         return [] # return empty list by default
     except:
