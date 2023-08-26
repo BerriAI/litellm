@@ -2,6 +2,7 @@
 
 | Integration | Required OS Variables                                    | How to Use with callbacks                |
 | ----------- | -------------------------------------------------------- | ---------------------------------------- |
+| Promptlayer   | `PROMPLAYER_API_KEY`                                   | `litellm.success_callback=["promptlayer"]` |
 | LLMonitor   | `LLMONITOR_APP_ID`                                       | `litellm.success_callback=["llmonitor"]` |
 | Sentry      | `SENTRY_API_URL`                                         | `litellm.success_callback=["sentry"]`    |
 | Posthog     | `POSTHOG_API_KEY`,`POSTHOG_API_URL`                      | `litellm.success_callback=["posthog"]`   |
