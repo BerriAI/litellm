@@ -58,7 +58,14 @@ const sidebars = {
         "observability/supabase_integration",
       ],
     },
-    'caching',
+    {
+      type: "category",
+      label: "Caching",
+      items: [
+        "caching/caching",
+        "caching/gpt_cache",
+      ],
+    },
     {
       type: 'category',
       label: 'Extras',
