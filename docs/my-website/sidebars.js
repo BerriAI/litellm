@@ -18,6 +18,7 @@ const sidebars = {
   // But you can create a sidebar manually
   tutorialSidebar: [
     { type: "doc", id: "index" }, // NEW
+    "tutorials/first_playground",
     {
       type: "category",
       label: "Completion()",
