@@ -19,6 +19,9 @@
     <a href="https://discord.gg/wuPM9dRgDw" target="_blank">
         <img src="https://dcbadge.vercel.app/api/server/wuPM9dRgDw?style=flat">
     </a>
+    <a href="https://www.ycombinator.com/companies/berriai">
+        <img src="https://img.shields.io/badge/Y%20Combinator-W23-orange?style=flat-square" alt="Y Combinator W23">
+    </a>
 </h4>
 
 <h4 align="center">
