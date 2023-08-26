@@ -4,7 +4,11 @@ import Image from '@theme/IdealImage';
 Create a playground to **evaluate multiple LLM Providers in less than 10 minutes**. If you want to see this in prod, check out our [website](https://litellm.ai/).
 
 **What will it look like?**
-<Image img={require('../../img/litellm_streamlit_playground.png')} alt="streamlit_playground" />
+<Image
+  img={require('../../img/litellm_streamlit_playground.png')}
+  alt="streamlit_playground"
+  style={{ maxWidth: '75%', height: 'auto' }}
+/>
 
 **How will we do this?**: We'll build <u>the server</u> and connect it to our template frontend, ending up with a working playground UI by the end!
 
