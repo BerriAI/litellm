@@ -28,6 +28,7 @@ try:
         model="gpt-3.5-turbo", messages=messages, stream=True, logger_fn=logger_fn
     )
     response = ""
+    start_time = time.time()
     for chunk in response:
         chunk_time = time.time() 
         print(f"time since initial request: {chunk_time - start_time:.2f}")
@@ -46,6 +47,7 @@ try:
         model="azure/chatgpt-test", messages=messages, stream=True, logger_fn=logger_fn
     )
     response = ""
+    start_time = time.time()
     for chunk in response:
         chunk_time = time.time() 
         print(f"time since initial request: {chunk_time - start_time:.2f}")
@@ -64,6 +66,7 @@ try:
         model="claude-instant-1", messages=messages, stream=True, logger_fn=logger_fn
     )
     response = ""
+    start_time = time.time()
     for chunk in response:
         chunk_time = time.time() 
         print(f"time since initial request: {chunk_time - start_time:.2f}")
