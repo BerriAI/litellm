@@ -1,4 +1,4 @@
-# Create your first playground
+# Create your first LLM playground
 import Image from '@theme/IdealImage';
 
 Create a playground to **evaluate multiple LLM Providers in less than 10 minutes**. If you want to see this in prod, check out our [website](https://litellm.ai/).
