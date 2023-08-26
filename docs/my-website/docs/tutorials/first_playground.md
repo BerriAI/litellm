@@ -3,6 +3,9 @@ import Image from '@theme/IdealImage';
 
 Create a playground to **evaluate multiple LLM Providers in less than 10 minutes**. If you want to see this in prod, check out our [website](https://litellm.ai/).
 
+**What will it look like?**
+<Image img={require('../../img/litellm_streamlit_playground.png')} alt="streamlit_playground" />
+
 **How will we do this?**: We'll build <u>the server</u> and connect it to our template frontend, ending up with a working playground UI by the end!
 
 :::info
@@ -168,8 +171,8 @@ If you're missing Streamlit - just pip install it (or check out their [installat
 pip install streamlit
 ```
 
+This is what you should see: 
 <Image img={require('../../img/litellm_streamlit_playground.png')} alt="streamlit_playground" />
-
 
 
 # Congratulations 🚀 
