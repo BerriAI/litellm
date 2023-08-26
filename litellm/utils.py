@@ -13,6 +13,8 @@ from .integrations.helicone import HeliconeLogger
 from .integrations.aispend import AISpendLogger
 from .integrations.berrispend import BerriSpendLogger
 from .integrations.supabase import Supabase
+from .integrations.llmonitor import LLMonitorLogger
+from .integrations.prompt_layer import PromptLayerLogger
 from .integrations.litedebugger import LiteDebugger
 from openai.error import OpenAIError as OriginalError
 from openai.openai_object import OpenAIObject
@@ -35,6 +37,7 @@ posthog = None
 slack_app = None
 alerts_channel = None
 heliconeLogger = None
+promptLayerLogger = None
 aispendLogger = None
 berrispendLogger = None
 supabaseClient = None
@@ -729,7 +732,7 @@ def load_test_model(
 
 
 def set_callbacks(callback_list):
-    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, llmonitorLogger
+    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, llmonitorLogger, promptLayerLogger
     try:
         for callback in callback_list:
             print_verbose(f"callback: {callback}")
@@ -784,6 +787,8 @@ def set_callbacks(callback_list):
                 heliconeLogger = HeliconeLogger()
             elif callback == "llmonitor":
                 llmonitorLogger = LLMonitorLogger()
+            elif callback == "promptlayer":
+                promptLayerLogger = PromptLayerLogger()
             elif callback == "aispend":
                 aispendLogger = AISpendLogger()
             elif callback == "berrispend":
@@ -1052,6 +1057,16 @@ def handle_success(args, kwargs, result, start_time, end_time):
                         end_time=end_time,
                         run_id=kwargs["litellm_call_id"],
                         print_verbose=print_verbose,
+                    )
+                elif callback == "promptlayer":
+                    print_verbose("reaches promptlayer for logging!")
+                    promptLayerLogger.log_event(
+                        kwargs=kwargs,
+                        response_obj=result,
+                        start_time=start_time,
+                        end_time=end_time,
+                        print_verbose=print_verbose,
+
                     )
                 elif callback == "aispend":
                     print_verbose("reaches aispend for logging!")
