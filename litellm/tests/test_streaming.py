@@ -9,7 +9,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import litellm
 from litellm import completion
-
+litellm.logging = False
 litellm.set_verbose = True
 
 score = 0
