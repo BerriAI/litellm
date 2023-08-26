@@ -62,7 +62,7 @@ class LiteDebugger:
     ):
         try:
             litellm_data_obj = {
-                "status": "success",
+                "status": "received",
                 "additional_details": {"original_response": original_response},
                 "litellm_call_id": litellm_call_id,
                 "user_email": self.user_email,
@@ -91,7 +91,7 @@ class LiteDebugger:
     ):
         try:
             print_verbose(
-                f"LiteLLMDebugger: Logging - Enters input logging function for model {model}"
+                f"LiteLLMDebugger: Logging - Enters handler logging function for model {model}"
             )
             total_cost = 0  # [TODO] implement cost tracking
             response_time = (end_time - start_time).total_seconds()
