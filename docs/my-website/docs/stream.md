@@ -1,4 +1,4 @@
-# Streaming Responses & Async Completion
+# Streaming + Async
 
 - [Streaming Responses](#streaming-responses)
 - [Async Completion](#async-completion)
