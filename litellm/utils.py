@@ -332,19 +332,18 @@ def client(original_function):
     ):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
         try:
             global callback_list, add_breadcrumb, user_logger_fn
-            if litellm.use_client: # enable users to opt-out of the debugging dashboard by setting `litellm.client = False`
-                if litellm.email is not None or os.getenv("LITELLM_EMAIL", None) is not None or litellm.token is not None or os.getenv("LITELLM_TOKEN", None):  # add to input, success and failure callbacks if user is using hosted product
-                    get_all_keys()
-                    if "lite_debugger" not in callback_list:
-                        litellm.input_callback.append("lite_debugger")
-                        litellm.success_callback.append("lite_debugger")
-                        litellm.failure_callback.append("lite_debugger")
-                else:
-                    # create a litellm token for users
-                    litellm.token = get_or_generate_uuid()
+            if litellm.email is not None or os.getenv("LITELLM_EMAIL", None) is not None or litellm.token is not None or os.getenv("LITELLM_TOKEN", None):  # add to input, success and failure callbacks if user is using hosted product
+                get_all_keys()
+                if "lite_debugger" not in callback_list:
                     litellm.input_callback.append("lite_debugger")
                     litellm.success_callback.append("lite_debugger")
                     litellm.failure_callback.append("lite_debugger")
+            # else:
+            #     # create a litellm token for users
+            #     litellm.token = get_or_generate_uuid()
+            #     litellm.input_callback.append("lite_debugger")
+            #     litellm.success_callback.append("lite_debugger")
+            #     litellm.failure_callback.append("lite_debugger")
             if (
                 len(litellm.input_callback) > 0
                 or len(litellm.success_callback) > 0
