@@ -100,8 +100,10 @@ llm_dict = {
 ```
 
 #### Setting your API Keys 
-Set your LLM API keys in a .env file in the directory or set them as `os.environ` variables 
+Set your LLM API keys in a .env file in the directory or set them as `os.environ` variables.
+
 See https://docs.litellm.ai/docs/completion/supported for the format of API keys 
+
 LiteLLM generalizes api keys to follow the following format 
 `PROVIDER_API_KEY`
 
@@ -156,9 +158,6 @@ After running your first `completion()` call litellm autogenerates a new logs da
 Example Terminal Output with Log Dashboard
 
 <img width="1280" alt="Screenshot 2023-08-25 at 8 53 27 PM" src="https://github.com/BerriAI/litellm/assets/29436595/8f4cc218-a991-4988-a05c-c8e508da5d18">
-
-
-
 
 
 
