@@ -12,7 +12,7 @@ liteLLM provides `callbacks`, making it easy for you to log data depending on th
 
 ### Using Callbacks
 
-# Get your PromptLayer API Key from https://promptlayer.com/
+Get your PromptLayer API Key from https://promptlayer.com/
 
 Use just 2 lines of code, to instantly log your responses **across all providers** with promptlayer:
 
@@ -33,7 +33,6 @@ os.environ["OPENAI_API_KEY"], os.environ["COHERE_API_KEY"] = "", ""
 
 # set callbacks
 litellm.success_callback = ["promptlayer"]
-litellm.failure_callback = ["llmonitor"]
 
 #openai call
 response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])
