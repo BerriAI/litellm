@@ -1,10 +1,9 @@
 # Create your first playground
 import Image from '@theme/IdealImage';
 
-Learn how to build a light version of the demo playground as shown on the website in less than 10 minutes. 
+Create a playground to **evaluate multiple LLM Providers in less than 10 minutes**. If you want to see this in prod, check out our [website](https://litellm.ai/).
 
-**What we'll build**: We'll build <u>the server</u> and connect it to our template frontend, ending up with a deployed playground by the end!
-
+**How will we do this?**: We'll build <u>the server</u> and connect it to our template frontend, ending up with a working playground UI by the end!
 
 :::info
 
