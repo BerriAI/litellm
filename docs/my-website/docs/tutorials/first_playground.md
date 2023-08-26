@@ -10,7 +10,7 @@ Create a playground to **evaluate multiple LLM Providers in less than 10 minutes
  Before you start, make sure you have followed the [environment-setup](./installation) guide. Please note, that this tutorial relies on you having API keys from at least 1 model provider (E.g. OpenAI). 
 :::
 
-## 1. Test keys 
+## 1. Quick start 
 
 Let's make sure our keys are working. Run this script in any environment of your choice (e.g. [Google Colab](https://colab.research.google.com/#create=true)).
 
