@@ -52,6 +52,7 @@ const sidebars = {
       items: [
         "observability/callbacks",
         "observability/integrations",
+        "observability/promptlayer_integration",
         "observability/llmonitor_integration",
         "observability/helicone_integration",
         "observability/supabase_integration",
