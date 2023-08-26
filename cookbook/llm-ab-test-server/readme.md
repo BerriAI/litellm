@@ -51,53 +51,42 @@ response = completion(model="command-nightly", messages=messages)
 response = completion(model="claude-2", messages=messages)
 ```
 
-After running the server all completion resposnes, costs and latency can be viewed on the LiteLLM Client UI
+After calling `completion()` costs and latency can be viewed on the LiteLLM Client UI
 
 ### LiteLLM Client UI
+![pika-1693023669579-1x](https://github.com/BerriAI/litellm/assets/29436595/86633e2f-eda0-4939-a588-84e4c100f36a)
 
 
-Litellm simplifies I/O with all models, the server simply makes a `litellm.completion()` call to the selected model
-
-
-
-- Translating inputs to the provider's completion and embedding endpoints
-- Guarantees [consistent output](https://litellm.readthedocs.io/en/latest/output/), text responses will always be available at `['choices'][0]['message']['content']`
-- Exception mapping - common exceptions across providers are mapped to the [OpenAI exception types](https://help.openai.com/en/articles/6897213-openai-library-error-types-guidance)
-# Usage
-
-<a target="_blank" href="https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/liteLLM_OpenAI.ipynb">
-  <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
-</a>
-
-
+## Using LiteLLM A/B Testing Server
+# Installation
 ```
 pip install litellm
-```
-
-```python
-from litellm import completion
-
-## set ENV variables
-os.environ["OPENAI_API_KEY"] = "openai key"
-os.environ["COHERE_API_KEY"] = "cohere key"
-os.environ["ANTHROPIC_API_KEY"] = "anthropic key"
-
-messages = [{ "content": "Hello, how are you?","role": "user"}]
-
-# openai call
-response = completion(model="gpt-3.5-turbo", messages=messages)
-
-# cohere call
-response = completion(model="command-nightly", messages=messages)
-
-# anthropic
-response = completion(model="claude-2", messages=messages)
 ```
 
 Stable version
 ```
 pip install litellm==0.1.424
 ```
+
+## Clone LiteLLM Git Repo
+```
+git clone https://github.com/BerriAI/litellm/
+```
+
+## Navigate to LiteLLM-A/B Test Server
+```
+cd litellm/cookbook/llm-ab-test-server
+```
+
+## Run the Server 
+```
+python3 main.py
+```
+
+## Set your LLM Configs
+Set your LLMs and LLM weights you want to run A/B testing with 
+
+
 
 
 
