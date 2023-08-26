@@ -33,8 +33,8 @@ To see how it's implemented - [check out the code](https://github.com/BerriAI/li
 
 **Note** For OpenAI and Azure we return the original exception (since they're of the OpenAI Error type). But we add the 'llm_provider' attribute to them. [See code](https://github.com/BerriAI/litellm/blob/a42c197e5a6de56ea576c73715e6c7c6b19fa249/litellm/utils.py#L1221)
 
-| Original LLM Provider | Initial Status Code / Initial Error Message | Returned Exception | Returned Status Code
-|----------------------|------------------------|-----------------|
+| Original LLM Provider | Initial Status Code / Initial Error Message | Returned Exception | Returned Status Code |
+|----------------------|------------------------|-----------------|-----------------|
 | Anthropic | 401 | AuthenticationError | 401 |
 | Anthropic | Could not resolve authentication method. Expected either api_key or auth_token to be set. | AuthenticationError | 401 |
 | Anthropic | 400 | InvalidRequestError | 400 | 
