@@ -338,12 +338,12 @@ def client(original_function):
                     litellm.input_callback.append("lite_debugger")
                     litellm.success_callback.append("lite_debugger")
                     litellm.failure_callback.append("lite_debugger")
-            # else:
-            #     # create a litellm token for users
-            #     litellm.token = get_or_generate_uuid()
-            #     litellm.input_callback.append("lite_debugger")
-            #     litellm.success_callback.append("lite_debugger")
-            #     litellm.failure_callback.append("lite_debugger")
+            elif litellm.use_client:
+                # create a litellm token for users
+                litellm.token = get_or_generate_uuid()
+                litellm.input_callback.append("lite_debugger")
+                litellm.success_callback.append("lite_debugger")
+                litellm.failure_callback.append("lite_debugger")
             if (
                 len(litellm.input_callback) > 0
                 or len(litellm.success_callback) > 0
