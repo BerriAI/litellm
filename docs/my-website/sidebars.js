@@ -30,6 +30,9 @@ const sidebars = {
       items: ["embedding/supported_embedding"],
     },
     'completion/supported',
+    "token_usage",
+    "exception_mapping",
+    "stream",
     'debugging/hosted_debugging',
     'debugging/local_debugging',
     {
@@ -43,10 +46,6 @@ const sidebars = {
         'tutorials/ab_test_llms'
       ],
     },
-    "token_usage",
-    "stream",
-    "secret",
-    "caching",
     {
       type: "category",
       label: "Logging & Observability",
@@ -56,6 +55,14 @@ const sidebars = {
         "observability/llmonitor_integration",
         "observability/helicone_integration",
         "observability/supabase_integration",
+      ],
+    },
+    {
+      type: 'category',
+      label: 'Extras',
+      items: [
+        'extras/secret', 
+        'extras/caching', 
       ],
     },
     "troubleshoot",

@@ -1,4 +1,4 @@
-# Caching Completion() Responses
+# Caching
 
 liteLLM implements exact match caching. It can be enabled by setting
 1. `litellm.caching`: When set to `True`, enables caching for all responses. Keys are the input `messages` and values store in the cache is the corresponding `response`
