@@ -39,6 +39,23 @@ llm_dict = {
 }
 ```
 
+All models defined can be called with the same Input/Output format using litellm `completion`
+```python
+from litellm import completion
+# SET API KEYS in .env
+# openai call
+response = completion(model="gpt-3.5-turbo", messages=messages)
+# cohere call
+response = completion(model="command-nightly", messages=messages)
+# anthropic
+response = completion(model="claude-2", messages=messages)
+```
+
+After running the server all completion resposnes, costs and latency can be viewed on the LiteLLM Client UI
+
+### LiteLLM Client UI
+
+
 Litellm simplifies I/O with all models, the server simply makes a `litellm.completion()` call to the selected model
 
 
