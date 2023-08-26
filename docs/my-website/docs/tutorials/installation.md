@@ -6,12 +6,12 @@ displayed_sidebar: tutorialSidebar
 
 Let's get the necessary keys to set up our demo environment.
 
-## 1. Get your keys
+Every LLM provider needs API keys (e.g. `OPENAI_API_KEY`). You can get API keys from OpenAI, Cohere and AI21 **without a waitlist**.
 
-Every LLM provider needs API keys (e.g. `OPENAI_API_KEY`). For this demo, let's get the API Keys for OpenAI, Cohere, and AI21. 
+Let's get them for our demo!
 
 **OpenAI**: https://platform.openai.com/account/api-keys  
-**Cohere**: https://dashboard.cohere.com/welcome/login?redirect_uri=%2Fapi-keys  
-**AI21**: https://studio.ai21.com/account/api-key
+**Cohere**: https://dashboard.cohere.com/welcome/login?redirect_uri=%2Fapi-keys  (no credit card required)  
+**AI21**: https://studio.ai21.com/account/api-key (no credit card required)
 
 
