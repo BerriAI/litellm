@@ -45,4 +45,25 @@ def test_caching_with_models():
         # if models are different, it should not return cached response
         print(f"response2: {response2}")
         print(f"response3: {response3}")
-        pytest.fail(f"Error occurred: {e}")
+        pytest.fail(f"Error occurred:")
+
+
+# def test_gpt_cache():
+#     # INIT GPT Cache #
+#     from gptcache import cache
+#     cache.init()
+#     cache.set_openai_key()
+
+#     messages = [{"role": "user", "content": "what is litellm this morning?  "}]
+#     response2 = litellm.cache.completion(model="gpt-3.5-turbo", messages=messages)
+#     response3 = litellm.cache.completion(model="command-nightly", messages=messages)
+#     print(f"response2: {response2}")
+#     print(f"response3: {response3}")
+
+#     if response3 != response2:
+#         # if models are different, it should not return cached response
+#         print(f"response2: {response2}")
+#         print(f"response3: {response3}")
+#         pytest.fail(f"Error occurred:")
+
+# test_gpt_cache()
