@@ -57,8 +57,10 @@ After calling `completion()` costs and latency can be viewed on the LiteLLM Clie
 ![pika-1693023669579-1x](https://github.com/BerriAI/litellm/assets/29436595/86633e2f-eda0-4939-a588-84e4c100f36a)
 
 
-## Using LiteLLM A/B Testing Server
-# Installation
+# Using LiteLLM A/B Testing Server
+## Setup
+
+### Install LiteLLM
 ```
 pip install litellm
 ```
@@ -68,23 +70,84 @@ Stable version
 pip install litellm==0.1.424
 ```
 
-## Clone LiteLLM Git Repo
+### Clone LiteLLM Git Repo
 ```
 git clone https://github.com/BerriAI/litellm/
 ```
 
-## Navigate to LiteLLM-A/B Test Server
+### Navigate to LiteLLM-A/B Test Server
 ```
 cd litellm/cookbook/llm-ab-test-server
 ```
 
-## Run the Server 
+### Run the Server 
 ```
 python3 main.py
 ```
 
-## Set your LLM Configs
+### Set your LLM Configs
 Set your LLMs and LLM weights you want to run A/B testing with 
+In main.py set your selected LLMs you want to AB test in `llm_dict`
+You can A/B test more than 100+ LLMs using LiteLLM https://docs.litellm.ai/docs/completion/supported
+```python
+llm_dict = {
+    "gpt-4": 0.2,
+    "together_ai/togethercomputer/llama-2-70b-chat": 0.4,
+    "claude-2": 0.2,
+    "claude-1.2": 0.2
+}
+```
+
+#### Setting your API Keys 
+Set your LLM API keys in a .env file in the directory or set them as `os.environ` variables 
+See https://docs.litellm.ai/docs/completion/supported for the format of API keys 
+LiteLLM generalizes api keys to follow the following format 
+`PROVIDER_API_KEY`
+
+## Making Requests to the LiteLLM Server Locally 
+The server follows the Input/Output format set by the OpenAI Chat Completions API
+Here is an example request made the LiteLLM Server
+
+### Python
+```python
+import requests
+import json
+
+url = "http://localhost:5000/chat/completions"
+
+payload = json.dumps({
+  "messages": [
+    {
+      "content": "who is CTO of litellm",
+      "role": "user"
+    }
+  ]
+})
+headers = {
+  'Content-Type': 'application/json'
+}
+
+response = requests.request("POST", url, headers=headers, data=payload)
+
+print(response.text)
+
+```
+
+### Curl Command
+curl --location 'http://localhost:5000/chat/completions' \
+--header 'Content-Type: application/json' \
+--data '{
+    "messages": [
+                    { 
+                        "content": "who is CTO of litellm",
+                        "role": "user"
+                    }
+                ]
+    
+}
+'
+
+
 
 
 
