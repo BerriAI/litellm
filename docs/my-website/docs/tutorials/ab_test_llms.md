@@ -1,4 +1,4 @@
-
+# A/B Test LLMs
 
 LiteLLM allows you to call 100+ LLMs using completion
 
@@ -28,7 +28,7 @@ response = completion(model="claude-2", messages=messages)
 This server allows you to view responses, costs and latency on your LiteLLM dashboard
 
 ### LiteLLM Client UI
-![pika-1693023669579-1x](https://github.com/BerriAI/litellm/assets/29436595/86633e2f-eda0-4939-a588-84e4c100f36a)
+
 
 
 # Using LiteLLM A/B Testing Server
@@ -130,15 +130,7 @@ After running your first `completion()` call litellm autogenerates a new logs da
 
 Example Terminal Output with Log Dashboard
 
-<img width="1280" alt="Screenshot 2023-08-25 at 8 53 27 PM" src="https://github.com/BerriAI/litellm/assets/29436595/8f4cc218-a991-4988-a05c-c8e508da5d18">
 
 
 
-# support / talk with founders
-- [Schedule Demo 👋](https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version)
-- [Community Discord 💭](https://discord.gg/wuPM9dRgDw)
-- Our numbers 📞 +1 (770) 8783-106 / ‭+1 (412) 618-6238‬
-- Our emails ✉️ ishaan@berri.ai / krrish@berri.ai
 
-# why did we build this 
-- **Need for simplicity**: Our code started to get extremely complicated managing & translating calls between Azure, OpenAI, Cohere
