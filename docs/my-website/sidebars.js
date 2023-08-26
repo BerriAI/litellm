@@ -58,12 +58,12 @@ const sidebars = {
         "observability/supabase_integration",
       ],
     },
+    'caching',
     {
       type: 'category',
       label: 'Extras',
       items: [
         'extras/secret', 
-        'extras/caching', 
       ],
     },
     "troubleshoot",
