@@ -7,7 +7,7 @@ Create a playground to **evaluate multiple LLM Providers in less than 10 minutes
 
 :::info
 
- Before you start with this section, make sure you have followed the [environment-setup](./installation) guide. Please note, that this demo relies on you having API keys from at least 1 model provider (E.g. OpenAI). 
+ Before you start, make sure you have followed the [environment-setup](./installation) guide. Please note, that this tutorial relies on you having API keys from at least 1 model provider (E.g. OpenAI). 
 :::
 
 ## 1. Test keys 
