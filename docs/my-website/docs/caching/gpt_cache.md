@@ -15,12 +15,26 @@ pip install gptcache
 ```python
 from gptcache import cache
 from litellm.cache import completion
+import time
 
 # Set your .env keys 
 os.environ['OPENAI_API_KEY'] = ""
 cache.init()
 cache.set_openai_key()
 
-messages = [{"role": "user", "content": "what is litellm YC 22?"}]
+question = "what's LiteLLM"
+for _ in range(2):
+    start_time = time.time()
+    response = completion(
+      model='gpt-3.5-turbo',
+      messages=[
+        {
+            'role': 'user',
+            'content': question
+        }
+      ],
+    )
+    print(f'Question: {question}')
+    print("Time consuming: {:.2f}s".format(time.time() - start_time))
 ```
 
