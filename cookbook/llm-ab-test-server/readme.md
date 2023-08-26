@@ -134,6 +134,7 @@ print(response.text)
 ```
 
 ### Curl Command
+```
 curl --location 'http://localhost:5000/chat/completions' \
 --header 'Content-Type: application/json' \
 --data '{
@@ -146,10 +147,14 @@ curl --location 'http://localhost:5000/chat/completions' \
     
 }
 '
+```
 
+## Viewing Logs
+After running your first `completion()` call litellm autogenerates a new logs dashboard for you. Link to your Logs dashboard is generated in the terminal / console. 
 
+Example Terminal Output with Log Dashboard
 
-
+<img width="1280" alt="Screenshot 2023-08-25 at 8 53 27 PM" src="https://github.com/BerriAI/litellm/assets/29436595/8f4cc218-a991-4988-a05c-c8e508da5d18">
 
 
 
