@@ -371,6 +371,8 @@ def client(original_function):
                 )
             if "logger_fn" in kwargs:
                 user_logger_fn = kwargs["logger_fn"]
+            # LOG SUCCESS
+            crash_reporting(*args, **kwargs)
         except:  # DO NOT BLOCK running the function because of this
             print_verbose(f"[Non-Blocking] {traceback.format_exc()}")
         pass
@@ -444,26 +446,27 @@ def client(original_function):
             function_setup(*args, **kwargs)
             litellm_call_id = str(uuid.uuid4())
             kwargs["litellm_call_id"] = litellm_call_id
-            # [OPTIONAL] CHECK CACHE
             start_time = datetime.datetime.now()
+            # [OPTIONAL] CHECK CACHE
             if (litellm.caching or litellm.caching_with_models) and (
                     cached_result := check_cache(*args, **kwargs)) is not None:
                 result = cached_result
-            else:
-                # MODEL CALL
-                result = original_function(*args, **kwargs)
+                return result
+            # MODEL CALL
+            result = original_function(*args, **kwargs)
+            if "stream" in kwargs and kwargs["stream"] == True:
+                return result
             end_time = datetime.datetime.now()
-            # Add response to CACHE
-            if litellm.caching:
+            # [OPTIONAL] ADD TO CACHE
+            if (litellm.caching or litellm.caching_with_models):
                 add_cache(result, *args, **kwargs)
             # LOG SUCCESS
-            crash_reporting(*args, **kwargs)
-
             my_thread = threading.Thread(
                 target=handle_success,
                 args=(args, kwargs, result, start_time,
                       end_time))  # don't interrupt execution of main thread
             my_thread.start()
+            # RETURN RESULT
             return result
         except Exception as e:
 
@@ -1465,7 +1468,7 @@ class CustomStreamWrapper:
         if model in litellm.cohere_models:
             # cohere does not return an iterator, so we need to wrap it in one
             self.completion_stream = iter(completion_stream)
-        elif model == "together_ai":
+        elif custom_llm_provider == "together_ai":
             self.completion_stream = iter(completion_stream)
         else:
             self.completion_stream = completion_stream

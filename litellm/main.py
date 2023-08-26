@@ -540,16 +540,9 @@ def completion(
 
             ## LOGGING
             logging.pre_call(input=prompt, api_key=TOGETHER_AI_TOKEN)
-            if stream == True:
-                return together_ai_completion_streaming(
-                    {
-                        "model": model,
-                        "prompt": prompt,
-                        "request_type": "language-model-inference",
-                        **optional_params,
-                    },
-                    headers=headers,
-                )
+
+            print(f"TOGETHER_AI_TOKEN: {TOGETHER_AI_TOKEN}")
+
             res = requests.post(
                 endpoint,
                 json={
@@ -560,6 +553,12 @@ def completion(
                 },
                 headers=headers,
             )
+
+            if "stream_tokens" in optional_params and optional_params["stream_tokens"] == True:
+                response = CustomStreamWrapper(
+                    res.iter_lines(), model, custom_llm_provider="together_ai"
+                )
+                return response
             ## LOGGING
             logging.post_call(
                 input=prompt, api_key=TOGETHER_AI_TOKEN, original_response=res.text
