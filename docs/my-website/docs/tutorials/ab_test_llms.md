@@ -28,6 +28,7 @@ response = completion(model="claude-2", messages=messages)
 This server allows you to view responses, costs and latency on your LiteLLM dashboard
 
 ### LiteLLM Client UI
+<Image img={require('../../img/ab_test_logs.png')} />
 
 
 
@@ -129,6 +130,8 @@ curl --location 'http://localhost:5000/chat/completions' \
 After running your first `completion()` call litellm autogenerates a new logs dashboard for you. Link to your Logs dashboard is generated in the terminal / console. 
 
 Example Terminal Output with Log Dashboard
+<Image img={require('../../img/term_output.png')} />
+
 
 
 
