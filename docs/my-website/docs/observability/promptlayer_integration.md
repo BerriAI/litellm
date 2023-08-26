@@ -2,9 +2,7 @@
 
 Promptlayer is a platform for prompt engineers. Log OpenAI requests. Search usage history. Track performance. Visually manage prompt templates.
 
-<video controls width='900' >
-  <source src='https://llmonitor.com/videos/demo-annotated.mp4'/>
-</video>
+<Image img={require('../../img/promptlayer.png')} />
 
 ## Use Promptlayer to log requests across all LLM Providers (OpenAI, Azure, Anthropic, Cohere, Replicate, PaLM)
 
