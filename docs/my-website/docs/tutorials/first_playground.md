@@ -44,51 +44,13 @@ response = completion("j2-mid", messages)
 
 ## 2. Set-up Server
 
-### 2.1 Spin-up Template
-Let's build a basic Flask app as our backend server.  
-
-Create a `main.py` file, and put in this starter code.
-
-```python
-from flask import Flask, jsonify, request
-
-app = Flask(__name__)
-
-# Example route
-@app.route('/', methods=['GET'])
-def hello():
-    return jsonify(message="Hello, Flask!")
-
-if __name__ == '__main__':
-    from waitress import serve
-    serve(app, host="0.0.0.0", port=4000, threads=500)
-```
-
-Let's test that it's working. 
-
-Start the server:
-```python 
-python main.py
-```
-
-Run a curl command to test it:
-```curl
-curl -X GET localhost:4000
-```
-
-This is what you should see
-
-<Image img={require('../../img/test_python_server_1.png')} alt="python_code_sample_1" />
-
-### 2.2 Add `completion` route
-
-Now, let's add a route for our completion calls. This is when we'll add litellm to our server to handle the model requests. 
+Let's build a basic Flask app as our backend server. We'll give it a specific route for our completion calls.  
 
 **Notes**:
 * 🚨 Don't forget to replace the placeholder key values with your keys!
 * `completion_with_retries`: LLM API calls can fail in production. This function wraps the normal litellm completion() call with [tenacity](https://tenacity.readthedocs.io/en/latest/) to retry the call in case it fails. 
 
-The snippet we'll add:
+LiteLLM specific snippet:
 
 ```python 
 import os
@@ -151,6 +113,7 @@ if __name__ == '__main__':
     serve(app, host="0.0.0.0", port=4000, threads=500)
 ```
 
+### Let's test it
 Start the server:
 ```python 
 python main.py
@@ -175,7 +138,46 @@ This is what you should see
 
 ## 3. Connect to our frontend template
 
+### 3.1 Download template
 
-## 4. Deploy!
+For our frontend, we'll use [Streamlit](https://streamlit.io/) - this enables us to build a simple python web-app.
+
+Let's download the playground template we (LiteLLM) have created: 
+
+```zsh
+git clone https://github.com/BerriAI/litellm_playground_fe_template.git
+```
+
+### 3.2 Run it
+
+Make sure our server from [step 2](#2-set-up-server) is still running at port 4000
+
+:::info
+
+ If you used another port, no worries - just make sure you change [this line](https://github.com/BerriAI/litellm_playground_fe_template/blob/411bea2b6a2e0b079eb0efd834886ad783b557ef/app.py#L7) in your playground template's app.py
+:::
+
+Now let's run our app: 
+
+```zsh
+cd litellm_playground_fe_template && streamlit run app.py
+```
+
+If you're missing Streamlit - just pip install it (or check out their [installation guidelines](https://docs.streamlit.io/library/get-started/installation#install-streamlit-on-macoslinux))
+
+```zsh
+pip install streamlit
+```
+
+<Image img={require('../../img/litellm_streamlit_playground.png')} alt="streamlit_playground" />
 
 
+
+# Congratulations 🚀 
+
+You've created your first LLM Playground - with the ability to call 50+ LLM APIs. 
+
+Next Steps: 
+* [Check out the full list of LLM Providers you can now add](../completion/supported)
+* [Deploy your server using Render](https://render.com/docs/deploy-flask)
+* [Deploy your playground using Streamlit](https://docs.streamlit.io/streamlit-community-cloud/deploy-your-app)
