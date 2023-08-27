@@ -92,12 +92,15 @@ class AnthropicLLM:
             additional_args={"complete_input_dict": data},
         )
         ## COMPLETION CALL
-        response = requests.post(
-            self.completion_url, headers=self.headers, data=json.dumps(data)
-        )
         if "stream" in optional_params and optional_params["stream"] == True:
+            response = requests.post(
+                self.completion_url, headers=self.headers, data=json.dumps(data), stream=optional_params["stream"]
+            )
             return response.iter_lines()
         else:
+            response = requests.post(
+                self.completion_url, headers=self.headers, data=json.dumps(data)
+            )
             ## LOGGING
             self.logging_obj.post_call(
                 input=prompt,
