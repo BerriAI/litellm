@@ -1468,8 +1468,6 @@ class CustomStreamWrapper:
         if model in litellm.cohere_models:
             # cohere does not return an iterator, so we need to wrap it in one
             self.completion_stream = iter(completion_stream)
-        elif custom_llm_provider == "together_ai":
-            self.completion_stream = iter(completion_stream)
         else:
             self.completion_stream = completion_stream
 
@@ -1512,7 +1510,7 @@ class CustomStreamWrapper:
         elif self.model == "replicate":
             chunk = next(self.completion_stream)
             completion_obj["content"] = chunk
-        elif (self.model == "together_ai") or ("togethercomputer"
+        elif (self.custom_llm_provider and self.custom_llm_provider == "together_ai") or ("togethercomputer"
                                                in self.model):
             chunk = next(self.completion_stream)
             text_data = self.handle_together_ai_chunk(chunk)
