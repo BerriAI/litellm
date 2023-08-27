@@ -77,13 +77,6 @@ Stable version
 pip install litellm==0.1.424
 ```
 
-
-# LiteLLM Client - debugging & 1-click add new LLMs
-Debugging Dashboard 👉 https://docs.litellm.ai/docs/debugging/hosted_debugging
-
-![pika-1692887776948-1x](https://github.com/BerriAI/litellm/assets/29436595/44f40714-abdc-4c53-9642-6ba3654209d5)
-
-
 ## Streaming
 liteLLM supports streaming the model response back, pass `stream=True` to get a streaming iterator in response.
 Streaming is supported for OpenAI, Azure, Anthropic, Huggingface models
