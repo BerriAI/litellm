@@ -98,6 +98,7 @@ def completion(
         if fallbacks != []:
             return completion_with_fallbacks(**args)
         if litellm.model_alias_map and model in litellm.model_alias_map:
+            args["model_alias_map"] = litellm.model_alias_map
             model = litellm.model_alias_map[model] # update the model to the actual value if an alias has been passed in
         model_response = ModelResponse()
         if azure:  # this flag is deprecated, remove once notebooks are also updated.
