@@ -35,8 +35,6 @@ from litellm.utils import (
 )
 from litellm.utils import (
     get_ollama_response_stream,
-    stream_to_string,
-    together_ai_completion_streaming,
 )
 
 ####### ENVIRONMENT VARIABLES ###################
@@ -542,46 +540,56 @@ def completion(
             logging.pre_call(input=prompt, api_key=TOGETHER_AI_TOKEN)
 
             print(f"TOGETHER_AI_TOKEN: {TOGETHER_AI_TOKEN}")
-
-            res = requests.post(
-                endpoint,
-                json={
-                    "model": model,
-                    "prompt": prompt,
-                    "request_type": "language-model-inference",
-                    **optional_params,
-                },
-                headers=headers,
-            )
-
             if "stream_tokens" in optional_params and optional_params["stream_tokens"] == True:
+                res = requests.post(
+                    endpoint,
+                    json={
+                        "model": model,
+                        "prompt": prompt,
+                        "request_type": "language-model-inference",
+                        **optional_params,
+                    },
+                    stream=optional_params["stream_tokens"],
+                    headers=headers,
+                )
                 response = CustomStreamWrapper(
                     res.iter_lines(), model, custom_llm_provider="together_ai"
                 )
                 return response
-            ## LOGGING
-            logging.post_call(
-                input=prompt, api_key=TOGETHER_AI_TOKEN, original_response=res.text
-            )
-            # make this safe for reading, if output does not exist raise an error
-            json_response = res.json()
-            if "output" not in json_response:
-                raise Exception(
-                    f"liteLLM: Error Making TogetherAI request, JSON Response {json_response}"
+            else:
+                res = requests.post(
+                    endpoint,
+                    json={
+                        "model": model,
+                        "prompt": prompt,
+                        "request_type": "language-model-inference",
+                        **optional_params,
+                    },
+                    headers=headers,
                 )
-            completion_response = json_response["output"]["choices"][0]["text"]
-            prompt_tokens = len(encoding.encode(prompt))
-            completion_tokens = len(encoding.encode(completion_response))
-            ## RESPONSE OBJECT
-            model_response["choices"][0]["message"]["content"] = completion_response
-            model_response["created"] = time.time()
-            model_response["model"] = model
-            model_response["usage"] = {
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "total_tokens": prompt_tokens + completion_tokens,
-            }
-            response = model_response
+                ## LOGGING
+                logging.post_call(
+                    input=prompt, api_key=TOGETHER_AI_TOKEN, original_response=res.text
+                )
+                # make this safe for reading, if output does not exist raise an error
+                json_response = res.json()
+                if "output" not in json_response:
+                    raise Exception(
+                        f"liteLLM: Error Making TogetherAI request, JSON Response {json_response}"
+                    )
+                completion_response = json_response["output"]["choices"][0]["text"]
+                prompt_tokens = len(encoding.encode(prompt))
+                completion_tokens = len(encoding.encode(completion_response))
+                ## RESPONSE OBJECT
+                model_response["choices"][0]["message"]["content"] = completion_response
+                model_response["created"] = time.time()
+                model_response["model"] = model
+                model_response["usage"] = {
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": prompt_tokens + completion_tokens,
+                }
+                response = model_response
         elif model in litellm.vertex_chat_models:
             # import vertexai/if it fails then pip install vertexai# import cohere/if it fails then pip install cohere
             install_and_import("vertexai")

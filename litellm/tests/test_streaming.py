@@ -62,27 +62,22 @@ messages = [{"content": user_message, "role": "user"}]
 
 
 # test on anthropic completion call
-try:
-    response = completion(
-        model="claude-instant-1", messages=messages, stream=True, logger_fn=logger_fn
-    )
-    complete_response = ""
-    start_time = time.time()
-    time_since_initial_request = []
-    for chunk in response:
-        chunk_time = time.time()
-        time_since_initial_request.append(chunk_time - start_time)
-        print(f"time since initial request: {chunk_time - start_time:.5f}")
-        print(chunk["choices"][0]["delta"])
-        complete_response += chunk["choices"][0]["delta"]["content"]
-    if complete_response == "": 
-        raise Exception("Empty response received")
-    print(f"set(time_since_initial_request): {set(time_since_initial_request)}")
-    if len(set(time_since_initial_request)) == 1: 
-        raise Exception("All time since initial request is the same")
-except:
-    print(f"error occurred: {traceback.format_exc()}")
-    pass
+# try:
+#     response = completion(
+#         model="claude-instant-1", messages=messages, stream=True, logger_fn=logger_fn
+#     )
+#     complete_response = ""
+#     start_time = time.time()
+#     for chunk in response:
+#         chunk_time = time.time()
+#         print(f"time since initial request: {chunk_time - start_time:.5f}")
+#         print(chunk["choices"][0]["delta"])
+#         complete_response += chunk["choices"][0]["delta"]["content"]
+#     if complete_response == "": 
+#         raise Exception("Empty response received")
+# except:
+#     print(f"error occurred: {traceback.format_exc()}")
+#     pass
 
 
 # # test on huggingface completion call
@@ -104,23 +99,23 @@ except:
 #     pass
 
 # test on together ai completion call
-# try:
-#     start_time = time.time()
-#     response = completion(
-#         model="Replit-Code-3B", messages=messages, logger_fn=logger_fn, stream= True
-#     )
-#     complete_response = ""
-#     print(f"returned response object: {response}")
-#     for chunk in response:
-#         chunk_time = time.time() 
-#         print(f"time since initial request: {chunk_time - start_time:.2f}")
-#         print(chunk["choices"][0]["delta"])
-#         complete_response += chunk["choices"][0]["delta"]["content"] if len(chunk["choices"][0]["delta"].keys()) > 0 else "" 
-#     if complete_response == "": 
-#         raise Exception("Empty response received")
-# except:
-#     print(f"error occurred: {traceback.format_exc()}")
-#     pass
+try:
+    start_time = time.time()
+    response = completion(
+        model="Replit-Code-3B", messages=messages, logger_fn=logger_fn, stream= True
+    )
+    complete_response = ""
+    print(f"returned response object: {response}")
+    for chunk in response:
+        chunk_time = time.time() 
+        print(f"time since initial request: {chunk_time - start_time:.2f}")
+        print(chunk["choices"][0]["delta"])
+        complete_response += chunk["choices"][0]["delta"]["content"] if len(chunk["choices"][0]["delta"].keys()) > 0 else "" 
+    if complete_response == "": 
+        raise Exception("Empty response received")
+except:
+    print(f"error occurred: {traceback.format_exc()}")
+    pass
 
 
 # # test on azure completion call
