@@ -410,19 +410,20 @@ def client(original_function):
     def check_cache(*args, **kwargs):
         try:  # never block execution
             prompt = get_prompt(*args, **kwargs)
-            if (prompt != None and prompt
-                    in local_cache):  # check if messages / prompt exists
+            if (prompt != None):  # check if messages / prompt exists
                 if litellm.caching_with_models:
                     # if caching with model names is enabled, key is prompt + model name
-                    if ("model" in kwargs and kwargs["model"]
-                            in local_cache[prompt]["models"]):
+                    if ("model" in kwargs):
                         cache_key = prompt + kwargs["model"]
-                        return local_cache[cache_key]
+                        if cache_key in local_cache:
+                            return local_cache[cache_key]
                 else:  # caching only with prompts
-                    result = local_cache[prompt]
-                    return result
+                    if prompt in local_cache:
+                        result = local_cache[prompt]
+                        return result
             else:
                 return None
+            return None # default to return None
         except:
             return None
 
@@ -430,8 +431,7 @@ def client(original_function):
         try:  # never block execution
             prompt = get_prompt(*args, **kwargs)
             if litellm.caching_with_models:  # caching with model + prompt
-                if ("model" in kwargs
-                        and kwargs["model"] in local_cache[prompt]["models"]):
+                if ("model" in kwargs):
                     cache_key = prompt + kwargs["model"]
                     local_cache[cache_key] = result
             else:  # caching based only on prompts
