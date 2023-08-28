@@ -105,6 +105,7 @@ for chunk in result:
 <!-- ALL-CONTRIBUTORS-LIST:START - Do not remove or modify this section -->
 <!-- prettier-ignore-start -->
 <!-- markdownlint-disable -->
+[![All Contributors](https://img.shields.io/github/all-contributors/BerriAI/litellm?color=ee8449&style=flat-square)](#contributors)
 
 <!-- markdownlint-restore -->
 <!-- prettier-ignore-end -->
