@@ -5,8 +5,7 @@ import time
 from typing import Callable
 from litellm.utils import ModelResponse
 
-
-class BasetenError(Exception):
+class AI21Error(Exception):
     def __init__(self, status_code, message):
         self.status_code = status_code
         self.message = message
@@ -15,11 +14,13 @@ class BasetenError(Exception):
         )  # Call the base class constructor with the parameters it needs
 
 
-class BasetenLLM:
-    def __init__(self, encoding, logging_obj, api_key=None):
+class AI21LLM:
+    def __init__(
+        self, encoding, logging_obj, api_key=None
+    ):
         self.encoding = encoding
-        self.completion_url_fragment_1 = "https://app.baseten.co/models/"
-        self.completion_url_fragment_2 = "/predict"
+        self.completion_url_fragment_1 = "https://api.ai21.com/studio/v1/"
+        self.completion_url_fragment_2 = "/complete"
         self.api_key = api_key
         self.logging_obj = logging_obj
         self.validate_environment(api_key=api_key)
@@ -36,7 +37,7 @@ class BasetenLLM:
         self.headers = {
             "accept": "application/json",
             "content-type": "application/json",
-            "Authorization": "Api-Key " + self.api_key,
+            "Authorization": "Bearer " + self.api_key,
         }
 
     def completion(
@@ -54,9 +55,13 @@ class BasetenLLM:
         for message in messages:
             if "role" in message:
                 if message["role"] == "user":
-                    prompt += f"{message['content']}"
+                    prompt += (
+                        f"{message['content']}"
+                    )
                 else:
-                    prompt += f"{message['content']}"
+                    prompt += (
+                        f"{message['content']}"
+                    )
             else:
                 prompt += f"{message['content']}"
         data = {
@@ -73,9 +78,7 @@ class BasetenLLM:
         )
         ## COMPLETION CALL
         response = requests.post(
-            self.completion_url_fragment_1 + model + self.completion_url_fragment_2,
-            headers=self.headers,
-            data=json.dumps(data),
+            self.completion_url_fragment_1 + model + self.completion_url_fragment_2, headers=self.headers, data=json.dumps(data)
         )
         if "stream" in optional_params and optional_params["stream"] == True:
             return response.iter_lines()
@@ -91,39 +94,20 @@ class BasetenLLM:
             ## RESPONSE OBJECT
             completion_response = response.json()
             if "error" in completion_response:
-                raise BasetenError(
+                raise AI21Error(
                     message=completion_response["error"],
                     status_code=response.status_code,
                 )
             else:
-                if "model_output" in completion_response:
-                    if (
-                        isinstance(completion_response["model_output"], dict)
-                        and "data" in completion_response["model_output"]
-                        and isinstance(
-                            completion_response["model_output"]["data"], list
-                        )
-                    ):
-                        model_response["choices"][0]["message"][
-                            "content"
-                        ] = completion_response["model_output"]["data"][0]
-                    elif isinstance(completion_response["model_output"], str):
-                        model_response["choices"][0]["message"][
-                            "content"
-                        ] = completion_response["model_output"]
-                elif "completion" in completion_response and isinstance(
-                    completion_response["completion"], str
-                ):
-                    model_response["choices"][0]["message"][
-                        "content"
-                    ] = completion_response["completion"]
-                else:
-                    raise ValueError(
-                        f"Unable to parse response. Original response: {response.text}"
-                    )
+                try:
+                    model_response["choices"][0]["message"]["content"] = completion_response["completions"][0]["data"]["text"]
+                except:
+                    raise ValueError(f"Unable to parse response. Original response: {response.text}")
 
-            ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here.
-            prompt_tokens = len(self.encoding.encode(prompt))
+            ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here. 
+            prompt_tokens = len(
+                self.encoding.encode(prompt)
+            ) 
             completion_tokens = len(
                 self.encoding.encode(model_response["choices"][0]["message"]["content"])
             )
