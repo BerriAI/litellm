@@ -1,5 +1,3 @@
-import litellm, openai
-
 def get_prompt(*args, **kwargs):
     # make this safe checks, it should not throw any exceptions
     if len(args) > 1:
@@ -13,8 +11,8 @@ def get_prompt(*args, **kwargs):
     return None
 
 class RedisCache():
-    import redis
     def __init__(self, host, port, password):
+        import redis
         # if users don't provider one, use the default litellm cache
         self.redis_client = redis.Redis(host=host, port=port, password=password)
 
