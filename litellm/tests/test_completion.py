@@ -10,7 +10,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import pytest
 import litellm
-from litellm import embedding, completion
+from litellm import embedding, completion, text_completion
 
 # from infisical import InfisicalClient
 
@@ -144,7 +144,7 @@ def test_completion_openai():
 
 def test_completion_openai_prompt():
     try:
-        response = completion(model="gpt-3.5-turbo", prompt="What's the weather in SF?")
+        response = text_completion(model="gpt-3.5-turbo", prompt="What's the weather in SF?")
         response_str = response["choices"][0]["message"]["content"]
         response_str_2 = response.choices[0].message.content
         print(response)
