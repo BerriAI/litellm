@@ -1627,7 +1627,7 @@ class CustomStreamWrapper:
             chunk = next(self.completion_stream)
             completion_obj['content'] = chunk['choices']['delta']
         # LOGGING
-        self.logging_obj(completion_obj["content"])
+        self.logging_obj.post_call(completion_obj["content"])
         # return this for all models
         return {"choices": [{"delta": completion_obj}]}
 

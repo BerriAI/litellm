@@ -22,7 +22,7 @@ response = completion(model="claude-instant-1", messages=[{"role": "user", "cont
 # print(f"response: {response}")
 
 # # Test 2: On embedding call
-# response = embedding(model="text-embedding-ada-002", input=["sample text"])
+response = embedding(model="text-embedding-ada-002", input=["sample text"])
 # print(f"response: {response}")
 
 # # Test 3: On streaming completion call
