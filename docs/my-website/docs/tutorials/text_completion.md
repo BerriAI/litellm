@@ -12,7 +12,8 @@ response = openai.Completion.create(
 ## Using LiteLLM in the Text Completion format
 ### With gpt-3.5-turbo
 ```python
-response = openai.Completion.create(
+from litellm import text_completion
+response = text_completion(
     model="gpt-3.5-turbo",
     prompt='Write a tagline for a traditional bavarian tavern',
     temperature=0,
@@ -21,7 +22,7 @@ response = openai.Completion.create(
 
 ### With text-davinci-003
 ```python
-response = openai.Completion.create(
+response = text_completion(
     model="text-davinci-003",
     prompt='Write a tagline for a traditional bavarian tavern',
     temperature=0,
@@ -30,7 +31,7 @@ response = openai.Completion.create(
 
 ### With llama2
 ```python
-response = openai.Completion.create(
+response = text_completion(
     model="togethercomputer/llama-2-70b-chat",
     prompt='Write a tagline for a traditional bavarian tavern',
     temperature=0,
