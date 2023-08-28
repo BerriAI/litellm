@@ -26,6 +26,7 @@ from .exceptions import (
     OpenAIError,
 )
 from typing import List, Dict, Union, Optional
+from .caching import Cache
 
 
 ####### ENVIRONMENT VARIABLES ####################
@@ -402,11 +403,16 @@ def client(original_function):
             kwargs["litellm_call_id"] = litellm_call_id
             start_time = datetime.datetime.now()
             # [OPTIONAL] CHECK CACHE
-            if (litellm.caching or litellm.caching_with_models or litellm.cache != None) and (
-                cached_result := litellm.cache.get_cache(*args, **kwargs)
-            ) is not None:
-                result = cached_result
-                return result
+            # remove this after deprecating litellm.caching
+            if (litellm.caching or litellm.caching_with_models) and litellm.cache is None:
+                litellm.cache = Cache() 
+
+            # checking cache
+            if (litellm.cache != None or litellm.caching or litellm.caching_with_models):
+                cached_result = litellm.cache.get_cache(*args, **kwargs)
+                if cached_result != None:
+                    return cached_result
+
             # MODEL CALL
             result = original_function(*args, **kwargs)
             if "stream" in kwargs and kwargs["stream"] == True:

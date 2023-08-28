@@ -29,12 +29,10 @@ def test_caching():
         if response2 != response1:
             print(f"response1: {response1}")
             print(f"response2: {response2}")
-            pytest.fail(f"Error occurred: {e}")
+            pytest.fail(f"Error occurred: responses are not equal")
     except Exception as e:
         litellm.caching = False
-        print(f"error occurred: {traceback.format_exc()}")
         pytest.fail(f"Error occurred: {e}")
-
 
 def test_caching_with_models():
     litellm.caching_with_models = True

@@ -75,11 +75,7 @@ class Cache():
             if cache_key is not None:
                 self.cache.set_cache(cache_key, result)
         except:
-        
             pass
-
-
-
 
 
 
