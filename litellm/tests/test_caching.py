@@ -152,3 +152,32 @@ def test_embedding_caching():
 # test_embedding_caching()
 
 
+# # test caching with streaming
+# messages = [{"role": "user", "content": "draft a 2 pg legal document on applying to litellm"}]
+# def test_caching_v2_stream():
+#     try:
+#         litellm.cache = Cache()
+#         response1 = completion(model="gpt-3.5-turbo", messages=messages, stream=True)
+#         for chunk in response1:
+#             print(chunk)
+#             response1_id = chunk['id']
+        
+#         # response2 = completion(model="gpt-3.5-turbo", messages=messages, stream=True)
+#         # for chunk in response2:
+#         #     #print(chunk)
+#         #     response2_id = chunk['id']
+       
+#         # print(f"response1: {response1}")
+#         # print(f"response2: {response2}")
+#         # litellm.cache = None # disable cache
+#         # if response2_id != response1_id:
+#         #     print(f"response1: {response1_id}")
+#         #     print(f"response2: {response2_id}")
+#         #     pytest.fail(f"Error occurred: {e}")
+#     except Exception as e:
+#         print(f"error occurred: {traceback.format_exc()}")
+#         pytest.fail(f"Error occurred: {e}")
+
+# test_caching_v2_stream()
+
+
