@@ -64,8 +64,8 @@ async def acompletion(*args, **kwargs):
 )  ## set timeouts, in case calls hang (e.g. Azure) - default is 600s, override with `force_timeout`
 def completion(
     model,
-    messages,  # required params
     # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
+    messages=[],
     functions=[],
     function_call="",  # optional params
     temperature=1,
@@ -91,6 +91,7 @@ def completion(
     custom_llm_provider=None,
     custom_api_base=None,
     litellm_call_id=None,
+    prompt="", # allow completion to be used as textCompletion or as ChatCompletion
     # model specific optional params
     # used by text-bison only
     top_k=40,
@@ -101,6 +102,8 @@ def completion(
     try:
         if fallbacks != []:
             return completion_with_fallbacks(**args)
+        if messages == [] and prompt!="":
+            messages = [{"role": "user", "content": prompt}]
         if litellm.model_alias_map and model in litellm.model_alias_map:
             args["model_alias_map"] = litellm.model_alias_map
             model = litellm.model_alias_map[model] # update the model to the actual value if an alias has been passed in
