@@ -1,5 +1,6 @@
 import requests, traceback, json, os
 
+
 class LiteDebugger:
     user_email = None
     dashboard_url = None
@@ -15,7 +16,9 @@ class LiteDebugger:
             self.user_email = os.getenv("LITELLM_EMAIL") or email
             self.dashboard_url = "https://admin.litellm.ai/" + self.user_email
             try:
-                print(f"\033[92mHere's your LiteLLM Dashboard 👉 \033[94m\033[4m{self.dashboard_url}\033[0m")
+                print(
+                    f"\033[92mHere's your LiteLLM Dashboard 👉 \033[94m\033[4m{self.dashboard_url}\033[0m"
+                )
             except:
                 print(f"Here's your LiteLLM Dashboard 👉 {self.dashboard_url}")
             if self.user_email == None:
@@ -28,17 +31,25 @@ class LiteDebugger:
             )
 
     def input_log_event(
-        self, model, messages, end_user, litellm_call_id, print_verbose, litellm_params, optional_params
+        self,
+        model,
+        messages,
+        end_user,
+        litellm_call_id,
+        print_verbose,
+        litellm_params,
+        optional_params,
     ):
         try:
             print_verbose(
                 f"LiteLLMDebugger: Logging - Enters input logging function for model {model}"
             )
+
             def remove_key_value(dictionary, key):
                 new_dict = dictionary.copy()  # Create a copy of the original dictionary
                 new_dict.pop(key)  # Remove the specified key-value pair from the copy
                 return new_dict
-            
+
             updated_litellm_params = remove_key_value(litellm_params, "logger_fn")
 
             litellm_data_obj = {
@@ -49,7 +60,7 @@ class LiteDebugger:
                 "litellm_call_id": litellm_call_id,
                 "user_email": self.user_email,
                 "litellm_params": updated_litellm_params,
-                "optional_params": optional_params
+                "optional_params": optional_params,
             }
             print_verbose(
                 f"LiteLLMDebugger: Logging - logged data obj {litellm_data_obj}"
@@ -65,10 +76,8 @@ class LiteDebugger:
                 f"[Non-Blocking Error] LiteDebugger: Logging Error - {traceback.format_exc()}"
             )
             pass
-    
-    def post_call_log_event(
-        self, original_response, litellm_call_id, print_verbose
-    ):
+
+    def post_call_log_event(self, original_response, litellm_call_id, print_verbose):
         try:
             litellm_data_obj = {
                 "status": "received",
@@ -110,7 +119,7 @@ class LiteDebugger:
                     "model": response_obj["model"],
                     "total_cost": total_cost,
                     "messages": messages,
-                    "response": response['choices'][0]['message']['content'],
+                    "response": response["choices"][0]["message"]["content"],
                     "end_user": end_user,
                     "litellm_call_id": litellm_call_id,
                     "status": "success",
@@ -124,7 +133,12 @@ class LiteDebugger:
                     headers={"content-type": "application/json"},
                     data=json.dumps(litellm_data_obj),
                 )
-            elif "data" in response_obj and isinstance(response_obj["data"], list) and len(response_obj["data"]) > 0 and "embedding" in response_obj["data"][0]:
+            elif (
+                "data" in response_obj
+                and isinstance(response_obj["data"], list)
+                and len(response_obj["data"]) > 0
+                and "embedding" in response_obj["data"][0]
+            ):
                 print(f"messages: {messages}")
                 litellm_data_obj = {
                     "response_time": response_time,
@@ -145,7 +159,10 @@ class LiteDebugger:
                     headers={"content-type": "application/json"},
                     data=json.dumps(litellm_data_obj),
                 )
-            elif isinstance(response_obj, object) and response_obj.__class__.__name__ == "CustomStreamWrapper":
+            elif (
+                isinstance(response_obj, object)
+                and response_obj.__class__.__name__ == "CustomStreamWrapper"
+            ):
                 litellm_data_obj = {
                     "response_time": response_time,
                     "total_cost": total_cost,

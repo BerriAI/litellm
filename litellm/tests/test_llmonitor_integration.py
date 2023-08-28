@@ -4,7 +4,7 @@
 import sys
 import os
 
-sys.path.insert(0, os.path.abspath('../..'))
+sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm import completion, embedding
 import litellm
@@ -17,11 +17,10 @@ litellm.set_verbose = True
 
 def test_chat_openai():
     try:
-        response = completion(model="gpt-3.5-turbo",
-                              messages=[{
-                                  "role": "user",
-                                  "content": "Hi 👋 - i'm openai"
-                              }])
+        response = completion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}],
+        )
 
         print(response)
 
@@ -31,7 +30,7 @@ def test_chat_openai():
 
 def test_embedding_openai():
     try:
-        response = embedding(model="text-embedding-ada-002", input=['test'])
+        response = embedding(model="text-embedding-ada-002", input=["test"])
         # Add any assertions here to check the response
         print(f"response: {str(response)[:50]}")
     except Exception as e:

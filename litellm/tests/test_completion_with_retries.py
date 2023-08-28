@@ -27,7 +27,7 @@
 #     # print(f"user_model_dict: {user_model_dict}")
 #     pass
 
-# # normal call 
+# # normal call
 # def test_completion_custom_provider_model_name():
 #     try:
 #         response = completion_with_retries(
@@ -41,7 +41,7 @@
 #         pytest.fail(f"Error occurred: {e}")
 
 
-# # bad call 
+# # bad call
 # # def test_completion_custom_provider_model_name():
 # #     try:
 # #         response = completion_with_retries(
@@ -54,7 +54,7 @@
 # #     except Exception as e:
 # #         pytest.fail(f"Error occurred: {e}")
 
-# # impact on exception mapping 
+# # impact on exception mapping
 # def test_context_window():
 #     sample_text = "how does a court case get to the Supreme Court?" * 5000
 #     messages = [{"content": sample_text, "role": "user"}]
