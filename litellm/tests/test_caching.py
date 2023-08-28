@@ -11,6 +11,7 @@ sys.path.insert(
 import pytest
 import litellm
 from litellm import embedding, completion
+from litellm.caching import Cache
 
 messages = [{"role": "user", "content": "who is ishaan Github?  "}]
 
@@ -78,3 +79,50 @@ def test_gpt_cache():
 
 
 # test_gpt_cache()
+
+
+####### Updated Caching as of Aug 28, 2023 ###################
+messages = [{"role": "user", "content": "who is ishaan 5222"}]
+def test_caching():
+    try:
+        litellm.cache = Cache()
+        response1 = completion(model="gpt-3.5-turbo", messages=messages)
+        response2 = completion(model="gpt-3.5-turbo", messages=messages)
+        print(f"response1: {response1}")
+        print(f"response2: {response2}")
+        litellm.cache = None # disable cache
+        if response2 != response1:
+            print(f"response1: {response1}")
+            print(f"response2: {response2}")
+            pytest.fail(f"Error occurred: {e}")
+    except Exception as e:
+        print(f"error occurred: {traceback.format_exc()}")
+        pytest.fail(f"Error occurred: {e}")
+
+# test_caching()
+
+
+def test_caching_with_models():
+    messages = [{"role": "user", "content": "who is ishaan CTO of litellm from litellm 2023"}]
+    litellm.cache = Cache()
+    print("test2 for caching")
+    response1 = completion(model="gpt-3.5-turbo", messages=messages)
+    response2 = completion(model="gpt-3.5-turbo", messages=messages)
+    response3 = completion(model="command-nightly", messages=messages)
+    print(f"response1: {response1}")
+    print(f"response2: {response2}")
+    print(f"response3: {response3}")
+    litellm.cache = None
+    if response3 == response2:
+        # if models are different, it should not return cached response
+        print(f"response2: {response2}")
+        print(f"response3: {response3}")
+        pytest.fail(f"Error occurred:")
+    if response1 != response2:
+        print(f"response1: {response1}")
+        print(f"response2: {response2}")
+        pytest.fail(f"Error occurred:")
+
+# test_caching_with_models()
+
+

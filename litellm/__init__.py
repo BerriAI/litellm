@@ -1,5 +1,6 @@
 import threading
 from typing import Callable, List, Optional, Dict
+from litellm.caching import Cache
 
 input_callback: List[str] = []
 success_callback: List[str] = []
@@ -30,6 +31,7 @@ baseten_key: Optional[str] = None
 use_client = False
 logging = True
 caching = False
+cache: Optional[Cache] = None # set to litellm.caching Cache() object
 caching_with_models = False  # if you want the caching key to be model + prompt
 model_alias_map: Dict[str, str] = {}
 model_cost = {
