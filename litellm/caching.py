@@ -1,4 +1,3 @@
-import redis
 import litellm, openai
 
 def get_prompt(*args, **kwargs):
