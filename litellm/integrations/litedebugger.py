@@ -1,5 +1,5 @@
 import requests, traceback, json, os
-
+import types
 
 class LiteDebugger:
     user_email = None
@@ -7,13 +7,12 @@ class LiteDebugger:
 
     def __init__(self, email=None):
         self.api_url = "https://api.litellm.ai/debugger"
-        # self.api_url = "http://0.0.0.0:4000/debugger"
         self.validate_environment(email)
         pass
 
     def validate_environment(self, email):
         try:
-            self.user_email = os.getenv("LITELLM_EMAIL") or email
+            self.user_email = (email or os.getenv("LITELLM_TOKEN") or os.getenv("LITELLM_EMAIL"))
             self.dashboard_url = "https://admin.litellm.ai/" + self.user_email
             try:
                 print(
@@ -23,11 +22,11 @@ class LiteDebugger:
                 print(f"Here's your LiteLLM Dashboard 👉 {self.dashboard_url}")
             if self.user_email == None:
                 raise Exception(
-                    "[Non-Blocking Error] LiteLLMDebugger: Missing LITELLM_EMAIL. Set it in your environment. Eg.: os.environ['LITELLM_EMAIL']= <your_email>"
+                    "[Non-Blocking Error] LiteLLMDebugger: Missing LITELLM_TOKEN. Set it in your environment. Eg.: os.environ['LITELLM_TOKEN']= <your_email>"
                 )
         except Exception as e:
             raise ValueError(
-                "[Non-Blocking Error] LiteLLMDebugger: Missing LITELLM_EMAIL. Set it in your environment. Eg.: os.environ['LITELLM_EMAIL']= <your_email>"
+                "[Non-Blocking Error] LiteLLMDebugger: Missing LITELLM_TOKEN. Set it in your environment. Eg.: os.environ['LITELLM_TOKEN']= <your_email>"
             )
 
     def input_log_event(
@@ -36,6 +35,7 @@ class LiteDebugger:
         messages,
         end_user,
         litellm_call_id,
+        call_type,
         print_verbose,
         litellm_params,
         optional_params,
@@ -52,39 +52,76 @@ class LiteDebugger:
 
             updated_litellm_params = remove_key_value(litellm_params, "logger_fn")
 
-            litellm_data_obj = {
-                "model": model,
-                "messages": messages,
-                "end_user": end_user,
-                "status": "initiated",
-                "litellm_call_id": litellm_call_id,
-                "user_email": self.user_email,
-                "litellm_params": updated_litellm_params,
-                "optional_params": optional_params,
-            }
-            print_verbose(
-                f"LiteLLMDebugger: Logging - logged data obj {litellm_data_obj}"
-            )
-            response = requests.post(
-                url=self.api_url,
-                headers={"content-type": "application/json"},
-                data=json.dumps(litellm_data_obj),
-            )
-            print_verbose(f"LiteDebugger: api response - {response.text}")
+            if call_type == "embedding":
+                for message in messages: # assuming the input is a list as required by the embedding function
+                    litellm_data_obj = {
+                        "model": model,
+                        "messages": [{"role": "user", "content": message}],
+                        "end_user": end_user,
+                        "status": "initiated",
+                        "litellm_call_id": litellm_call_id,
+                        "user_email": self.user_email,
+                        "litellm_params": updated_litellm_params,
+                        "optional_params": optional_params,
+                    }
+                    print_verbose(
+                        f"LiteLLMDebugger: Logging - logged data obj {litellm_data_obj}"
+                    )
+                    response = requests.post(
+                        url=self.api_url,
+                        headers={"content-type": "application/json"},
+                        data=json.dumps(litellm_data_obj),
+                    )
+                print_verbose(f"LiteDebugger: embedding api response - {response.text}")
+            elif call_type == "completion":
+                litellm_data_obj = {
+                    "model": model,
+                    "messages": messages if isinstance(messages, list) else [{"role": "user", "content": messages}],
+                    "end_user": end_user,
+                    "status": "initiated",
+                    "litellm_call_id": litellm_call_id,
+                    "user_email": self.user_email,
+                    "litellm_params": updated_litellm_params,
+                    "optional_params": optional_params,
+                }
+                print_verbose(
+                    f"LiteLLMDebugger: Logging - logged data obj {litellm_data_obj}"
+                )
+                response = requests.post(
+                    url=self.api_url,
+                    headers={"content-type": "application/json"},
+                    data=json.dumps(litellm_data_obj),
+                )
+                print_verbose(f"LiteDebugger: completion api response - {response.text}")
         except:
             print_verbose(
                 f"[Non-Blocking Error] LiteDebugger: Logging Error - {traceback.format_exc()}"
             )
             pass
 
-    def post_call_log_event(self, original_response, litellm_call_id, print_verbose):
+    def post_call_log_event(self, original_response, litellm_call_id, print_verbose, call_type, stream):
         try:
-            litellm_data_obj = {
-                "status": "received",
-                "additional_details": {"original_response": original_response},
-                "litellm_call_id": litellm_call_id,
-                "user_email": self.user_email,
-            }
+            if call_type == "embedding":
+                litellm_data_obj = {
+                    "status": "received",
+                    "additional_details": {"original_response": str(original_response["data"][0]["embedding"][:5])}, # don't store the entire vector
+                    "litellm_call_id": litellm_call_id,
+                    "user_email": self.user_email,
+                }
+            elif call_type == "completion" and not stream:
+                litellm_data_obj = {
+                    "status": "received",
+                    "additional_details": {"original_response": original_response},
+                    "litellm_call_id": litellm_call_id,
+                    "user_email": self.user_email,
+                }
+            elif call_type == "completion" and stream:
+                litellm_data_obj = {
+                    "status": "received",
+                    "additional_details": {"original_response": "Streamed response" if isinstance(original_response, types.GeneratorType) else original_response},
+                    "litellm_call_id": litellm_call_id,
+                    "user_email": self.user_email,
+                }
             response = requests.post(
                 url=self.api_url,
                 headers={"content-type": "application/json"},
@@ -98,32 +135,28 @@ class LiteDebugger:
 
     def log_event(
         self,
-        model,
-        messages,
         end_user,
         response_obj,
         start_time,
         end_time,
         litellm_call_id,
         print_verbose,
+        call_type, 
+        stream = False
     ):
         try:
             print_verbose(
-                f"LiteLLMDebugger: Logging - Enters handler logging function for model {model} with response object {response_obj}"
+                f"LiteLLMDebugger: Logging - Enters handler logging function for function {call_type} and stream set to {stream} with response object {response_obj}"
             )
             total_cost = 0  # [TODO] implement cost tracking
             response_time = (end_time - start_time).total_seconds()
-            if "choices" in response_obj:
+            if call_type == "completion" and stream == False:
                 litellm_data_obj = {
                     "response_time": response_time,
-                    "model": response_obj["model"],
                     "total_cost": total_cost,
-                    "messages": messages,
-                    "response": response["choices"][0]["message"]["content"],
-                    "end_user": end_user,
+                    "response": response_obj["choices"][0]["message"]["content"],
                     "litellm_call_id": litellm_call_id,
                     "status": "success",
-                    "user_email": self.user_email,
                 }
                 print_verbose(
                     f"LiteDebugger: Logging - final data object: {litellm_data_obj}"
@@ -133,45 +166,26 @@ class LiteDebugger:
                     headers={"content-type": "application/json"},
                     data=json.dumps(litellm_data_obj),
                 )
-            elif (
-                "data" in response_obj
-                and isinstance(response_obj["data"], list)
-                and len(response_obj["data"]) > 0
-                and "embedding" in response_obj["data"][0]
-            ):
-                print(f"messages: {messages}")
+            elif call_type == "embedding":
                 litellm_data_obj = {
                     "response_time": response_time,
-                    "model": response_obj["model"],
                     "total_cost": total_cost,
-                    "messages": messages,
                     "response": str(response_obj["data"][0]["embedding"][:5]),
-                    "end_user": end_user,
                     "litellm_call_id": litellm_call_id,
                     "status": "success",
-                    "user_email": self.user_email,
                 }
-                print_verbose(
-                    f"LiteDebugger: Logging - final data object: {litellm_data_obj}"
-                )
                 response = requests.post(
                     url=self.api_url,
                     headers={"content-type": "application/json"},
                     data=json.dumps(litellm_data_obj),
                 )
-            elif (
-                isinstance(response_obj, object)
-                and response_obj.__class__.__name__ == "CustomStreamWrapper"
-            ):
+            elif call_type == "completion" and stream == True:
                 litellm_data_obj = {
                     "response_time": response_time,
                     "total_cost": total_cost,
-                    "messages": messages,
-                    "response": "Streamed response",
-                    "end_user": end_user,
+                    "response": "streamed response",
                     "litellm_call_id": litellm_call_id,
                     "status": "success",
-                    "user_email": self.user_email,
                 }
                 print_verbose(
                     f"LiteDebugger: Logging - final data object: {litellm_data_obj}"
@@ -188,7 +202,6 @@ class LiteDebugger:
                     "response_time": response_time,
                     "model": response_obj["model"],
                     "total_cost": total_cost,
-                    "messages": messages,
                     "error": response_obj["error"],
                     "end_user": end_user,
                     "litellm_call_id": litellm_call_id,
