@@ -1,4 +1,4 @@
-import json
+import os, json
 from enum import Enum
 import requests
 import time
@@ -15,11 +15,15 @@ class AnthropicError(Exception):
     def __init__(self, status_code, message):
         self.status_code = status_code
         self.message = message
-        super().__init__(self.message)  # Call the base class constructor with the parameters it needs
+        super().__init__(
+            self.message
+        )  # Call the base class constructor with the parameters it needs
 
 
 class AnthropicLLM:
-    def __init__(self, encoding, default_max_tokens_to_sample, logging_obj, api_key=None):
+    def __init__(
+        self, encoding, default_max_tokens_to_sample, logging_obj, api_key=None
+    ):
         self.encoding = encoding
         self.default_max_tokens_to_sample = default_max_tokens_to_sample
         self.completion_url = "https://api.anthropic.com/v1/complete"
@@ -27,13 +31,13 @@ class AnthropicLLM:
         self.logging_obj = logging_obj
         self.validate_environment(api_key=api_key)
 
-    def validate_environment(self, api_key):  # set up the environment required to run the model
+    def validate_environment(
+        self, api_key
+    ):  # set up the environment required to run the model
         # set the api key
-        if self.api_key is None:
+        if self.api_key == None:
             raise ValueError(
-                "Missing Anthropic API Key -"
-                + " A call is being made to anthropic but no key is set either"
-                + " in the environment variables or via params"
+                "Missing Anthropic API Key - A call is being made to anthropic but no key is set either in the environment variables or via params"
             )
         self.api_key = api_key
         self.headers = {
@@ -58,13 +62,19 @@ class AnthropicLLM:
         for message in messages:
             if "role" in message:
                 if message["role"] == "user":
-                    prompt += f"{AnthropicConstants.HUMAN_PROMPT.value}{message['content']}"
+                    prompt += (
+                        f"{AnthropicConstants.HUMAN_PROMPT.value}{message['content']}"
+                    )
                 else:
-                    prompt += f"{AnthropicConstants.AI_PROMPT.value}{message['content']}"
+                    prompt += (
+                        f"{AnthropicConstants.AI_PROMPT.value}{message['content']}"
+                    )
             else:
                 prompt += f"{AnthropicConstants.HUMAN_PROMPT.value}{message['content']}"
         prompt += f"{AnthropicConstants.AI_PROMPT.value}"
-        if "max_tokens" in optional_params and optional_params["max_tokens"] != float("inf"):
+        if "max_tokens" in optional_params and optional_params["max_tokens"] != float(
+            "inf"
+        ):
             max_tokens = optional_params["max_tokens"]
         else:
             max_tokens = self.default_max_tokens_to_sample
@@ -75,7 +85,7 @@ class AnthropicLLM:
             **optional_params,
         }
 
-        # LOGGING
+        ## LOGGING
         self.logging_obj.pre_call(
             input=prompt,
             api_key=self.api_key,
@@ -99,7 +109,7 @@ class AnthropicLLM:
                 additional_args={"complete_input_dict": data},
             )
             print_verbose(f"raw model_response: {response.text}")
-            # RESPONSE OBJECT
+            ## RESPONSE OBJECT
             completion_response = response.json()
             if "error" in completion_response:
                 raise AnthropicError(
@@ -107,13 +117,17 @@ class AnthropicLLM:
                     status_code=response.status_code,
                 )
             else:
-                model_response["choices"][0]["message"]["content"] = completion_response["completion"]
+                model_response["choices"][0]["message"][
+                    "content"
+                ] = completion_response["completion"]
 
-            # CALCULATING USAGE
-            prompt_tokens = len(self.encoding.encode(prompt))  # [TODO] use the anthropic tokenizer here
+            ## CALCULATING USAGE
+            prompt_tokens = len(
+                self.encoding.encode(prompt)
+            )  ##[TODO] use the anthropic tokenizer here
             completion_tokens = len(
                 self.encoding.encode(model_response["choices"][0]["message"]["content"])
-            )  # [TODO] use the anthropic tokenizer here
+            )  ##[TODO] use the anthropic tokenizer here
 
             model_response["created"] = time.time()
             model_response["model"] = model
