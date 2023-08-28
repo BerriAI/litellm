@@ -43,7 +43,8 @@ const sidebars = {
         'tutorials/TogetherAI_liteLLM', 
         'tutorials/fallbacks', 
         'tutorials/finetuned_chat_gpt',
-        'tutorials/ab_test_llms'
+        'tutorials/ab_test_llms',
+        'tutorials/litellm_Test_Multiple_Providers'
       ],
     },
     {
