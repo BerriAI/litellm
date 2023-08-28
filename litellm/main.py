@@ -211,11 +211,9 @@ def completion(
             openai.api_type = "openai"
             # note: if a user sets a custom base - we should ensure this works
             api_base = (
-                custom_api_base if custom_api_base is not None else litellm.api_base
-            )  # allow for the setting of dynamic and stateful api-bases
-            openai.api_base = (
-                api_base if api_base is not None else "https://api.openai.com/v1"
+                custom_api_base or litellm.api_base or get_secret("OPENAI_API_BASE")
             )
+            openai.api_base = api_base or "https://api.openai.com/v1"
             openai.api_version = None
             if litellm.organization:
                 openai.organization = litellm.organization

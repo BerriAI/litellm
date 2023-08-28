@@ -17,6 +17,8 @@ liteLLM reads key naming, all keys should be named in the following format:
 | gpt-3.5-turbo-16k-0613    | `completion('gpt-3.5-turbo-16k-0613', messages)` | `os.environ['OPENAI_API_KEY']`       |
 | gpt-4            | `completion('gpt-4', messages)`         | `os.environ['OPENAI_API_KEY']`       |
 
+These also support the `OPENAI_API_BASE` environment variable, which can be used to specify a custom API endpoint.
+
 ### Azure OpenAI Chat Completion Models
 
 | Model Name       | Function Call                           | Required OS Variables                     |
