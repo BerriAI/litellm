@@ -1625,7 +1625,8 @@ class CustomStreamWrapper:
             completion_obj["content"] = self.handle_openai_text_completion_chunk(chunk)
         else: # openai chat/azure models
             chunk = next(self.completion_stream)
-            completion_obj['content'] = chunk['choices']['delta']
+            return chunk
+
         # LOGGING
         self.logging_obj.post_call(completion_obj["content"])
         # return this for all models
