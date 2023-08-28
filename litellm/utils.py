@@ -403,7 +403,7 @@ def client(original_function):
             start_time = datetime.datetime.now()
             # [OPTIONAL] CHECK CACHE
             if (litellm.caching or litellm.caching_with_models or litellm.cache != None) and (
-                cached_result := litellm.cache.check_cache(*args, **kwargs)
+                cached_result := litellm.cache.get_cache(*args, **kwargs)
             ) is not None:
                 result = cached_result
                 return result
