@@ -31,7 +31,7 @@ class AI21LLM:
         # set the api key
         if self.api_key == None:
             raise ValueError(
-                "Missing Baseten API Key - A call is being made to baseten but no key is set either in the environment variables or via params"
+                "Missing AI21 API Key - A call is being made to ai21 but no key is set either in the environment variables or via params"
             )
         self.api_key = api_key
         self.headers = {
