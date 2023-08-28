@@ -452,17 +452,18 @@ def client(original_function):
             # CRASH REPORTING TELEMETRY
             crash_reporting(*args, **kwargs)
             # INIT LOGGER - for user-specified integrations
-            model = args[0] if len(args) > 1 else kwargs["model"]
+            print(f"len args: {len(args)}")
+            model = args[0] if len(args) > 0 else kwargs["model"]
             call_type = original_function.__name__
             if call_type == CallTypes.completion.value:
-                messages = args[1] if len(args) > 2 else kwargs["messages"]
+                messages = args[1] if len(args) > 1 else kwargs["messages"]
             elif call_type == CallTypes.embedding.value:
-                messages = args[1] if len(args) > 2 else kwargs["input"]
+                messages = args[1] if len(args) > 1 else kwargs["input"]
             stream = True if "stream" in kwargs and kwargs["stream"] == True else False
             logging_obj = Logging(model=model, messages=messages, stream=stream, litellm_call_id=kwargs["litellm_call_id"], call_type=call_type)
             return logging_obj
         except:  # DO NOT BLOCK running the function because of this
-            print_verbose(f"[Non-Blocking] {traceback.format_exc()}")
+            print_verbose(f"[Non-Blocking] {traceback.format_exc()}; args - {args}; kwargs - {kwargs}")
         pass
     
     def crash_reporting(*args, **kwargs):
