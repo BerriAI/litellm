@@ -214,6 +214,7 @@ def completion(
         ):  # allow user to make an openai call with a custom base
             openai.api_type = "openai"
             # note: if a user sets a custom base - we should ensure this works
+            # allow for the setting of dynamic and stateful api-bases
             api_base = (
                 custom_api_base or litellm.api_base or get_secret("OPENAI_API_BASE") or "https://api.openai.com/v1"
             )
