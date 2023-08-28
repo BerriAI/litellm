@@ -5,8 +5,12 @@ input_callback: List[str] = []
 success_callback: List[str] = []
 failure_callback: List[str] = []
 set_verbose = False
-email: Optional[str] = None  # for hosted dashboard. Learn more - https://docs.litellm.ai/docs/debugging/hosted_debugging
-token: Optional[str] = None  # for hosted dashboard. Learn more - https://docs.litellm.ai/docs/debugging/hosted_debugging
+email: Optional[
+    str
+] = None  # for hosted dashboard. Learn more - https://docs.litellm.ai/docs/debugging/hosted_debugging
+token: Optional[
+    str
+] = None  # for hosted dashboard. Learn more - https://docs.litellm.ai/docs/debugging/hosted_debugging
 telemetry = True
 max_tokens = 256  # OpenAI Defaults
 retry = True

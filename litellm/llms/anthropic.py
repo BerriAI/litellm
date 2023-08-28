@@ -94,7 +94,10 @@ class AnthropicLLM:
         ## COMPLETION CALL
         if "stream" in optional_params and optional_params["stream"] == True:
             response = requests.post(
-                self.completion_url, headers=self.headers, data=json.dumps(data), stream=optional_params["stream"]
+                self.completion_url,
+                headers=self.headers,
+                data=json.dumps(data),
+                stream=optional_params["stream"],
             )
             return response.iter_lines()
         else:
@@ -142,4 +145,3 @@ class AnthropicLLM:
         self,
     ):  # logic for parsing in - calling - parsing out model embedding calls
         pass
-

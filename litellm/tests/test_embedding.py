@@ -22,4 +22,6 @@ def test_openai_embedding():
         # print(f"response: {str(response)}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
 test_openai_embedding()

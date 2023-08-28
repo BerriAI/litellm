@@ -7,6 +7,7 @@ import requests
 dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
 
+
 class PromptLayerLogger:
     # Class variables or attributes
     def __init__(self):
@@ -26,7 +27,9 @@ class PromptLayerLogger:
                     "function_name": "openai.ChatCompletion.create",
                     "kwargs": kwargs,
                     "tags": ["hello", "world"],
-                    "request_response": dict(response_obj), # TODO: Check if we need  a dict
+                    "request_response": dict(
+                        response_obj
+                    ),  # TODO: Check if we need  a dict
                     "request_start_time": int(start_time.timestamp()),
                     "request_end_time": int(end_time.timestamp()),
                     "api_key": self.key,
@@ -34,11 +37,12 @@ class PromptLayerLogger:
                     # "prompt_id": "<PROMPT ID>",
                     # "prompt_input_variables": "<Dictionary of variables for prompt>",
                     # "prompt_version":1,
-
                 },
             )
 
-            print_verbose(f"Prompt Layer Logging - final response object: {request_response}")
+            print_verbose(
+                f"Prompt Layer Logging - final response object: {request_response}"
+            )
         except:
             # traceback.print_exc()
             print_verbose(f"Prompt Layer Error - {traceback.format_exc()}")

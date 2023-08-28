@@ -142,9 +142,12 @@ def test_completion_openai():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+
 def test_completion_openai_prompt():
     try:
-        response = text_completion(model="gpt-3.5-turbo", prompt="What's the weather in SF?")
+        response = text_completion(
+            model="gpt-3.5-turbo", prompt="What's the weather in SF?"
+        )
         response_str = response["choices"][0]["message"]["content"]
         response_str_2 = response.choices[0].message.content
         print(response)
@@ -153,6 +156,7 @@ def test_completion_openai_prompt():
         assert len(response_str) > 1
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
 
 def test_completion_text_openai():
     try:
