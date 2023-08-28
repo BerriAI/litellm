@@ -91,16 +91,16 @@ for chunk in result:
   print(chunk['choices'][0]['delta'])
 ```
 
-# support / talk with founders
+# Support / talk with founders
 - [Schedule Demo 👋](https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version)
 - [Community Discord 💭](https://discord.gg/wuPM9dRgDw)
 - Our numbers 📞 +1 (770) 8783-106 / ‭+1 (412) 618-6238‬
 - Our emails ✉️ ishaan@berri.ai / krrish@berri.ai
 
-# why did we build this 
+# Why did we build this 
 - **Need for simplicity**: Our code started to get extremely complicated managing & translating calls between Azure, OpenAI, Cohere
 
-## Contributors
+# Contributors
 
 <!-- ALL-CONTRIBUTORS-LIST:START - Do not remove or modify this section -->
 <!-- prettier-ignore-start -->
