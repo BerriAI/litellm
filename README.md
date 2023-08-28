@@ -1,23 +1,53 @@
-# *🚅 litellm*
-[![PyPI Version](https://img.shields.io/pypi/v/litellm.svg)](https://pypi.org/project/litellm/)
-[![PyPI Version](https://img.shields.io/badge/stable%20version-v0.1.424-blue?color=green&link=https://pypi.org/project/litellm/0.1.1/)](https://pypi.org/project/litellm/0.1.1/)
-[![CircleCI](https://dl.circleci.com/status-badge/img/gh/BerriAI/litellm/tree/main.svg?style=svg)](https://dl.circleci.com/status-badge/redirect/gh/BerriAI/litellm/tree/main)
-![Downloads](https://img.shields.io/pypi/dm/litellm)
+<h1 align="center">
+        🚅 LiteLLM
+    </h1>
+    <p align="center">
+        <p align="center">Call all LLM APIs using the OpenAI format [Anthropic, Huggingface, Cohere, Azure OpenAI etc.]</p>
+    </p>
 
-[![](https://dcbadge.vercel.app/api/server/wuPM9dRgDw)](https://discord.gg/wuPM9dRgDw)
+<h4 align="center">
+    <a href="https://pypi.org/project/litellm/" target="_blank">
+        <img src="https://img.shields.io/pypi/v/litellm.svg" alt="PyPI Version">
+    </a>
+    <a href="https://pypi.org/project/litellm/0.1.1/" target="_blank">
+        <img src="https://img.shields.io/badge/stable%20version-v0.1.424-blue?color=green&link=https://pypi.org/project/litellm/0.1.1/" alt="Stable Version">
+    </a>
+    <a href="https://dl.circleci.com/status-badge/redirect/gh/BerriAI/litellm/tree/main" target="_blank">
+        <img src="https://dl.circleci.com/status-badge/img/gh/BerriAI/litellm/tree/main.svg?style=svg" alt="CircleCI">
+    </a>
+    <img src="https://img.shields.io/pypi/dm/litellm" alt="Downloads">
+    <a href="https://discord.gg/wuPM9dRgDw" target="_blank">
+        <img src="https://dcbadge.vercel.app/api/server/wuPM9dRgDw?style=flat">
+    </a>
+    <a href="https://www.ycombinator.com/companies/berriai">
+        <img src="https://img.shields.io/badge/Y%20Combinator-W23-orange?style=flat-square" alt="Y Combinator W23">
+    </a>
+</h4>
 
-a light package to simplify calling OpenAI, Azure, Cohere, Anthropic, Huggingface API Endpoints. It manages: 
-- translating inputs to the provider's completion and embedding endpoints
-- guarantees [consistent output](https://litellm.readthedocs.io/en/latest/output/), text responses will always be available at `['choices'][0]['message']['content']`
-- exception mapping - common exceptions across providers are mapped to the [OpenAI exception types](https://help.openai.com/en/articles/6897213-openai-library-error-types-guidance)
-# usage
-<a href='https://docs.litellm.ai/docs/completion/supported' target="_blank"><img alt='None' src='https://img.shields.io/badge/100+_Supported_LLMs_liteLLM-100000?style=for-the-badge&logo=None&logoColor=000000&labelColor=000000&color=8400EA'/></a>
+<h4 align="center">
+<a target="_blank" href="https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/liteLLM_OpenAI.ipynb">
+  <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
+</a>    
+</h4>
 
-Demo - https://litellm.ai/playground  
-Docs - https://docs.litellm.ai/docs/  
-**Free** Dashboard - https://docs.litellm.ai/docs/debugging/hosted_debugging
+<h4 align="center">
+    <a href="https://docs.litellm.ai/docs/completion/supported" target="_blank">100+ Supported Models</a> |
+    <a href="https://docs.litellm.ai/docs/" target="_blank">Docs</a> |
+    <a href="https://litellm.ai/playground" target="_blank">Demo Website</a>
+</h4>
 
-## quick start
+LiteLLM manages
+
+- Translating inputs to the provider's completion and embedding endpoints
+- Guarantees [consistent output](https://litellm.readthedocs.io/en/latest/output/), text responses will always be available at `['choices'][0]['message']['content']`
+- Exception mapping - common exceptions across providers are mapped to the [OpenAI exception types](https://help.openai.com/en/articles/6897213-openai-library-error-types-guidance)
+# Usage
+
+<a target="_blank" href="https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/liteLLM_OpenAI.ipynb">
+  <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
+</a>
+
+
 ```
 pip install litellm
 ```
@@ -28,6 +58,7 @@ from litellm import completion
 ## set ENV variables
 os.environ["OPENAI_API_KEY"] = "openai key"
 os.environ["COHERE_API_KEY"] = "cohere key"
+os.environ["ANTHROPIC_API_KEY"] = "anthropic key"
 
 messages = [{ "content": "Hello, how are you?","role": "user"}]
 
@@ -35,16 +66,18 @@ messages = [{ "content": "Hello, how are you?","role": "user"}]
 response = completion(model="gpt-3.5-turbo", messages=messages)
 
 # cohere call
-response = completion(model="command-nightly", messages)
+response = completion(model="command-nightly", messages=messages)
+
+# anthropic
+response = completion(model="claude-2", messages=messages)
 ```
-Code Sample: [Getting Started Notebook](https://colab.research.google.com/drive/1gR3pY-JzDZahzpVdbGBtrNGDBmzUNJaJ?usp=sharing)
 
 Stable version
 ```
 pip install litellm==0.1.424
 ```
 
-## Streaming Queries
+## Streaming
 liteLLM supports streaming the model response back, pass `stream=True` to get a streaming iterator in response.
 Streaming is supported for OpenAI, Azure, Anthropic, Huggingface models
 ```python
@@ -58,11 +91,27 @@ for chunk in result:
   print(chunk['choices'][0]['delta'])
 ```
 
-# support / talk with founders
-- [Our calendar 👋](https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version)
+# Support / talk with founders
+- [Schedule Demo 👋](https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version)
 - [Community Discord 💭](https://discord.gg/wuPM9dRgDw)
 - Our numbers 📞 +1 (770) 8783-106 / ‭+1 (412) 618-6238‬
 - Our emails ✉️ ishaan@berri.ai / krrish@berri.ai
 
-# why did we build this 
+# Why did we build this 
 - **Need for simplicity**: Our code started to get extremely complicated managing & translating calls between Azure, OpenAI, Cohere
+
+# Contributors
+
+<!-- ALL-CONTRIBUTORS-LIST:START - Do not remove or modify this section -->
+<!-- prettier-ignore-start -->
+<!-- markdownlint-disable -->
+
+<!-- markdownlint-restore -->
+<!-- prettier-ignore-end -->
+
+<!-- ALL-CONTRIBUTORS-LIST:END -->
+
+<a href="https://github.com/BerriAI/litellm/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=BerriAI/litellm" />
+</a>
+

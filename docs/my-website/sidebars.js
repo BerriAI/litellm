@@ -17,37 +17,67 @@ const sidebars = {
 
   // But you can create a sidebar manually
   tutorialSidebar: [
-    { type: "doc", id: "index" },  // NEW
+    { type: "doc", id: "index" }, // NEW
+    "tutorials/first_playground",
     {
-      type: 'category',
-      label: 'Completion()',
-      items: ['completion/input','completion/output'],
+      type: "category",
+      label: "Completion()",
+      items: ["completion/input", "completion/output", "completion/reliable_completions"],
     },
     {
-      type: 'category',
-      label: 'Embedding()',
-      items: ['embedding/supported_embedding'],
+      type: "category",
+      label: "Embedding()",
+      items: ["embedding/supported_embedding"],
     },
     'completion/supported',
-    'debugging/local_debugging',
+    "token_usage",
+    "exception_mapping",
+    "stream",
     'debugging/hosted_debugging',
+    'debugging/local_debugging',
     {
       type: 'category',
       label: 'Tutorials',
-      items: ['tutorials/huggingface_tutorial', 'tutorials/TogetherAI_liteLLM', 'tutorials/fallbacks', 'tutorials/finetuned_chat_gpt'],
+      items: [
+        'tutorials/huggingface_tutorial', 
+        'tutorials/TogetherAI_liteLLM', 
+        'tutorials/fallbacks', 
+        'tutorials/finetuned_chat_gpt',
+        'tutorials/text_completion',
+        'tutorials/ab_test_llms',
+        'tutorials/litellm_Test_Multiple_Providers'
+      ],
     },
-    'token_usage',
-    'stream',
-    'secret',
-    'caching',
+    {
+      type: "category",
+      label: "Logging & Observability",
+      items: [
+        "observability/callbacks",
+        "observability/integrations",
+        "observability/promptlayer_integration",
+        "observability/llmonitor_integration",
+        "observability/helicone_integration",
+        "observability/supabase_integration",
+      ],
+    },
+    {
+      type: "category",
+      label: "Caching",
+      items: [
+        "caching/caching",
+        "caching/gpt_cache",
+      ],
+    },
     {
       type: 'category',
-      label: 'Logging & Observability',
-      items: ['observability/callbacks', 'observability/integrations', 'observability/helicone_integration', 'observability/supabase_integration'],
+      label: 'Extras',
+      items: [
+        'extras/secret', 
+      ],
     },
-    'troubleshoot',
-    'contributing',
-    'contact'
+    "troubleshoot",
+    "contributing",
+    "contact",
   ],
 };
 

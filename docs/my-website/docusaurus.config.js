@@ -31,13 +31,16 @@ const config = {
     [
       '@docusaurus/plugin-ideal-image',
       {
-        quality: 70,
-        max: 1030, // max resized image's size.
+        quality: 100,
+        max: 1920, // max resized image's size.
         min: 640, // min resized image's size. if original is lower, use that size.
         steps: 2, // the max number of images generated between min and max (inclusive)
         disableInDev: false,
       },
     ],
+    [ require.resolve('docusaurus-lunr-search'), {
+      languages: ['en'] // language codes
+    }]
   ],
 
   presets: [
@@ -60,7 +63,7 @@ const config = {
     /** @type {import('@docusaurus/preset-classic').ThemeConfig} */
     ({
       // Replace with your project's social card
-      image: 'img/docusaurus-social-card.jpg',
+      image: 'img/docusaurus-social-card.png',
       navbar: {
         title: '🚅 LiteLLM',
         items: [
