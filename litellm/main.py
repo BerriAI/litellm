@@ -1,7 +1,7 @@
 import os, openai, sys
 from typing import Any
 from functools import partial
-import dotenv, traceback, random, asyncio, time
+import dotenv, traceback, random, asyncio, time, contextvars
 from copy import deepcopy
 import litellm
 from litellm import (  # type: ignore
@@ -49,8 +49,12 @@ async def acompletion(*args, **kwargs):
     # Use a partial function to pass your keyword arguments
     func = partial(completion, *args, **kwargs)
 
+    # Add the context to the function
+    ctx = contextvars.copy_context()
+    func_with_context = partial(ctx.run, func)
+
     # Call the synchronous function using run_in_executor
-    return await loop.run_in_executor(None, func)
+    return await loop.run_in_executor(None, func_with_context)
 
 
 @client
