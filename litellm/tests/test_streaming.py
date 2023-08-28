@@ -18,30 +18,85 @@ score = 0
 
 
 def logger_fn(model_call_object: dict):
-    return
     print(f"model call details: {model_call_object}")
 
 
 user_message = "Hello, how are you?"
 messages = [{"content": user_message, "role": "user"}]
 
+# test on baseten completion call
+try:
+    response = completion(
+        model="wizard-lm", messages=messages, stream=True, logger_fn=logger_fn
+    )
+    print(f"response: {response}")
+    complete_response = ""
+    start_time = time.time()
+    for chunk in response:
+        chunk_time = time.time()
+        print(f"time since initial request: {chunk_time - start_time:.5f}")
+        print(chunk["choices"][0]["delta"])
+        complete_response += chunk["choices"][0]["delta"]["content"]
+    if complete_response == "": 
+        raise Exception("Empty response received")
+except:
+    print(f"error occurred: {traceback.format_exc()}")
+    pass
+
 # test on openai completion call
-# try:
-#     response = completion(
-#         model="gpt-3.5-turbo", messages=messages, stream=True, logger_fn=logger_fn
-#     )
-#     complete_response = ""
-#     start_time = time.time()
-#     for chunk in response:
-#         chunk_time = time.time()
-#         print(f"time since initial request: {chunk_time - start_time:.5f}")
-#         print(chunk["choices"][0]["delta"])
-#         complete_response += chunk["choices"][0]["delta"]["content"]
-#     if complete_response == "":
-#         raise Exception("Empty response received")
-# except:
-#     print(f"error occurred: {traceback.format_exc()}")
-#     pass
+try:
+    response = completion(
+        model="text-davinci-003", messages=messages, stream=True, logger_fn=logger_fn
+    )
+    complete_response = ""
+    start_time = time.time()
+    for chunk in response:
+        chunk_time = time.time()
+        print(f"chunk: {chunk}")
+        complete_response += chunk["choices"][0]["delta"]["content"]
+    if complete_response == "": 
+        raise Exception("Empty response received")
+except:
+    print(f"error occurred: {traceback.format_exc()}")
+    pass
+
+# # test on ai21 completion call
+try:
+    response = completion(
+        model="j2-ultra", messages=messages, stream=True, logger_fn=logger_fn
+    )
+    print(f"response: {response}")
+    complete_response = ""
+    start_time = time.time()
+    for chunk in response:
+        chunk_time = time.time()
+        print(f"time since initial request: {chunk_time - start_time:.5f}")
+        print(chunk["choices"][0]["delta"])
+        complete_response += chunk["choices"][0]["delta"]["content"]
+    if complete_response == "": 
+        raise Exception("Empty response received")
+except:
+    print(f"error occurred: {traceback.format_exc()}")
+    pass
+
+
+# test on openai completion call
+try:
+    response = completion(
+        model="gpt-3.5-turbo", messages=messages, stream=True, logger_fn=logger_fn
+    )
+    complete_response = ""
+    start_time = time.time()
+    for chunk in response:
+        chunk_time = time.time() 
+        print(f"time since initial request: {chunk_time - start_time:.5f}")
+        print(chunk["choices"][0]["delta"])
+        complete_response += chunk["choices"][0]["delta"]["content"]
+    if complete_response == "": 
+        raise Exception("Empty response received")
+except:
+    print(f"error occurred: {traceback.format_exc()}")
+    pass
 
 
 # # test on azure completion call
@@ -61,25 +116,6 @@ messages = [{"content": user_message, "role": "user"}]
 # except:
 #     print(f"error occurred: {traceback.format_exc()}")
 #     pass
-
-
-# test on anthropic completion call
-try:
-    response = completion(
-        model="claude-instant-1", messages=messages, stream=True, logger_fn=logger_fn
-    )
-    complete_response = ""
-    start_time = time.time()
-    for chunk in response:
-        chunk_time = time.time()
-        print(f"time since initial request: {chunk_time - start_time:.5f}")
-        print(chunk["choices"][0]["delta"])
-        complete_response += chunk["choices"][0]["delta"]["content"]
-    if complete_response == "":
-        raise Exception("Empty response received")
-except:
-    print(f"error occurred: {traceback.format_exc()}")
-    pass
 
 
 # # test on huggingface completion call
@@ -123,7 +159,7 @@ except:
     print(f"error occurred: {traceback.format_exc()}")
     pass
 
-# test on together ai completion call - starcoder
+# # test on together ai completion call - starcoder
 try:
     start_time = time.time()
     response = completion(
@@ -148,57 +184,3 @@ try:
 except:
     print(f"error occurred: {traceback.format_exc()}")
     pass
-
-
-# # test on azure completion call
-# try:
-#     response = completion(
-#         model="azure/chatgpt-test", messages=messages, stream=True, logger_fn=logger_fn
-#     )
-#     response = ""
-#     for chunk in response:
-#         chunk_time = time.time()
-#         print(f"time since initial request: {chunk_time - start_time:.2f}")
-#         print(chunk["choices"][0]["delta"])
-#         response += chunk["choices"][0]["delta"]
-#     if response == "":
-#         raise Exception("Empty response received")
-# except:
-#     print(f"error occurred: {traceback.format_exc()}")
-#     pass
-
-
-# # test on anthropic completion call
-# try:
-#     response = completion(
-#         model="claude-instant-1", messages=messages, stream=True, logger_fn=logger_fn
-#     )
-#     response = ""
-#     for chunk in response:
-#         chunk_time = time.time()
-#         print(f"time since initial request: {chunk_time - start_time:.2f}")
-#         print(chunk["choices"][0]["delta"])
-#         response += chunk["choices"][0]["delta"]
-#     if response == "":
-#         raise Exception("Empty response received")
-# except:
-#     print(f"error occurred: {traceback.format_exc()}")
-#     pass
-
-
-# # # test on huggingface completion call
-# # try:
-# #     response = completion(
-# #         model="meta-llama/Llama-2-7b-chat-hf",
-# #         messages=messages,
-# #         custom_llm_provider="huggingface",
-# #         custom_api_base="https://s7c7gytn18vnu4tw.us-east-1.aws.endpoints.huggingface.cloud",
-# #         stream=True,
-# #         logger_fn=logger_fn,
-# #     )
-# #     for chunk in response:
-# #         print(chunk["choices"][0]["delta"])
-# #     score += 1
-# # except:
-# #     print(f"error occurred: {traceback.format_exc()}")
-# #     pass
