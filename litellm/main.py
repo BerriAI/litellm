@@ -1,7 +1,7 @@
 import os, openai, sys
 from typing import Any
 from functools import partial
-import dotenv, traceback, random, asyncio, time
+import dotenv, traceback, random, asyncio, time, contextvars
 from copy import deepcopy
 import litellm
 from litellm import (  # type: ignore
@@ -49,8 +49,12 @@ async def acompletion(*args, **kwargs):
     # Use a partial function to pass your keyword arguments
     func = partial(completion, *args, **kwargs)
 
+    # Add the context to the function
+    ctx = contextvars.copy_context()
+    func_with_context = partial(ctx.run, func)
+
     # Call the synchronous function using run_in_executor
-    return await loop.run_in_executor(None, func)
+    return await loop.run_in_executor(None, func_with_context)
 
 
 @client
@@ -60,8 +64,8 @@ async def acompletion(*args, **kwargs):
 )  ## set timeouts, in case calls hang (e.g. Azure) - default is 600s, override with `force_timeout`
 def completion(
     model,
-    messages,  # required params
     # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
+    messages=[],
     functions=[],
     function_call="",  # optional params
     temperature=1,
@@ -212,9 +216,9 @@ def completion(
             # note: if a user sets a custom base - we should ensure this works
             # allow for the setting of dynamic and stateful api-bases
             api_base = (
-                custom_api_base or litellm.api_base or get_secret("OPENAI_API_BASE")
+                custom_api_base or litellm.api_base or get_secret("OPENAI_API_BASE") or "https://api.openai.com/v1"
             )
-            openai.api_base = api_base or "https://api.openai.com/v1"
+            openai.api_base = api_base
             openai.api_version = None
             if litellm.organization:
                 openai.organization = litellm.organization
@@ -861,6 +865,13 @@ def embedding(
             custom_llm_provider="azure" if azure == True else None,
         )
 
+###### Text Completion ################
+def text_completion(*args, **kwargs):
+    if 'prompt' in kwargs:
+        messages = [{'role': 'system', 'content': kwargs['prompt']}]
+        kwargs['messages'] = messages
+        kwargs.pop('prompt')
+        return completion(*args, **kwargs)
 
 ####### HELPER FUNCTIONS ################
 ## Set verbose to true -> ```litellm.set_verbose = True```
