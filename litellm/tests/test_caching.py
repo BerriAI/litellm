@@ -12,6 +12,7 @@ import pytest
 import litellm
 from litellm import embedding, completion
 from litellm.caching import Cache
+# litellm.set_verbose=True
 
 messages = [{"role": "user", "content": "who is ishaan Github?  "}]
 # comment
@@ -83,7 +84,7 @@ def test_gpt_cache():
 
 ####### Updated Caching as of Aug 28, 2023 ###################
 messages = [{"role": "user", "content": "who is ishaan 5222"}]
-def test_caching():
+def test_caching_v2():
     try:
         litellm.cache = Cache()
         response1 = completion(model="gpt-3.5-turbo", messages=messages)
@@ -102,7 +103,7 @@ def test_caching():
 # test_caching()
 
 
-def test_caching_with_models():
+def test_caching_with_models_v2():
     messages = [{"role": "user", "content": "who is ishaan CTO of litellm from litellm 2023"}]
     litellm.cache = Cache()
     print("test2 for caching")
@@ -123,6 +124,33 @@ def test_caching_with_models():
         print(f"response2: {response2}")
         pytest.fail(f"Error occurred:")
 
+
+embedding_large_text = """
+small text
+""" * 5
+
 # test_caching_with_models()
+def test_embedding_caching():
+    import time
+    litellm.cache = Cache()
+    text_to_embed = [embedding_large_text]
+    start_time = time.time()
+    embedding1 = embedding(model="text-embedding-ada-002", input=text_to_embed)
+    end_time = time.time()
+    print(f"Embedding 1 response time: {end_time - start_time} seconds")
+    
+    time.sleep(1)
+    start_time = time.time()
+    embedding2 = embedding(model="text-embedding-ada-002", input=text_to_embed)
+    end_time = time.time()
+    print(f"Embedding 2 response time: {end_time - start_time} seconds")
+    
+    litellm.cache = None
+    if embedding2 != embedding1:
+        print(f"embedding1: {embedding1}")
+        print(f"embedding2: {embedding2}")
+        pytest.fail("Error occurred: Embedding caching failed")
+
+# test_embedding_caching()
 
 
