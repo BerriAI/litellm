@@ -27,7 +27,7 @@ cache.set_openai_key()
 #### Full Code using GPTCache and LiteLLM
 ```python
 from gptcache import cache
-from litellm.cache import completion # import completion from litellm.cache
+from litellm.gpt_cache import completion # import completion from litellm.cache
 import time
 
 # Set your .env keys 
