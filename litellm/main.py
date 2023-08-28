@@ -195,7 +195,9 @@ def completion(
                 response = openai.ChatCompletion.create(
                     engine=model, messages=messages, **optional_params
                 )
-
+            if "stream" in optional_params and optional_params["stream"] == True:
+                response = CustomStreamWrapper(response, model)
+                return response
             ## LOGGING
             logging.post_call(
                 input=messages,
@@ -251,6 +253,9 @@ def completion(
                 response = openai.ChatCompletion.create(
                     model=model, messages=messages, **optional_params
                 )
+            if "stream" in optional_params and optional_params["stream"] == True:
+                response = CustomStreamWrapper(response, model)
+                return response
             ## LOGGING
             logging.post_call(
                 input=messages,

@@ -1623,6 +1623,9 @@ class CustomStreamWrapper:
         elif self.model in litellm.open_ai_text_completion_models:
             chunk = next(self.completion_stream)
             completion_obj["content"] = self.handle_openai_text_completion_chunk(chunk)
+        else: # openai chat/azure models
+            chunk = next(self.completion_stream)
+            completion_obj['content'] = chunk['choices']['delta']
         # LOGGING
         self.logging_obj(completion_obj["content"])
         # return this for all models
