@@ -59,12 +59,12 @@ def test_caching_with_models():
 def test_gpt_cache():
     # INIT GPT Cache #
     from gptcache import cache
-    from litellm.cache import completion
+    from litellm.gpt_cache import completion
 
     cache.init()
     cache.set_openai_key()
 
-    messages = [{"role": "user", "content": "what is litellm YC 22?"}]
+    messages = [{"role": "user", "content": "what is litellm YC paul graham, partner?"}]
     response2 = completion(model="gpt-3.5-turbo", messages=messages)
     response3 = completion(model="command-nightly", messages=messages)
     print(f"response2: {response2}")
