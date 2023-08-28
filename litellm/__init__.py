@@ -30,9 +30,9 @@ togetherai_api_key: Optional[str] = None
 baseten_key: Optional[str] = None
 use_client = False
 logging = True
-caching = False
-cache: Optional[Cache] = None # set to litellm.caching Cache() object
-caching_with_models = False  # if you want the caching key to be model + prompt
+caching = False # deprecated son
+caching_with_models = False  # if you want the caching key to be model + prompt # deprecated soon
+cache: Optional[Cache] = None # cache object
 model_alias_map: Dict[str, str] = {}
 model_cost = {
     "babbage-002": {
