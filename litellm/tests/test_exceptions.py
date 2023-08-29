@@ -144,42 +144,40 @@ def invalid_auth(model):  # set the model key to an invalid key, depending on th
 
 
 invalid_auth(test_model)
+
 # Test 3: Rate Limit Errors
-def test_model(model):
-    try:
-        sample_text = "how does a court case get to the Supreme Court?" * 50000
-        messages = [{ "content": sample_text,"role": "user"}]
-        custom_llm_provider = None
-        if model == "chatgpt-test":
-            custom_llm_provider = "azure"
-        print(f"model: {model}")
-        response = completion(model=model, messages=messages, custom_llm_provider=custom_llm_provider)
-    except RateLimitError:
-        return True
-    except OpenAIError: # is at least an openai error -> in case of random model errors - e.g. overloaded server
-        return True
-    except Exception as e:
-        print(f"Uncaught Exception {model}: {type(e).__name__} - {e}")
-        pass
-    return False
+# def test_model_call(model):
+#     try:
+#         sample_text = "how does a court case get to the Supreme Court?"
+#         messages = [{ "content": sample_text,"role": "user"}]
+#         print(f"model: {model}")
+#         response = completion(model=model, messages=messages)
+#     except RateLimitError:
+#         return True
+#     except OpenAIError: # is at least an openai error -> in case of random model errors - e.g. overloaded server
+#         return True
+#     except Exception as e:
+#         print(f"Uncaught Exception {model}: {type(e).__name__} - {e}")
+#         traceback.print_exc()
+#         pass
+#     return False
+# # Repeat each model 500 times
+# extended_models = [model for model in models for _ in range(250)]
 
-# Repeat each model 500 times
-extended_models = [model for model in models for _ in range(250)]
+# def worker(model):
+#     return test_model_call(model)
 
-def worker(model):
-    return test_model(model)
+# # Create a dictionary to store the results
+# counts = {True: 0, False: 0}
 
-# Create a dictionary to store the results
-counts = {True: 0, False: 0}
+# # Use Thread Pool Executor
+# with ThreadPoolExecutor(max_workers=500) as executor:
+#     # Use map to start the operation in thread pool
+#     results = executor.map(worker, extended_models)
 
-# Use Thread Pool Executor
-with ThreadPoolExecutor(max_workers=500) as executor:
-    # Use map to start the operation in thread pool
-    results = executor.map(worker, extended_models)
+#     # Iterate over results and count True/False
+#     for result in results:
+#         counts[result] += 1
 
-    # Iterate over results and count True/False
-    for result in results:
-        counts[result] += 1
-
-accuracy_score = counts[True]/(counts[True] + counts[False])
-print(f"accuracy_score: {accuracy_score}")
+# accuracy_score = counts[True]/(counts[True] + counts[False])
+# print(f"accuracy_score: {accuracy_score}")

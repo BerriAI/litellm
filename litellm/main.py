@@ -23,6 +23,7 @@ from .llms.anthropic import AnthropicLLM
 from .llms.huggingface_restapi import HuggingfaceRestAPILLM
 from .llms.baseten import BasetenLLM
 from .llms.ai21 import AI21LLM
+from .llms.together_ai import TogetherAILLM
 import tiktoken
 from concurrent.futures import ThreadPoolExecutor
 
@@ -540,78 +541,30 @@ def completion(
             response = model_response
         elif custom_llm_provider == "together_ai" or ("togethercomputer" in model):
             custom_llm_provider = "together_ai"
-            import requests
-
-            TOGETHER_AI_TOKEN = (
-                get_secret("TOGETHER_AI_TOKEN")
-                or get_secret("TOGETHERAI_API_KEY")
-                or get_secret("TOGETHER_AI_API_KEY")
-                or api_key
+            together_ai_key = (
+                api_key
                 or litellm.togetherai_api_key
+                or get_secret("TOGETHER_AI_TOKEN")
+                or get_secret("TOGETHERAI_API_KEY")
             )
-            headers = {"Authorization": f"Bearer {TOGETHER_AI_TOKEN}"}
-            endpoint = "https://api.together.xyz/inference"
-            prompt = " ".join(
-                [message["content"] for message in messages]
-            )  # TODO: Add chat support for together AI
 
-            ## LOGGING
-            logging.pre_call(input=prompt, api_key=TOGETHER_AI_TOKEN)
-
-            print(f"TOGETHER_AI_TOKEN: {TOGETHER_AI_TOKEN}")
-            if (
-                "stream_tokens" in optional_params
-                and optional_params["stream_tokens"] == True
-            ):
-                res = requests.post(
-                    endpoint,
-                    json={
-                        "model": model,
-                        "prompt": prompt,
-                        "request_type": "language-model-inference",
-                        **optional_params,
-                    },
-                    stream=optional_params["stream_tokens"],
-                    headers=headers,
-                )
+            together_ai_client = TogetherAILLM(encoding=encoding, api_key=together_ai_key, logging_obj=logging)
+            model_response = together_ai_client.completion(
+                model=model,
+                messages=messages,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+            )
+            if "stream_tokens" in optional_params and optional_params["stream_tokens"] == True:
+                # don't try to access stream object,
                 response = CustomStreamWrapper(
-                    res.iter_lines(), model, custom_llm_provider="together_ai", logging_obj=logging
+                    model_response, model, custom_llm_provider="together_ai", logging_obj=logging
                 )
                 return response
-            else:
-                res = requests.post(
-                    endpoint,
-                    json={
-                        "model": model,
-                        "prompt": prompt,
-                        "request_type": "language-model-inference",
-                        **optional_params,
-                    },
-                    headers=headers,
-                )
-                ## LOGGING
-                logging.post_call(
-                    input=prompt, api_key=TOGETHER_AI_TOKEN, original_response=res.text
-                )
-                # make this safe for reading, if output does not exist raise an error
-                json_response = res.json()
-                if "error" in json_response:
-                    raise Exception(json.dumps(json_response))
-                elif "error" in json_response["output"]:
-                    raise Exception(json.dumps(json_response["output"]))
-                completion_response = json_response["output"]["choices"][0]["text"]
-                prompt_tokens = len(encoding.encode(prompt))
-                completion_tokens = len(encoding.encode(completion_response))
-                ## RESPONSE OBJECT
-                model_response["choices"][0]["message"]["content"] = completion_response
-                model_response["created"] = time.time()
-                model_response["model"] = model
-                model_response["usage"] = {
-                    "prompt_tokens": prompt_tokens,
-                    "completion_tokens": completion_tokens,
-                    "total_tokens": prompt_tokens + completion_tokens,
-                }
-                response = model_response
+            response = model_response
         elif model in litellm.vertex_chat_models:
             import vertexai
             from vertexai.preview.language_models import ChatModel, InputOutputTextPair
