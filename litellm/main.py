@@ -612,8 +612,6 @@ def completion(
                 }
                 response = model_response
         elif model in litellm.vertex_chat_models:
-            # import vertexai/if it fails then pip install vertexai# import cohere/if it fails then pip install cohere
-            install_and_import("vertexai")
             import vertexai
             from vertexai.preview.language_models import ChatModel, InputOutputTextPair
 
@@ -637,12 +635,10 @@ def completion(
             )
 
             ## RESPONSE OBJECT
-            model_response["choices"][0]["message"]["content"] = completion_response
+            model_response["choices"][0]["message"]["content"] = str(completion_response)
             model_response["created"] = time.time()
             model_response["model"] = model
         elif model in litellm.vertex_text_models:
-            # import vertexai/if it fails then pip install vertexai# import cohere/if it fails then pip install cohere
-            install_and_import("vertexai")
             import vertexai
             from vertexai.language_models import TextGenerationModel
 
@@ -663,7 +659,7 @@ def completion(
                 input=prompt, api_key=None, original_response=completion_response
             )
             ## RESPONSE OBJECT
-            model_response["choices"][0]["message"]["content"] = completion_response
+            model_response["choices"][0]["message"]["content"] = str(completion_response)
             model_response["created"] = time.time()
             model_response["model"] = model
             response = model_response
