@@ -102,7 +102,7 @@ class AI21LLM:
                 try:
                     model_response["choices"][0]["message"]["content"] = completion_response["completions"][0]["data"]["text"]
                 except:
-                    raise ValueError(f"Unable to parse response. Original response: {response.text}")
+                    raise AI21Error(message=json.dumps(completion_response), status_code=response.status_code)
 
             ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here. 
             prompt_tokens = len(
