@@ -70,7 +70,7 @@ last_fetched_at_keys = None
 
 
 class Message(OpenAIObject):
-    def __init__(self, content=" ", role="assistant", **params):
+    def __init__(self, content="default", role="assistant", **params):
         super(Message, self).__init__(**params)
         self.content = content
         self.role = role
@@ -287,24 +287,18 @@ class Logging:
                         )
                     if callback == "cache":
                         try:
-                            #print("in cache callback2", self.stream)
-                            #print(original_response)
-                            #print(self.model_call_details)
-                            
-                            if litellm.cache != None:
+                            if litellm.cache != None and self.model_call_details.get('optional_params', {}).get('stream', False) == True:
                                 if self.litellm_params["stream_response"] == None:
                                     self.litellm_params["stream_response"] = ModelResponse()
                                 else:
                                     #self.litellm_call_id["stream_response"]["id"] = self.litellm_params["litellm_call_id"]
-                                    self.litellm_params["stream_response"]["choices"][0]["message"]["content"] += original_response
-                                #print("cache is not none")
-                                # convert original_response to format of Model Object
-                                # Set the model
+                                    if self.litellm_params["stream_response"]["choices"][0]["message"]["content"] == "default":
+                                        self.litellm_params["stream_response"]["choices"][0]["message"]["content"] = original_response # handle first try
+                                    else:
+                                        self.litellm_params["stream_response"]["choices"][0]["message"]["content"] += original_response
                                 litellm.cache.add_cache(self.litellm_params["stream_response"], **self.model_call_details)
-                            #print(self.litellm_params["stream_response"])
                         except Exception as e:
-                            print("got exception")
-                            print(e)
+                           pass
                 except:
                     print_verbose(
                         f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while post-call logging with integrations {traceback.format_exc()}"
