@@ -7,8 +7,5 @@ assignees: ''
 
 ---
 
-**Your feature request in one line**
-Describe your request in one line
-
 **Describe the solution you'd like**
 A clear and concise description of what you want to happen.
