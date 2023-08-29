@@ -1333,7 +1333,7 @@ def exception_type(model, original_exception, custom_llm_provider):
             exception_mapping_worked = True
             if model in litellm.openrouter_models:
                 if original_exception.http_status == 413:
-                    raise ContextWindowExceededError(
+                    raise InvalidRequestError(
                         message=str(original_exception),
                         model=model,
                         llm_provider="openrouter"
@@ -1382,8 +1382,9 @@ def exception_type(model, original_exception, custom_llm_provider):
                         )
                     elif original_exception.status_code == 413:
                         exception_mapping_worked = True
-                        raise ContextWindowExceededError(
+                        raise InvalidRequestError(
                             message=f"AnthropicException - {original_exception.message}",
+                            model=model,
                             llm_provider="anthropic",
                         )
                     elif original_exception.status_code == 429:
@@ -1406,6 +1407,13 @@ def exception_type(model, original_exception, custom_llm_provider):
                     exception_mapping_worked = True
                     raise AuthenticationError(
                         message=f"ReplicateException - {error_str}",
+                        llm_provider="replicate",
+                    )
+                elif "input is too long" in error_str:
+                    exception_mapping_worked = True
+                    raise ContextWindowExceededError(
+                        message=f"ReplicateException - {error_str}",
+                        model=model,
                         llm_provider="replicate",
                     )
                 elif exception_type == "ModelError":
