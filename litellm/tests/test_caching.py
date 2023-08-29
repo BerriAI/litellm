@@ -152,35 +152,32 @@ def test_embedding_caching():
 # test_embedding_caching()
 
 
-# # test caching with streaming
-# messages = [{"role": "user", "content": "hello gm who are u"}]
-# def test_caching_v2_stream():
-#     try:
-#         litellm.cache = Cache()
-#         # litellm.token="ishaan@berri.ai"
-#         response1 = completion(model="gpt-3.5-turbo", messages=messages, stream=True)
-#         for chunk in response1:
-#             # 
-#             pass
-#             # print("chunk")
-#             pass
-#             # response1_id = chunk['id']
+# test caching with streaming
+messages = [{"role": "user", "content": "tell me a story in 2 sentences"}]
+def test_caching_v2_stream():
+    try:
+        litellm.cache = Cache()
+        # litellm.token="ishaan@berri.ai"
+        response1 = completion(model="gpt-3.5-turbo", messages=messages, stream=True)
+        result_string = ""
+        for chunk in response1:
+            print(chunk)
+            result_string+=chunk['choices'][0]['delta']['content']
+            # response1_id = chunk['id']
 
-#         # response2 = completion(model="gpt-3.5-turbo", messages=messages, stream=True)
-#         # for chunk in response2:
-#         #     #print(chunk)
-#         #     response2_id = chunk['id']
-       
-#         # print(f"response1: {response1}")
-#         # print(f"response2: {response2}")
-#         # litellm.cache = None # disable cache
-#         # if response2_id != response1_id:
-#         #     print(f"response1: {response1_id}")
-#         #     print(f"response2: {response2_id}")
-#         #     pytest.fail(f"Error occurred: {e}")
-#     except Exception as e:
-#         print(f"error occurred: {traceback.format_exc()}")
-#         pytest.fail(f"Error occurred: {e}")
+        result2_string=""
+        response2 = completion(model="gpt-3.5-turbo", messages=messages, stream=True)
+        for chunk in response2:
+            print(chunk)
+            result2_string+=chunk['choices'][0]['delta']['content']
+        if result_string != result2_string:
+            print(result_string)
+            print(result2_string)
+            pytest.fail(f"Error occurred: Caching with streaming failed, strings diff")
+
+    except Exception as e:
+        print(f"error occurred: {traceback.format_exc()}")
+        pytest.fail(f"Error occurred: {e}")
 
 # test_caching_v2_stream()
 
