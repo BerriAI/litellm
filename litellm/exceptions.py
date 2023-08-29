@@ -28,6 +28,17 @@ class InvalidRequestError(InvalidRequestError):  # type: ignore
             self.message, f"{self.model}"
         )  # Call the base class constructor with the parameters it needs
 
+# sub class of invalid request error - meant to give more granularity for error handling context window exceeded errors
+class ContextWindowExceededError(InvalidRequestError):  # type: ignore
+    def __init__(self, message, model, llm_provider):
+        self.status_code = 400
+        self.message = message
+        self.model = model
+        self.llm_provider = llm_provider
+        super().__init__(
+            self.message, self.model, self.llm_provider
+        )  # Call the base class constructor with the parameters it needs
+
 
 class RateLimitError(RateLimitError):  # type: ignore
     def __init__(self, message, llm_provider):

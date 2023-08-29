@@ -1,4 +1,4 @@
-import os, openai, sys
+import os, openai, sys, json
 from typing import Any
 from functools import partial
 import dotenv, traceback, random, asyncio, time, contextvars
@@ -539,6 +539,7 @@ def completion(
                 return response
             response = model_response
         elif custom_llm_provider == "together_ai" or ("togethercomputer" in model):
+            custom_llm_provider = "together_ai"
             import requests
 
             TOGETHER_AI_TOKEN = (
@@ -594,10 +595,10 @@ def completion(
                 )
                 # make this safe for reading, if output does not exist raise an error
                 json_response = res.json()
-                if "output" not in json_response:
-                    raise Exception(
-                        f"liteLLM: Error Making TogetherAI request, JSON Response {json_response}"
-                    )
+                if "error" in json_response:
+                    raise Exception(json.dumps(json_response))
+                elif "error" in json_response["output"]:
+                    raise Exception(json.dumps(json_response["output"]))
                 completion_response = json_response["output"]["choices"][0]["text"]
                 prompt_tokens = len(encoding.encode(prompt))
                 completion_tokens = len(encoding.encode(completion_response))
