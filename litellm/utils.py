@@ -1357,6 +1357,14 @@ def exception_type(model, original_exception, custom_llm_provider):
             else:
                 exception_type = ""
             if "claude" in model:  # one of the anthropics
+                if hasattr(original_exception, "message"):
+                    if "prompt is too long" in original_exception.message:
+                        exception_mapping_worked = True
+                        raise ContextWindowExceededError(
+                            message=original_exception.message, 
+                            model=model,
+                            llm_provider="anthropic"
+                        )
                 if hasattr(original_exception, "status_code"):
                     print_verbose(f"status_code: {original_exception.status_code}")
                     if original_exception.status_code == 401:
@@ -1370,6 +1378,12 @@ def exception_type(model, original_exception, custom_llm_provider):
                         raise InvalidRequestError(
                             message=f"AnthropicException - {original_exception.message}",
                             model=model,
+                            llm_provider="anthropic",
+                        )
+                    elif original_exception.status_code == 413:
+                        exception_mapping_worked = True
+                        raise ContextWindowExceededError(
+                            message=f"AnthropicException - {original_exception.message}",
                             llm_provider="anthropic",
                         )
                     elif original_exception.status_code == 429:
