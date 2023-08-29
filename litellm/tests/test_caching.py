@@ -229,3 +229,28 @@ def test_caching_v2_stream():
 # test_caching_v2_stream()
 
 
+def test_redis_cache_completion():
+    messages = [{"role": "user", "content": "who is ishaan CTO of litellm from litellm 2023"}]
+    litellm.cache = Cache(type="redis", host=os.environ['REDIS_HOST'], port=os.environ['REDIS_PORT'], password=os.environ['REDIS_PASSWORD'])
+    print("test2 for caching")
+    response1 = completion(model="gpt-3.5-turbo", messages=messages)
+    response2 = completion(model="gpt-3.5-turbo", messages=messages)
+    response3 = completion(model="command-nightly", messages=messages)
+    print(f"response1: {response1}")
+    print(f"response2: {response2}")
+    print(f"response3: {response3}")
+    litellm.cache = None
+    if response3 == response2:
+        # if models are different, it should not return cached response
+        print(f"response2: {response2}")
+        print(f"response3: {response3}")
+        pytest.fail(f"Error occurred:")
+    if response1 != response2: # 1 and 2 should be the same
+        print(f"response1: {response1}")
+        print(f"response2: {response2}")
+        pytest.fail(f"Error occurred:")
+
+# test_redis_cache_completion()
+
+
+
