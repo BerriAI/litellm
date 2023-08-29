@@ -42,11 +42,13 @@ Base case - we return the original exception.
 
 | LLM Provider | Initial Status Code / Initial Error Message | Returned Exception | Returned Status Code |
 |----------------------|------------------------|-----------------|-----------------|
+| Anthropic | prompt is too long | ContextWindowExceededError | 400 |
 | Anthropic | 401 | AuthenticationError | 401 |
 | Anthropic | Could not resolve authentication method. Expected either api_key or auth_token to be set. | AuthenticationError | 401 |
 | Anthropic | 400 | InvalidRequestError | 400 | 
 | Anthropic | 429 | RateLimitError | 429 | 
 | OpenAI | This model's maximum context length is | ContextWindowExceededError | 400 | 
+| Replicate | input is too long | ContextWindowExceededError | 400 | 
 | Replicate | Incorrect authentication token | AuthenticationError | 401 | 
 | Replicate | ModelError | InvalidRequestError | 400 |
 | Replicate | Request was throttled | RateLimitError | 429 |
@@ -54,8 +56,9 @@ Base case - we return the original exception.
 | Cohere | invalid api token | AuthenticationError | 401 |
 | Cohere | too many tokens | ContextWindowExceededError | 400 |
 | Cohere | CohereConnectionError | RateLimitError | 429 |
-| Huggingface | 401 | AuthenticationError | 401 |
-| Huggingface | 400 | InvalidRequestError | 400 | 
+| Huggingface | length limit exceeded | ContextWindowExceededError | 400 |
+| Huggingface | 400 | InvalidRequestError | 400 |
+| Huggingface | 401 | AuthenticationError | 401 | 
 | Huggingface | 429 | RateLimitError | 429 | 
 | Openrouter | 413 | ContextWindowExceededError | 400 | 
 | Openrouter | 401 | AuthenticationError | 401 | 
