@@ -40,7 +40,7 @@ models = ["gpt-3.5-turbo"]
 
 
 def logging_fn(model_call_dict):
-    # return
+    return
     if "model" in model_call_dict:
         print(f"model_call_dict: {model_call_dict['model']}")
     else:
