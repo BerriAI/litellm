@@ -113,10 +113,13 @@ class AnthropicLLM:
             )
             print_verbose(f"raw model_response: {response.text}")
             ## RESPONSE OBJECT
-            completion_response = response.json()
+            try:
+                completion_response = response.json()
+            except:
+                raise AnthropicError(message=response.text, status_code=response.status_code)
             if "error" in completion_response:
                 raise AnthropicError(
-                    message=completion_response["error"],
+                    message=str(completion_response["error"]),
                     status_code=response.status_code,
                 )
             else:

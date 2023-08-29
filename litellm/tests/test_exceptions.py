@@ -23,7 +23,6 @@ litellm.vertex_project = "pathrise-convert-1606954137718"
 litellm.vertex_location = "us-central1"
 
 litellm.failure_callback = ["sentry"]
-# litellm.set_verbose = True
 #### What this tests ####
 #    This tests exception mapping -> trigger an exception from an llm provider -> assert if output is of the expected type
 
@@ -35,8 +34,8 @@ litellm.failure_callback = ["sentry"]
 # Approach: Run each model through the test -> assert if the correct error (always the same one) is triggered
 
 # models = ["gpt-3.5-turbo", "chatgpt-test",  "claude-instant-1", "command-nightly"]
-test_model = "gpt-3.5-turbo"
-models = ["gpt-3.5-turbo"]
+test_model = "claude-instant-1"
+models = ["claude-instant-1"]
 
 
 def logging_fn(model_call_dict):
@@ -50,7 +49,7 @@ def logging_fn(model_call_dict):
 # Test 1: Context Window Errors
 @pytest.mark.parametrize("model", models)
 def test_context_window(model):
-    sample_text = "how does a court case get to the Supreme Court?" * 1000000
+    sample_text = "how does a court case get to the Supreme Court?" * 50000
     messages = [{"content": sample_text, "role": "user"}]
     try:
         print(f"model: {model}")
@@ -64,6 +63,7 @@ def test_context_window(model):
         return
     except InvalidRequestError as e:
         print(f"InvalidRequestError: {e.llm_provider}")
+        print(f"InvalidRequestError message: {e.message}")
         return
     except OpenAIError as e:
         print(f"OpenAIError: {e.llm_provider}")
