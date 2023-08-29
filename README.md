@@ -54,7 +54,7 @@ pip install litellm
 
 ```python
 from litellm import completion
-
+import os
 ## set ENV variables
 os.environ["OPENAI_API_KEY"] = "openai key"
 os.environ["COHERE_API_KEY"] = "cohere key"
