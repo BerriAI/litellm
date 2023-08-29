@@ -1331,7 +1331,17 @@ def exception_type(model, original_exception, custom_llm_provider):
         if isinstance(original_exception, OriginalError):
             # Handle the OpenAIError
             exception_mapping_worked = True
-            if custom_llm_provider == "azure":
+            if model in litellm.openrouter_models:
+                print(f"e: {original_exception}")
+                print(f"original_exception.http_status: {original_exception.http_status}")
+                if original_exception.http_status == 413:
+                    raise ContextWindowExceededError(
+                        message=str(original_exception),
+                        model=model,
+                        llm_provider="openrouter"
+                    )
+                original_exception.llm_provider = "openrouter"
+            elif custom_llm_provider == "azure":
                 original_exception.llm_provider = "azure"
             else:
                 original_exception.llm_provider = "openai"
@@ -1400,7 +1410,7 @@ def exception_type(model, original_exception, custom_llm_provider):
                         message=f"ReplicateException - {error_str}",
                         llm_provider="replicate",
                     )
-            elif model == "command-nightly":  # Cohere
+            elif model in litellm.cohere_models:  # Cohere
                 if (
                     "invalid api token" in error_str
                     or "No API key provided." in error_str
