@@ -153,15 +153,19 @@ def test_embedding_caching():
 
 
 # # test caching with streaming
-# messages = [{"role": "user", "content": "draft a 2 pg legal document on applying to litellm"}]
+# messages = [{"role": "user", "content": "hello gm who are u"}]
 # def test_caching_v2_stream():
 #     try:
 #         litellm.cache = Cache()
+#         # litellm.token="ishaan@berri.ai"
 #         response1 = completion(model="gpt-3.5-turbo", messages=messages, stream=True)
 #         for chunk in response1:
-#             print(chunk)
-#             response1_id = chunk['id']
-        
+#             # 
+#             pass
+#             # print("chunk")
+#             pass
+#             # response1_id = chunk['id']
+
 #         # response2 = completion(model="gpt-3.5-turbo", messages=messages, stream=True)
 #         # for chunk in response2:
 #         #     #print(chunk)

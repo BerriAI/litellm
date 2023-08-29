@@ -1,3 +1,4 @@
+import litellm
 def get_prompt(*args, **kwargs):
     # make this safe checks, it should not throw any exceptions
     if len(args) > 1:
@@ -29,8 +30,9 @@ class InMemoryCache():
         self.cache_dict = {}
 
     def set_cache(self, key, value):
-        #print("in set cache for inmem")
+        print("in set cache for inmem")
         self.cache_dict[key] = value
+        print(self.cache_dict)
 
     def get_cache(self, key):
         #print("in get cache for inmem")
@@ -46,6 +48,8 @@ class Cache():
             self.cache = RedisCache(type, host, port, password)
         if type == "local":
             self.cache = InMemoryCache()
+        litellm.input_callback.append("cache")
+        litellm.success_callback.append("cache")
 
     def get_cache_key(self, *args, **kwargs):
         prompt = get_prompt(*args, **kwargs)
@@ -71,8 +75,11 @@ class Cache():
 
     def add_cache(self, result, *args, **kwargs):
         try:
+            # print("adding to cache", result)
             cache_key = self.get_cache_key(*args, **kwargs)
+            # print(cache_key)
             if cache_key is not None:
+                # print("adding to cache", cache_key, result)
                 self.cache.set_cache(cache_key, result)
         except:
             pass

@@ -196,7 +196,7 @@ def completion(
                     engine=model, messages=messages, **optional_params
                 )
             if "stream" in optional_params and optional_params["stream"] == True:
-                response = CustomStreamWrapper(response, model)
+                response = CustomStreamWrapper(response, model, logging_obj=logging)
                 return response
             ## LOGGING
             logging.post_call(
@@ -254,7 +254,7 @@ def completion(
                     model=model, messages=messages, **optional_params
                 )
             if "stream" in optional_params and optional_params["stream"] == True:
-                response = CustomStreamWrapper(response, model)
+                response = CustomStreamWrapper(response, model, logging_obj=logging)
                 return response
             ## LOGGING
             logging.post_call(
