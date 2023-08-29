@@ -1446,6 +1446,37 @@ def exception_type(model, original_exception, custom_llm_provider):
                             message=f"HuggingfaceException - {original_exception.message}",
                             llm_provider="huggingface",
                         )
+            elif custom_llm_provider == "ai21":
+                print(f"e: {original_exception}")
+                if hasattr(original_exception, "message"):
+                    if "Prompt has too many tokens" in original_exception.message:
+                        exception_mapping_worked = True
+                        raise ContextWindowExceededError(
+                            message=f"AI21Exception - {original_exception.message}",
+                            model=model,
+                            llm_provider="ai21"
+                        )
+                if hasattr(original_exception, "status_code"):
+                    print(f"status code: {original_exception.status_code}")
+                    if original_exception.status_code == 401:
+                        exception_mapping_worked = True
+                        raise AuthenticationError(
+                            message=f"AI21Exception - {original_exception.message}",
+                            llm_provider="ai21",
+                        )
+                    if original_exception.status_code == 422 or "Prompt has too many tokens" in original_exception.message:
+                        exception_mapping_worked = True
+                        raise InvalidRequestError(
+                            message=f"AI21Exception - {original_exception.message}",
+                            model=model,
+                            llm_provider="ai21",
+                        )
+                    elif original_exception.status_code == 429:
+                        exception_mapping_worked = True
+                        raise RateLimitError(
+                            message=f"AI21Exception - {original_exception.message}",
+                            llm_provider="ai21",
+                        )
             elif custom_llm_provider == "together_ai":
                 error_response = json.loads(error_str)
                 if "error" in error_response and "`inputs` tokens + `max_new_tokens` must be <=" in error_response["error"]:

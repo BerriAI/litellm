@@ -33,8 +33,8 @@ litellm.failure_callback = ["sentry"]
 # Approach: Run each model through the test -> assert if the correct error (always the same one) is triggered
 
 # models = ["gpt-3.5-turbo", "chatgpt-test",  "claude-instant-1", "command-nightly"]
-test_model = "togethercomputer/CodeLlama-34b-Python"
-models = ["togethercomputer/CodeLlama-34b-Python"]
+test_model = "j2-light"
+models = ["j2-light"]
 
 
 def logging_fn(model_call_dict):
@@ -98,6 +98,9 @@ def invalid_auth(model):  # set the model key to an invalid key, depending on th
         elif model == "command-nightly":
             temporary_key = os.environ["COHERE_API_KEY"]
             os.environ["COHERE_API_KEY"] = "bad-key"
+        elif "j2" in model:
+            temporary_key = os.environ["AI21_API_KEY"]
+            os.environ["AI21_API_KEY"] = "bad-key"
         elif "togethercomputer" in model:
             temporary_key = os.environ["TOGETHERAI_API_KEY"]
             os.environ["TOGETHERAI_API_KEY"] = "84060c79880fc49df126d3e87b53f8a463ff6e1c6d27fe64207cde25cdfcd1f24a"
@@ -138,6 +141,8 @@ def invalid_auth(model):  # set the model key to an invalid key, depending on th
             == "replicate/llama-2-70b-chat:2c1608e18606fad2812020dc541930f2d0495ce32eee50074220b87300bc16e1"
         ):
             os.environ["REPLICATE_API_KEY"] = temporary_key
+        elif "j2" in model:
+            os.environ["AI21_API_KEY"] = temporary_key
         elif ("togethercomputer" in model):
             os.environ["TOGETHERAI_API_KEY"] = temporary_key
     return
