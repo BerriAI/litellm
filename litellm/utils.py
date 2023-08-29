@@ -70,7 +70,7 @@ last_fetched_at_keys = None
 
 
 class Message(OpenAIObject):
-    def __init__(self, content="default", role="assistant", **params):
+    def __init__(self, content=" ", role="assistant", **params):
         super(Message, self).__init__(**params)
         self.content = content
         self.role = role
@@ -285,6 +285,26 @@ class Logging:
                             call_type = self.call_type, 
                             stream = self.stream
                         )
+                    if callback == "cache":
+                        try:
+                            #print("in cache callback2", self.stream)
+                            #print(original_response)
+                            #print(self.model_call_details)
+                            
+                            if litellm.cache != None:
+                                if self.litellm_params["stream_response"] == None:
+                                    self.litellm_params["stream_response"] = ModelResponse()
+                                else:
+                                    #self.litellm_call_id["stream_response"]["id"] = self.litellm_params["litellm_call_id"]
+                                    self.litellm_params["stream_response"]["choices"][0]["message"]["content"] += original_response
+                                #print("cache is not none")
+                                # convert original_response to format of Model Object
+                                # Set the model
+                                litellm.cache.add_cache(self.litellm_params["stream_response"], **self.model_call_details)
+                            #print(self.litellm_params["stream_response"])
+                        except Exception as e:
+                            print("got exception")
+                            print(e)
                 except:
                     print_verbose(
                         f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while post-call logging with integrations {traceback.format_exc()}"
@@ -624,6 +644,7 @@ def get_litellm_params(
         "custom_api_base": custom_api_base,
         "litellm_call_id": litellm_call_id,
         "model_alias_map": model_alias_map,
+        "stream_response": None
     }
 
     return litellm_params
@@ -1576,7 +1597,10 @@ class CustomStreamWrapper:
             return chunk["choices"][0]["text"]
         except:
             raise ValueError(f"Unable to parse response. Original response: {chunk}")
-    
+
+    def handle_openai_chat_completion_chunk(self, chunk):
+        return chunk["choices"][0]["delta"]["content"]
+
     def handle_baseten_chunk(self, chunk):
         chunk = chunk.decode("utf-8")
         data_json = json.loads(chunk)
@@ -1593,44 +1617,47 @@ class CustomStreamWrapper:
             return ""
 
     def __next__(self):
-        completion_obj = {"role": "assistant", "content": ""}
-        if self.model in litellm.anthropic_models:
-            chunk = next(self.completion_stream)
-            completion_obj["content"] = self.handle_anthropic_chunk(chunk)
-        elif self.model == "replicate":
-            chunk = next(self.completion_stream)
-            completion_obj["content"] = chunk
-        elif (
-            self.custom_llm_provider and self.custom_llm_provider == "together_ai"
-        ) or ("togethercomputer" in self.model):
-            chunk = next(self.completion_stream)
-            text_data = self.handle_together_ai_chunk(chunk)
-            if text_data == "":
-                return self.__next__()
-            completion_obj["content"] = text_data
-        elif self.model in litellm.cohere_models:
-            chunk = next(self.completion_stream)
-            completion_obj["content"] = chunk.text
-        elif self.custom_llm_provider and self.custom_llm_provider == "huggingface":
-            chunk = next(self.completion_stream)
-            completion_obj["content"] = self.handle_huggingface_chunk(chunk)
-        elif self.custom_llm_provider and self.custom_llm_provider == "baseten": # baseten doesn't provide streaming
-            chunk = next(self.completion_stream)
-            completion_obj["content"] = self.handle_baseten_chunk(chunk)
-        elif self.custom_llm_provider and self.custom_llm_provider == "ai21": #ai21 doesn't provide streaming
-            chunk = next(self.completion_stream)
-            completion_obj["content"] = self.handle_ai21_chunk(chunk)
-        elif self.model in litellm.open_ai_text_completion_models:
-            chunk = next(self.completion_stream)
-            completion_obj["content"] = self.handle_openai_text_completion_chunk(chunk)
-        else: # openai chat/azure models
-            chunk = next(self.completion_stream)
-            return chunk
+        try:
+            completion_obj = {"role": "assistant", "content": ""}
+            if self.model in litellm.anthropic_models:
+                chunk = next(self.completion_stream)
+                completion_obj["content"] = self.handle_anthropic_chunk(chunk)
+            elif self.model == "replicate":
+                chunk = next(self.completion_stream)
+                completion_obj["content"] = chunk
+            elif (
+                self.custom_llm_provider and self.custom_llm_provider == "together_ai"
+            ) or ("togethercomputer" in self.model):
+                chunk = next(self.completion_stream)
+                text_data = self.handle_together_ai_chunk(chunk)
+                if text_data == "":
+                    return self.__next__()
+                completion_obj["content"] = text_data
+            elif self.model in litellm.cohere_models:
+                chunk = next(self.completion_stream)
+                completion_obj["content"] = chunk.text
+            elif self.custom_llm_provider and self.custom_llm_provider == "huggingface":
+                chunk = next(self.completion_stream)
+                completion_obj["content"] = self.handle_huggingface_chunk(chunk)
+            elif self.custom_llm_provider and self.custom_llm_provider == "baseten": # baseten doesn't provide streaming
+                chunk = next(self.completion_stream)
+                completion_obj["content"] = self.handle_baseten_chunk(chunk)
+            elif self.custom_llm_provider and self.custom_llm_provider == "ai21": #ai21 doesn't provide streaming
+                chunk = next(self.completion_stream)
+                completion_obj["content"] = self.handle_ai21_chunk(chunk)
+            elif self.model in litellm.open_ai_text_completion_models:
+                chunk = next(self.completion_stream)
+                completion_obj["content"] = self.handle_openai_text_completion_chunk(chunk)
+            else: # openai chat/azure models
+                chunk = next(self.completion_stream)
+                completion_obj["content"] = self.handle_openai_chat_completion_chunk(chunk)
 
-        # LOGGING
-        self.logging_obj.post_call(completion_obj["content"])
-        # return this for all models
-        return {"choices": [{"delta": completion_obj}]}
+            # LOGGING
+            self.logging_obj.post_call(completion_obj["content"])
+            # return this for all models
+            return {"choices": [{"delta": completion_obj}]}
+        except:
+            raise StopIteration
 
 
 ########## Reading Config File ############################
