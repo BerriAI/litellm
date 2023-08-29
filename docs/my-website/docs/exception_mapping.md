@@ -1,13 +1,14 @@
 # Exception Mapping
 
-LiteLLM maps the 3 most common exceptions across all providers. 
+LiteLLM maps the 4 most common exceptions across all providers. 
 - Rate Limit Errors
 - Context Window Errors
-- InvalidAuth errors (key rotation stuff)
+- Invalid Request Errors
+- InvalidAuth Errors (incorrect key, etc.)
 
 Base case - we return the original exception.
 
-For all 3 cases, the exception returned inherits from the original OpenAI Exception but contains 3 additional attributes: 
+For all 4 cases, the exception returned inherits from the original OpenAI Exception but contains 3 additional attributes: 
 * status_code - the http status code of the exception
 * message - the error message
 * llm_provider - the provider raising the exception
@@ -44,9 +45,25 @@ To see how it's implemented - [check out the code](https://github.com/BerriAI/li
 | Replicate | Request was throttled | RateLimitError | 429 |
 | Replicate | ReplicateError | ServiceUnavailableError | 500 |
 | Cohere | invalid api token | AuthenticationError | 401 |
-| Cohere | too many tokens | InvalidRequestError | 400 |
+| Cohere | too many tokens | ContextWindowExceededError | 400 |
 | Cohere | CohereConnectionError | RateLimitError | 429 |
 | Huggingface | 401 | AuthenticationError | 401 |
 | Huggingface | 400 | InvalidRequestError | 400 | 
 | Huggingface | 429 | RateLimitError | 429 | 
+| Openrouter | 413 | ContextWindowExceededError | 400 | 
+| Openrouter | 401 | AuthenticationError | 401 | 
+| Openrouter | 429 | RateLimitError | 429 | 
+| AI21 | Prompt has too many tokens | ContextWindowExceededError | 400 | 
+| AI21 | 422 | InvalidRequestError | 400 | 
+| AI21 | 401 | AuthenticationError | 401 | 
+| AI21 | 429 | RateLimitError | 429 | 
+| TogetherAI | inputs` tokens + `max_new_tokens` must be <= | ContextWindowExceededError | 400 | 
+| TogetherAI | INVALID_ARGUMENT | InvalidRequestError | 400 | 
+| TogetherAI | "error_type": "validation" | InvalidRequestError | 400 | 
+| TogetherAI | invalid private key | AuthenticationError | 401 | 
+| TogetherAI | 429 | RateLimitError | 429 | 
+
+
+The `ContextWindowExceededError` is a sub-class of `InvalidRequestError`. It was introduced to provide more granularity for exception-handling scenarios. Please refer to [this issue to learn more](https://github.com/BerriAI/litellm/issues/228).
+
 
