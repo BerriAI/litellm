@@ -1451,30 +1451,36 @@ def exception_type(model, original_exception, custom_llm_provider):
                 if "error" in error_response and "`inputs` tokens + `max_new_tokens` must be <=" in error_response["error"]:
                     exception_mapping_worked = True
                     raise ContextWindowExceededError(
-                        message=error_response["error"],
+                        message=f"TogetherAIException - {error_response['error']}",
                         model=model,
                         llm_provider="together_ai"
                     )
                 elif "error" in error_response and "invalid private key" in error_response["error"]:
                     exception_mapping_worked = True
                     raise AuthenticationError(
-                        message=error_response["error"],
+                        message=f"TogetherAIException - {error_response['error']}",
                         llm_provider="together_ai"
                     )
                 elif "error" in error_response and "INVALID_ARGUMENT" in error_response["error"]:
                     exception_mapping_worked = True
                     raise InvalidRequestError(
-                        message=error_response["error"],
+                        message=f"TogetherAIException - {error_response['error']}",
                         model=model,
                         llm_provider="together_ai"
                     )
                 elif "error_type" in error_response and error_response["error_type"] == "validation":
                     exception_mapping_worked = True
                     raise InvalidRequestError(
-                        message=error_response["error"],
+                        message=f"TogetherAIException - {error_response['error']}",
                         model=model,
                         llm_provider="together_ai"
                     )
+                elif original_exception.status_code == 429:
+                        exception_mapping_worked = True
+                        raise RateLimitError(
+                            message=f"TogetherAIException - {original_exception.message}",
+                            llm_provider="together_ai",
+                        )
                 print(f"error: {error_response}")
                 print(f"e: {original_exception}")
             raise original_exception  # base case - return the original exception
