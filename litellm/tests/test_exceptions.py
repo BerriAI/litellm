@@ -35,12 +35,12 @@ litellm.failure_callback = ["sentry"]
 # Approach: Run each model through the test -> assert if the correct error (always the same one) is triggered
 
 # models = ["gpt-3.5-turbo", "chatgpt-test",  "claude-instant-1", "command-nightly"]
-test_model = "claude-instant-1"
-models = ["claude-instant-1"]
+test_model = "gpt-3.5-turbo"
+models = ["gpt-3.5-turbo"]
 
 
 def logging_fn(model_call_dict):
-    return
+    # return
     if "model" in model_call_dict:
         print(f"model_call_dict: {model_call_dict['model']}")
     else:
@@ -59,7 +59,6 @@ def test_context_window(model):
             messages=messages,
             logger_fn=logging_fn,
         )
-        print(f"response: {response}")
     except ContextWindowExceededError as e:
         print(f"ContextWindowExceededError: {e.llm_provider}")
         return
