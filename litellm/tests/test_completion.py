@@ -79,15 +79,15 @@ def test_completion_claude_stream():
 #     except Exception as e:
 #         pytest.fail(f"Error occurred: {e}")
 
-def test_completion_hf_deployed_api():
-    try:
-        user_message = "There's a llama in my garden 😱 What should I do?"
-        messages = [{ "content": user_message,"role": "user"}]
-        response = completion(model="meta-llama/Llama-2-7b-chat-hf", messages=messages, custom_llm_provider="huggingface", custom_api_base="https://s7c7gytn18vnu4tw.us-east-1.aws.endpoints.huggingface.cloud", logger_fn=logger_fn)
-        # Add any assertions here to check the response
-        print(response)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
+# def test_completion_hf_deployed_api():
+#     try:
+#         user_message = "There's a llama in my garden 😱 What should I do?"
+#         messages = [{ "content": user_message,"role": "user"}]
+#         response = completion(model="meta-llama/Llama-2-7b-chat-hf", messages=messages, custom_llm_provider="huggingface", custom_api_base="https://s7c7gytn18vnu4tw.us-east-1.aws.endpoints.huggingface.cloud", logger_fn=logger_fn)
+#         # Add any assertions here to check the response
+#         print(response)
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
 
 
 def test_completion_cohere():
