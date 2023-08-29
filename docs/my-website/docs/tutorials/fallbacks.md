@@ -8,12 +8,12 @@ To use fallback models with `completion()`, specify a list of models in the `fal
 The `fallbacks` list should include the primary model you want to use, followed by additional models that can be used as backups in case the primary model fails to provide a response.
 
 ```python
-response = completion(model="bad-model", messages=messages, fallbacks=["gpt-3.5-turbo" "command-nightly"])
+response = completion(model="bad-model", fallbacks=["gpt-3.5-turbo" "command-nightly"], messages=messages)
 ```
 
 ## How does `completion_with_fallbacks()` work
 
-The `completion_with_fallbacks()` function attempts a completion call using the primary model. If the primary model fails or encounters an error, it automatically tries the fallback models in the specified order. This ensures a response even if the primary model is unavailable.
+The `completion_with_fallbacks()` function attempts a completion call using the primary model specified as `model` in `completion()`. If the primary model fails or encounters an error, it automatically tries the fallback models in the specified order. This ensures a response even if the primary model is unavailable.
 
 ### Output from calls
 ```
