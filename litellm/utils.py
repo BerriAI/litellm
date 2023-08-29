@@ -9,6 +9,7 @@ import uuid
 
 encoding = tiktoken.get_encoding("cl100k_base")
 import importlib.metadata
+from .integrations.traceloop import TraceloopLogger
 from .integrations.helicone import HeliconeLogger
 from .integrations.aispend import AISpendLogger
 from .integrations.berrispend import BerriSpendLogger
@@ -811,7 +812,7 @@ def load_test_model(
 
 
 def set_callbacks(callback_list):
-    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, llmonitorLogger, promptLayerLogger
+    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, llmonitorLogger, promptLayerLogger
     try:
         for callback in callback_list:
             print_verbose(f"callback: {callback}")
@@ -864,6 +865,8 @@ def set_callbacks(callback_list):
                 )
                 alerts_channel = os.environ["SLACK_API_CHANNEL"]
                 print_verbose(f"Initialized Slack App: {slack_app}")
+            elif callback == "traceloop":
+                traceloopLogger = TraceloopLogger()
             elif callback == "helicone":
                 heliconeLogger = HeliconeLogger()
             elif callback == "llmonitor":
