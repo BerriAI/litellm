@@ -39,6 +39,7 @@ slack_app = None
 alerts_channel = None
 heliconeLogger = None
 promptLayerLogger = None
+llmonitorLogger = None
 aispendLogger = None
 berrispendLogger = None
 supabaseClient = None
@@ -888,7 +889,7 @@ def set_callbacks(callback_list):
 
 
 def handle_failure(exception, traceback_exception, start_time, end_time, args, kwargs):
-    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient
+    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, llmonitorLogger
     try:
         # print_verbose(f"handle_failure args: {args}")
         # print_verbose(f"handle_failure kwargs: {kwargs}")
