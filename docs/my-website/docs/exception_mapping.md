@@ -8,6 +8,8 @@ LiteLLM maps the 4 most common exceptions across all providers.
 
 Base case - we return the original exception.
 
+All our exceptions inherit from OpenAI's exception types, so any error-handling you have for that, should work out of the box with LiteLLM. 
+
 For all 4 cases, the exception returned inherits from the original OpenAI Exception but contains 3 additional attributes: 
 * status_code - the http status code of the exception
 * message - the error message
