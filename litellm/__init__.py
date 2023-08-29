@@ -286,10 +286,11 @@ from .utils import (
 )
 from .main import *  # type: ignore
 from .integrations import *
-from openai.error import (
+from .exceptions import (
     AuthenticationError,
     InvalidRequestError,
     RateLimitError,
     ServiceUnavailableError,
     OpenAIError,
+    ContextWindowExceededError
 )

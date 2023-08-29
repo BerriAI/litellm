@@ -12,6 +12,7 @@ from litellm import (
     completion,
     AuthenticationError,
     InvalidRequestError,
+    ContextWindowExceededError,
     RateLimitError,
     ServiceUnavailableError,
     OpenAIError,
@@ -32,11 +33,12 @@ litellm.failure_callback = ["sentry"]
 # Approach: Run each model through the test -> assert if the correct error (always the same one) is triggered
 
 # models = ["gpt-3.5-turbo", "chatgpt-test",  "claude-instant-1", "command-nightly"]
-test_model = "claude-instant-1"
-models = ["claude-instant-1"]
+test_model = "togethercomputer/CodeLlama-34b-Python"
+models = ["togethercomputer/CodeLlama-34b-Python"]
 
 
 def logging_fn(model_call_dict):
+    return
     if "model" in model_call_dict:
         print(f"model_call_dict: {model_call_dict['model']}")
     else:
@@ -49,15 +51,16 @@ def test_context_window(model):
     sample_text = "how does a court case get to the Supreme Court?" * 5000
     messages = [{"content": sample_text, "role": "user"}]
     try:
-        model = "chatgpt-test"
         print(f"model: {model}")
         response = completion(
             model=model,
             messages=messages,
-            custom_llm_provider="azure",
             logger_fn=logging_fn,
         )
         print(f"response: {response}")
+    except ContextWindowExceededError as e:
+        print(f"ContextWindowExceededError: {e.llm_provider}")
+        return
     except InvalidRequestError as e:
         print(f"InvalidRequestError: {e.llm_provider}")
         return
@@ -95,6 +98,9 @@ def invalid_auth(model):  # set the model key to an invalid key, depending on th
         elif model == "command-nightly":
             temporary_key = os.environ["COHERE_API_KEY"]
             os.environ["COHERE_API_KEY"] = "bad-key"
+        elif "togethercomputer" in model:
+            temporary_key = os.environ["TOGETHERAI_API_KEY"]
+            os.environ["TOGETHERAI_API_KEY"] = "84060c79880fc49df126d3e87b53f8a463ff6e1c6d27fe64207cde25cdfcd1f24a"
         elif (
             model
             == "replicate/llama-2-70b-chat:2c1608e18606fad2812020dc541930f2d0495ce32eee50074220b87300bc16e1"
@@ -132,46 +138,48 @@ def invalid_auth(model):  # set the model key to an invalid key, depending on th
             == "replicate/llama-2-70b-chat:2c1608e18606fad2812020dc541930f2d0495ce32eee50074220b87300bc16e1"
         ):
             os.environ["REPLICATE_API_KEY"] = temporary_key
+        elif ("togethercomputer" in model):
+            os.environ["TOGETHERAI_API_KEY"] = temporary_key
     return
 
 
 invalid_auth(test_model)
-# # Test 3: Rate Limit Errors
-# def test_model(model):
-#     try:
-#         sample_text = "how does a court case get to the Supreme Court?" * 50000
-#         messages = [{ "content": sample_text,"role": "user"}]
-#         custom_llm_provider = None
-#         if model == "chatgpt-test":
-#             custom_llm_provider = "azure"
-#         print(f"model: {model}")
-#         response = completion(model=model, messages=messages, custom_llm_provider=custom_llm_provider)
-#     except RateLimitError:
-#         return True
-#     except OpenAIError: # is at least an openai error -> in case of random model errors - e.g. overloaded server
-#         return True
-#     except Exception as e:
-#         print(f"Uncaught Exception {model}: {type(e).__name__} - {e}")
-#         pass
-#     return False
+# Test 3: Rate Limit Errors
+def test_model(model):
+    try:
+        sample_text = "how does a court case get to the Supreme Court?" * 50000
+        messages = [{ "content": sample_text,"role": "user"}]
+        custom_llm_provider = None
+        if model == "chatgpt-test":
+            custom_llm_provider = "azure"
+        print(f"model: {model}")
+        response = completion(model=model, messages=messages, custom_llm_provider=custom_llm_provider)
+    except RateLimitError:
+        return True
+    except OpenAIError: # is at least an openai error -> in case of random model errors - e.g. overloaded server
+        return True
+    except Exception as e:
+        print(f"Uncaught Exception {model}: {type(e).__name__} - {e}")
+        pass
+    return False
 
-# # Repeat each model 500 times
-# extended_models = [model for model in models for _ in range(250)]
+# Repeat each model 500 times
+extended_models = [model for model in models for _ in range(250)]
 
-# def worker(model):
-#     return test_model(model)
+def worker(model):
+    return test_model(model)
 
-# # Create a dictionary to store the results
-# counts = {True: 0, False: 0}
+# Create a dictionary to store the results
+counts = {True: 0, False: 0}
 
-# # Use Thread Pool Executor
-# with ThreadPoolExecutor(max_workers=500) as executor:
-#     # Use map to start the operation in thread pool
-#     results = executor.map(worker, extended_models)
+# Use Thread Pool Executor
+with ThreadPoolExecutor(max_workers=500) as executor:
+    # Use map to start the operation in thread pool
+    results = executor.map(worker, extended_models)
 
-#     # Iterate over results and count True/False
-#     for result in results:
-#         counts[result] += 1
+    # Iterate over results and count True/False
+    for result in results:
+        counts[result] += 1
 
-# accuracy_score = counts[True]/(counts[True] + counts[False])
-# print(f"accuracy_score: {accuracy_score}")
+accuracy_score = counts[True]/(counts[True] + counts[False])
+print(f"accuracy_score: {accuracy_score}")

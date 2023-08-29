@@ -25,6 +25,7 @@ from .exceptions import (
     RateLimitError,
     ServiceUnavailableError,
     OpenAIError,
+    ContextWindowExceededError
 )
 from typing import List, Dict, Union, Optional
 from .caching import Cache
@@ -1445,6 +1446,37 @@ def exception_type(model, original_exception, custom_llm_provider):
                             message=f"HuggingfaceException - {original_exception.message}",
                             llm_provider="huggingface",
                         )
+            elif custom_llm_provider == "together_ai":
+                error_response = json.loads(error_str)
+                if "error" in error_response and "`inputs` tokens + `max_new_tokens` must be <=" in error_response["error"]:
+                    exception_mapping_worked = True
+                    raise ContextWindowExceededError(
+                        message=error_response["error"],
+                        model=model,
+                        llm_provider="together_ai"
+                    )
+                elif "error" in error_response and "invalid private key" in error_response["error"]:
+                    exception_mapping_worked = True
+                    raise AuthenticationError(
+                        message=error_response["error"],
+                        llm_provider="together_ai"
+                    )
+                elif "error" in error_response and "INVALID_ARGUMENT" in error_response["error"]:
+                    exception_mapping_worked = True
+                    raise InvalidRequestError(
+                        message=error_response["error"],
+                        model=model,
+                        llm_provider="together_ai"
+                    )
+                elif "error_type" in error_response and error_response["error_type"] == "validation":
+                    exception_mapping_worked = True
+                    raise InvalidRequestError(
+                        message=error_response["error"],
+                        model=model,
+                        llm_provider="together_ai"
+                    )
+                print(f"error: {error_response}")
+                print(f"e: {original_exception}")
             raise original_exception  # base case - return the original exception
         else:
             raise original_exception
