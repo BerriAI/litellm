@@ -94,7 +94,10 @@ class HuggingfaceRestAPILLM:
                 additional_args={"complete_input_dict": data},
             )
             ## RESPONSE OBJECT
-            completion_response = response.json()
+            try:
+                completion_response = response.json()
+            except:
+                raise HuggingfaceError(message=response.text, status_code=response.status_code)
             print_verbose(f"response: {completion_response}")
             if isinstance(completion_response, dict) and "error" in completion_response:
                 print_verbose(f"completion error: {completion_response['error']}")

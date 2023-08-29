@@ -1462,6 +1462,13 @@ def exception_type(model, original_exception, custom_llm_provider):
                         llm_provider="cohere",
                     )
             elif custom_llm_provider == "huggingface":
+                if "length limit exceeded" in error_str:
+                    exception_mapping_worked = True
+                    raise ContextWindowExceededError(
+                        message=error_str,
+                        model=model,
+                        llm_provider="huggingface"
+                    )
                 if hasattr(original_exception, "status_code"):
                     if original_exception.status_code == 401:
                         exception_mapping_worked = True
