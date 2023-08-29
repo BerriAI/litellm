@@ -87,7 +87,7 @@ class Choices(OpenAIObject):
 class ModelResponse(OpenAIObject):
     def __init__(self, choices=None, created=None, model=None, usage=None, **params):
         super(ModelResponse, self).__init__(**params)
-        self.choices = choices if choices else [Choices()]
+        self.choices = self.choices = choices if choices else [Choices(message=Message())]
         self.created = created
         self.model = model
         self.usage = (
@@ -271,7 +271,7 @@ class Logging:
                     print_verbose(
                         f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {traceback.format_exc()}"
                     )
-
+            
             # Input Integration Logging -> If you want to log the fact that an attempt to call the model was made
             for callback in litellm.input_callback:
                 try:
@@ -287,17 +287,26 @@ class Logging:
                         )
                     if callback == "cache":
                         try:
+                            # print("entering logger first time")
+                            # print(self.litellm_params["stream_response"])
                             if litellm.cache != None and self.model_call_details.get('optional_params', {}).get('stream', False) == True:
-                                if self.litellm_params["stream_response"] == None:
-                                    self.litellm_params["stream_response"] = ModelResponse()
-                                else:
-                                    #self.litellm_call_id["stream_response"]["id"] = self.litellm_params["litellm_call_id"]
-                                    if self.litellm_params["stream_response"]["choices"][0]["message"]["content"] == "default":
-                                        self.litellm_params["stream_response"]["choices"][0]["message"]["content"] = original_response # handle first try
+                                litellm_call_id = self.litellm_params["litellm_call_id"]
+                                if litellm_call_id in self.litellm_params["stream_response"]:
+                                    # append for the given call_id
+                                    if self.litellm_params["stream_response"][litellm_call_id]["choices"][0]["message"]["content"] == "default":
+                                        self.litellm_params["stream_response"][litellm_call_id]["choices"][0]["message"]["content"] = original_response # handle first try
                                     else:
-                                        self.litellm_params["stream_response"]["choices"][0]["message"]["content"] += original_response
-                                litellm.cache.add_cache(self.litellm_params["stream_response"], **self.model_call_details)
+                                        self.litellm_params["stream_response"][litellm_call_id]["choices"][0]["message"]["content"] += original_response
+                                else: # init a streaming response for this call id
+                                    new_model_response = ModelResponse(choices=[Choices(message=Message(content="default"))])
+                                    #print("creating new model response")
+                                    #print(new_model_response)
+                                    self.litellm_params["stream_response"][litellm_call_id] = new_model_response
+                                #print("adding to cache for", litellm_call_id)                              
+                                litellm.cache.add_cache(self.litellm_params["stream_response"][litellm_call_id], **self.model_call_details)
                         except Exception as e:
+                        #    print("got exception")
+                        #    print(e)
                            pass
                 except:
                     print_verbose(
@@ -466,7 +475,6 @@ def client(original_function):
             # CRASH REPORTING TELEMETRY
             crash_reporting(*args, **kwargs)
             # INIT LOGGER - for user-specified integrations
-            print(f"len args: {len(args)}")
             model = args[0] if len(args) > 0 else kwargs["model"]
             call_type = original_function.__name__
             if call_type == CallTypes.completion.value:
@@ -638,7 +646,7 @@ def get_litellm_params(
         "custom_api_base": custom_api_base,
         "litellm_call_id": litellm_call_id,
         "model_alias_map": model_alias_map,
-        "stream_response": None
+        "stream_response": {} # litellm_call_id: ModelResponse Dict
     }
 
     return litellm_params

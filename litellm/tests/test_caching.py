@@ -127,7 +127,7 @@ embedding_large_text = """
 small text
 """ * 5
 
-# test_caching_with_models()
+# # test_caching_with_models()
 def test_embedding_caching():
     import time
     litellm.cache = Cache()
@@ -136,7 +136,7 @@ def test_embedding_caching():
     embedding1 = embedding(model="text-embedding-ada-002", input=text_to_embed)
     end_time = time.time()
     print(f"Embedding 1 response time: {end_time - start_time} seconds")
-    
+
     time.sleep(1)
     start_time = time.time()
     embedding2 = embedding(model="text-embedding-ada-002", input=text_to_embed)
@@ -153,17 +153,63 @@ def test_embedding_caching():
 
 
 # test caching with streaming
-messages = [{"role": "user", "content": "tell me a story in 2 sentences"}]
-def test_caching_v2_stream():
+
+def test_caching_v2_stream_basic():
     try:
         litellm.cache = Cache()
         # litellm.token="ishaan@berri.ai"
+        messages = [{"role": "user", "content": "tell me a story in 2 sentences"}]
         response1 = completion(model="gpt-3.5-turbo", messages=messages, stream=True)
+
         result_string = ""
         for chunk in response1:
             print(chunk)
             result_string+=chunk['choices'][0]['delta']['content']
             # response1_id = chunk['id']
+
+        print("current cache")
+        print(litellm.cache.cache.cache_dict)
+
+        result2_string=""
+        import time
+        time.sleep(1)
+        response2 = completion(model="gpt-3.5-turbo", messages=messages, stream=True)
+        for chunk in response2:
+            print(chunk)
+            result2_string+=chunk['choices'][0]['delta']['content']
+        if result_string != result2_string:
+            print(result_string)
+            print(result2_string)
+            pytest.fail(f"Error occurred: Caching with streaming failed, strings diff")
+        litellm.cache = None
+
+    except Exception as e:
+        print(f"error occurred: {traceback.format_exc()}")
+        pytest.fail(f"Error occurred: {e}")
+
+# test_caching_v2_stream_basic()
+
+def test_caching_v2_stream():
+    try:
+        litellm.cache = Cache()
+        # litellm.token="ishaan@berri.ai"
+        messages = [{"role": "user", "content": "tell me a story in 2 sentences"}]
+        response1 = completion(model="gpt-3.5-turbo", messages=messages, stream=True)
+
+        messages = [{"role": "user", "content": "tell me a chair"}]
+        response7 = completion(model="command-nightly", messages=messages)
+        messages = [{"role": "user", "content": "sing a song"}]
+        response8 = completion(model="gpt-3.5-turbo", messages=messages, stream=True)
+
+        result_string = ""
+        for chunk in response1:
+            print(chunk)
+            result_string+=chunk['choices'][0]['delta']['content']
+            # response1_id = chunk['id']
+
+        print("current cache")
+        messages = [{"role": "user", "content": "tell me a story in 2 sentences"}]
+        print(litellm.cache.cache.cache_dict)
 
         result2_string=""
         response2 = completion(model="gpt-3.5-turbo", messages=messages, stream=True)
@@ -174,6 +220,7 @@ def test_caching_v2_stream():
             print(result_string)
             print(result2_string)
             pytest.fail(f"Error occurred: Caching with streaming failed, strings diff")
+        litellm.cache = None
 
     except Exception as e:
         print(f"error occurred: {traceback.format_exc()}")

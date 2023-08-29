@@ -49,8 +49,10 @@ class Cache():
             self.cache = RedisCache(type, host, port, password)
         if type == "local":
             self.cache = InMemoryCache()
-        litellm.input_callback.append("cache")
-        litellm.success_callback.append("cache")
+        if "cache" not in litellm.input_callback:
+            litellm.input_callback.append("cache")
+        if "cache" not in litellm.success_callback:
+            litellm.success_callback.append("cache")
 
     def get_cache_key(self, *args, **kwargs):
         prompt = get_prompt(*args, **kwargs)
@@ -88,8 +90,9 @@ class Cache():
 
     def add_cache(self, result, *args, **kwargs):
         try:
-            # print("adding to cache", result)
+            
             cache_key = self.get_cache_key(*args, **kwargs)
+            # print("adding to cache", cache_key, result)
             # print(cache_key)
             if cache_key is not None:
                 # print("adding to cache", cache_key, result)
