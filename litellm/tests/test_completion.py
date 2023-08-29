@@ -12,6 +12,9 @@ import pytest
 import litellm
 from litellm import embedding, completion, text_completion
 
+litellm.vertex_project = "pathrise-convert-1606954137718"
+litellm.vertex_location = "us-central1"
+litellm.use_client = True
 # from infisical import InfisicalClient
 
 # litellm.set_verbose = True
@@ -189,13 +192,13 @@ def test_completion_openrouter():
             messages=messages,
             temperature=0.5,
             top_p=0.1,
-            user="ishaan_dev@berri.ai",
         )
         # Add any assertions here to check the response
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+test_completion_openrouter()
 
 def test_completion_openai_with_more_optional_params():
     try:
@@ -346,6 +349,14 @@ def test_completion_together_ai():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+
+def test_vertex_ai():
+    model_name = "chat-bison"
+    try:
+        response = completion(model=model_name, messages=messages, logger_fn=logger_fn)
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 def test_petals():
     model_name = "stabilityai/StableBeluga2"

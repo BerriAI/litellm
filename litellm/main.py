@@ -592,6 +592,7 @@ def completion(
             model_response["choices"][0]["message"]["content"] = str(completion_response)
             model_response["created"] = time.time()
             model_response["model"] = model
+            response = model_response
         elif model in litellm.vertex_text_models:
             import vertexai
             from vertexai.language_models import TextGenerationModel
