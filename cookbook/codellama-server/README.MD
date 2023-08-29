@@ -113,7 +113,7 @@ All responses from the server are returned in the following format (for all LLM 
 
 1. Clone liteLLM repository to your local machine:
    ```
-   git clone https://github.com/BerriAI/litellm-CodeGen-proxy
+   git clone https://github.com/BerriAI/litellm-CodeLlama-server
    ```
 2. Install the required dependencies using pip
    ```
