@@ -1,5 +1,7 @@
 import litellm
 import time
+import json
+
 def get_prompt(*args, **kwargs):
     # make this safe checks, it should not throw any exceptions
     if len(args) > 1:
@@ -22,8 +24,14 @@ class RedisCache():
         self.redis_client.set(key, str(value))
 
     def get_cache(self, key):
-        # TODO convert this to a ModelResponse object 
-        return self.redis_client.get(key)
+        # TODO convert this to a ModelResponse object
+        cached_response = self.redis_client.get(key)
+        if cached_response!=None:
+            # cached_response is in `b{} convert it to ModelResponse
+            cached_response = cached_response.decode("utf-8")  # Convert bytes to string
+            cached_response = json.loads(cached_response)  # Convert string to dictionary
+            return cached_response
+
 
 class InMemoryCache():
     def __init__(self):
@@ -46,7 +54,7 @@ class InMemoryCache():
 class Cache():
     def __init__(self, type="local", host="", port="", password=""):
         if type == "redis":
-            self.cache = RedisCache(type, host, port, password)
+            self.cache = RedisCache(host, port, password)
         if type == "local":
             self.cache = InMemoryCache()
         if "cache" not in litellm.input_callback:
