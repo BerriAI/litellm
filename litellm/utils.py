@@ -1332,8 +1332,6 @@ def exception_type(model, original_exception, custom_llm_provider):
             # Handle the OpenAIError
             exception_mapping_worked = True
             if model in litellm.openrouter_models:
-                print(f"e: {original_exception}")
-                print(f"original_exception.http_status: {original_exception.http_status}")
                 if original_exception.http_status == 413:
                     raise ContextWindowExceededError(
                         message=str(original_exception),
@@ -1422,7 +1420,7 @@ def exception_type(model, original_exception, custom_llm_provider):
                     )
                 elif "too many tokens" in error_str:
                     exception_mapping_worked = True
-                    raise InvalidRequestError(
+                    raise ContextWindowExceededError(
                         message=f"CohereException - {original_exception.message}",
                         model=model,
                         llm_provider="cohere",
@@ -1474,7 +1472,7 @@ def exception_type(model, original_exception, custom_llm_provider):
                             message=f"AI21Exception - {original_exception.message}",
                             llm_provider="ai21",
                         )
-                    if original_exception.status_code == 422 or "Prompt has too many tokens" in original_exception.message:
+                    if original_exception.status_code == 422:
                         exception_mapping_worked = True
                         raise InvalidRequestError(
                             message=f"AI21Exception - {original_exception.message}",
@@ -1522,8 +1520,6 @@ def exception_type(model, original_exception, custom_llm_provider):
                             message=f"TogetherAIException - {original_exception.message}",
                             llm_provider="together_ai",
                         )
-                print(f"error: {error_response}")
-                print(f"e: {original_exception}")
             raise original_exception  # base case - return the original exception
         else:
             raise original_exception
