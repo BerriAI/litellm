@@ -13,7 +13,7 @@ response = completion(model="bad-model", fallbacks=["gpt-3.5-turbo" "command-nig
 
 ## How does `completion_with_fallbacks()` work
 
-The `completion_with_fallbacks()` function attempts a completion call using the primary model specified as `model` in `completion()`. If the primary model fails or encounters an error, it automatically tries the fallback models in the specified order. This ensures a response even if the primary model is unavailable.
+The `completion_with_fallbacks()` function attempts a completion call using the primary model specified as `model` in `completion(model=model)`. If the primary model fails or encounters an error, it automatically tries the `fallbacks` models in the specified order. This ensures a response even if the primary model is unavailable.
 
 ### Output from calls
 ```
@@ -44,4 +44,91 @@ completion call gpt-3.5-turbo
   }
 }
 
+```
+
+### Key components of Model Fallbacks implementation:
+* Looping through `fallbacks`
+* Cool-Downs for rate-limited models
+
+#### Looping through `fallbacks`
+Allow `45seconds` for each request. In the 45s this function tries calling the primary model set as `model`. If model fails it loops through the backup `fallbacks` models and attempts to get a response in the allocated `45s` time set here: 
+```python
+while response == None and time.time() - start_time < 45:
+        for model in fallbacks:
+```
+
+#### Cool-Downs for rate-limited models
+If a model API call leads to an error - allow it to cooldown for `60s`
+```python
+except Exception as e:
+  print(f"got exception {e} for model {model}")
+  rate_limited_models.add(model)
+  model_expiration_times[model] = (
+      time.time() + 60
+  )  # cool down this selected model
+  pass
+```
+
+Before making an LLM API call we check if the selected model is in `rate_limited_models`, if so skip making the API call
+```python
+if (
+  model in rate_limited_models
+):  # check if model is currently cooling down
+  if (
+      model_expiration_times.get(model)
+      and time.time() >= model_expiration_times[model]
+  ):
+      rate_limited_models.remove(
+          model
+      )  # check if it's been 60s of cool down and remove model
+  else:
+      continue  # skip model
+
+```
+
+#### Full code of completion with fallbacks()
+```python
+
+    response = None
+    rate_limited_models = set()
+    model_expiration_times = {}
+    start_time = time.time()
+    fallbacks = [kwargs["model"]] + kwargs["fallbacks"]
+    del kwargs["fallbacks"]  # remove fallbacks so it's not recursive
+
+    while response == None and time.time() - start_time < 45:
+        for model in fallbacks:
+            # loop thru all models
+            try:
+                if (
+                    model in rate_limited_models
+                ):  # check if model is currently cooling down
+                    if (
+                        model_expiration_times.get(model)
+                        and time.time() >= model_expiration_times[model]
+                    ):
+                        rate_limited_models.remove(
+                            model
+                        )  # check if it's been 60s of cool down and remove model
+                    else:
+                        continue  # skip model
+
+                # delete model from kwargs if it exists
+                if kwargs.get("model"):
+                    del kwargs["model"]
+
+                print("making completion call", model)
+                response = litellm.completion(**kwargs, model=model)
+
+                if response != None:
+                    return response
+
+            except Exception as e:
+                print(f"got exception {e} for model {model}")
+                rate_limited_models.add(model)
+                model_expiration_times[model] = (
+                    time.time() + 60
+                )  # cool down this selected model
+                pass
+    return response
 ```
