@@ -72,10 +72,10 @@ const sidebars = {
       label: 'Extras',
       items: [
         'extras/secret',
+        'extras/contributing',
       ],
     },
     "troubleshoot",
-    "contributing",
     "contact",
   ],
 };
