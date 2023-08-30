@@ -84,9 +84,6 @@ class HuggingfaceRestAPILLM:
             )
             return response.iter_lines()
         else:
-            print(f"completion url: {completion_url}")
-            print(f"headers: {self.headers}")
-            print(f"data: {data}")
             response = requests.post(
                 completion_url, headers=self.headers, data=json.dumps(data)
             )
