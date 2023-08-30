@@ -438,7 +438,7 @@ def client(original_function):
                 litellm.email is not None
                 or os.getenv("LITELLM_EMAIL", None) is not None
                 or litellm.token is not None
-                or os.getenv("LITELLM_TOKEN", None)
+                or os.getenv("LITELLM_TOKEN", None) is not None
             ):  # add to input, success and failure callbacks if user is using hosted product
                 get_all_keys()
                 if "lite_debugger" not in callback_list and litellm.logging:
