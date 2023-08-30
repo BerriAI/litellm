@@ -157,11 +157,11 @@ open_ai_chat_completion_models = [
     #################
     "gpt-3.5-turbo",
     "gpt-3.5-turbo-0301",
-    "gpt-3.5-turbo-16k",
     "gpt-3.5-turbo-0613",
+    "gpt-3.5-turbo-16k",
     "gpt-3.5-turbo-16k-0613",
 ]
-open_ai_text_completion_models = ["text-davinci-003", "babbage-002", "davinci-002"]
+open_ai_text_completion_models = ["text-davinci-003", "curie-001", "babbage-001", "ada-001", "babbage-002", "davinci-002"]
 
 cohere_models = [
     "command-nightly",
