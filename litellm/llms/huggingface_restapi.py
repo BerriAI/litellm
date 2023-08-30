@@ -48,6 +48,8 @@ class HuggingfaceRestAPILLM:
         completion_url: str = ""
         if "https" in model:
             completion_url = model
+        elif custom_api_base:
+            completion_url = custom_api_base
         elif "HF_API_BASE" in os.environ:
             completion_url = os.getenv("HF_API_BASE", "")
         else:
