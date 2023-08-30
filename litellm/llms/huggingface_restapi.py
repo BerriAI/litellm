@@ -46,8 +46,8 @@ class HuggingfaceRestAPILLM:
         logger_fn=None,
     ):  # logic for parsing in - calling - parsing out model completion calls
         completion_url: str = ""
-        if custom_api_base:
-            completion_url = custom_api_base
+        if "https" in model:
+            completion_url = model
         elif "HF_API_BASE" in os.environ:
             completion_url = os.getenv("HF_API_BASE", "")
         else:

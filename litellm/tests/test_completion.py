@@ -87,7 +87,7 @@ def test_completion_hf_deployed_api():
     try:
         user_message = "There's a llama in my garden 😱 What should I do?"
         messages = [{ "content": user_message,"role": "user"}]
-        response = completion(model="huggingface/WizardLM/WizardCoder-Python-34B-V1.0", messages=messages, custom_api_base="https://ji16r2iys9a8rjk2.us-east-1.aws.endpoints.huggingface.cloud", logger_fn=logger_fn)
+        response = completion(model="huggingface/https://ji16r2iys9a8rjk2.us-east-1.aws.endpoints.huggingface.cloud", messages=messages, logger_fn=logger_fn)
         # Add any assertions here to check the response
         print(response)
     except Exception as e:

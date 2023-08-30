@@ -30,6 +30,17 @@ const sidebars = {
       items: ["embedding/supported_embedding"],
     },
     'completion/supported',
+    {
+      type: "category",
+      label: "Providers",
+      link: {
+        type: 'generated-index',
+        title: 'Providers',
+        description: 'Learn how to deploy + call models from different providers on LiteLLM',
+        slug: '/providers',
+      },
+      items: ["providers/huggingface"],
+    },
     "token_usage",
     "exception_mapping",
     'debugging/hosted_debugging',
