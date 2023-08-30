@@ -15,14 +15,15 @@ Need help deploying a model on huggingface? [Check out this guide.](https://hugg
 
 ## usage 
 
-In this case our model id is the same as the model url - `https://ji16r2iys9a8rjk2.us-east-1.aws.endpoints.huggingface.cloud`
+You need to tell LiteLLM when you're calling Huggingface.  
 
 
-
-You need to tell LiteLLM when you're calling Huggingface. You can do that in 2 ways:
-
-* By passing in the custom llm provider as part of the model name -  
+Do that by passing in the custom llm provider as part of the model name -  
 completion(model="<custom_llm_provider>/<model_id>",...). 
+
+With Huggingface, our model id is the same as the model url.
+
+Model id - `https://ji16r2iys9a8rjk2.us-east-1.aws.endpoints.huggingface.cloud`
 
 ```
 import os 
@@ -39,18 +40,29 @@ response = completion(model="huggingface/https://ji16r2iys9a8rjk2.us-east-1.aws.
 print(response)
 ```
 
-* By passing in a `custom_llm_provider` argument in the completion call
+# output
+
+Same as the OpenAI format, but also includes logprobs. [See the code](https://github.com/BerriAI/litellm/blob/b4b2dbf005142e0a483d46a07a88a19814899403/litellm/llms/huggingface_restapi.py#L115)
 
 ```
-import os 
-from litellm import completion 
-
-# Set env variables
-os.environ["HUGGINGFACE_API_KEY"] = "huggingface_api_key"
-
-messages = [{ "content": "There's a llama in my garden 😱 What should I do?","role": "user"}]
-
-response = completion(model="https://ji16r2iys9a8rjk2.us-east-1.aws.endpoints.huggingface.cloud", messages=messages, custom_llm_provider="huggingface")
-# Add any assertions here to check the response
-print(response)
+{
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "message": {
+        "content": "\ud83d\ude31\n\nComment: @SarahSzabo I'm",
+        "role": "assistant",
+        "logprobs": -22.697942825499993
+      }
+    }
+  ],
+  "created": 1693436637.38206,
+  "model": "https://ji16r2iys9a8rjk2.us-east-1.aws.endpoints.huggingface.cloud",
+  "usage": {
+    "prompt_tokens": 14,
+    "completion_tokens": 11,
+    "total_tokens": 25
+  }
+}
 ```
