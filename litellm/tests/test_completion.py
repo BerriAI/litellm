@@ -72,16 +72,17 @@ def test_completion_claude_stream():
         pytest.fail(f"Error occurred: {e}")
 
 
-# def test_completion_hf_api():
-#     try:
-#         user_message = "write some code to find the sum of two numbers"
-#         messages = [{ "content": user_message,"role": "user"}]
-#         response = completion(model="stabilityai/stablecode-completion-alpha-3b-4k", messages=messages, custom_llm_provider="huggingface")
-#         # Add any assertions here to check the response
-#         print(response)
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
+def test_completion_hf_api():
+    try:
+        user_message = "write some code to find the sum of two numbers"
+        messages = [{ "content": user_message,"role": "user"}]
+        response = completion(model="stabilityai/stablecode-completion-alpha-3b-4k", messages=messages, custom_llm_provider="huggingface", logger_fn=logger_fn)
+        # Add any assertions here to check the response
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
+test_completion_hf_api()
 # def test_completion_hf_deployed_api():
 #     try:
 #         user_message = "There's a llama in my garden 😱 What should I do?"
