@@ -75,6 +75,7 @@ const sidebars = {
         'extras/contributing',
       ],
     },
+    "projects",
     "troubleshoot",
     "contact",
   ],
