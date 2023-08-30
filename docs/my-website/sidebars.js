@@ -22,7 +22,7 @@ const sidebars = {
     {
       type: "category",
       label: "Completion()",
-      items: ["completion/input", "completion/output", "completion/reliable_completions", "completion/stream"],
+      items: ["completion/input", "completion/output", "completion/model_alias", "completion/reliable_completions", "completion/stream"],
     },
     {
       type: "category",

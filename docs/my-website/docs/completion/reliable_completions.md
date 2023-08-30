@@ -1,4 +1,4 @@
-# Reliability for completion()
+# Reliability
 
 LiteLLM supports the following functions for reliability:
 * `completion_with_retries`: use tenacity retries

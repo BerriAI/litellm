@@ -1,4 +1,4 @@
-# Output Format - completion()
+# Output Format
 Here's the exact json output and type you can expect from all litellm `completion` calls for all models
 
 ```python 
