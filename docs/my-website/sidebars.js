@@ -22,7 +22,7 @@ const sidebars = {
     {
       type: "category",
       label: "Completion()",
-      items: ["completion/input", "completion/output", "completion/reliable_completions"],
+      items: ["completion/input", "completion/output", "completion/reliable_completions", "completion/stream"],
     },
     {
       type: "category",
@@ -32,7 +32,6 @@ const sidebars = {
     'completion/supported',
     "token_usage",
     "exception_mapping",
-    "stream",
     'debugging/hosted_debugging',
     'debugging/local_debugging',
     {
