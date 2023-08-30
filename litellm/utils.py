@@ -73,10 +73,11 @@ last_fetched_at_keys = None
 
 
 class Message(OpenAIObject):
-    def __init__(self, content="default", role="assistant", **params):
+    def __init__(self, content="default", role="assistant", logprobs=None, **params):
         super(Message, self).__init__(**params)
         self.content = content
         self.role = role
+        self.logprobs = logprobs
 
 
 class Choices(OpenAIObject):
@@ -739,6 +740,22 @@ def get_optional_params(  # use the openai defaults
         optional_params["num_beams"] = num_beams
         if max_tokens != float("inf"):
             optional_params["max_new_tokens"] = max_tokens
+    elif custom_llm_provider == "huggingface":
+        if temperature != 1:
+            optional_params["temperature"] = temperature
+        if top_p != 1:
+            optional_params["top_p"] = top_p
+        if n != 1:
+            optional_params["n"] = n
+        if stream:
+            optional_params["stream"] = stream
+        if stop != None:
+            optional_params["stop"] = stop
+        if max_tokens != float("inf"):
+            optional_params["max_new_tokens"] = max_tokens
+        if presence_penalty != 0:
+            optional_params["repetition_penalty"] = presence_penalty
+        optional_params["details"] = True
     else:  # assume passing in params for openai/azure openai
         if functions != []:
             optional_params["functions"] = functions
