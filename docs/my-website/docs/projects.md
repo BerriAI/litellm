@@ -1,36 +1,22 @@
 # Projects Built on LiteLLM
 
-<div class="card">
-  <div class="card-body">
-    <h1>LangStream</h1>
-    <p>Build robust LLM applications with true composabilit</p>
-  </div>
-</div>
+### LangStream
+Build robust LLM applications with true composability
+[Github](https://github.com/rogeriochaves/langstream)
+[Docs](https://rogeriochaves.github.io/langstream/)
 
-<div class="card">
-  <div class="card-body">
-    <h1>LangStream</h1>
-    <p>Build robust LLM applications with true composabilit</p>
-  </div>
-</div>
+### Codium PR Agent
+An AI-Powered 🤖 Tool for Automated Pull Request Analysis, 
+Feedback, Suggestions 💻🔍
+[Github](https://github.com/Codium-ai/pr-agent)
 
-<div class="card">
-  <div class="card-body">
-    <h1>LangStream</h1>
-    <p>Build robust LLM applications with true composabilit</p>
-  </div>
-</div>
+### LiteLLM Proxy
+liteLLM Proxy Server: 50+ LLM Models, Error Handling, Caching
+[Github](https://github.com/BerriAI/litellm/tree/main/proxy-server)
 
-<div class="card">
-  <div class="card-body">
-    <h1>LangStream</h1>
-    <p>Build robust LLM applications with true composabilit</p>
-  </div>
-</div>
+### EntoAI
+Chat and Ask on your own data.
+[Github](https://github.com/akshata29/entaoai)
 
-<div class="card">
-  <div class="card-body">
-    <h1>LangStream</h1>
-    <p>Build robust LLM applications with true composabilit</p>
-  </div>
-</div>
+
+
