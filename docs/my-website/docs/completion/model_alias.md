@@ -4,6 +4,15 @@ The model name you show an end-user might be different from the one you pass to 
 
 LiteLLM simplifies this by letting you pass in a model alias mapping. 
 
+# expected format
+
+```
+litellm.model_alias_map = {
+    # a dictionary containing a mapping of the alias string to the actual litellm model name string
+    "model_alias": "litellm_model_name"
+}
+```
+
 # usage 
 
 ### Relevant Code
