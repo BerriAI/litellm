@@ -1,8 +1,8 @@
 # Model Alias
 
-Model names can be long, and you might want to use more user-friendly names for your end-users - e.g. Calling it `GPT-3.5` when the model name is `gpt-3.5-turbo-16k`. 
+The model name you show an end-user might be different from the one you pass to LiteLLM - e.g. Displaying `GPT-3.5` while calling `gpt-3.5-turbo-16k` on the backend. 
 
-LiteLLM supports this by letting you pass in a model alias mapping. 
+LiteLLM simplifies this by letting you pass in a model alias mapping. 
 
 # usage 
 
