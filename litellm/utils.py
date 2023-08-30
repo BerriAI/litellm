@@ -1599,6 +1599,7 @@ def get_or_generate_uuid():
                 uuid_value = uuid_value.strip()
             else:
                 raise FileNotFoundError
+
     except FileNotFoundError:
         # Generate a new UUID if the file doesn't exist or is empty
         new_uuid = uuid.uuid4()
@@ -1667,7 +1668,10 @@ class CustomStreamWrapper:
 
     def __iter__(self):
         return self
-    
+
+    def __aiter__(self):
+        return self
+
     def logging(self, text):
         if self.logging_obj: 
             self.logging_obj.post_call(text)
@@ -1774,6 +1778,12 @@ class CustomStreamWrapper:
             return {"choices": [{"delta": completion_obj}]}
         except:
             raise StopIteration
+    
+    async def __anext__(self):
+        try:
+            return next(self)
+        except StopIteration:
+            raise StopAsyncIteration
 
 
 ########## Reading Config File ############################
