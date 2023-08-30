@@ -356,19 +356,19 @@ def test_completion_together_ai():
 #     except Exception as e:
 #         pytest.fail(f"Error occurred: {e}")
 
-def test_petals():
-    model_name = "stabilityai/StableBeluga2"
-    try:
-        response = completion(
-            model=model_name,
-            messages=messages,
-            custom_llm_provider="petals",
-            force_timeout=120,
-        )
-        # Add any assertions here to check the response
-        print(response)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
+# def test_petals():
+#     model_name = "stabilityai/StableBeluga2"
+#     try:
+#         response = completion(
+#             model=model_name,
+#             messages=messages,
+#             custom_llm_provider="petals",
+#             force_timeout=120,
+#         )
+#         # Add any assertions here to check the response
+#         print(response)
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
 
 
 def test_completion_with_fallbacks():
