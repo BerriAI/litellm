@@ -71,7 +71,7 @@ const sidebars = {
       type: 'category',
       label: 'Extras',
       items: [
-        'extras/secret', 
+        'extras/secret', 'extras/contributing'
       ],
     },
     "troubleshoot",
