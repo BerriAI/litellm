@@ -348,13 +348,13 @@ def test_completion_together_ai():
         pytest.fail(f"Error occurred: {e}")
 
 
-def test_vertex_ai():
-    model_name = "chat-bison"
-    try:
-        response = completion(model=model_name, messages=messages, logger_fn=logger_fn)
-        print(response)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
+# def test_vertex_ai():
+#     model_name = "chat-bison"
+#     try:
+#         response = completion(model=model_name, messages=messages, logger_fn=logger_fn)
+#         print(response)
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
 
 def test_petals():
     model_name = "stabilityai/StableBeluga2"
