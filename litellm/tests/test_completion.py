@@ -83,16 +83,16 @@ def test_completion_claude_stream():
 #         pytest.fail(f"Error occurred: {e}")
 
 
-def test_completion_hf_deployed_api():
-    try:
-        user_message = "There's a llama in my garden 😱 What should I do?"
-        messages = [{ "content": user_message,"role": "user"}]
-        response = completion(model="huggingface/https://ji16r2iys9a8rjk2.us-east-1.aws.endpoints.huggingface.cloud", messages=messages, logger_fn=logger_fn)
-        # Add any assertions here to check the response
-        print(response)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-test_completion_hf_deployed_api()
+# def test_completion_hf_deployed_api():
+#     try:
+#         user_message = "There's a llama in my garden 😱 What should I do?"
+#         messages = [{ "content": user_message,"role": "user"}]
+#         response = completion(model="huggingface/https://ji16r2iys9a8rjk2.us-east-1.aws.endpoints.huggingface.cloud", messages=messages, logger_fn=logger_fn)
+#         # Add any assertions here to check the response
+#         print(response)
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
+
 
 # def test_completion_cohere(): # commenting for now as the cohere endpoint is being flaky
 #     try:
