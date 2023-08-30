@@ -10,7 +10,9 @@ In this document we cover:
 * Quick Start Usage
 * Advanced Usage - Set Custom Cache Keys
 
+
 ## Quick Start Usage
+👉 Jump to [Colab Notebook Example](https://github.com/BerriAI/litellm/blob/main/cookbook/LiteLLM_GPTCache.ipynb)
 
 ### Install GPTCache
 ```
