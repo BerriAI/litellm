@@ -66,3 +66,14 @@ Same as the OpenAI format, but also includes logprobs. [See the code](https://gi
   }
 }
 ```
+
+# FAQ 
+**Does this support stop sequences?**
+
+Yes, we support stop sequences - and you can pass as many as allowed by Huggingface (or any provider!)
+
+**How do you deal with repetition penalty?**
+
+We map the presence penalty parameter in openai to the repetition penalty parameter on Huggingface. [See code](https://github.com/BerriAI/litellm/blob/b4b2dbf005142e0a483d46a07a88a19814899403/litellm/utils.py#L757). 
+
+We welcome any suggestions for improving our Huggingface integration - Create an [issue](https://github.com/BerriAI/litellm/issues/new/choose)/[Join the Discord](https://discord.com/invite/wuPM9dRgDw)!
