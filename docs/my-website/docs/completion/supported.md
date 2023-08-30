@@ -1,4 +1,4 @@
-# Supported Chat, Completion Models
+# Supported Providers + Models
 
 ## API Keys 
 liteLLM reads key naming, all keys should be named in the following format:
