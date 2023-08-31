@@ -1,8 +1,35 @@
-# A/B Test LLMs
+import Image from '@theme/IdealImage';
 
-LiteLLM allows you to call 100+ LLMs using completion
+# A/B Test LLMs - Tutorial!
 
-## This template server allows you to define LLMs with their A/B test ratios
+Move freely from OpenAI to other models using LiteLLM. In this tutorial, we'll go through how to A/B test between OpenAI, Claude and TogetherAI using LiteLLM.
+
+Resources: 
+* [Code](https://github.com/BerriAI/litellm/tree/main/cookbook/llm-ab-test-server)
+* [Sample Dashboard](https://lite-llm-abtest-ui.vercel.app/ishaan_discord@berri.ai)
+
+# Code Walkthrough
+## Setup
+
+### Install LiteLLM
+```
+pip install litellm
+```
+
+### Clone LiteLLM Git Repo
+```
+git clone https://github.com/BerriAI/litellm/
+```
+
+### Navigate to LiteLLM-A/B Test Server
+```
+cd litellm/cookbook/llm-ab-test-server
+```
+
+### Define LLMs with their A/B test ratios
+In main.py set select the LLMs you want to AB test in `llm_dict` (and remember to set their API keys in the .env)!
+
+We support 5+ providers and 100+ LLMs: https://docs.litellm.ai/docs/completion/supported
 
 ```python
 llm_dict = {
@@ -16,43 +43,17 @@ llm_dict = {
 All models defined can be called with the same Input/Output format using litellm `completion`
 ```python
 from litellm import completion
-# SET API KEYS in .env
+# SET API KEYS in .env - https://docs.litellm.ai/docs/completion/supported
+os.environ["OPENAI_API_KEY"] = ""
+os.environ["TOGETHERAI_API_KEY"] = ""
+os.environ["ANTHROPIC_API_KEY"] = "" 
+
 # openai call
 response = completion(model="gpt-3.5-turbo", messages=messages)
 # cohere call
-response = completion(model="command-nightly", messages=messages)
+response = completion(model="together_ai/togethercomputer/llama-2-70b-chat", messages=messages)
 # anthropic
 response = completion(model="claude-2", messages=messages)
-```
-
-This server allows you to view responses, costs and latency on your LiteLLM dashboard
-
-### LiteLLM Client UI
-<Image img={require('../../img/ab_test_logs.png')} />
-
-
-
-# Using LiteLLM A/B Testing Server
-## Setup
-
-### Install LiteLLM
-```
-pip install litellm
-```
-
-Stable version
-```
-pip install litellm==0.1.424
-```
-
-### Clone LiteLLM Git Repo
-```
-git clone https://github.com/BerriAI/litellm/
-```
-
-### Navigate to LiteLLM-A/B Test Server
-```
-cd litellm/cookbook/llm-ab-test-server
 ```
 
 ### Run the Server 
@@ -60,28 +61,7 @@ cd litellm/cookbook/llm-ab-test-server
 python3 main.py
 ```
 
-### Set your LLM Configs
-Set your LLMs and LLM weights you want to run A/B testing with 
-In main.py set your selected LLMs you want to AB test in `llm_dict`
-You can A/B test more than 100+ LLMs using LiteLLM https://docs.litellm.ai/docs/completion/supported
-```python
-llm_dict = {
-    "gpt-4": 0.2,
-    "together_ai/togethercomputer/llama-2-70b-chat": 0.4,
-    "claude-2": 0.2,
-    "claude-1.2": 0.2
-}
-```
-
-#### Setting your API Keys 
-Set your LLM API keys in a .env file in the directory or set them as `os.environ` variables.
-
-See https://docs.litellm.ai/docs/completion/supported for the format of API keys 
-
-LiteLLM generalizes api keys to follow the following format 
-`PROVIDER_API_KEY`
-
-## Making Requests to the LiteLLM Server Locally 
+## Testing our Server
 The server follows the Input/Output format set by the OpenAI Chat Completions API
 Here is an example request made the LiteLLM Server
 
@@ -126,12 +106,20 @@ curl --location 'http://localhost:5000/chat/completions' \
 '
 ```
 
+
 ## Viewing Logs
 After running your first `completion()` call litellm autogenerates a new logs dashboard for you. Link to your Logs dashboard is generated in the terminal / console. 
 
 Example Terminal Output with Log Dashboard
 <Image img={require('../../img/term_output.png')} />
 
+View responses, costs and latency on your Log dashboard
+
+<Image img={require('../../img/ab_test_logs.png')} />
+
+
+
+**Note** You can turn this off by setting `litellm.use_client = False`
 
 
 
