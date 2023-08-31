@@ -45,7 +45,7 @@ Here is what your logs dashboard looks like:
 <Image img={require('../../img/ab_test_logs.png')} />
 
 Your logs will be available at: 
-https://lite-llm-abtest-nckmhi7ue-clerkieai.vercel.app/<your-token>
+https://lite-llm-abtest-nckmhi7ue-clerkieai.vercel.app/your-token
 
 ### Live Demo UI
 👉https://lite-llm-abtest-nckmhi7ue-clerkieai.vercel.app/ishaan_discord@berri.ai
