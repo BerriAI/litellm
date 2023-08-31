@@ -34,8 +34,9 @@
 
 LiteLLM allows you to call 100+ LLMs using completion
 
-## This template server allows you to define LLMs with their A/B test ratios
+## Usage - A/B Test LLMs in Production
 
+### Set your A/B Test Ratios
 ```python
 llm_dict = {
     "gpt-4": 0.2,
@@ -45,8 +46,10 @@ llm_dict = {
 }
 ```
 
-Easily call selected model during `completion`
+### Select LLM + Make Completion call
+Use weighted selection, and call the model using litellm.completion
 ```python
+from litellm import completion
 selected_llm = random.choices(list(llm_dict.keys()), weights=list(llm_dict.values()))[0]
 
 response = completion(model=selected_model, messages=[{ "content": "Hello, how are you?","role": "user"}])
