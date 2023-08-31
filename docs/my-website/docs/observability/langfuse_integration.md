@@ -3,7 +3,7 @@
 LangFuse is open Source Observability & Analytics for LLM Apps
 Detailed production traces and a granular view on quality, cost and latency
 
-<Image img={require('../../img/langfuse.gif')} />
+<Image img={require('../../img/langfuse.png')} />
 
 ## Use Langfuse to log requests across all LLM Providers (OpenAI, Azure, Anthropic, Cohere, Replicate, PaLM)
 
