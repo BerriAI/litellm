@@ -78,10 +78,6 @@ https://lite-llm-abtest-nckmhi7ue-clerkieai.vercel.app/<your-token>
 pip install litellm
 ```
 
-Stable version
-```
-pip install litellm==0.1.424
-```
 
 ### Clone LiteLLM Git Repo
 ```
@@ -163,15 +159,6 @@ curl --location 'http://localhost:5000/chat/completions' \
 }
 '
 ```
-
-## Viewing Logs
-After running your first `completion()` call litellm autogenerates a new logs dashboard for you. Link to your Logs dashboard is generated in the terminal / console. 
-
-Example Terminal Output with Log Dashboard
-
-<img width="1280" alt="Screenshot 2023-08-25 at 8 53 27 PM" src="https://github.com/BerriAI/litellm/assets/29436595/8f4cc218-a991-4988-a05c-c8e508da5d18">
-
-
 
 # support / talk with founders
 - [Schedule Demo 👋](https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version)
