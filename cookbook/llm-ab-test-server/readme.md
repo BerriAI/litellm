@@ -27,6 +27,8 @@
     <a href="https://litellm.ai/playground" target="_blank">Demo Website</a>
 </h4>
 
+![pika-1693451518986-1x](https://github.com/BerriAI/litellm/assets/29436595/1cbf29a3-5313-4f61-ad6e-481dd8737309)
+
 LiteLLM allows you to call 100+ LLMs using completion
 
 ## This template server allows you to define LLMs with their A/B test ratios
@@ -53,9 +55,6 @@ response = completion(model="claude-2", messages=messages)
 ```
 
 This server allows you to view responses, costs and latency on your LiteLLM dashboard
-
-### LiteLLM Client UI
-![pika-1693023669579-1x](https://github.com/BerriAI/litellm/assets/29436595/86633e2f-eda0-4939-a588-84e4c100f36a)
 
 
 # Using LiteLLM A/B Testing Server
