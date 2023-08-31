@@ -9,6 +9,38 @@ Resources:
 * [Sample Dashboard](https://lite-llm-abtest-ui.vercel.app/ishaan_discord@berri.ai)
 
 # Code Walkthrough
+## Main Code
+This is the main piece of code that we'll write to handle our A/B test logic. We'll cover specific details in [Setup](#setup)
+### Define LLMs with their A/B test ratios
+In main.py set select the LLMs you want to AB test in `llm_dict` (and remember to set their API keys in the .env)!
+
+We support 5+ providers and 100+ LLMs: https://docs.litellm.ai/docs/completion/supported
+
+```python
+llm_dict = {
+    "gpt-4": 0.2,
+    "together_ai/togethercomputer/llama-2-70b-chat": 0.4,
+    "claude-2": 0.2,
+    "claude-1.2": 0.2
+}
+```
+
+All models defined can be called with the same Input/Output format using litellm `completion`
+```python
+from litellm import completion
+# SET API KEYS in .env - https://docs.litellm.ai/docs/completion/supported
+os.environ["OPENAI_API_KEY"] = ""
+os.environ["TOGETHERAI_API_KEY"] = ""
+os.environ["ANTHROPIC_API_KEY"] = "" 
+
+# openai call
+response = completion(model="gpt-3.5-turbo", messages=messages)
+# cohere call
+response = completion(model="together_ai/togethercomputer/llama-2-70b-chat", messages=messages)
+# anthropic
+response = completion(model="claude-2", messages=messages)
+```
+
 ## Setup
 
 ### Install LiteLLM
