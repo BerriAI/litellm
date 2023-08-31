@@ -16,6 +16,7 @@ from .integrations.berrispend import BerriSpendLogger
 from .integrations.supabase import Supabase
 from .integrations.llmonitor import LLMonitorLogger
 from .integrations.prompt_layer import PromptLayerLogger
+from .integrations.langfuse import LangFuseLogger
 from .integrations.litedebugger import LiteDebugger
 from openai.error import OpenAIError as OriginalError
 from openai.openai_object import OpenAIObject
@@ -41,6 +42,7 @@ slack_app = None
 alerts_channel = None
 heliconeLogger = None
 promptLayerLogger = None
+langFuseLogger = None
 llmonitorLogger = None
 aispendLogger = None
 berrispendLogger = None
@@ -837,7 +839,7 @@ def load_test_model(
 
 
 def set_callbacks(callback_list):
-    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, llmonitorLogger, promptLayerLogger
+    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, llmonitorLogger, promptLayerLogger, langFuseLogger
     try:
         for callback in callback_list:
             print_verbose(f"callback: {callback}")
@@ -898,6 +900,8 @@ def set_callbacks(callback_list):
                 llmonitorLogger = LLMonitorLogger()
             elif callback == "promptlayer":
                 promptLayerLogger = PromptLayerLogger()
+            elif callback == "langfuse":
+                langFuseLogger = LangFuseLogger()
             elif callback == "aispend":
                 aispendLogger = AISpendLogger()
             elif callback == "berrispend":
@@ -1165,6 +1169,16 @@ def handle_success(args, kwargs, result, start_time, end_time):
                         end_time=end_time,
                         print_verbose=print_verbose,
                     )
+                elif callback == "langfuse":
+                    print_verbose("reaches langfuse for logging!")
+                    langFuseLogger.log_event(
+                        kwargs=kwargs,
+                        response_obj=result,
+                        start_time=start_time,
+                        end_time=end_time,
+                        print_verbose=print_verbose,
+                    )
+
                 elif callback == "aispend":
                     print_verbose("reaches aispend for logging!")
                     model = args[0] if len(args) > 0 else kwargs["model"]

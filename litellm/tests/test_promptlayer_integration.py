@@ -28,4 +28,20 @@
 #     except Exception as e:
 #         print(e)
 
-# # test_chat_openai()
+
+
+# def test_chat_openai():
+#     litellm.success_callback = ["langfuse"]
+#     try:
+#         response = completion(model="gpt-3.5-turbo",
+#                               messages=[{
+#                                   "role": "user",
+#                                   "content": "Hi 👋 - i'm openai"
+#                               }])
+
+#         print(response)
+
+#     except Exception as e:
+#         print(e)
+
+# test_chat_openai()
