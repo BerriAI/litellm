@@ -1898,6 +1898,58 @@ async def stream_to_string(generator):
     return response
 
 
+########## experimental completion variants ############################
+
+def get_model_split_test(models, completion_call_id):
+    global last_fetched_at
+    try:
+        # make the api call
+        last_fetched_at = time.time()
+        print(f"last_fetched_at: {last_fetched_at}")
+        response = requests.post(
+            #http://api.litellm.ai
+            url="http://api.litellm.ai/get_model_split_test", # get the updated dict from table or update the table with the dict
+            headers={"content-type": "application/json"},
+            data=json.dumps({"completion_call_id": completion_call_id, "models": models}),
+        )
+        print_verbose(f"get_model_list response: {response.text}")
+        data = response.json()
+        # update model list
+        split_test_models = data["split_test_models"]
+        # update environment - if required
+        threading.Thread(target=get_all_keys, args=()).start()
+        return split_test_models
+    except:
+        print_verbose(
+            f"[Non-Blocking Error] get_all_keys error - {traceback.format_exc()}"
+        )
+
+
+def completion_with_split_tests(models={}, messages=[], use_client=False, **kwargs):
+    """
+    Example Usage: 
+
+    models =  {
+	    "gpt-4": 0.7, 
+	    "huggingface/wizard-coder": 0.3
+    }
+    messages = [{ "content": "Hello, how are you?","role": "user"}]
+    completion_with_split_tests(models=models, messages=messages)
+    """
+    import random
+    if use_client:
+        if "id" not in kwargs or kwargs["id"] is None:
+            raise ValueError("Please tag this completion call, if you'd like to update it's split test values through the UI. - eg. `completion_with_split_tests(.., id=1234)`.")
+        # get the most recent model split list from server 
+        models = get_model_split_test(models=models, completion_call_id=kwargs["id"])
+
+    try:
+        selected_llm = random.choices(list(models.keys()), weights=list(models.values()))[0]
+    except:
+        traceback.print_exc()
+        raise ValueError("""models does not follow the required format - {'model_name': 'split_percentage'}, e.g. {'gpt-4': 0.7, 'huggingface/wizard-coder': 0.3}""")
+    return litellm.completion(model=selected_llm, messages=messages, **kwargs)
+
 def completion_with_fallbacks(**kwargs):
     response = None
     rate_limited_models = set()

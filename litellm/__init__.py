@@ -286,6 +286,7 @@ from .utils import (
     Logging,
     acreate,
     get_model_list,
+    completion_with_split_tests
 )
 from .main import *  # type: ignore
 from .integrations import *
