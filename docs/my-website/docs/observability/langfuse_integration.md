@@ -1,3 +1,5 @@
+import Image from '@theme/IdealImage';
+
 # LangFuse Tutorial
 
 LangFuse is open Source Observability & Analytics for LLM Apps
@@ -6,11 +8,9 @@ Detailed production traces and a granular view on quality, cost and latency
 <Image img={require('../../img/langfuse.png')} />
 
 ## Use Langfuse to log requests across all LLM Providers (OpenAI, Azure, Anthropic, Cohere, Replicate, PaLM)
-
 liteLLM provides `callbacks`, making it easy for you to log data depending on the status of your responses.
 
 ### Using Callbacks
-
 Get your Langfuse API Keys from https://cloud.langfuse.com/
 
 Use just 2 lines of code, to instantly log your responses **across all providers** with langfuse:
