@@ -56,7 +56,18 @@ response = completion(model=selected_model, messages=[{ "content": "Hello, how a
 
 ```
 
-This server allows you to view responses, costs and latency on your LiteLLM dashboard
+### Viewing Logs, Feedback 
+In order to view logs set `litellm.token=<your-email>`
+```python
+import litellm
+litellm.token='ishaan_discord@berri.ai'
+```
+
+Your logs will be available at: 
+https://lite-llm-abtest-nckmhi7ue-clerkieai.vercel.app/<your-token>
+
+## Live Demo UI
+👉https://lite-llm-abtest-nckmhi7ue-clerkieai.vercel.app/ishaan_discord@berri.ai
 
 
 # Using LiteLLM A/B Testing Server
