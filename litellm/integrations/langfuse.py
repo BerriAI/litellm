@@ -34,7 +34,6 @@ class LangFuseLogger:
             # print(response_obj['usage']['prompt_tokens'])
             # print(response_obj['usage']['completion_tokens'])
 
-            generationStartTime = datetime.now()
             self.Langfuse.generation(InitialGeneration(
                 name="litellm-completion",
                 startTime=start_time,
@@ -48,7 +47,7 @@ class LangFuseLogger:
                     completion_tokens=response_obj['usage']['completion_tokens']
                 ),
             ))
-
+            self.Langfuse.flush()
             print_verbose(
                 f"Langfuse Layer Logging - final response object: {response_obj}"
             )
