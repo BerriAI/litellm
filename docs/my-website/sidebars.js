@@ -65,6 +65,7 @@ const sidebars = {
         "observability/callbacks",
         "observability/integrations",
         "observability/promptlayer_integration",
+        "observability/langfuse_integration",
         "observability/traceloop_integration",
         "observability/llmonitor_integration",
         "observability/helicone_integration",
