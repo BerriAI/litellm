@@ -27,7 +27,10 @@
     <a href="https://litellm.ai/playground" target="_blank">Demo Website</a>
 </h4>
 
+<h4 align="center">
+
 ![pika-1693451518986-1x](https://github.com/BerriAI/litellm/assets/29436595/1cbf29a3-5313-4f61-ad6e-481dd8737309)
+</h4>
 
 LiteLLM allows you to call 100+ LLMs using completion
 
