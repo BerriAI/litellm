@@ -20,7 +20,7 @@ litellm.use_client = True
 # litellm.set_verbose = True
 # litellm.secret_manager_client = InfisicalClient(token=os.environ["INFISICAL_TOKEN"])
 
-user_message = "Hello, whats the weather in San Francisco??"
+user_message = "write me a function to print hello world in python"
 messages = [{"content": user_message, "role": "user"}]
 
 
@@ -383,6 +383,14 @@ def test_completion_with_fallbacks():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+# def test_baseten():
+#     try:
+
+#         response = completion(model="baseten/RqgAEn0", messages=messages, logger_fn=logger_fn)
+#         # Add any assertions here to check the response
+#         print(response)
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
 
 # def test_baseten_falcon_7bcompletion():
 #     model_name = "qvv0xeq"

@@ -25,23 +25,24 @@ user_message = "Hello, how are you?"
 messages = [{"content": user_message, "role": "user"}]
 
 # test on baseten completion call
-try:
-    response = completion(
-        model="wizard-lm", messages=messages, stream=True, logger_fn=logger_fn
-    )
-    print(f"response: {response}")
-    complete_response = ""
-    start_time = time.time()
-    for chunk in response:
-        chunk_time = time.time()
-        print(f"time since initial request: {chunk_time - start_time:.5f}")
-        print(chunk["choices"][0]["delta"])
-        complete_response += chunk["choices"][0]["delta"]["content"]
-    if complete_response == "": 
-        raise Exception("Empty response received")
-except:
-    print(f"error occurred: {traceback.format_exc()}")
-    pass
+# try:
+#     response = completion(
+#         model="baseten/RqgAEn0", messages=messages, logger_fn=logger_fn
+#     )
+#     print(f"response: {response}")
+#     complete_response = ""
+#     start_time = time.time()
+#     for chunk in response:
+#         chunk_time = time.time()
+#         print(f"time since initial request: {chunk_time - start_time:.5f}")
+#         print(chunk["choices"][0]["delta"])
+#         complete_response += chunk["choices"][0]["delta"]["content"]
+#     if complete_response == "": 
+#         raise Exception("Empty response received")
+#     print(f"complete response: {complete_response}")
+# except:
+#     print(f"error occurred: {traceback.format_exc()}")
+#     pass
 
 # test on openai completion call
 try:
