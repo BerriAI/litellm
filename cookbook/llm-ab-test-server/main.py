@@ -32,8 +32,7 @@ def api_completion():
     try:
         # pass in data to completion function, unpack data
         selected_llm = random.choices(list(llm_dict.keys()), weights=list(llm_dict.values()))[0]
-        data['model'] = selected_llm
-        response = completion(**data)
+        response = completion(**data, model=selected_llm)
     except Exception as e:
         print(f"got error{e}")
     return response, 200
