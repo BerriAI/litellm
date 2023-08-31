@@ -1,4 +1,4 @@
-import os, openai, sys, json
+import os, openai, sys, json, inspect
 from typing import Any
 from functools import partial
 import dotenv, traceback, random, asyncio, time, contextvars
@@ -682,7 +682,7 @@ def completion(
                 litellm_params=litellm_params,
                 logger_fn=logger_fn,
             )
-            if "stream" in optional_params and optional_params["stream"] == True:
+            if inspect.isgenerator(model_response) or ("stream" in optional_params and optional_params["stream"] == True):
                 # don't try to access stream object,
                 response = CustomStreamWrapper(
                     model_response, model, custom_llm_provider="baseten", logging_obj=logging
