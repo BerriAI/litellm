@@ -66,9 +66,13 @@ litellm.token='ishaan_discord@berri.ai'
 Your logs will be available at: 
 https://lite-llm-abtest-nckmhi7ue-clerkieai.vercel.app/<your-token>
 
-## Live Demo UI
+### Live Demo UI
 👉https://lite-llm-abtest-nckmhi7ue-clerkieai.vercel.app/ishaan_discord@berri.ai
 
+## Viewing Responses + Custom Scores 
+LiteLLM UI allows you to view responses and set custom scores for each response
+
+<img width="626" alt="Screenshot 2023-08-30 at 8 08 59 PM" src="https://github.com/BerriAI/litellm/assets/29436595/7dc62d98-fb47-4b86-ad6f-f302b28bf15d">
 
 # Using LiteLLM A/B Testing Server
 ## Setup
