@@ -1361,7 +1361,7 @@ def exception_type(model, original_exception, custom_llm_provider):
                 original_exception.llm_provider = "azure"
             else:
                 original_exception.llm_provider = "openai"
-            if "This model's maximum context length is" in original_exception:
+            if "This model's maximum context length is" in original_exception._message:
                 raise ContextWindowExceededError(
                     message=str(original_exception),
                     model=model,
