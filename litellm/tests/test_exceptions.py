@@ -33,50 +33,16 @@ litellm.failure_callback = ["sentry"]
 
 # Approach: Run each model through the test -> assert if the correct error (always the same one) is triggered
 
-# models = ["gpt-3.5-turbo", "chatgpt-test",  "claude-instant-1", "command-nightly"]
+models = ["gpt-3.5-turbo"]
 test_model = "claude-instant-1"
-models = ["claude-instant-1"]
 
-
-def logging_fn(model_call_dict):
-    return
-    if "model" in model_call_dict:
-        print(f"model_call_dict: {model_call_dict['model']}")
-    else:
-        print(f"model_call_dict: {model_call_dict}")
-
-
-# Test 1: Context Window Errors
 @pytest.mark.parametrize("model", models)
 def test_context_window(model):
-    sample_text = "how does a court case get to the Supreme Court?" * 50000
+    sample_text = "how does a court case get to the Supreme Court?" * 1000
     messages = [{"content": sample_text, "role": "user"}]
-    try:
-        print(f"model: {model}")
-        response = completion(
-            model=model,
-            messages=messages,
-            logger_fn=logging_fn,
-        )
-    except ContextWindowExceededError as e:
-        print(f"ContextWindowExceededError: {e.llm_provider}")
-        return
-    except InvalidRequestError as e:
-        print(f"InvalidRequestError: {e.llm_provider}")
-        print(f"InvalidRequestError message: {e.message}")
-        return
-    except OpenAIError as e:
-        print(f"OpenAIError: {e.llm_provider}")
-        return
-    except Exception as e:
-        print("Uncaught Error in test_context_window")
-        print(f"Error Type: {type(e).__name__}")
-        print(f"Uncaught Exception - {e}")
-        pytest.fail(f"Error occurred: {e}")
-    return
 
-
-test_context_window(test_model)
+    with pytest.raises(ContextWindowExceededError):
+        completion(model=model, messages=messages)
 
 
 # Test 2: InvalidAuth Errors
