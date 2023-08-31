@@ -1606,9 +1606,9 @@ def safe_crash_reporting(model=None, exception=None, custom_llm_provider=None):
     }
     threading.Thread(target=litellm_telemetry, args=(data,)).start()
 
-
 def get_or_generate_uuid():
-    uuid_file = "litellm_uuid.txt"
+    temp_dir = os.path.join(os.path.abspath(os.sep), "tmp")
+    uuid_file =  os.path.join(temp_dir, "litellm_uuid.txt")
     try:
         # Try to open the file and load the UUID
         with open(uuid_file, "r") as file:
