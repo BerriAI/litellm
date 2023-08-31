@@ -25,20 +25,14 @@ llm_dict = {
 }
 ```
 
-All models defined can be called with the same Input/Output format using litellm `completion`
+### Select LLM + Make Completion call
+Use weighted selection, and call the model using litellm.completion
 ```python
 from litellm import completion
-# SET API KEYS in .env - https://docs.litellm.ai/docs/completion/supported
-os.environ["OPENAI_API_KEY"] = ""
-os.environ["TOGETHERAI_API_KEY"] = ""
-os.environ["ANTHROPIC_API_KEY"] = "" 
+selected_llm = random.choices(list(llm_dict.keys()), weights=list(llm_dict.values()))[0]
 
-# openai call
-response = completion(model="gpt-3.5-turbo", messages=messages)
-# cohere call
-response = completion(model="together_ai/togethercomputer/llama-2-70b-chat", messages=messages)
-# anthropic
-response = completion(model="claude-2", messages=messages)
+response = completion(model=selected_model, messages=[{ "content": "Hello, how are you?","role": "user"}])
+
 ```
 
 ## Setup
