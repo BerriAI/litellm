@@ -543,6 +543,11 @@ def client(original_function):
             # [OPTIONAL] ADD TO CACHE
             if litellm.caching or litellm.caching_with_models or litellm.cache != None: # user init a cache object
                 litellm.cache.add_cache(result, *args, **kwargs)
+            
+            # [OPTIONAL] Return LiteLLM call_id
+            if litellm.use_client == True:
+                result['litellm_call_id'] = litellm_call_id
+
             # LOG SUCCESS
             my_thread = threading.Thread(
                 target=handle_success, args=(args, kwargs, result, start_time, end_time)
