@@ -94,6 +94,7 @@ def completion(
     custom_api_base=None,
     litellm_call_id=None,
     litellm_logging_obj=None,
+    completion_call_id=None, # this is an optional param to tag individual completion calls 
     # model specific optional params
     # used by text-bison only
     top_k=40,
@@ -153,6 +154,7 @@ def completion(
             custom_api_base=custom_api_base,
             litellm_call_id=litellm_call_id,
             model_alias_map=litellm.model_alias_map,
+            completion_call_id=completion_call_id
         )
         logging.update_environment_variables(optional_params=optional_params, litellm_params=litellm_params)
         if custom_llm_provider == "azure":

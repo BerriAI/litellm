@@ -646,6 +646,7 @@ def get_litellm_params(
     custom_api_base=None,
     litellm_call_id=None,
     model_alias_map=None,
+    completion_call_id=None
 ):
     litellm_params = {
         "return_async": return_async,
@@ -657,6 +658,7 @@ def get_litellm_params(
         "custom_api_base": custom_api_base,
         "litellm_call_id": litellm_call_id,
         "model_alias_map": model_alias_map,
+        "completion_call_id": completion_call_id,
         "stream_response": {} # litellm_call_id: ModelResponse Dict
     }
 
