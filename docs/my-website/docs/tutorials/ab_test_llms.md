@@ -9,7 +9,6 @@ Resources:
 * [Sample Dashboard](https://lite-llm-abtest-ui.vercel.app/ishaan_discord@berri.ai)
 
 # Code Walkthrough
-## Main Code
 This is the main piece of code that we'll write to handle our A/B test logic. We'll cover specific details in [Setup](#setup)
 ### Define LLMs with their A/B test ratios
 In main.py set select the LLMs you want to AB test in `llm_dict` (and remember to set their API keys in the .env)!
@@ -121,22 +120,6 @@ curl --location 'http://localhost:5000/chat/completions' \
 }
 '
 ```
-
-
-## Viewing Logs
-After running your first `completion()` call litellm autogenerates a new logs dashboard for you. Link to your Logs dashboard is generated in the terminal / console. 
-
-Example Terminal Output with Log Dashboard
-<Image img={require('../../img/term_output.png')} />
-
-View responses, costs and latency on your Log dashboard
-
-<Image img={require('../../img/ab_test_logs.png')} />
-
-
-
-**Note** You can turn this off by setting `litellm.use_client = False`
-
 
 
 
