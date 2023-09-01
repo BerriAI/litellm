@@ -84,7 +84,7 @@ try:
 except Exception as e:
     pytest.fail(f"Error occurred: {e}")
 
-Test 3: On streaming completion call - setting client to true
+# Test 3: On streaming completion call - setting client to true
 try:
     # Redirect stdout
     old_stdout = sys.stdout
