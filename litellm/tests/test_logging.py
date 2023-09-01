@@ -176,6 +176,8 @@ try:
     sys.stdout = old_stdout
     output = new_stdout.getvalue().strip()
 
+    print(output)
+
     if "Logging Details Pre-API Call" not in output:
         raise Exception("Required log message not found!")
     elif "Logging Details Post-API Call" not in output:

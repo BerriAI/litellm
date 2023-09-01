@@ -157,7 +157,7 @@ class CallTypes(Enum):
 class Logging:
     global supabaseClient, liteDebuggerClient
 
-    def __init__(self, model, messages, stream, call_type, litellm_call_id):
+    def __init__(self, model, messages, stream, call_type, litellm_call_id, completion_call_id):
         if call_type not in [item.value for item in CallTypes]:
             allowed_values = ", ".join([item.value for item in CallTypes])
             raise ValueError(f"Invalid call_type {call_type}. Allowed values: {allowed_values}")
@@ -166,6 +166,7 @@ class Logging:
         self.stream = stream
         self.call_type = call_type
         self.litellm_call_id = litellm_call_id
+        self.completion_call_id = completion_call_id
     
     def update_environment_variables(self, optional_params, litellm_params):
         self.optional_params = optional_params
@@ -442,24 +443,10 @@ def client(original_function):
     ):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
         try:
             global callback_list, add_breadcrumb, user_logger_fn, Logging
-            if (
-                litellm.email is not None
-                or os.getenv("LITELLM_EMAIL", None) is not None
-                or litellm.token is not None
-                or os.getenv("LITELLM_TOKEN", None) is not None
-            ):  # add to input, success and failure callbacks if user is using hosted product
-                get_all_keys()
-                if "lite_debugger" not in callback_list and litellm.logging:
-                    litellm.input_callback.append("lite_debugger")
-                    litellm.success_callback.append("lite_debugger")
-                    litellm.failure_callback.append("lite_debugger")
-            elif litellm.use_client:
-                # create a litellm token for users
-                litellm.token = get_or_generate_uuid()
-                if litellm.logging:
-                    litellm.input_callback.append("lite_debugger")
-                    litellm.success_callback.append("lite_debugger")
-                    litellm.failure_callback.append("lite_debugger")
+            if "use_client" in kwargs and kwargs["use_client"] == True: 
+                litellm.input_callback.append("lite_debugger")
+                litellm.success_callback.append("lite_debugger")
+                litellm.failure_callback.append("lite_debugger")
             if (
                 len(litellm.input_callback) > 0
                 or len(litellm.success_callback) > 0
@@ -493,7 +480,8 @@ def client(original_function):
             elif call_type == CallTypes.embedding.value:
                 messages = args[1] if len(args) > 1 else kwargs["input"]
             stream = True if "stream" in kwargs and kwargs["stream"] == True else False
-            logging_obj = Logging(model=model, messages=messages, stream=stream, litellm_call_id=kwargs["litellm_call_id"], call_type=call_type)
+            completion_call_id = kwargs["id"] if "id" in kwargs else None
+            logging_obj = Logging(model=model, messages=messages, stream=stream, litellm_call_id=kwargs["litellm_call_id"], completion_call_id=completion_call_id, call_type=call_type)
             return logging_obj
         except:  # DO NOT BLOCK running the function because of this
             print_verbose(f"[Non-Blocking] {traceback.format_exc()}; args - {args}; kwargs - {kwargs}")
