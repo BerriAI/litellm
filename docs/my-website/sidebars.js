@@ -51,7 +51,7 @@ const sidebars = {
       items: [
         'tutorials/huggingface_tutorial', 
         'tutorials/TogetherAI_liteLLM', 
-        'tutorials/fallbacks', 
+        'tutorials/compare_llms',
         'tutorials/finetuned_chat_gpt',
         'tutorials/text_completion',
         'tutorials/litellm_Test_Multiple_Providers',
