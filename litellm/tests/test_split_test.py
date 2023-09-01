@@ -11,8 +11,8 @@ import litellm
 from litellm import completion_with_split_tests
 litellm.set_verbose = True
 split_per_model = {
-	"gpt-4": 0.7, 
-	"claude-instant-1.2": 0.3
+	"gpt-3.5-turbo": 0.8, 
+	"claude-instant-1.2": 0.1
 }
 
 messages = [{ "content": "Hello, how are you?","role": "user"}]
@@ -21,4 +21,4 @@ messages = [{ "content": "Hello, how are you?","role": "user"}]
 
 # test with client 
 
-print(completion_with_split_tests(models=split_per_model, messages=messages, use_client=True, id=1234))
+print(completion_with_split_tests(models=split_per_model, messages=messages, use_client=True, id="ishaan_1@berri.ai"))
