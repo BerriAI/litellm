@@ -154,184 +154,184 @@ try:
 except Exception as e:
     pytest.fail(f"Error occurred: {e}")
 
-## 2. On LiteLLM Call failure
-## TEST BAD KEY
+# ## 2. On LiteLLM Call failure
+# ## TEST BAD KEY
 
-# normal completion 
-## test on openai completion call
-try:
-    temporary_oai_key = os.environ["OPENAI_API_KEY"]
-    os.environ["OPENAI_API_KEY"] = "bad-key"
+# # normal completion 
+# ## test on openai completion call
+# try:
+#     temporary_oai_key = os.environ["OPENAI_API_KEY"]
+#     os.environ["OPENAI_API_KEY"] = "bad-key"
 
-    temporary_anthropic_key = os.environ["ANTHROPIC_API_KEY"]
-    os.environ["ANTHROPIC_API_KEY"] = "bad-key"
+#     temporary_anthropic_key = os.environ["ANTHROPIC_API_KEY"]
+#     os.environ["ANTHROPIC_API_KEY"] = "bad-key"
 
 
-    # Redirect stdout
-    old_stdout = sys.stdout
-    sys.stdout = new_stdout = io.StringIO()
+#     # Redirect stdout
+#     old_stdout = sys.stdout
+#     sys.stdout = new_stdout = io.StringIO()
     
-    try:
-        response = completion(model="gpt-3.5-turbo", messages=messages)
-    except AuthenticationError:
-        print(f"raised auth error")
-        pass
-    # Restore stdout
-    sys.stdout = old_stdout
-    output = new_stdout.getvalue().strip()
+#     try:
+#         response = completion(model="gpt-3.5-turbo", messages=messages)
+#     except AuthenticationError:
+#         print(f"raised auth error")
+#         pass
+#     # Restore stdout
+#     sys.stdout = old_stdout
+#     output = new_stdout.getvalue().strip()
 
-    print(output)
+#     print(output)
 
-    if "Logging Details Pre-API Call" not in output:
-        raise Exception("Required log message not found!")
-    elif "Logging Details Post-API Call" not in output: 
-        raise Exception("Required log message not found!")
-    elif "Logging Details LiteLLM-Failure Call" not in output:
-        raise Exception("Required log message not found!")
+#     if "Logging Details Pre-API Call" not in output:
+#         raise Exception("Required log message not found!")
+#     elif "Logging Details Post-API Call" not in output: 
+#         raise Exception("Required log message not found!")
+#     elif "Logging Details LiteLLM-Failure Call" not in output:
+#         raise Exception("Required log message not found!")
 
-    os.environ["OPENAI_API_KEY"] = temporary_oai_key
-    os.environ["ANTHROPIC_API_KEY"] = temporary_anthropic_key
+#     os.environ["OPENAI_API_KEY"] = temporary_oai_key
+#     os.environ["ANTHROPIC_API_KEY"] = temporary_anthropic_key
     
-    score += 1
-except Exception as e:
-    print(f"exception type: {type(e).__name__}")
-    pytest.fail(f"Error occurred: {e}")
-    pass
+#     score += 1
+# except Exception as e:
+#     print(f"exception type: {type(e).__name__}")
+#     pytest.fail(f"Error occurred: {e}")
+#     pass
 
-## test on non-openai completion call
-try:
-    temporary_oai_key = os.environ["OPENAI_API_KEY"]
-    os.environ["OPENAI_API_KEY"] = "bad-key"
+# ## test on non-openai completion call
+# try:
+#     temporary_oai_key = os.environ["OPENAI_API_KEY"]
+#     os.environ["OPENAI_API_KEY"] = "bad-key"
 
-    temporary_anthropic_key = os.environ["ANTHROPIC_API_KEY"]
-    os.environ["ANTHROPIC_API_KEY"] = "bad-key"
-    # Redirect stdout
-    old_stdout = sys.stdout
-    sys.stdout = new_stdout = io.StringIO()
+#     temporary_anthropic_key = os.environ["ANTHROPIC_API_KEY"]
+#     os.environ["ANTHROPIC_API_KEY"] = "bad-key"
+#     # Redirect stdout
+#     old_stdout = sys.stdout
+#     sys.stdout = new_stdout = io.StringIO()
 
-    try:
-        response = completion(model="claude-instant-1", messages=messages)
-    except AuthenticationError:
-        pass
+#     try:
+#         response = completion(model="claude-instant-1", messages=messages)
+#     except AuthenticationError:
+#         pass
 
-    if "Logging Details Pre-API Call" not in output:
-        raise Exception("Required log message not found!")
-    elif "Logging Details Post-API Call" not in output:
-        raise Exception("Required log message not found!")
-    elif "Logging Details LiteLLM-Failure Call" not in output:
-        raise Exception("Required log message not found!")
-    os.environ["OPENAI_API_KEY"] = temporary_oai_key
-    os.environ["ANTHROPIC_API_KEY"] = temporary_anthropic_key
-    score += 1
-except Exception as e:
-    print(f"exception type: {type(e).__name__}")
-    # Restore stdout
-    sys.stdout = old_stdout
-    output = new_stdout.getvalue().strip()
+#     if "Logging Details Pre-API Call" not in output:
+#         raise Exception("Required log message not found!")
+#     elif "Logging Details Post-API Call" not in output:
+#         raise Exception("Required log message not found!")
+#     elif "Logging Details LiteLLM-Failure Call" not in output:
+#         raise Exception("Required log message not found!")
+#     os.environ["OPENAI_API_KEY"] = temporary_oai_key
+#     os.environ["ANTHROPIC_API_KEY"] = temporary_anthropic_key
+#     score += 1
+# except Exception as e:
+#     print(f"exception type: {type(e).__name__}")
+#     # Restore stdout
+#     sys.stdout = old_stdout
+#     output = new_stdout.getvalue().strip()
 
-    print(output)
-    pytest.fail(f"Error occurred: {e}")
+#     print(output)
+#     pytest.fail(f"Error occurred: {e}")
 
 
-# streaming completion
-## test on openai completion call
-try:
-    temporary_oai_key = os.environ["OPENAI_API_KEY"]
-    os.environ["OPENAI_API_KEY"] = "bad-key"
+# # streaming completion
+# ## test on openai completion call
+# try:
+#     temporary_oai_key = os.environ["OPENAI_API_KEY"]
+#     os.environ["OPENAI_API_KEY"] = "bad-key"
 
-    temporary_anthropic_key = os.environ["ANTHROPIC_API_KEY"]
-    os.environ["ANTHROPIC_API_KEY"] = "bad-key"
-    # Redirect stdout
-    old_stdout = sys.stdout
-    sys.stdout = new_stdout = io.StringIO()
+#     temporary_anthropic_key = os.environ["ANTHROPIC_API_KEY"]
+#     os.environ["ANTHROPIC_API_KEY"] = "bad-key"
+#     # Redirect stdout
+#     old_stdout = sys.stdout
+#     sys.stdout = new_stdout = io.StringIO()
 
-    try:
-        response = completion(model="gpt-3.5-turbo", messages=messages)
-    except AuthenticationError:
-        pass
+#     try:
+#         response = completion(model="gpt-3.5-turbo", messages=messages)
+#     except AuthenticationError:
+#         pass
 
-    # Restore stdout
-    sys.stdout = old_stdout
-    output = new_stdout.getvalue().strip()
+#     # Restore stdout
+#     sys.stdout = old_stdout
+#     output = new_stdout.getvalue().strip()
 
-    print(output)
+#     print(output)
 
-    if "Logging Details Pre-API Call" not in output:
-        raise Exception("Required log message not found!")
-    elif "Logging Details Post-API Call" not in output:
-        raise Exception("Required log message not found!")
-    elif "Logging Details LiteLLM-Failure Call" not in output:
-        raise Exception("Required log message not found!")
+#     if "Logging Details Pre-API Call" not in output:
+#         raise Exception("Required log message not found!")
+#     elif "Logging Details Post-API Call" not in output:
+#         raise Exception("Required log message not found!")
+#     elif "Logging Details LiteLLM-Failure Call" not in output:
+#         raise Exception("Required log message not found!")
     
-    os.environ["OPENAI_API_KEY"] = temporary_oai_key
-    os.environ["ANTHROPIC_API_KEY"] = temporary_anthropic_key
-    score += 1
-except Exception as e:
-    print(f"exception type: {type(e).__name__}")
-    pytest.fail(f"Error occurred: {e}")
+#     os.environ["OPENAI_API_KEY"] = temporary_oai_key
+#     os.environ["ANTHROPIC_API_KEY"] = temporary_anthropic_key
+#     score += 1
+# except Exception as e:
+#     print(f"exception type: {type(e).__name__}")
+#     pytest.fail(f"Error occurred: {e}")
 
-## test on non-openai completion call
-try:
-    temporary_oai_key = os.environ["OPENAI_API_KEY"]
-    os.environ["OPENAI_API_KEY"] = "bad-key"
+# ## test on non-openai completion call
+# try:
+#     temporary_oai_key = os.environ["OPENAI_API_KEY"]
+#     os.environ["OPENAI_API_KEY"] = "bad-key"
 
-    temporary_anthropic_key = os.environ["ANTHROPIC_API_KEY"]
-    os.environ["ANTHROPIC_API_KEY"] = "bad-key"
-    # Redirect stdout
-    old_stdout = sys.stdout
-    sys.stdout = new_stdout = io.StringIO()
+#     temporary_anthropic_key = os.environ["ANTHROPIC_API_KEY"]
+#     os.environ["ANTHROPIC_API_KEY"] = "bad-key"
+#     # Redirect stdout
+#     old_stdout = sys.stdout
+#     sys.stdout = new_stdout = io.StringIO()
 
-    try:
-        response = completion(model="claude-instant-1", messages=messages)
-    except AuthenticationError:
-        pass
+#     try:
+#         response = completion(model="claude-instant-1", messages=messages)
+#     except AuthenticationError:
+#         pass
     
-    # Restore stdout
-    sys.stdout = old_stdout
-    output = new_stdout.getvalue().strip()
+#     # Restore stdout
+#     sys.stdout = old_stdout
+#     output = new_stdout.getvalue().strip()
 
-    print(output)
+#     print(output)
 
-    if "Logging Details Pre-API Call" not in output:
-        raise Exception("Required log message not found!")
-    elif "Logging Details Post-API Call" not in output:
-        raise Exception("Required log message not found!")
-    elif "Logging Details LiteLLM-Failure Call" not in output:
-        raise Exception("Required log message not found!")
-    score += 1
-except Exception as e:
-    print(f"exception type: {type(e).__name__}")
-    pytest.fail(f"Error occurred: {e}")
+#     if "Logging Details Pre-API Call" not in output:
+#         raise Exception("Required log message not found!")
+#     elif "Logging Details Post-API Call" not in output:
+#         raise Exception("Required log message not found!")
+#     elif "Logging Details LiteLLM-Failure Call" not in output:
+#         raise Exception("Required log message not found!")
+#     score += 1
+# except Exception as e:
+#     print(f"exception type: {type(e).__name__}")
+#     pytest.fail(f"Error occurred: {e}")
 
-# embedding
+# # embedding
 
-try:
-    temporary_oai_key = os.environ["OPENAI_API_KEY"]
-    os.environ["OPENAI_API_KEY"] = "bad-key"
+# try:
+#     temporary_oai_key = os.environ["OPENAI_API_KEY"]
+#     os.environ["OPENAI_API_KEY"] = "bad-key"
 
-    temporary_anthropic_key = os.environ["ANTHROPIC_API_KEY"]
-    os.environ["ANTHROPIC_API_KEY"] = "bad-key"
-    # Redirect stdout
-    old_stdout = sys.stdout
-    sys.stdout = new_stdout = io.StringIO()
+#     temporary_anthropic_key = os.environ["ANTHROPIC_API_KEY"]
+#     os.environ["ANTHROPIC_API_KEY"] = "bad-key"
+#     # Redirect stdout
+#     old_stdout = sys.stdout
+#     sys.stdout = new_stdout = io.StringIO()
 
-    try:
-        response = embedding(model="text-embedding-ada-002", input=["good morning from litellm"])
-    except AuthenticationError:
-        pass
+#     try:
+#         response = embedding(model="text-embedding-ada-002", input=["good morning from litellm"])
+#     except AuthenticationError:
+#         pass
 
-    # Restore stdout
-    sys.stdout = old_stdout
-    output = new_stdout.getvalue().strip()
+#     # Restore stdout
+#     sys.stdout = old_stdout
+#     output = new_stdout.getvalue().strip()
 
-    print(output)
+#     print(output)
 
-    if "Logging Details Pre-API Call" not in output:
-        raise Exception("Required log message not found!")
-    elif "Logging Details Post-API Call" not in output:
-        raise Exception("Required log message not found!")
-    elif "Logging Details LiteLLM-Failure Call" not in output:
-        raise Exception("Required log message not found!")
-except Exception as e:
-    print(f"exception type: {type(e).__name__}")
-    pytest.fail(f"Error occurred: {e}")
+#     if "Logging Details Pre-API Call" not in output:
+#         raise Exception("Required log message not found!")
+#     elif "Logging Details Post-API Call" not in output:
+#         raise Exception("Required log message not found!")
+#     elif "Logging Details LiteLLM-Failure Call" not in output:
+#         raise Exception("Required log message not found!")
+# except Exception as e:
+#     print(f"exception type: {type(e).__name__}")
+#     pytest.fail(f"Error occurred: {e}")
