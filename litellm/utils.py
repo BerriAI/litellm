@@ -292,29 +292,6 @@ class Logging:
                             call_type = self.call_type, 
                             stream = self.stream,
                         )
-                    if callback == "cache":
-                        try:
-                            # print("entering logger first time")
-                            # print(self.litellm_params["stream_response"])
-                            if litellm.cache != None and self.model_call_details.get('optional_params', {}).get('stream', False) == True:
-                                litellm_call_id = self.litellm_params["litellm_call_id"]
-                                if litellm_call_id in self.litellm_params["stream_response"]:
-                                    # append for the given call_id
-                                    if self.litellm_params["stream_response"][litellm_call_id]["choices"][0]["message"]["content"] == "default":
-                                        self.litellm_params["stream_response"][litellm_call_id]["choices"][0]["message"]["content"] = original_response # handle first try
-                                    else:
-                                        self.litellm_params["stream_response"][litellm_call_id]["choices"][0]["message"]["content"] += original_response
-                                else: # init a streaming response for this call id
-                                    new_model_response = ModelResponse(choices=[Choices(message=Message(content="default"))])
-                                    #print("creating new model response")
-                                    #print(new_model_response)
-                                    self.litellm_params["stream_response"][litellm_call_id] = new_model_response
-                                #print("adding to cache for", litellm_call_id)                              
-                                litellm.cache.add_cache(self.litellm_params["stream_response"][litellm_call_id], **self.model_call_details)
-                        except Exception as e:
-                        #    print("got exception")
-                        #    print(e)
-                           pass
                 except:
                     print_verbose(
                         f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while post-call logging with integrations {traceback.format_exc()}"
@@ -356,6 +333,25 @@ class Logging:
                                 call_type = self.call_type, 
                                 stream = self.stream,
                             )
+                    if callback == "cache":
+                        # print("entering logger first time")
+                        # print(self.litellm_params["stream_response"])
+                        if litellm.cache != None and self.model_call_details.get('optional_params', {}).get('stream', False) == True:
+                            litellm_call_id = self.litellm_params["litellm_call_id"]
+                            if litellm_call_id in self.litellm_params["stream_response"]:
+                                # append for the given call_id
+                                if self.litellm_params["stream_response"][litellm_call_id]["choices"][0]["message"]["content"] == "default":
+                                    self.litellm_params["stream_response"][litellm_call_id]["choices"][0]["message"]["content"] = result["content"] # handle first try
+                                else:
+                                    self.litellm_params["stream_response"][litellm_call_id]["choices"][0]["message"]["content"] += result["content"]
+                            else: # init a streaming response for this call id
+                                new_model_response = ModelResponse(choices=[Choices(message=Message(content="default"))])
+                                #print("creating new model response")
+                                #print(new_model_response)
+                                self.litellm_params["stream_response"][litellm_call_id] = new_model_response
+                            #print("adding to cache for", litellm_call_id)                              
+                            litellm.cache.add_cache(self.litellm_params["stream_response"][litellm_call_id], **self.model_call_details)
+
                 except Exception as e:
                     print_verbose(
                         f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while success logging with integrations {traceback.format_exc()}"
@@ -545,6 +541,7 @@ def client(original_function):
 
             # checking cache
             if (litellm.cache != None or litellm.caching or litellm.caching_with_models):
+                print_verbose(f"LiteLLM: Checking Cache")
                 cached_result = litellm.cache.get_cache(*args, **kwargs)
                 if cached_result != None:
                     return cached_result
