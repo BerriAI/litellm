@@ -177,6 +177,7 @@ try:
     output = new_stdout.getvalue().strip()
 
     print(output)
+    print(response)
 
     if "Logging Details Pre-API Call" not in output:
         raise Exception("Required log message not found!")
