@@ -6,8 +6,7 @@ class LiteDebugger:
     dashboard_url = None
 
     def __init__(self, email=None):
-        # self.api_url = "https://api.litellm.ai/debugger"
-        self.api_url = "http://0.0.0.0:4000/debugger"
+        self.api_url = "https://api.litellm.ai/debugger"
         self.validate_environment(email)
         pass
 
