@@ -36,8 +36,8 @@ litellm.set_verbose = True
 
 score = 0
 split_per_model = {
-	"gpt-4": 0.7, 
-	"claude-instant-1.2": 0.3
+	"gpt-4": 0, 
+	"claude-instant-1.2": 1
 }
 
 
@@ -81,20 +81,24 @@ try:
         raise Exception("LiteLLMDebugger: post-api call not logged!")
     if "LiteDebugger: Success/Failure Call Logging" not in output:
         raise Exception("LiteLLMDebugger: success/failure call not logged!")
-except:
-    pass
+except Exception as e:
+    pytest.fail(f"Error occurred: {e}")
 
-# Test 3: On streaming completion call - setting client to true
+Test 3: On streaming completion call - setting client to true
 try:
     # Redirect stdout
     old_stdout = sys.stdout
     sys.stdout = new_stdout = io.StringIO()
 
-    response = completion_with_split_tests(models=split_per_model, messages=messages, stream=True, use_client=True, id="6d383c99-488d-481d-aa1b-1f94935cec44")
-
+    response = completion_with_split_tests(models=split_per_model, messages=messages, stream=True, use_client=True, override_client=True, id="6d383c99-488d-481d-aa1b-1f94935cec44")
+    for data in response:
+        print(data)
     # Restore stdout
     sys.stdout = old_stdout
     output = new_stdout.getvalue().strip()
+
+    print(output)
+    print(f"response: {response}")
 
     if "LiteDebugger: Pre-API Call Logging" not in output:
         raise Exception("LiteLLMDebugger: pre-api call not logged!")
@@ -102,5 +106,6 @@ try:
         raise Exception("LiteLLMDebugger: post-api call not logged!")
     if "LiteDebugger: Success/Failure Call Logging" not in output:
         raise Exception("LiteLLMDebugger: success/failure call not logged!")
-except:
-    pass
+except Exception as e:
+    pytest.fail(f"Error occurred: {e}")
+
