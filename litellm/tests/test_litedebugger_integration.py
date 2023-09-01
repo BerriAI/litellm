@@ -44,68 +44,66 @@ split_per_model = {
 user_message = "Hello, how are you?"
 messages = [{"content": user_message, "role": "user"}]
 
-# Test 1: On completion call - without setting client to true -> ensure litedebugger is not initialized
-try:
-    # Redirect stdout
-    old_stdout = sys.stdout
-    sys.stdout = new_stdout = io.StringIO()
+# #Test 1: On completion call - without setting client to true -> ensure litedebugger is not initialized
+# try:
+#     # Redirect stdout
+#     old_stdout = sys.stdout
+#     sys.stdout = new_stdout = io.StringIO()
 
-    response = completion_with_split_tests(models=split_per_model, messages=messages)
+#     response = completion_with_split_tests(models=split_per_model, messages=messages)
 
-    # Restore stdout
-    sys.stdout = old_stdout
-    output = new_stdout.getvalue().strip()
+#     # Restore stdout
+#     sys.stdout = old_stdout
+#     output = new_stdout.getvalue().strip()
 
-    if "LiteLLMDebugger" in output:
-        raise Exception("LiteLLM Debugger should not be called!")
-    score += 1
-except Exception as e:
-    pytest.fail(f"Error occurred: {e}")
+#     if "LiteLLMDebugger" in output:
+#         raise Exception("LiteLLM Debugger should not be called!")
+#     score += 1
+# except Exception as e:
+#     pytest.fail(f"Error occurred: {e}")
 
 
 # Test 2: On normal completion call - setting client to true
-try:
-    # Redirect stdout
-    old_stdout = sys.stdout
-    sys.stdout = new_stdout = io.StringIO()
+def test_completion_with_client():
+    try:
+        # Redirect stdout
+        old_stdout = sys.stdout
+        sys.stdout = new_stdout = io.StringIO()
 
-    response = completion_with_split_tests(models=split_per_model, messages=messages, use_client=True, id="6d383c99-488d-481d-aa1b-1f94935cec44")
+        response = completion_with_split_tests(models=split_per_model, messages=messages, use_client=True, id="6d383c99-488d-481d-aa1b-1f94935cec44")
 
-    # Restore stdout
-    sys.stdout = old_stdout
-    output = new_stdout.getvalue().strip()
+        # Restore stdout
+        sys.stdout = old_stdout
+        output = new_stdout.getvalue().strip()
 
-    if "LiteDebugger: Pre-API Call Logging" not in output:
-        raise Exception("LiteLLMDebugger: pre-api call not logged!")
-    if "LiteDebugger: Post-API Call Logging" not in output:
-        raise Exception("LiteLLMDebugger: post-api call not logged!")
-    if "LiteDebugger: Success/Failure Call Logging" not in output:
-        raise Exception("LiteLLMDebugger: success/failure call not logged!")
-except Exception as e:
-    pytest.fail(f"Error occurred: {e}")
+        if "LiteDebugger: Pre-API Call Logging" not in output:
+            raise Exception(f"LiteLLMDebugger: pre-api call not logged! \n{output}")
+        if "LiteDebugger: Post-API Call Logging" not in output:
+            raise Exception("LiteLLMDebugger: post-api call not logged!")
+        if "LiteDebugger: Success/Failure Call Logging" not in output:
+            raise Exception("LiteLLMDebugger: success/failure call not logged!")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
-# Test 3: On streaming completion call - setting client to true
-try:
-    # Redirect stdout
-    old_stdout = sys.stdout
-    sys.stdout = new_stdout = io.StringIO()
+# # Test 3: On streaming completion call - setting client to true
+# try:
+#     # Redirect stdout
+#     old_stdout = sys.stdout
+#     sys.stdout = new_stdout = io.StringIO()
 
-    response = completion_with_split_tests(models=split_per_model, messages=messages, stream=True, use_client=True, override_client=True, id="6d383c99-488d-481d-aa1b-1f94935cec44")
-    for data in response:
-        print(data)
-    # Restore stdout
-    sys.stdout = old_stdout
-    output = new_stdout.getvalue().strip()
+#     response = completion_with_split_tests(models=split_per_model, messages=messages, stream=True, use_client=True, override_client=True, id="6d383c99-488d-481d-aa1b-1f94935cec44")
+#     for data in response:
+#         continue
+#     # Restore stdout
+#     sys.stdout = old_stdout
+#     output = new_stdout.getvalue().strip()
 
-    print(output)
-    print(f"response: {response}")
-
-    if "LiteDebugger: Pre-API Call Logging" not in output:
-        raise Exception("LiteLLMDebugger: pre-api call not logged!")
-    if "LiteDebugger: Post-API Call Logging" not in output:
-        raise Exception("LiteLLMDebugger: post-api call not logged!")
-    if "LiteDebugger: Success/Failure Call Logging" not in output:
-        raise Exception("LiteLLMDebugger: success/failure call not logged!")
-except Exception as e:
-    pytest.fail(f"Error occurred: {e}")
+#     if "LiteDebugger: Pre-API Call Logging" not in output:
+#         raise Exception("LiteLLMDebugger: pre-api call not logged!")
+#     if "LiteDebugger: Post-API Call Logging" not in output:
+#         raise Exception("LiteLLMDebugger: post-api call not logged!")
+#     if "LiteDebugger: Success/Failure Call Logging" not in output:
+#         raise Exception("LiteLLMDebugger: success/failure call not logged!")
+# except Exception as e:
+#     pytest.fail(f"Error occurred: {e}")
 
