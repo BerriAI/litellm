@@ -94,6 +94,7 @@ def completion(
     custom_api_base=None,
     litellm_call_id=None,
     litellm_logging_obj=None,
+    use_client=False,
     id=None, # this is an optional param to tag individual completion calls 
     # model specific optional params
     # used by text-bison only
@@ -245,17 +246,28 @@ def completion(
                 additional_args={"headers": litellm.headers, "api_base": api_base},
             )
             ## COMPLETION CALL
-            if litellm.headers:
-                response = openai.ChatCompletion.create(
-                    model=model,
-                    messages=messages,
-                    headers=litellm.headers,
-                    **optional_params,
+            try:
+                if litellm.headers:
+                    response = openai.ChatCompletion.create(
+                        model=model,
+                        messages=messages,
+                        headers=litellm.headers,
+                        **optional_params,
+                    )
+                else:
+                    response = openai.ChatCompletion.create(
+                        model=model, messages=messages, **optional_params
+                    )
+            except Exception as e:
+                ## LOGGING - log the original exception returned
+                logging.post_call(
+                    input=messages,
+                    api_key=api_key,
+                    original_response=str(e),
+                    additional_args={"headers": litellm.headers},
                 )
-            else:
-                response = openai.ChatCompletion.create(
-                    model=model, messages=messages, **optional_params
-                )
+                raise e
+            
             if "stream" in optional_params and optional_params["stream"] == True:
                 response = CustomStreamWrapper(response, model, logging_obj=logging)
                 return response
@@ -817,6 +829,12 @@ def embedding(
         logging.post_call(input=input, api_key=openai.api_key, original_response=response)
         return response
     except Exception as e:
+        ## LOGGING
+        logging.post_call(
+            input=input,
+            api_key=openai.api_key,
+            original_response=str(e),
+        )
         ## Map to OpenAI Exception
         raise exception_type(
             model=model,

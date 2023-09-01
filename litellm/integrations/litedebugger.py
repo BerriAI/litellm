@@ -6,7 +6,8 @@ class LiteDebugger:
     dashboard_url = None
 
     def __init__(self, email=None):
-        self.api_url = "https://api.litellm.ai/debugger"
+        # self.api_url = "https://api.litellm.ai/debugger"
+        self.api_url = "http://0.0.0.0:4000/debugger"
         self.validate_environment(email)
         pass
 
@@ -40,6 +41,7 @@ class LiteDebugger:
         litellm_params,
         optional_params,
     ):
+        print_verbose(f"LiteDebugger: Pre-API Call Logging")
         try:
             print_verbose(
                 f"LiteLLMDebugger: Logging - Enters input logging function for model {model}"
@@ -100,6 +102,7 @@ class LiteDebugger:
             pass
 
     def post_call_log_event(self, original_response, litellm_call_id, print_verbose, call_type, stream):
+        print_verbose(f"LiteDebugger: Post-API Call Logging")
         try:
             if call_type == "embedding":
                 litellm_data_obj = {
@@ -122,6 +125,7 @@ class LiteDebugger:
                     "litellm_call_id": litellm_call_id,
                     "user_email": self.user_email,
                 }
+            print_verbose(f"litedebugger post-call data object - {litellm_data_obj}")
             response = requests.post(
                 url=self.api_url,
                 headers={"content-type": "application/json"},
@@ -144,9 +148,10 @@ class LiteDebugger:
         call_type, 
         stream = False
     ):
+        print_verbose(f"LiteDebugger: Success/Failure Call Logging")
         try:
             print_verbose(
-                f"LiteLLMDebugger: Logging - Enters handler logging function for function {call_type} and stream set to {stream} with response object {response_obj}"
+                f"LiteLLMDebugger: Success/Failure Logging - Enters handler logging function for function {call_type} and stream set to {stream} with response object {response_obj}"
             )
             total_cost = 0  # [TODO] implement cost tracking
             response_time = (end_time - start_time).total_seconds()
