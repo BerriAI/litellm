@@ -180,8 +180,10 @@ class Logging:
         }
 
     def pre_call(self, input, api_key, model=None, additional_args={}):
+        # Log the exact input to the LLM API
+        print_verbose(f"Logging Details Pre-API Call")
         try:
-            print_verbose(f"logging pre call for model: {self.model} with call type: {self.call_type}")
+            # print_verbose(f"logging pre call for model: {self.model} with call type: {self.call_type}")
             self.model_call_details["input"] = input
             self.model_call_details["api_key"] = api_key
             self.model_call_details["additional_args"] = additional_args
@@ -193,9 +195,6 @@ class Logging:
 
             # User Logging -> if you pass in a custom logging function
             print_verbose(f"model call details: {self.model_call_details}")
-            print_verbose(
-                f"Logging Details: logger_fn - {self.logger_fn} | callable(logger_fn) - {callable(self.logger_fn)}"
-            )
             if self.logger_fn and callable(self.logger_fn):
                 try:
                     self.logger_fn(
@@ -257,7 +256,7 @@ class Logging:
                 capture_exception(e)
 
     def post_call(self, original_response, input=None, api_key=None,  additional_args={}):
-        # Do something here
+        # Log the exact result from the LLM API, for streaming - log the type of response received
         try:
             self.model_call_details["input"] = input
             self.model_call_details["api_key"] = api_key
@@ -266,7 +265,7 @@ class Logging:
 
             # User Logging -> if you pass in a custom logging function
             print_verbose(
-                f"Logging Details: logger_fn - {self.logger_fn} | callable(logger_fn) - {callable(self.logger_fn)}"
+                f"Logging Details Post-API Call: logger_fn - {self.logger_fn} | callable(logger_fn) - {callable(self.logger_fn)}"
             )
             if self.logger_fn and callable(self.logger_fn):
                 try:
@@ -331,6 +330,9 @@ class Logging:
 
     
     def success_handler(self, result, start_time, end_time):
+        print_verbose(
+                f"Logging Details LiteLLM-Success Call"
+            )
         try:
             for callback in litellm.success_callback:
                 try:
@@ -364,6 +366,9 @@ class Logging:
             pass
 
     def failure_handler(self, exception, traceback_exception, start_time, end_time):
+        print_verbose(
+                f"Logging Details LiteLLM-Failure Call"
+            )
         try:
             for callback in litellm.failure_callback:
                 if callback == "lite_debugger":
@@ -1699,6 +1704,9 @@ class CustomStreamWrapper:
         self.model = model
         self.custom_llm_provider = custom_llm_provider
         self.logging_obj = logging_obj
+        if self.logging_obj:
+                # Log the type of the received item
+                self.logging_obj.post_call(str(type(completion_stream)))
         if model in litellm.cohere_models:
             # cohere does not return an iterator, so we need to wrap it in one
             self.completion_stream = iter(completion_stream)
@@ -1825,7 +1833,7 @@ class CustomStreamWrapper:
                 completion_obj["content"] = self.handle_openai_chat_completion_chunk(chunk)
 
             # LOGGING
-            self.logging_obj.post_call(completion_obj["content"])
+            # self.logging_obj.post_call(completion_obj["content"])
             # return this for all models
             return {"choices": [{"delta": completion_obj}]}
         except:
