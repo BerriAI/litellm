@@ -25,7 +25,8 @@ llm_dict = {
 ```
 
 ### Select LLM + Make Completion call
-Use weighted selection, and call the model using litellm.completion
+Call the model using litellm.completion_with_split_tests, this uses the weights passed in to randomly select one of your provided models. [See implementation code](https://github.com/BerriAI/litellm/blob/9ccdbcbd6f14dd18827f59f8a1f9fd52d70443bb/litellm/utils.py#L1928)
+
 ```python
 from litellm import completion_with_split_tests
 
