@@ -12,7 +12,7 @@ import pytest
 import litellm
 from litellm import embedding, completion
 from litellm.caching import Cache
-# litellm.set_verbose=True
+litellm.set_verbose=True
 
 messages = [{"role": "user", "content": "who is ishaan Github?  "}]
 # comment
@@ -176,7 +176,6 @@ def test_embedding_caching():
 def test_caching_v2_stream_basic():
     try:
         litellm.cache = Cache()
-        # litellm.token="ishaan@berri.ai"
         messages = [{"role": "user", "content": "tell me a story in 2 sentences"}]
         response1 = completion(model="gpt-3.5-turbo", messages=messages, stream=True)
 
