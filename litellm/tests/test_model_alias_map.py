@@ -12,13 +12,12 @@ from litellm import embedding, completion
 
 litellm.set_verbose = True
 
-# Test: Check if the alias created via LiteDebugger is mapped correctly
-{
-    "top_p": 0.75,
-    "prompt": "What's the meaning of life?",
-    "num_beams": 4,
-    "temperature": 0.1,
+model_alias_map = {
+    "llama2": "replicate/llama-2-70b-chat:2796ee9483c3fd7aa2e171d38f4ca12251a30609463dcfd4cd76703f22e96cdf"
 }
+
+litellm.model_alias_map = model_alias_map
+
 print(
     completion(
         "llama2",

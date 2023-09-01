@@ -157,7 +157,7 @@ class CallTypes(Enum):
 class Logging:
     global supabaseClient, liteDebuggerClient
 
-    def __init__(self, model, messages, stream, call_type, litellm_call_id, completion_call_id):
+    def __init__(self, model, messages, stream, call_type, litellm_call_id, function_id):
         if call_type not in [item.value for item in CallTypes]:
             allowed_values = ", ".join([item.value for item in CallTypes])
             raise ValueError(f"Invalid call_type {call_type}. Allowed values: {allowed_values}")
@@ -166,7 +166,7 @@ class Logging:
         self.stream = stream
         self.call_type = call_type
         self.litellm_call_id = litellm_call_id
-        self.completion_call_id = completion_call_id
+        self.function_id = function_id
     
     def update_environment_variables(self, optional_params, litellm_params):
         self.optional_params = optional_params
@@ -235,7 +235,7 @@ class Logging:
                             litellm_params=self.model_call_details["litellm_params"],
                             optional_params=self.model_call_details["optional_params"],
                             print_verbose=print_verbose,
-                            call_type=self.call_type, 
+                            call_type=self.call_type
                         )
                 except Exception as e:
                     print_verbose(
@@ -289,7 +289,7 @@ class Logging:
                             litellm_call_id=self.litellm_params["litellm_call_id"],
                             print_verbose=print_verbose,
                             call_type = self.call_type, 
-                            stream = self.stream
+                            stream = self.stream,
                         )
                     if callback == "cache":
                         try:
@@ -349,11 +349,11 @@ class Logging:
                                 litellm_call_id=self.litellm_call_id,
                                 print_verbose=print_verbose,
                                 call_type = self.call_type, 
-                                stream = self.stream
+                                stream = self.stream,
                             )
                 except Exception as e:
                     print_verbose(
-                        f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while post-call logging with integrations {traceback.format_exc()}"
+                        f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while success logging with integrations {traceback.format_exc()}"
                     )
                     print_verbose(
                         f"LiteLLM.Logging: is sentry capture exception initialized {capture_exception}"
@@ -372,34 +372,46 @@ class Logging:
             )
         try:
             for callback in litellm.failure_callback:
-                if callback == "lite_debugger":
-                        print_verbose("reaches lite_debugger for logging!")
-                        print_verbose(f"liteDebuggerClient: {liteDebuggerClient}")
-                        result = {
-                            "model": self.model,
-                            "created": time.time(),
-                            "error": traceback_exception,
-                            "usage": {
-                                "prompt_tokens": prompt_token_calculator(
-                                    self.model, messages=self.messages
-                                ),
-                                "completion_tokens": 0,
-                            },
-                        }
-                        liteDebuggerClient.log_event(
-                            model=self.model,
-                            messages=self.messages,
-                            end_user=litellm._thread_context.user,
-                            response_obj=result,
-                            start_time=start_time,
-                            end_time=end_time,
-                            litellm_call_id=self.litellm_call_id,
-                            print_verbose=print_verbose,
-                            call_type = self.call_type, 
-                            stream = self.stream
-                        )
-            pass
+                try:
+                    if callback == "lite_debugger":
+                            print_verbose("reaches lite_debugger for logging!")
+                            print_verbose(f"liteDebuggerClient: {liteDebuggerClient}")
+                            result = {
+                                "model": self.model,
+                                "created": time.time(),
+                                "error": traceback_exception,
+                                "usage": {
+                                    "prompt_tokens": prompt_token_calculator(
+                                        self.model, messages=self.messages
+                                    ),
+                                    "completion_tokens": 0,
+                                },
+                            }
+                            liteDebuggerClient.log_event(
+                                model=self.model,
+                                messages=self.messages,
+                                end_user=litellm._thread_context.user,
+                                response_obj=result,
+                                start_time=start_time,
+                                end_time=end_time,
+                                litellm_call_id=self.litellm_call_id,
+                                print_verbose=print_verbose,
+                                call_type = self.call_type, 
+                                stream = self.stream,
+                            )
+                except Exception as e:
+                    print_verbose(
+                        f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while failure logging with integrations {traceback.format_exc()}"
+                    )
+                    print_verbose(
+                        f"LiteLLM.Logging: is sentry capture exception initialized {capture_exception}"
+                    )
+                    if capture_exception:  # log this error to sentry for debugging
+                        capture_exception(e)
         except:
+            print_verbose(
+                f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while failure logging {traceback.format_exc()}"
+            )
             pass
 
 
@@ -443,7 +455,9 @@ def client(original_function):
     ):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
         try:
             global callback_list, add_breadcrumb, user_logger_fn, Logging
+            function_id = kwargs["id"] if "id" in kwargs else None
             if "use_client" in kwargs and kwargs["use_client"] == True: 
+                print_verbose(f"litedebugger initialized")
                 litellm.input_callback.append("lite_debugger")
                 litellm.success_callback.append("lite_debugger")
                 litellm.failure_callback.append("lite_debugger")
@@ -461,6 +475,7 @@ def client(original_function):
                 )
                 set_callbacks(
                     callback_list=callback_list,
+                    function_id=function_id
                 )
             if add_breadcrumb:
                 add_breadcrumb(
@@ -480,8 +495,7 @@ def client(original_function):
             elif call_type == CallTypes.embedding.value:
                 messages = args[1] if len(args) > 1 else kwargs["input"]
             stream = True if "stream" in kwargs and kwargs["stream"] == True else False
-            completion_call_id = kwargs["id"] if "id" in kwargs else None
-            logging_obj = Logging(model=model, messages=messages, stream=stream, litellm_call_id=kwargs["litellm_call_id"], completion_call_id=completion_call_id, call_type=call_type)
+            logging_obj = Logging(model=model, messages=messages, stream=stream, litellm_call_id=kwargs["litellm_call_id"], function_id=function_id, call_type=call_type)
             return logging_obj
         except:  # DO NOT BLOCK running the function because of this
             print_verbose(f"[Non-Blocking] {traceback.format_exc()}; args - {args}; kwargs - {kwargs}")
@@ -833,7 +847,7 @@ def load_test_model(
         }
 
 
-def set_callbacks(callback_list):
+def set_callbacks(callback_list, function_id=None):
     global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, llmonitorLogger, promptLayerLogger, langFuseLogger
     try:
         for callback in callback_list:
@@ -902,14 +916,12 @@ def set_callbacks(callback_list):
             elif callback == "berrispend":
                 berrispendLogger = BerriSpendLogger()
             elif callback == "supabase":
-                print(f"instantiating supabase")
+                print_verbose(f"instantiating supabase")
                 supabaseClient = Supabase()
             elif callback == "lite_debugger":
                 print_verbose(f"instantiating lite_debugger")
-                if litellm.token:
-                    liteDebuggerClient = LiteDebugger(email=litellm.token)
-                else:
-                    liteDebuggerClient = LiteDebugger(email=litellm.email)
+                if function_id:
+                    liteDebuggerClient = LiteDebugger(email=function_id)
     except Exception as e:
         raise e
 
@@ -1944,7 +1956,7 @@ def completion_with_split_tests(models={}, messages=[], use_client=False, **kwar
     except:
         traceback.print_exc()
         raise ValueError("""models does not follow the required format - {'model_name': 'split_percentage'}, e.g. {'gpt-4': 0.7, 'huggingface/wizard-coder': 0.3}""")
-    return litellm.completion(model=selected_llm, messages=messages, **kwargs)
+    return litellm.completion(model=selected_llm, messages=messages, use_client=use_client, **kwargs)
 
 def completion_with_fallbacks(**kwargs):
     response = None
