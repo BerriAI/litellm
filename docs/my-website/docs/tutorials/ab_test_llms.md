@@ -27,10 +27,9 @@ llm_dict = {
 ### Select LLM + Make Completion call
 Use weighted selection, and call the model using litellm.completion
 ```python
-from litellm import completion
-selected_llm = random.choices(list(llm_dict.keys()), weights=list(llm_dict.values()))[0]
+from litellm import completion_with_split_tests
 
-response = completion(model=selected_model, messages=[{ "content": "Hello, how are you?","role": "user"}])
+response = completion_with_split_tests(model=llm_dict, messages=[{ "content": "Hello, how are you?","role": "user"}])
 
 ```
 
