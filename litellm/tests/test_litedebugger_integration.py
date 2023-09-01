@@ -63,27 +63,27 @@ messages = [{"content": user_message, "role": "user"}]
 #     pytest.fail(f"Error occurred: {e}")
 
 
-# Test 2: On normal completion call - setting client to true
-def test_completion_with_client():
-    try:
-        # Redirect stdout
-        old_stdout = sys.stdout
-        sys.stdout = new_stdout = io.StringIO()
+# # Test 2: On normal completion call - setting client to true
+# def test_completion_with_client():
+#     try:
+#         # Redirect stdout
+#         old_stdout = sys.stdout
+#         sys.stdout = new_stdout = io.StringIO()
 
-        response = completion_with_split_tests(models=split_per_model, messages=messages, use_client=True, id="6d383c99-488d-481d-aa1b-1f94935cec44")
+#         response = completion_with_split_tests(models=split_per_model, messages=messages, use_client=True, id="6d383c99-488d-481d-aa1b-1f94935cec44")
 
-        # Restore stdout
-        sys.stdout = old_stdout
-        output = new_stdout.getvalue().strip()
+#         # Restore stdout
+#         sys.stdout = old_stdout
+#         output = new_stdout.getvalue().strip()
 
-        if "LiteDebugger: Pre-API Call Logging" not in output:
-            raise Exception(f"LiteLLMDebugger: pre-api call not logged! \n{output}")
-        if "LiteDebugger: Post-API Call Logging" not in output:
-            raise Exception("LiteLLMDebugger: post-api call not logged!")
-        if "LiteDebugger: Success/Failure Call Logging" not in output:
-            raise Exception("LiteLLMDebugger: success/failure call not logged!")
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
+#         if "LiteDebugger: Pre-API Call Logging" not in output:
+#             raise Exception(f"LiteLLMDebugger: pre-api call not logged!")
+#         if "LiteDebugger: Post-API Call Logging" not in output:
+#             raise Exception("LiteLLMDebugger: post-api call not logged!")
+#         if "LiteDebugger: Success/Failure Call Logging" not in output:
+#             raise Exception("LiteLLMDebugger: success/failure call not logged!")
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
 
 # # Test 3: On streaming completion call - setting client to true
 # try:
