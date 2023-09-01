@@ -213,13 +213,7 @@ try:
         response = completion(model="claude-instant-1", messages=messages)
     except AuthenticationError:
         pass
-    
-    # Restore stdout
-    sys.stdout = old_stdout
-    output = new_stdout.getvalue().strip()
 
-    print(output)
-    
     if "Logging Details Pre-API Call" not in output:
         raise Exception("Required log message not found!")
     elif "Logging Details Post-API Call" not in output:
@@ -231,6 +225,11 @@ try:
     score += 1
 except Exception as e:
     print(f"exception type: {type(e).__name__}")
+    # Restore stdout
+    sys.stdout = old_stdout
+    output = new_stdout.getvalue().strip()
+
+    print(output)
     pytest.fail(f"Error occurred: {e}")
 
 

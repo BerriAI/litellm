@@ -1956,6 +1956,7 @@ def completion_with_split_tests(models={}, messages=[], use_client=False, overri
     completion_with_split_tests(models=models, messages=messages)
     """
     import random
+    model_configs = {}
     if use_client and not override_client:
         if "id" not in kwargs or kwargs["id"] is None:
             raise ValueError("Please tag this completion call, if you'd like to update it's split test values through the UI. - eg. `completion_with_split_tests(.., id=1234)`.")
