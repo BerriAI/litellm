@@ -1,134 +1,123 @@
 import Image from '@theme/IdealImage';
 
-# A/B Test LLMs - In Production!
-
-## Get Started here: https://admin.litellm.ai/
-
-### A/B Test any LLMs in production in 10 lines of code
-<Image img={require('../../img/ab_test_code.png')} />
-
-### A/B Testing Dashboard after running code
-<Image img={require('../../img/ab_test_logs.png')} />
+# Replace GPT-4 with Llama2 in Production!
+In this tutorial, we'll walk through replacing our GPT-4 endpoint with Llama2 in production. We'll assume you've deployed Llama2 on Huggingface Inference Endpoints (but any of TogetherAI, Baseten, Ollama, Petals, Openrouter should work as well).
 
 
-<!-- 
-Resources: 
-* [Code](https://github.com/BerriAI/litellm/tree/main/cookbook/llm-ab-test-server)
-* [Sample Dashboard](https://lite-llm-abtest-ui.vercel.app/ishaan_discord@berri.ai)
+# Relevant Links: 
+
+* 🚀 [Your production dashboard!](https://admin.litellm.ai/)
+
+
+* [Deploying models on Huggingface](https://huggingface.co/docs/inference-endpoints/guides/create_endpoint)
+* [All supported providers on LiteLLM](https://docs.litellm.ai/docs/completion/supported)
 
 # Code Walkthrough
-This is the main piece of code that we'll write to handle our A/B test logic. We'll cover specific details in [Setup](#setup)
-### Define LLMs with their A/B test ratios
-In main.py set select the LLMs you want to AB test in `llm_dict` (and remember to set their API keys in the .env)!
 
-We support 5+ providers and 100+ LLMs: https://docs.litellm.ai/docs/completion/supported
+## 1. Replace GPT-4 with Llama2 
+LiteLLM is a *drop-in replacement* for the OpenAI python sdk, so let's replace our openai ChatCompletion call with a LiteLLM completion call. 
 
-```python
-llm_dict = {
-    "gpt-4": 0.2,
-    "together_ai/togethercomputer/llama-2-70b-chat": 0.4,
-    "claude-2": 0.2,
-    "claude-1.2": 0.2
+### a) Replace Openai
+Replace this
+```python  
+openai.ChatCompletion.create(model="gpt-4", messages=messages)
+```
+
+With this
+```python  
+from litellm import completion
+completion(model="gpt-4", messages=messages)
+```
+
+### b) Replace GPT-4
+Assume Llama2 is deployed at this endpoint: "https://my-unique-endpoint.us-east-1.aws.endpoints.huggingface.cloud" on Huggingface. 
+
+```python  
+from litellm import completion
+completion(model="huggingface/https://my-unique-endpoint.us-east-1.aws.endpoints.huggingface.cloud", messages=messages)
+```
+
+## 2. 😱 But what if Llama2 isn't good enough?
+In production, we don't know if Llama2 is going to provide:
+* good results 
+* quickly
+
+### 💡 Split traffic b/w GPT-4 + Llama2
+If Llama2 returns poor answers / is extremely slow, we want to roll-back this change, and use GPT-4 instead.
+
+Instead of routing 100% of our traffic to Llama2, let's **start by just routing 20% traffic** to it and see how it does. 
+
+```python 
+## route 20% of responses to Llama2
+split_per_model = {
+	"gpt-4": 0.8, 
+	"huggingface/https://my-unique-endpoint.us-east-1.aws.endpoints.huggingface.cloud": 0.2
 }
 ```
 
-### Select LLM + Make Completion call
-Call the model using litellm.completion_with_split_tests, this uses the weights passed in to randomly select one of your provided models. [See implementation code](https://github.com/BerriAI/litellm/blob/9ccdbcbd6f14dd18827f59f8a1f9fd52d70443bb/litellm/utils.py#L1928)
+## 3. Complete Code
 
-```python
+### a) For Local
+This is what our complete code looks like.
+```python 
 from litellm import completion_with_split_tests
+import os 
 
-response = completion_with_split_tests(model=llm_dict, messages=[{ "content": "Hello, how are you?","role": "user"}])
+## set ENV variables
+os.environ["OPENAI_API_KEY"] = "openai key"
+os.environ["HUGGINGFACE_API_KEY"] = "huggingface key"
 
+## route 20% of responses to Llama2
+split_per_model = {
+	"gpt-4": 0.8, 
+	"huggingface/https://my-unique-endpoint.us-east-1.aws.endpoints.huggingface.cloud": 0.2
+}
+
+messages = [{ "content": "Hello, how are you?","role": "user"}]
+
+completion_with_split_tests(
+  models=split_per_model, 
+  messages=messages, 
+)
 ```
 
-### Viewing Logs, Feedback 
-In order to view logs set `litellm.token=<your-email>`
+### b) For Production
+
+If we're in production, we don't want to keep going to code to change model/test details (prompt, split%, etc.) and redeploying changes. 
+
+LiteLLM exposes a client dashboard to do this in a UI - and instantly updates your test config in prod.
+
+#### Relevant Code 
+
 ```python
-import litellm
-litellm.token='ishaan_discord@berri.ai'
+completion_with_split_tests(..., use_client=True, id="my-unique-id")
 ```
 
-Here is what your logs dashboard looks like:
+#### Complete Code
+
+```python 
+from litellm import completion_with_split_tests
+import os 
+
+## set ENV variables
+os.environ["OPENAI_API_KEY"] = "openai key"
+os.environ["HUGGINGFACE_API_KEY"] = "huggingface key"
+
+## route 20% of responses to Llama2
+split_per_model = {
+	"gpt-4": 0.8, 
+	"huggingface/https://my-unique-endpoint.us-east-1.aws.endpoints.huggingface.cloud": 0.2
+}
+
+messages = [{ "content": "Hello, how are you?","role": "user"}]
+
+completion_with_split_tests(
+  models=split_per_model, 
+  messages=messages, 
+  use_client=True, 
+  id="my-unique-id" # Auto-create this @ https://admin.litellm.ai/
+)
+```
+
+### A/B Testing Dashboard after running code - https://admin.litellm.ai/
 <Image img={require('../../img/ab_test_logs.png')} />
-
-Your logs will be available at: 
-https://lite-llm-abtest-nckmhi7ue-clerkieai.vercel.app/your-token
-
-### Live Demo UI
-👉https://lite-llm-abtest-nckmhi7ue-clerkieai.vercel.app/ishaan_discord@berri.ai
-
-## Viewing Responses + Custom Scores 
-LiteLLM UI allows you to view responses and set custom scores for each response
-
-## Setup
-
-### Install LiteLLM
-```
-pip install litellm
-```
-
-### Clone LiteLLM Git Repo
-```
-git clone https://github.com/BerriAI/litellm/
-```
-
-### Navigate to LiteLLM-A/B Test Server
-```
-cd litellm/cookbook/llm-ab-test-server
-```
-
-
-### Run the Server 
-```
-python3 main.py
-```
-
-## Testing our Server
-The server follows the Input/Output format set by the OpenAI Chat Completions API
-Here is an example request made the LiteLLM Server
-
-### Python
-```python
-import requests
-import json
-
-url = "http://localhost:5000/chat/completions"
-
-payload = json.dumps({
-  "messages": [
-    {
-      "content": "who is CTO of litellm",
-      "role": "user"
-    }
-  ]
-})
-headers = {
-  'Content-Type': 'application/json'
-}
-
-response = requests.request("POST", url, headers=headers, data=payload)
-
-print(response.text)
-
-```
-
-### Curl Command
-```
-curl --location 'http://localhost:5000/chat/completions' \
---header 'Content-Type: application/json' \
---data '{
-    "messages": [
-                    { 
-                        "content": "who is CTO of litellm",
-                        "role": "user"
-                    }
-                ]
-    
-}
-'
-```
-
-
-
- -->
