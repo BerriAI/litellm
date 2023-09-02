@@ -21,4 +21,4 @@ messages = [{ "content": "Hello, how are you?","role": "user"}]
 
 # test with client 
 
-print(completion_with_split_tests(models=split_per_model, messages=messages, use_client=True, id="ishaan_1@berri.ai"))
+print(completion_with_split_tests(models=split_per_model, messages=messages, use_client=True, id="test_id"))
