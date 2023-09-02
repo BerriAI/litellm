@@ -54,6 +54,27 @@ def test_completion_claude():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+# def test_completion_aleph_alpha():
+#     try:
+#         response = completion(
+#             model="luminous-base", messages=messages, logger_fn=logger_fn
+#         )
+#         # Add any assertions here to check the response
+#         print(response)
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
+
+
+# def test_completion_aleph_alpha_control_models():
+#     try:
+#         response = completion(
+#             model="luminous-base-control", messages=messages, logger_fn=logger_fn
+#         )
+#         # Add any assertions here to check the response
+#         print(response)
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
+
 def test_completion_with_litellm_call_id():
     try:
         litellm.use_client = False

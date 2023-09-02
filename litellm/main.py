@@ -24,6 +24,7 @@ from .llms.huggingface_restapi import HuggingfaceRestAPILLM
 from .llms.baseten import BasetenLLM
 from .llms.ai21 import AI21LLM
 from .llms.together_ai import TogetherAILLM
+from .llms.aleph_alpha import AlephAlphaLLM
 import tiktoken
 from concurrent.futures import ThreadPoolExecutor
 
@@ -428,6 +429,33 @@ def completion(
                 litellm_params=litellm_params,
                 logger_fn=logger_fn,
             )
+            if "stream" in optional_params and optional_params["stream"] == True:
+                # don't try to access stream object,
+                response = CustomStreamWrapper(model_response, model, logging_obj=logging)
+                return response
+            response = model_response
+        elif model in litellm.aleph_alpha_models:
+            aleph_alpha_key = (
+                api_key or litellm.aleph_alpha_key or os.environ.get("ALEPH_ALPHA_API_KEY")
+            )
+
+            aleph_alpha_client = AlephAlphaLLM(
+                encoding=encoding,
+                default_max_tokens_to_sample=litellm.max_tokens,
+                api_key=aleph_alpha_key,
+                logging_obj=logging # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
+            )
+
+            model_response = aleph_alpha_client.completion(
+                model=model,
+                messages=messages,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+            )
+
             if "stream" in optional_params and optional_params["stream"] == True:
                 # don't try to access stream object,
                 response = CustomStreamWrapper(model_response, model, logging_obj=logging)

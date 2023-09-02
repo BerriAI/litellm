@@ -780,6 +780,25 @@ def get_optional_params(  # use the openai defaults
         if presence_penalty != 0:
             optional_params["repetition_penalty"] = presence_penalty
         optional_params["details"] = True
+    elif model in litellm.aleph_alpha_models:
+        if max_tokens != float("inf"):
+            optional_params["maximum_tokens"] = max_tokens
+        if stream:
+            optional_params["stream"] = stream
+        if temperature != 1:
+            optional_params["temperature"] = temperature
+        if top_k != 40:
+            optional_params["top_k"] = top_k
+        if top_p != 1:
+            optional_params["top_p"] = top_p
+        if presence_penalty != 0:
+            optional_params["presence_penalty"] = presence_penalty
+        if frequency_penalty != 0:
+            optional_params["frequency_penalty"] = frequency_penalty
+        if n != 1:
+            optional_params["n"] = n
+        if stop != None:
+            optional_params["stop_sequences"] = stop
     else:  # assume passing in params for openai/azure openai
         if functions != []:
             optional_params["functions"] = functions
@@ -1766,6 +1785,14 @@ class CustomStreamWrapper:
         except:
             raise ValueError(f"Unable to parse response. Original response: {chunk}")
     
+    def handle_aleph_alpha_chunk(self, chunk):
+        chunk = chunk.decode("utf-8")
+        data_json = json.loads(chunk)
+        try:
+            return data_json["completions"][0]["completion"]
+        except:
+            raise ValueError(f"Unable to parse response. Original response: {chunk}")
+    
     def handle_openai_text_completion_chunk(self, chunk):
         try:
             return chunk["choices"][0]["text"]
@@ -1832,6 +1859,9 @@ class CustomStreamWrapper:
             elif self.custom_llm_provider and self.custom_llm_provider == "ai21": #ai21 doesn't provide streaming
                 chunk = next(self.completion_stream)
                 completion_obj["content"] = self.handle_ai21_chunk(chunk)
+            elif self.model in litellm.aleph_alpha_models: #ai21 doesn't provide streaming
+                chunk = next(self.completion_stream)
+                completion_obj["content"] = self.handle_aleph_alpha_chunk(chunk)
             elif self.model in litellm.open_ai_text_completion_models:
                 chunk = next(self.completion_stream)
                 completion_obj["content"] = self.handle_openai_text_completion_chunk(chunk)
