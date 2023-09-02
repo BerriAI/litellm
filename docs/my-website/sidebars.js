@@ -43,7 +43,7 @@ const sidebars = {
     },
     "token_usage",
     "exception_mapping",
-    'debugging/hosted_debugging',
+    // 'debugging/hosted_debugging',
     'debugging/local_debugging',
     {
       type: 'category',
