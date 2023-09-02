@@ -1990,7 +1990,8 @@ def completion_with_split_tests(models={}, messages=[], use_client=False, overri
     model_configs = {}
     if use_client and not override_client:
         if "id" not in kwargs or kwargs["id"] is None:
-            raise ValueError("Please tag this completion call, if you'd like to update it's split test values through the UI. - eg. `completion_with_split_tests(.., id=1234)`.")
+            kwargs["id"] = str(uuid.uuid4())
+            #raise ValueError("Please tag this completion call, if you'd like to update it's split test values through the UI. - eg. `completion_with_split_tests(.., id=1234)`.")
         # get the most recent model split list from server 
         models, model_configs = get_model_split_test(models=models, completion_call_id=kwargs["id"])
 
