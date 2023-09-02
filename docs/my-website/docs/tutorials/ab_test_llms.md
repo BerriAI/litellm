@@ -7,6 +7,11 @@ import Image from '@theme/IdealImage';
 ### A/B Test any LLMs in production in 10 lines of code
 <Image img={require('../../img/ab_test_code.png')} />
 
+### A/B Testing Dashboard after running code
+<Image img={require('../../img/ab_test_logs.png')} />
+
+
+<!-- 
 Resources: 
 * [Code](https://github.com/BerriAI/litellm/tree/main/cookbook/llm-ab-test-server)
 * [Sample Dashboard](https://lite-llm-abtest-ui.vercel.app/ishaan_discord@berri.ai)
@@ -126,4 +131,4 @@ curl --location 'http://localhost:5000/chat/completions' \
 
 
 
-
+ -->
