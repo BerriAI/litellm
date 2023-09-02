@@ -1,7 +1,7 @@
 import Image from '@theme/IdealImage';
 
 # Split traffic betwen GPT-4 and Llama2 in Production!
-In this tutorial, we'll walk through replacing our GPT-4 endpoint with Llama2 in production. We'll assume you've deployed Llama2 on Huggingface Inference Endpoints (but any of TogetherAI, Baseten, Ollama, Petals, Openrouter should work as well).
+In this tutorial, we'll walk through A/B testing between GPT-4 and Llama2 in production. We'll assume you've deployed Llama2 on Huggingface Inference Endpoints (but any of TogetherAI, Baseten, Ollama, Petals, Openrouter should work as well).
 
 
 # Relevant Resources: 
