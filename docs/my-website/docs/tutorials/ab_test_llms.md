@@ -1,8 +1,11 @@
 import Image from '@theme/IdealImage';
 
-# A/B Test LLMs - Tutorial!
+# A/B Test LLMs - In Production!
 
-Move freely from OpenAI to other models using LiteLLM. In this tutorial, we'll go through how to A/B test between OpenAI, Claude and TogetherAI using LiteLLM.
+## Get Started here: https://admin.litellm.ai/
+
+### A/B Test any LLMs in production in 10 lines of code
+<Image img={require('../../img/ab_test_code.png')} />
 
 Resources: 
 * [Code](https://github.com/BerriAI/litellm/tree/main/cookbook/llm-ab-test-server)
