@@ -1,10 +1,10 @@
 import Image from '@theme/IdealImage';
 
-# Replace GPT-4 with Llama2 in Production!
+# Split traffic betwen GPT-4 and Llama2 in Production!
 In this tutorial, we'll walk through replacing our GPT-4 endpoint with Llama2 in production. We'll assume you've deployed Llama2 on Huggingface Inference Endpoints (but any of TogetherAI, Baseten, Ollama, Petals, Openrouter should work as well).
 
 
-# Relevant Links: 
+# Relevant Resources: 
 
 * 🚀 [Your production dashboard!](https://admin.litellm.ai/)
 
@@ -14,38 +14,14 @@ In this tutorial, we'll walk through replacing our GPT-4 endpoint with Llama2 in
 
 # Code Walkthrough
 
-## 1. Replace GPT-4 with Llama2 
-LiteLLM is a *drop-in replacement* for the OpenAI python sdk, so let's replace our openai ChatCompletion call with a LiteLLM completion call. 
-
-### a) Replace Openai
-Replace this
-```python  
-openai.ChatCompletion.create(model="gpt-4", messages=messages)
-```
-
-With this
-```python  
-from litellm import completion
-completion(model="gpt-4", messages=messages)
-```
-
-### b) Replace GPT-4
-Assume Llama2 is deployed at this endpoint: "https://my-unique-endpoint.us-east-1.aws.endpoints.huggingface.cloud" on Huggingface. 
-
-```python  
-from litellm import completion
-completion(model="huggingface/https://my-unique-endpoint.us-east-1.aws.endpoints.huggingface.cloud", messages=messages)
-```
-
-## 2. 😱 But what if Llama2 isn't good enough?
 In production, we don't know if Llama2 is going to provide:
 * good results 
 * quickly
 
-### 💡 Split traffic b/w GPT-4 + Llama2
+### 💡 Route 20% traffic to Llama2
 If Llama2 returns poor answers / is extremely slow, we want to roll-back this change, and use GPT-4 instead.
 
-Instead of routing 100% of our traffic to Llama2, let's **start by just routing 20% traffic** to it and see how it does. 
+Instead of routing 100% of our traffic to Llama2, let's **start by routing 20% traffic** to it and see how it does. 
 
 ```python 
 ## route 20% of responses to Llama2
@@ -55,10 +31,10 @@ split_per_model = {
 }
 ```
 
-## 3. Complete Code
+## 👨‍💻 Complete Code
 
 ### a) For Local
-This is what our complete code looks like.
+If we're testing this in a script - this is what our complete code looks like.
 ```python 
 from litellm import completion_with_split_tests
 import os 
@@ -83,9 +59,9 @@ completion_with_split_tests(
 
 ### b) For Production
 
-If we're in production, we don't want to keep going to code to change model/test details (prompt, split%, etc.) and redeploying changes. 
+If we're in production, we don't want to keep going to code to change model/test details (prompt, split%, etc.) for our completion function and redeploying changes. 
 
-LiteLLM exposes a client dashboard to do this in a UI - and instantly updates your test config in prod.
+LiteLLM exposes a client dashboard to do this in a UI - and instantly updates our completion function in prod.
 
 #### Relevant Code 
 
