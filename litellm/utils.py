@@ -1801,7 +1801,10 @@ class CustomStreamWrapper:
             raise ValueError(f"Unable to parse response. Original response: {chunk}")
 
     def handle_openai_chat_completion_chunk(self, chunk):
-        return chunk["choices"][0]["delta"]["content"]
+        try:
+            return chunk["choices"][0]["delta"]["content"]
+        except:
+            return ""
 
     def handle_baseten_chunk(self, chunk):
         try:
@@ -1869,12 +1872,12 @@ class CustomStreamWrapper:
             else: # openai chat/azure models
                 chunk = next(self.completion_stream)
                 completion_obj["content"] = self.handle_openai_chat_completion_chunk(chunk)
-
+            
             # LOGGING
             threading.Thread(target=self.logging_obj.success_handler, args=(completion_obj,)).start()
             # return this for all models
             return {"choices": [{"delta": completion_obj}]}
-        except:
+        except Exception as e:
             raise StopIteration
     
     async def __anext__(self):
