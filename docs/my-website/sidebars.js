@@ -49,7 +49,6 @@ const sidebars = {
       type: 'category',
       label: 'Tutorials',
       items: [
-        'tutorials/ab_test_llms_locally',
         'tutorials/huggingface_tutorial', 
         'tutorials/TogetherAI_liteLLM', 
         'tutorials/compare_llms',
