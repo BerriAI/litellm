@@ -169,8 +169,9 @@ class Logging:
         self.litellm_call_id = litellm_call_id
         self.function_id = function_id
     
-    def update_environment_variables(self, optional_params, litellm_params):
+    def update_environment_variables(self, model, optional_params, litellm_params):
         self.optional_params = optional_params
+        self.model = model
         self.litellm_params = litellm_params
         self.logger_fn = litellm_params["logger_fn"]
         print_verbose(f"self.optional_params: {self.optional_params}")
