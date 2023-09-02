@@ -19,6 +19,8 @@ messages = [{ "content": "Hello, how are you?","role": "user"}]
 
 # print(completion_with_split_tests(models=split_per_model, messages=messages))
 
-# test with client 
-
+# test 
 print(completion_with_split_tests(models=split_per_model, messages=messages))
+
+# test with client, without id 
+print(completion_with_split_tests(models=split_per_model, messages=messages, use_client=True))
