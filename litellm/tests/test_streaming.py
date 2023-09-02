@@ -45,59 +45,62 @@ messages = [{"content": user_message, "role": "user"}]
 #     pass
 
 # test on openai completion call
-try:
-    response = completion(
-        model="text-davinci-003", messages=messages, stream=True, logger_fn=logger_fn
-    )
-    complete_response = ""
-    start_time = time.time()
-    for chunk in response:
-        chunk_time = time.time()
-        print(f"chunk: {chunk}")
-        complete_response += chunk["choices"][0]["delta"]["content"]
-    if complete_response == "": 
-        raise Exception("Empty response received")
-except:
-    print(f"error occurred: {traceback.format_exc()}")
-    pass
+def test_openai_text_completion_call():
+    try:
+        response = completion(
+            model="text-davinci-003", messages=messages, stream=True, logger_fn=logger_fn
+        )
+        complete_response = ""
+        start_time = time.time()
+        for chunk in response:
+            chunk_time = time.time()
+            print(f"chunk: {chunk}")
+            complete_response += chunk["choices"][0]["delta"]["content"]
+        if complete_response == "": 
+            raise Exception("Empty response received")
+    except:
+        print(f"error occurred: {traceback.format_exc()}")
+        pass
 
 # # test on ai21 completion call
-try:
-    response = completion(
-        model="j2-ultra", messages=messages, stream=True, logger_fn=logger_fn
-    )
-    print(f"response: {response}")
-    complete_response = ""
-    start_time = time.time()
-    for chunk in response:
-        chunk_time = time.time()
-        print(f"time since initial request: {chunk_time - start_time:.5f}")
-        print(chunk["choices"][0]["delta"])
-        complete_response += chunk["choices"][0]["delta"]["content"]
-    if complete_response == "": 
-        raise Exception("Empty response received")
-except:
-    print(f"error occurred: {traceback.format_exc()}")
-    pass
+def ai21_completion_call():
+    try:
+        response = completion(
+            model="j2-ultra", messages=messages, stream=True, logger_fn=logger_fn
+        )
+        print(f"response: {response}")
+        complete_response = ""
+        start_time = time.time()
+        for chunk in response:
+            chunk_time = time.time()
+            print(f"time since initial request: {chunk_time - start_time:.5f}")
+            print(chunk["choices"][0]["delta"])
+            complete_response += chunk["choices"][0]["delta"]["content"]
+        if complete_response == "": 
+            raise Exception("Empty response received")
+    except:
+        print(f"error occurred: {traceback.format_exc()}")
+        pass
 
 
 # test on openai completion call
-try:
-    response = completion(
-        model="gpt-3.5-turbo", messages=messages, stream=True, logger_fn=logger_fn
-    )
-    complete_response = ""
-    start_time = time.time()
-    for chunk in response:
-        chunk_time = time.time() 
-        print(f"time since initial request: {chunk_time - start_time:.5f}")
-        print(chunk["choices"][0]["delta"])
-        complete_response += chunk["choices"][0]["delta"]["content"]
-    if complete_response == "": 
-        raise Exception("Empty response received")
-except:
-    print(f"error occurred: {traceback.format_exc()}")
-    pass
+def test_openai_chat_completion_call():
+    try:
+        response = completion(
+            model="gpt-3.5-turbo", messages=messages, stream=True, logger_fn=logger_fn
+        )
+        complete_response = ""
+        start_time = time.time()
+        for chunk in response:
+            chunk_time = time.time() 
+            print(f"time since initial request: {chunk_time - start_time:.5f}")
+            print(chunk["choices"][0]["delta"])
+            complete_response += chunk["choices"][0]["delta"]["content"]
+        if complete_response == "": 
+            raise Exception("Empty response received")
+    except:
+        print(f"error occurred: {traceback.format_exc()}")
+        pass
 
 
 # # test on azure completion call
@@ -138,50 +141,79 @@ except:
 #     pass
 
 # test on together ai completion call - replit-code-3b
-try:
-    start_time = time.time()
-    response = completion(
-        model="Replit-Code-3B", messages=messages, logger_fn=logger_fn, stream=True
-    )
-    complete_response = ""
-    print(f"returned response object: {response}")
-    for chunk in response:
-        chunk_time = time.time()
-        print(f"time since initial request: {chunk_time - start_time:.2f}")
-        print(chunk["choices"][0]["delta"])
-        complete_response += (
-            chunk["choices"][0]["delta"]["content"]
-            if len(chunk["choices"][0]["delta"].keys()) > 0
-            else ""
+def test_together_ai_completion_call_replit():
+    try:
+        start_time = time.time()
+        response = completion(
+            model="Replit-Code-3B", messages=messages, logger_fn=logger_fn, stream=True
         )
-    if complete_response == "":
-        raise Exception("Empty response received")
-except:
-    print(f"error occurred: {traceback.format_exc()}")
-    pass
+        complete_response = ""
+        print(f"returned response object: {response}")
+        for chunk in response:
+            chunk_time = time.time()
+            print(f"time since initial request: {chunk_time - start_time:.2f}")
+            print(chunk["choices"][0]["delta"])
+            complete_response += (
+                chunk["choices"][0]["delta"]["content"]
+                if len(chunk["choices"][0]["delta"].keys()) > 0
+                else ""
+            )
+        if complete_response == "":
+            raise Exception("Empty response received")
+    except:
+        print(f"error occurred: {traceback.format_exc()}")
+        pass
 
 # # test on together ai completion call - starcoder
-try:
-    start_time = time.time()
-    response = completion(
-        model="together_ai/bigcode/starcoder",
-        messages=messages,
-        logger_fn=logger_fn,
-        stream=True,
-    )
-    complete_response = ""
-    print(f"returned response object: {response}")
-    for chunk in response:
-        chunk_time = time.time()
-        complete_response += (
-            chunk["choices"][0]["delta"]["content"]
-            if len(chunk["choices"][0]["delta"].keys()) > 0
-            else ""
+def test_together_ai_completion_call_starcoder():
+    try:
+        start_time = time.time()
+        response = completion(
+            model="together_ai/bigcode/starcoder",
+            messages=messages,
+            logger_fn=logger_fn,
+            stream=True,
         )
-        if len(complete_response) > 0:
-            print(complete_response)
-    if complete_response == "":
-        raise Exception("Empty response received")
-except:
-    print(f"error occurred: {traceback.format_exc()}")
-    pass
+        complete_response = ""
+        print(f"returned response object: {response}")
+        for chunk in response:
+            chunk_time = time.time()
+            complete_response += (
+                chunk["choices"][0]["delta"]["content"]
+                if len(chunk["choices"][0]["delta"].keys()) > 0
+                else ""
+            )
+            if len(complete_response) > 0:
+                print(complete_response)
+        if complete_response == "":
+            raise Exception("Empty response received")
+    except:
+        print(f"error occurred: {traceback.format_exc()}")
+        pass
+
+# test on aleph alpha completion call
+# def test_aleph_alpha_call():
+#     try:
+#         start_time = time.time()
+#         response = completion(
+#             model="luminous-base",
+#             messages=messages,
+#             logger_fn=logger_fn,
+#             stream=True,
+#         )
+#         complete_response = ""
+#         print(f"returned response object: {response}")
+#         for chunk in response:
+#             chunk_time = time.time()
+#             complete_response += (
+#                 chunk["choices"][0]["delta"]["content"]
+#                 if len(chunk["choices"][0]["delta"].keys()) > 0
+#                 else ""
+#             )
+#             if len(complete_response) > 0:
+#                 print(complete_response)
+#         if complete_response == "":
+#             raise Exception("Empty response received")
+#     except:
+#         print(f"error occurred: {traceback.format_exc()}")
+#         pass

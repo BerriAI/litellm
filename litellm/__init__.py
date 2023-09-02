@@ -28,6 +28,7 @@ vertex_project: Optional[str] = None
 vertex_location: Optional[str] = None
 togetherai_api_key: Optional[str] = None
 baseten_key: Optional[str] = None
+aleph_alpha_key: Optional[str] = None
 use_client = False
 logging = True
 caching = False # deprecated son
@@ -225,6 +226,15 @@ together_ai_models = [
     "togethercomputer/llama-2-7b",
 ]
 
+aleph_alpha_models = [
+    "luminous-base",
+    "luminous-base-control",
+    "luminous-extended",
+    "luminous-extended-control",
+    "luminous-supreme",
+    "luminous-supreme-control"
+]
+
 baseten_models = ["qvv0xeq", "q841o8w", "31dxrj3"]  # FALCON 7B  # WizardLM  # Mosaic ML
 
 model_list = (
@@ -240,6 +250,7 @@ model_list = (
     + ai21_models
     + together_ai_models
     + baseten_models
+    + aleph_alpha_models
 )
 
 provider_list = [
