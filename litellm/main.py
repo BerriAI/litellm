@@ -158,7 +158,7 @@ def completion(
             model_alias_map=litellm.model_alias_map,
             completion_call_id=id
         )
-        logging.update_environment_variables(optional_params=optional_params, litellm_params=litellm_params)
+        logging.update_environment_variables(model=model, optional_params=optional_params, litellm_params=litellm_params)
         if custom_llm_provider == "azure":
             # azure configs
             openai.api_type = "azure"
