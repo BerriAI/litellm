@@ -814,7 +814,7 @@ def embedding(
     try:
         response = None
         logging = litellm_logging_obj
-        logging.update_environment_variables(optional_params={}, litellm_params={"force_timeout": force_timeout, "azure": azure, "litellm_call_id": litellm_call_id, "logger_fn": logger_fn})
+        logging.update_environment_variables(model=model, optional_params={}, litellm_params={"force_timeout": force_timeout, "azure": azure, "litellm_call_id": litellm_call_id, "logger_fn": logger_fn})
         if azure == True:
             # azure configs
             openai.api_type = "azure"
