@@ -658,7 +658,7 @@ def get_litellm_params(
     replicate=False,
     together_ai=False,
     custom_llm_provider=None,
-    custom_api_base=None,
+    api_base=None,
     litellm_call_id=None,
     model_alias_map=None,
     completion_call_id=None
@@ -670,7 +670,7 @@ def get_litellm_params(
         "logger_fn": logger_fn,
         "verbose": verbose,
         "custom_llm_provider": custom_llm_provider,
-        "custom_api_base": custom_api_base,
+        "api_base": api_base,
         "litellm_call_id": litellm_call_id,
         "model_alias_map": model_alias_map,
         "completion_call_id": completion_call_id,
@@ -834,7 +834,7 @@ def get_optional_params(  # use the openai defaults
 def load_test_model(
     model: str,
     custom_llm_provider: str = "",
-    custom_api_base: str = "",
+    api_base: str = "",
     prompt: str = "",
     num_calls: int = 0,
     force_timeout: int = 0,
@@ -852,7 +852,7 @@ def load_test_model(
             model=model,
             messages=messages,
             custom_llm_provider=custom_llm_provider,
-            custom_api_base=custom_api_base,
+            api_base=api_base,
             force_timeout=force_timeout,
         )
         end_time = time.time()
