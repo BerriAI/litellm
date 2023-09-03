@@ -87,6 +87,7 @@ def completion(
     *,
     return_async=False,
     api_key=None,
+    api_version=None,
     force_timeout=600,
     logger_fn=None,
     verbose=False,
@@ -198,7 +199,9 @@ def completion(
                 )
             else:
                 response = openai.ChatCompletion.create(
-                    engine=model, messages=messages, **optional_params
+                    engine=model, 
+                    messages=messages, 
+                    **optional_params
                 )
             if "stream" in optional_params and optional_params["stream"] == True:
                 response = CustomStreamWrapper(response, model, logging_obj=logging)
@@ -228,7 +231,6 @@ def completion(
                 or get_secret("OPENAI_API_BASE")
                 or "https://api.openai.com/v1"
             )
-            openai.api_version = None
             if litellm.organization:
                 openai.organization = litellm.organization
             # set API KEY
@@ -236,8 +238,6 @@ def completion(
                 api_key = litellm.openai_key
             elif not api_key and get_secret("OPENAI_API_KEY"):
                 api_key = get_secret("OPENAI_API_KEY")
-
-            openai.api_key = api_key
 
             ## LOGGING
             logging.pre_call(
@@ -247,21 +247,15 @@ def completion(
             )
             ## COMPLETION CALL
             try:
-                if litellm.headers:
-                    response = openai.ChatCompletion.create(
-                        model=model,
-                        messages=messages,
-                        headers=litellm.headers,
-                        api_base=api_base,
-                        **optional_params,
-                    )
-                else:
-                    response = openai.ChatCompletion.create(
-                        model=model,
-                        messages=messages, 
-                        api_base=api_base, # thread safe setting of api_base
-                        **optional_params
-                    )
+                response = openai.ChatCompletion.create(
+                    model=model,
+                    messages=messages,
+                    headers=litellm.headers, # None by default
+                    api_base=api_base, # thread safe setting base, key, api_version
+                    api_key=api_key,
+                    api_version=api_version # default None
+                    **optional_params,
+                )
             except Exception as e:
                 ## LOGGING - log the original exception returned
                 logging.post_call(
