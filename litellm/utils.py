@@ -1561,7 +1561,6 @@ def exception_type(model, original_exception, custom_llm_provider):
                             llm_provider="huggingface",
                         )
             elif custom_llm_provider == "ai21":
-                print(f"e: {original_exception}")
                 if hasattr(original_exception, "message"):
                     if "Prompt has too many tokens" in original_exception.message:
                         exception_mapping_worked = True
@@ -1571,7 +1570,6 @@ def exception_type(model, original_exception, custom_llm_provider):
                             llm_provider="ai21"
                         )
                 if hasattr(original_exception, "status_code"):
-                    print(f"status code: {original_exception.status_code}")
                     if original_exception.status_code == 401:
                         exception_mapping_worked = True
                         raise AuthenticationError(
