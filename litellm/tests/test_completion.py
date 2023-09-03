@@ -54,6 +54,7 @@ def test_completion_claude():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+# aleph alpha
 # def test_completion_aleph_alpha():
 #     try:
 #         response = completion(
