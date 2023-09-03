@@ -228,7 +228,6 @@ def completion(
                 or get_secret("OPENAI_API_BASE")
                 or "https://api.openai.com/v1"
             )
-            openai.api_base = api_base
             openai.api_version = None
             if litellm.organization:
                 openai.organization = litellm.organization
@@ -253,11 +252,15 @@ def completion(
                         model=model,
                         messages=messages,
                         headers=litellm.headers,
+                        api_base=api_base,
                         **optional_params,
                     )
                 else:
                     response = openai.ChatCompletion.create(
-                        model=model, messages=messages, **optional_params
+                        model=model,
+                        messages=messages, 
+                        api_base=api_base, # thread safe setting of api_base
+                        **optional_params
                     )
             except Exception as e:
                 ## LOGGING - log the original exception returned
