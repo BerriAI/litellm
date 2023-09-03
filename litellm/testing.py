@@ -31,9 +31,9 @@ def testing_batch_completion(*args, **kwargs):
                         if isinstance(model, dict) and "custom_llm_provider" in model
                         else None
                     )
-                    kwargs_modified["custom_api_base"] = (
-                        model["custom_api_base"]
-                        if isinstance(model, dict) and "custom_api_base" in model
+                    kwargs_modified["api_base"] = (
+                        model["api_base"]
+                        if isinstance(model, dict) and "api_base" in model
                         else None
                     )
                 for message_list in batch_messages:

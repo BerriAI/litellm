@@ -24,7 +24,7 @@
 
 # def test_completion_ollama():
 #     try:
-#         response = completion(model="llama2", messages=messages, custom_api_base="http://localhost:11434", custom_llm_provider="ollama")
+#         response = completion(model="llama2", messages=messages, api_base="http://localhost:11434", custom_llm_provider="ollama")
 #         print(response)
 #         string_response = asyncio.run(get_response(response))
 #         print(string_response)
@@ -36,7 +36,7 @@
 
 # def test_completion_ollama_stream():
 #     try:
-#         response = completion(model="llama2", messages=messages, custom_api_base="http://localhost:11434", custom_llm_provider="ollama", stream=True)
+#         response = completion(model="llama2", messages=messages, api_base="http://localhost:11434", custom_llm_provider="ollama", stream=True)
 #         print(response)
 #         string_response = asyncio.run(get_response(response))
 #         print(string_response)

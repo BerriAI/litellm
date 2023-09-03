@@ -92,7 +92,7 @@ def completion(
     verbose=False,
     azure=False,
     custom_llm_provider=None,
-    custom_api_base=None,
+    api_base=None,
     litellm_call_id=None,
     litellm_logging_obj=None,
     use_client=False,
@@ -153,7 +153,7 @@ def completion(
             logger_fn=logger_fn,
             verbose=verbose,
             custom_llm_provider=custom_llm_provider,
-            custom_api_base=custom_api_base,
+            api_base=api_base,
             litellm_call_id=litellm_call_id,
             model_alias_map=litellm.model_alias_map,
             completion_call_id=id
@@ -223,7 +223,7 @@ def completion(
             # note: if a user sets a custom base - we should ensure this works
             # allow for the setting of dynamic and stateful api-bases
             api_base = (
-                custom_api_base
+                api_base
                 or litellm.api_base
                 or get_secret("OPENAI_API_BASE")
                 or "https://api.openai.com/v1"
@@ -567,7 +567,7 @@ def completion(
             model_response = huggingface_client.completion(
                 model=model,
                 messages=messages,
-                custom_api_base=custom_api_base,
+                api_base=api_base,
                 model_response=model_response,
                 print_verbose=print_verbose,
                 optional_params=optional_params,
@@ -692,7 +692,7 @@ def completion(
             response = model_response
         elif custom_llm_provider == "ollama":
             endpoint = (
-                litellm.api_base if litellm.api_base is not None else custom_api_base
+                litellm.api_base if litellm.api_base is not None else api_base
             )
             prompt = " ".join([message["content"] for message in messages])
 

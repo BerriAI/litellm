@@ -20,14 +20,14 @@ models = ["gorilla-7b-hf-v1", "gpt-4"]
 custom_llm_provider = None
 messages = [{"role": "user", "content": "Hey,  how's it going?"}]
 for model in models:  # iterate through list
-    custom_api_base = None
+    api_base = None
     if model == "gorilla-7b-hf-v1":
         custom_llm_provider = "custom_openai"
-        custom_api_base = "http://zanino.millennium.berkeley.edu:8000/v1"
+        api_base = "http://zanino.millennium.berkeley.edu:8000/v1"
     completion(
         model=model,
         messages=messages,
         custom_llm_provider=custom_llm_provider,
-        custom_api_base=custom_api_base,
+        api_base=api_base,
         logger_fn=logging_fn,
     )

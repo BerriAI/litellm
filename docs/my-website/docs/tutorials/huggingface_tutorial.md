@@ -41,14 +41,14 @@ from litellm import completion
 
 model = "meta-llama/Llama-2-7b-hf"
 messages = [{"role": "user", "content": "Hey, how's it going?"}] # LiteLLM follows the OpenAI format 
-custom_api_base = "https://ag3dkq4zui5nu8g3.us-east-1.aws.endpoints.huggingface.cloud"
+api_base = "https://ag3dkq4zui5nu8g3.us-east-1.aws.endpoints.huggingface.cloud"
 
 ### CALLING ENDPOINT
-completion(model=model, messages=messages, custom_llm_provider="huggingface", custom_api_base=custom_api_base)
+completion(model=model, messages=messages, custom_llm_provider="huggingface", api_base=api_base)
 ```
 
 What's happening? 
-- custom_api_base: Optional param. Since this uses a deployed endpoint (not the [default huggingface inference endpoint](https://github.com/BerriAI/litellm/blob/6aff47083be659b80e00cb81eb783cb24db2e183/litellm/llms/huggingface_restapi.py#L35)), we pass that to LiteLLM. 
+- api_base: Optional param. Since this uses a deployed endpoint (not the [default huggingface inference endpoint](https://github.com/BerriAI/litellm/blob/6aff47083be659b80e00cb81eb783cb24db2e183/litellm/llms/huggingface_restapi.py#L35)), we pass that to LiteLLM. 
 
 ### Case 3: Call Llama2 private Huggingface endpoint
 
@@ -72,10 +72,10 @@ os.environ["HF_TOKEN] = "..."
 
 model = "meta-llama/Llama-2-7b-hf"
 messages = [{"role": "user", "content": "Hey, how's it going?"}] # LiteLLM follows the OpenAI format 
-custom_api_base = "https://ag3dkq4zui5nu8g3.us-east-1.aws.endpoints.huggingface.cloud"
+api_base = "https://ag3dkq4zui5nu8g3.us-east-1.aws.endpoints.huggingface.cloud"
 
 ### CALLING ENDPOINT
-completion(model=model, messages=messages, custom_llm_provider="huggingface", custom_api_base=custom_api_base)
+completion(model=model, messages=messages, custom_llm_provider="huggingface", api_base=api_base)
 ```
 
 **Setting it as package variable**  
@@ -93,10 +93,10 @@ litellm.huggingface_key = "..."
 
 model = "meta-llama/Llama-2-7b-hf"
 messages = [{"role": "user", "content": "Hey, how's it going?"}] # LiteLLM follows the OpenAI format 
-custom_api_base = "https://ag3dkq4zui5nu8g3.us-east-1.aws.endpoints.huggingface.cloud"
+api_base = "https://ag3dkq4zui5nu8g3.us-east-1.aws.endpoints.huggingface.cloud"
 
 ### CALLING ENDPOINT
-completion(model=model, messages=messages, custom_llm_provider="huggingface", custom_api_base=custom_api_base)
+completion(model=model, messages=messages, custom_llm_provider="huggingface", api_base=api_base)
 ```
 
 **Passed in during completion call**  
@@ -111,8 +111,8 @@ from litellm import completion
 
 model = "meta-llama/Llama-2-7b-hf"
 messages = [{"role": "user", "content": "Hey, how's it going?"}] # LiteLLM follows the OpenAI format 
-custom_api_base = "https://ag3dkq4zui5nu8g3.us-east-1.aws.endpoints.huggingface.cloud"
+api_base = "https://ag3dkq4zui5nu8g3.us-east-1.aws.endpoints.huggingface.cloud"
 
 ### CALLING ENDPOINT
-completion(model=model, messages=messages, custom_llm_provider="huggingface", custom_api_base=custom_api_base, api_key="...")
+completion(model=model, messages=messages, custom_llm_provider="huggingface", api_base=api_base, api_key="...")
 ```
