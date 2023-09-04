@@ -52,9 +52,16 @@ context_window_fallback_list = ["gpt-3.5-turbo-16k", "gpt-4", "claude-instant-1"
 user_message = "Hello, how are you?"
 messages = [{ "content": user_message,"role": "user"}]
 
-for model in context_window_fallback_list:
-  try:
-      response = completion(model=model, messages=messages)
-  except ContextWindowExceededError as e:
-      completion_with_fallbacks(model=context_window_fallback_list[0], messages=messages, fallbacks=context_window_fallback_list[1:])
+initial_model = "gpt-3.5-turbo"
+try:
+    response = completion(model=initial_model, messages=messages)
+except ContextWindowExceededError as e:
+    for model in context_window_fallback_list:
+        try:
+            response = completion(model=model, messages=messages)
+            return response
+        except ContextWindowExceededError as e:
+            continue
+
+print(response)
 ```
