@@ -18,7 +18,7 @@ const sidebars = {
   // But you can create a sidebar manually
   tutorialSidebar: [
     { type: "doc", id: "index" }, // NEW
-    'tutorials/ab_test_llms',
+    'tutorials/compare_llms',
     {
       type: "category",
       label: "Completion()",
@@ -30,32 +30,32 @@ const sidebars = {
       items: ["embedding/supported_embedding"],
     },
     'completion/supported',
-    {
-      type: "category",
-      label: "Providers",
-      link: {
-        type: 'generated-index',
-        title: 'Providers',
-        description: 'Learn how to deploy + call models from different providers on LiteLLM',
-        slug: '/providers',
-      },
-      items: ["providers/huggingface"],
-    },
+    // {
+    //   type: "category",
+    //   label: "Providers",
+    //   link: {
+    //     type: 'generated-index',
+    //     title: 'Providers',
+    //     description: 'Learn how to deploy + call models from different providers on LiteLLM',
+    //     slug: '/providers',
+    //   },
+    //   items: ["providers/huggingface"],
+    // },
     "token_usage",
     "exception_mapping",
-    // 'debugging/hosted_debugging',
     'debugging/local_debugging',
     {
       type: 'category',
       label: 'Tutorials',
       items: [
+        "tutorials/model_fallbacks",
+        'tutorials/ab_test_llms',
         'tutorials/huggingface_tutorial', 
         'tutorials/TogetherAI_liteLLM', 
-        'tutorials/compare_llms',
         'tutorials/finetuned_chat_gpt',
         'tutorials/text_completion',
         'tutorials/litellm_Test_Multiple_Providers',
-        "tutorials/first_playground"
+        "tutorials/first_playground",
       ],
     },
     {
