@@ -47,7 +47,7 @@ def get_model_cost_map():
         print("Error occurred:", e)
         return None
 model_cost = get_model_cost_map()
-custom_prompt_dict = {}
+custom_prompt_dict:Dict[str, dict] = {}
 ####### THREAD-SPECIFIC DATA ###################
 class MyLocal(threading.local):
     def __init__(self):
