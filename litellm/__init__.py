@@ -47,7 +47,7 @@ def get_model_cost_map():
         print("Error occurred:", e)
         return None
 model_cost = get_model_cost_map()
-
+custom_prompt_dict = {}
 ####### THREAD-SPECIFIC DATA ###################
 class MyLocal(threading.local):
     def __init__(self):
@@ -224,7 +224,8 @@ from .utils import (
     acreate,
     get_model_list,
     completion_with_split_tests,
-    get_max_tokens
+    get_max_tokens,
+    register_prompt_template
 )
 from .main import *  # type: ignore
 from .integrations import *
