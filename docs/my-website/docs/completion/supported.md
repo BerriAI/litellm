@@ -151,6 +151,16 @@ https://aws.amazon.com/sagemaker/ Use liteLLM to easily call custom LLMs on Sage
 | Llama2 7B        | `completion(model='sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b, messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']`     |
 | Custom LLM Endpoint        | `completion(model='sagemaker/your-endpoint, messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']`     |
 
+### Aleph Alpha Models
+https://www.aleph-alpha.com/
+
+| Model Name       | Function Call                                  | Required OS Variables              |
+|------------------|--------------------------------------------|------------------------------------|
+| luminous-base       | `completion(model='luminous-base', messages=messages)`         | `os.environ['ALEPHALPHA_API_KEY']`     |
+| luminous-extended       | `completion(model='luminous-extended', messages=messages)`         | `os.environ['ALEPHALPHA_API_KEY']`     |
+| luminous-supreme     | `completion(model='luminous-supreme', messages=messages)`         | `os.environ['ALEPHALPHA_API_KEY']`     |
+
+
 ### Baseten Models
 Baseten provides infrastructure to deploy and serve ML models https://www.baseten.co/. Use liteLLM to easily call models deployed on Baseten.
 
