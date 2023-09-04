@@ -6,3 +6,4 @@ tiktoken
 importlib_metadata
 baseten
 gptcache
+boto3
