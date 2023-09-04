@@ -4,7 +4,7 @@ from enum import Enum
 import requests
 import time
 from typing import Callable
-from litellm.utils import ModelResponse
+from litellm.utils import ModelResponse, get_secret
 import sys
 
 class SagemakerError(Exception):
@@ -21,6 +21,8 @@ os.environ['AWS_ACCESS_KEY_ID'] = ""
 os.environ['AWS_SECRET_ACCESS_KEY'] = ""
 """
 
+# set os.environ['AWS_REGION_NAME'] = <your-region_name>
+
 def completion(
     model: str,
     messages: list,
@@ -35,12 +37,16 @@ def completion(
     import sys
     if 'boto3' not in sys.modules:
         import boto3
-    
+
+    region_name = (
+        get_secret("AWS_REGION_NAME") or
+        "us-west-2" # default to us-west-2
+    )
+
     client = boto3.client(
         "sagemaker-runtime", 
-        region_name="us-west-2"
+        region_name=region_name
     )
-    
 
     model = model
     prompt = ""
