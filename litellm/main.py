@@ -25,8 +25,8 @@ from .llms import ai21
 from .llms import sagemaker
 from .llms import bedrock
 from .llms import huggingface_restapi
+from .llms import aleph_alpha
 from .llms.baseten import BasetenLLM
-from .llms.aleph_alpha import AlephAlphaLLM
 import tiktoken
 from concurrent.futures import ThreadPoolExecutor
 
@@ -427,17 +427,10 @@ def completion(
             response = model_response
         elif model in litellm.aleph_alpha_models:
             aleph_alpha_key = (
-                api_key or litellm.aleph_alpha_key or os.environ.get("ALEPH_ALPHA_API_KEY")
+                api_key or litellm.aleph_alpha_key or get_secret("ALEPH_ALPHA_API_KEY") or get_secret("ALEPHALPHA_API_KEY")
             )
 
-            aleph_alpha_client = AlephAlphaLLM(
-                encoding=encoding,
-                default_max_tokens_to_sample=litellm.max_tokens,
-                api_key=aleph_alpha_key,
-                logging_obj=logging # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
-            )
-
-            model_response = aleph_alpha_client.completion(
+            model_response = aleph_alpha.completion(
                 model=model,
                 messages=messages,
                 model_response=model_response,
@@ -445,6 +438,10 @@ def completion(
                 optional_params=optional_params,
                 litellm_params=litellm_params,
                 logger_fn=logger_fn,
+                encoding=encoding,
+                default_max_tokens_to_sample=litellm.max_tokens,
+                api_key=aleph_alpha_key,
+                logging_obj=logging # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
             )
 
             if "stream" in optional_params and optional_params["stream"] == True:
