@@ -392,16 +392,19 @@ def test_completion_together_ai():
         pytest.fail(f"Error occurred: {e}")
 
 
-# def test_completion_sagemaker():
-#     try:
-#         response = completion(
-#             model="sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b", 
-#             messages=messages
-#         )
-#         # Add any assertions here to check the response
-#         print(response)
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
+def test_completion_sagemaker():
+    try:
+        response = completion(
+            model="sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b", 
+            messages=messages,
+            temperature=0.2,
+            max_tokens=80,
+        )
+        # Add any assertions here to check the response
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
 
 # def test_vertex_ai():
 #     model_name = "chat-bison"

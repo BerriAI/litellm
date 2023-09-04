@@ -58,8 +58,7 @@ def completion(
             prompt += f"{message['content']}"
     data = {
         "inputs": prompt,
-        # "instruction": prompt, # some baseten models require the prompt to be passed in via the 'instruction' kwarg
-        **optional_params,
+        "parameters": optional_params
     }
 
     ## LOGGING
