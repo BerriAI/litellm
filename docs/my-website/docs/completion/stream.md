@@ -33,7 +33,7 @@ print(response)
 ```
 
 ## Async Streaming
-We've implemented an `__anext__()` function in the streaming object returned. This 
+We've implemented an `__anext__()` function in the streaming object returned. This enables async iteration over the streaming object. 
 ### Usage
 ```
 from litellm import acompletion
