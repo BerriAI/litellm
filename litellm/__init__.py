@@ -265,6 +265,7 @@ provider_list = [
     "ai21",
     "baseten",
     "azure",
+    "sagemaker",
 ]
 
 models_by_provider = {
