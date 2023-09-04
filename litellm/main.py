@@ -21,9 +21,9 @@ from litellm.utils import (
 )
 from .llms import anthropic
 from .llms import together_ai
+from .llms import ai21
 from .llms.huggingface_restapi import HuggingfaceRestAPILLM
 from .llms.baseten import BasetenLLM
-from .llms.ai21 import AI21LLM
 from .llms.aleph_alpha import AlephAlphaLLM
 import tiktoken
 from concurrent.futures import ThreadPoolExecutor
@@ -657,12 +657,8 @@ def completion(
                 api_key
                 or litellm.ai21_key
                 or os.environ.get("AI21_API_KEY")
-            )
-            ai21_client = AI21LLM(
-                encoding=encoding, api_key=ai21_key, logging_obj=logging
-            )
-            
-            model_response = ai21_client.completion(
+            )            
+            model_response = ai21.completion(
                 model=model,
                 messages=messages,
                 model_response=model_response,
@@ -670,6 +666,9 @@ def completion(
                 optional_params=optional_params,
                 litellm_params=litellm_params,
                 logger_fn=logger_fn,
+                encoding=encoding,
+                api_key=ai21_key,
+                logging_obj=logging
             )
             
             if "stream" in optional_params and optional_params["stream"] == True:
