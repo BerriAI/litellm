@@ -137,7 +137,7 @@ Example TogetherAI Usage - Note: liteLLM supports all models deployed on Togethe
 ### AWS Sagemaker Models
 https://aws.amazon.com/sagemaker/ Use liteLLM to easily call custom LLMs on Sagemaker
 
-### Requirements using Sagemaker with LiteLLM
+#### Requirements using Sagemaker with LiteLLM
 
 * `pip install boto3` 
 * Set the following AWS credentials as .env variables (Sagemaker auth: https://boto3.amazonaws.com/v1/documentation/api/latest/guide/credentials.html)
@@ -149,6 +149,7 @@ https://aws.amazon.com/sagemaker/ Use liteLLM to easily call custom LLMs on Sage
 | Model Name       | Function Call                                  | Required OS Variables              |
 |------------------|--------------------------------------------|------------------------------------|
 | Llama2 7B        | `completion(model='sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b, messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']`     |
+| Custom LLM Endpoint        | `completion(model='sagemaker/your-endpoint, messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']`     |
 
 ### Baseten Models
 Baseten provides infrastructure to deploy and serve ML models https://www.baseten.co/. Use liteLLM to easily call models deployed on Baseten.

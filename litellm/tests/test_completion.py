@@ -404,8 +404,6 @@ def test_completion_sagemaker():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_sagemaker()
-
 
 # def test_vertex_ai():
 #     model_name = "chat-bison"
