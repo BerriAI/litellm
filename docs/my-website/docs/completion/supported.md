@@ -154,7 +154,9 @@ https://aws.amazon.com/sagemaker/ Use liteLLM to easily call custom LLMs on Sage
 ### Baseten Models
 Baseten provides infrastructure to deploy and serve ML models https://www.baseten.co/. Use liteLLM to easily call models deployed on Baseten.
 
-Example Baseten Usage - Note: liteLLM supports all models deployed on Basten
+Example Baseten Usage - Note: liteLLM supports all models deployed on Baseten
+
+Usage: Pass `model=baseten/<Model ID>`
 
 | Model Name       | Function Call                                  | Required OS Variables              |
 |------------------|--------------------------------------------|------------------------------------|
