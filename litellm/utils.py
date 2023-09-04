@@ -846,6 +846,13 @@ def get_optional_params(  # use the openai defaults
     return optional_params
 
 
+def get_max_tokens(model: str):
+    try:
+        return litellm.model_cost[model]
+    except:
+        raise Exception("This model isn't mapped yet. Add it here - https://raw.githubusercontent.com/BerriAI/litellm/main/cookbook/community-resources/max_tokens.json")
+    
+
 def load_test_model(
     model: str,
     custom_llm_provider: str = "",
@@ -1458,6 +1465,7 @@ def exception_type(model, original_exception, custom_llm_provider):
                         raise AuthenticationError(
                             message=f"AnthropicException - {original_exception.message}",
                             llm_provider="anthropic",
+                            model=model
                         )
                     elif original_exception.status_code == 400:
                         exception_mapping_worked = True
@@ -1478,6 +1486,7 @@ def exception_type(model, original_exception, custom_llm_provider):
                         raise RateLimitError(
                             message=f"AnthropicException - {original_exception.message}",
                             llm_provider="anthropic",
+                            model=model
                         )
                 elif (
                     "Could not resolve authentication method. Expected either api_key or auth_token to be set."
@@ -1487,6 +1496,7 @@ def exception_type(model, original_exception, custom_llm_provider):
                     raise AuthenticationError(
                         message=f"AnthropicException - {original_exception.message}",
                         llm_provider="anthropic",
+                        model=model
                     )
             elif "replicate" in model:
                 if "Incorrect authentication token" in error_str:
@@ -1494,6 +1504,7 @@ def exception_type(model, original_exception, custom_llm_provider):
                     raise AuthenticationError(
                         message=f"ReplicateException - {error_str}",
                         llm_provider="replicate",
+                        model=model
                     )
                 elif "input is too long" in error_str:
                     exception_mapping_worked = True
@@ -1514,6 +1525,7 @@ def exception_type(model, original_exception, custom_llm_provider):
                     raise RateLimitError(
                         message=f"ReplicateException - {error_str}",
                         llm_provider="replicate",
+                        model=model
                     )
                 elif (
                     exception_type == "ReplicateError"
@@ -1521,6 +1533,7 @@ def exception_type(model, original_exception, custom_llm_provider):
                     raise ServiceUnavailableError(
                         message=f"ReplicateException - {error_str}",
                         llm_provider="replicate",
+                        model=model
                     )
             elif model in litellm.cohere_models:  # Cohere
                 if (
@@ -1531,6 +1544,7 @@ def exception_type(model, original_exception, custom_llm_provider):
                     raise AuthenticationError(
                         message=f"CohereException - {original_exception.message}",
                         llm_provider="cohere",
+                        model=model
                     )
                 elif "too many tokens" in error_str:
                     exception_mapping_worked = True
@@ -1546,6 +1560,7 @@ def exception_type(model, original_exception, custom_llm_provider):
                     raise RateLimitError(
                         message=f"CohereException - {original_exception.message}",
                         llm_provider="cohere",
+                        model=model
                     )
             elif custom_llm_provider == "huggingface":
                 if "length limit exceeded" in error_str:
@@ -1561,6 +1576,7 @@ def exception_type(model, original_exception, custom_llm_provider):
                         raise AuthenticationError(
                             message=f"HuggingfaceException - {original_exception.message}",
                             llm_provider="huggingface",
+                            model=model
                         )
                     elif original_exception.status_code == 400:
                         exception_mapping_worked = True
@@ -1574,6 +1590,7 @@ def exception_type(model, original_exception, custom_llm_provider):
                         raise RateLimitError(
                             message=f"HuggingfaceException - {original_exception.message}",
                             llm_provider="huggingface",
+                            model=model
                         )
             elif custom_llm_provider == "ai21":
                 if hasattr(original_exception, "message"):
@@ -1590,6 +1607,7 @@ def exception_type(model, original_exception, custom_llm_provider):
                         raise AuthenticationError(
                             message=f"AI21Exception - {original_exception.message}",
                             llm_provider="ai21",
+                            model=model
                         )
                     if original_exception.status_code == 422:
                         exception_mapping_worked = True
@@ -1617,7 +1635,8 @@ def exception_type(model, original_exception, custom_llm_provider):
                     exception_mapping_worked = True
                     raise AuthenticationError(
                         message=f"TogetherAIException - {error_response['error']}",
-                        llm_provider="together_ai"
+                        llm_provider="together_ai",
+                        model=model
                     )
                 elif "error" in error_response and "INVALID_ARGUMENT" in error_response["error"]:
                     exception_mapping_worked = True
@@ -1638,6 +1657,7 @@ def exception_type(model, original_exception, custom_llm_provider):
                         raise RateLimitError(
                             message=f"TogetherAIException - {original_exception.message}",
                             llm_provider="together_ai",
+                            model=model
                         )
             raise original_exception  # base case - return the original exception
         else:
