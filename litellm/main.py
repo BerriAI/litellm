@@ -24,7 +24,7 @@ from .llms import together_ai
 from .llms import ai21
 from .llms import sagemaker
 from .llms import bedrock
-from .llms.huggingface_restapi import HuggingfaceRestAPILLM
+from .llms import huggingface_restapi
 from .llms.baseten import BasetenLLM
 from .llms.aleph_alpha import AlephAlphaLLM
 import tiktoken
@@ -552,10 +552,7 @@ def completion(
                 or os.environ.get("HF_TOKEN")
                 or os.environ.get("HUGGINGFACE_API_KEY")
             )
-            huggingface_client = HuggingfaceRestAPILLM(
-                encoding=encoding, api_key=huggingface_key, logging_obj=logging
-            )
-            model_response = huggingface_client.completion(
+            model_response = huggingface_restapi.completion(
                 model=model,
                 messages=messages,
                 api_base=api_base,
@@ -564,6 +561,10 @@ def completion(
                 optional_params=optional_params,
                 litellm_params=litellm_params,
                 logger_fn=logger_fn,
+                encoding=encoding, 
+                api_key=huggingface_key, 
+                logging_obj=logging
+
             )
             if "stream" in optional_params and optional_params["stream"] == True:
                 # don't try to access stream object,
