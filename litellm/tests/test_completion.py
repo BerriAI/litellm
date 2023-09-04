@@ -428,6 +428,7 @@ def test_completion_sagemaker():
 #         pytest.fail(f"Error occurred: {e}")
 
 
+
 def test_completion_with_fallbacks():
     fallbacks = ["gpt-3.5-turb", "gpt-3.5-turbo", "command-nightly"]
     try:
