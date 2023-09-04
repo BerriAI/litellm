@@ -5,6 +5,7 @@ import requests
 import time
 from typing import Callable
 from litellm.utils import ModelResponse
+import sys
 
 class SagemakerError(Exception):
     def __init__(self, status_code, message):
@@ -14,18 +15,32 @@ class SagemakerError(Exception):
             self.message
         )  # Call the base class constructor with the parameters it needs
 
+"""
+SAGEMAKER AUTH Keys/Vars
+os.environ['AWS_ACCESS_KEY_ID'] = ""
+os.environ['AWS_SECRET_ACCESS_KEY'] = ""
+"""
+
 def completion(
     model: str,
     messages: list,
     model_response: ModelResponse,
     print_verbose: Callable,
     encoding,
-    api_key,
     logging_obj,
     optional_params=None,
     litellm_params=None,
     logger_fn=None,
 ):
+    import sys
+    if 'boto3' not in sys.modules:
+        import boto3
+    
+    client = boto3.client(
+        "sagemaker-runtime", 
+        region_name="us-west-2"
+    )
+    
 
     model = model
     prompt = ""
@@ -42,7 +57,7 @@ def completion(
         else:
             prompt += f"{message['content']}"
     data = {
-        "prompt": prompt,
+        "inputs": prompt,
         # "instruction": prompt, # some baseten models require the prompt to be passed in via the 'instruction' kwarg
         **optional_params,
     }
@@ -50,26 +65,30 @@ def completion(
     ## LOGGING
     logging_obj.pre_call(
             input=prompt,
-            api_key=api_key,
+            api_key="",
             additional_args={"complete_input_dict": data},
         )
     ## COMPLETION CALL
-    response = requests.post(
-        "https://api.ai21.com/studio/v1/" + model + "/complete", headers=headers, data=json.dumps(data)
+    response = client.invoke_endpoint(
+        EndpointName=model,
+        ContentType="application/json",
+        Body=json.dumps(data),
+        CustomAttributes="accept_eula=true",
     )
+    response = response["Body"].read().decode("utf8")
     if "stream" in optional_params and optional_params["stream"] == True:
         return response.iter_lines()
     else:
         ## LOGGING
         logging_obj.post_call(
                 input=prompt,
-                api_key=api_key,
-                original_response=response.text,
+                api_key="",
+                original_response=response,
                 additional_args={"complete_input_dict": data},
             )
-        print_verbose(f"raw model_response: {response.text}")
+        print_verbose(f"raw model_response: {response}")
         ## RESPONSE OBJECT
-        completion_response = response.json()
+        completion_response = json.loads(response)
         if "error" in completion_response:
             raise SagemakerError(
                 message=completion_response["error"],
@@ -77,7 +96,7 @@ def completion(
             )
         else:
             try:
-                model_response["choices"][0]["message"]["content"] = completion_response["completions"][0]["data"]["text"]
+                model_response["choices"][0]["message"]["content"] = completion_response[0]["generation"]
             except:
                 raise SagemakerError(message=json.dumps(completion_response), status_code=response.status_code)
 

@@ -692,7 +692,6 @@ def completion(
                 litellm_params=litellm_params,
                 logger_fn=logger_fn,
                 encoding=encoding,
-                api_key=ai21_key,
                 logging_obj=logging
             )
             
