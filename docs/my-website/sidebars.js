@@ -29,18 +29,17 @@ const sidebars = {
       label: "Embedding()",
       items: ["embedding/supported_embedding"],
     },
-    'completion/supported',
-    // {
-    //   type: "category",
-    //   label: "Providers",
-    //   link: {
-    //     type: 'generated-index',
-    //     title: 'Providers',
-    //     description: 'Learn how to deploy + call models from different providers on LiteLLM',
-    //     slug: '/providers',
-    //   },
-    //   items: ["providers/huggingface"],
-    // },
+    {
+      type: "category",
+      label: "Supported Models + Providers",
+      link: {
+        type: 'generated-index',
+        title: 'Providers',
+        description: 'Learn how to deploy + call models from different providers on LiteLLM',
+        slug: '/providers',
+      },
+      items: ["providers/huggingface", "providers/openai", "providers/azure", "providers/vertex", "providers/anthropic", "providers/ai21", "providers/replicate", "providers/cohere", "providers/togetherai", "providers/aws_sagemaker", "providers/aleph_alpha", "providers/baseten", "providers/openrouter", "providers/ollama"]
+    },
     "token_usage",
     "exception_mapping",
     'debugging/local_debugging',
