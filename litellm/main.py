@@ -19,7 +19,7 @@ from litellm.utils import (
     read_config_args,
     completion_with_fallbacks,
 )
-from .llms.anthropic import AnthropicLLM
+from .llms import anthropic
 from .llms.huggingface_restapi import HuggingfaceRestAPILLM
 from .llms.baseten import BasetenLLM
 from .llms.ai21 import AI21LLM
@@ -61,7 +61,6 @@ async def acompletion(*args, **kwargs):
 
 
 @client
-# @retry(wait=wait_random_exponential(min=1, max=60), stop=stop_after_attempt(2), reraise=True, retry_error_callback=lambda retry_state: setattr(retry_state.outcome, 'retry_variable', litellm.retry)) # retry call, turn this off by setting `litellm.retry = False`
 @timeout(  # type: ignore
     600
 )  ## set timeouts, in case calls hang (e.g. Azure) - default is 600s, override with `force_timeout`
@@ -79,7 +78,6 @@ def completion(
     max_tokens=float("inf"),
     presence_penalty=0,
     frequency_penalty=0,
-    num_beams=1,
     logit_bias={},
     user="",
     deployment_id=None,
@@ -89,6 +87,7 @@ def completion(
     api_key=None,
     api_version=None,
     force_timeout=600,
+    num_beams=1,
     logger_fn=None,
     verbose=False,
     azure=False,
@@ -407,13 +406,7 @@ def completion(
             anthropic_key = (
                 api_key or litellm.anthropic_key or os.environ.get("ANTHROPIC_API_KEY")
             )
-            anthropic_client = AnthropicLLM(
-                encoding=encoding,
-                default_max_tokens_to_sample=litellm.max_tokens,
-                api_key=anthropic_key,
-                logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit anthropic's requirements
-            )
-            model_response = anthropic_client.completion(
+            model_response = anthropic.completion(
                 model=model,
                 messages=messages,
                 model_response=model_response,
@@ -421,6 +414,9 @@ def completion(
                 optional_params=optional_params,
                 litellm_params=litellm_params,
                 logger_fn=logger_fn,
+                encoding=encoding, # for calculating input/output tokens
+                api_key=anthropic_key,
+                logging_obj=logging, 
             )
             if "stream" in optional_params and optional_params["stream"] == True:
                 # don't try to access stream object,
