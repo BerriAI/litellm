@@ -41,10 +41,6 @@ The `fallbacks` list should include the primary model you want to use, followed 
 response = completion(model="bad-model", fallbacks=["gpt-3.5-turbo" "command-nightly"], messages=messages)
 ```
 
-## How does `completion_with_fallbacks()` work
-
-The `completion_with_fallbacks()` function attempts a completion call using the primary model specified as `model` in `completion(model=model)`. If the primary model fails or encounters an error, it automatically tries the `fallbacks` models in the specified order. This ensures a response even if the primary model is unavailable.
-
 ### Output from calls
 ```
 Completion with 'bad-model': got exception Unable to map your input to a model. Check your input - {'model': 'bad-model'
@@ -75,6 +71,11 @@ completion call gpt-3.5-turbo
 }
 
 ```
+
+## How does fallbacks work
+
+When you pass `fallbacks` to `completion`, it makes the first `completion` call using the primary model specified as `model` in `completion(model=model)`. If the primary model fails or encounters an error, it automatically tries the `fallbacks` models in the specified order. This ensures a response even if the primary model is unavailable.
+
 
 ### Key components of Model Fallbacks implementation:
 * Looping through `fallbacks`
