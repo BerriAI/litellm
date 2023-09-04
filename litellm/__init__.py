@@ -1,4 +1,4 @@
-import threading
+import threading, requests
 from typing import Callable, List, Optional, Dict
 from litellm.caching import Cache
 
@@ -35,94 +35,18 @@ caching = False # deprecated son
 caching_with_models = False  # if you want the caching key to be model + prompt # deprecated soon
 cache: Optional[Cache] = None # cache object
 model_alias_map: Dict[str, str] = {}
-model_cost = {
-    "babbage-002": {
-        "max_tokens": 16384,
-        "input_cost_per_token": 0.0000004,
-        "output_cost_per_token": 0.0000004,
-    },
-    "davinci-002": {
-        "max_tokens": 16384,
-        "input_cost_per_token": 0.000002,
-        "output_cost_per_token": 0.000002,
-    },
-    "gpt-3.5-turbo": {
-        "max_tokens": 4000,
-        "input_cost_per_token": 0.0000015,
-        "output_cost_per_token": 0.000002,
-    },
-    "gpt-35-turbo": {
-        "max_tokens": 4000,
-        "input_cost_per_token": 0.0000015,
-        "output_cost_per_token": 0.000002,
-    },  # azure model name
-    "gpt-3.5-turbo-0613": {
-        "max_tokens": 4000,
-        "input_cost_per_token": 0.0000015,
-        "output_cost_per_token": 0.000002,
-    },
-    "gpt-3.5-turbo-0301": {
-        "max_tokens": 4000,
-        "input_cost_per_token": 0.0000015,
-        "output_cost_per_token": 0.000002,
-    },
-    "gpt-3.5-turbo-16k": {
-        "max_tokens": 16000,
-        "input_cost_per_token": 0.000003,
-        "output_cost_per_token": 0.000004,
-    },
-    "gpt-35-turbo-16k": {
-        "max_tokens": 16000,
-        "input_cost_per_token": 0.000003,
-        "output_cost_per_token": 0.000004,
-    },  # azure model name
-    "gpt-3.5-turbo-16k-0613": {
-        "max_tokens": 16000,
-        "input_cost_per_token": 0.000003,
-        "output_cost_per_token": 0.000004,
-    },
-    "gpt-4": {
-        "max_tokens": 8000,
-        "input_cost_per_token": 0.000003,
-        "output_cost_per_token": 0.00006,
-    },
-    "gpt-4-0613": {
-        "max_tokens": 8000,
-        "input_cost_per_token": 0.000003,
-        "output_cost_per_token": 0.00006,
-    },
-    "gpt-4-32k": {
-        "max_tokens": 8000,
-        "input_cost_per_token": 0.00006,
-        "output_cost_per_token": 0.00012,
-    },
-    "claude-instant-1": {
-        "max_tokens": 100000,
-        "input_cost_per_token": 0.00000163,
-        "output_cost_per_token": 0.00000551,
-    },
-    "claude-2": {
-        "max_tokens": 100000,
-        "input_cost_per_token": 0.00001102,
-        "output_cost_per_token": 0.00003268,
-    },
-    "text-bison-001": {
-        "max_tokens": 8192,
-        "input_cost_per_token": 0.000004,
-        "output_cost_per_token": 0.000004,
-    },
-    "chat-bison-001": {
-        "max_tokens": 4096,
-        "input_cost_per_token": 0.000002,
-        "output_cost_per_token": 0.000002,
-    },
-    "command-nightly": {
-        "max_tokens": 4096,
-        "input_cost_per_token": 0.000015,
-        "output_cost_per_token": 0.000015,
-    },
-}
-
+def get_model_cost_map():
+    url = "https://raw.githubusercontent.com/BerriAI/litellm/main/cookbook/community-resources/max_tokens.json"
+    
+    try:
+        response = requests.get(url)
+        response.raise_for_status()  # Raise an exception if request is unsuccessful
+        content = response.json()
+        return content
+    except requests.exceptions.RequestException as e:
+        print("Error occurred:", e)
+        return None
+model_cost = get_model_cost_map()
 
 ####### THREAD-SPECIFIC DATA ###################
 class MyLocal(threading.local):
@@ -298,7 +222,8 @@ from .utils import (
     Logging,
     acreate,
     get_model_list,
-    completion_with_split_tests
+    completion_with_split_tests,
+    get_max_tokens
 )
 from .main import *  # type: ignore
 from .integrations import *

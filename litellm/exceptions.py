@@ -9,10 +9,11 @@ from openai.error import (
 
 
 class AuthenticationError(AuthenticationError):  # type: ignore
-    def __init__(self, message, llm_provider):
+    def __init__(self, message, llm_provider, model):
         self.status_code = 401
         self.message = message
         self.llm_provider = llm_provider
+        self.model = model
         super().__init__(
             self.message
         )  # Call the base class constructor with the parameters it needs
@@ -41,20 +42,22 @@ class ContextWindowExceededError(InvalidRequestError):  # type: ignore
 
 
 class RateLimitError(RateLimitError):  # type: ignore
-    def __init__(self, message, llm_provider):
+    def __init__(self, message, llm_provider, model):
         self.status_code = 429
         self.message = message
         self.llm_provider = llm_provider
+        self.modle = model
         super().__init__(
             self.message
         )  # Call the base class constructor with the parameters it needs
 
 
 class ServiceUnavailableError(ServiceUnavailableError):  # type: ignore
-    def __init__(self, message, llm_provider):
+    def __init__(self, message, llm_provider, model):
         self.status_code = 500
         self.message = message
         self.llm_provider = llm_provider
+        self.model = model
         super().__init__(
             self.message
         )  # Call the base class constructor with the parameters it needs

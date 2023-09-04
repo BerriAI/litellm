@@ -22,7 +22,7 @@ import pytest
 litellm.vertex_project = "pathrise-convert-1606954137718"
 litellm.vertex_location = "us-central1"
 
-litellm.failure_callback = ["sentry"]
+# litellm.failure_callback = ["sentry"]
 #### What this tests ####
 #    This tests exception mapping -> trigger an exception from an llm provider -> assert if output is of the expected type
 
