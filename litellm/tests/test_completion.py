@@ -123,7 +123,10 @@ def test_completion_claude_stream():
 #         # Add any assertions here to check the response
 #         print(response)
 #     except Exception as e:
+#         if "loading" in str(e):
+#             pass
 #         pytest.fail(f"Error occurred: {e}")
+# # test_completion_hf_api()
 
 
 # def test_completion_hf_deployed_api():
