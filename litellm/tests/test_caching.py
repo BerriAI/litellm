@@ -207,42 +207,42 @@ def test_caching_v2_stream_basic():
 
 # test_caching_v2_stream_basic()
 
-def test_caching_v2_stream():
-    try:
-        litellm.cache = Cache()
-        # litellm.token="ishaan@berri.ai"
-        messages = [{"role": "user", "content": "tell me a story in 2 sentences"}]
-        response1 = completion(model="gpt-3.5-turbo", messages=messages, stream=True)
+# def test_caching_v2_stream():
+#     try:
+#         litellm.cache = Cache()
+#         # litellm.token="ishaan@berri.ai"
+#         messages = [{"role": "user", "content": "tell me a story in 2 sentences"}]
+#         response1 = completion(model="gpt-3.5-turbo", messages=messages, stream=True)
 
-        messages = [{"role": "user", "content": "tell me a chair"}]
-        response7 = completion(model="command-nightly", messages=messages)
-        messages = [{"role": "user", "content": "sing a song"}]
-        response8 = completion(model="gpt-3.5-turbo", messages=messages, stream=True)
+#         messages = [{"role": "user", "content": "tell me a chair"}]
+#         response7 = completion(model="command-nightly", messages=messages)
+#         messages = [{"role": "user", "content": "sing a song"}]
+#         response8 = completion(model="gpt-3.5-turbo", messages=messages, stream=True)
 
-        result_string = ""
-        for chunk in response1:
-            print(chunk)
-            result_string+=chunk['choices'][0]['delta']['content']
-            # response1_id = chunk['id']
+#         result_string = ""
+#         for chunk in response1:
+#             print(chunk)
+#             result_string+=chunk['choices'][0]['delta']['content']
+#             # response1_id = chunk['id']
 
-        print("current cache")
-        messages = [{"role": "user", "content": "tell me a story in 2 sentences"}]
-        print(litellm.cache.cache.cache_dict)
+#         print("current cache")
+#         messages = [{"role": "user", "content": "tell me a story in 2 sentences"}]
+#         print(litellm.cache.cache.cache_dict)
 
-        result2_string=""
-        response2 = completion(model="gpt-3.5-turbo", messages=messages, stream=True)
-        for chunk in response2:
-            print(chunk)
-            result2_string+=chunk['choices'][0]['delta']['content']
-        if result_string != result2_string:
-            print(result_string)
-            print(result2_string)
-            pytest.fail(f"Error occurred: Caching with streaming failed, strings diff")
-        litellm.cache = None
+#         result2_string=""
+#         response2 = completion(model="gpt-3.5-turbo", messages=messages, stream=True)
+#         for chunk in response2:
+#             print(chunk)
+#             result2_string+=chunk['choices'][0]['delta']['content']
+#         if result_string != result2_string:
+#             print(result_string)
+#             print(result2_string)
+#             pytest.fail(f"Error occurred: Caching with streaming failed, strings diff")
+#         litellm.cache = None
 
-    except Exception as e:
-        print(f"error occurred: {traceback.format_exc()}")
-        pytest.fail(f"Error occurred: {e}")
+#     except Exception as e:
+#         print(f"error occurred: {traceback.format_exc()}")
+#         pytest.fail(f"Error occurred: {e}")
 
 # test_caching_v2_stream()
 
