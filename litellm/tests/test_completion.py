@@ -64,6 +64,7 @@ def test_completion_claude():
 #         print(response)
 #     except Exception as e:
 #         pytest.fail(f"Error occurred: {e}")
+# test_completion_aleph_alpha()
 
 
 # def test_completion_aleph_alpha_control_models():
@@ -75,6 +76,7 @@ def test_completion_claude():
 #         print(response)
 #     except Exception as e:
 #         pytest.fail(f"Error occurred: {e}")
+# test_completion_aleph_alpha_control_models()
 
 def test_completion_with_litellm_call_id():
     try:
@@ -126,8 +128,8 @@ def test_completion_claude_stream():
 #         if "loading" in str(e):
 #             pass
 #         pytest.fail(f"Error occurred: {e}")
-# # test_completion_hf_api()
 
+# test_completion_hf_api()
 
 # def test_completion_hf_deployed_api():
 #     try:
