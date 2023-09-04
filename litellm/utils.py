@@ -1326,6 +1326,27 @@ def modify_integration(integration_name, integration_params):
             Supabase.supabase_table_name = integration_params["table_name"]
 
 
+# custom prompt helper function
+def register_prompt_template(model: str, roles: dict, pre_message_sep: str, post_message_sep: str):
+    """
+    Example usage:
+    ```
+    import litellm 
+    litellm.register_prompt_template(
+	    model="bloomz",
+	    roles={"system":"<|im_start|>system", "assistant":"<|im_start|>assistant", "user":"<|im_start|>user"}
+	    pre_message_sep: "\n",
+	    post_message_sep: "<|im_end|>\n"
+    )
+    ```
+    """
+    litellm.custom_prompt_dict[model] = {
+        "roles": roles,
+        "pre_message_sep": pre_message_sep,
+        "post_message_sep": post_message_sep
+    }
+    return litellm.custom_prompt_dict
+
 ####### [BETA] HOSTED PRODUCT ################ - https://docs.litellm.ai/docs/debugging/hosted_debugging
 
 
@@ -1414,7 +1435,6 @@ def get_model_list():
         print_verbose(
             f"[Non-Blocking Error] get_all_keys error - {traceback.format_exc()}"
         )
-
 
 ####### EXCEPTION MAPPING ################
 def exception_type(model, original_exception, custom_llm_provider):

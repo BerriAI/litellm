@@ -563,8 +563,8 @@ def completion(
                 logger_fn=logger_fn,
                 encoding=encoding, 
                 api_key=huggingface_key, 
-                logging_obj=logging
-
+                logging_obj=logging,
+                custom_prompt_dict=litellm.custom_prompt_dict
             )
             if "stream" in optional_params and optional_params["stream"] == True:
                 # don't try to access stream object,
