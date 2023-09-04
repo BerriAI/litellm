@@ -781,6 +781,21 @@ def get_optional_params(  # use the openai defaults
         if presence_penalty != 0:
             optional_params["repetition_penalty"] = presence_penalty
         optional_params["details"] = True
+    elif custom_llm_provider == "sagemaker":
+        if "llama-2" in model:
+            # llama-2 models on sagemaker support the following args
+            """
+            max_new_tokens: Model generates text until the output length (excluding the input context length) reaches max_new_tokens. If specified, it must be a positive integer.
+            temperature: Controls the randomness in the output. Higher temperature results in output sequence with low-probability words and lower temperature results in output sequence with high-probability words. If temperature -> 0, it results in greedy decoding. If specified, it must be a positive float.
+            top_p: In each step of text generation, sample from the smallest possible set of words with cumulative probability top_p. If specified, it must be a float between 0 and 1.
+            return_full_text: If True, input text will be part of the output generated text. If specified, it must be boolean. The default value for it is False.
+            """
+            if max_tokens != float("inf"):
+                optional_params["max_new_tokens"] = max_tokens
+            if temperature != 1:
+                optional_params["temperature"] = temperature
+            if top_p != 1:
+                optional_params["top_p"] = top_p
     elif model in litellm.aleph_alpha_models:
         if max_tokens != float("inf"):
             optional_params["maximum_tokens"] = max_tokens
