@@ -190,6 +190,7 @@ provider_list = [
     "baseten",
     "azure",
     "sagemaker",
+    "bedrock",
 ]
 
 models_by_provider = {

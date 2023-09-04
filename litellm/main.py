@@ -23,6 +23,7 @@ from .llms import anthropic
 from .llms import together_ai
 from .llms import ai21
 from .llms import sagemaker
+from .llms import bedrock
 from .llms.huggingface_restapi import HuggingfaceRestAPILLM
 from .llms.baseten import BasetenLLM
 from .llms.aleph_alpha import AlephAlphaLLM
@@ -696,6 +697,30 @@ def completion(
             )
             
             # TODO: Add streaming for sagemaker
+            # if "stream" in optional_params and optional_params["stream"] == True:
+            #     # don't try to access stream object,
+            #     response = CustomStreamWrapper(
+            #         model_response, model, custom_llm_provider="ai21", logging_obj=logging
+            #     )
+            #     return response
+            
+            ## RESPONSE OBJECT
+            response = model_response
+        elif custom_llm_provider == "bedrock":
+            # boto3 reads keys from .env
+            model_response = bedrock.completion(
+                model=model,
+                messages=messages,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                encoding=encoding,
+                logging_obj=logging
+            )
+            
+            # TODO: Add streaming for bedrock
             # if "stream" in optional_params and optional_params["stream"] == True:
             #     # don't try to access stream object,
             #     response = CustomStreamWrapper(
