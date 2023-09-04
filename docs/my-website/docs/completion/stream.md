@@ -31,3 +31,41 @@ response = asyncio.run(test_get_response())
 print(response)
 
 ```
+
+## Async Streaming
+We've implemented an `__anext__()` function in the streaming object returned. This 
+### Usage
+```
+from litellm import acompletion
+import asyncio
+
+def logger_fn(model_call_object: dict):
+    print(f"LOGGER FUNCTION: {model_call_object}")
+
+
+user_message = "Hello, how are you?"
+messages = [{"content": user_message, "role": "user"}]
+
+# # test on ai21 completion call
+async def ai21_async_completion_call():
+    try:
+        response = completion(
+            model="j2-ultra", messages=messages, stream=True, logger_fn=logger_fn
+        )
+        print(f"response: {response}")
+        complete_response = ""
+        start_time = time.time()
+        # Change for loop to async for loop
+        async for chunk in response:
+            chunk_time = time.time()
+            print(f"time since initial request: {chunk_time - start_time:.5f}")
+            print(chunk["choices"][0]["delta"])
+            complete_response += chunk["choices"][0]["delta"]["content"]
+        if complete_response == "": 
+            raise Exception("Empty response received")
+    except:
+        print(f"error occurred: {traceback.format_exc()}")
+        pass
+
+asyncio.run(ai21_async_completion_call())
+```

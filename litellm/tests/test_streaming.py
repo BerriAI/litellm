@@ -9,7 +9,7 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import litellm
-from litellm import completion
+from litellm import completion, acompletion
 
 litellm.logging = False
 litellm.set_verbose = False
@@ -217,3 +217,25 @@ def test_together_ai_completion_call_starcoder():
 #     except:
 #         print(f"error occurred: {traceback.format_exc()}")
 #         pass
+#### Test Async streaming 
+
+# # test on ai21 completion call
+async def ai21_async_completion_call():
+    try:
+        response = completion(
+            model="j2-ultra", messages=messages, stream=True, logger_fn=logger_fn
+        )
+        print(f"response: {response}")
+        complete_response = ""
+        start_time = time.time()
+        # Change for loop to async for loop
+        async for chunk in response:
+            chunk_time = time.time()
+            print(f"time since initial request: {chunk_time - start_time:.5f}")
+            print(chunk["choices"][0]["delta"])
+            complete_response += chunk["choices"][0]["delta"]["content"]
+        if complete_response == "": 
+            raise Exception("Empty response received")
+    except:
+        print(f"error occurred: {traceback.format_exc()}")
+        pass
