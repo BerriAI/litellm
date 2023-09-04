@@ -20,10 +20,10 @@ from litellm.utils import (
     completion_with_fallbacks,
 )
 from .llms import anthropic
+from .llms import together_ai
 from .llms.huggingface_restapi import HuggingfaceRestAPILLM
 from .llms.baseten import BasetenLLM
 from .llms.ai21 import AI21LLM
-from .llms.together_ai import TogetherAILLM
 from .llms.aleph_alpha import AlephAlphaLLM
 import tiktoken
 from concurrent.futures import ThreadPoolExecutor
@@ -578,9 +578,8 @@ def completion(
                 or get_secret("TOGETHER_AI_TOKEN")
                 or get_secret("TOGETHERAI_API_KEY")
             )
-
-            together_ai_client = TogetherAILLM(encoding=encoding, api_key=together_ai_key, logging_obj=logging)
-            model_response = together_ai_client.completion(
+            
+            model_response = together_ai.completion(
                 model=model,
                 messages=messages,
                 model_response=model_response,
@@ -588,6 +587,9 @@ def completion(
                 optional_params=optional_params,
                 litellm_params=litellm_params,
                 logger_fn=logger_fn,
+                encoding=encoding,
+                api_key=together_ai_key,
+                logging_obj=logging
             )
             if "stream_tokens" in optional_params and optional_params["stream_tokens"] == True:
                 # don't try to access stream object,
