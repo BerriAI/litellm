@@ -118,6 +118,8 @@ def completion(
         model_response = ModelResponse()
         if azure:  # this flag is deprecated, remove once notebooks are also updated.
             custom_llm_provider = "azure"
+            if deployment_id:
+                model=deployment_id
         elif (
             model.split("/", 1)[0] in litellm.provider_list
         ):  # allow custom provider to be passed in via the model name "azure/chatgpt-test"
