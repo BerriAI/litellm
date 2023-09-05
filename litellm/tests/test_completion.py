@@ -337,6 +337,19 @@ def test_completion_azure():
         pytest.fail(f"Error occurred: {e}")
 
 
+def test_completion_azure_deployment_id():
+    try:
+        response = completion(
+            model="chatgpt-3.5-turbo",
+            deployment_id="chatgpt-v-2",
+            messages=messages,
+            azure=True,
+        )
+        # Add any assertions here to check the response
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
 # Replicate API endpoints are unstable -> throw random CUDA errors -> this means our tests can fail even if our tests weren't incorrect.
 def test_completion_replicate_llama_stream():
     model_name = "replicate/llama-2-70b-chat:2c1608e18606fad2812020dc541930f2d0495ce32eee50074220b87300bc16e1"
@@ -409,8 +422,6 @@ def test_customprompt_together_ai():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-
-test_customprompt_together_ai()
 
 def test_completion_sagemaker():
     try:
