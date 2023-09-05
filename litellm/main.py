@@ -605,7 +605,10 @@ def completion(
                 return response
             response = model_response
         elif model in litellm.vertex_chat_models:
-            import vertexai
+            try:
+                import vertexai
+            except:
+                Exception("vertexai import failed please run `pip install google-cloud-aiplatform`")
             from vertexai.preview.language_models import ChatModel, InputOutputTextPair
 
             vertexai.init(
@@ -633,7 +636,10 @@ def completion(
             model_response["model"] = model
             response = model_response
         elif model in litellm.vertex_text_models:
-            import vertexai
+            try:
+                import vertexai
+            except:
+                Exception("vertexai import failed please run `pip install google-cloud-aiplatform`")
             from vertexai.language_models import TextGenerationModel
 
             vertexai.init(
@@ -790,7 +796,10 @@ def completion(
 
 
 def completion_with_retries(*args, **kwargs):
-    import tenacity
+    try:
+        import tenacity
+    except:
+        Exception("tenacity import failed please run `pip install tenacity`")
 
     retryer = tenacity.Retrying(stop=tenacity.stop_after_attempt(3), reraise=True)
     return retryer(completion, *args, **kwargs)
