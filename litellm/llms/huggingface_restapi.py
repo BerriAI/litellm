@@ -28,7 +28,7 @@ def validate_environment(api_key):
 def completion(
     model: str,
     messages: list,
-    api_base: str,
+    api_base: Optional[str],
     model_response: ModelResponse,
     print_verbose: Callable,
     encoding,
