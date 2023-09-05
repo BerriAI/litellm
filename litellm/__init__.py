@@ -191,6 +191,7 @@ provider_list = [
     "azure",
     "sagemaker",
     "bedrock",
+    "custom", # custom apis
 ]
 
 models_by_provider = {
