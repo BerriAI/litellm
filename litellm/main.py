@@ -546,7 +546,11 @@ def completion(
             }
             response = model_response
         elif (
-            model in litellm.huggingface_models or custom_llm_provider == "huggingface"
+            (
+                model in litellm.huggingface_models and 
+                custom_llm_provider!="custom" # if users use a hf model, with a custom/provider. See implementation of custom_llm_provider == custom
+            ) or 
+            custom_llm_provider == "huggingface"
         ):
             custom_llm_provider = "huggingface"
             huggingface_key = (
@@ -782,6 +786,62 @@ def completion(
                     model_response, model, custom_llm_provider="baseten", logging_obj=logging
                 )
                 return response
+            response = model_response
+        elif (
+            custom_llm_provider == "custom"
+            ):
+            import requests
+            url = (
+                litellm.api_base or
+                api_base
+            )
+            """
+            assume input to custom LLM api bases follow this format:
+            resp = requests.post(
+                api_base, 
+                json={
+                    'model': 'meta-llama/Llama-2-13b-hf', # model name
+                    'params': {
+                        'prompt': ["The capital of France is P"],
+                        'max_tokens': 32,
+                        'temperature': 0.7,
+                        'top_p': 1.0,
+                        'top_k': 40,
+                    }
+                }
+            )
+
+            """
+            prompt = " ".join([message["content"] for message in messages])
+            resp = requests.post(url, json={
+                'model': model,
+                'params': {
+                    'prompt': [prompt],
+                    'max_tokens': max_tokens,
+                    'temperature': temperature,
+                    'top_p': top_p,
+                    'top_k': top_k,
+                }
+            })
+            resp = resp.json()
+            """
+            assume all responses from custom api_bases of this format:
+            {
+                'data': [
+                    {
+                        'prompt': 'The capital of France is P',
+                        'output': ['The capital of France is PARIS.\nThe capital of France is PARIS.\nThe capital of France is PARIS.\nThe capital of France is PARIS.\nThe capital of France is PARIS.\nThe capital of France is PARIS.\nThe capital of France is PARIS.\nThe capital of France is PARIS.\nThe capital of France is PARIS.\nThe capital of France is PARIS.\nThe capital of France is PARIS.\nThe capital of France is PARIS.\nThe capital of France is PARIS.\nThe capital of France'],
+                        'params': {'temperature': 0.7, 'top_k': 40, 'top_p': 1}}],
+                        'message': 'ok'
+                    }
+                ]
+            }
+            """
+            string_response = resp['data'][0]['output'][0]
+            ## RESPONSE OBJECT
+            model_response["choices"][0]["message"]["content"] = string_response
+            model_response["created"] = time.time()
+            model_response["model"] = model
             response = model_response
         else:
             raise ValueError(
