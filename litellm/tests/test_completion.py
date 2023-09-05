@@ -20,7 +20,7 @@ litellm.use_client = True
 # litellm.set_verbose = True
 # litellm.secret_manager_client = InfisicalClient(token=os.environ["INFISICAL_TOKEN"])
 
-user_message = "write me a function to print hello world in python"
+user_message = "Write a short poem about the sky"
 messages = [{"content": user_message, "role": "user"}]
 
 
@@ -390,12 +390,13 @@ def test_completion_replicate_stability():
 def test_completion_together_ai():
     model_name = "togethercomputer/llama-2-70b-chat"
     try:
-        response = completion(model=model_name, messages=messages)
+        response = completion(model=model_name, messages=messages, max_tokens=256, logger_fn=logger_fn)
         # Add any assertions here to check the response
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+test_completion_together_ai()
 
 def test_completion_sagemaker():
     try:

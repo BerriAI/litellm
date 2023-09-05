@@ -5,6 +5,7 @@ import requests
 import time
 from typing import Callable
 from litellm.utils import ModelResponse
+from .prompt_templates.factory import prompt_factory, custom_prompt
 
 class TogetherAIError(Exception):
     def __init__(self, status_code, message):
@@ -34,21 +35,19 @@ def completion(
     encoding,
     api_key,
     logging_obj,
+    custom_prompt_dict={},
     optional_params=None,
     litellm_params=None,
     logger_fn=None,
 ):
     headers = validate_environment(api_key)
     model = model
-    prompt = ""
-    for message in messages:
-        if "role" in message:
-            if message["role"] == "user":
-                prompt += f"{message['content']}"
-            else:
-                prompt += f"{message['content']}"
-        else:
-            prompt += f"{message['content']}"
+    if model in custom_prompt_dict:
+        # check if the model has a registered custom prompt
+        model_prompt_details = custom_prompt_dict[model]
+        prompt = custom_prompt(role_dict=model_prompt_details["roles"], pre_message_sep=model_prompt_details["pre_message_sep"],  post_message_sep=model_prompt_details["post_message_sep"], messages=messages)
+    else:
+        prompt = prompt_factory(model=model, messages=messages)
     data = {
         "model": model,
         "prompt": prompt,

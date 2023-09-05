@@ -13,8 +13,18 @@ def llama_2_chat_pt(messages):
             prompt += message["content"] + "[/INST]"
     return prompt
 
-def llama_2_pt(messages):
-    return " ".join(message["content"] for message in messages)
+# TogetherAI Llama2 prompt template
+def togetherai_llama_2_chat_pt(messages):
+    prompt = "[INST]\n"
+    for message in messages:
+        if message["role"] == "system":
+            prompt += message["content"]
+        elif message["role"] == "assistant":
+            prompt += message["content"]
+        elif message["role"] == "user":
+            prompt += message["content"]
+    prompt += "\n[\INST]\n\n"
+    return prompt
 
 # Falcon prompt template - from https://github.com/lm-sys/FastChat/blob/main/fastchat/conversation.py#L110
 def falcon_instruct_pt(messages):
@@ -77,21 +87,17 @@ def custom_prompt(role_dict: dict, pre_message_sep: str, post_message_sep: str, 
 
 def prompt_factory(model: str, messages: list):
     model = model.lower()
-    if "bloom" in model:
-        return default_pt(messages=messages)
-    elif "flan-t5" in model:
-        return default_pt(messages=messages)
-    elif "meta-llama" in model:
+    if "meta-llama/Llama-2" in model:
         if "chat" in model:
             return llama_2_chat_pt(messages=messages)
         else:
             return default_pt(messages=messages)
-    elif "falcon" in model: # Note: for the instruct models, it's best to use a User: .., Assistant:.. approach in your prompt template.
+    elif "tiiuae/falcon" in model: # Note: for the instruct models, it's best to use a User: .., Assistant:.. approach in your prompt template.
         if "instruct" in model:
             return falcon_instruct_pt(messages=messages)
         else:
             return default_pt(messages=messages)
-    elif "mpt" in model:
+    elif "mosaicml/mpt" in model:
         if "chat" in model:
             return mpt_chat_pt(messages=messages)
         else:
@@ -101,9 +107,11 @@ def prompt_factory(model: str, messages: list):
             return llama_2_chat_pt(messages=messages) # https://huggingface.co/blog/codellama#conversational-instructions
         else:
             return default_pt(messages=messages)
-    elif "wizardcoder" in model:
+    elif "wizardlm/wizardcoder" in model:
         return wizardcoder_pt(messages=messages)
-    elif "phind-codellama" in model:
+    elif "phind/phind-codellama" in model:
         return phind_codellama_pt(messages=messages)
+    elif "togethercomputer/llama-2" in model:
+        return togetherai_llama_2_chat_pt(messages=messages)
     else:
         return default_pt(messages=messages)
