@@ -14,7 +14,6 @@ from litellm import (  # type: ignore
 )
 from litellm.utils import (
     get_secret,
-    install_and_import,
     CustomStreamWrapper,
     read_config_args,
     completion_with_fallbacks,
@@ -34,7 +33,6 @@ from typing import Callable, List, Optional, Dict
 encoding = tiktoken.get_encoding("cl100k_base")
 from litellm.utils import (
     get_secret,
-    install_and_import,
     CustomStreamWrapper,
     ModelResponse,
     read_config_args,
@@ -344,8 +342,10 @@ def completion(
             response = model_response
         elif "replicate" in model or custom_llm_provider == "replicate":
             # import replicate/if it fails then pip install replicate
-            install_and_import("replicate")
-            import replicate
+            try:
+                import replicate
+            except:
+                Exception("Replicate import failed please run `pip install replicate`")
 
             # Setting the relevant API KEY for replicate, replicate defaults to using os.environ.get("REPLICATE_API_TOKEN")
             replicate_key = os.environ.get("REPLICATE_API_TOKEN")
@@ -507,8 +507,10 @@ def completion(
             )
         elif model in litellm.cohere_models:
             # import cohere/if it fails then pip install cohere
-            install_and_import("cohere")
-            import cohere
+            try:
+                import cohere
+            except:
+                Exception("Cohere import failed please run `pip install cohere`")
 
             cohere_key = (
                 api_key
@@ -775,39 +777,6 @@ def completion(
                     model_response, model, custom_llm_provider="baseten", logging_obj=logging
                 )
                 return response
-            response = model_response
-        elif custom_llm_provider == "petals" or (
-            litellm.api_base and "chat.petals.dev" in litellm.api_base
-        ):
-            url = "https://chat.petals.dev/api/v1/generate"
-            import requests
-
-            prompt = " ".join([message["content"] for message in messages])
-
-            ## LOGGING
-            logging.pre_call(
-                input=prompt,
-                api_key=None,
-                additional_args={"url": url, "max_new_tokens": 100},
-            )
-
-            response = requests.post(
-                url, data={"inputs": prompt, "max_new_tokens": 100, "model": model}
-            )
-            ## LOGGING
-            logging.post_call(
-                input=prompt,
-                api_key=None,
-                original_response=response.text,
-                additional_args={"url": url, "max_new_tokens": 100},
-            )
-
-            completion_response = response.json()["outputs"]
-
-            # RESPONSE OBJECT
-            model_response["choices"][0]["message"]["content"] = completion_response
-            model_response["created"] = time.time()
-            model_response["model"] = model
             response = model_response
         else:
             raise ValueError(
