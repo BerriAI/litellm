@@ -119,33 +119,6 @@ def print_verbose(print_statement):
         if random.random() <= 0.3:
             print("Get help - https://discord.com/invite/wuPM9dRgDw")
 
-
-####### Package Import Handler ###################
-
-
-def install_and_import(package: str):
-    if package in globals().keys():
-        print_verbose(f"{package} has already been imported.")
-        return
-    try:
-        # Import the module
-        module = importlib.import_module(package)
-    except ImportError:
-        print_verbose(f"{package} is not installed. Installing...")
-        subprocess.call([sys.executable, "-m", "pip", "install", package])
-        globals()[package] = importlib.import_module(package)
-    # except VersionConflict as vc:
-    #     print_verbose(f"Detected version conflict for {package}. Upgrading...")
-    #     subprocess.call([sys.executable, "-m", "pip", "install", "--upgrade", package])
-    #     globals()[package] = importlib.import_module(package)
-    finally:
-        if package not in globals().keys():
-            globals()[package] = importlib.import_module(package)
-
-
-##################################################
-
-
 ####### LOGGING ###################
 from enum import Enum
 
@@ -599,7 +572,11 @@ def token_counter(model, text):
     # use tiktoken or anthropic's tokenizer depending on the model
     num_tokens = 0
     if "claude" in model:
-        install_and_import("anthropic")
+        try:
+            import anthropic
+        except Exception:
+            Exception("Anthropic import failed please run `pip install anthropic`")
+
         from anthropic import Anthropic, HUMAN_PROMPT, AI_PROMPT
 
         anthropic = Anthropic()
@@ -1293,7 +1270,10 @@ def prompt_token_calculator(model, messages):
     text = " ".join(message["content"] for message in messages)
     num_tokens = 0
     if "claude" in model:
-        install_and_import("anthropic")
+        try:
+            import anthropic
+        except:
+            Exception("Anthropic import failed please run `pip install anthropic`")
         from anthropic import Anthropic, HUMAN_PROMPT, AI_PROMPT
 
         anthropic = Anthropic()
