@@ -70,16 +70,16 @@ async def acompletion(*args, **kwargs):
 def completion(
     model: str,
     # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
-    messages=[],
-    functions=[],
-    function_call="",  # optional params
+    messages: List = [],
+    functions: List = [],
+    function_call: str = "",  # optional params
     temperature: float = 1,
     top_p: float = 1,
     n: int = 1,
     stream: bool = False,
     stop=None,
-    max_tokens=float("inf"),
-    presence_penalty=0,
+    max_tokens: float = float("inf"),
+    presence_penalty: float = 0,
     frequency_penalty=0,
     logit_bias: dict = {},
     user: str = "",
@@ -360,10 +360,12 @@ def completion(
                 # set replicate key
                 os.environ["REPLICATE_API_TOKEN"] = str(replicate_key)
             prompt = " ".join([message["content"] for message in messages])
-            input = {"prompt": prompt}
+            input = {
+                "prompt": prompt
+            }
             if "max_tokens" in optional_params:
-                input["max_length"] = max_tokens  # for t5 models
-                input["max_new_tokens"] = max_tokens  # for llama2 models
+                input["max_length"] = optional_params['max_tokens']  # for t5 models
+                input["max_new_tokens"] = optional_params['max_tokens']  # for llama2 models
             ## LOGGING
             logging.pre_call(
                 input=prompt,
