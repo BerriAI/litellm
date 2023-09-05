@@ -10,6 +10,9 @@ All calls using Vertex AI require the following parameters:
 * Your Project Location
 `litellm.vertex_location` = "us-central1" 
 
+### Pre-requisites
+`pip install google-cloud-aiplatform`
+
 Authentication:
 VertexAI uses Application Default Credentials, see https://cloud.google.com/docs/authentication/external/set-up-adc for more information on setting this up
 
