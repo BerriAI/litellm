@@ -59,7 +59,7 @@ initial_model = "command-nightly"
 try:
     response = completion(model=initial_model, messages=messages)
 except ContextWindowExceededError as e:
-    model_max_tokens = get_max_tokens(model)
+    model_max_tokens = get_max_tokens(model)["max_tokens"]
     for model in context_window_fallback_list:
         if model_max_tokens < model["max_tokens"]
         try:
