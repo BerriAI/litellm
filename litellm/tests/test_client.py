@@ -83,7 +83,7 @@ def test_bad_azure_embedding():
 
 # def test_good_azure_embedding():
 #     try:
-#         response = embedding(model='azure-embedding-model', input=[user_message], azure=True, logger_fn=logger_fn)
+#         response = embedding(model='azure/azure-embedding-model', input=[user_message], logger_fn=logger_fn)
 #         # Add any assertions here to check the response
 #         print(f"response: {str(response)[:50]}")
 #     except Exception as e:

@@ -326,10 +326,10 @@ def test_completion_openai_with_functions():
 
 def test_completion_azure():
     try:
+        print("azure gpt-3.5 test\n\n")
         response = completion(
-            model="chatgpt-test",
+            model="azure/chatgpt-v-2",
             messages=messages,
-            custom_llm_provider="azure",
         )
         # Add any assertions here to check the response
         print(response)
@@ -340,10 +340,9 @@ def test_completion_azure():
 def test_completion_azure_deployment_id():
     try:
         response = completion(
-            model="chatgpt-3.5-turbo",
             deployment_id="chatgpt-v-2",
+            model="gpt-3.5-turbo",
             messages=messages,
-            azure=True,
         )
         # Add any assertions here to check the response
         print(response)
