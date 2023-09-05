@@ -555,7 +555,7 @@ def completion(
             model_response = huggingface_restapi.completion(
                 model=model,
                 messages=messages,
-                api_base=api_base,
+                api_base=api_base, # type: ignore
                 model_response=model_response,
                 print_verbose=print_verbose,
                 optional_params=optional_params,
