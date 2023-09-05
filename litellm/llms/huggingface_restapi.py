@@ -7,7 +7,7 @@ import time
 from typing import Callable
 from litellm.utils import ModelResponse
 from typing import Optional
-from .huggingface_model_prompt_templates.factory import prompt_factory, custom_prompt
+from .prompt_templates.factory import prompt_factory, custom_prompt
 
 class HuggingfaceError(Exception):
     def __init__(self, status_code, message):
