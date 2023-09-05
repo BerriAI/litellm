@@ -148,7 +148,7 @@ together_ai_models = [
     "togethercomputer/llama-2-70b-chat",
     "togethercomputer/Llama-2-7B-32K-Instruct",
     "togethercomputer/llama-2-7b",
-]
+] # supports all together ai models, just pass in the model id e.g. completion(model="together_computer/replit_code_3b",...)
 
 aleph_alpha_models = [
     "luminous-base",
