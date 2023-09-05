@@ -4,6 +4,7 @@ jobs:
     docker:
       - image: circleci/python:3.8
     working_directory: ~/project
+    parallelism: 4
 
     steps:
       - checkout
