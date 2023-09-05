@@ -36,31 +36,37 @@ LiteLLM provides a sub-class of the InvalidRequestError class for Context Window
 
 Implement model fallbacks based on context window exceptions. 
 
+LiteLLM also exposes a `get_max_tokens()` function, which you can use to identify the context window limit that's been exceeded. 
+
 ```python 
 import litellm
-from litellm import completion, ContextWindowExceededError, completion_with_fallbacks
+from litellm import completion, ContextWindowExceededError, get_max_tokens
 
 # set ENV variables
 os.environ["OPENAI_API_KEY"] = ""
+os.environ["COHERE_API_KEY"] = ""
 os.environ["ANTHROPIC_API_KEY"] = ""
 os.environ["AZURE_API_KEY"] = ""
 os.environ["AZURE_API_BASE"] = ""
 os.environ["AZURE_API_VERSION"] = ""
 
-context_window_fallback_list = ["gpt-3.5-turbo-16k", "gpt-4", "claude-instant-1"]
+context_window_fallback_list = [{"model":"gpt-3.5-turbo-16k", "max_tokens": 16385}, {"model":"gpt-4-32k", "max_tokens": 32768}, {"model": "claude-instant-1", "max_tokens":100000}]
 
 user_message = "Hello, how are you?"
 messages = [{ "content": user_message,"role": "user"}]
 
-initial_model = "gpt-3.5-turbo"
+initial_model = "command-nightly"
 try:
     response = completion(model=initial_model, messages=messages)
 except ContextWindowExceededError as e:
+    model_max_tokens = get_max_tokens(model)
     for model in context_window_fallback_list:
+        if model_max_tokens < model["max_tokens"]
         try:
-            response = completion(model=model, messages=messages)
+            response = completion(model=model["model"], messages=messages)
             return response
         except ContextWindowExceededError as e:
+            model_max_tokens = get_max_tokens(model["model"])
             continue
 
 print(response)
