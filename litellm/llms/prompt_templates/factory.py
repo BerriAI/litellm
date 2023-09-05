@@ -111,7 +111,7 @@ def prompt_factory(model: str, messages: list):
         return wizardcoder_pt(messages=messages)
     elif "phind/phind-codellama" in model:
         return phind_codellama_pt(messages=messages)
-    elif "togethercomputer/llama-2" in model:
+    elif "togethercomputer/llama-2" in model and "instruct" in model:
         return togetherai_llama_2_chat_pt(messages=messages)
     else:
         return default_pt(messages=messages)
