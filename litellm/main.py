@@ -29,6 +29,7 @@ from .llms import aleph_alpha
 from .llms import baseten
 import tiktoken
 from concurrent.futures import ThreadPoolExecutor
+from typing import Callable, List, Optional, Dict
 
 encoding = tiktoken.get_encoding("cl100k_base")
 from litellm.utils import (
@@ -67,34 +68,34 @@ async def acompletion(*args, **kwargs):
     600
 )  ## set timeouts, in case calls hang (e.g. Azure) - default is 600s, override with `force_timeout`
 def completion(
-    model,
+    model: str,
     # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
     messages=[],
     functions=[],
     function_call="",  # optional params
-    temperature=1,
-    top_p=1,
-    n=1,
-    stream=False,
+    temperature: float = 1,
+    top_p: float = 1,
+    n: int = 1,
+    stream: bool = False,
     stop=None,
     max_tokens=float("inf"),
     presence_penalty=0,
     frequency_penalty=0,
-    logit_bias={},
-    user="",
-    deployment_id=None,
+    logit_bias: dict = {},
+    user: str = "",
+    deployment_id = None,
     # Optional liteLLM function params
     *,
     return_async=False,
-    api_key=None,
-    api_version=None,
+    api_key: Optional[str] = None,
+    api_version: Optional[str] = None,
+    api_base: Optional[str] = None,
     force_timeout=600,
     num_beams=1,
     logger_fn=None,
     verbose=False,
     azure=False,
     custom_llm_provider=None,
-    api_base=None,
     litellm_call_id=None,
     litellm_logging_obj=None,
     use_client=False,
