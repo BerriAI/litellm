@@ -10,11 +10,12 @@
 | gpt-4            | `completion('gpt-4', messages)`         | `os.environ['OPENAI_API_KEY']`       |
 
 ## Azure OpenAI Chat Completion Models
+For Azure calls add the `azure/` prefix to `model`. If your azure deployment name is `gpt-v-2` set `model` = `azure/gpt-v-2`
 
 | Model Name       | Function Call                           | Required OS Variables                     |
 |------------------|-----------------------------------------|-------------------------------------------|
-| gpt-3.5-turbo    | `completion('gpt-3.5-turbo', messages, azure=True)` | `os.environ['AZURE_API_KEY']`,`os.environ['AZURE_API_BASE']`,`os.environ['AZURE_API_VERSION']` |
-| gpt-4            | `completion('gpt-4', messages, azure=True)`         | `os.environ['AZURE_API_KEY']`,`os.environ['AZURE_API_BASE']`,`os.environ['AZURE_API_VERSION']` |
+| gpt-3.5-turbo    | `completion('azure/gpt-3.5-turbo-deployment', messages)` | `os.environ['AZURE_API_KEY']`,`os.environ['AZURE_API_BASE']`,`os.environ['AZURE_API_VERSION']` |
+| gpt-4            | `completion('azure/gpt-4-deployment', messages)`         | `os.environ['AZURE_API_KEY']`,`os.environ['AZURE_API_BASE']`,`os.environ['AZURE_API_VERSION']` |
 
 ### OpenAI Text Completion Models
 

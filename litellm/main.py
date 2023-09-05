@@ -115,10 +115,9 @@ def completion(
                 model
             ]  # update the model to the actual value if an alias has been passed in
         model_response = ModelResponse()
-        if azure:  # this flag is deprecated, remove once notebooks are also updated.
-            custom_llm_provider = "azure"
-            if deployment_id:
+        if deployment_id != None:
                 model=deployment_id
+                custom_llm_provider="azure"
         elif (
             model.split("/", 1)[0] in litellm.provider_list
         ):  # allow custom provider to be passed in via the model name "azure/chatgpt-test"
