@@ -34,9 +34,11 @@ print(response)
 
 ## Async Streaming
 We've implemented an `__anext__()` function in the streaming object returned. This enables async iteration over the streaming object. 
+
 ### Usage
+Here's an example of using it with openai. But this 
 ```
-from litellm import acompletion
+from litellm import completion
 import asyncio
 
 def logger_fn(model_call_object: dict):
@@ -46,11 +48,10 @@ def logger_fn(model_call_object: dict):
 user_message = "Hello, how are you?"
 messages = [{"content": user_message, "role": "user"}]
 
-# # test on ai21 completion call
-async def ai21_async_completion_call():
+async def completion_call():
     try:
         response = completion(
-            model="j2-ultra", messages=messages, stream=True, logger_fn=logger_fn
+            model="gpt-3.5-turbo", messages=messages, stream=True, logger_fn=logger_fn
         )
         print(f"response: {response}")
         complete_response = ""
@@ -67,5 +68,5 @@ async def ai21_async_completion_call():
         print(f"error occurred: {traceback.format_exc()}")
         pass
 
-asyncio.run(ai21_async_completion_call())
+asyncio.run(completion_call())
 ```
