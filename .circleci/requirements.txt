@@ -5,5 +5,8 @@ openai
 tiktoken
 importlib_metadata
 baseten
+cohere
+replicate
+anthropic
 gptcache
 boto3
