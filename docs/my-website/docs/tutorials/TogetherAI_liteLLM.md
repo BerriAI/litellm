@@ -1,33 +1,37 @@
-# liteLLM Together AI Tutorial
+# Llama2 Together AI Tutorial
 https://together.ai/
 
 
 
 ```python
-!pip install litellm==0.1.371
+!pip install litellm
 ```
 
 
 ```python
 import os
 from litellm import completion
-os.environ["TOGETHER_AI_TOKEN"] = "" #@param
+os.environ["TOGETHERAI_API_KEY"] = "" #@param
 user_message = "Hello, whats the weather in San Francisco??"
 messages = [{ "content": user_message,"role": "user"}]
 ```
 
-## Calling togethercomputer/llama-2-70b-chat
+## Calling Llama2 on TogetherAI
 https://api.together.xyz/playground/chat?model=togethercomputer%2Fllama-2-70b-chat
 
-
 ```python
-model_name = "togethercomputer/llama-2-70b-chat"
-response = completion(model=model_name, messages=messages, together_ai=True)
+model_name = "together_ai/togethercomputer/llama-2-70b-chat"
+response = completion(model=model_name, messages=messages)
 print(response)
 ```
 
     {'choices': [{'finish_reason': 'stop', 'index': 0, 'message': {'role': 'assistant', 'content': "\n\nI'm not able to provide real-time weather information. However, I can suggest"}}], 'created': 1691629657.9288375, 'model': 'togethercomputer/llama-2-70b-chat', 'usage': {'prompt_tokens': 9, 'completion_tokens': 17, 'total_tokens': 26}}
 
+
+LiteLLM handles the prompt formatting for Together AI's Llama2 models as well, converting your message to the 
+`[INST] <your instruction> [/INST]` format required. 
+
+[Implementation Code](https://github.com/BerriAI/litellm/blob/64f3d3c56ef02ac5544983efc78293de31c1c201/litellm/llms/prompt_templates/factory.py#L17)
 
 ## With Streaming
 
@@ -39,23 +43,95 @@ for chunk in response:
   print(chunk['choices'][0]['delta']) # same as openai format
 ```
 
-    <litellm.utils.CustomStreamWrapper object at 0x7ad005e93ee0>
-    {'role': 'assistant', 'content': '\\n'}
-    {'role': 'assistant', 'content': '\\n'}
-    {'role': 'assistant', 'content': 'I'}
-    {'role': 'assistant', 'content': 'm'}
-    {'role': 'assistant', 'content': ' not'}
-    {'role': 'assistant', 'content': ' able'}
-    {'role': 'assistant', 'content': ' to'}
-    {'role': 'assistant', 'content': ' provide'}
-    {'role': 'assistant', 'content': ' real'}
-    {'role': 'assistant', 'content': '-'}
-    {'role': 'assistant', 'content': 'time'}
-    {'role': 'assistant', 'content': ' weather'}
-    {'role': 'assistant', 'content': ' information'}
-    {'role': 'assistant', 'content': '.'}
-    {'role': 'assistant', 'content': ' However'}
-    {'role': 'assistant', 'content': ','}
-    {'role': 'assistant', 'content': ' I'}
-    {'role': 'assistant', 'content': ' can'}
 
+## Use Llama2 variants with Custom Prompt Templates
+
+Using a version of Llama2 on TogetherAI that needs custom prompt formatting? 
+
+You can create a custom prompt template. 
+
+Let's make one for `OpenAssistant/llama2-70b-oasst-sft-v10`!
+
+The accepted template format is: [Reference](https://huggingface.co/OpenAssistant/llama2-70b-oasst-sft-v10-)
+```
+"""
+<|im_start|>system
+{system_message}<|im_end|>
+<|im_start|>user
+{prompt}<|im_end|>
+<|im_start|>assistant
+"""
+```
+
+Let's register our custom prompt template: [Implementation Code](https://github.com/BerriAI/litellm/blob/64f3d3c56ef02ac5544983efc78293de31c1c201/litellm/llms/prompt_templates/factory.py#L77)
+```
+import litellm 
+
+litellm.register_prompt_template(
+    model="OpenAssistant/llama2-70b-oasst-sft-v10",
+    roles={"system":"<|im_start|>system", "assistant":"<|im_start|>assistant", "user":"<|im_start|>user"}, # tell LiteLLM how you want to map the openai messages to this model
+    pre_message_sep= "\n",
+    post_message_sep= "\n"
+)
+```
+
+Let's use it! 
+
+```
+from litellm import completion 
+
+# set env variable 
+os.environ["TOGETHERAI_API_KEY"] = ""
+
+messages=[{"role":"user", "content": "Write me a poem about the blue sky"}]
+
+completion(model="together_ai/OpenAssistant/llama2-70b-oasst-sft-v10", messages=messages)
+```
+
+**Complete Code**
+
+```
+import litellm 
+from litellm import completion
+
+# set env variable 
+os.environ["TOGETHERAI_API_KEY"] = ""
+
+litellm.register_prompt_template(
+    model="OpenAssistant/llama2-70b-oasst-sft-v10",
+    roles={"system":"<|im_start|>system", "assistant":"<|im_start|>assistant", "user":"<|im_start|>user"}, # tell LiteLLM how you want to map the openai messages to this model
+    pre_message_sep= "\n",
+    post_message_sep= "\n"
+)
+
+messages=[{"role":"user", "content": "Write me a poem about the blue sky"}]
+
+response = completion(model="together_ai/OpenAssistant/llama2-70b-oasst-sft-v10", messages=messages)
+
+print(response)
+```
+
+**Output**
+```
+{
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "message": {
+        "content": ".\n\nThe sky is a canvas of blue,\nWith clouds that drift and move,",
+        "role": "assistant",
+        "logprobs": null
+      }
+    }
+  ],
+  "created": 1693941410.482018,
+  "model": "OpenAssistant/llama2-70b-oasst-sft-v10",
+  "usage": {
+    "prompt_tokens": 7,
+    "completion_tokens": 16,
+    "total_tokens": 23
+  },
+  "litellm_call_id": "f21315db-afd6-4c1e-b43a-0b5682de4b06"
+}
+```
