@@ -28,5 +28,4 @@ try:
         max_tokens=60,
     )
 except Exception as e:
-    print(e.status_code)
     print(e)
