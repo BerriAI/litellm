@@ -26,7 +26,10 @@ from .exceptions import (
     RateLimitError,
     ServiceUnavailableError,
     OpenAIError,
-    ContextWindowExceededError
+    ContextWindowExceededError,
+    Timeout,
+    APIConnectionError,
+    APIError
 )
 from typing import List, Dict, Union, Optional
 from .caching import Cache
@@ -1495,6 +1498,13 @@ def exception_type(model, original_exception, custom_llm_provider):
                             model=model,
                             llm_provider="anthropic",
                         )
+                    elif original_exception.status_code == 408:
+                        exception_mapping_worked = True
+                        raise Timeout(
+                            message=f"AnthropicException - {original_exception.message}",
+                            model=model,
+                            llm_provider="anthropic"
+                        )
                     elif original_exception.status_code == 413:
                         exception_mapping_worked = True
                         raise InvalidRequestError(
@@ -1509,16 +1519,21 @@ def exception_type(model, original_exception, custom_llm_provider):
                             llm_provider="anthropic",
                             model=model
                         )
-                elif (
-                    "Could not resolve authentication method. Expected either api_key or auth_token to be set."
-                    in error_str
-                ):
-                    exception_mapping_worked = True
-                    raise AuthenticationError(
-                        message=f"AnthropicException - {original_exception.message}",
-                        llm_provider="anthropic",
-                        model=model
-                    )
+                    elif original_exception.status_code == 500:
+                        exception_mapping_worked = True
+                        raise ServiceUnavailableError(
+                            message=f"AnthropicException - {original_exception.message}",
+                            llm_provider="anthropic",
+                            model=model
+                        )
+                    else:
+                        exception_mapping_worked = True
+                        raise APIError(
+                            status_code=original_exception.status_code,
+                            message=f"AnthropicException - {original_exception.message}",
+                            llm_provider="anthropic",
+                            model=model
+                        )
             elif "replicate" in model:
                 if "Incorrect authentication token" in error_str:
                     exception_mapping_worked = True
@@ -1551,8 +1566,17 @@ def exception_type(model, original_exception, custom_llm_provider):
                 elif (
                     exception_type == "ReplicateError"
                 ):  # ReplicateError implies an error on Replicate server side, not user side
+                    exception_mapping_worked = True
                     raise ServiceUnavailableError(
                         message=f"ReplicateException - {error_str}",
+                        llm_provider="replicate",
+                        model=model
+                    )
+                else:
+                    exception_mapping_worked = True
+                    raise APIError(
+                        status_code=original_exception.status_code, 
+                        message=f"ReplicateException - {original_exception.message}",
                         llm_provider="replicate",
                         model=model
                     )
@@ -1583,6 +1607,14 @@ def exception_type(model, original_exception, custom_llm_provider):
                         llm_provider="cohere",
                         model=model
                     )
+                else:
+                    exception_mapping_worked = True
+                    raise APIError(
+                        status_code=original_exception.status_code, 
+                        message=f"CohereException - {original_exception.message}",
+                        llm_provider="cohere",
+                        model=model
+                    )
             elif custom_llm_provider == "huggingface":
                 if "length limit exceeded" in error_str:
                     exception_mapping_worked = True
@@ -1606,9 +1638,24 @@ def exception_type(model, original_exception, custom_llm_provider):
                             model=model,
                             llm_provider="huggingface",
                         )
+                    elif original_exception.status_code == 408:
+                        exception_mapping_worked = True
+                        raise Timeout(
+                            message=f"HuggingfaceException - {original_exception.message}",
+                            model=model,
+                            llm_provider="huggingface"
+                        )
                     elif original_exception.status_code == 429:
                         exception_mapping_worked = True
                         raise RateLimitError(
+                            message=f"HuggingfaceException - {original_exception.message}",
+                            llm_provider="huggingface",
+                            model=model
+                        )
+                    else:
+                        exception_mapping_worked = True
+                        raise APIError(
+                            status_code=original_exception.status_code, 
                             message=f"HuggingfaceException - {original_exception.message}",
                             llm_provider="huggingface",
                             model=model
@@ -1630,6 +1677,13 @@ def exception_type(model, original_exception, custom_llm_provider):
                             llm_provider="ai21",
                             model=model
                         )
+                    elif original_exception.status_code == 408:
+                        exception_mapping_worked = True
+                        raise Timeout(
+                            message=f"AI21Exception - {original_exception.message}",
+                            model=model,
+                            llm_provider="ai21"
+                        )
                     if original_exception.status_code == 422:
                         exception_mapping_worked = True
                         raise InvalidRequestError(
@@ -1642,6 +1696,14 @@ def exception_type(model, original_exception, custom_llm_provider):
                         raise RateLimitError(
                             message=f"AI21Exception - {original_exception.message}",
                             llm_provider="ai21",
+                        )
+                    else:
+                        exception_mapping_worked = True
+                        raise APIError(
+                            status_code=original_exception.status_code, 
+                            message=f"AI21Exception - {original_exception.message}",
+                            llm_provider="ai21",
+                            model=model
                         )
             elif custom_llm_provider == "together_ai":
                 error_response = json.loads(error_str)
@@ -1673,6 +1735,13 @@ def exception_type(model, original_exception, custom_llm_provider):
                         model=model,
                         llm_provider="together_ai"
                     )
+                elif original_exception.status_code == 408:
+                        exception_mapping_worked = True
+                        raise Timeout(
+                            message=f"TogetherAIException - {original_exception.message}",
+                            model=model,
+                            llm_provider="together_ai"
+                        )
                 elif original_exception.status_code == 429:
                         exception_mapping_worked = True
                         raise RateLimitError(
@@ -1680,7 +1749,14 @@ def exception_type(model, original_exception, custom_llm_provider):
                             llm_provider="together_ai",
                             model=model
                         )
-            raise original_exception  # base case - return the original exception
+                else: 
+                    exception_mapping_worked = True
+                    raise APIError(
+                        status_code=original_exception.status_code, 
+                        message=f"TogetherAIException - {original_exception.message}",
+                        llm_provider="together_ai",
+                        model=model
+                    )
         else:
             raise original_exception
     except Exception as e:

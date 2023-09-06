@@ -5,6 +5,9 @@ from openai.error import (
     RateLimitError,
     ServiceUnavailableError,
     OpenAIError,
+    APIError, 
+    Timeout, 
+    APIConnectionError, 
 )
 
 
@@ -22,6 +25,16 @@ class AuthenticationError(AuthenticationError):  # type: ignore
 class InvalidRequestError(InvalidRequestError):  # type: ignore
     def __init__(self, message, model, llm_provider):
         self.status_code = 400
+        self.message = message
+        self.model = model
+        self.llm_provider = llm_provider
+        super().__init__(
+            self.message, f"{self.model}"
+        )  # Call the base class constructor with the parameters it needs
+
+class Timeout(Timeout):  # type: ignore
+    def __init__(self, message, model, llm_provider):
+        self.status_code = 408
         self.message = message
         self.model = model
         self.llm_provider = llm_provider
@@ -62,6 +75,25 @@ class ServiceUnavailableError(ServiceUnavailableError):  # type: ignore
             self.message
         )  # Call the base class constructor with the parameters it needs
 
+
+class APIError(APIError):  # raise this when the API returns an invalid response object - https://github.com/openai/openai-python/blob/1be14ee34a0f8e42d3f9aa5451aa4cb161f1781f/openai/api_requestor.py#L401
+    def __init__(self, status_code, message, llm_provider, model):
+        self.status_code = status_code 
+        self.message = message
+        self.llm_provider = llm_provider
+        self.model = model
+        super().__init__(
+            self.message
+        )
+
+class APIConnectionError(APIConnectionError):  # raised if an invalid request (not get, delete, put, post) is made
+    def __init__(self, message, llm_provider, model):
+        self.message = message
+        self.llm_provider = llm_provider
+        self.model = model
+        super().__init__(
+            self.message
+        )
 
 class OpenAIError(OpenAIError):  # type: ignore
     def __init__(self, original_exception):
