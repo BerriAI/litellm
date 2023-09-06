@@ -108,9 +108,8 @@ def completion(
     version_id = model_to_version_id(model)
     input_data = {
         "prompt": prompt,
-        "max_new_tokens": 50,
+        **optional_params
     }
-
 
     ## LOGGING
     logging_obj.pre_call(
@@ -142,6 +141,9 @@ def completion(
         )
 
         print_verbose(f"raw model_response: {result}")
+
+        if len(result) == 0: # edge case, where result from replicate is empty
+            result = " "
         
         ## Building RESPONSE OBJECT
         model_response["choices"][0]["message"]["content"] = result

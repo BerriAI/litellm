@@ -352,10 +352,13 @@ def test_completion_azure_deployment_id():
 # Replicate API endpoints are unstable -> throw random CUDA errors -> this means our tests can fail even if our tests weren't incorrect.
 
 def test_completion_replicate_llama_2():
+    litellm.set_verbose = True
     model_name = "replicate/llama-2-70b-chat:2796ee9483c3fd7aa2e171d38f4ca12251a30609463dcfd4cd76703f22e96cdf"
     try:
         response = completion(
-            model=model_name, messages=messages, custom_llm_provider="replicate"
+            model=model_name, 
+            messages=messages, 
+            custom_llm_provider="replicate"
         )
         print(response)
         # Add any assertions here to check the response
