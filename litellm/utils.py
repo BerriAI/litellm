@@ -652,7 +652,9 @@ def completion_cost(
     prompt_tokens = token_counter(model=model, text=prompt)
     completion_tokens = token_counter(model=model, text=completion)
     if "togethercomputer" in model:
-        together_catgeory = get_model_params_and_category(model)
+        # together ai prices based on size of llm
+        # get_model_params_and_category takes a model name and returns the category of LLM size it is in model_prices_and_context_window.json 
+        model = get_model_params_and_category(model)
         # print(together_catgeory)
     prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar = cost_per_token(
         model=model, prompt_tokens=prompt_tokens, completion_tokens=completion_tokens
@@ -875,7 +877,7 @@ def get_max_tokens(model: str):
     try:
         return litellm.model_cost[model]
     except:
-        raise Exception("This model isn't mapped yet. Add it here - https://raw.githubusercontent.com/BerriAI/litellm/main/cookbook/community-resources/max_tokens.json")
+        raise Exception("This model isn't mapped yet. Add it here - https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json")
     
 
 def load_test_model(

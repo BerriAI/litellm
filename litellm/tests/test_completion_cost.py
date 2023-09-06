@@ -16,7 +16,7 @@
 
 
 # print(completion_cost(
-#         model="togethercomputer/llama-2-70b-chat", 
+#         model="togethercomputer/llama-2-2b-chat", 
 #         prompt="gm", 
 #         completion="hello"
 #     ))
