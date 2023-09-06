@@ -14,7 +14,7 @@ class ReplicateError(Exception):
         )  # Call the base class constructor with the parameters it needs
 
 # Function to start a prediction and get the prediction URL
-def start_prediction(version_id, input_data, api_token):
+def start_prediction(version_id, input_data, api_token, logging_obj):
     base_url = "https://api.replicate.com/v1"
     headers = {
         "Authorization": f"Token {api_token}",
@@ -27,12 +27,19 @@ def start_prediction(version_id, input_data, api_token):
         "max_new_tokens": 500,
     }
 
+        ## LOGGING
+    logging_obj.pre_call(
+            input=input_data["prompt"],
+            api_key="",
+            additional_args={"complete_input_dict": initial_prediction_data, "headers": headers},
+    )
+
     response = requests.post(f"{base_url}/predictions", json=initial_prediction_data, headers=headers)
     if response.status_code == 201:
         response_data = response.json()
         return response_data.get("urls", {}).get("get")
     else:
-        raise ReplicateError(response.status_code, "Failed to start prediction.")
+        raise ReplicateError(response.status_code, message=response.text)
 
 # Function to handle prediction response (non-streaming)
 def handle_prediction_response(prediction_url, api_token, print_verbose):
@@ -111,18 +118,12 @@ def completion(
         **optional_params
     }
 
-    ## LOGGING
-    logging_obj.pre_call(
-            input=prompt,
-            api_key="",
-            additional_args={"complete_input_dict": input_data},
-    )
     ## COMPLETION CALL
     ## Replicate Compeltion calls have 2 steps
     ## Step1: Start Prediction: gets a prediction url
     ## Step2: Poll prediction url for response
     ## Step2: is handled with and without streaming
-    prediction_url = start_prediction(version_id, input_data, api_key)
+    prediction_url = start_prediction(version_id, input_data, api_key, logging_obj=logging_obj)
     print_verbose(prediction_url)
 
     # Handle the prediction response (streaming or non-streaming)

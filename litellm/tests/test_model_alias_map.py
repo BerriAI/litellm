@@ -18,13 +18,15 @@ model_alias_map = {
 
 litellm.model_alias_map = model_alias_map
 
-print(
+try:
     completion(
         "llama2",
         messages=[{"role": "user", "content": "Hey, how's it going?"}],
         top_p=0.1,
-        temperature=0,
+        temperature=0.1,
         num_beams=4,
         max_tokens=60,
     )
-)
+except Exception as e:
+    print(e.status_code)
+    print(e)
