@@ -50,6 +50,7 @@ def handle_prediction_response(prediction_url, api_token, print_verbose):
     }
 
     status = ""
+    logs = ""
     while True and (status not in ["succeeded", "failed", "canceled"]):
         print_verbose("making request")
         time.sleep(0.0001)
@@ -60,9 +61,10 @@ def handle_prediction_response(prediction_url, api_token, print_verbose):
                 output_string = "".join(response_data['output'])
                 print_verbose(f"Non-streamed output:{output_string}")
             status = response_data['status']
+            logs = response_data.get("logs", "")
         else:
             print_verbose("Failed to fetch prediction status and output.")
-    return output_string
+    return output_string, logs
 
 # Function to handle prediction response (streaming)
 def handle_prediction_response_streaming(prediction_url, api_token, print_verbose):
@@ -131,14 +133,14 @@ def completion(
         print_verbose("streaming request")
         return handle_prediction_response_streaming(prediction_url, api_key, print_verbose)
     else:
-        result = handle_prediction_response(prediction_url, api_key, print_verbose)
+        result, logs = handle_prediction_response(prediction_url, api_key, print_verbose)
 
         ## LOGGING
         logging_obj.post_call(
                 input=prompt,
                 api_key="",
                 original_response=result,
-                additional_args={"complete_input_dict": input_data},
+                additional_args={"complete_input_dict": input_data,"logs": logs},
         )
 
         print_verbose(f"raw model_response: {result}")

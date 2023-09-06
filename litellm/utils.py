@@ -241,6 +241,7 @@ class Logging:
             self.model_call_details["additional_args"] = additional_args
 
             # User Logging -> if you pass in a custom logging function
+            print_verbose(f"model call details: {self.model_call_details}")
             print_verbose(
                 f"Logging Details Post-API Call: logger_fn - {self.logger_fn} | callable(logger_fn) - {callable(self.logger_fn)}"
             )
