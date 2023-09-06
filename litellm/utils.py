@@ -872,6 +872,29 @@ def load_test_model(
             "exception": e,
         }
 
+def validate_environment(self):
+        api_key = None
+        if "OPENAI_API_KEY" in os.environ:
+            api_key = os.getenv("OPENAI_API_KEY")
+        elif "ANTHROPIC_API_KEY" in os.environ:
+            api_key = os.getenv("ANTHROPIC_API_KEY")
+        elif "REPLICATE_API_KEY" in os.environ:
+            api_key = os.getenv("REPLICATE_API_KEY")
+        elif "AZURE_API_KEY" in os.environ:
+            api_key = os.getenv("AZURE_API_KEY")
+        elif "COHERE_API_KEY" in os.getenv("COHERE_API_KEY"):
+            api_key = os.getenv("COHERE_API_KEY")
+        elif "TOGETHERAI_API_KEY" in os.environ:
+            api_key = os.getenv("TOGETHERAI_API_KEY")
+        elif "BASETEN_API_KEY" in os.environ:
+            api_key = os.getenv("BASETEN_API_KEY")
+        elif "AI21_API_KEY" in os.environ:
+            api_key = os.getenv("AI21_API_KEY")
+        elif "OPENROUTER_API_KEY" in os.environ:
+            api_key = os.getenv("OPENROUTER_API_KEY")
+        elif "ALEPHALPHA_API_KEY" in os.environ:
+            api_key = os.getenv("ALEPHALPHA_API_KEY")
+        return api_key
 
 def set_callbacks(callback_list, function_id=None):
     global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, llmonitorLogger, promptLayerLogger, langFuseLogger
