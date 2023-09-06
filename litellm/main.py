@@ -791,10 +791,15 @@ def completion(
             custom_llm_provider == "custom"
             ):
             import requests
+
             url = (
                 litellm.api_base or
-                api_base
+                api_base or
+                ""
             )
+            if url == None or url == "":
+                raise ValueError("api_base not set. Set api_base or litellm.api_base for custom endpoints")
+
             """
             assume input to custom LLM api bases follow this format:
             resp = requests.post(
@@ -823,7 +828,7 @@ def completion(
                     'top_k': top_k,
                 }
             })
-            resp = resp.json()
+            response_json = resp.json()
             """
             assume all responses from custom api_bases of this format:
             {
@@ -837,7 +842,7 @@ def completion(
                 ]
             }
             """
-            string_response = resp['data'][0]['output'][0]
+            string_response = response_json['data'][0]['output'][0]
             ## RESPONSE OBJECT
             model_response["choices"][0]["message"]["content"] = string_response
             model_response["created"] = time.time()
