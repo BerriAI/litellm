@@ -1,6 +1,6 @@
-# Batching Completion Calls - batch_completion
+# Batching Completion() Calls 
 
-Batch Completion allows you to pass a batch of completion() requests to process multiple `messages` in a single API call.
+In the batch_completion method, you provide a list of `messages` where each sub-list of messages is passed to `litellm.completion()`, allowing you to process multiple prompts efficiently in a single API call.
 
 ## Example Code
 ```python
@@ -29,6 +29,3 @@ responses = batch_completion(
     ]
 )
 ```
-
-
-In the batch_completion method, you provide a list of `messages` where each sub-list of messages is passed to `litellm.completion()`, allowing you to process multiple prompts efficiently in a single API call.
