@@ -36,7 +36,7 @@ caching_with_models = False  # if you want the caching key to be model + prompt 
 cache: Optional[Cache] = None # cache object
 model_alias_map: Dict[str, str] = {}
 def get_model_cost_map():
-    url = "https://raw.githubusercontent.com/BerriAI/litellm/main/cookbook/community-resources/max_tokens.json"
+    url = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
     
     try:
         response = requests.get(url)
