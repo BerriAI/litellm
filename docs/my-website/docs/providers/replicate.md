@@ -9,6 +9,22 @@ os.environ["REPLICATE_API_KEY"] = ""
 ```
 
 
+### Example Call
+
+```python
+
+from litellm import completion
+
+## set ENV variables
+os.environ["REPLICATE_API_KEY"] = "replicate key"
+
+messages = [{ "content": "Hello, how are you?","role": "user"}]
+
+# replicate llama-2 call
+response = completion("replicate/llama-2-70b-chat:2796ee9483c3fd7aa2e171d38f4ca12251a30609463dcfd4cd76703f22e96cdf", messages)
+```
+
+
 ### Replicate Models
 liteLLM supports all replicate LLMs. For replicate models ensure to add a `replicate` prefix to the `model` arg. liteLLM detects it using this arg. 
 Below are examples on how to call replicate LLMs using liteLLM 
