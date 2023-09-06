@@ -2,6 +2,19 @@
 LiteLLM supports Custom deploy api endpoints
 
 LiteLLM Expects the following input and output for custom LLM API endpoints
+
+### Model Details
+
+For calls to your custom API base ensure:
+* Set `api_base="your-api-base"`
+* Add `custom/` as a prefix to the `model` param. If your API expects `meta-llama/Llama-2-13b-hf` set `model=custom/meta-llama/Llama-2-13b-hf`
+
+| Model Name       | Function Call                              |
+|------------------|--------------------------------------------|
+| meta-llama/Llama-2-13b-hf  | `response = completion(model="custom/meta-llama/Llama-2-13b-hf", messages=messages, api_base="https://your-custom-inference-endpoint")` |
+| meta-llama/Llama-2-13b-hf  | `response = completion(model="custom/meta-llama/Llama-2-13b-hf", messages=messages, api_base="https://api.autoai.dev/inference")` |
+
+
 #### Input
 Inputs to your custom LLM api bases should follow this format:
 
@@ -23,7 +36,7 @@ resp = requests.post(
 
 #### Output
 Outputs from your custom LLM api bases should follow this format:   
-"""
+```
 {
     'data': [
         {
@@ -40,14 +53,4 @@ Outputs from your custom LLM api bases should follow this format:
         ],
     'message': 'ok'
 }
-"""
-
-### Model Details
-
-For calls to your custom API base ensure:
-* Set `api_base="your-api-base"`
-* Add `custom/` as a prefix to the `model` param. If your API expects `meta-llama/Llama-2-13b-hf` set `model=custom/meta-llama/Llama-2-13b-hf`
-
-| Model Name       | Function Call                              |
-|------------------|--------------------------------------------|
-| meta-llama/Llama-2-13b-hf  | `response = completion(model="custom/meta-llama/Llama-2-13b-hf", messages=messages, api_base="https://your-custom-inference-endpoint")` |
+```
