@@ -702,13 +702,20 @@ def get_optional_params(  # use the openai defaults
             optional_params["logit_bias"] = logit_bias
         return optional_params
     elif custom_llm_provider == "replicate":
-        # any replicate models
-        # TODO: handle translating remaining replicate params
         if stream:
             optional_params["stream"] = stream
             return optional_params
         if max_tokens != float("inf"):
             optional_params["max_new_tokens"] = max_tokens
+        if temperature != 1:
+            optional_params["temperature"] = temperature
+        if top_p != 1:
+            optional_params["top_p"] = top_p
+        if top_k != 40:
+            optional_params["top_k"] = top_k
+        if stop != None:
+            optional_params["stop_sequences"] = stop
+
     elif custom_llm_provider == "together_ai" or ("togethercomputer" in model):
         if stream:
             optional_params["stream_tokens"] = stream
