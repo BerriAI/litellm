@@ -23,7 +23,7 @@ try:
         "llama2",
         messages=[{"role": "user", "content": "Hey, how's it going?"}],
         top_p=0.1,
-        temperature=0.1,
+        temperature=0.01,
         num_beams=4,
         max_tokens=60,
     )

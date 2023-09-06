@@ -39,7 +39,7 @@ def start_prediction(version_id, input_data, api_token, logging_obj):
         response_data = response.json()
         return response_data.get("urls", {}).get("get")
     else:
-        raise ReplicateError(response.status_code, message=response.text)
+        raise ReplicateError(response.status_code, f"Failed to start prediction {response.text}")
 
 # Function to handle prediction response (non-streaming)
 def handle_prediction_response(prediction_url, api_token, print_verbose):
