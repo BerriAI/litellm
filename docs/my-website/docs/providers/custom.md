@@ -16,15 +16,16 @@ For calls to your custom API base ensure:
 
 ### Example Call to Custom LLM API using LiteLLM
 ```python
-    response = completion(
-        model="custom/meta-llama/Llama-2-13b-hf", 
-        messages= [{"content": "what is custom llama?", "role": "user"}],
-        temperature=0.2,
-        max_tokens=10,
-        api_base="https://api.autoai.dev/inference",
-        request_timeout=300,
-    )
-    print("got response\n", response)
+from litellm import completion
+response = completion(
+    model="custom/meta-llama/Llama-2-13b-hf", 
+    messages= [{"content": "what is custom llama?", "role": "user"}],
+    temperature=0.2,
+    max_tokens=10,
+    api_base="https://api.autoai.dev/inference",
+    request_timeout=300,
+)
+print("got response\n", response)
 ```
 
 #### Setting your Custom API endpoint
