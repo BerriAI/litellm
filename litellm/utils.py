@@ -706,7 +706,10 @@ def get_optional_params(  # use the openai defaults
             optional_params["stream"] = stream
             return optional_params
         if max_tokens != float("inf"):
-            optional_params["max_new_tokens"] = max_tokens
+            if "vicuna" in model:
+                optional_params["max_length"] = max_tokens
+            else:
+                optional_params["max_new_tokens"] = max_tokens
         if temperature != 1:
             optional_params["temperature"] = temperature
         if top_p != 1:
