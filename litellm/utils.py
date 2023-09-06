@@ -1572,23 +1572,56 @@ def exception_type(model, original_exception, custom_llm_provider):
                         llm_provider="replicate",
                         model=model
                     )
-                elif (
-                    exception_type == "ReplicateError"
-                ):  # ReplicateError implies an error on Replicate server side, not user side
-                    exception_mapping_worked = True
-                    raise ServiceUnavailableError(
-                        message=f"ReplicateException - {error_str}",
-                        llm_provider="replicate",
-                        model=model
-                    )
-                else:
-                    exception_mapping_worked = True
-                    raise APIError(
-                        status_code=original_exception.status_code, 
-                        message=f"ReplicateException - {original_exception.message}",
-                        llm_provider="replicate",
-                        model=model
-                    )
+                elif hasattr(original_exception, "status_code"):
+                    if original_exception.status_code == 401:
+                        exception_mapping_worked = True
+                        raise AuthenticationError(
+                            message=f"ReplicateException - {original_exception.message}",
+                            llm_provider="replicate",
+                            model=model
+                        )
+                    elif original_exception.status_code == 400:
+                        exception_mapping_worked = True
+                        raise InvalidRequestError(
+                            message=f"ReplicateException - {original_exception.message}",
+                            model=model,
+                            llm_provider="replicate",
+                        )
+                    elif original_exception.status_code == 408:
+                        exception_mapping_worked = True
+                        raise Timeout(
+                            message=f"ReplicateException - {original_exception.message}",
+                            model=model,
+                            llm_provider="replicate"
+                        )
+                    elif original_exception.status_code == 413:
+                        exception_mapping_worked = True
+                        raise InvalidRequestError(
+                            message=f"ReplicateException - {original_exception.message}",
+                            model=model,
+                            llm_provider="replicate",
+                        )
+                    elif original_exception.status_code == 429:
+                        exception_mapping_worked = True
+                        raise RateLimitError(
+                            message=f"ReplicateException - {original_exception.message}",
+                            llm_provider="replicate",
+                            model=model
+                        )
+                    elif original_exception.status_code == 500:
+                        exception_mapping_worked = True
+                        raise ServiceUnavailableError(
+                            message=f"ReplicateException - {original_exception.message}",
+                            llm_provider="replicate",
+                            model=model
+                        )
+                exception_mapping_worked = True
+                raise APIError(
+                    status_code=original_exception.status_code, 
+                    message=f"ReplicateException - {original_exception.message}",
+                    llm_provider="replicate",
+                    model=model
+                )
             elif model in litellm.cohere_models:  # Cohere
                 if (
                     "invalid api token" in error_str
