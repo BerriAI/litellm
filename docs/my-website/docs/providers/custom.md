@@ -14,8 +14,21 @@ For calls to your custom API base ensure:
 | meta-llama/Llama-2-13b-hf  | `response = completion(model="custom/meta-llama/Llama-2-13b-hf", messages=messages, api_base="https://your-custom-inference-endpoint")` |
 | meta-llama/Llama-2-13b-hf  | `response = completion(model="custom/meta-llama/Llama-2-13b-hf", messages=messages, api_base="https://api.autoai.dev/inference")` |
 
+### Example Call to Custom LLM API using LiteLLM
+```python
+    response = completion(
+        model="custom/meta-llama/Llama-2-13b-hf", 
+        messages= [{"content": "what is custom llama?", "role": "user"}],
+        temperature=0.2,
+        max_tokens=10,
+        api_base="https://api.autoai.dev/inference",
+        request_timeout=300,
+    )
+    print("got response\n", response)
+```
 
-#### Input
+#### Setting your Custom API endpoint
+
 Inputs to your custom LLM api bases should follow this format:
 
 ```python
@@ -34,7 +47,6 @@ resp = requests.post(
 )
 ```
 
-#### Output
 Outputs from your custom LLM api bases should follow this format:   
 ```
 {
