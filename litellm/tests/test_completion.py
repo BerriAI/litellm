@@ -435,7 +435,7 @@ def test_completion_together_ai():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-
+test_completion_together_ai()
 # def test_customprompt_together_ai():
 #     try:
 #         litellm.register_prompt_template(
