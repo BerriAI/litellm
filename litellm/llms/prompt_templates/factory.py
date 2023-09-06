@@ -36,6 +36,16 @@ def falcon_instruct_pt(messages):
             prompt += message['role']+":"+ message["content"].replace("\r\n", "\n").replace("\n\n", "\n")
             prompt += "\n\n"
 
+def falcon_chat_pt(messages):
+    prompt = ""
+    for message in messages:
+        if message["role"] == "system":
+            prompt += "System: " + messages["content"]
+        elif message["role"] == "assistant":
+            prompt += "Falcon: " + message["content"]
+        elif message["role"] == "user":
+            prompt += "User: " + message["content"]
+
 
 # MPT prompt template - from https://github.com/lm-sys/FastChat/blob/main/fastchat/conversation.py#L110
 def mpt_chat_pt(messages):
@@ -93,7 +103,9 @@ def prompt_factory(model: str, messages: list):
         else:
             return default_pt(messages=messages)
     elif "tiiuae/falcon" in model: # Note: for the instruct models, it's best to use a User: .., Assistant:.. approach in your prompt template.
-        if "instruct" in model:
+        if model == "tiiuae/falcon-180B-chat":
+            return falcon_chat_pt(messages=messages)
+        elif "instruct" in model:
             return falcon_instruct_pt(messages=messages)
         else:
             return default_pt(messages=messages)
