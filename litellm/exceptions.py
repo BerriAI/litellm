@@ -76,7 +76,8 @@ class ServiceUnavailableError(ServiceUnavailableError):  # type: ignore
         )  # Call the base class constructor with the parameters it needs
 
 
-class APIError(APIError):  # raise this when the API returns an invalid response object - https://github.com/openai/openai-python/blob/1be14ee34a0f8e42d3f9aa5451aa4cb161f1781f/openai/api_requestor.py#L401
+# raise this when the API returns an invalid response object - https://github.com/openai/openai-python/blob/1be14ee34a0f8e42d3f9aa5451aa4cb161f1781f/openai/api_requestor.py#L401
+class APIError(APIError): # type: ignore 
     def __init__(self, status_code, message, llm_provider, model):
         self.status_code = status_code 
         self.message = message
@@ -86,7 +87,8 @@ class APIError(APIError):  # raise this when the API returns an invalid response
             self.message
         )
 
-class APIConnectionError(APIConnectionError):  # raised if an invalid request (not get, delete, put, post) is made
+# raised if an invalid request (not get, delete, put, post) is made
+class APIConnectionError(APIConnectionError):  # type: ignore 
     def __init__(self, message, llm_provider, model):
         self.message = message
         self.llm_provider = llm_provider
