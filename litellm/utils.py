@@ -707,6 +707,8 @@ def get_optional_params(  # use the openai defaults
         if stream:
             optional_params["stream"] = stream
             return optional_params
+        if max_tokens != float("inf"):
+            optional_params["max_new_tokens"] = max_tokens
     elif custom_llm_provider == "together_ai" or ("togethercomputer" in model):
         if stream:
             optional_params["stream_tokens"] = stream
