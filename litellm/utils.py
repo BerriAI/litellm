@@ -570,6 +570,34 @@ def client(original_function):
 ####### USAGE CALCULATOR ################
 
 
+# Extract the number of billion parameters from the model name
+# together_compute
+def get_model_params_and_category(model_name):
+    import re
+    params_match = re.search(r'(\d+b)', model_name) # catch all decimals like 3b, 70b, etc    
+    category = None
+    if params_match != None:
+        params_match = params_match.group(1)
+        params_match = params_match.replace("b", "")
+        print(params_match)
+        params_billion = float(params_match)
+
+        # Determine the category based on the number of parameters
+        if params_billion <= 3.0:
+            category = "together-ai-up-to-3b"
+        elif params_billion <= 7.0:
+            category = "together-ai-3.1b-7b"
+        elif params_billion <= 20.0:
+            category = "together-ai-7.1b-20b"
+        elif params_billion <= 40.0:
+            category = "together-ai-20.1b-40b"
+        elif params_billion <= 70.0:
+            category = "together-ai-40.1b-70b"
+        return category
+    
+    return "Model name not recognized or category not found."
+
+
 def token_counter(model, text):
     # use tiktoken or anthropic's tokenizer depending on the model
     num_tokens = 0
@@ -616,14 +644,20 @@ def cost_per_token(model="gpt-3.5-turbo", prompt_tokens=0, completion_tokens=0):
         return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
 
 
-def completion_cost(model="gpt-3.5-turbo", prompt="", completion=""):
+def completion_cost(
+        model="gpt-3.5-turbo", 
+        prompt="", 
+        completion=""
+    ):
     prompt_tokens = token_counter(model=model, text=prompt)
     completion_tokens = token_counter(model=model, text=completion)
+    if "togethercomputer" in model:
+        together_catgeory = get_model_params_and_category(model)
+        # print(together_catgeory)
     prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar = cost_per_token(
         model=model, prompt_tokens=prompt_tokens, completion_tokens=completion_tokens
     )
     return prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar
-
 
 ####### HELPER FUNCTIONS ################
 def get_litellm_params(
