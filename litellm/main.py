@@ -371,7 +371,7 @@ def completion(
             )
             if "stream" in optional_params and optional_params["stream"] == True:
                 # don't try to access stream object,
-                response = CustomStreamWrapper(model_response, model, logging_obj=logging)
+                response = CustomStreamWrapper(model_response, model, logging_obj=logging, custom_llm_provider="replicate")
                 return response
             response = model_response
 
@@ -939,9 +939,6 @@ def text_completion(*args, **kwargs):
 def print_verbose(print_statement):
     if litellm.set_verbose:
         print(f"LiteLLM: {print_statement}")
-        if random.random() <= 0.3:
-            print("Get help - https://discord.com/invite/wuPM9dRgDw")
-
 
 def config_completion(**kwargs):
     if litellm.config_path != None:

@@ -116,8 +116,6 @@ class ModelResponse(OpenAIObject):
 def print_verbose(print_statement):
     if litellm.set_verbose:
         print(f"LiteLLM: {print_statement}")
-        if random.random() <= 0.3:
-            print("Get help - https://discord.com/invite/wuPM9dRgDw")
 
 ####### LOGGING ###################
 from enum import Enum
@@ -1896,7 +1894,7 @@ class CustomStreamWrapper:
             if self.model in litellm.anthropic_models:
                 chunk = next(self.completion_stream)
                 completion_obj["content"] = self.handle_anthropic_chunk(chunk)
-            elif self.model == "replicate":
+            elif self.model == "replicate" or self.custom_llm_provider == "replicate":
                 chunk = next(self.completion_stream)
                 completion_obj["content"] = chunk
             elif (

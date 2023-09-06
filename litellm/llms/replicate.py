@@ -104,14 +104,39 @@ def completion(
         "max_new_tokens": 50,
     }
 
+
+    ## LOGGING
+    logging_obj.pre_call(
+            input=prompt,
+            api_key="",
+            additional_args={"complete_input_dict": input_data},
+    )
+    ## COMPLETION CALL
+    ## Replicate Compeltion calls have 2 steps
+    ## Step1: Start Prediction: gets a prediction url
+    ## Step2: Poll prediction url for response
+    ## Step2: is handled with and without streaming
     prediction_url = start_prediction(version_id, input_data, api_key)
     print_verbose(prediction_url)
 
     # Handle the prediction response (streaming or non-streaming)
     if "stream" in optional_params and optional_params["stream"] == True:
+        print_verbose("streaming request")
         return handle_prediction_response_streaming(prediction_url, api_key, print_verbose)
     else:
         result = handle_prediction_response(prediction_url, api_key, print_verbose)
+
+        ## LOGGING
+        logging_obj.post_call(
+                input=prompt,
+                api_key="",
+                original_response=result,
+                additional_args={"complete_input_dict": input_data},
+        )
+
+        print_verbose(f"raw model_response: {result}")
+        
+        ## Building RESPONSE OBJECT
         model_response["choices"][0]["message"]["content"] = result
 
         # Calculate usage
