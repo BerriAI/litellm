@@ -41,14 +41,13 @@ def completion(
     logger_fn=None,
 ):
     headers = validate_environment(api_key)
-    model = model
     if model in custom_prompt_dict:
         # check if the model has a registered custom prompt
         model_prompt_details = custom_prompt_dict[model]
         prompt = custom_prompt(
             role_dict=model_prompt_details["roles"], 
-            initial_prompt_value=model_prompt_details["pre_message_sep"],  
-            final_prompt_value=model_prompt_details["post_message_sep"], 
+            initial_prompt_value=model_prompt_details["initial_prompt_value"],  
+            final_prompt_value=model_prompt_details["final_prompt_value"], 
             messages=messages
         )
     else:
