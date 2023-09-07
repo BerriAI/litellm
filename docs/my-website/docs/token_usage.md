@@ -1,4 +1,4 @@
-# Token Usage
+# Completion Token Usage & Cost
 By default LiteLLM returns token usage in all completion requests ([See here](https://litellm.readthedocs.io/en/latest/output/))
 
 However, we also expose 3 public helper functions to calculate token usage across providers:
@@ -33,13 +33,19 @@ print(prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar)
 ```
 
 3. `completion_cost`
+Accepts a `litellm.completion()` response and return a `float` of cost for the `completion` call 
 
 ```python
-from litellm import completion_cost
+from litellm import completion, completion_cost
 
-prompt = "Hey, how's it going"
-completion = "Hi, I'm gpt - I am doing well"
-cost_of_query = completion_cost(model="gpt-3.5-turbo", prompt=prompt, completion=completion))
-
-print(cost_of_query)
+response = completion(
+            model="together_ai/togethercomputer/llama-2-70b-chat",
+            messages=messages,
+            request_timeout=200,
+        )
+# pass your response from completion to completion_cost
+cost = completion_cost(completion_response=response)
+formatted_string = f"${float(cost):.10f}"
+print(formatted_string)
 ```
+

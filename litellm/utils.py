@@ -578,9 +578,7 @@ def get_model_params_and_category(model_name):
     if params_match != None:
         params_match = params_match.group(1)
         params_match = params_match.replace("b", "")
-        print(params_match)
         params_billion = float(params_match)
-
         # Determine the category based on the number of parameters
         if params_billion <= 3.0:
             category = "together-ai-up-to-3b"
@@ -593,8 +591,8 @@ def get_model_params_and_category(model_name):
         elif params_billion <= 70.0:
             category = "together-ai-40.1b-70b"
         return category
-    
-    return "Model name not recognized or category not found."
+
+    return None
 
 
 def token_counter(model, text):
