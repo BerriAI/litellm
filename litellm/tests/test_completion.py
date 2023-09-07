@@ -435,7 +435,6 @@ def test_completion_together_ai():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_completion_together_ai()
 # def test_customprompt_together_ai():
 #     try:
 #         litellm.register_prompt_template(
@@ -462,6 +461,20 @@ def test_completion_sagemaker():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+######## Test VLLM ########
+# def test_completion_vllm():
+#     try:
+#         response = completion(
+#             model="vllm/facebook/opt-125m", 
+#             messages=messages,
+#             temperature=0.2,
+#             max_tokens=80,
+#         )
+#         print(response)
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
+
+# test_completion_vllm()
 
 # def test_completion_custom_api_base():
 #     try:

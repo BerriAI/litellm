@@ -27,6 +27,7 @@ from .llms import huggingface_restapi
 from .llms import replicate
 from .llms import aleph_alpha
 from .llms import baseten
+from .llms import vllm
 import tiktoken
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, List, Optional, Dict
@@ -670,20 +671,18 @@ def completion(
                 encoding=encoding,
                 logging_obj=logging
             )
-            
-            # TODO: Add streaming for sagemaker
-            # if "stream" in optional_params and optional_params["stream"] == True:
-            #     # don't try to access stream object,
-            #     response = CustomStreamWrapper(
-            #         model_response, model, custom_llm_provider="ai21", logging_obj=logging
-            #     )
-            #     return response
-            
+
+            if "stream" in optional_params and optional_params["stream"] == True: ## [BETA]
+                # don't try to access stream object,
+                response = CustomStreamWrapper(
+                    iter(model_response), model, custom_llm_provider="sagemaker", logging_obj=logging
+                )
+                return response
+
             ## RESPONSE OBJECT
             response = model_response
-        elif custom_llm_provider == "bedrock":
-            # boto3 reads keys from .env
-            model_response = bedrock.completion(
+        elif custom_llm_provider == "vllm":
+            model_response = vllm.completion(
                 model=model,
                 messages=messages,
                 model_response=model_response,
@@ -695,17 +694,15 @@ def completion(
                 logging_obj=logging
             )
             
-            # TODO: Add streaming for bedrock
-            # if "stream" in optional_params and optional_params["stream"] == True:
-            #     # don't try to access stream object,
-            #     response = CustomStreamWrapper(
-            #         model_response, model, custom_llm_provider="ai21", logging_obj=logging
-            #     )
-            #     return response
-            
+            if "stream" in optional_params and optional_params["stream"] == True: ## [BETA]
+                # don't try to access stream object,
+                response = CustomStreamWrapper(
+                    model_response, model, custom_llm_provider="vllm", logging_obj=logging
+                )
+                return response
+
             ## RESPONSE OBJECT
             response = model_response
-
         elif custom_llm_provider == "ollama":
             endpoint = (
                 litellm.api_base if litellm.api_base is not None else api_base

@@ -195,6 +195,7 @@ provider_list = [
     "azure",
     "sagemaker",
     "bedrock",
+    "vllm",
     "custom", # custom apis
 ]
 

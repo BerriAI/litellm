@@ -1385,23 +1385,33 @@ def modify_integration(integration_name, integration_params):
 
 
 # custom prompt helper function
-def register_prompt_template(model: str, roles: dict, pre_message_sep: str, post_message_sep: str):
+def register_prompt_template(model: str, roles: dict, initial_prompt_value: str = "", final_prompt_value: str = ""):
     """
     Example usage:
     ```
     import litellm 
     litellm.register_prompt_template(
-	    model="bloomz",
-	    roles={"system":"<|im_start|>system", "assistant":"<|im_start|>assistant", "user":"<|im_start|>user"}
-	    pre_message_sep: "\n",
-	    post_message_sep: "<|im_end|>\n"
+	    model="llama-2",
+	    roles={
+            "system": {
+                "pre_message": "[INST] <<SYS>>\n",
+                "post_message": "\n<</SYS>>\n [/INST]\n"
+            },
+            "user": { # follow this format https://github.com/facebookresearch/llama/blob/77062717054710e352a99add63d160274ce670c6/llama/generation.py#L348
+                "pre_message": "[INST] ",
+                "post_message": " [/INST]\n"
+            }, 
+            "assistant": {
+                "post_message": "\n" # follows this - https://replicate.com/blog/how-to-prompt-llama
+            }
+        },
     )
     ```
     """
     litellm.custom_prompt_dict[model] = {
         "roles": roles,
-        "pre_message_sep": pre_message_sep,
-        "post_message_sep": post_message_sep
+        "initial_prompt_value": initial_prompt_value,
+        "final_prompt_value": final_prompt_value
     }
     return litellm.custom_prompt_dict
 
@@ -1844,6 +1854,14 @@ def exception_type(model, original_exception, custom_llm_provider):
                         llm_provider="together_ai",
                         model=model
                     )
+            elif custom_llm_provider == "vllm":
+                if hasattr(original_exception, "status_code"):
+                    if original_exception.status_code == 0:
+                        raise APIConnectionError(
+                            message=f"VLLMException - {original_exception.message}",
+                            llm_provider="vllm",
+                            model=model
+                        )
         else:
             raise original_exception
     except Exception as e:
@@ -2080,6 +2098,9 @@ class CustomStreamWrapper:
             elif self.custom_llm_provider and self.custom_llm_provider == "ai21": #ai21 doesn't provide streaming
                 chunk = next(self.completion_stream)
                 completion_obj["content"] = self.handle_ai21_chunk(chunk)
+            elif self.custom_llm_provider and self.custom_llm_provider == "vllm":
+                chunk = next(self.completion_stream)
+                completion_obj["content"] = chunk[0].outputs[0].text
             elif self.model in litellm.aleph_alpha_models: #ai21 doesn't provide streaming
                 chunk = next(self.completion_stream)
                 completion_obj["content"] = self.handle_aleph_alpha_chunk(chunk)
