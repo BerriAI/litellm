@@ -28,11 +28,11 @@ def test_completion_togetherai_cost():
         )
         # Add any assertions here to check the response
         print(response)
-        print("Completion Cost:")
+        print("Completion Cost: for togethercomputer/llama-2-70b-chat")
         cost = completion_cost(completion_response=response)
         formatted_string = f"${float(cost):.10f}"
         print(formatted_string)
         
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_completion_togetherai_cost()
+test_completion_togetherai_cost()
