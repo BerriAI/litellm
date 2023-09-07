@@ -60,8 +60,17 @@ async def acompletion(*args, **kwargs):
     func_with_context = partial(ctx.run, func)
 
     # Call the synchronous function using run_in_executor
-    return await loop.run_in_executor(None, func_with_context)
-
+    response =  await loop.run_in_executor(None, func_with_context)
+    if kwargs.get("stream", False): # return an async generator
+        # do not change this
+        # for stream = True, always return an async generator
+        # See OpenAI acreate https://github.com/openai/openai-python/blob/5d50e9e3b39540af782ca24e65c290343d86e1a9/openai/api_resources/abstract/engine_api_resource.py#L193
+        return(
+            line
+            async for line in response
+        )
+    else:
+        return response
 
 @client
 @timeout(  # type: ignore

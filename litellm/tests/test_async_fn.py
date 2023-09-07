@@ -11,7 +11,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 from litellm import acompletion, acreate
 
-
+@pytest.mark.asyncio
 async def test_get_response():
     user_message = "Hello, how are you?"
     messages = [{"content": user_message, "role": "user"}]
@@ -22,8 +22,39 @@ async def test_get_response():
     return response
 
 
-response = asyncio.run(test_get_response())
-print(response)
+# response = asyncio.run(test_get_response())
+# print(response)
+
+@pytest.mark.asyncio
+async def test_get_response_streaming():
+    user_message = "Hello, how are you?"
+    messages = [{"content": user_message, "role": "user"}]
+    try:
+        response = await acompletion(model="gpt-3.5-turbo", messages=messages, stream=True)
+        print(type(response))
+
+        import inspect
+
+        is_async_generator = inspect.isasyncgen(response)
+        print(is_async_generator)
+
+        output = ""
+        async for chunk in response:
+            token = chunk["choices"][0]["delta"].get("content", "")
+            output += token
+            print(output)
+
+        assert output is not None, "Agent output cannot be None."
+        assert isinstance(output, str), "Agent output needs to be of type str"
+        assert len(output) > 0, "Length of output needs to be greater than 0."
+
+    except Exception as e:
+        pytest.fail(f"error occurred: {e}")
+    return response
+
+# response = asyncio.run(test_get_response_streaming())
+# print(response)
+
 
 # async def test_get_response():
 #     user_message = "Hello, how are you?"

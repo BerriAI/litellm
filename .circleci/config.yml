@@ -25,6 +25,7 @@ jobs:
             python -m pip install -r .circleci/requirements.txt
             pip install infisical
             pip install pytest
+            pip install pytest-asyncio
             pip install mypy
             pip install openai[datalib]
             pip install -Uq chromadb==0.3.29
