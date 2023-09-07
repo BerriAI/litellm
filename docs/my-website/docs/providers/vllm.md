@@ -2,6 +2,8 @@
 
 LiteLLM supports all models on VLLM.
 
+🚀[Code Tutorial](https://github.com/BerriAI/litellm/blob/main/cookbook/VLLM_Model_Testing.ipynb)
+
 ### Quick Start
 ```
 pip install litellm vllm
@@ -98,3 +100,4 @@ test_vllm_custom_model()
 ```
 
 [Implementation Code](https://github.com/BerriAI/litellm/blob/6b3cb1898382f2e4e80fd372308ea232868c78d1/litellm/utils.py#L1414)
+
