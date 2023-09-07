@@ -125,6 +125,7 @@ def completion(
     ## Step1: Start Prediction: gets a prediction url
     ## Step2: Poll prediction url for response
     ## Step2: is handled with and without streaming
+    model_response["created"] = time.time() # for pricing this must remain right before calling api
     prediction_url = start_prediction(version_id, input_data, api_key, logging_obj=logging_obj)
     print_verbose(prediction_url)
 
@@ -134,7 +135,7 @@ def completion(
         return handle_prediction_response_streaming(prediction_url, api_key, print_verbose)
     else:
         result, logs = handle_prediction_response(prediction_url, api_key, print_verbose)
-
+        model_response["ended"] = time.time() # for pricing this must remain right after calling api
         ## LOGGING
         logging_obj.post_call(
                 input=prompt,
@@ -154,15 +155,13 @@ def completion(
         # Calculate usage
         prompt_tokens = len(encoding.encode(prompt))
         completion_tokens = len(encoding.encode(model_response["choices"][0]["message"]["content"]))
-        model_response["created"] = time.time()
-        model_response["model"] = model
+        model_response["model"] = "replicate/" + model
         model_response["usage"] = {
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
             "total_tokens": prompt_tokens + completion_tokens,
         }
         return model_response
-
 
 
 # # Example usage:

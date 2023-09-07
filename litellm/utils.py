@@ -529,7 +529,7 @@ def client(original_function):
                 # TODO: Add to cache for streaming
                 return result
         
-            
+
             # [OPTIONAL] ADD TO CACHE
             if litellm.caching or litellm.caching_with_models or litellm.cache != None: # user init a cache object
                 litellm.cache.add_cache(result, *args, **kwargs)
@@ -594,6 +594,21 @@ def get_model_params_and_category(model_name):
 
     return None
 
+def get_replicate_completion_pricing(completion_response=None, run_time_in_seconds=0.0):
+    # see https://replicate.com/pricing
+    a100_40gb_price_per_second_public = 0.001150
+
+    # for all litellm currently supported LLMs, almost all requests go to a100_80gb
+    a100_80gb_price_per_second_public = 0.001400
+
+    start_time = completion_response['created']
+    end_time = completion_response["ended"]
+    run_time_in_seconds = end_time - start_time
+
+    print("total_replicate_run_time", run_time_in_seconds)
+
+    return a100_80gb_price_per_second_public*run_time_in_seconds
+
 
 def token_counter(model, text):
     # use tiktoken or anthropic's tokenizer depending on the model
@@ -647,6 +662,8 @@ def completion_cost(
         completion="",
         completion_response=None
     ):
+
+    # Handle Inputs to completion_cost
     prompt_tokens = 0
     completion_tokens = 0
     if completion_response != None:
@@ -657,10 +674,20 @@ def completion_cost(
     else:
         prompt_tokens = token_counter(model=model, text=prompt)
         completion_tokens = token_counter(model=model, text=completion)
+    
+    # Calculate cost based on prompt_tokens, completion_tokens
     if "togethercomputer" in model:
         # together ai prices based on size of llm
         # get_model_params_and_category takes a model name and returns the category of LLM size it is in model_prices_and_context_window.json 
         model = get_model_params_and_category(model)
+    # replicate llms are calculate based on time for request running
+    # see https://replicate.com/pricing
+    elif (
+        model in litellm.replicate_models or
+        "replicate" in model
+    ):
+        return get_replicate_completion_pricing(completion_response)
+
     prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar = cost_per_token(
         model=model, prompt_tokens=prompt_tokens, completion_tokens=completion_tokens
     )
