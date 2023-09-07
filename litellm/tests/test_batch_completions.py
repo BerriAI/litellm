@@ -9,10 +9,11 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import litellm
 from litellm import batch_completion
-
+litellm.set_verbose=True
 messages = [[{"role": "user", "content": "Hey, how's it going"}] for _ in range(5)]
 print(messages[0:5])
 print(len(messages))
+# model = "vllm/facebook/opt-125m"
 model = "gpt-3.5-turbo"
 
 result = batch_completion(model=model, messages=messages)
