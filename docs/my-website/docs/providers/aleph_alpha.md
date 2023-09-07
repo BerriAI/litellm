@@ -1,6 +1,6 @@
 # Aleph Alpha
 
-LiteLLM supports the 'luminous' + 'luminous-control' series of models from [Aleph Alpha](https://www.aleph-alpha.com/). 
+LiteLLM supports all models from [Aleph Alpha](https://www.aleph-alpha.com/). 
 
 Like AI21 and Cohere, you can use these models without a waitlist. 
 
