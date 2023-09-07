@@ -25,7 +25,7 @@ def default_pt(messages):
     return " ".join(message["content"] for message in messages)
 ```
 
-[Code for how prompt formats work in LiteLLM](https://github.com/BerriAI/litellm/blob/main/litellm/llms/huggingface_model_prompt_templates/factory.py)
+[Code for how prompt formats work in LiteLLM](https://github.com/BerriAI/litellm/blob/main/litellm/llms/prompt_templates/factory.py)
 
 #### Models with Special Prompt Templates
 
@@ -43,7 +43,20 @@ def default_pt(messages):
 # Create your own custom prompt template works 
 litellm.register_prompt_template(
 	model="togethercomputer/LLaMA-2-7B-32K",
-	roles={"system":"", "assistant":"Assistant:", "user":"User:"}, # tell LiteLLM how you want to map the openai messages to this model
+	role_dict={
+            "system": {
+                "pre_message": "[INST] <<SYS>>\n",
+                "post_message": "\n<</SYS>>\n [/INST]\n"
+            },
+            "user": { 
+                "pre_message": "[INST] ",
+                "post_message": " [/INST]\n"
+            }, 
+            "assistant": {
+                "pre_message": "\n",
+                "post_message": "\n",
+            }
+        } # tell LiteLLM how you want to map the openai messages to this model
 	pre_message_sep= "\n",
 	post_message_sep= "\n"
 )
