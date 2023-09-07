@@ -44,8 +44,8 @@ async def test_get_response_streaming():
             output += token
             print(output)
 
-        assert output is not None, "Agent output cannot be None."
-        assert isinstance(output, str), "Agent output needs to be of type str"
+        assert output is not None, "output cannot be None."
+        assert isinstance(output, str), "output needs to be of type str"
         assert len(output) > 0, "Length of output needs to be greater than 0."
 
     except Exception as e:
@@ -56,15 +56,3 @@ async def test_get_response_streaming():
 # print(response)
 
 
-# async def test_get_response():
-#     user_message = "Hello, how are you?"
-#     messages = [{"content": user_message, "role": "user"}]
-#     try:
-#         response = await acreate(model="gpt-3.5-turbo", messages=messages)
-#     except Exception as e:
-#         pytest.fail(f"error occurred: {e}")
-#     return response
-
-
-# response = asyncio.run(test_get_response())
-# print(response)
