@@ -6,7 +6,7 @@ import time
 from typing import Callable
 from litellm.utils import ModelResponse
 from .prompt_templates.factory import prompt_factory, custom_prompt
-
+llm = None
 class VLLMError(Exception):
     def __init__(self, status_code, message):
         self.status_code = status_code
@@ -16,10 +16,12 @@ class VLLMError(Exception):
         )  # Call the base class constructor with the parameters it needs
 
 # check if vllm is installed
-def validate_environment():
+def validate_environment(model: str, llm: any=None):
     try: 
         from vllm import LLM, SamplingParams
-        return LLM, SamplingParams
+        if llm is None:
+            llm = LLM(model=model)
+        return llm, SamplingParams
     except:
         raise VLLMError(status_code=0, message="The vllm package is not installed in your environment. Run - `pip install vllm` before proceeding.")
 
@@ -35,9 +37,8 @@ def completion(
     litellm_params=None,
     logger_fn=None,
 ):
-    LLM, SamplingParams = validate_environment()
     try:
-        llm = LLM(model=model)
+        llm, SamplingParams = validate_environment(model=model)
     except Exception as e:
         raise VLLMError(status_code=0, message=str(e))
     sampling_params = SamplingParams(**optional_params)
@@ -91,6 +92,85 @@ def completion(
             "total_tokens": prompt_tokens + completion_tokens,
         }
         return model_response
+
+def batch_completions(
+    model: str,
+    messages: list,
+    optional_params=None,
+    custom_prompt_dict={}
+):
+    """
+    Example usage:
+    import litellm
+    import os
+    from litellm import batch_completion
+
+
+    responses = batch_completion(
+        model="vllm/facebook/opt-125m",
+        messages = [
+            [
+                {
+                    "role": "user",
+                    "content": "good morning? "
+                }
+            ],
+            [
+                {
+                    "role": "user",
+                    "content": "what's the time? "
+                }
+            ]
+        ]
+    )
+    """
+    global llm
+    try:
+        llm, SamplingParams = validate_environment(model=model, llm=llm)
+    except Exception as e:
+        if "data parallel group is already initialized" in e:
+            pass 
+        else:
+            raise VLLMError(status_code=0, message=str(e))
+    sampling_params = SamplingParams(**optional_params)
+    prompts = [] 
+    if model in custom_prompt_dict:
+        # check if the model has a registered custom prompt
+        model_prompt_details = custom_prompt_dict[model]
+        for message in messages:
+            prompt = custom_prompt(
+                role_dict=model_prompt_details["roles"], 
+                initial_prompt_value=model_prompt_details["initial_prompt_value"],  
+                final_prompt_value=model_prompt_details["final_prompt_value"], 
+                messages=message
+            )
+            prompts.append(prompt)
+    else:
+        for message in messages:
+            prompt = prompt_factory(model=model, messages=message)
+            prompts.append(prompt)
+    
+    outputs = llm.generate(prompts, sampling_params)
+
+    final_outputs = []
+    for output in outputs:
+        model_response = ModelResponse()
+        ## RESPONSE OBJECT
+        model_response["choices"][0]["message"]["content"] = output.outputs[0].text
+
+        ## CALCULATING USAGE
+        prompt_tokens = len(output.prompt_token_ids)  
+        completion_tokens = len(output.outputs[0].token_ids)  
+
+        model_response["created"] = time.time()
+        model_response["model"] = model
+        model_response["usage"] = {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+        }
+        final_outputs.append(model_response)
+    return final_outputs
 
 def embedding():
     # logic for parsing in - calling - parsing out model embedding calls
