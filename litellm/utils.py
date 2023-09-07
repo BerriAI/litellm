@@ -563,7 +563,6 @@ def client(original_function):
                 ):  # make it easy to get to the debugger logs if you've initialized it
                     e.message += f"\n Check the log in your dashboard - {liteDebuggerClient.dashboard_url}"
             raise e
-
     return wrapper
 
 
@@ -571,7 +570,7 @@ def client(original_function):
 
 
 # Extract the number of billion parameters from the model name
-# together_compute
+# only used for together_computer LLMs
 def get_model_params_and_category(model_name):
     import re
     params_match = re.search(r'(\d+b)', model_name) # catch all decimals like 3b, 70b, etc    
@@ -647,15 +646,23 @@ def cost_per_token(model="gpt-3.5-turbo", prompt_tokens=0, completion_tokens=0):
 def completion_cost(
         model="gpt-3.5-turbo", 
         prompt="", 
-        completion=""
+        completion="",
+        completion_response=None
     ):
-    prompt_tokens = token_counter(model=model, text=prompt)
-    completion_tokens = token_counter(model=model, text=completion)
+    prompt_tokens = 0
+    completion_tokens = 0
+    if completion_response != None:
+        # get input/output tokens from completion_response
+        prompt_tokens = completion_response['usage']['prompt_tokens']
+        completion_tokens = completion_response['usage']['completion_tokens']
+        model = completion_response['model'] # get model from completion_response
+    else:
+        prompt_tokens = token_counter(model=model, text=prompt)
+        completion_tokens = token_counter(model=model, text=completion)
     if "togethercomputer" in model:
         # together ai prices based on size of llm
         # get_model_params_and_category takes a model name and returns the category of LLM size it is in model_prices_and_context_window.json 
         model = get_model_params_and_category(model)
-        # print(together_catgeory)
     prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar = cost_per_token(
         model=model, prompt_tokens=prompt_tokens, completion_tokens=completion_tokens
     )
