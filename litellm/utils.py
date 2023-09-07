@@ -6,6 +6,7 @@ import random, uuid, requests
 import datetime, time
 import tiktoken
 import uuid
+import aiohttp
 
 encoding = tiktoken.get_encoding("cl100k_base")
 import importlib.metadata
