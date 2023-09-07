@@ -44,6 +44,11 @@
         "input_cost_per_token": 0.00000163,
         "output_cost_per_token": 0.00000551
     },
+    "claude-instant-1.2": {
+        "max_tokens": 100000,
+        "input_cost_per_token": 0.00000163,
+        "output_cost_per_token": 0.00000551
+    },
     "claude-2": {
         "max_tokens": 100000,
         "input_cost_per_token": 0.00001102,
