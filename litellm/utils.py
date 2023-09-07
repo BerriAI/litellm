@@ -604,8 +604,6 @@ def get_replicate_completion_pricing(completion_response=None, total_time=0.0):
         end_time = completion_response["ended"]
         total_time = end_time - start_time
 
-    print("total_replicate_run_time", total_time)
-
     return a100_80gb_price_per_second_public*total_time
 
 
