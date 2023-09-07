@@ -10,7 +10,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import pytest
 import litellm
-from litellm import embedding, completion, text_completion
+from litellm import embedding, completion, text_completion, completion_cost
 
 litellm.vertex_project = "pathrise-convert-1606954137718"
 litellm.vertex_location = "us-central1"
@@ -185,14 +185,18 @@ def test_completion_cohere_stream():
 def test_completion_openai():
     try:
         response = completion(model="gpt-3.5-turbo", messages=messages)
-
+        
         response_str = response["choices"][0]["message"]["content"]
         response_str_2 = response.choices[0].message.content
+        print("response\n", response)
+        cost = completion_cost(completion_response=response)
+        print("Cost for completion call with gpt-3.5-turbo: ", f"${float(cost):.10f}")
         assert response_str == response_str_2
         assert type(response_str) == str
         assert len(response_str) > 1
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+# test_completion_openai()
 
 
 def test_completion_openai_prompt():
@@ -361,6 +365,8 @@ def test_completion_replicate_llama_2():
             custom_llm_provider="replicate"
         )
         print(response)
+        cost = completion_cost(completion_response=response)
+        print("Cost for completion call with llama-2: ", f"${float(cost):.10f}")
         # Add any assertions here to check the response
         response_str = response["choices"][0]["message"]["content"]
         print(response_str)
@@ -432,9 +438,11 @@ def test_completion_together_ai():
         response = completion(model=model_name, messages=messages, max_tokens=256, logger_fn=logger_fn)
         # Add any assertions here to check the response
         print(response)
+        cost = completion_cost(completion_response=response)
+        print("Cost for completion call together-computer/llama-2-70b: ", f"${float(cost):.10f}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-
+# test_completion_together_ai()
 # def test_customprompt_together_ai():
 #     try:
 #         litellm.register_prompt_template(

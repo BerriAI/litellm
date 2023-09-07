@@ -594,20 +594,19 @@ def get_model_params_and_category(model_name):
 
     return None
 
-def get_replicate_completion_pricing(completion_response=None, run_time_in_seconds=0.0):
+def get_replicate_completion_pricing(completion_response=None, total_time=0.0):
     # see https://replicate.com/pricing
     a100_40gb_price_per_second_public = 0.001150
-
     # for all litellm currently supported LLMs, almost all requests go to a100_80gb
-    a100_80gb_price_per_second_public = 0.001400
+    a100_80gb_price_per_second_public = 0.001400 # assume all calls sent to A100 80GB for now
+    if total_time == 0.0:
+        start_time = completion_response['created']
+        end_time = completion_response["ended"]
+        total_time = end_time - start_time
 
-    start_time = completion_response['created']
-    end_time = completion_response["ended"]
-    run_time_in_seconds = end_time - start_time
+    print("total_replicate_run_time", total_time)
 
-    print("total_replicate_run_time", run_time_in_seconds)
-
-    return a100_80gb_price_per_second_public*run_time_in_seconds
+    return a100_80gb_price_per_second_public*total_time
 
 
 def token_counter(model, text):
@@ -657,10 +656,11 @@ def cost_per_token(model="gpt-3.5-turbo", prompt_tokens=0, completion_tokens=0):
 
 
 def completion_cost(
+        completion_response=None,
         model="gpt-3.5-turbo", 
         prompt="", 
         completion="",
-        completion_response=None
+        total_time=0.0, # used for replicate
     ):
 
     # Handle Inputs to completion_cost
@@ -686,8 +686,7 @@ def completion_cost(
         model in litellm.replicate_models or
         "replicate" in model
     ):
-        return get_replicate_completion_pricing(completion_response)
-
+        return get_replicate_completion_pricing(completion_response, total_time)
     prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar = cost_per_token(
         model=model, prompt_tokens=prompt_tokens, completion_tokens=completion_tokens
     )
