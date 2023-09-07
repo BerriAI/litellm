@@ -1977,8 +1977,6 @@ def get_secret(secret_name):
         except:
             secret = None
         return secret
-    elif litellm.api_key != None:  # if users use litellm default key
-        return litellm.api_key
     else:
         return os.environ.get(secret_name)
 

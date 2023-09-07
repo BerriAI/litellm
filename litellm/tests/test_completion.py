@@ -184,6 +184,7 @@ def test_completion_cohere_stream():
 
 def test_completion_openai():
     try:
+        litellm.api_key = os.environ['OPENAI_API_KEY']
         response = completion(model="gpt-3.5-turbo", messages=messages)
         
         response_str = response["choices"][0]["message"]["content"]
