@@ -1,5 +1,5 @@
 #### What this tests ####
-#    This tests the the acompletion function
+#    This tests the the acompletion function #
 
 import sys, os
 import pytest
