@@ -1051,6 +1051,10 @@ def set_callbacks(callback_list, function_id=None):
                 print_verbose(f"instantiating lite_debugger")
                 if function_id:
                     liteDebuggerClient = LiteDebugger(email=function_id)
+                elif litellm.token:
+                    liteDebuggerClient = LiteDebugger(email=litellm.token)
+                elif litellm.email:
+                    liteDebuggerClient = LiteDebugger(email=litellm.email)
     except Exception as e:
         raise e
 

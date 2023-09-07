@@ -30,7 +30,7 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import litellm
-from litellm import completion_with_split_tests
+from litellm import completion
 from openai.error import AuthenticationError
 litellm.set_verbose = True
 
@@ -69,8 +69,8 @@ messages = [{"content": user_message, "role": "user"}]
 #         # Redirect stdout
 #         old_stdout = sys.stdout
 #         sys.stdout = new_stdout = io.StringIO()
-
-#         response = completion_with_split_tests(models=split_per_model, messages=messages, use_client=True, id="6d383c99-488d-481d-aa1b-1f94935cec44")
+#         litellm.token = "a67abbaf-35b8-4649-8647-68c5fe8d37fb" # generate one here - https://www.uuidgenerator.net/version4
+#         response = completion(model="gpt-3.5-turbo", messages=messages, use_client=True)
 
 #         # Restore stdout
 #         sys.stdout = old_stdout
@@ -83,6 +83,7 @@ messages = [{"content": user_message, "role": "user"}]
 #         if "LiteDebugger: Success/Failure Call Logging" not in output:
 #             raise Exception("LiteLLMDebugger: success/failure call not logged!")
 #     except Exception as e:
+#         print(output)
 #         pytest.fail(f"Error occurred: {e}")
 
 # # Test 3: On streaming completion call - setting client to true
