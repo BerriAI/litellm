@@ -844,6 +844,13 @@ def batch_completion(
     frequency_penalty=0,
     logit_bias: dict = {},
     user: str = "",
+    # Optional liteLLM function params
+    *,
+    return_async=False,
+    api_key: Optional[str] = None,
+    api_version: Optional[str] = None,
+    api_base: Optional[str] = None,
+    force_timeout=600,
     # used by text-bison only
     top_k=40,
     custom_llm_provider=None,):
