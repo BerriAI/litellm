@@ -285,13 +285,18 @@ def completion(
             model in litellm.open_ai_text_completion_models
             or "ft:babbage-002" in model
             or "ft:davinci-002" in model  # support for finetuned completion models
+            or custom_llm_provider == "openai"
         ):
+            # print("calling custom openai provider")
             openai.api_type = "openai"
-            openai.api_base = (
-                litellm.api_base
-                if litellm.api_base is not None
-                else "https://api.openai.com/v1"
+
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret("OPENAI_API_BASE")
+                or "https://api.openai.com/v1"
             )
+
             openai.api_version = None
             # set API KEY
             if not api_key and litellm.openai_key:
@@ -311,20 +316,18 @@ def completion(
                 additional_args={
                     "openai_organization": litellm.organization,
                     "headers": litellm.headers,
-                    "api_base": openai.api_base,
+                    "api_base": api_base,
                     "api_type": openai.api_type,
                 },
             )
             ## COMPLETION CALL
-            if litellm.headers:
-                response = openai.Completion.create(
-                    model=model,
-                    prompt=prompt,
-                    headers=litellm.headers,
-                )
-            else:
-                response = openai.Completion.create(model=model, prompt=prompt, **optional_params)
-            
+            response = openai.Completion.create(
+                model=model, 
+                prompt=prompt,
+                headers=litellm.headers,
+                api_base=api_base,
+                **optional_params
+            )
             if "stream" in optional_params and optional_params["stream"] == True:
                 response = CustomStreamWrapper(response, model, logging_obj=logging)
                 return response
