@@ -9,13 +9,14 @@ Easily benchmark LLMs for a given question by viewing
 ### Benchmark Output
 <Image img={require('../../img/bench_llm.png')} />
 
-**🤝 Schedule a 1-on-1 Session:** Book a [1-on-1 session](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat) with Krrish and Ishaan, the founders, to discuss any issues, provide feedback, or explore how we can improve LiteLLM for you.
-
 ## Setup:
 ```
 git clone https://github.com/BerriAI/litellm
 ```
 cd to `benchmark` dir
+
+Located here: 
+https://github.com/BerriAI/litellm/tree/main/cookbook/benchmark
 ```
 cd litellm/cookbook/benchmark
 ```
@@ -81,6 +82,8 @@ Benchmark Results for 'When will BerriAI IPO?':
 |                 | plans or strategies.                                                             |                           |            |
 +-----------------+----------------------------------------------------------------------------------+---------------------------+------------+
 ```
+## Support
+**🤝 Schedule a 1-on-1 Session:** Book a [1-on-1 session](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat) with Krrish and Ishaan, the founders, to discuss any issues, provide feedback, or explore how we can improve LiteLLM for you.
 
 
 <!-- 
