@@ -159,7 +159,7 @@ class Logging:
 
     def pre_call(self, input, api_key, model=None, additional_args={}):
         # Log the exact input to the LLM API
-        print_verbose(f"Logging Details Pre-API Call")
+        print_verbose(f"Logging Details Pre-API Call for call id {self.litellm_call_id}")
         try:
             # print_verbose(f"logging pre call for model: {self.model} with call type: {self.call_type}")
             self.model_call_details["input"] = input
@@ -200,7 +200,7 @@ class Logging:
                         )
 
                     elif callback == "lite_debugger":
-                        print_verbose("reaches litedebugger for logging!")
+                        print_verbose(f"reaches litedebugger for logging! - model_call_details {self.model_call_details}")
                         model = self.model_call_details["model"]
                         messages = self.model_call_details["input"]
                         print_verbose(f"liteDebuggerClient: {liteDebuggerClient}")
@@ -294,6 +294,7 @@ class Logging:
                 start_time = self.start_time
             if end_time is None:
                 end_time = datetime.datetime.now()
+            print_verbose(f"success callbacks: {litellm.success_callback}")
             for callback in litellm.success_callback:
                 try:
                     if callback == "lite_debugger":
@@ -441,9 +442,12 @@ def client(original_function):
             function_id = kwargs["id"] if "id" in kwargs else None
             if litellm.use_client or ("use_client" in kwargs and kwargs["use_client"] == True): 
                 print_verbose(f"litedebugger initialized")
-                litellm.input_callback.append("lite_debugger")
-                litellm.success_callback.append("lite_debugger")
-                litellm.failure_callback.append("lite_debugger")
+                if "lite_debugger" not in litellm.input_callback:
+                    litellm.input_callback.append("lite_debugger")
+                if "lite_debugger" not in litellm.success_callback:
+                    litellm.success_callback.append("lite_debugger")
+                if "lite_debugger" not in litellm.failure_callback:
+                    litellm.failure_callback.append("lite_debugger")
             if (
                 len(litellm.input_callback) > 0
                 or len(litellm.success_callback) > 0
@@ -540,7 +544,8 @@ def client(original_function):
                 result['litellm_call_id'] = litellm_call_id
 
             # LOG SUCCESS - handle streaming success logging in the _next_ object, remove `handle_success` once it's deprecated
-            threading.Thread(target=logging_obj.success_handler, args=(result, start_time, end_time)).start()
+            logging_obj.success_handler(result, start_time, end_time)
+            # threading.Thread(target=logging_obj.success_handler, args=(result, start_time, end_time)).start()
             my_thread = threading.Thread(
                 target=handle_success, args=(args, kwargs, result, start_time, end_time)
             )  # don't interrupt execution of main thread

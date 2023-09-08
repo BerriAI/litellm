@@ -70,13 +70,15 @@ messages = [{"content": user_message, "role": "user"}]
 #         # Redirect stdout
 #         old_stdout = sys.stdout
 #         sys.stdout = new_stdout = io.StringIO()
-#         litellm.token = "a67abbaf-35b8-4649-8647-68c5fe8d37fb" # generate one here - https://www.uuidgenerator.net/version4
-#         response = completion(model="gpt-3.5-turbo", messages=messages)
+#         litellm.token = "1e6795ea-a75e-4231-8110-dcc721dcffc3" # generate one here - https://www.uuidgenerator.net/version4
+
+#         completion(model="gpt-3.5-turbo", messages=messages)
+#         completion(model="claude-instant-1", messages=messages)
 
 #         # Restore stdout
 #         sys.stdout = old_stdout
 #         output = new_stdout.getvalue().strip()
-
+#         print(output)
 #         if "LiteDebugger: Pre-API Call Logging" not in output:
 #             raise Exception(f"LiteLLMDebugger: pre-api call not logged!")
 #         if "LiteDebugger: Post-API Call Logging" not in output:
