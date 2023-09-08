@@ -44,13 +44,13 @@ split_per_model = {
 user_message = "Hello, how are you?"
 messages = [{"content": user_message, "role": "user"}]
 
-# #Test 1: On completion call - without setting client to true -> ensure litedebugger is not initialized
+# # #Test 1: On completion call - without setting client to true -> ensure litedebugger is not initialized
 # try:
 #     # Redirect stdout
 #     old_stdout = sys.stdout
 #     sys.stdout = new_stdout = io.StringIO()
 
-#     response = completion_with_split_tests(models=split_per_model, messages=messages)
+#     response = completion(model="gpt-3.5-turbo", messages=messages)
 
 #     # Restore stdout
 #     sys.stdout = old_stdout
@@ -64,13 +64,14 @@ messages = [{"content": user_message, "role": "user"}]
 
 
 # # Test 2: On normal completion call - setting client to true
+# litellm.use_client=True
 # def test_completion_with_client():
 #     try:
 #         # Redirect stdout
 #         old_stdout = sys.stdout
 #         sys.stdout = new_stdout = io.StringIO()
 #         litellm.token = "a67abbaf-35b8-4649-8647-68c5fe8d37fb" # generate one here - https://www.uuidgenerator.net/version4
-#         response = completion(model="gpt-3.5-turbo", messages=messages, use_client=True)
+#         response = completion(model="gpt-3.5-turbo", messages=messages)
 
 #         # Restore stdout
 #         sys.stdout = old_stdout
@@ -83,9 +84,8 @@ messages = [{"content": user_message, "role": "user"}]
 #         if "LiteDebugger: Success/Failure Call Logging" not in output:
 #             raise Exception("LiteLLMDebugger: success/failure call not logged!")
 #     except Exception as e:
-#         print(output)
 #         pytest.fail(f"Error occurred: {e}")
-
+# test_completion_with_client()
 # # Test 3: On streaming completion call - setting client to true
 # try:
 #     # Redirect stdout
