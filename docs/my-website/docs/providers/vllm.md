@@ -20,7 +20,7 @@ response = completion(
 print(response)
 ```
 
-#### Calling hosted VLLM Server
+### Calling hosted VLLM Server
 In order to use litellm to call a hosted vllm server add the following to your completion call
 
 * `custom_llm_provider == "openai"`
