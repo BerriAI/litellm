@@ -8,7 +8,7 @@ LiteLLM supports all models on VLLM.
 ```
 pip install litellm vllm
 ```
-```
+```python
 import litellm 
 
 response = completion(
@@ -19,6 +19,25 @@ response = completion(
 
 print(response)
 ```
+
+#### Calling hosted VLLM Server
+In order to use litellm to call a hosted vllm server add the following to your completion call
+
+* `custom_llm_provider == "openai"`
+* `api_base = "your-hosted-vllm-server/v1"`
+
+```python
+import litellm 
+
+response = completion(
+            model="vllm/facebook/opt-125m", 
+            messages=messages,
+            temperature=0.2,
+            max_tokens=80)
+
+print(response)
+```
+
 
 ### Batch Completion
 
