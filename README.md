@@ -43,7 +43,7 @@ LiteLLM manages
 
 - Translating inputs to the provider's completion and embedding endpoints
 - Guarantees [consistent output](https://docs.litellm.ai/docs/completion/output), text responses will always be available at `['choices'][0]['message']['content']`
-- Exception mapping - common exceptions across providers are mapped to the [OpenAI exception types](https://help.openai.com/en/articles/6897213-openai-library-error-types-guidance)
+- Exception mapping - common exceptions across providers are mapped to the OpenAI exception types
 
 **🤝 Schedule a 1-on-1 Session:** Book a [1-on-1 session](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat) with Krrish and Ishaan, the founders, to discuss any issues, provide feedback, or explore how we can improve LiteLLM for you.
 # Usage
