@@ -1411,6 +1411,18 @@ def valid_model(model):
     except:
         raise InvalidRequestError(message="", model=model, llm_provider="")
 
+# check valid api key 
+def check_valid_key(model: str, api_key: str):
+    messages = [{"role": "user", "content": "Hey, how's it going?"}]
+    try:
+        litellm.completion(model=model, messages=messages, api_key=api_key)
+        return True
+    except AuthenticationError as e:
+        return False
+    except Exception as e:
+        raise ValueError(str(e))
+
+
 
 # integration helper function
 def modify_integration(integration_name, integration_params):
