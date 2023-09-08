@@ -1753,13 +1753,14 @@ def exception_type(model, original_exception, custom_llm_provider):
                         model=model
                     )
                 else:
-                    exception_mapping_worked = True
-                    raise APIError(
-                        status_code=original_exception.status_code, 
-                        message=f"CohereException - {original_exception.message}",
-                        llm_provider="cohere",
-                        model=model
-                    )
+                    if hasattr(original_exception, "status_code"):
+                        exception_mapping_worked = True
+                        raise APIError(
+                            status_code=original_exception.status_code, 
+                            message=f"CohereException - {original_exception.message}",
+                            llm_provider="cohere",
+                            model=model
+                        )
             elif custom_llm_provider == "huggingface":
                 if "length limit exceeded" in error_str:
                     exception_mapping_worked = True
@@ -1927,10 +1928,8 @@ def exception_type(model, original_exception, custom_llm_provider):
             litellm.email or "LITELLM_EMAIL" in os.environ
         ):
             threading.Thread(target=get_all_keys, args=(e.llm_provider,)).start()
-        if exception_mapping_worked:
-            raise e
-        else:  # don't let an error with mapping interrupt the user from receiving an error from the llm api calls
-            raise original_exception
+        # don't let an error with mapping interrupt the user from receiving an error from the llm api calls
+        raise original_exception
 
 
 ####### CRASH REPORTING ################
