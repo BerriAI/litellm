@@ -50,6 +50,7 @@ const sidebars = {
     "token_usage",
     "exception_mapping",
     'debugging/local_debugging',
+    'debugging/hosted_debugging',
     {
       type: 'category',
       label: 'Tutorials',
