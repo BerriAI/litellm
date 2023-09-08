@@ -35,7 +35,7 @@ git clone https://github.com/BerriAI/litellm
 ```
 cd to `benchmark` dir
 ```
-cd litellm/benchmark
+cd litellm/cookbook/benchmark
 ```
 
 ### Install Dependencies
