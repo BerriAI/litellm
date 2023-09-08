@@ -1,7 +1,7 @@
 ---
 displayed_sidebar: tutorialSidebar
 ---
-# litellm
+# Litellm
 
 import QueryParamReader from '../src/components/queryParamReader.js'
 
@@ -21,7 +21,7 @@ a light package to simplify calling OpenAI, Azure, Cohere, Anthropic, Huggingfac
 
 # usage
 
-<a href='https://docs.litellm.ai/docs/completion/supported' target="_blank"><img alt='None' src='https://img.shields.io/badge/Supported_LLMs-100000?style=for-the-badge&logo=None&logoColor=000000&labelColor=000000&color=8400EA'/></a>
+<a href='https://docs.litellm.ai/docs/providers' target="_blank"><img alt='None' src='https://img.shields.io/badge/Supported_LLMs-100000?style=for-the-badge&logo=None&logoColor=000000&labelColor=000000&color=8400EA'/></a>
 
 Demo - https://litellm.ai/playground \
 Read the docs - https://docs.litellm.ai/docs/
