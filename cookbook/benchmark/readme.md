@@ -27,6 +27,8 @@
 <img width="1280" alt="Screenshot 2023-09-07 at 8 54 26 PM" src="https://github.com/BerriAI/litellm/assets/29436595/cfcc0a3c-5395-4976-8e3c-5e2e328ce88b">
 </h4>
 
+**🤝 Schedule a 1-on-1 Session:** Book a [1-on-1 session](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat) with Krrish and Ishaan, the founders, to discuss any issues, provide feedback, or explore how we can improve LiteLLM for you.
+
 ## Setup:
 ```
 git clone https://github.com/BerriAI/litellm
