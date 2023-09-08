@@ -14,7 +14,6 @@ from litellm import embedding, completion, text_completion, completion_cost
 
 litellm.vertex_project = "pathrise-convert-1606954137718"
 litellm.vertex_location = "us-central1"
-litellm.use_client = True
 
 user_message = "Write a short poem about the sky"
 messages = [{"content": user_message, "role": "user"}]
@@ -481,6 +480,31 @@ def test_completion_sagemaker():
 #         pytest.fail(f"Error occurred: {e}")
 
 # test_completion_vllm()
+
+# def test_completion_hosted_vllm():
+#     # this tests calling a server where vllm is hosted
+#     # this should make an openai.Completion() call to the specified api_base
+#     # send a request to this proxy server: https://replit.com/@BerriAI/openai-proxy#main.py
+#     # it checks if model == facebook/opt-125m and returns test passed
+#     try:
+#         # litellm.set_verbose = True
+#         response = completion(
+#             model="facebook/opt-125m", 
+#             messages=messages,
+#             temperature=0.2,
+#             max_tokens=80,
+#             api_base="https://openai-proxy.berriai.repl.co/v1",
+#             custom_llm_provider="openai"
+#         )
+#         print(response)
+
+#         if response['choices'][0]['message']['content'] != "passed":
+#             # see https://replit.com/@BerriAI/openai-proxy#main.py
+#             pytest.fail(f"Error occurred: proxy server did not respond")
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
+
+# test_completion_hosted_vllm()
 
 # def test_completion_custom_api_base():
 #     try:

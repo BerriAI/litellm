@@ -346,9 +346,9 @@ def completion(
             ## RESPONSE OBJECT
             completion_response = response["choices"][0]["text"]
             model_response["choices"][0]["message"]["content"] = completion_response
-            model_response["created"] = response["created"]
+            model_response["created"] = response.get("created", time.time())
             model_response["model"] = model
-            model_response["usage"] = response["usage"]
+            model_response["usage"] = response.get("usage", 0)
             response = model_response
         elif (
             "replicate" in model or 
