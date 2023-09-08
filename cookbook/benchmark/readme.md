@@ -1,9 +1,8 @@
-# Benchmark LLMs using LiteLLM
 <h1 align="center">
-        LLM-Bench powered by 🚅 LiteLLM
+        LLM-Bench
     </h1>
     <p align="center">
-        <p align="center">Call all LLM APIs using the OpenAI format [Anthropic, Huggingface, Cohere, TogetherAI, Azure, OpenAI, etc.]</p>
+        <p align="center">Benchmark LLMs response, cost and response time</p>
     </p>
 
 <h4 align="center">
