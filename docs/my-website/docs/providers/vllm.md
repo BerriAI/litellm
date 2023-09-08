@@ -32,6 +32,8 @@ import litellm
 response = completion(
             model="vllm/facebook/opt-125m", 
             messages=messages,
+            api_base="https://hosted-vllm-api.co/v1",
+            custom_llm_provider="openai",
             temperature=0.2,
             max_tokens=80)
 
