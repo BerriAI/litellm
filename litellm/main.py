@@ -225,6 +225,7 @@ def completion(
         elif (
             model in litellm.open_ai_chat_completion_models
             or custom_llm_provider == "custom_openai"
+            # NOTE: Do NOT add custom_llm_provider == "openai". this will break hosted vllm calls. see: https://docs.litellm.ai/docs/providers/vllm#calling-hosted-vllm-server. VLLM expects requests to call openai.Completion we need those requests to always call openai.Completion
             or "ft:gpt-3.5-turbo" in model  # finetuned gpt-3.5-turbo
         ):  # allow user to make an openai call with a custom base
             openai.api_type = "openai"
