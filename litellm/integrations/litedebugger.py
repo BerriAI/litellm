@@ -40,7 +40,7 @@ class LiteDebugger:
         litellm_params,
         optional_params,
     ):
-        print_verbose(f"LiteDebugger: Pre-API Call Logging")
+        print_verbose(f"LiteDebugger: Pre-API Call Logging for call id {litellm_call_id}")
         try:
             print_verbose(
                 f"LiteLLMDebugger: Logging - Enters input logging function for model {model}"
@@ -101,7 +101,7 @@ class LiteDebugger:
             pass
 
     def post_call_log_event(self, original_response, litellm_call_id, print_verbose, call_type, stream):
-        print_verbose(f"LiteDebugger: Post-API Call Logging")
+        print_verbose(f"LiteDebugger: Post-API Call Logging for call id {litellm_call_id}")
         try:
             if call_type == "embedding":
                 litellm_data_obj = {
@@ -147,7 +147,7 @@ class LiteDebugger:
         call_type, 
         stream = False
     ):
-        print_verbose(f"LiteDebugger: Success/Failure Call Logging")
+        print_verbose(f"LiteDebugger: Success/Failure Call Logging for call id {litellm_call_id}")
         try:
             print_verbose(
                 f"LiteLLMDebugger: Success/Failure Logging - Enters handler logging function for function {call_type} and stream set to {stream} with response object {response_obj}"
