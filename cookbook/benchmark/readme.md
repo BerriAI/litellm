@@ -1,2 +1,2 @@
-# Benchmark LLMs using LiteLL
+# Benchmark LLMs using LiteLLM
 
