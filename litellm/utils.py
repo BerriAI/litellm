@@ -439,7 +439,7 @@ def client(original_function):
         try:
             global callback_list, add_breadcrumb, user_logger_fn, Logging
             function_id = kwargs["id"] if "id" in kwargs else None
-            if "use_client" in kwargs and kwargs["use_client"] == True: 
+            if litellm.use_client or ("use_client" in kwargs and kwargs["use_client"] == True): 
                 print_verbose(f"litedebugger initialized")
                 litellm.input_callback.append("lite_debugger")
                 litellm.success_callback.append("lite_debugger")
