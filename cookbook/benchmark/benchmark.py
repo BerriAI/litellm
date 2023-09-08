@@ -3,16 +3,30 @@ import time
 import click
 from tqdm import tqdm
 from tabulate import tabulate
-from termcolor import colored 
+from termcolor import colored
+import os
+
 
 # Define the list of models to benchmark
+# select any LLM listed here: https://docs.litellm.ai/docs/providers
 models = ['gpt-3.5-turbo', 'togethercomputer/llama-2-70b-chat', 'claude-2']
+
+# Enter LLM API keys
+# https://docs.litellm.ai/docs/providers
+os.environ['OPENAI_API_KEY'] = ""
+os.environ['ANTHROPIC_API_KEY'] = ""
+os.environ['TOGETHERAI_API_KEY'] = ""
 
 # List of questions to benchmark (replace with your questions)
 questions = [
     "When will BerriAI IPO?",
     "When will LiteLLM hit $100M ARR?"
 ]
+
+# Enter your system prompt here 
+system_prompt = """
+You are LiteLLMs helpful assistant
+"""
 
 @click.command()
 @click.option('--system-prompt', default="You are a helpful assistant that can answer questions.", help="System prompt for the conversation.")
