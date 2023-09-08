@@ -15,10 +15,6 @@ from litellm import embedding, completion, text_completion, completion_cost
 litellm.vertex_project = "pathrise-convert-1606954137718"
 litellm.vertex_location = "us-central1"
 litellm.use_client = True
-# from infisical import InfisicalClient
-
-# litellm.set_verbose = True
-# litellm.secret_manager_client = InfisicalClient(token=os.environ["INFISICAL_TOKEN"])
 
 user_message = "Write a short poem about the sky"
 messages = [{"content": user_message, "role": "user"}]
@@ -217,6 +213,7 @@ def test_completion_openai_prompt():
 
 def test_completion_text_openai():
     try:
+        # litellm.set_verbose=True
         response = completion(model="text-davinci-003", messages=messages)
         # Add any assertions here to check the response
         print(response)
