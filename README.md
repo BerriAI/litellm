@@ -34,7 +34,7 @@
 </h4>
 
 <h4 align="center">
-    <a href="https://docs.litellm.ai/docs/completion/supported" target="_blank">100+ Supported Models</a> |
+    <a href="https://docs.litellm.ai/docs/providers" target="_blank">100+ Supported Models</a> |
     <a href="https://docs.litellm.ai/docs/" target="_blank">Docs</a> |
     <a href="https://litellm.ai/playground" target="_blank">Demo Website</a>
 </h4>
