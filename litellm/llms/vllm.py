@@ -22,8 +22,8 @@ def validate_environment(model: str, llm: Any =None):
         if llm is None:
             llm = LLM(model=model)
         return llm, SamplingParams
-    except:
-        raise VLLMError(status_code=0, message="The vllm package is not installed in your environment. Run - `pip install vllm` before proceeding.")
+    except Exception as e:
+        raise VLLMError(status_code=0, message=str(e))
 
 def completion(
     model: str,
