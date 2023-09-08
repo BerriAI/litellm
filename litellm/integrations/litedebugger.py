@@ -13,6 +13,8 @@ class LiteDebugger:
     def validate_environment(self, email):
         try:
             self.user_email = (email or os.getenv("LITELLM_TOKEN") or os.getenv("LITELLM_EMAIL"))
+            if self.user_email == None: # if users are trying to use_client=True but token not set
+                raise ValueError("litellm.use_client = True but no token or email passed. Please set it in litellm.token")
             self.dashboard_url = "https://admin.litellm.ai/" + self.user_email
             try:
                 print(
@@ -21,7 +23,7 @@ class LiteDebugger:
             except:
                 print(f"Here's your LiteLLM Dashboard 👉 {self.dashboard_url}")
             if self.user_email == None:
-                raise Exception(
+                raise ValueError(
                     "[Non-Blocking Error] LiteLLMDebugger: Missing LITELLM_TOKEN. Set it in your environment. Eg.: os.environ['LITELLM_TOKEN']= <your_email>"
                 )
         except Exception as e:

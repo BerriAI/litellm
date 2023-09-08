@@ -1061,7 +1061,7 @@ def set_callbacks(callback_list, function_id=None):
                 elif litellm.email:
                     liteDebuggerClient = LiteDebugger(email=litellm.email)
                 else:
-                    liteDebuggerClient = LiteDebugger()
+                    liteDebuggerClient = LiteDebugger(email=str(uuid.uuid4()))
     except Exception as e:
         raise e
 
