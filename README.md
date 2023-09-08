@@ -22,6 +22,9 @@
     <a href="https://www.ycombinator.com/companies/berriai">
         <img src="https://img.shields.io/badge/Y%20Combinator-W23-orange?style=flat-square" alt="Y Combinator W23">
     </a>
+    <a href="https://github.com/traceloop/openllmetry/issues">
+      <img src="https://img.shields.io/github/commit-activity/m/BerriAI/litellm" alt="git commit activity" />
+    </a>
 </h4>
 
 <h4 align="center">
