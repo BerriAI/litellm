@@ -1,4 +1,4 @@
-# Benchmark Llama2, Claude1.2, GPT3.5 your use case {#litellm---benchmark-llama2-claude12-and-gpt35-for-a-use-case}
+# Benchmark LLMs for your use case {#litellm---benchmark-llama2-claude12-and-gpt35-for-a-use-case}
 
 In this notebook for a given use case we run the same question on 3 LLMs and compare:
 
