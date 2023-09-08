@@ -10,7 +10,7 @@ In this tutorial, we'll walk through A/B testing between GPT-4 and Llama2 in pro
 
 
 * [Deploying models on Huggingface](https://huggingface.co/docs/inference-endpoints/guides/create_endpoint)
-* [All supported providers on LiteLLM](https://docs.litellm.ai/docs/completion/supported)
+* [All supported providers on LiteLLM](https://docs.litellm.ai/docs/providers)
 
 # Code Walkthrough
 

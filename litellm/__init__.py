@@ -144,7 +144,7 @@ huggingface_models = [
     "meta-llama/Llama-2-13b-chat",
     "meta-llama/Llama-2-70b",
     "meta-llama/Llama-2-70b-chat",
-]  # these have been tested on extensively. But by default all text2text-generation and text-generation models are supported by liteLLM. - https://docs.litellm.ai/docs/completion/supported
+]  # these have been tested on extensively. But by default all text2text-generation and text-generation models are supported by liteLLM. - https://docs.litellm.ai/docs/providers
 
 ai21_models = ["j2-ultra", "j2-mid", "j2-light"]
 

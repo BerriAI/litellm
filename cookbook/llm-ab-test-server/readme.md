@@ -22,7 +22,7 @@
 </h4>
 
 <h4 align="center">
-    <a href="https://docs.litellm.ai/docs/completion/supported" target="_blank">100+ Supported Models</a> |
+    <a href="https://docs.litellm.ai/docs/providers" target="_blank">100+ Supported Models</a> |
     <a href="https://docs.litellm.ai/docs/" target="_blank">Docs</a> |
     <a href="https://litellm.ai/playground" target="_blank">Demo Website</a>
 </h4>
@@ -101,7 +101,7 @@ python3 main.py
 ### Set your LLM Configs
 Set your LLMs and LLM weights you want to run A/B testing with 
 In main.py set your selected LLMs you want to AB test in `llm_dict`
-You can A/B test more than 100+ LLMs using LiteLLM https://docs.litellm.ai/docs/completion/supported
+You can A/B test more than 100+ LLMs using LiteLLM https://docs.litellm.ai/docs/providers
 ```python
 llm_dict = {
     "gpt-4": 0.2,
@@ -114,7 +114,7 @@ llm_dict = {
 #### Setting your API Keys 
 Set your LLM API keys in a .env file in the directory or set them as `os.environ` variables.
 
-See https://docs.litellm.ai/docs/completion/supported for the format of API keys 
+See https://docs.litellm.ai/docs/providers for the format of API keys 
 
 LiteLLM generalizes api keys to follow the following format 
 `PROVIDER_API_KEY`
