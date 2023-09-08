@@ -484,7 +484,7 @@ def completion(
             try:
                 import cohere
             except:
-                Exception("Cohere import failed please run `pip install cohere`")
+                raise Exception("Cohere import failed please run `pip install cohere`")
 
             cohere_key = (
                 api_key
@@ -587,7 +587,7 @@ def completion(
             try:
                 import vertexai
             except:
-                Exception("vertexai import failed please run `pip install google-cloud-aiplatform`")
+                raise Exception("vertexai import failed please run `pip install google-cloud-aiplatform`")
             from vertexai.preview.language_models import ChatModel, InputOutputTextPair
 
             vertexai.init(
@@ -618,7 +618,7 @@ def completion(
             try:
                 import vertexai
             except:
-                Exception("vertexai import failed please run `pip install google-cloud-aiplatform`")
+                raise Exception("vertexai import failed please run `pip install google-cloud-aiplatform`")
             from vertexai.language_models import TextGenerationModel
 
             vertexai.init(
@@ -835,7 +835,7 @@ def completion_with_retries(*args, **kwargs):
     try:
         import tenacity
     except:
-        Exception("tenacity import failed please run `pip install tenacity`")
+        raise Exception("tenacity import failed please run `pip install tenacity`")
 
     retryer = tenacity.Retrying(stop=tenacity.stop_after_attempt(3), reraise=True)
     return retryer(completion, *args, **kwargs)
