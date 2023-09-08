@@ -27,9 +27,43 @@
 <img width="1280" alt="Screenshot 2023-09-07 at 8 54 26 PM" src="https://github.com/BerriAI/litellm/assets/29436595/cfcc0a3c-5395-4976-8e3c-5e2e328ce88b">
 </h4>
 
+## Setup:
+```
+git clone https://github.com/BerriAI/litellm
+```
+cd to `benchmark` dir
+```
+cd litellm/benchmark
+```
 
+### Install Dependencies
+```
+pip install litellm click tqdm tabulate termcolor
+```
 
-## Usage
+### Configuration
+In `benchmark/benchmark.py` select your LLMs, LLM API Key and questions
+
+Supported LLMs: https://docs.litellm.ai/docs/providers
+
+```python
+# Define the list of models to benchmark
+models = ['gpt-3.5-turbo', 'togethercomputer/llama-2-70b-chat', 'claude-2']
+
+# Enter LLM API keys
+os.environ['OPENAI_API_KEY'] = ""
+os.environ['ANTHROPIC_API_KEY'] = ""
+os.environ['TOGETHERAI_API_KEY'] = ""
+
+# List of questions to benchmark (replace with your questions)
+questions = [
+    "When will BerriAI IPO?",
+    "When will LiteLLM hit $100M ARR?"
+]
+
+```
+
+## Run LLM-Bench
 ```
 python3 benchmark.py
 ```
