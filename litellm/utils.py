@@ -1578,7 +1578,7 @@ def exception_type(model, original_exception, custom_llm_provider):
                     model=model,
                     llm_provider=original_exception.llm_provider
                 )
-            raise original_exception
+            raise ValueError(original_exception)
         elif model:
             error_str = str(original_exception)
             if isinstance(original_exception, BaseException):
@@ -1761,6 +1761,7 @@ def exception_type(model, original_exception, custom_llm_provider):
                             llm_provider="cohere",
                             model=model
                         )
+                    raise ValueError(original_exception)
             elif custom_llm_provider == "huggingface":
                 if "length limit exceeded" in error_str:
                     exception_mapping_worked = True
@@ -1912,7 +1913,7 @@ def exception_type(model, original_exception, custom_llm_provider):
                             model=model
                         )
         else:
-            raise original_exception
+            raise ValueError(original_exception)
     except Exception as e:
         # LOGGING
         exception_logging(
@@ -1929,7 +1930,7 @@ def exception_type(model, original_exception, custom_llm_provider):
         ):
             threading.Thread(target=get_all_keys, args=(e.llm_provider,)).start()
         # don't let an error with mapping interrupt the user from receiving an error from the llm api calls
-        raise original_exception
+        raise ValueError(original_exception)
 
 
 ####### CRASH REPORTING ################
