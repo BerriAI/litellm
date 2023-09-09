@@ -231,7 +231,8 @@ from .utils import (
     get_model_list,
     completion_with_split_tests,
     get_max_tokens,
-    register_prompt_template
+    register_prompt_template,
+    validate_environment
 )
 from .main import *  # type: ignore
 from .integrations import *
