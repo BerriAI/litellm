@@ -1762,7 +1762,7 @@ def exception_type(model, original_exception, custom_llm_provider):
                             llm_provider="cohere",
                             model=model
                         )
-                    raise ValueError(original_exception)
+                    raise original_exception
             elif custom_llm_provider == "huggingface":
                 if "length limit exceeded" in error_str:
                     exception_mapping_worked = True
@@ -1915,7 +1915,7 @@ def exception_type(model, original_exception, custom_llm_provider):
                             model=model
                         )
         else:
-            raise ValueError(original_exception)
+            raise original_exception
     except Exception as e:
         # LOGGING
         exception_logging(
