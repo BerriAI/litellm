@@ -24,7 +24,7 @@ print(response)
 In order to use litellm to call a hosted vllm server add the following to your completion call
 
 * `custom_llm_provider == "openai"`
-* `api_base = "your-hosted-vllm-server/v1"`
+* `api_base = "your-hosted-vllm-server"`
 
 ```python
 import litellm 
@@ -32,7 +32,7 @@ import litellm
 response = completion(
             model="facebook/opt-125m", # pass the vllm model name
             messages=messages,
-            api_base="https://hosted-vllm-api.co/v1",
+            api_base="https://hosted-vllm-api.co",
             custom_llm_provider="openai",
             temperature=0.2,
             max_tokens=80)
