@@ -2,6 +2,7 @@ from openai.error import AuthenticationError, InvalidRequestError, RateLimitErro
 import os
 import sys
 import traceback
+import subprocess
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -36,6 +37,7 @@ litellm.vertex_location = "us-central1"
 models = ["gpt-3.5-turbo"]
 test_model = "claude-instant-1"
 
+# Test 1: Context Window Errors 
 @pytest.mark.parametrize("model", models)
 def test_context_window(model):
     sample_text = "how does a court case get to the Supreme Court?" * 1000
@@ -43,7 +45,19 @@ def test_context_window(model):
 
     with pytest.raises(ContextWindowExceededError):
         completion(model=model, messages=messages)
-test_context_window(models[0])
+
+def test_uninstall_cohere_and_completion_call():
+    # Uninstall cohere package
+    subprocess.call(["pip", "uninstall", "cohere"])
+
+    model = "command-nightly"
+    sample_text = "how does a court case get to the Supreme Court?" * 1000
+    messages = [{"content": sample_text, "role": "user"}]
+
+    # with pytest.raises(Exception):
+    completion(model=model, messages=messages)
+
+test_uninstall_cohere_and_completion_call()
 
 # Test 2: InvalidAuth Errors
 @pytest.mark.parametrize("model", models)
