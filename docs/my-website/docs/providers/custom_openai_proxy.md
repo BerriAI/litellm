@@ -10,6 +10,7 @@ No api keys required
 
 #### Pre-Requisites
 Ensure your proxy server has the following route
+Here's an example OpenAI proxy server with routes: https://replit.com/@BerriAI/openai-proxy#main.py
 
 ```python
 @app.route('/chat/completions', methods=["POST"])
