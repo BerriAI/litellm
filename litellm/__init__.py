@@ -36,9 +36,11 @@ caching_with_models = False  # if you want the caching key to be model + prompt 
 cache: Optional[Cache] = None # cache object
 model_alias_map: Dict[str, str] = {}
 
-####### APIManager ###################
-from .apimanager import APIManager
-apiManager = APIManager()
+####### BudgetManager ###################
+from .budget_manager import BudgetManager
+budget_manager = BudgetManager()
+
+#############################################
 
 def get_model_cost_map():
     url = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
