@@ -8,6 +8,19 @@ import os
 os.environ["TOGETHERAI_API_KEY"] = ""
 ```
 
+### Sample Usage
+
+```python
+from litellm import completion 
+
+# set env variable 
+os.environ["TOGETHERAI_API_KEY"] = ""
+
+messages = [{"role": "user", "content": "Write me a poem about the blue sky"}]
+
+completion(model="togethercomputer/Llama-2-7B-32K-Instruct", messages=messages, custom_llm_provider="together_ai")
+```
+
 ### Together AI Models
 liteLLM supports `non-streaming` and `streaming` requests to all models on https://api.together.xyz/
 
