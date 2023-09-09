@@ -142,3 +142,22 @@ print(response)
   "litellm_call_id": "f21315db-afd6-4c1e-b43a-0b5682de4b06"
 }
 ```
+
+### Advanced Usage
+
+Instead of using the `custom_llm_provider` arg to specify which provider you're using (e.g. together ai), you can just pass the provider name as part of the model name, and LiteLLM will parse it out. 
+
+Expected format: <custom_llm_provider>/<model_name>
+
+e.g. completion(model="together_ai/togethercomputer/Llama-2-7B-32K-Instruct", ...)
+
+```python
+from litellm import completion 
+
+# set env variable 
+os.environ["TOGETHERAI_API_KEY"] = ""
+
+messages = [{"role": "user", "content": "Write me a poem about the blue sky"}]
+
+completion(model="together_ai/togethercomputer/Llama-2-7B-32K-Instruct", messages=messages)
+```
