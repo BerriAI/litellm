@@ -28,7 +28,7 @@ In order to use your custom OpenAI Chat Completion proxy with LiteLLM, ensure yo
 from litellm import completion
 
 ## set ENV variables
-os.environ["OPENAI_API_KEY"] = "set it, but it's not used"
+os.environ["OPENAI_API_KEY"] = "set anything here - key is not used for proxy"
 
 messages = [{ "content": "Hello, how are you?","role": "user"}]
 
