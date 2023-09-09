@@ -17,44 +17,6 @@ from litellm.caching import Cache
 messages = [{"role": "user", "content": "who is ishaan Github?  "}]
 # comment
 
-# test if response cached
-def test_caching():
-    try:
-        litellm.caching = True
-        response1 = completion(model="gpt-3.5-turbo", messages=messages)
-        response2 = completion(model="gpt-3.5-turbo", messages=messages)
-        print(f"response1: {response1}")
-        print(f"response2: {response2}")
-        litellm.caching = False
-        if response2 != response1:
-            print(f"response1: {response1}")
-            print(f"response2: {response2}")
-            pytest.fail(f"Error occurred: responses are not equal")
-    except Exception as e:
-        litellm.caching = False
-        pytest.fail(f"Error occurred: {e}")
-
-def test_caching_with_models():
-    litellm.caching_with_models = True
-    response1 = completion(model="gpt-3.5-turbo", messages=messages)
-    response2 = completion(model="gpt-3.5-turbo", messages=messages)
-    response3 = completion(model="command-nightly", messages=messages)
-    print(f"response2: {response2}")
-    print(f"response3: {response3}")
-    litellm.caching_with_models = False
-    if response3 == response2:
-        # if models are different, it should not return cached response
-        print(f"response2: {response2}")
-        print(f"response3: {response3}")
-        pytest.fail(f"Error occurred:")
-    if response1 != response2:
-        print(f"response1: {response1}")
-        print(f"response2: {response2}")
-        pytest.fail(f"Error occurred:")
-
-
-# test_caching_with_models()
-
 
 def test_gpt_cache():
     # INIT GPT Cache #
@@ -104,12 +66,12 @@ messages = [{"role": "user", "content": "who is ishaan 5222"}]
 def test_caching_v2():
     try:
         litellm.cache = Cache()
-        response1 = completion(model="gpt-3.5-turbo", messages=messages)
-        response2 = completion(model="gpt-3.5-turbo", messages=messages)
+        response1 = completion(model="gpt-3.5-turbo", messages=messages, caching=True)
+        response2 = completion(model="gpt-3.5-turbo", messages=messages, caching=True)
         print(f"response1: {response1}")
         print(f"response2: {response2}")
         litellm.cache = None # disable cache
-        if response2 != response1:
+        if response2['choices'][0]['message']['content'] != response1['choices'][0]['message']['content']:
             print(f"response1: {response1}")
             print(f"response2: {response2}")
             pytest.fail(f"Error occurred: {e}")
@@ -117,30 +79,31 @@ def test_caching_v2():
         print(f"error occurred: {traceback.format_exc()}")
         pytest.fail(f"Error occurred: {e}")
 
-# test_caching()
+# test_caching_v2()
+
 
 
 def test_caching_with_models_v2():
     messages = [{"role": "user", "content": "who is ishaan CTO of litellm from litellm 2023"}]
     litellm.cache = Cache()
     print("test2 for caching")
-    response1 = completion(model="gpt-3.5-turbo", messages=messages)
-    response2 = completion(model="gpt-3.5-turbo", messages=messages)
-    response3 = completion(model="command-nightly", messages=messages)
+    response1 = completion(model="gpt-3.5-turbo", messages=messages, caching=True)
+    response2 = completion(model="gpt-3.5-turbo", messages=messages, caching=True)
+    response3 = completion(model="command-nightly", messages=messages, caching=True)
     print(f"response1: {response1}")
     print(f"response2: {response2}")
     print(f"response3: {response3}")
     litellm.cache = None
-    if response3 == response2:
+    if response3['choices'][0]['message']['content'] == response2['choices'][0]['message']['content']:
         # if models are different, it should not return cached response
         print(f"response2: {response2}")
         print(f"response3: {response3}")
         pytest.fail(f"Error occurred:")
-    if response1 != response2:
+    if response1['choices'][0]['message']['content'] != response2['choices'][0]['message']['content']:
         print(f"response1: {response1}")
         print(f"response2: {response2}")
         pytest.fail(f"Error occurred:")
-
+# test_caching_with_models_v2()
 
 embedding_large_text = """
 small text
@@ -152,18 +115,18 @@ def test_embedding_caching():
     litellm.cache = Cache()
     text_to_embed = [embedding_large_text]
     start_time = time.time()
-    embedding1 = embedding(model="text-embedding-ada-002", input=text_to_embed)
+    embedding1 = embedding(model="text-embedding-ada-002", input=text_to_embed, caching=True)
     end_time = time.time()
     print(f"Embedding 1 response time: {end_time - start_time} seconds")
 
     time.sleep(1)
     start_time = time.time()
-    embedding2 = embedding(model="text-embedding-ada-002", input=text_to_embed)
+    embedding2 = embedding(model="text-embedding-ada-002", input=text_to_embed, caching=True)
     end_time = time.time()
     print(f"Embedding 2 response time: {end_time - start_time} seconds")
     
     litellm.cache = None
-    if embedding2 != embedding1:
+    if embedding2['data'][0]['embedding'] != embedding1['data'][0]['embedding']:
         print(f"embedding1: {embedding1}")
         print(f"embedding2: {embedding2}")
         pytest.fail("Error occurred: Embedding caching failed")
@@ -251,19 +214,19 @@ def test_redis_cache_completion():
     messages = [{"role": "user", "content": "who is ishaan CTO of litellm from litellm 2023"}]
     litellm.cache = Cache(type="redis", host=os.environ['REDIS_HOST'], port=os.environ['REDIS_PORT'], password=os.environ['REDIS_PASSWORD'])
     print("test2 for caching")
-    response1 = completion(model="gpt-3.5-turbo", messages=messages)
-    response2 = completion(model="gpt-3.5-turbo", messages=messages)
-    response3 = completion(model="command-nightly", messages=messages)
+    response1 = completion(model="gpt-3.5-turbo", messages=messages, caching=True)
+    response2 = completion(model="gpt-3.5-turbo", messages=messages, caching=True)
+    response3 = completion(model="command-nightly", messages=messages, caching=True)
     print(f"response1: {response1}")
     print(f"response2: {response2}")
     print(f"response3: {response3}")
     litellm.cache = None
-    if response3 == response2:
+    if response3['choices'][0]['message']['content'] == response2['choices'][0]['message']['content']:
         # if models are different, it should not return cached response
         print(f"response2: {response2}")
         print(f"response3: {response3}")
         pytest.fail(f"Error occurred:")
-    if response1 != response2: # 1 and 2 should be the same
+    if response1['choices'][0]['message']['content'] != response2['choices'][0]['message']['content']: # 1 and 2 should be the same
         print(f"response1: {response1}")
         print(f"response2: {response2}")
         pytest.fail(f"Error occurred:")
@@ -278,7 +241,7 @@ def custom_get_cache_key(*args, **kwargs):
     return key
 
 def test_custom_redis_cache_with_key():
-    messages = [{"role": "user", "content": "how many stars does litellm have?  "}]
+    messages = [{"role": "user", "content": "write a one line story"}]
     litellm.cache = Cache(type="redis", host=os.environ['REDIS_HOST'], port=os.environ['REDIS_PORT'], password=os.environ['REDIS_PASSWORD'])
     litellm.cache.get_cache_key = custom_get_cache_key
 
@@ -289,6 +252,9 @@ def test_custom_redis_cache_with_key():
     print(f"response1: {response1}")
     print(f"response2: {response2}")
     print(f"response3: {response3}")
+
+    if response3['choices'][0]['message']['content'] == response2['choices'][0]['message']['content']:
+        pytest.fail(f"Error occurred:")        
 
 # test_custom_redis_cache_with_key()
 
