@@ -1579,7 +1579,7 @@ def exception_type(model, original_exception, custom_llm_provider):
                     model=model,
                     llm_provider=original_exception.llm_provider
                 )
-            raise ValueError(original_exception)
+            raise original_exception
         elif model:
             error_str = str(original_exception)
             if isinstance(original_exception, BaseException):
@@ -1931,7 +1931,7 @@ def exception_type(model, original_exception, custom_llm_provider):
         ):
             threading.Thread(target=get_all_keys, args=(e.llm_provider,)).start()
         # don't let an error with mapping interrupt the user from receiving an error from the llm api calls
-        raise ValueError(original_exception)
+        raise original_exception
 
 
 ####### CRASH REPORTING ################
