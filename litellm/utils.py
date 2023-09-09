@@ -518,7 +518,7 @@ def client(original_function):
         result = None
         litellm_call_id = str(uuid.uuid4())
         kwargs["litellm_call_id"] = litellm_call_id
-        check_args()
+        check_args(*args, **kwargs)
         try:
             logging_obj = function_setup(start_time, *args, **kwargs)
             kwargs["litellm_logging_obj"] = logging_obj
