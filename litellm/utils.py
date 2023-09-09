@@ -434,6 +434,12 @@ def exception_logging(
 def client(original_function):
     global liteDebuggerClient, get_all_keys
 
+    def check_args(*args, **kwargs):
+        try:
+            model = args[0] if len(args) > 0 else kwargs["model"]
+        except:
+            raise ValueError("model param not passed in.")
+
     def function_setup(
         start_time, *args, **kwargs
     ):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
@@ -512,9 +518,10 @@ def client(original_function):
         result = None
         litellm_call_id = str(uuid.uuid4())
         kwargs["litellm_call_id"] = litellm_call_id
-        logging_obj = function_setup(start_time, *args, **kwargs)
-        kwargs["litellm_logging_obj"] = logging_obj
+        check_args()
         try:
+            logging_obj = function_setup(start_time, *args, **kwargs)
+            kwargs["litellm_logging_obj"] = logging_obj
             # [OPTIONAL] CHECK CACHE
             # remove this after deprecating litellm.caching
             if (litellm.caching or litellm.caching_with_models) and litellm.cache is None:
