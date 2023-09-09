@@ -518,7 +518,12 @@ def client(original_function):
         result = None
         litellm_call_id = str(uuid.uuid4())
         kwargs["litellm_call_id"] = litellm_call_id
-        check_args(*args, **kwargs)
+        # check_args(*args, **kwargs)
+        try:
+            model = args[0] if len(args) > 0 else kwargs["model"]
+        except:
+            raise ValueError("model param not passed in.")
+
         try:
             logging_obj = function_setup(start_time, *args, **kwargs)
             kwargs["litellm_logging_obj"] = logging_obj
