@@ -30,6 +30,7 @@ class RedisCache():
             # cached_response is in `b{} convert it to ModelResponse
             cached_response = cached_response.decode("utf-8")  # Convert bytes to string
             cached_response = json.loads(cached_response)  # Convert string to dictionary
+            cached_response['cache'] = True # set cache-hit flag to True
             return cached_response
 
 

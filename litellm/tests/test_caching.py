@@ -12,7 +12,7 @@ import pytest
 import litellm
 from litellm import embedding, completion
 from litellm.caching import Cache
-litellm.set_verbose=True
+# litellm.set_verbose=True
 
 messages = [{"role": "user", "content": "who is ishaan Github?  "}]
 # comment
@@ -270,5 +270,26 @@ def test_redis_cache_completion():
 
 # test_redis_cache_completion()
 
+# redis cache with custom keys
+def custom_get_cache_key(*args, **kwargs):
+    # return key to use for your cache:
+    key = kwargs.get("model", "") + str(kwargs.get("messages", "")) + str(kwargs.get("temperature", "")) + str(kwargs.get("logit_bias", ""))
+    print("key for cache", key)
+    return key
+
+def test_custom_redis_cache_with_key():
+    messages = [{"role": "user", "content": "how many stars does litellm have?  "}]
+    litellm.cache = Cache(type="redis", host=os.environ['REDIS_HOST'], port=os.environ['REDIS_PORT'], password=os.environ['REDIS_PASSWORD'])
+    litellm.cache.get_cache_key = custom_get_cache_key
+
+    response1 = completion(model="gpt-3.5-turbo", messages=messages, temperature=0.1, caching=True)
+    response2 = completion(model="gpt-3.5-turbo", messages=messages, temperature=0.1, caching=True)
+    response3 = completion(model="gpt-3.5-turbo", messages=messages, temperature=0.1, caching=False)
+    
+    print(f"response1: {response1}")
+    print(f"response2: {response2}")
+    print(f"response3: {response3}")
+
+# test_custom_redis_cache_with_key()
 
 
