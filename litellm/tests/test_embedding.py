@@ -24,4 +24,4 @@ def test_openai_embedding():
         pytest.fail(f"Error occurred: {e}")
 
 
-test_openai_embedding()
+# test_openai_embedding()
