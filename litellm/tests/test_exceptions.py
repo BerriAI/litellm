@@ -46,19 +46,6 @@ def test_context_window(model):
     with pytest.raises(ContextWindowExceededError):
         completion(model=model, messages=messages)
 
-def test_uninstall_cohere_and_completion_call():
-    # Uninstall cohere package
-    subprocess.call(["pip", "uninstall", "cohere"])
-
-    model = "command-nightly"
-    sample_text = "how does a court case get to the Supreme Court?" * 1000
-    messages = [{"content": sample_text, "role": "user"}]
-
-    # with pytest.raises(Exception):
-    completion(model=model, messages=messages)
-
-test_uninstall_cohere_and_completion_call()
-
 # Test 2: InvalidAuth Errors
 @pytest.mark.parametrize("model", models)
 def invalid_auth(model):  # set the model key to an invalid key, depending on the model
