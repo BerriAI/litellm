@@ -43,7 +43,7 @@ def test_context_window(model):
 
     with pytest.raises(ContextWindowExceededError):
         completion(model=model, messages=messages)
-
+test_context_window(models[0])
 
 # Test 2: InvalidAuth Errors
 @pytest.mark.parametrize("model", models)
