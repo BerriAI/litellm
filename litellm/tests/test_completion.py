@@ -156,8 +156,7 @@ def test_completion_claude_stream():
 #             pytest.fail(f"Error occurred: {e}")
 #     except Exception as e:
 #         pytest.fail(f"Error occurred: {e}")
-
-
+## 
 def test_completion_cohere_stream():
     try:
         messages = [
