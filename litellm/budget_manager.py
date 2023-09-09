@@ -1,6 +1,6 @@
 import litellm 
 from litellm.utils import ModelResponse
-class APIManager:
+class BudgetManager:
     def __init__(self):
         self.user_dict = {}
 
@@ -23,3 +23,6 @@ class APIManager:
         cost = litellm.completion_cost(completion_response=completion_obj)
         self.user_dict[user]["current_cost"] = cost + self.user_dict[user].get("current_cost", 0)
         return self.user_dict[user]["current_cost"]
+    
+    def get_current_cost(self, user):
+        return self.user_dict[user].get("current_cost", 0)
