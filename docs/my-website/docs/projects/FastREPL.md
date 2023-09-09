@@ -1,3 +1,4 @@
-Fast Run-Eval-Polish Loop for LLM apps
+⚡Fast Run-Eval-Polish Loop for LLM Applications
 
-Github: https://github.com/fastrepl/proxy
+Core: https://github.com/fastrepl/fastrepl
+Proxy: https://github.com/fastrepl/proxy
