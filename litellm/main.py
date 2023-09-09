@@ -115,6 +115,7 @@ def completion(
     request_timeout=0,  # unused var for old version of OpenAI API
     fallbacks=[],
     caching = False,
+    cache_params = {}, # optional to specify metadata for caching
 ) -> ModelResponse:
     args = locals()
     try:
