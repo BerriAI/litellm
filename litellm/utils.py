@@ -1961,10 +1961,20 @@ def get_or_generate_uuid():
 
     except FileNotFoundError:
         # Generate a new UUID if the file doesn't exist or is empty
-        new_uuid = uuid.uuid4()
-        uuid_value = str(new_uuid)
-        with open(uuid_file, "w") as file:
-            file.write(uuid_value)
+        try: 
+            new_uuid = uuid.uuid4()
+            uuid_value = str(new_uuid)
+            with open(uuid_file, "w") as file:
+                file.write(uuid_value)
+        except: # if writing to tmp/litellm_uuid.txt then retry writing to litellm_uuid.txt
+            try:
+                new_uuid = uuid.uuid4()
+                uuid_value = str(new_uuid)
+                with open("litellm_uuid.txt", "w") as file:
+                    file.write(uuid_value)
+            except: # if this 3rd attempt fails just pass
+                # Good first issue for someone to improve this function :) 
+                return
     except:
         # [Non-Blocking Error]
         return
@@ -1973,7 +1983,11 @@ def get_or_generate_uuid():
 
 def litellm_telemetry(data):
     # Load or generate the UUID
-    uuid_value = get_or_generate_uuid()
+    uuid_value = ""
+    try:
+        uuid_value = get_or_generate_uuid()
+    except:
+        uuid_value = str(uuid.uuid4())
     try:
         # Prepare the data to send to litellm logging api
         payload = {
