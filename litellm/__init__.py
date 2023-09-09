@@ -232,7 +232,8 @@ from .utils import (
     completion_with_split_tests,
     get_max_tokens,
     register_prompt_template,
-    validate_environment
+    validate_environment,
+    check_valid_key
 )
 from .main import *  # type: ignore
 from .integrations import *
@@ -242,5 +243,6 @@ from .exceptions import (
     RateLimitError,
     ServiceUnavailableError,
     OpenAIError,
-    ContextWindowExceededError
+    ContextWindowExceededError,
+
 )
