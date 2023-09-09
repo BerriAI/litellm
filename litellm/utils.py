@@ -144,9 +144,10 @@ class Logging:
         self.litellm_call_id = litellm_call_id
         self.function_id = function_id
     
-    def update_environment_variables(self, model, optional_params, litellm_params):
+    def update_environment_variables(self, model, user, optional_params, litellm_params):
         self.optional_params = optional_params
         self.model = model
+        self.user = user
         self.litellm_params = litellm_params
         self.logger_fn = litellm_params["logger_fn"]
         print_verbose(f"self.optional_params: {self.optional_params}")
@@ -298,19 +299,22 @@ class Logging:
             for callback in litellm.success_callback:
                 try:
                     if callback == "lite_debugger":
-                            print_verbose("reaches lite_debugger for logging!")
-                            print_verbose(f"liteDebuggerClient: {liteDebuggerClient}")
-                            print_verbose(f"liteDebuggerClient details function {self.call_type} and stream set to {self.stream}")
-                            liteDebuggerClient.log_event(
-                                end_user=litellm._thread_context.user,
-                                response_obj=result,
-                                start_time=start_time,
-                                end_time=end_time,
-                                litellm_call_id=self.litellm_call_id,
-                                print_verbose=print_verbose,
-                                call_type = self.call_type, 
-                                stream = self.stream,
-                            )
+                        print_verbose("reaches lite_debugger for logging!")
+                        print_verbose(f"liteDebuggerClient: {liteDebuggerClient}")
+                        print_verbose(f"liteDebuggerClient details function {self.call_type} and stream set to {self.stream}")
+                        liteDebuggerClient.log_event(
+                            end_user=litellm._thread_context.user,
+                            response_obj=result,
+                            start_time=start_time,
+                            end_time=end_time,
+                            litellm_call_id=self.litellm_call_id,
+                            print_verbose=print_verbose,
+                            call_type = self.call_type, 
+                            stream = self.stream,
+                        )
+                    if callback == "api_manager":
+                        print_verbose("reaches api manager for updating model cost")
+                        litellm.apiManager.update_cost(completion_obj=result, user=self.user)
                     if callback == "cache":
                         # print("entering logger first time")
                         # print(self.litellm_params["stream_response"])

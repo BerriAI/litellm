@@ -117,9 +117,6 @@ def invalid_auth(model):  # set the model key to an invalid key, depending on th
             os.environ["TOGETHERAI_API_KEY"] = temporary_key
     return
 
-
-invalid_auth(test_model)
-
 # Test 3: Rate Limit Errors
 # def test_model_call(model):
 #     try:
