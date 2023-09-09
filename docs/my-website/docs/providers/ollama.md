@@ -1,6 +1,40 @@
 # Ollama 
 LiteLLM supports all models from [Ollama](https://github.com/jmorganca/ollama)
 
+## Pre-requisites
+Ensure you have your ollama server running
+
+## Example usage
+```python
+from litellm import completion
+
+response = completion(
+    model="llama2", 
+    messages=[{ "content": "respond in 20 words. who are you?","role": "user"}], 
+    api_base="http://localhost:11434", 
+    custom_llm_provider="ollama"
+)
+print(response)
+
+```
+
+## Example usage - Streaming
+```python
+from litellm import completion
+
+response = completion(
+    model="llama2", 
+    messages=[{ "content": "respond in 20 words. who are you?","role": "user"}], 
+    api_base="http://localhost:11434", 
+    custom_llm_provider="ollama",
+    stream=True
+)
+print(response)
+for chunk in response:
+    print(chunk['choices'][0]['delta'])
+
+```
+
 ### Ollama Models
 Ollama supported models: https://github.com/jmorganca/ollama
 
