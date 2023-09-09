@@ -1908,6 +1908,7 @@ def exception_type(model, original_exception, custom_llm_provider):
             elif custom_llm_provider == "vllm":
                 if hasattr(original_exception, "status_code"):
                     if original_exception.status_code == 0:
+                        exception_mapping_worked = True
                         raise APIConnectionError(
                             message=f"VLLMException - {original_exception.message}",
                             llm_provider="vllm",
@@ -1931,7 +1932,10 @@ def exception_type(model, original_exception, custom_llm_provider):
         ):
             threading.Thread(target=get_all_keys, args=(e.llm_provider,)).start()
         # don't let an error with mapping interrupt the user from receiving an error from the llm api calls
-        raise original_exception
+        if exception_mapping_worked:
+            raise e
+        else:
+            raise original_exception
 
 
 ####### CRASH REPORTING ################
