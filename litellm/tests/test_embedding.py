@@ -7,10 +7,8 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import litellm
 from litellm import embedding, completion
-from infisical import InfisicalClient
 
 litellm.set_verbose = True
-# litellm.secret_manager_client = InfisicalClient(token=os.environ["INFISICAL_TOKEN"])
 
 
 def test_openai_embedding():

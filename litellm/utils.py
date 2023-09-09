@@ -438,12 +438,6 @@ def exception_logging(
 def client(original_function):
     global liteDebuggerClient, get_all_keys
 
-    def check_args(*args, **kwargs):
-        try:
-            model = args[0] if len(args) > 0 else kwargs["model"]
-        except:
-            raise ValueError("model param not passed in.")
-
     def function_setup(
         start_time, *args, **kwargs
     ):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
@@ -494,8 +488,9 @@ def client(original_function):
             stream = True if "stream" in kwargs and kwargs["stream"] == True else False
             logging_obj = Logging(model=model, messages=messages, stream=stream, litellm_call_id=kwargs["litellm_call_id"], function_id=function_id, call_type=call_type, start_time=start_time)
             return logging_obj
-        except:  # DO NOT BLOCK running the function because of this
+        except Exception as e:  # DO NOT BLOCK running the function because of this
             print_verbose(f"[Non-Blocking] {traceback.format_exc()}; args - {args}; kwargs - {kwargs}")
+            print(e)
         pass
     
     def crash_reporting(*args, **kwargs):
@@ -522,11 +517,10 @@ def client(original_function):
         result = None
         litellm_call_id = str(uuid.uuid4())
         kwargs["litellm_call_id"] = litellm_call_id
-        # check_args(*args, **kwargs)
-        try:
-            model = args[0] if len(args) > 0 else kwargs["model"]
-        except:
-            raise ValueError("model param not passed in.")
+        # try:
+        #     model = args[0] if len(args) > 0 else kwargs["model"]
+        # except:
+        #     raise ValueError("model param not passed in.")
 
         try:
             logging_obj = function_setup(start_time, *args, **kwargs)

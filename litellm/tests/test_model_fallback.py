@@ -11,7 +11,7 @@ import litellm
 from litellm import embedding, completion
 
 litellm.success_callback = ["posthog"]
-litellm.failure_callback = ["slack", "sentry", "posthog"]
+litellm.failure_callback = ["sentry", "posthog"]
 
 litellm.set_verbose = True
 
