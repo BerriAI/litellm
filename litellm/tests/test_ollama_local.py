@@ -1,4 +1,5 @@
-###### THESE TESTS CAN ONLY RUN LOCALLY WITH THE OLLAMA SERVER RUNNING ######
+# ##### THESE TESTS CAN ONLY RUN LOCALLY WITH THE OLLAMA SERVER RUNNING ######
+# # https://ollama.ai/
 
 # import sys, os
 # import traceback
@@ -15,32 +16,36 @@
 # user_message = "respond in 20 words. who are you?"
 # messages = [{ "content": user_message,"role": "user"}]
 
-# async def get_response(generator):
-#     response = ""
-#     async for elem in generator:
-#         print(elem)
-#         response += elem["content"]
-#     return response
-
 # def test_completion_ollama():
 #     try:
-#         response = completion(model="llama2", messages=messages, api_base="http://localhost:11434", custom_llm_provider="ollama")
+#         response = completion(
+#             model="llama2", 
+#             messages=messages, 
+#             api_base="http://localhost:11434", 
+#             custom_llm_provider="ollama"
+#         )
 #         print(response)
-#         string_response = asyncio.run(get_response(response))
-#         print(string_response)
 #     except Exception as e:
 #         pytest.fail(f"Error occurred: {e}")
 
-
-# # test_completion_ollama()
+# test_completion_ollama()
 
 # def test_completion_ollama_stream():
+#     user_message = "what is litellm?"
+#     messages = [{ "content": user_message,"role": "user"}]
 #     try:
-#         response = completion(model="llama2", messages=messages, api_base="http://localhost:11434", custom_llm_provider="ollama", stream=True)
+#         response = completion(
+#             model="llama2", 
+#             messages=messages, 
+#             api_base="http://localhost:11434", 
+#             custom_llm_provider="ollama", 
+#             stream=True
+#         )
 #         print(response)
-#         string_response = asyncio.run(get_response(response))
-#         print(string_response)
+#         for chunk in response:
+#             print(chunk['choices'][0]['delta'])
+
 #     except Exception as e:
 #         pytest.fail(f"Error occurred: {e}")
 
-# test_completion_ollama_stream()
+# # test_completion_ollama_stream()
