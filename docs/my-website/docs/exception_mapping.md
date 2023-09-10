@@ -40,38 +40,38 @@ To see how it's implemented - [check out the code](https://github.com/BerriAI/li
 
 Base case - we return the original exception.
 
-| LLM Provider  | Returned Status Code |
-| ------------- | --------------------- |
-| Anthropic     | 400                   |
-| Anthropic     | 401                   |
-| Anthropic     | 401                   |
-| Anthropic     | 400                   |
-| Anthropic     | 429                   |
-| OpenAI        | 400                   |
-| Replicate     | 400                   |
-| Replicate     | 401                   |
-| Replicate     | 400                   |
-| Replicate     | 429                   |
-| Replicate     | 500                   |
-| Cohere        | 401                   |
-| Cohere        | 400                   |
-| Cohere        | 429                   |
-| Huggingface   | 400                   |
-| Huggingface   | 400                   |
-| Huggingface   | 401                   |
-| Huggingface   | 429                   |
-| Openrouter    | 400                   |
-| Openrouter    | 401                   |
-| Openrouter    | 429                   |
-| AI21          | 400                   |
-| AI21          | 400                   |
-| AI21          | 401                   |
-| AI21          | 429                   |
-| TogetherAI    | 400                   |
-| TogetherAI    | 400                   |
-| TogetherAI    | 400                   |
-| TogetherAI    | 401                   |
-| TogetherAI    | 429                   |
+| LLM Provider  | Returned Exception           |
+|---------------|-----------------------------|
+| Anthropic     | ContextWindowExceededError  |
+| Anthropic     | AuthenticationError         |
+| Anthropic     | AuthenticationError         |
+| Anthropic     | InvalidRequestError         |
+| Anthropic     | RateLimitError             |
+| OpenAI        | ContextWindowExceededError  |
+| Replicate     | ContextWindowExceededError  |
+| Replicate     | AuthenticationError         |
+| Replicate     | InvalidRequestError         |
+| Replicate     | RateLimitError             |
+| Replicate     | ServiceUnavailableError    |
+| Cohere        | AuthenticationError         |
+| Cohere        | ContextWindowExceededError  |
+| Cohere        | RateLimitError             |
+| Huggingface   | ContextWindowExceededError  |
+| Huggingface   | InvalidRequestError         |
+| Huggingface   | AuthenticationError         |
+| Huggingface   | RateLimitError             |
+| Openrouter    | ContextWindowExceededError  |
+| Openrouter    | AuthenticationError         |
+| Openrouter    | RateLimitError             |
+| AI21          | ContextWindowExceededError  |
+| AI21          | InvalidRequestError         |
+| AI21          | AuthenticationError         |
+| AI21          | RateLimitError             |
+| TogetherAI    | ContextWindowExceededError  |
+| TogetherAI    | InvalidRequestError         |
+| TogetherAI    | InvalidRequestError         |
+| TogetherAI    | AuthenticationError         |
+| TogetherAI    | RateLimitError             |
 
 > For a deeper understanding of these exceptions, you can check out [this](https://github.com/BerriAI/litellm/blob/d7e58d13bf9ba9edbab2ab2f096f3de7547f35fa/litellm/utils.py#L1544) implementation for additional insights.
 
