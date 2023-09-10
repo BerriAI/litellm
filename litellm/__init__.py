@@ -36,10 +36,6 @@ caching_with_models = False  # if you want the caching key to be model + prompt 
 cache: Optional[Cache] = None # cache object
 model_alias_map: Dict[str, str] = {}
 
-####### BudgetManager ###################
-from .budget_manager import BudgetManager
-budget_manager = BudgetManager()
-
 #############################################
 
 def get_model_cost_map():
@@ -240,7 +236,7 @@ from .utils import (
     get_max_tokens,
     register_prompt_template,
     validate_environment,
-    check_valid_key
+    check_valid_key,
 )
 from .main import *  # type: ignore
 from .integrations import *
@@ -253,3 +249,4 @@ from .exceptions import (
     ContextWindowExceededError,
 
 )
+from .budget_manager import BudgetManager

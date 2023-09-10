@@ -8,7 +8,9 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import litellm 
-from litellm import budget_manager, completion 
+from litellm import BudgetManager, completion 
+
+budget_manager = BudgetManager(type="local")
 
 ## Scenario 1: User budget enough to make call
 def test_user_budget_enough():
@@ -25,10 +27,13 @@ def test_user_budget_enough():
     messages = data["messages"]
     if budget_manager.get_current_cost(user=user) <= budget_manager.get_total_budget(user):
         response = completion(**data)
+        print(budget_manager.update_cost(completion_obj=response, user=user))
     else:
         response = "Sorry - no budget!"
 
     print(f"response: {response}")
+
+test_user_budget_enough()
 
 ## Scenario 2: User budget not enough to make call
 def test_user_budget_not_enough():
@@ -45,10 +50,22 @@ def test_user_budget_not_enough():
     messages = data["messages"]
     if budget_manager.get_current_cost(user=user) < budget_manager.get_total_budget(user=user):
         response = completion(**data)
-        budget_manager.update_cost(completion_obj=response, user=user)
+        print(budget_manager.update_cost(completion_obj=response, user=user))
     else:
         response = "Sorry - no budget!"
 
     print(f"response: {response}")
 
 test_user_budget_not_enough()
+
+## Scenario 3: Saving budget to disk 
+def test_budget_save_to_disk():
+    budget_manager.save_data()
+
+test_budget_save_to_disk()
+
+## Scenario 4: Loading budget from disk
+def test_budget_load_from_disk():
+    budget_manager_2 = BudgetManager(type="local") 
+
+test_budget_load_from_disk()
