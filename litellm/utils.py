@@ -17,6 +17,7 @@ from .integrations.berrispend import BerriSpendLogger
 from .integrations.supabase import Supabase
 from .integrations.llmonitor import LLMonitorLogger
 from .integrations.prompt_layer import PromptLayerLogger
+from .integrations.custom_logger import CustomLogger
 from .integrations.langfuse import LangFuseLogger
 from .integrations.litedebugger import LiteDebugger
 from openai.error import OpenAIError as OriginalError
@@ -46,6 +47,7 @@ slack_app = None
 alerts_channel = None
 heliconeLogger = None
 promptLayerLogger = None
+customLogger = None
 langFuseLogger = None
 llmonitorLogger = None
 aispendLogger = None
@@ -677,35 +679,37 @@ def completion_cost(
         completion="",
         total_time=0.0, # used for replicate
     ):
-
-    # Handle Inputs to completion_cost
-    prompt_tokens = 0
-    completion_tokens = 0
-    if completion_response != None:
-        # get input/output tokens from completion_response
-        prompt_tokens = completion_response['usage']['prompt_tokens']
-        completion_tokens = completion_response['usage']['completion_tokens']
-        model = completion_response['model'] # get model from completion_response
-    else:
-        prompt_tokens = token_counter(model=model, text=prompt)
-        completion_tokens = token_counter(model=model, text=completion)
-    
-    # Calculate cost based on prompt_tokens, completion_tokens
-    if "togethercomputer" in model:
-        # together ai prices based on size of llm
-        # get_model_params_and_category takes a model name and returns the category of LLM size it is in model_prices_and_context_window.json 
-        model = get_model_params_and_category(model)
-    # replicate llms are calculate based on time for request running
-    # see https://replicate.com/pricing
-    elif (
-        model in litellm.replicate_models or
-        "replicate" in model
-    ):
-        return get_replicate_completion_pricing(completion_response, total_time)
-    prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar = cost_per_token(
-        model=model, prompt_tokens=prompt_tokens, completion_tokens=completion_tokens
-    )
-    return prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar
+    try:
+        # Handle Inputs to completion_cost
+        prompt_tokens = 0
+        completion_tokens = 0
+        if completion_response != None:
+            # get input/output tokens from completion_response
+            prompt_tokens = completion_response['usage']['prompt_tokens']
+            completion_tokens = completion_response['usage']['completion_tokens']
+            model = completion_response['model'] # get model from completion_response
+        else:
+            prompt_tokens = token_counter(model=model, text=prompt)
+            completion_tokens = token_counter(model=model, text=completion)
+        
+        # Calculate cost based on prompt_tokens, completion_tokens
+        if "togethercomputer" in model:
+            # together ai prices based on size of llm
+            # get_model_params_and_category takes a model name and returns the category of LLM size it is in model_prices_and_context_window.json 
+            model = get_model_params_and_category(model)
+        # replicate llms are calculate based on time for request running
+        # see https://replicate.com/pricing
+        elif (
+            model in litellm.replicate_models or
+            "replicate" in model
+        ):
+            return get_replicate_completion_pricing(completion_response, total_time)
+        prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar = cost_per_token(
+            model=model, prompt_tokens=prompt_tokens, completion_tokens=completion_tokens
+        )
+        return prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar
+    except:
+        return 0.0 # this should not block a users execution path
 
 ####### HELPER FUNCTIONS ################
 def get_litellm_params(
@@ -993,7 +997,7 @@ def validate_environment():
         return api_key
 
 def set_callbacks(callback_list, function_id=None):
-    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, llmonitorLogger, promptLayerLogger, langFuseLogger
+    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, llmonitorLogger, promptLayerLogger, langFuseLogger, customLogger
     try:
         for callback in callback_list:
             print_verbose(f"callback: {callback}")
@@ -1073,6 +1077,8 @@ def set_callbacks(callback_list, function_id=None):
                     liteDebuggerClient = LiteDebugger(email=litellm.email)
                 else:
                     liteDebuggerClient = LiteDebugger(email=str(uuid.uuid4()))
+            elif callable(callback):
+                customLogger = CustomLogger()
     except Exception as e:
         raise e
 
@@ -1364,6 +1370,14 @@ def handle_success(args, kwargs, result, start_time, end_time):
                         start_time=start_time,
                         end_time=end_time,
                         litellm_call_id=kwargs["litellm_call_id"],
+                        print_verbose=print_verbose,
+                    )
+                elif callable(callback): # custom logger functions
+                    customLogger.log_event(
+                        kwargs=kwargs,
+                        response_obj=result,
+                        start_time=start_time,
+                        end_time=end_time,
                         print_verbose=print_verbose,
                     )
             except Exception as e:
