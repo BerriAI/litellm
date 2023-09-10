@@ -6,6 +6,7 @@ liteLLM provides `success_callbacks` and `failure_callbacks`, making it easy for
 
 liteLLM supports:
 
+- [Custom Callback Functions](https://docs.litellm.ai/docs/observability/custom_callback)
 - [LLMonitor](https://llmonitor.com/docs)
 - [Helicone](https://docs.helicone.ai/introduction)
 - [Traceloop](https://traceloop.com/docs)
