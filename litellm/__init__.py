@@ -47,8 +47,9 @@ def get_model_cost_map():
         content = response.json()
         return content
     except requests.exceptions.RequestException as e:
-        print("Error occurred:", e)
-        return None
+        return {}
+    except:
+        return {}
 model_cost = get_model_cost_map()
 custom_prompt_dict:Dict[str, dict] = {}
 ####### THREAD-SPECIFIC DATA ###################
