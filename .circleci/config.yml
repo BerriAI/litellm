@@ -44,9 +44,10 @@ jobs:
 
       # Run pytest and generate JUnit XML report
       - run:
-          name: Run Pytest with JUnit report
+          name: Run tests in parallel
           command: |
-            python -m pytest --junitxml=test-results/junit.xml
+            # Split tests into separate workers
+            python -m pytest -n 50 --junitxml=test-results/junit.xml
 
       # Store test results
       - store_test_results:
