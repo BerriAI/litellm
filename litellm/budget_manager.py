@@ -21,8 +21,24 @@ class BudgetManager:
 
     def update_cost(self, completion_obj: ModelResponse, user: str):
         cost = litellm.completion_cost(completion_response=completion_obj)
+        model = completion_obj.get("model", "") # if this throws an error try, model = completion_obj['model']
+        self.store_llm_costs(cost, model)
         self.user_dict[user]["current_cost"] = cost + self.user_dict[user].get("current_cost", 0)
         return self.user_dict[user]["current_cost"]
     
     def get_current_cost(self, user):
         return self.user_dict[user].get("current_cost", 0)
+
+    def store_llm_costs(self, cost, model):
+        try:
+            import json
+            with open("cost.json", 'r') as json_file:
+                cost_dict = json.load(json_file)
+                if model in cost_dict:
+                    cost_dict[model] += cost
+                else:
+                    cost_dict[model] = cost
+                with open("cost.json", 'w') as json_file:
+                    json.dump(cost_dict, json_file, indent=4)  # Indent for pretty formatting
+        except Exception as e:
+            return # [Non blocking]
