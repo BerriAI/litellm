@@ -29,6 +29,7 @@ jobs:
             pip install mypy
             pip install openai[datalib]
             pip install -Uq chromadb==0.3.29
+            pip install pytest-xdist==3.3.1
 
       - run:
           name: Linting Testing
