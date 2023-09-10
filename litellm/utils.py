@@ -1078,7 +1078,7 @@ def set_callbacks(callback_list, function_id=None):
                 else:
                     liteDebuggerClient = LiteDebugger(email=str(uuid.uuid4()))
             elif callable(callback):
-                customLogger = CustomLogger()
+                customLogger = CustomLogger(callback_func=callback)
     except Exception as e:
         raise e
 
