@@ -33,8 +33,6 @@ def test_user_budget_enough():
 
     print(f"response: {response}")
 
-test_user_budget_enough()
-
 ## Scenario 2: User budget not enough to make call
 def test_user_budget_not_enough():
     user = "12345"
@@ -56,16 +54,10 @@ def test_user_budget_not_enough():
 
     print(f"response: {response}")
 
-test_user_budget_not_enough()
-
 ## Scenario 3: Saving budget to disk 
 def test_budget_save_to_disk():
     budget_manager.save_data()
 
-test_budget_save_to_disk()
-
 ## Scenario 4: Loading budget from disk
 def test_budget_load_from_disk():
     budget_manager_2 = BudgetManager(type="local") 
-
-test_budget_load_from_disk()
