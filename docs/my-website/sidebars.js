@@ -90,6 +90,7 @@ const sidebars = {
       items: [
         "observability/callbacks",
         "observability/integrations",
+        "observability/custom_callback",
         "observability/promptlayer_integration",
         "observability/langfuse_integration",
         "observability/traceloop_integration",
