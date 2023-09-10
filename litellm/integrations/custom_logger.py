@@ -25,7 +25,6 @@ class CustomLogger:
                 response_obj,
                 start_time,
                 end_time,
-                print_verbose
             )
             print_verbose(
                 f"Custom Logger - final response object: {response_obj}"
