@@ -2210,7 +2210,7 @@ class CustomStreamWrapper:
                     [
                         {
                             "delta": completion_obj,
-                            "finish_reason": "stop"
+                            "finish_reason": None
                         },
                     ]
                 }
