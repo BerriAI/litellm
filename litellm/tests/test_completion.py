@@ -32,6 +32,7 @@ def test_completion_custom_provider_model_name():
         )
         # Add any assertions here to check the response
         print(response)
+        print(response['choices'][0]['finish_reason'])
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -107,8 +108,10 @@ def test_completion_claude_stream():
         # Add any assertions here to check the response
         for chunk in response:
             print(chunk["choices"][0]["delta"])  # same as openai format
+            print(chunk["choices"][0]["finish_reason"])
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+# test_completion_claude_stream()
 
 
 
@@ -173,8 +176,10 @@ def test_completion_cohere_stream():
         # Add any assertions here to check the response
         for chunk in response:
             print(chunk["choices"][0]["delta"])  # same as openai format
+            print(chunk["choices"][0]["finish_reason"])
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+# test_completion_cohere_stream()
 
 
 def test_completion_openai():
@@ -293,8 +298,12 @@ def test_completion_openai_with_stream():
         )
         # Add any assertions here to check the response
         print(response)
+        for chunk in response:
+            print(chunk)
+            print(chunk["choices"][0]["finish_reason"])
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+# test_completion_openai_with_stream()
 
 
 def test_completion_openai_with_functions():
@@ -317,12 +326,16 @@ def test_completion_openai_with_functions():
     ]
     try:
         response = completion(
-            model="gpt-3.5-turbo", messages=messages, functions=function1
+            model="gpt-3.5-turbo", messages=messages, functions=function1, stream=True
         )
         # Add any assertions here to check the response
         print(response)
+        for chunk in response:
+            print(chunk)
+            print(chunk["choices"][0]["finish_reason"])
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+# test_completion_openai_with_functions()
 
 
 def test_completion_azure():
