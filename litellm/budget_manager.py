@@ -9,7 +9,7 @@ class BudgetManager:
         self.load_data() 
     
     def print_verbose(self, print_statement):
-        if litellm.print_verbose:
+        if litellm.set_verbose:
             print(print_statement)
     
     def load_data(self):
