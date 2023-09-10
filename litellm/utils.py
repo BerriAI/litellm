@@ -2198,12 +2198,22 @@ class CustomStreamWrapper:
                 completion_obj["content"] = self.handle_openai_text_completion_chunk(chunk)
             else: # openai chat/azure models
                 chunk = next(self.completion_stream)
-                completion_obj["content"] = self.handle_openai_chat_completion_chunk(chunk)
+                return chunk # open ai returns finish_reason, we should just return the openai chunk
+            
+                #completion_obj["content"] = self.handle_openai_chat_completion_chunk(chunk)
             
             # LOGGING
             threading.Thread(target=self.logging_obj.success_handler, args=(completion_obj,)).start()
             # return this for all models
-            return {"choices": [{"delta": completion_obj}]}
+            return {
+                "choices": 
+                    [
+                        {
+                            "delta": completion_obj,
+                            "finish_reason": "stop"
+                        },
+                    ]
+                }
         except Exception as e:
             raise StopIteration
     
