@@ -18,10 +18,16 @@ const sidebars = {
   // But you can create a sidebar manually
   tutorialSidebar: [
     { type: "doc", id: "index" }, // NEW
-    "tutorials/model_fallbacks",
+    "getting_started",
     {
       type: "category",
       label: "Completion()",
+      link: {
+        type: 'generated-index',
+        title: 'Completion()',
+        description: 'Details on the completion() function',
+        slug: '/completion',
+      },
       items: [
         "completion/input", 
         "completion/output", 
@@ -82,6 +88,7 @@ const sidebars = {
         'tutorials/litellm_Test_Multiple_Providers',
         "tutorials/first_playground",
         'tutorials/compare_llms',
+        "tutorials/model_fallbacks",
       ],
     },
     {
