@@ -18,7 +18,7 @@ const sidebars = {
   // But you can create a sidebar manually
   tutorialSidebar: [
     { type: "doc", id: "index" }, // NEW
-    'tutorials/compare_llms',
+    "tutorials/model_fallbacks",
     {
       type: "category",
       label: "Completion()",
@@ -73,7 +73,6 @@ const sidebars = {
       type: 'category',
       label: 'Tutorials',
       items: [
-        "tutorials/model_fallbacks",
         'tutorials/ab_test_llms',
         'tutorials/huggingface_tutorial', 
         'tutorials/TogetherAI_liteLLM', 
@@ -82,6 +81,7 @@ const sidebars = {
         'tutorials/text_completion',
         'tutorials/litellm_Test_Multiple_Providers',
         "tutorials/first_playground",
+        'tutorials/compare_llms',
       ],
     },
     {
