@@ -379,6 +379,19 @@ def test_completion_azure():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+# new azure test for using litellm. vars
+# def test_completion_azure():
+#     try:
+#         print("azure gpt-3.5 test\n\n")
+#         response = completion(
+#             model="azure/chatgpt-v-2",
+#             messages=messages,
+#         )
+#         # Add any assertions here to check the response
+#         print(response)
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
+
 
 def test_completion_azure_deployment_id():
     try:

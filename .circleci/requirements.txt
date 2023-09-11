@@ -6,6 +6,7 @@ tiktoken
 importlib_metadata
 baseten
 cohere
+redis
 replicate
 anthropic
 gptcache
