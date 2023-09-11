@@ -184,10 +184,13 @@ def completion(
                 if litellm.api_version is not None
                 else get_secret("AZURE_API_VERSION")
             )
-            if not api_key and litellm.azure_key:
-                api_key = litellm.azure_key
-            elif not api_key and get_secret("AZURE_API_KEY"):
-                api_key = get_secret("AZURE_API_KEY")
+
+            api_key = (
+                api_key or
+                litellm.api_key or
+                litellm.azure_key or
+                get_secret("AZURE_API_KEY")
+            )
 
             ## LOGGING
             logging.pre_call(
@@ -240,10 +243,12 @@ def completion(
             if litellm.organization:
                 openai.organization = litellm.organization
             # set API KEY
-            if not api_key and litellm.openai_key:
-                api_key = litellm.openai_key
-            elif not api_key and get_secret("OPENAI_API_KEY"):
-                api_key = get_secret("OPENAI_API_KEY")
+            api_key = (
+                api_key or
+                litellm.api_key or
+                litellm.openai_key or
+                get_secret("OPENAI_API_KEY")
+            )
 
             ## LOGGING
             logging.pre_call(
@@ -304,12 +309,14 @@ def completion(
 
             openai.api_version = None
             # set API KEY
-            if not api_key and litellm.openai_key:
-                api_key = litellm.openai_key
-            elif not api_key and get_secret("OPENAI_API_KEY"):
-                api_key = get_secret("OPENAI_API_KEY")
 
-            openai.api_key = api_key
+            api_key = (
+                api_key or
+                litellm.api_key or
+                litellm.openai_key or
+                get_secret("OPENAI_API_KEY")
+            )
+
 
             if litellm.organization:
                 openai.organization = litellm.organization
@@ -330,6 +337,7 @@ def completion(
                 model=model, 
                 prompt=prompt,
                 headers=litellm.headers,
+                api_key = api_key,
                 api_base=api_base,
                 **optional_params
             )
@@ -367,6 +375,7 @@ def completion(
                 or get_secret("REPLICATE_API_TOKEN")
                 or api_key
                 or litellm.replicate_key
+                or litellm.api_key
             )
 
             model_response = replicate.completion(
@@ -389,7 +398,7 @@ def completion(
 
         elif model in litellm.anthropic_models:
             anthropic_key = (
-                api_key or litellm.anthropic_key or os.environ.get("ANTHROPIC_API_KEY")
+                api_key or litellm.anthropic_key or os.environ.get("ANTHROPIC_API_KEY") or litellm.api_key
             )
             model_response = anthropic.completion(
                 model=model,
@@ -410,7 +419,7 @@ def completion(
             response = model_response
         elif model in litellm.aleph_alpha_models:
             aleph_alpha_key = (
-                api_key or litellm.aleph_alpha_key or get_secret("ALEPH_ALPHA_API_KEY") or get_secret("ALEPHALPHA_API_KEY")
+                api_key or litellm.aleph_alpha_key or get_secret("ALEPH_ALPHA_API_KEY") or get_secret("ALEPHALPHA_API_KEY") or litellm.api_key
             )
 
             model_response = aleph_alpha.completion(
@@ -450,7 +459,7 @@ def completion(
             else:
                 openai.api_key = get_secret("OPENROUTER_API_KEY") or get_secret(
                     "OR_API_KEY"
-                )
+                ) or litellm.api_key
             ## LOGGING
             logging.pre_call(input=messages, api_key=openai.api_key)
             ## COMPLETION CALL
@@ -495,6 +504,7 @@ def completion(
                 or litellm.cohere_key
                 or get_secret("COHERE_API_KEY")
                 or get_secret("CO_API_KEY")
+                or litellm.api_key
             )
             co = cohere.Client(cohere_key)
             prompt = " ".join([message["content"] for message in messages])
@@ -537,6 +547,7 @@ def completion(
                 or litellm.huggingface_key
                 or os.environ.get("HF_TOKEN")
                 or os.environ.get("HUGGINGFACE_API_KEY")
+                or litellm.api_key
             )
             model_response = huggingface_restapi.completion(
                 model=model,
@@ -566,6 +577,7 @@ def completion(
                 or litellm.togetherai_api_key
                 or get_secret("TOGETHER_AI_TOKEN")
                 or get_secret("TOGETHERAI_API_KEY")
+                or litellm.api_key
             )
             
             model_response = together_ai.completion(
@@ -652,6 +664,7 @@ def completion(
                 api_key
                 or litellm.ai21_key
                 or os.environ.get("AI21_API_KEY")
+                or litellm.api_key
             )            
             model_response = ai21.completion(
                 model=model,
@@ -757,7 +770,7 @@ def completion(
         ):
             custom_llm_provider = "baseten"
             baseten_key = (
-                api_key or litellm.baseten_key or os.environ.get("BASETEN_API_KEY")
+                api_key or litellm.baseten_key or os.environ.get("BASETEN_API_KEY") or litellm.api_key
             )
 
             model_response = baseten.completion(
