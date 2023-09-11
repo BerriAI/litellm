@@ -195,6 +195,8 @@ def test_completion_openai():
         assert response_str == response_str_2
         assert type(response_str) == str
         assert len(response_str) > 1
+
+        litellm.api_key = None
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 # test_completion_openai()
@@ -263,6 +265,9 @@ def test_completion_openai_litellm_key():
 
         ###### reset environ key
         os.environ['OPENAI_API_KEY'] = litellm.api_key
+
+        ##### unset litellm var
+        litellm.api_key = None
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -379,18 +384,59 @@ def test_completion_azure():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+# test_completion_azure()
+
 # new azure test for using litellm. vars
-# def test_completion_azure():
-#     try:
-#         print("azure gpt-3.5 test\n\n")
-#         response = completion(
-#             model="azure/chatgpt-v-2",
-#             messages=messages,
-#         )
-#         # Add any assertions here to check the response
-#         print(response)
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
+# use the following vars in this test and make an azure_api_call
+#  litellm.api_type = self.azure_api_type 
+#  litellm.api_base = self.azure_api_base 
+#  litellm.api_version = self.azure_api_version 
+#  litellm.api_key = self.api_key 
+def test_completion_azure():
+    try:
+        print("azure gpt-3.5 test\n\n")
+        import openai
+
+
+        #### set litellm vars
+        litellm.api_type = "azure"
+        litellm.api_base = os.environ['AZURE_API_BASE']
+        litellm.api_version = os.environ['AZURE_API_VERSION']
+        litellm.api_key = os.environ['AZURE_API_KEY']
+
+        ######### UNSET ENV VARs for this ################
+        os.environ['AZURE_API_BASE'] = ""
+        os.environ['AZURE_API_VERSION'] = ""
+        os.environ['AZURE_API_KEY'] = ""
+
+        ######### UNSET OpenAI vars for this ##############
+        openai.api_type = ""
+        openai.api_base = "gm"
+        openai.api_version = "333"
+        openai.api_key = "ymca"
+
+        response = completion(
+            model="azure/chatgpt-v-2",
+            messages=messages,
+        )
+        # Add any assertions here to check the response
+        print(response)
+
+
+        ######### RESET ENV VARs for this ################
+        os.environ['AZURE_API_BASE'] = litellm.api_base
+        os.environ['AZURE_API_VERSION'] = litellm.api_version
+        os.environ['AZURE_API_KEY'] = litellm.api_key
+
+        ######### UNSET litellm vars
+        litellm.api_type = None
+        litellm.api_base = None
+        litellm.api_version = None
+        litellm.api_key = None
+
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+# test_completion_azure()
 
 
 def test_completion_azure_deployment_id():
@@ -404,6 +450,7 @@ def test_completion_azure_deployment_id():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+# test_completion_azure_deployment_id()
 
 # Replicate API endpoints are unstable -> throw random CUDA errors -> this means our tests can fail even if our tests weren't incorrect.
 
