@@ -43,6 +43,7 @@ jobs:
   
 
       # Run pytest and generate JUnit XML report
+      parallelism: 10
       - run:
           name: Run tests
           command: |
