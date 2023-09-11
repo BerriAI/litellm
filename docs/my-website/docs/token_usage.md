@@ -1,13 +1,15 @@
 # Completion Token Usage & Cost
 By default LiteLLM returns token usage in all completion requests ([See here](https://litellm.readthedocs.io/en/latest/output/))
 
-However, we also expose 3 public helper functions to calculate token usage across providers:
+However, we also expose 4 public helper functions to calculate token usage across providers:
 
 - `token_counter`: This returns the number of tokens for a given input - it uses the tokenizer based on the model, and defaults to tiktoken if no model-specific tokenizer is available. 
 
 - `cost_per_token`: This returns the cost (in USD) for prompt (input) and completion (output) tokens. It utilizes our model_cost map which can be found in `__init__.py` and also as a [community resource](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json).
 
 - `completion_cost`: This returns the overall cost (in USD) for a given LLM API Call. It combines `token_counter` and `cost_per_token` to return the cost for that query (counting both cost of input and output). 
+
+- `get_max_tokens`: This returns a dictionary for a given model name, with it's max_tokens, input_cost_per_token and output_cost_per_token
 
 ## Example Usage 
 
@@ -51,3 +53,15 @@ formatted_string = f"${float(cost):.10f}"
 print(formatted_string)
 ```
 
+### 4. `get_max_tokens`
+
+* Input: Accepts a model name - e.g. `gpt-3.5-turbo` (to get a complete list, call `litellm.model_list`)
+* Output: Returns a dict object containing the max_tokens, input_cost_per_token, output_cost_per_token
+
+```python 
+from litellm import get_max_tokens 
+
+model = "gpt-3.5-turbo"
+
+print(get_max_tokens(model)) # {'max_tokens': 4000, 'input_cost_per_token': 1.5e-06, 'output_cost_per_token': 2e-06}
+```
