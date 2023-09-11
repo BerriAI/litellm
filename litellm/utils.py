@@ -1938,8 +1938,7 @@ def exception_type(model, original_exception, custom_llm_provider):
                             llm_provider="vllm",
                             model=model
                         )
-        else:
-            raise original_exception
+        raise original_exception
     except Exception as e:
         # LOGGING
         exception_logging(

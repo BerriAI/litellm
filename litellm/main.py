@@ -93,6 +93,7 @@ def completion(
     deployment_id = None,
     # Optional liteLLM function params
     *,
+    mock_request=False, # to mock an LLM request
     return_async=False,
     api_key: Optional[str] = None,
     api_version: Optional[str] = None,
@@ -134,7 +135,13 @@ def completion(
         ):  # allow custom provider to be passed in via the model name "azure/chatgpt-test"
             custom_llm_provider = model.split("/", 1)[0]
             model = model.split("/", 1)[1]
-        
+        if mock_request == True: 
+            ## RESPONSE OBJECT
+            completion_response = "This is a mock request"
+            model_response["choices"][0]["message"]["content"] = completion_response
+            model_response["created"] = time.time()
+            model_response["model"] = "MockResponse"
+            return model_response
         # check if user passed in any of the OpenAI optional params
         optional_params = get_optional_params(
             functions=functions,
