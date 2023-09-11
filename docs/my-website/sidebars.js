@@ -75,7 +75,7 @@ const sidebars = {
     "token_usage",
     "exception_mapping",
     'debugging/local_debugging',
-    'debugging/hosted_debugging',
+    "budget_manager",
     {
       type: 'category',
       label: 'Tutorials',
@@ -121,6 +121,7 @@ const sidebars = {
       items: [
         'extras/secret',
         'extras/contributing',
+        'debugging/hosted_debugging',
       ],
     },
     {

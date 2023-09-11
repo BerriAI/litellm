@@ -5,7 +5,7 @@ import requests
 from typing import Optional
 
 class BudgetManager:
-    def __init__(self, project_name: str, type: str = "client", api_base: Optional[str] = None):
+    def __init__(self, project_name: str, type: str = "local", api_base: Optional[str] = None):
         self.type = type
         self.project_name = project_name
         self.api_base = api_base or "https://api.litellm.ai"
