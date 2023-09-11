@@ -1,10 +1,13 @@
 import os, json
 import litellm 
 from litellm.utils import ModelResponse
+import requests
 
 class BudgetManager:
-    def __init__(self, type: str):
+    def __init__(self, project_name: str, type: str = "client", api_base: str = None):
         self.type = type
+        self.project_name = project_name
+        self.api_base = api_base or "https://api.litellm.ai"
         ## load the data or init the initial dictionaries
         self.load_data() 
     
@@ -22,6 +25,19 @@ class BudgetManager:
             else:
                 self.print_verbose("User Dictionary not found!")
                 self.user_dict = {} 
+        elif self.type == "client":
+            # Load the user_dict from hosted db
+            url = self.api_base + "/get_budget"
+            headers = {'Content-Type': 'application/json'}
+            data = {
+                'project_name' : self.project_name
+            }
+            response = requests.post(url, headers=headers, json=data)
+            response = response.json()
+            if response["status"] == "error":
+                self.user_dict = {} # assume this means the user dict hasn't been stored yet
+            else:
+                self.user_dict = response["data"]
 
     def create_budget(self, total_budget: float, user: str):
         self.user_dict[user] = {"total_budget": total_budget}
@@ -66,3 +82,14 @@ class BudgetManager:
             # save the user dict 
             with open("user_cost.json", 'w') as json_file:
                 json.dump(self.user_dict, json_file, indent=4)  # Indent for pretty formatting
+            return {"status": "success"}
+        elif self.type == "client":
+            url = self.api_base + "/set_budget"
+            headers = {'Content-Type': 'application/json'}
+            data = {
+                'project_name' : self.project_name, 
+                "user_dict": self.user_dict
+            }
+            response = requests.post(url, headers=headers, json=data)
+            response = response.json()
+            return response
