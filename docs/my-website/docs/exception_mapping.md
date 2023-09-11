@@ -40,39 +40,19 @@ To see how it's implemented - [check out the code](https://github.com/BerriAI/li
 
 Base case - we return the original exception.
 
-| LLM Provider | Initial Status Code / Initial Error Message | Returned Exception | Returned Status Code |
-|----------------------|------------------------|-----------------|-----------------|
-| Anthropic | prompt is too long | ContextWindowExceededError | 400 |
-| Anthropic | 401 | AuthenticationError | 401 |
-| Anthropic | Could not resolve authentication method. Expected either api_key or auth_token to be set. | AuthenticationError | 401 |
-| Anthropic | 400 | InvalidRequestError | 400 | 
-| Anthropic | 429 | RateLimitError | 429 | 
-| OpenAI | This model's maximum context length is | ContextWindowExceededError | 400 | 
-| Replicate | input is too long | ContextWindowExceededError | 400 | 
-| Replicate | Incorrect authentication token | AuthenticationError | 401 | 
-| Replicate | ModelError | InvalidRequestError | 400 |
-| Replicate | Request was throttled | RateLimitError | 429 |
-| Replicate | ReplicateError | ServiceUnavailableError | 500 |
-| Cohere | invalid api token | AuthenticationError | 401 |
-| Cohere | too many tokens | ContextWindowExceededError | 400 |
-| Cohere | CohereConnectionError | RateLimitError | 429 |
-| Huggingface | length limit exceeded | ContextWindowExceededError | 400 |
-| Huggingface | 400 | InvalidRequestError | 400 |
-| Huggingface | 401 | AuthenticationError | 401 | 
-| Huggingface | 429 | RateLimitError | 429 | 
-| Openrouter | 413 | ContextWindowExceededError | 400 | 
-| Openrouter | 401 | AuthenticationError | 401 | 
-| Openrouter | 429 | RateLimitError | 429 | 
-| AI21 | Prompt has too many tokens | ContextWindowExceededError | 400 | 
-| AI21 | 422 | InvalidRequestError | 400 | 
-| AI21 | 401 | AuthenticationError | 401 | 
-| AI21 | 429 | RateLimitError | 429 | 
-| TogetherAI | inputs` tokens + `max_new_tokens` must be <= | ContextWindowExceededError | 400 | 
-| TogetherAI | INVALID_ARGUMENT | InvalidRequestError | 400 | 
-| TogetherAI | "error_type": "validation" | InvalidRequestError | 400 | 
-| TogetherAI | invalid private key | AuthenticationError | 401 | 
-| TogetherAI | 429 | RateLimitError | 429 | 
+|               | ContextWindowExceededError | AuthenticationError | InvalidRequestError | RateLimitError | ServiceUnavailableError |
+|---------------|----------------------------|---------------------|---------------------|---------------|-------------------------|
+| Anthropic     | ✅                          | ✅                   | ✅                   | ✅             |                         |
+| OpenAI        | ✅                          | ✅                     |✅                     |✅               |✅                         |
+| Replicate     | ✅                          | ✅                   | ✅                   | ✅             | ✅                       |
+| Cohere        | ✅                          | ✅                   |                     | ✅             |                         |
+| Huggingface   | ✅                          | ✅                   | ✅                   | ✅             |                         |
+| Openrouter    | ✅                          | ✅                   |                     | ✅             |                         |
+| AI21          | ✅                          | ✅                   | ✅                   | ✅             |                         |
+| TogetherAI    | ✅                          | ✅                   | ✅                   | ✅             |                         |
 
+
+> For a deeper understanding of these exceptions, you can check out [this](https://github.com/BerriAI/litellm/blob/d7e58d13bf9ba9edbab2ab2f096f3de7547f35fa/litellm/utils.py#L1544) implementation for additional insights.
 
 The `ContextWindowExceededError` is a sub-class of `InvalidRequestError`. It was introduced to provide more granularity for exception-handling scenarios. Please refer to [this issue to learn more](https://github.com/BerriAI/litellm/issues/228).
 
