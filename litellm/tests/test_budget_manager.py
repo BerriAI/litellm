@@ -68,3 +68,11 @@ def test_save_user_budget():
         print(response)
     except:
         pytest.fail(f"An error occurred")
+
+## Scenario 4: Getting list of users 
+def test_get_users():
+    try:
+        response = budget_manager.get_users()
+        print(response)
+    except:
+        pytest.fail(f"An error occurred") 

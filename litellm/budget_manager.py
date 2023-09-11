@@ -70,6 +70,9 @@ class BudgetManager:
     
     def get_model_cost(self, user):
         return self.user_dict[user].get("model_cost", 0)
+
+    def get_users(self):
+        return list(self.user_dict.keys())
     
     def reset_cost(self, user):
         self.user_dict[user]["current_cost"] = 0
