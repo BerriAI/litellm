@@ -11,8 +11,9 @@ budget_manager = BudgetManager(project_name="test_project")
 
 user = "1234"
 
-# create a budget for a user
-budget_manager.create_budget(total_budget=10, user=user)
+# create a budget if new user user
+if not budget_manager.is_valid_user(user):
+    budget_manager.create_budget(total_budget=10, user=user)
 
 # check if a given call can be made
 if budget_manager.get_current_cost(user=user) <= budget_manager.get_total_budget(user):
@@ -40,7 +41,7 @@ budget_manager.get_model_cost(user=user) # {"gpt-3.5-turbo-0613": 7.3e-05}
 
 ### save budget to disk
 
-When you call `save_data()` it will check for the self.type (by default this is set to client), and save the dictionary to a local `user_cost.json` file. 
+When you call `save_data()` it will check for the self.client_type (by default this is set to local), and save the dictionary to a local `user_cost.json` file. 
 
 ```python
 # ...
@@ -49,20 +50,20 @@ budget_manager.save_data() # 👈 save to user_cost.json()
 
 [**Implementation Code**](https://github.com/BerriAI/litellm/blob/817798c692207569a17c26186d10541aa83f04e7/litellm/budget_manager.py#L83)
 
-### save budget to db (LiteLLM)
+### save budget to hosted db (LiteLLM)
 
-Set the BudgetManager type to `client`.
+Set the BudgetManager type to `client_type`.
 ```python
-budget_manager = BudgetManager(project_name="test_project", type="client")
+budget_manager = BudgetManager(project_name="test_project", client_type="hosted")
 # ...
 budget_manager.save_data() # 👈 saved to hosted db 
 ```
 
 [**Implementation Code**](https://github.com/BerriAI/litellm/blob/817798c692207569a17c26186d10541aa83f04e7/litellm/budget_manager.py#L11)
 
-### save budget to db (self-hosted)
+### save budget to hosted db (self-hosted)
 
-Set the BudgetManager type to `client`. Overwrite the api_base
+Set the BudgetManager type to `client_type`. Overwrite the api_base
 ```python
 budget_manager = BudgetManager(project_name="test_project", type="client", api_base="your_custom_api")
 # ...

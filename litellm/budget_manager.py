@@ -5,8 +5,8 @@ import requests
 from typing import Optional
 
 class BudgetManager:
-    def __init__(self, project_name: str, type: str = "local", api_base: Optional[str] = None):
-        self.type = type
+    def __init__(self, project_name: str, client_type: str = "local", api_base: Optional[str] = None):
+        self.client_type = client_type
         self.project_name = project_name
         self.api_base = api_base or "https://api.litellm.ai"
         ## load the data or init the initial dictionaries
@@ -17,7 +17,7 @@ class BudgetManager:
             print(print_statement)
     
     def load_data(self):
-        if self.type == "local":
+        if self.client_type == "local":
             # Check if user dict file exists
             if os.path.isfile("user_cost.json"):
                 # Load the user dict
@@ -26,7 +26,8 @@ class BudgetManager:
             else:
                 self.print_verbose("User Dictionary not found!")
                 self.user_dict = {} 
-        elif self.type == "client":
+            self.print_verbose(f"user dict from local: {self.user_dict}")
+        elif self.client_type == "hosted":
             # Load the user_dict from hosted db
             url = self.api_base + "/get_budget"
             headers = {'Content-Type': 'application/json'}
@@ -70,7 +71,10 @@ class BudgetManager:
     
     def get_model_cost(self, user):
         return self.user_dict[user].get("model_cost", 0)
-
+    
+    def is_valid_user(self, user: str) -> bool:
+        return user in self.user_dict
+    
     def get_users(self):
         return list(self.user_dict.keys())
     
@@ -80,14 +84,14 @@ class BudgetManager:
         return {"user": self.user_dict[user]}
 
     def save_data(self):
-        if self.type == "local":
+        if self.client_type == "local":
             import json 
             
             # save the user dict 
             with open("user_cost.json", 'w') as json_file:
                 json.dump(self.user_dict, json_file, indent=4)  # Indent for pretty formatting
             return {"status": "success"}
-        elif self.type == "client":
+        elif self.client_type == "hosted":
             url = self.api_base + "/set_budget"
             headers = {'Content-Type': 'application/json'}
             data = {

@@ -9,9 +9,10 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import litellm 
+litellm.set_verbose = True
 from litellm import BudgetManager, completion 
 
-budget_manager = BudgetManager(project_name="test_project")
+budget_manager = BudgetManager(project_name="test_project", client_type="hosted")
 
 ## Scenario 1: User budget enough to make call
 def test_user_budget_enough():
@@ -32,8 +33,10 @@ def test_user_budget_enough():
             response = "Sorry - no budget!"
 
         print(f"response: {response}")
-    except:
-        pytest.fail(f"An error occurred")
+    except Exception as e:
+        pytest.fail(f"An error occurred - {str(e)}")
+
+test_user_budget_enough()
 
 ## Scenario 2: User budget not enough to make call
 def test_user_budget_not_enough():
