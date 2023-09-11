@@ -29,7 +29,6 @@ jobs:
             pip install mypy
             pip install openai[datalib]
             pip install -Uq chromadb==0.3.29
-            pip install pytest-xdist==3.3.1
 
       - run:
           name: Linting Testing
@@ -45,10 +44,9 @@ jobs:
 
       # Run pytest and generate JUnit XML report
       - run:
-          name: Run tests in parallel
+          name: Run tests
           command: |
-            # Split tests into separate workers
-            python -m pytest -n 50 --junitxml=test-results/junit.xml
+            python -m pytest --junitxml=test-results/junit.xml
 
       # Store test results
       - store_test_results:
