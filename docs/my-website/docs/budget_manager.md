@@ -52,7 +52,7 @@ budget_manager.save_data() # 👈 save to user_cost.json()
 
 ### save budget to hosted db (LiteLLM)
 
-Set the BudgetManager type to `client_type`.
+Set the BudgetManager client type to `hosted`.
 ```python
 budget_manager = BudgetManager(project_name="test_project", client_type="hosted")
 # ...
@@ -63,7 +63,7 @@ budget_manager.save_data() # 👈 saved to hosted db
 
 ### save budget to hosted db (self-hosted)
 
-Set the BudgetManager type to `client_type`. Overwrite the api_base
+Set the BudgetManager client type to `hosted` **And** Overwrite the api_base
 ```python
 budget_manager = BudgetManager(project_name="test_project", type="client", api_base="your_custom_api")
 # ...
