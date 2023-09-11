@@ -927,7 +927,7 @@ def get_max_tokens(model: str):
     try:
         return litellm.model_cost[model]
     except:
-        raise Exception("This model isn't mapped yet. Add it here - https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json")
+        raise Exception("This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/cookbook/community-resources/max_tokens.json")
     
 
 def load_test_model(
