@@ -17,7 +17,9 @@ jobs:
               echo "No changes to litellm or pyproject.toml. Skipping tests."
               circleci step halt
             fi
-
+      - restore_cache:
+          keys:
+            - v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
       - run:
           name: Install Dependencies
           command: |
@@ -29,7 +31,10 @@ jobs:
             pip install mypy
             pip install openai[datalib]
             pip install -Uq chromadb==0.3.29
-
+      - save_cache:
+          paths:
+            - ./venv
+          key: v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
       - run:
           name: Linting Testing
           command: |
@@ -43,7 +48,6 @@ jobs:
   
 
       # Run pytest and generate JUnit XML report
-      parallelism: 10
       - run:
           name: Run tests
           command: |

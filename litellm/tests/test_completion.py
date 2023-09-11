@@ -386,7 +386,7 @@ def test_completion_azure():
 
 # test_completion_azure()
 
-# new azure test for using litellm. vars 
+# new azure test for using litellm. vars, 
 # use the following vars in this test and make an azure_api_call
 #  litellm.api_type = self.azure_api_type 
 #  litellm.api_base = self.azure_api_base 
