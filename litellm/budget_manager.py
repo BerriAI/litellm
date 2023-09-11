@@ -14,15 +14,6 @@ class BudgetManager:
     
     def load_data(self):
         if self.type == "local":
-            # Check if model dict file exists
-            if os.path.isfile("model_cost.json"):
-                # Load the model dict
-                with open("model_cost.json", 'r') as json_file:
-                    self.model_dict = json.load(json_file)
-            else:
-                self.print_verbose("Model Dictionary not found!")
-                self.model_dict = {}
-                    
             # Check if user dict file exists
             if os.path.isfile("user_cost.json"):
                 # Load the user dict
@@ -50,20 +41,27 @@ class BudgetManager:
     def update_cost(self, completion_obj: ModelResponse, user: str):
         cost = litellm.completion_cost(completion_response=completion_obj)
         model = completion_obj['model'] # if this throws an error try, model = completion_obj['model']
-        self.model_dict[model] = cost + self.model_dict.get(model, 0)
         self.user_dict[user]["current_cost"] = cost + self.user_dict[user].get("current_cost", 0)
-        return {"current_user_cost": self.user_dict[user]["current_cost"], "current_model_cost": self.model_dict[model]}
+        if "model_cost" in self.user_dict[user]:
+            self.user_dict[user]["model_cost"][model] = cost + self.user_dict[user]["model_cost"].get(model, 0)
+        else:
+            self.user_dict[user]["model_cost"] = {model: cost}
+        return {"user": self.user_dict[user]}
     
     def get_current_cost(self, user):
         return self.user_dict[user].get("current_cost", 0)
+    
+    def get_model_cost(self, user):
+        return self.user_dict[user].get("model_cost", 0)
+    
+    def reset_cost(self, user):
+        self.user_dict[user]["current_cost"] = 0
+        self.user_dict[user]["model_cost"] = {}
+        return {"user": self.user_dict[user]}
 
     def save_data(self):
         if self.type == "local":
             import json 
-            
-            # save the model dict
-            with open("model_cost.json", 'w') as json_file:
-                json.dump(self.model_dict, json_file, indent=4)  # Indent for pretty formatting
             
             # save the user dict 
             with open("user_cost.json", 'w') as json_file:
