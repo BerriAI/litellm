@@ -11,6 +11,7 @@ os.environ["OPENAI_API_KEY"] = ""
 ### Usage
 ```python
 import os 
+from litellm import completion
 
 os.environ["OPENAI_API_KEY"] = ""
 
@@ -49,3 +50,23 @@ These also support the `OPENAI_API_BASE` environment variable, which can be used
 | babbage-001 | `completion('babbage-001', messages)` | `os.environ['OPENAI_API_KEY']`       |
 | babbage-002 | `completion('ada-001', messages)` | `os.environ['OPENAI_API_KEY']`       |
 | davinci-002 | `completion('davinci-002', messages)` | `os.environ['OPENAI_API_KEY']`       |
+
+### Using OpenAI Proxy with LiteLLM
+```python
+import os 
+import litellm
+from litellm import completion
+
+os.environ["OPENAI_API_KEY"] = ""
+
+# set custom api base to your proxy
+# either set .env or litellm.api_base
+# os.environ["OPENAI_API_BASE"] = ""
+litellm.api_base = "https://openai-proxy.berriai.repl.co"
+
+
+messages = [{ "content": "Hello, how are you?","role": "user"}]
+
+# openai call
+response = completion("gpt-3.5-turbo", messages)
+```
