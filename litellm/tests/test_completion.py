@@ -239,6 +239,35 @@ def test_completion_openai_with_optional_params():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+
+def test_completion_openai_litellm_key():
+    try:
+        litellm.api_key = os.environ['OPENAI_API_KEY']
+
+        # ensure key is set to None in .env and in openai.api_key
+        os.environ['OPENAI_API_KEY'] = ""
+        import openai
+        openai.api_key = ""
+        ##########################################################
+
+        response = completion(
+            model="gpt-3.5-turbo",
+            messages=messages,
+            temperature=0.5,
+            top_p=0.1,
+            max_tokens=10,
+            user="ishaan_dev@berri.ai",
+        )
+        # Add any assertions here to check the response
+        print(response)
+
+        ###### reset environ key
+        os.environ['OPENAI_API_KEY'] = litellm.api_key
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+# test_completion_openai_litellm_key()
+
 # commented out for now, as openrouter is quite flaky - causing our deployments to fail. Please run this before pushing changes.
 # def test_completion_openrouter():
 #     try:
