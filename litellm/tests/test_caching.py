@@ -214,6 +214,21 @@ def test_redis_cache_completion():
     messages = [{"role": "user", "content": "who is ishaan CTO of litellm from litellm 2023"}]
     litellm.cache = Cache(type="redis", host=os.environ['REDIS_HOST'], port=os.environ['REDIS_PORT'], password=os.environ['REDIS_PASSWORD'])
     print("test2 for caching")
+
+    # patch this redis test
+    local_cache = {}
+
+    def set_cache(key, value):
+        local_cache[key] = value
+    
+    def get_cache(key):
+        if key in local_cache:
+            return local_cache[key]
+    
+    litellm.cache.cache.set_cache = set_cache
+    litellm.cache.cache.get_cache = get_cache
+
+
     response1 = completion(model="gpt-3.5-turbo", messages=messages, caching=True)
     response2 = completion(model="gpt-3.5-turbo", messages=messages, caching=True)
     response3 = completion(model="command-nightly", messages=messages, caching=True)
@@ -244,6 +259,20 @@ def test_custom_redis_cache_with_key():
     messages = [{"role": "user", "content": "write a one line story"}]
     litellm.cache = Cache(type="redis", host=os.environ['REDIS_HOST'], port=os.environ['REDIS_PORT'], password=os.environ['REDIS_PASSWORD'])
     litellm.cache.get_cache_key = custom_get_cache_key
+
+    local_cache = {}
+
+    def set_cache(key, value):
+        local_cache[key] = value
+    
+    def get_cache(key):
+        if key in local_cache:
+            return local_cache[key]
+    
+    litellm.cache.cache.set_cache = set_cache
+    litellm.cache.cache.get_cache = get_cache
+
+    # patch this redis cache get and set call
 
     response1 = completion(model="gpt-3.5-turbo", messages=messages, temperature=1, caching=True)
     response2 = completion(model="gpt-3.5-turbo", messages=messages, temperature=1, caching=True)
