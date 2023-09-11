@@ -392,7 +392,7 @@ def test_completion_azure():
 #  litellm.api_base = self.azure_api_base 
 #  litellm.api_version = self.azure_api_version 
 #  litellm.api_key = self.api_key 
-def test_completion_azure():
+def test_completion_azure_with_litellm_key():
     try:
         print("azure gpt-3.5 test\n\n")
         import openai
