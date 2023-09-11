@@ -1,7 +1,7 @@
 import os, json
 import litellm 
 from litellm.utils import ModelResponse
-import requests
+import requests, threading
 from typing import Optional
 
 class BudgetManager:
@@ -64,6 +64,7 @@ class BudgetManager:
             self.user_dict[user]["model_cost"][model] = cost + self.user_dict[user]["model_cost"].get(model, 0)
         else:
             self.user_dict[user]["model_cost"] = {model: cost}
+        self._save_data_thread() # [Non-Blocking] Update persistent storage without blocking execution
         return {"user": self.user_dict[user]}
     
     def get_current_cost(self, user):
@@ -82,6 +83,10 @@ class BudgetManager:
         self.user_dict[user]["current_cost"] = 0
         self.user_dict[user]["model_cost"] = {}
         return {"user": self.user_dict[user]}
+    
+    def _save_data_thread(self):
+        thread = threading.Thread(target=self.save_data) # [Non-Blocking]: saves data without blocking execution
+        thread.start()
 
     def save_data(self):
         if self.client_type == "local":
