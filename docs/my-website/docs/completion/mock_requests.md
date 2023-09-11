@@ -28,6 +28,21 @@ if complete_response == "":
     raise Exception("Empty response received")
 ```
 
+## set mock response
+You can also customize the mock response text returned. By default it's set to - `This is a mock request`. But you can override this with `mock_response`. 
+
+```python
+model = "gpt-3.5-turbo"
+messages = [{"role": "user", "content": "Hey, I'm a mock request"}]
+response = litellm.mock_completion(model=model, messages=messages, mock_response="My custom mock response", stream=True)
+complete_response = "" 
+for chunk in response: 
+    print(chunk) # {'choices': [{'delta': {'role': 'assistant', 'content': 'My '}, 'finish_reason': None}]}
+    complete_response += chunk["choices"][0]["delta"]["content"]
+if complete_response == "": 
+    raise Exception("Empty response received")
+```
+
 ## (Non-streaming) Mock Response Object 
 
 ```
