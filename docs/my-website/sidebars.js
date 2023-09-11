@@ -34,7 +34,8 @@ const sidebars = {
         "completion/model_alias", 
         "completion/reliable_completions", 
         "completion/stream", 
-        "completion/batching"
+        "completion/batching",
+        "completion/mock_requests",
       ],
     },
     {
