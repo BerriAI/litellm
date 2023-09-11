@@ -23,8 +23,6 @@ def test_user_budget_enough():
         "model": "gpt-3.5-turbo",
         "messages": [{"role": "user", "content": "Hey, how's it going?"}]
     }
-    model = data["model"]
-    messages = data["messages"]
     if budget_manager.get_current_cost(user=user) <= budget_manager.get_total_budget(user):
         response = completion(**data)
         print(budget_manager.update_cost(completion_obj=response, user=user))
@@ -61,3 +59,5 @@ def test_budget_save_to_disk():
 ## Scenario 4: Loading budget from disk
 def test_budget_load_from_disk():
     budget_manager_2 = BudgetManager(type="local") 
+
+## Scenario 5: Test get model cost from user dict 
