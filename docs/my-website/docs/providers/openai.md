@@ -2,10 +2,23 @@
 LiteLLM supports OpenAI Chat + Text completion and embedding calls.
 
 ### API KEYS
-```
+```python
 import os 
 
 os.environ["OPENAI_API_KEY"] = ""
+```
+
+### Usage
+```python
+import os 
+
+os.environ["OPENAI_API_KEY"] = ""
+
+
+messages = [{ "content": "Hello, how are you?","role": "user"}]
+
+# openai call
+response = completion("gpt-3.5-turbo", messages)
 ```
 
 ### OpenAI Chat Completion Models
