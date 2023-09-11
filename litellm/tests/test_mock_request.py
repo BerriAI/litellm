@@ -13,9 +13,23 @@ def test_mock_request():
     try:
         model = "gpt-3.5-turbo"
         messages = [{"role": "user", "content": "Hey, I'm a mock request"}]
-        response = litellm.completion(model=model, messages=messages, mock_request=True)
+        response = litellm.mock_completion(model=model, messages=messages)
         print(response)
     except:
         traceback.print_exc()
 
-test_mock_request()
+def test_streaming_mock_request():
+    try: 
+        model = "gpt-3.5-turbo"
+        messages = [{"role": "user", "content": "Hey, I'm a mock request"}]
+        response = litellm.mock_completion(model=model, messages=messages, stream=True)
+        complete_response = "" 
+        for chunk in response: 
+            print(f"chunk: {chunk}")
+            complete_response += chunk["choices"][0]["delta"]["content"]
+        if complete_response == "": 
+            raise Exception("Empty response received")
+    except:
+        traceback.print_exc()
+
+test_streaming_mock_request()
