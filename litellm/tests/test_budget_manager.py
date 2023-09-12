@@ -19,7 +19,7 @@ def test_user_budget_enough():
     try: 
         user = "1234"
         # create a budget for a user
-        budget_manager.create_budget(total_budget=10, user=user)
+        budget_manager.create_budget(total_budget=10, user=user, duration="daily")
 
         # check if a given call can be made
         data = {
@@ -41,7 +41,7 @@ def test_user_budget_not_enough():
     try: 
         user = "12345"
         # create a budget for a user
-        budget_manager.create_budget(total_budget=0, user=user)
+        budget_manager.create_budget(total_budget=0, user=user, duration="daily")
 
         # check if a given call can be made
         data = {
