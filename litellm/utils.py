@@ -2496,7 +2496,7 @@ def shorten_message_to_fit_limit(
 # LiteLLM token trimmer 
 # this code is borrowed from https://github.com/KillianLucas/tokentrim/blob/main/tokentrim/tokentrim.py
 # Credits for this code go to Killian Lucas
-def safe_messages(
+def trim_messages(
     messages,
     model = None,
     system_message = None, # str of user system message
