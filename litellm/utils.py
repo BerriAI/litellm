@@ -2566,6 +2566,6 @@ def verify_access_key(access_key:str):
             ],
             max_tokens = 10
         )
-        return False
-    except:
         return True
+    except:
+        return False
