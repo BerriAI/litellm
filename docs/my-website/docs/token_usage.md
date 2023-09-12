@@ -1,7 +1,7 @@
 # Completion Token Usage & Cost
 By default LiteLLM returns token usage in all completion requests ([See here](https://litellm.readthedocs.io/en/latest/output/))
 
-However, we also expose 4 public helper functions to calculate token usage across providers:
+However, we also expose 5 public helper functions to calculate token usage across providers:
 
 - `token_counter`: This returns the number of tokens for a given input - it uses the tokenizer based on the model, and defaults to tiktoken if no model-specific tokenizer is available. 
 
@@ -9,7 +9,9 @@ However, we also expose 4 public helper functions to calculate token usage acros
 
 - `completion_cost`: This returns the overall cost (in USD) for a given LLM API Call. It combines `token_counter` and `cost_per_token` to return the cost for that query (counting both cost of input and output). 
 
-- `get_max_tokens`: This returns a dictionary for a given model name, with it's max_tokens, input_cost_per_token and output_cost_per_token
+- `get_max_tokens`: This returns a dictionary for a specific model, with it's max_tokens, input_cost_per_token and output_cost_per_token
+
+- `model_cost`: This returns a dictionary for all models, with their max_tokens, input_cost_per_token and output_cost_per_token [**List of all models**](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json) (📣 This is a community maintained list. Contributions are welcome! ❤️)
 
 ## Example Usage 
 
@@ -65,3 +67,14 @@ model = "gpt-3.5-turbo"
 
 print(get_max_tokens(model)) # {'max_tokens': 4000, 'input_cost_per_token': 1.5e-06, 'output_cost_per_token': 2e-06}
 ```
+
+### 5. `model_cost`
+
+* Output: Returns a dict object containing the max_tokens, input_cost_per_token, output_cost_per_token for all models on [community-maintained list](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json)
+
+```python 
+from litellm import model_cost 
+
+print(model_cost) # {'gpt-3.5-turbo': {'max_tokens': 4000, 'input_cost_per_token': 1.5e-06, 'output_cost_per_token': 2e-06}, ...}
+```
+
