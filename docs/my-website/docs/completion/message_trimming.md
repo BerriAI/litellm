@@ -1,4 +1,4 @@
-# Trimming Messages - litellm.safe_messages
+# Trimming Messages - safe_messages()
 **Use litellm.safe_messages() to ensure messages does not exceed a model's token limit or specified `max_tokens`**
 
 ## Usage 
@@ -7,20 +7,32 @@ from litellm import completion
 from litellm.utils import safe_messages
 
 response = completion(
-  model=model,
-  messages=safe_messages(messages, model) # safe_messages ensures tokens(messages) < tokens (model)
-)
+    model=model, 
+    messages=safe_messages(messages, model) # safe_messages ensures tokens(messages) < max_tokens(model)
+) 
+```
 
+## Usage - set max_tokens
+```python
+from litellm import completion
+from litellm.utils import safe_messages
+
+response = completion(
+    model=model, 
+    messages=safe_messages(messages, model, max_tokens=10), # safe_messages ensures tokens(messages) < max_tokens
+) 
 ```
 
 ## Parameters
 
 The function uses the following parameters:
 
-- `messages`: This should be a list of input messages 
+- `messages`:       [Required] This should be a list of input messages 
 
-- `model`: This is the LiteLLM model being used. This parameter is optional, as you can alternatively specify the `max_tokens` parameter.
+- `model`:          [Optional] This is the LiteLLM model being used. This parameter is optional, as you can alternatively specify the `max_tokens` parameter.
 
-- `system_message`: This is a string containing an optional system message that will be preserved at the beginning of the conversation. This parameter is optional and set to `None` by default.
+- `system_message`: [Optional]This is a string containing an optional system message that will be preserved at the beginning of the conversation. This parameter is optional and set to `None` by default.
 
-- `trim_ratio`: This represents the target ratio of tokens to use following trimming. It's default value is 0.75, which implies that messages will be trimmed to utilise about 75%
+- `max_tokens`:     [Optional] This is an int, manually set upper limit on messages
+
+- `trim_ratio`:     [Optional] This represents the target ratio of tokens to use following trimming. It's default value is 0.75, which implies that messages will be trimmed to utilise about 75%
