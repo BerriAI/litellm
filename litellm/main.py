@@ -178,10 +178,10 @@ def completion(
                 or get_secret("AZURE_API_BASE")
             )
 
-            openai.api_version = (
-                litellm.api_version
-                if litellm.api_version is not None
-                else get_secret("AZURE_API_VERSION")
+            api_version = (
+                api_version or
+                litellm.api_version or
+                get_secret("AZURE_API_VERSION")
             )
 
             api_key = (
@@ -194,11 +194,11 @@ def completion(
             ## LOGGING
             logging.pre_call(
                 input=messages,
-                api_key=openai.api_key,
+                api_key=api_key,
                 additional_args={
                     "headers": litellm.headers,
-                    "api_version": openai.api_version,
-                    "api_base": openai.api_base,
+                    "api_version": api_version,
+                    "api_base": api_base,
                 },
             )
             ## COMPLETION CALL
@@ -208,6 +208,7 @@ def completion(
                 headers=litellm.headers,
                 api_key=api_key,
                 api_base=api_base,
+                api_version=api_version,
                 **optional_params,
             )
             if "stream" in optional_params and optional_params["stream"] == True:
