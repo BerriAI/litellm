@@ -2554,3 +2554,18 @@ def trim_messages(
     except: # [NON-Blocking, if error occurs just return final_messages
         return messages
 
+
+# Verify that the user has passed in a valid and active api key
+def verify_access_key(access_key:str):
+    openai.api_key = access_key
+    try:
+        test_response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "user", "content": "test"},
+            ],
+            max_tokens = 10
+        )
+        return False
+    except:
+        return True
