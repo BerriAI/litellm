@@ -32,6 +32,16 @@ def test_completion_with_empty_model():
         pass
 
 
+def test_completion_with_no_provider():
+    # test on empty
+    try:
+        model = "cerebras/btlm-3b-8k-base"
+        response = completion(model=model, messages=messages)
+    except Exception as e:
+        print(f"error occurred: {e}")
+        pass
+
+test_completion_with_no_provider()
 # # bad key
 # temp_key = os.environ.get("OPENAI_API_KEY")
 # os.environ["OPENAI_API_KEY"] = "bad-key"

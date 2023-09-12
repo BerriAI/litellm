@@ -17,6 +17,7 @@ from litellm.utils import (
     CustomStreamWrapper,
     read_config_args,
     completion_with_fallbacks,
+    get_llm_provider
 )
 from .llms import anthropic
 from .llms import together_ai
@@ -168,6 +169,7 @@ def completion(
             completion_call_id=id
         )
         logging.update_environment_variables(model=model, user=user, optional_params=optional_params, litellm_params=litellm_params)
+        get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
         if custom_llm_provider == "azure":
             # azure configs
             openai.api_type = get_secret("AZURE_API_TYPE") or "azure"
