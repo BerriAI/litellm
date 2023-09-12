@@ -2,8 +2,8 @@
 LiteLLM supports Claude-1, 1.2 and Claude-2.
 
 ### API KEYS
-```
-import os 
+```python
+import os
 
 os.environ["ANTHROPIC_API_KEY"] = ""
 ```

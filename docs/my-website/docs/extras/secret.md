@@ -12,7 +12,7 @@ Integrates with [Infisical's Secret Manager](https://infisical.com/) for secure 
 ### Usage
 liteLLM manages reading in your LLM API secrets/env variables from Infisical for you
 
-```
+```python
 import litellm
 from infisical import InfisicalClient
 
