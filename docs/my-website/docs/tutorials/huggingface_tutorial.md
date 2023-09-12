@@ -16,7 +16,7 @@ In this case, let's try and call 3 models:
 
 Here's the complete example:
 
-```
+```python
 from litellm import completion 
 
 model = "deepset/deberta-v3-large-squad2"
@@ -36,7 +36,7 @@ What's happening?
 We've deployed `meta-llama/Llama-2-7b-hf` behind a public endpoint - `https://ag3dkq4zui5nu8g3.us-east-1.aws.endpoints.huggingface.cloud`.
 
 Let's try it out: 
-```
+```python
 from litellm import completion 
 
 model = "meta-llama/Llama-2-7b-hf"
@@ -60,15 +60,15 @@ Either via environment variables, by setting it as a package variable or when ca
 
 **Setting via environment variables**  
 Here's the 1 line of code you need to add 
-```
-os.environ["HF_TOKEN] = "..."
+```python
+os.environ["HF_TOKEN"] = "..."
 ```
 
 Here's the full code: 
-```
+```python
 from litellm import completion 
 
-os.environ["HF_TOKEN] = "..."
+os.environ["HF_TOKEN"] = "..."
 
 model = "meta-llama/Llama-2-7b-hf"
 messages = [{"role": "user", "content": "Hey, how's it going?"}] # LiteLLM follows the OpenAI format 
@@ -80,12 +80,12 @@ completion(model=model, messages=messages, custom_llm_provider="huggingface", ap
 
 **Setting it as package variable**  
 Here's the 1 line of code you need to add 
-```
+```python
 litellm.huggingface_key = "..."
 ```
 
 Here's the full code: 
-```
+```python
 import litellm
 from litellm import completion 
 
@@ -100,13 +100,13 @@ completion(model=model, messages=messages, custom_llm_provider="huggingface", ap
 ```
 
 **Passed in during completion call**  
-```
+```python
 completion(..., api_key="...")
 ```
 
 Here's the full code: 
 
-```
+```python
 from litellm import completion 
 
 model = "meta-llama/Llama-2-7b-hf"

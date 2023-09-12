@@ -13,7 +13,7 @@ While Traceloop is still in beta, [ping them](nir@traceloop.com) and mention you
 
 Then, install the Traceloop SDK:
 
-```bash
+```
 pip install traceloop
 ```
 

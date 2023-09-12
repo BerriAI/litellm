@@ -93,7 +93,7 @@ Model name - `WizardLM/WizardCoder-Python-34B-V1.0`
 
 Model id - `https://ji16r2iys9a8rjk2.us-east-1.aws.endpoints.huggingface.cloud`
 
-```
+```python
 import os 
 from litellm import completion 
 
@@ -112,7 +112,7 @@ print(response)
 
 Same as the OpenAI format, but also includes logprobs. [See the code](https://github.com/BerriAI/litellm/blob/b4b2dbf005142e0a483d46a07a88a19814899403/litellm/llms/huggingface_restapi.py#L115)
 
-```
+```json
 {
   "choices": [
     {

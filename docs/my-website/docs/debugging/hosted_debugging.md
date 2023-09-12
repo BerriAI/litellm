@@ -32,7 +32,7 @@ Go to [admin.litellm.ai](https://admin.litellm.ai/) and copy the code snippet wi
 
 **Add it to your .env**
 
-```
+```python
 import os 
 
 os.env["LITELLM_TOKEN"] = "e24c4c06-d027-4c30-9e78-18bc3a50aebb" # replace with your unique token
@@ -40,13 +40,13 @@ os.env["LITELLM_TOKEN"] = "e24c4c06-d027-4c30-9e78-18bc3a50aebb" # replace with 
 ```
 
 **Turn on LiteLLM Client**
-```
+```python
 import litellm 
 litellm.client = True
 ```
 
 ### 3. Make a normal `completion()` call
-```
+```python
 import litellm 
 from litellm import completion
 import os 

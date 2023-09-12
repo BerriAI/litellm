@@ -39,7 +39,7 @@ for chunk in response:
 
 ## (Non-streaming) Mock Response Object 
 
-```
+```json
 {
   "choices": [
     {
