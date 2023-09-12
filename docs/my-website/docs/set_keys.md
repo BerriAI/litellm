@@ -1,20 +1,23 @@
 # Setting API Keys, Base, Version
 
+LiteLLM allows you to specify the following:
+* API Key
+* API Base
+* API Version
+* API Type
 
-environment variables
-
-setting litellm.api_key
-
-setting litellm.<provider_name>_api_key (e.g. litellm.openai_api_key, litellm.anthropic_api_key, etc.)
-
-passing in dynamically via completion() call - e.g. completion(..., api_key="...")
-
+You can set the API configs using:
+* Environment Variables
+* litellm.api_key [litellm variables]
+* Passing args to `completion()`
 
 # Setting API Keys, Base, and Version 
 
 API keys, base API endpoint, and API version can be set via environment variables or passed dynamically. 
 
 ## Environment Variables
+
+### Setting API Keys
 
 Set the liteLLM API key or specific provider key:
 
@@ -27,6 +30,15 @@ os.environ["ANTHROPIC_API_KEY"] = "Your API Key"
 os.environ["REPLICATE_API_KEY"] = "Your API Key"
 os.environ["TOGETHERAI_API_KEY"] = "Your API Key"
 ```
+
+### Setting API Base and API Version
+
+```python
+AZURE_API_BASE = "https://openai-gpt-4-test-v-1.openai.azure.com/"
+AZURE_API_VERSION = "2023-05-15"
+```
+
+### Setting API Version
 
 ## Dynamic API Key
 
