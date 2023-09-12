@@ -931,7 +931,7 @@ def get_optional_params(  # use the openai defaults
         return optional_params
     return optional_params
 
-def get_llm_provider(model: str, custom_llm_provider: str = None):
+def get_llm_provider(model: str, custom_llm_provider: str = ""):
     try:
         # check if llm provider provided
         if custom_llm_provider:
@@ -975,7 +975,7 @@ def get_llm_provider(model: str, custom_llm_provider: str = None):
         elif model in litellm.baseten_models:
             custom_llm_provider = "baseten"
         
-        if custom_llm_provider is None:
+        if custom_llm_provider is None or custom_llm_provider=="":
             raise ValueError(f"LLM Provider NOT provided. Pass in the LLM provider you are trying to call. E.g. For 'Huggingface' inference endpoints pass in `completion(model='huggingface/{model}',..)` Learn more: https://docs.litellm.ai/docs/providers")
         return model, custom_llm_provider
     except Exception as e: 
