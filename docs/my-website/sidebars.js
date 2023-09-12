@@ -73,6 +73,7 @@ const sidebars = {
         "providers/custom_openai_proxy",
       ]
     },
+    "set_keys",
     "token_usage",
     "exception_mapping",
     'debugging/local_debugging',

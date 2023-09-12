@@ -931,6 +931,55 @@ def get_optional_params(  # use the openai defaults
         return optional_params
     return optional_params
 
+def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None):
+    try:
+        # check if llm provider provided
+        if custom_llm_provider:
+            return model, custom_llm_provider
+
+        # check if llm provider part of model name
+        if model.split("/",1)[0] in litellm.provider_list:
+            custom_llm_provider = model.split("/", 1)[0]
+            model = model.split("/", 1)[1]
+            return model, custom_llm_provider
+
+        # check if model in known model provider list 
+        ## openai - chatcompletion + text completion
+        if model in litellm.open_ai_chat_completion_models or model in litellm.open_ai_text_completion_models:
+            custom_llm_provider = "openai"
+        ## cohere
+        elif model in litellm.cohere_models:
+            custom_llm_provider = "cohere"
+        ## replicate
+        elif model in litellm.replicate_models:
+            custom_llm_provider = "replicate"
+        ## openrouter
+        elif model in litellm.openrouter_models:
+            custom_llm_provider = "openrouter"
+        ## vertex - text + chat models
+        elif model in litellm.vertex_chat_models or model in litellm.vertex_text_models:
+            custom_llm_provider = "vertex_ai"
+        ## huggingface 
+        elif model in litellm.huggingface_models:
+            custom_llm_provider = "huggingface"
+        ## ai21 
+        elif model in litellm.ai21_models:
+            custom_llm_provider = "ai21"
+        ## together_ai 
+        elif model in litellm.together_ai_models:
+            custom_llm_provider = "together_ai"
+        ## aleph_alpha 
+        elif model in litellm.aleph_alpha_models:
+            custom_llm_provider = "aleph_alpha"
+        ## baseten 
+        elif model in litellm.baseten_models:
+            custom_llm_provider = "baseten"
+        
+        if custom_llm_provider is None or custom_llm_provider=="":
+            raise ValueError(f"LLM Provider NOT provided. Pass in the LLM provider you are trying to call. E.g. For 'Huggingface' inference endpoints pass in `completion(model='huggingface/{model}',..)` Learn more: https://docs.litellm.ai/docs/providers")
+        return model, custom_llm_provider
+    except Exception as e: 
+        raise e
 
 def get_max_tokens(model: str):
     try:
@@ -2555,6 +2604,7 @@ def trim_messages(
         return messages
 
 
+
 # Verify that the user has passed in a valid and active api key
 def verify_access_key(access_key:str):
     openai.api_key = access_key
@@ -2569,3 +2619,33 @@ def verify_access_key(access_key:str):
         return True
     except:
         return False
+
+# this helper reads the .env and returns a list of supported llms for user
+def get_valid_models():
+    try:
+        # get keys set in .env
+        environ_keys = os.environ.keys()
+        valid_providers = []
+        # for all valid providers, make a list of supported llms
+        valid_models = []
+
+        for provider in litellm.provider_list:
+            # edge case litellm has together_ai as a provider, it should be togetherai
+            provider = provider.replace("_", "")
+
+            # litellm standardizes expected provider keys to 
+            # PROVIDER_API_KEY. Example: OPENAI_API_KEY, COHERE_API_KEY
+            expected_provider_key = f"{provider.upper()}_API_KEY"
+            if expected_provider_key in environ_keys:            
+                # key is set 
+                valid_providers.append(provider)
+        
+        for provider in valid_providers:
+            if provider == "azure":
+                valid_models.append("Azure-LLM")
+            else:
+                models_for_provider = litellm.models_by_provider.get(provider, [])
+                valid_models.extend(models_for_provider)
+        return valid_models
+    except:
+        return [] # NON-Blocking

@@ -18,6 +18,7 @@ from litellm.utils import (
     read_config_args,
     completion_with_fallbacks,
     verify_access_key,
+    get_llm_provider
 )
 from .llms import anthropic
 from .llms import together_ai
@@ -169,6 +170,7 @@ def completion(
             completion_call_id=id
         )
         logging.update_environment_variables(model=model, user=user, optional_params=optional_params, litellm_params=litellm_params)
+        get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
         if custom_llm_provider == "azure":
             # azure configs
             openai.api_type = get_secret("AZURE_API_TYPE") or "azure"
@@ -179,10 +181,10 @@ def completion(
                 or get_secret("AZURE_API_BASE")
             )
 
-            openai.api_version = (
-                litellm.api_version
-                if litellm.api_version is not None
-                else get_secret("AZURE_API_VERSION")
+            api_version = (
+                api_version or
+                litellm.api_version or
+                get_secret("AZURE_API_VERSION")
             )
 
             api_key = (
@@ -195,11 +197,11 @@ def completion(
             ## LOGGING
             logging.pre_call(
                 input=messages,
-                api_key=openai.api_key,
+                api_key=api_key,
                 additional_args={
                     "headers": litellm.headers,
-                    "api_version": openai.api_version,
-                    "api_base": openai.api_base,
+                    "api_version": api_version,
+                    "api_base": api_base,
                 },
             )
             ## COMPLETION CALL
@@ -209,6 +211,7 @@ def completion(
                 headers=litellm.headers,
                 api_key=api_key,
                 api_base=api_base,
+                api_version=api_version,
                 **optional_params,
             )
             if "stream" in optional_params and optional_params["stream"] == True:
@@ -217,12 +220,12 @@ def completion(
             ## LOGGING
             logging.post_call(
                 input=messages,
-                api_key=openai.api_key,
+                api_key=api_key,
                 original_response=response,
                 additional_args={
                     "headers": litellm.headers,
-                    "api_version": openai.api_version,
-                    "api_base": openai.api_base,
+                    "api_version": api_version,
+                    "api_base": api_base,
                 },
             )
         elif (
