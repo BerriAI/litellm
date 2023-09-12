@@ -1,8 +1,8 @@
-import os, json
+import os, json, time
 import litellm 
 from litellm.utils import ModelResponse
 import requests, threading
-from typing import Optional
+from typing import Optional, Union, Literal
 
 class BudgetManager:
     def __init__(self, project_name: str, client_type: str = "local", api_base: Optional[str] = None):
@@ -41,8 +41,18 @@ class BudgetManager:
             else:
                 self.user_dict = response["data"]
 
-    def create_budget(self, total_budget: float, user: str):
-        self.user_dict[user] = {"total_budget": total_budget}
+    def create_budget(self, total_budget: float, user: str, duration: Literal["daily", "weekly", "monthly", "yearly"], created_at: float = time.time()): 
+        if duration == 'daily':
+            duration_in_days = 1
+        elif duration == 'weekly':
+            duration_in_days = 7
+        elif duration == 'monthly':
+            duration_in_days = 28
+        elif duration == 'yearly':
+            duration_in_days = 365
+        else:
+            raise ValueError('Invalid duration')
+        self.user_dict[user] = {"total_budget": total_budget, "duration": duration_in_days, "created_at": created_at, "last_updated_at": created_at}
         return self.user_dict[user]
     
     def projected_cost(self, model: str, messages: list, user: str):
@@ -84,6 +94,26 @@ class BudgetManager:
         self.user_dict[user]["model_cost"] = {}
         return {"user": self.user_dict[user]}
     
+    def reset_on_duration(self, user: str):
+        # Get current and creation time
+        last_updated_at = self.user_dict[user]["last_updated_at"]
+        current_time = time.time()
+
+        # Convert duration from days to seconds
+        duration_in_seconds = self.user_dict[user]["duration"] * 24 * 60 * 60
+        
+        # Check if duration has elapsed
+        if current_time - last_updated_at >= duration_in_seconds:
+            # Reset cost if duration has elapsed and update the creation time
+            self.reset_cost(user)
+            self.user_dict[user]["last_updated_at"] = current_time
+            self._save_data_thread()  # Save the data
+    
+    def update_budget_all_users(self):
+        for user in self.get_users():
+            if "duration" in self.user_dict[user]:
+                self.reset_on_duration(user)
+
     def _save_data_thread(self):
         thread = threading.Thread(target=self.save_data) # [Non-Blocking]: saves data without blocking execution
         thread.start()

@@ -36,8 +36,6 @@ def test_user_budget_enough():
     except Exception as e:
         pytest.fail(f"An error occurred - {str(e)}")
 
-test_user_budget_enough()
-
 ## Scenario 2: User budget not enough to make call
 def test_user_budget_not_enough():
     try: 
@@ -79,3 +77,36 @@ def test_get_users():
         print(response)
     except:
         pytest.fail(f"An error occurred") 
+
+
+## Scenario 5: Reset budget at the end of duration 
+def test_reset_on_duration():
+    try:
+        # First, set a short duration budget for a user
+        user = "123456"
+        budget_manager.create_budget(total_budget=10, user=user, duration="daily")
+
+        # Use some of the budget
+        data = {
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "Hello!"}]
+        }
+        if budget_manager.get_current_cost(user=user) <= budget_manager.get_total_budget(user=user):
+            response = litellm.completion(**data)
+            print(budget_manager.update_cost(completion_obj=response, user=user))
+
+        assert budget_manager.get_current_cost(user) > 0, f"Test setup failed: Budget did not decrease after completion"
+
+        # Now, we need to simulate the passing of time. Since we don't want our tests to actually take days, we're going
+        # to cheat a little -- we'll manually adjust the "created_at" time so it seems like a day has passed.
+        # In a real-world testing scenario, we might instead use something like the `freezegun` library to mock the system time. 
+        one_day_in_seconds = 24 * 60 * 60
+        budget_manager.user_dict[user]["last_updated_at"] -= one_day_in_seconds
+
+        # Now the duration should have expired, so our budget should reset
+        budget_manager.update_budget_all_users()
+
+        # Make sure the budget was actually reset
+        assert budget_manager.get_current_cost(user) == 0, "Budget didn't reset after duration expired" 
+    except Exception as e:
+        pytest.fail(f"An error occurred - {str(e)}")
