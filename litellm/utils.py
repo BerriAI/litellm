@@ -2604,6 +2604,22 @@ def trim_messages(
         return messages
 
 
+
+# Verify that the user has passed in a valid and active api key
+def verify_access_key(access_key:str):
+    openai.api_key = access_key
+    try:
+        test_response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "user", "content": "test"},
+            ],
+            max_tokens = 10
+        )
+        return True
+    except:
+        return False
+
 # this helper reads the .env and returns a list of supported llms for user
 def get_valid_models():
     try:
