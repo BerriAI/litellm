@@ -2445,7 +2445,7 @@ def shorten_message_to_fit_limit(
 def safe_messages(
     messages,
     model = None,
-    system_message = None,
+    system_message = None, # str of user system message
     trim_ratio: float = 0.75,
     return_response_tokens: bool = False,
     max_tokens = None
@@ -2487,12 +2487,10 @@ def safe_messages(
         #### Trimming messages if current_tokens > max_tokens
         print_verbose(f"Need to trim input messages: {messages}, current_tokens{current_tokens}, max_tokens: {max_tokens}")
         if system_message:
-            system_message_event, max_tokens = process_system_message(messages=messages, max_tokens=max_tokens, model=model)
+            system_message_event, max_tokens = process_system_message(system_message=system_message, max_tokens=max_tokens, model=model)
+            messages = messages + [system_message_event]
 
         final_messages = process_messages(messages=messages, max_tokens=max_tokens, model=model)
-
-        if system_message:
-            final_messages = [system_message_event] + final_messages
 
         if return_response_tokens: # if user wants token count with new trimmed messages
             response_tokens = max_tokens - get_token_count(final_messages, model)
