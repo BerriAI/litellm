@@ -1,25 +1,25 @@
 # Trimming Input Messages
-**Use litellm.safe_messages() to ensure messages does not exceed a model's token limit or specified `max_tokens`**
+**Use litellm.trim_messages() to ensure messages does not exceed a model's token limit or specified `max_tokens`**
 
 ## Usage 
 ```python
 from litellm import completion
-from litellm.utils import safe_messages
+from litellm.utils import trim_messages
 
 response = completion(
     model=model, 
-    messages=safe_messages(messages, model) # safe_messages ensures tokens(messages) < max_tokens(model)
+    messages=trim_messages(messages, model) # trim_messages ensures tokens(messages) < max_tokens(model)
 ) 
 ```
 
 ## Usage - set max_tokens
 ```python
 from litellm import completion
-from litellm.utils import safe_messages
+from litellm.utils import trim_messages
 
 response = completion(
     model=model, 
-    messages=safe_messages(messages, model, max_tokens=10), # safe_messages ensures tokens(messages) < max_tokens
+    messages=trim_messages(messages, model, max_tokens=10), # trim_messages ensures tokens(messages) < max_tokens
 ) 
 ```
 
