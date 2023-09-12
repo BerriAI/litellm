@@ -10,7 +10,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import pytest
 import litellm
-from litellm.utils import trim_messages, get_token_count, get_valid_models
+from litellm.utils import trim_messages, get_token_count, get_valid_models, check_valid_key
 
 # Assuming your trim_messages, shorten_message_to_fit_limit, and get_token_count functions are all in a module named 'message_utils'
 
@@ -83,12 +83,9 @@ def test_get_valid_models():
 
 # test_get_valid_models()
 
-
-
-
 # def test_bad_key():
 #     key = "bad-key"
-#     response = verify_access_key(key)
+#     response = check_valid_key(key)
 #     if response == False:
 #         pass
 #     else:
@@ -97,7 +94,7 @@ def test_get_valid_models():
 
 # def test_good_key():
 #     key = os.environ['OPENAI_API_KEY']
-#     response = verify_access_key(key)
+#     response = check_valid_key(key)
 #     if response == True:
 #         pass
 #     else:
