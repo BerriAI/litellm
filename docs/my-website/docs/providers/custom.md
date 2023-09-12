@@ -49,7 +49,7 @@ resp = requests.post(
 ```
 
 Outputs from your custom LLM api bases should follow this format:   
-```
+```python
 {
     'data': [
         {

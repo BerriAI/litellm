@@ -14,10 +14,9 @@ for chunk in response:
 ```
 
 ## Async Completion
-Asynchronous Completion with LiteLLM
-LiteLLM provides an asynchronous version of the completion function called `acompletion`
+Asynchronous Completion with LiteLLM. LiteLLM provides an asynchronous version of the completion function called `acompletion`
 ### Usage
-```
+```python
 from litellm import acompletion
 import asyncio
 
@@ -37,7 +36,7 @@ We've implemented an `__anext__()` function in the streaming object returned. Th
 
 ### Usage
 Here's an example of using it with openai. But this 
-```
+```python
 from litellm import completion
 import asyncio
 

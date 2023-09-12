@@ -31,7 +31,7 @@ BudgetManager creates a dictionary to manage the user budgets, where the key is 
 
 ### get model-breakdown per user 
 
-```
+```python
 user = "1234"
 # ...
 budget_manager.get_model_cost(user=user) # {"gpt-3.5-turbo-0613": 7.3e-05}

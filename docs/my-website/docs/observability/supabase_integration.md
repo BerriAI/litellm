@@ -35,7 +35,7 @@ create table
 ### Use Callbacks 
 Use just 2 lines of code, to instantly see costs and log your responses **across all providers** with Supabase: 
 
-```
+```python
 litellm.success_callback=["supabase"]
 litellm.failure_callback=["supabase"]
 ```

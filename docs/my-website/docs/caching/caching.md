@@ -89,7 +89,7 @@ response3 = completion(model="gpt-3.5-turbo", messages=messages, temperature=0.1
 For resposes that were returned as cache hit, the response includes a param `cache` = True 
 
 Example response with cache hit
-```
+```python
 {
     'cache': True,
     'id': 'chatcmpl-7wggdzd6OXhgE2YhcLJHJNZsEWzZ2', 
