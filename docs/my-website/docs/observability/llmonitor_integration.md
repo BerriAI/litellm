@@ -16,10 +16,9 @@ First, sign up to get an app ID on the [LLMonitor dashboard](https://llmonitor.c
 
 Use just 2 lines of code, to instantly log your responses **across all providers** with llmonitor:
 
-```
+```python
 litellm.success_callback = ["llmonitor"]
 litellm.failure_callback = ["llmonitor"]
-
 ```
 
 Complete code

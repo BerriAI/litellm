@@ -2,8 +2,8 @@
 LiteLLM supports Azure Chat + Embedding calls. 
 
 ### API KEYS
-```
-import os 
+```python
+import os
 
 os.environ["AZURE_API_KEY"] = ""
 os.environ["AZURE_API_BASE"] = ""

@@ -4,7 +4,7 @@ There's 2 ways to do local debugging - `litellm.set_verbose=True` and by passing
 ## Set Verbose 
 
 This is good for getting print statements for everything litellm is doing.
-```
+```python
 from litellm import completion
 
 litellm.set_verbose=True # 👈 this is the 1-line change you need to make
@@ -31,13 +31,13 @@ In that case, LiteLLM allows you to pass in a custom logging function to see / m
 
 Your custom function 
 
-```
+```python
 def my_custom_logging_fn(model_call_dict):
     print(f"model call details: {model_call_dict}")
 ```
 
 ### Complete Example
-```
+```python
 from litellm import completion
 
 def my_custom_logging_fn(model_call_dict):

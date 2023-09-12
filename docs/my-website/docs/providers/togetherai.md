@@ -71,7 +71,7 @@ The accepted template format is: [Reference](https://huggingface.co/OpenAssistan
 ```
 
 Let's register our custom prompt template: [Implementation Code](https://github.com/BerriAI/litellm/blob/64f3d3c56ef02ac5544983efc78293de31c1c201/litellm/llms/prompt_templates/factory.py#L77)
-```
+```python
 import litellm 
 
 litellm.register_prompt_template(
@@ -95,7 +95,7 @@ litellm.register_prompt_template(
 
 Let's use it! 
 
-```
+```python
 from litellm import completion 
 
 # set env variable 
@@ -108,7 +108,7 @@ completion(model="together_ai/OpenAssistant/llama2-70b-oasst-sft-v10", messages=
 
 **Complete Code**
 
-```
+```python
 import litellm 
 from litellm import completion
 
@@ -141,7 +141,7 @@ print(response)
 ```
 
 **Output**
-```
+```json
 {
   "choices": [
     {

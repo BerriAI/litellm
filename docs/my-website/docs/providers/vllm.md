@@ -43,7 +43,7 @@ print(response)
 
 ### Batch Completion
 
-```
+```python
 from litellm import batch_completion
 
 model_name = "facebook/opt-125m"

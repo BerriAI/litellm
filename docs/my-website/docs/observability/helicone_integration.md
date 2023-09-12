@@ -8,7 +8,7 @@ In this case, we want to log requests to Helicone when a request succeeds.
 
 ### Approach 1: Use Callbacks 
 Use just 1 line of code, to instantly log your responses **across all providers** with helicone: 
-```
+```python
 litellm.success_callback=["helicone"]
 ```
 
@@ -39,7 +39,7 @@ If you want to use Helicone to proxy your OpenAI/Azure requests, then you can -
 - Pass in helicone request headers via: `litellm.headers` 
 
 Complete Code
-```
+```python
 import litellm
 from litellm import completion
 
