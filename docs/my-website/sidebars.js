@@ -31,9 +31,10 @@ const sidebars = {
       items: [
         "completion/input", 
         "completion/output", 
+        "completion/stream", 
+        "completion/message_trimming",
         "completion/model_alias", 
         "completion/reliable_completions", 
-        "completion/stream", 
         "completion/batching",
         "completion/mock_requests",
       ],
