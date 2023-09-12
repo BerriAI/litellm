@@ -8,7 +8,7 @@ LiteLLM allows you to specify the following:
 
 You can set the API configs using:
 * Environment Variables
-* litellm.api_key [litellm variables]
+* litellm variables `litellm.api_key`
 * Passing args to `completion()`
 
 # Setting API Keys, Base, and Version 
@@ -31,16 +31,39 @@ os.environ["REPLICATE_API_KEY"] = "Your API Key"
 os.environ["TOGETHERAI_API_KEY"] = "Your API Key"
 ```
 
-### Setting API Base and API Version
+### Setting API Base, API Version, API Type
 
 ```python
-AZURE_API_BASE = "https://openai-gpt-4-test-v-1.openai.azure.com/"
-AZURE_API_VERSION = "2023-05-15"
+# for azure openai
+os.environ['AZURE_API_BASE'] = "https://openai-gpt-4-test2-v-12.openai.azure.com/"
+os.environ['AZURE_API_VERSION'] = "2023-05-15"
+os.environ['AZURE_API_TYPE'] = "your-custom-type"
+
+# for openai
+os.environ['OPENAI_API_BASE'] = "https://openai-gpt-4-test2-v-12.openai.azure.com/"
 ```
 
-### Setting API Version
+## litellm variables
 
-## Dynamic API Key
+### litellm.api_key
+This variable is checked for all providers
+
+```python
+import litellm
+# openai call
+litellm.api_key = "sk-OpenAIKey
+response = litellm.completion(messages=messages, model="gpt-3.5-turbo")
+
+# anthropic call
+litellm.api_key = "sk-AnthropicKey
+response = litellm.completion(messages=messages, model="claude-2")
+```
+
+### litellm.api_base
+
+### litellm.provider_key (example litellm.openai_key)
+
+
 
 You can pass the API key within `completion()` call:
 
