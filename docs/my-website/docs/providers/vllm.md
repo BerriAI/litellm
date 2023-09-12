@@ -95,7 +95,7 @@ def default_pt(messages):
 # Create your own custom prompt template works 
 litellm.register_prompt_template(
 	model="togethercomputer/LLaMA-2-7B-32K",
-	role_dict={
+	roles={
             "system": {
                 "pre_message": "[INST] <<SYS>>\n",
                 "post_message": "\n<</SYS>>\n [/INST]\n"
