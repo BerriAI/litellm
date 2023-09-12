@@ -11,10 +11,6 @@ You can set the API configs using:
 * litellm variables `litellm.api_key`
 * Passing args to `completion()`
 
-# Setting API Keys, Base, and Version 
-
-API keys, base API endpoint, and API version can be set via environment variables or passed dynamically. 
-
 ## Environment Variables
 
 ### Setting API Keys
@@ -77,7 +73,13 @@ import litellm
 litellm.api_base = "https://hosted-llm-api.co"
 response = litellm.completion(messages=messages, model="gpt-3.5-turbo")
 ```
-se = litellm.completion(messages=messages, model="gpt-3.5-turbo")
+
+### litellm.organization
+```python
+import litellm
+litellm.organization = "LiteLlmOrg"
+response = litellm.completion(messages=messages, model="gpt-3.5-turbo")
+```
 
 ## Passing Args to completion()
 
@@ -100,5 +102,15 @@ from litellm import completion
 messages = [{ "content": "Hello, how are you?","role": "user"}]
 
 response = completion("command-nightly", messages, api_base="https://hosted-llm-api.co")
+```
+
+### api_version
+
+```python
+from litellm import completion
+
+messages = [{ "content": "Hello, how are you?","role": "user"}]
+
+response = completion("command-nightly", messages, api_version="2023-02-15")
 ```
 
