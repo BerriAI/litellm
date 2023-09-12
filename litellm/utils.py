@@ -947,6 +947,9 @@ def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None):
         ## openai - chatcompletion + text completion
         if model in litellm.open_ai_chat_completion_models or model in litellm.open_ai_text_completion_models:
             custom_llm_provider = "openai"
+        ## anthropic 
+        elif model in litellm.anthropic_models:
+            custom_llm_provider = "anthropic"
         ## cohere
         elif model in litellm.cohere_models:
             custom_llm_provider = "cohere"
