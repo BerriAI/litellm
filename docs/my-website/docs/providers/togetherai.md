@@ -75,11 +75,22 @@ Let's register our custom prompt template: [Implementation Code](https://github.
 import litellm 
 
 litellm.register_prompt_template(
-    model="OpenAssistant/llama2-70b-oasst-sft-v10",
-    roles={"system":"<|im_start|>system", "assistant":"<|im_start|>assistant", "user":"<|im_start|>user"}, # tell LiteLLM how you want to map the openai messages to this model
-    pre_message_sep= "\n",
-    post_message_sep= "\n"
-)
+	    model="OpenAssistant/llama2-70b-oasst-sft-v10",
+	    roles={
+            "system": {
+                "pre_message": "[<|im_start|>system",
+                "post_message": "\n"
+            },
+            "user": {
+                "pre_message": "<|im_start|>user",
+                "post_message": "\n"
+            }, 
+            "assistant": {
+                "pre_message": "<|im_start|>assistant",
+                "post_message": "\n"
+            }
+        }
+    )
 ```
 
 Let's use it! 
@@ -105,11 +116,22 @@ from litellm import completion
 os.environ["TOGETHERAI_API_KEY"] = ""
 
 litellm.register_prompt_template(
-    model="OpenAssistant/llama2-70b-oasst-sft-v10",
-    roles={"system":"<|im_start|>system", "assistant":"<|im_start|>assistant", "user":"<|im_start|>user"}, # tell LiteLLM how you want to map the openai messages to this model
-    pre_message_sep= "\n",
-    post_message_sep= "\n"
-)
+	    model="OpenAssistant/llama2-70b-oasst-sft-v10",
+	    roles={
+            "system": {
+                "pre_message": "[<|im_start|>system",
+                "post_message": "\n"
+            },
+            "user": {
+                "pre_message": "<|im_start|>user",
+                "post_message": "\n"
+            }, 
+            "assistant": {
+                "pre_message": "<|im_start|>assistant",
+                "post_message": "\n"
+            }
+        }
+    )
 
 messages=[{"role":"user", "content": "Write me a poem about the blue sky"}]
 

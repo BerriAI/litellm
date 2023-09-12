@@ -42,24 +42,21 @@ def default_pt(messages):
 ```python 
 # Create your own custom prompt template works 
 litellm.register_prompt_template(
-	model="togethercomputer/LLaMA-2-7B-32K",
-	role_dict={
+	    model="togethercomputer/LLaMA-2-7B-32K",
+	    roles={
             "system": {
                 "pre_message": "[INST] <<SYS>>\n",
                 "post_message": "\n<</SYS>>\n [/INST]\n"
             },
-            "user": { 
+            "user": {
                 "pre_message": "[INST] ",
                 "post_message": " [/INST]\n"
             }, 
             "assistant": {
-                "pre_message": "\n",
-                "post_message": "\n",
+                "post_message": "\n"
             }
-        } # tell LiteLLM how you want to map the openai messages to this model
-	pre_message_sep= "\n",
-	post_message_sep= "\n"
-)
+        }
+    )
 
 def test_huggingface_custom_model():
     model = "huggingface/togethercomputer/LLaMA-2-7B-32K"

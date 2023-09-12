@@ -1538,7 +1538,7 @@ def register_prompt_template(model: str, roles: dict, initial_prompt_value: str 
             "assistant": {
                 "post_message": "\n" # follows this - https://replicate.com/blog/how-to-prompt-llama
             }
-        },
+        }
     )
     ```
     """
