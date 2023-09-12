@@ -1,4 +1,4 @@
-# Trimming Messages - safe_messages()
+# Trimming Input Messages
 **Use litellm.safe_messages() to ensure messages does not exceed a model's token limit or specified `max_tokens`**
 
 ## Usage 
@@ -31,7 +31,7 @@ The function uses the following parameters:
 
 - `model`:[Optional] This is the LiteLLM model being used. This parameter is optional, as you can alternatively specify the `max_tokens` parameter.
 
-- `system_message`:[Optional]This is a string containing an optional system message that will be preserved at the beginning of the conversation. This parameter is optional and set to `None` by default.
+- `system_message`:[Optional] This is a string containing an optional system message that will be preserved at the beginning of the conversation. This parameter is optional and set to `None` by default.
 
 - `max_tokens`:[Optional] This is an int, manually set upper limit on messages
 
