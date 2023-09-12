@@ -17,6 +17,7 @@ from litellm.utils import (
     CustomStreamWrapper,
     read_config_args,
     completion_with_fallbacks,
+    verify_access_key,
 )
 from .llms import anthropic
 from .llms import together_ai
