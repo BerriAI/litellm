@@ -1499,16 +1499,16 @@ def valid_model(model):
 
 # check valid api key 
 def check_valid_key(model: str, api_key: str):
+    # returns True if key is valid for the model
+    # returns False if key is invalid for the model
     messages = [{"role": "user", "content": "Hey, how's it going?"}]
     try:
-        litellm.completion(model=model, messages=messages, api_key=api_key)
+        litellm.completion(model=model, messages=messages, api_key=api_key, max_tokens=10)
         return True
     except AuthenticationError as e:
         return False
     except Exception as e:
-        raise ValueError(str(e))
-
-
+        return False
 
 # integration helper function
 def modify_integration(integration_name, integration_params):
@@ -2605,23 +2605,6 @@ def trim_messages(
         return final_messages
     except: # [NON-Blocking, if error occurs just return final_messages
         return messages
-
-
-
-# Verify that the user has passed in a valid and active api key
-def verify_access_key(access_key:str):
-    openai.api_key = access_key
-    try:
-        test_response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "user", "content": "test"},
-            ],
-            max_tokens = 10
-        )
-        return True
-    except:
-        return False
 
 # this helper reads the .env and returns a list of supported llms for user
 def get_valid_models():
