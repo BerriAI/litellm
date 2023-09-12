@@ -931,7 +931,7 @@ def get_optional_params(  # use the openai defaults
         return optional_params
     return optional_params
 
-def get_llm_provider(model: str, custom_llm_provider: str = ""):
+def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None):
     try:
         # check if llm provider provided
         if custom_llm_provider:
