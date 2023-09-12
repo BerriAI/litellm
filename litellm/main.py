@@ -170,7 +170,7 @@ def completion(
         logging.update_environment_variables(model=model, user=user, optional_params=optional_params, litellm_params=litellm_params)
         if custom_llm_provider == "azure":
             # azure configs
-            openai.api_type = "azure"
+            openai.api_type = get_secret("AZURE_API_TYPE") or "azure"
 
             api_base = (
                 api_base
@@ -984,7 +984,7 @@ def embedding(
         logging.update_environment_variables(model=model, user="", optional_params={}, litellm_params={"force_timeout": force_timeout, "azure": azure, "litellm_call_id": litellm_call_id, "logger_fn": logger_fn})
         if azure == True:
             # azure configs
-            openai.api_type = "azure"
+            openai.api_type = get_secret("AZURE_API_TYPE") or "azure"
             openai.api_base = get_secret("AZURE_API_BASE")
             openai.api_version = get_secret("AZURE_API_VERSION")
             openai.api_key = get_secret("AZURE_API_KEY")
