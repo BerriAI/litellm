@@ -83,20 +83,13 @@ def test_get_valid_models():
 
 # test_get_valid_models()
 
-# def test_bad_key():
-#     key = "bad-key"
-#     response = check_valid_key(key)
-#     if response == False:
-#         pass
-#     else:
-#         raise Exception("Bad key was not detected")
-# test_bad_key()
+def test_bad_key():
+    key = "bad-key"
+    response = check_valid_key(model="gpt-3.5-turbo", api_key=key)
+    print(response, key)
+    assert(response == False)
 
-# def test_good_key():
-#     key = os.environ['OPENAI_API_KEY']
-#     response = check_valid_key(key)
-#     if response == True:
-#         pass
-#     else:
-#         raise Exception("Good key did not pass")
-# test_good_key()
+def test_good_key():
+    key = os.environ['OPENAI_API_KEY']
+    response = check_valid_key(model="gpt-3.5-turbo", api_key=key)
+    assert(response == True)
