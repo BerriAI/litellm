@@ -43,13 +43,14 @@ Base case - we return the original exception.
 |               | ContextWindowExceededError | AuthenticationError | InvalidRequestError | RateLimitError | ServiceUnavailableError |
 |---------------|----------------------------|---------------------|---------------------|---------------|-------------------------|
 | Anthropic     | ✅                          | ✅                   | ✅                   | ✅             |                         |
-| OpenAI        | ✅                          | ✅                     |✅                     |✅               |✅                         |
+| OpenAI        | ✅                          | ✅                     |✅                     |✅               |✅|
 | Replicate     | ✅                          | ✅                   | ✅                   | ✅             | ✅                       |
-| Cohere        | ✅                          | ✅                   |                     | ✅             |                         |
+| Cohere        | ✅                          | ✅                   | ✅                    | ✅             | ✅                        |
 | Huggingface   | ✅                          | ✅                   | ✅                   | ✅             |                         |
-| Openrouter    | ✅                          | ✅                   |                     | ✅             |                         |
+| Openrouter    | ✅                          | ✅                   | ✅                    | ✅             |                         |
 | AI21          | ✅                          | ✅                   | ✅                   | ✅             |                         |
 | TogetherAI    | ✅                          | ✅                   | ✅                   | ✅             |                         |
+| AlephAlpha    | ✅                          | ✅                   | ✅                   | ✅             | ✅                        |
 
 
 > For a deeper understanding of these exceptions, you can check out [this](https://github.com/BerriAI/litellm/blob/d7e58d13bf9ba9edbab2ab2f096f3de7547f35fa/litellm/utils.py#L1544) implementation for additional insights.
