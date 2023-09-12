@@ -51,17 +51,34 @@ This variable is checked for all providers
 ```python
 import litellm
 # openai call
-litellm.api_key = "sk-OpenAIKey
+litellm.api_key = "sk-OpenAIKey"
 response = litellm.completion(messages=messages, model="gpt-3.5-turbo")
 
 # anthropic call
-litellm.api_key = "sk-AnthropicKey
+litellm.api_key = "sk-AnthropicKey"
+response = litellm.completion(messages=messages, model="claude-2")
+```
+
+### litellm.provider_key (example litellm.openai_key)
+
+```python
+litellm.openai_key = "sk-OpenAIKey"
+response = litellm.completion(messages=messages, model="gpt-3.5-turbo")
+
+# anthropic call
+litellm.anthropic_key = "sk-AnthropicKey"
 response = litellm.completion(messages=messages, model="claude-2")
 ```
 
 ### litellm.api_base
 
-### litellm.provider_key (example litellm.openai_key)
+```python
+import litellm
+litellm.api_base = "https://hosted-llm-api.co"
+response = litellm.completion(messages=messages, model="gpt-3.5-turbo")
+```
+se = litellm.completion(messages=messages, model="gpt-3.5-turbo")
+```
 
 
 
