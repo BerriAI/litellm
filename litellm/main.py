@@ -217,12 +217,12 @@ def completion(
             ## LOGGING
             logging.post_call(
                 input=messages,
-                api_key=openai.api_key,
+                api_key=api_key,
                 original_response=response,
                 additional_args={
                     "headers": litellm.headers,
-                    "api_version": openai.api_version,
-                    "api_base": openai.api_base,
+                    "api_version": api_version,
+                    "api_base": api_base,
                 },
             )
         elif (
