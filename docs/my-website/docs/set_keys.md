@@ -78,31 +78,27 @@ litellm.api_base = "https://hosted-llm-api.co"
 response = litellm.completion(messages=messages, model="gpt-3.5-turbo")
 ```
 se = litellm.completion(messages=messages, model="gpt-3.5-turbo")
-```
 
-
+## Passing Args to completion()
 
 You can pass the API key within `completion()` call:
 
+### api_key
 ```python
 from litellm import completion
 
 messages = [{ "content": "Hello, how are you?","role": "user"}]
 
-response = completion("gpt-3.5-turbo", messages, api_key="Your-Api-Key")
+response = completion("command-nightly", messages, api_key="Your-Api-Key")
 ```
 
-Sample usage of liteLLM with OpenAI:
+### api_base
 
 ```python
-import os 
 from litellm import completion
-
-os.environ["OPENAI_API_KEY"] = "Your API Key"
 
 messages = [{ "content": "Hello, how are you?","role": "user"}]
 
-# openai call
-response = completion("gpt-3.5-turbo", messages)
+response = completion("command-nightly", messages, api_base="https://hosted-llm-api.co")
 ```
 
