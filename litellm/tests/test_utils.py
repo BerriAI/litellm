@@ -20,9 +20,18 @@ def test_basic_trimming():
     trimmed_messages = safe_messages(messages, model="claude-2", max_tokens=8)
     print("trimmed messages")
     print(trimmed_messages)
-    print(get_token_count(messages=trimmed_messages, model="claude-2"))
+    # print(get_token_count(messages=trimmed_messages, model="claude-2"))
     assert (get_token_count(messages=trimmed_messages, model="claude-2")) <= 8
-# test_basic_trimming()
+test_basic_trimming()
+
+def test_basic_trimming_no_max_tokens_specified():
+    messages = [{"role": "user", "content": "This is a long message that is definitely under the token limit."}]
+    trimmed_messages = safe_messages(messages, model="gpt-4")
+    print("trimmed messages for gpt-4")
+    print(trimmed_messages)
+    # print(get_token_count(messages=trimmed_messages, model="claude-2"))
+    assert (get_token_count(messages=trimmed_messages, model="gpt-4")) <= litellm.model_cost['gpt-4']['max_tokens']
+test_basic_trimming_no_max_tokens_specified()
 
 def test_multiple_messages_trimming():
     messages = [
@@ -32,9 +41,9 @@ def test_multiple_messages_trimming():
     trimmed_messages = safe_messages(messages=messages, model="gpt-3.5-turbo", max_tokens=20)
     print("Trimmed messages")
     print(trimmed_messages)
-    print(get_token_count(messages=trimmed_messages, model="gpt-3.5-turbo"))
+    # print(get_token_count(messages=trimmed_messages, model="gpt-3.5-turbo"))
     assert(get_token_count(messages=trimmed_messages, model="gpt-3.5-turbo")) <= 20
-# test_multiple_messages_trimming()
+test_multiple_messages_trimming()
 
 def test_multiple_messages_no_trimming():
     messages = [
@@ -46,7 +55,7 @@ def test_multiple_messages_no_trimming():
     print(trimmed_messages)
     assert(messages==trimmed_messages)
 
-# test_multiple_messages_no_trimming()
+test_multiple_messages_no_trimming()
 
 
 def test_large_trimming():
@@ -55,4 +64,4 @@ def test_large_trimming():
     print("trimmed messages")
     print(trimmed_messages)
     assert(get_token_count(messages=trimmed_messages, model="random")) <= 20
-# test_large_trimming()
+test_large_trimming()
