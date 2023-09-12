@@ -1786,6 +1786,20 @@ def exception_type(model, original_exception, custom_llm_provider):
                         llm_provider="cohere",
                         model=model
                     )
+                elif "invalid type:" in error_str:
+                    exception_mapping_worked = True
+                    raise InvalidRequestError(
+                        message=f"CohereException - {original_exception.message}",
+                        llm_provider="cohere",
+                        model=model
+                    )
+                elif "Unexpected server error" in error_str:
+                    exception_mapping_worked = True
+                    raise ServiceUnavailableError(
+                        message=f"CohereException - {original_exception.message}",
+                        llm_provider="cohere",
+                        model=model
+                    )
                 else:
                     if hasattr(original_exception, "status_code"):
                         exception_mapping_worked = True
@@ -1938,6 +1952,46 @@ def exception_type(model, original_exception, custom_llm_provider):
                         llm_provider="together_ai",
                         model=model
                     )
+            elif model in litellm.aleph_alpha_models:
+                if "This is longer than the model's maximum context length" in error_str:
+                    exception_mapping_worked = True
+                    raise ContextWindowExceededError(
+                        message=f"AlephAlphaException - {original_exception.message}",
+                        llm_provider="aleph_alpha", 
+                        model=model
+                    )
+                elif hasattr(original_exception, "status_code"):
+                    print(f"status code: {original_exception.status_code}")
+                    if original_exception.status_code == 401:
+                        exception_mapping_worked = True
+                        raise AuthenticationError(
+                            message=f"AlephAlphaException - {original_exception.message}",
+                            llm_provider="aleph_alpha",
+                            model=model
+                        )
+                    elif original_exception.status_code == 400:
+                        exception_mapping_worked = True
+                        raise InvalidRequestError(
+                            message=f"AlephAlphaException - {original_exception.message}",
+                            llm_provider="aleph_alpha",
+                            model=model
+                        )
+                    elif original_exception.status_code == 429:
+                        exception_mapping_worked = True
+                        raise RateLimitError(
+                            message=f"AlephAlphaException - {original_exception.message}",
+                            llm_provider="aleph_alpha",
+                            model=model
+                        )
+                    elif original_exception.status_code == 500:
+                        exception_mapping_worked = True
+                        raise ServiceUnavailableError(
+                            message=f"AlephAlphaException - {original_exception.message}",
+                            llm_provider="aleph_alpha",
+                            model=model
+                        )
+                    raise original_exception
+                raise original_exception
             elif custom_llm_provider == "vllm":
                 if hasattr(original_exception, "status_code"):
                     if original_exception.status_code == 0:
