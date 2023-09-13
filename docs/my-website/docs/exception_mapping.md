@@ -1,12 +1,15 @@
 # Exception Mapping
 
-LiteLLM maps the 4 most common exceptions across all providers. 
+LiteLLM maps exceptions across all providers to their OpenAI counterparts.
 - Rate Limit Errors
-- Context Window Errors
 - Invalid Request Errors
-- InvalidAuth Errors (incorrect key, etc.)
+- Authentication Errors
+- Timeout Errors 
+- ServiceUnavailableError 
+- APIError 
+- APIConnectionError
 
-Base case - we return the original exception.
+Base case we return APIError
 
 All our exceptions inherit from OpenAI's exception types, so any error-handling you have for that, should work out of the box with LiteLLM. 
 
@@ -24,8 +27,8 @@ os.environ["ANTHROPIC_API_KEY"] = "bad-key"
 try: 
     # some code 
     completion(model="claude-instant-1", messages=[{"role": "user", "content": "Hey, how's it going?"}])
-except Exception as e:
-    print(e.llm_provider)
+except OpenAIError as e:
+    print(e)
 ```
 
 ## details 
