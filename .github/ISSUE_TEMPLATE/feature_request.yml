@@ -1,0 +1,33 @@
+name: 🚀 Feature Request 
+description: Submit a proposal/request for a new LiteLLM feature.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for making LiteLLM better! 
+  - type: textarea
+    id: the-feature
+    attributes:
+      label: The Feature
+      description: A clear and concise description of the feature proposal
+      placeholder: Tell us what you want!
+    validations:
+      required: true
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation, pitch
+      description: Please outline the motivation for the proposal. Is your feature request related to a specific problem? e.g., "I'm working on X and would like Y to be possible". If this is related to another GitHub issue, please link here too.
+      render: shell
+    validations:
+      required: true
+  - type: input
+    id: contact
+    attributes:
+      label: Twitter / LinkedIn details 
+      description: We announce new features on Twitter + LinkedIn. When this is announced, and you'd like a mention, we'll gladly shout you out!
+      placeholder: ex. @krrish_dh / https://www.linkedin.com/in/krish-d/
+    validations:
+      required: false
