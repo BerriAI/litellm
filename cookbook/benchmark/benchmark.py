@@ -51,7 +51,7 @@ def main(system_prompt):
 
                 end = time.time()
                 total_time = end - start_time
-                cost = completion_cost(response)
+                cost = completion_cost(completion_response=response)
                 raw_response = response['choices'][0]['message']['content']
 
                 data.append({
