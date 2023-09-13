@@ -34,6 +34,25 @@ else:
 
 [**Implementation Code**](https://github.com/BerriAI/litellm/blob/main/litellm/budget_manager.py)
 
+## use with Text Input / Output
+
+Update cost by just passing in the text input / output and model name. 
+
+```python
+from litellm import BudgetManager
+
+budget_manager = BudgetManager(project_name="test_project")
+user = "12345"
+budget_manager.create_budget(total_budget=10, user=user, duration="daily")
+
+input_text = "hello world"
+output_text = "it's a sunny day in san francisco"
+model = "gpt-3.5-turbo"
+
+budget_manager.update_cost(user=user, model=model, input_text=input_text, output_text=output_text) # 👈
+print(budget_manager.get_current_cost(user))
+```
+
 ## advanced usage
 In production, we will need to 
 * store user budgets in a database
