@@ -21,6 +21,7 @@ For all 4 cases, the exception returned inherits from the original OpenAI Except
 ## usage
 
 ```python 
+from openai.error import OpenAIError
 from litellm import completion
 
 os.environ["ANTHROPIC_API_KEY"] = "bad-key"
