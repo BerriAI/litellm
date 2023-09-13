@@ -110,3 +110,20 @@ def test_reset_on_duration():
         assert budget_manager.get_current_cost(user) == 0, "Budget didn't reset after duration expired" 
     except Exception as e:
         pytest.fail(f"An error occurred - {str(e)}")
+
+## Scenario 6: passing in text: 
+def test_input_text_on_completion():
+    try:
+        user = "12345"
+        budget_manager.create_budget(total_budget=10, user=user, duration="daily")
+
+        input_text = "hello world"
+        output_text = "it's a sunny day in san francisco"
+        model = "gpt-3.5-turbo"
+
+        budget_manager.update_cost(user=user, model=model, input_text=input_text, output_text=output_text)
+        print(budget_manager.get_current_cost(user))
+    except Exception as e:
+        pytest.fail(f"An error occurred - {str(e)}")
+
+test_input_text_on_completion()
