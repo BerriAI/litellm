@@ -82,7 +82,7 @@ def ai21_completion_call():
         print(f"error occurred: {traceback.format_exc()}")
         pass
 
-
+ai21_completion_call()
 # test on openai completion call
 def test_openai_chat_completion_call():
     try:
@@ -122,7 +122,7 @@ async def completion_call():
         print(f"error occurred: {traceback.format_exc()}")
         pass
 
-asyncio.run(completion_call())
+# asyncio.run(completion_call())
 
 # # test on azure completion call
 # try:

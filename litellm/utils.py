@@ -87,6 +87,12 @@ class Message(OpenAIObject):
         self.role = role
         self.logprobs = logprobs
 
+class Delta(OpenAIObject):
+    def __init__(self, content="default", logprobs=None, **params):
+        super(Delta, self).__init__(**params)
+        self.content = content
+        self.logprobs = logprobs
+
 
 class Choices(OpenAIObject):
     def __init__(self, finish_reason="stop", index=0, message=Message(), **params):
@@ -95,11 +101,20 @@ class Choices(OpenAIObject):
         self.index = index
         self.message = message
 
+class StreamingChoices(OpenAIObject):
+    def __init__(self, finish_reason="stop", index=0, delta=Delta(), **params):
+        super(StreamingChoices, self).__init__(**params)
+        self.finish_reason = finish_reason
+        self.index = index
+        self.delta = delta
 
 class ModelResponse(OpenAIObject):
-    def __init__(self, choices=None, created=None, model=None, usage=None, **params):
+    def __init__(self, choices=None, created=None, model=None, usage=None, stream=False, **params):
         super(ModelResponse, self).__init__(**params)
-        self.choices = self.choices = choices if choices else [Choices(message=Message())]
+        if stream:
+            self.choices = self.choices = choices if choices else [StreamingChoices()]
+        else:
+            self.choices = self.choices = choices if choices else [Choices()]
         self.created = created
         self.model = model
         self.usage = (
@@ -2274,7 +2289,7 @@ class CustomStreamWrapper:
 
     def __next__(self):
         try:
-            completion_obj = {"role": "assistant", "content": ""}
+            completion_obj = {"content": ""}
             if self.model in litellm.anthropic_models:
                 chunk = next(self.completion_stream)
                 completion_obj["content"] = self.handle_anthropic_chunk(chunk)
@@ -2315,19 +2330,12 @@ class CustomStreamWrapper:
                 return chunk # open ai returns finish_reason, we should just return the openai chunk
             
                 #completion_obj["content"] = self.handle_openai_chat_completion_chunk(chunk)
-            
             # LOGGING
             threading.Thread(target=self.logging_obj.success_handler, args=(completion_obj,)).start()
             # return this for all models
-            return {
-                "choices": 
-                    [
-                        {
-                            "delta": completion_obj,
-                            "finish_reason": None
-                        },
-                    ]
-                }
+            model_response = ModelResponse(stream=True)
+            model_response.choices[0].delta = completion_obj
+            return model_response
         except Exception as e:
             raise StopIteration
     
