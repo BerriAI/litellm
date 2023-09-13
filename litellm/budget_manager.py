@@ -41,7 +41,7 @@ class BudgetManager:
             else:
                 self.user_dict = response["data"]
 
-    def create_budget(self, total_budget: float, user: str, duration: Literal["daily", "weekly", "monthly", "yearly"] = None, created_at: float = time.time()): 
+    def create_budget(self, total_budget: float, user: str, duration: Optional[Literal["daily", "weekly", "monthly", "yearly"]] = None, created_at: float = time.time()): 
         self.user_dict[user] = {"total_budget": total_budget}
         if duration is None:
             return self.user_dict[user]
