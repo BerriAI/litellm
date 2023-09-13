@@ -41,7 +41,11 @@ class BudgetManager:
             else:
                 self.user_dict = response["data"]
 
-    def create_budget(self, total_budget: float, user: str, duration: Literal["daily", "weekly", "monthly", "yearly"], created_at: float = time.time()): 
+    def create_budget(self, total_budget: float, user: str, duration: Literal["daily", "weekly", "monthly", "yearly"] = None, created_at: float = time.time()): 
+        self.user_dict[user] = {"total_budget": total_budget}
+        if duration is None:
+            return self.user_dict[user]
+        
         if duration == 'daily':
             duration_in_days = 1
         elif duration == 'weekly':
@@ -51,7 +55,7 @@ class BudgetManager:
         elif duration == 'yearly':
             duration_in_days = 365
         else:
-            raise ValueError('Invalid duration')
+            raise ValueError("""duration needs to be one of ["daily", "weekly", "monthly", "yearly"]""")
         self.user_dict[user] = {"total_budget": total_budget, "duration": duration_in_days, "created_at": created_at, "last_updated_at": created_at}
         return self.user_dict[user]
     
