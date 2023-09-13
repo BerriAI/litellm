@@ -33,12 +33,11 @@ Supported LLMs: https://docs.litellm.ai/docs/providers
 
 ```python
 # Define the list of models to benchmark
-models = ['gpt-3.5-turbo', 'togethercomputer/llama-2-70b-chat', 'claude-2']
+models = ['gpt-3.5-turbo', 'claude-2']
 
 # Enter LLM API keys
 os.environ['OPENAI_API_KEY'] = ""
 os.environ['ANTHROPIC_API_KEY'] = ""
-os.environ['TOGETHERAI_API_KEY'] = ""
 
 # List of questions to benchmark (replace with your questions)
 questions = [
