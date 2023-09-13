@@ -17,8 +17,11 @@ class PromptLayerLogger:
     def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
         # Method definition
         try:
+            if 'litellm_logging_obj' in kwargs:
+                kwargs.pop('litellm_logging_obj')
+
             print_verbose(
-                f"Prompt Layer Logging - Enters logging function for model {kwargs}"
+                f"Prompt Layer Logging - Enters logging function for model kwargs: {kwargs}\n, response: {response_obj}"
             )
 
             request_response = requests.post(
@@ -27,9 +30,7 @@ class PromptLayerLogger:
                     "function_name": "openai.ChatCompletion.create",
                     "kwargs": kwargs,
                     "tags": ["hello", "world"],
-                    "request_response": dict(
-                        response_obj
-                    ),  # TODO: Check if we need  a dict
+                    "request_response": dict(response_obj),
                     "request_start_time": int(start_time.timestamp()),
                     "request_end_time": int(end_time.timestamp()),
                     "api_key": self.key,
@@ -39,11 +40,9 @@ class PromptLayerLogger:
                     # "prompt_version":1,
                 },
             )
-
             print_verbose(
-                f"Prompt Layer Logging - final response object: {request_response}"
+                f"Prompt Layer Logging: success - final response object: {request_response}"
             )
         except:
-            # traceback.print_exc()
-            print_verbose(f"Prompt Layer Error - {traceback.format_exc()}")
+            print_verbose(f"error: Prompt Layer Error - {traceback.format_exc()}")
             pass
