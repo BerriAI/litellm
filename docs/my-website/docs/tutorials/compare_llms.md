@@ -13,7 +13,7 @@ Easily benchmark LLMs for a given question by viewing
 ```
 git clone https://github.com/BerriAI/litellm
 ```
-cd to `benchmark` dir
+cd to `litellm/cookbook/benchmark` dir
 
 Located here: 
 https://github.com/BerriAI/litellm/tree/main/cookbook/benchmark
@@ -26,7 +26,7 @@ cd litellm/cookbook/benchmark
 pip install litellm click tqdm tabulate termcolor
 ```
 
-### Configuration
+### Configuration - Set LLM API Keys + LLMs in benchmark.py
 In `benchmark/benchmark.py` select your LLMs, LLM API Key and questions
 
 Supported LLMs: https://docs.litellm.ai/docs/providers
