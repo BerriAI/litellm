@@ -119,7 +119,8 @@ def test_completion_claude_stream():
 #     try:
 #         user_message = "write some code to find the sum of two numbers"
 #         messages = [{ "content": user_message,"role": "user"}]
-#         response = completion(model="stabilityai/stablecode-instruct-alpha-3b", messages=messages, custom_llm_provider="huggingface", logger_fn=logger_fn)
+#         api_base = "https://wyh9bqfgj2r1klv5.us-east-1.aws.endpoints.huggingface.cloud"
+#         response = completion(model="facebook/blenderbot-400M-distill", messages=messages, custom_llm_provider="huggingface", task="conversational", api_base=api_base, logger_fn=logger_fn)
 #         # Add any assertions here to check the response
 #         print(response)
 #     except Exception as e:

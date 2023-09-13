@@ -109,8 +109,8 @@ def completion(
     use_client=False,
     id=None, # this is an optional param to tag individual completion calls 
     # model specific optional params
-    # used by text-bison only
-    top_k=40,
+    top_k=40,# used by text-bison only
+    task: Optional[str]="text-generation-inference", # used by huggingface inference endpoints
     request_timeout=0,  # unused var for old version of OpenAI API
     fallbacks=[],
     caching = False,
@@ -154,6 +154,7 @@ def completion(
             model=model,
             custom_llm_provider=custom_llm_provider,
             top_k=top_k,
+            task=task
         )
         # For logging - save the values of the litellm-specific params passed in
         litellm_params = get_litellm_params(

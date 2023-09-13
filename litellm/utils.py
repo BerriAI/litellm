@@ -788,6 +788,7 @@ def get_optional_params(  # use the openai defaults
     model=None,
     custom_llm_provider="",
     top_k=40,
+    task=None
 ):
     optional_params = {}
     if model in litellm.anthropic_models:
@@ -882,6 +883,7 @@ def get_optional_params(  # use the openai defaults
         if presence_penalty != 0:
             optional_params["repetition_penalty"] = presence_penalty
         optional_params["details"] = True
+        optional_params["task"] = task
     elif custom_llm_provider == "sagemaker":
         if "llama-2" in model:
             # llama-2 models on sagemaker support the following args
