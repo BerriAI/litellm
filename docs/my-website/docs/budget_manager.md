@@ -9,6 +9,10 @@ LiteLLM exposes the `BudgetManager` class to help set budgets per user. BudgetMa
 
 ## quick start
 
+<a target="_blank" href="https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/LiteLLM_User_Based_Rate_Limits.ipynb">
+  <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
+</a>
+
 ```python
 from litellm import BudgetManager, completion 
 
