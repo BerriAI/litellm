@@ -20,7 +20,6 @@ body:
     attributes:
       label: Motivation, pitch
       description: Please outline the motivation for the proposal. Is your feature request related to a specific problem? e.g., "I'm working on X and would like Y to be possible". If this is related to another GitHub issue, please link here too.
-      render: shell
     validations:
       required: true
   - type: input
