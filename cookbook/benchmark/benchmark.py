@@ -9,13 +9,12 @@ import os
 
 # Define the list of models to benchmark
 # select any LLM listed here: https://docs.litellm.ai/docs/providers
-models = ['gpt-3.5-turbo', 'togethercomputer/llama-2-70b-chat', 'claude-2']
+models = ['gpt-3.5-turbo', 'claude-2']
 
 # Enter LLM API keys
 # https://docs.litellm.ai/docs/providers
 os.environ['OPENAI_API_KEY'] = ""
 os.environ['ANTHROPIC_API_KEY'] = ""
-os.environ['TOGETHERAI_API_KEY'] = ""
 
 # List of questions to benchmark (replace with your questions)
 questions = [
