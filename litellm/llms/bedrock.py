@@ -139,7 +139,7 @@ def completion(
             outputText = response_body.get('results')[0].get('outputText')
         if "error" in outputText:
             raise BedrockError(
-                message=outputText["error"],
+                message=outputText,
                 status_code=response.status_code,
             )
         else:
