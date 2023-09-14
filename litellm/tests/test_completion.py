@@ -633,6 +633,23 @@ def test_completion_sagemaker():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+
+# def test_completion_bedrock():
+#     try:
+#         response = completion(
+#             model="bedrock/amazon.titan-tg1-large", 
+#             messages=messages,
+#             temperature=0.2,
+#             max_tokens=80,
+#             logger_fn=logger_fn
+#         )
+#         # Add any assertions here to check the response
+#         print(response)
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
+# test_completion_bedrock()
+
+
 # test_completion_sagemaker()
 ######## Test VLLM ########
 # def test_completion_vllm():
