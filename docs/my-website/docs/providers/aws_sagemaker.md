@@ -10,6 +10,23 @@ os.environ["AWS_SECRET_ACCESS_KEY"] = ""
 os.environ["AWS_REGION_NAME"] = ""
 ```
 
+### Usage
+```python
+import os 
+from litellm import completion
+
+os.environ["AWS_ACCESS_KEY_ID"] = ""
+os.environ["AWS_SECRET_ACCESS_KEY"] = ""
+os.environ["AWS_REGION_NAME"] = ""
+
+response = completion(
+            model="sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b", 
+            messages=[{ "content": "Hello, how are you?","role": "user"}],
+            temperature=0.2,
+            max_tokens=80
+        )
+```
+
 ### AWS Sagemaker Models
 Here's an example of using a sagemaker model with LiteLLM 
 
