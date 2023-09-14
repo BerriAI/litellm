@@ -602,7 +602,7 @@ def test_completion_sagemaker():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_completion_sagemaker()
+# test_completion_sagemaker()
 ######## Test VLLM ########
 # def test_completion_vllm():
 #     try:
