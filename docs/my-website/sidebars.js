@@ -54,11 +54,11 @@ const sidebars = {
         slug: '/providers',
       },
       items: [
-        "providers/huggingface", 
         "providers/openai", 
         "providers/azure", 
         "providers/vertex", 
         "providers/anthropic", 
+        "providers/huggingface", 
         "providers/vllm", 
         "providers/ai21", 
         "providers/replicate", 
