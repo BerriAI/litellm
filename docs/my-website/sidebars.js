@@ -82,6 +82,7 @@ const sidebars = {
       type: 'category',
       label: 'Tutorials',
       items: [
+        'tutorials/azure_openai',
         'tutorials/ab_test_llms',
         'tutorials/huggingface_tutorial', 
         'tutorials/TogetherAI_liteLLM', 
