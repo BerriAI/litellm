@@ -35,8 +35,7 @@ def completion(
     logger_fn=None,
 ):
     import sys
-    if 'boto3' not in sys.modules:
-        import boto3
+    import boto3
 
     region_name = (
         get_secret("AWS_REGION_NAME") or
