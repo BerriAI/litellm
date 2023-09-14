@@ -2,9 +2,58 @@ import Image from '@theme/IdealImage';
 
 # Huggingface
 
-LiteLLM supports Huggingface Inference Endpoints that uses the [text-generation-inference](https://github.com/huggingface/text-generation-inference) format. 
+LiteLLM supports Huggingface models that use the [text-generation-inference](https://github.com/huggingface/text-generation-inference) format or the [Conversational task](https://huggingface.co/docs/api-inference/detailed_parameters#conversational-task) format. 
 
-### API KEYS 
+* text-generation-interface: [Here's all the models that use this format](https://huggingface.co/models?other=text-generation-inference).
+* conversational task: [Here's all the models that use this format](https://huggingface.co/models?pipeline_tag=conversational).
+
+By default, we assume the you're trying to call models with the 'text-generation-interface' format (e.g. Llama2, Falcon, WizardCoder, MPT, etc.)
+
+This can be changed by setting task="conversational" in the completion call. [Example](#conversational-task-blenderbot-etc)
+
+## usage 
+
+You need to tell LiteLLM when you're calling Huggingface. 
+Do that by setting it as part of the model name -  completion(model="huggingface/<model_name>",...). 
+
+```python
+import os 
+from litellm import completion 
+
+# Set env variables
+os.environ["HUGGINGFACE_API_KEY"] = "huggingface_api_key" # [OPTIONAL]
+
+messages = [{ "content": "There's a llama in my garden 😱 What should I do?","role": "user"}]
+
+# e.g. let's do this for 'WizardLM/WizardCoder-Python-34B-V1.0'
+response = completion(model="huggingface/WizardLM/WizardCoder-Python-34B-V1.0", messages=messages, api_base="https://my-endpoint.huggingface.cloud")
+
+print(response)
+```
+
+### conversational-task (BlenderBot, etc.)
+
+**Key Change**: `completion(..., task="conversational")`
+
+```python
+import os 
+from litellm import completion 
+
+# Set env variables
+os.environ["HUGGINGFACE_API_KEY"] = "huggingface_api_key" # [OPTIONAL]
+
+messages = [{ "content": "There's a llama in my garden 😱 What should I do?","role": "user"}]
+
+# e.g. let's do this for 'facebook/blenderbot-400M-distill'
+response = completion(model="huggingface/facebook/blenderbot-400M-distill", messages=messages, api_base="https://my-endpoint.huggingface.cloud", task="conversational")
+
+print(response)
+```
+
+
+### [OPTIONAL] API KEYS
+If the endpoint you're calling requires an api key to be passed, set it in your os environment. [Code for how it's sent](https://github.com/BerriAI/litellm/blob/0100ab2382a0e720c7978fbf662cc6e6920e7e03/litellm/llms/huggingface_restapi.py#L25)
+
 ```python
 import os 
 os.environ["HUGGINGFACE_API_KEY"] = ""
@@ -81,32 +130,6 @@ You can use any chat/text model from Hugging Face with the following steps:
 
 Need help deploying a model on huggingface? [Check out this guide.](https://huggingface.co/docs/inference-endpoints/guides/create_endpoint)
 
-## usage 
-
-You need to tell LiteLLM when you're calling Huggingface.  
-
-
-Do that by passing in the custom llm provider as part of the model name -  
-completion(model="<custom_llm_provider>/<model_name>",...). 
-
-Model name - `WizardLM/WizardCoder-Python-34B-V1.0`
-
-Model id - `https://ji16r2iys9a8rjk2.us-east-1.aws.endpoints.huggingface.cloud`
-
-```python
-import os 
-from litellm import completion 
-
-# Set env variables
-os.environ["HUGGINGFACE_API_KEY"] = "huggingface_api_key"
-
-messages = [{ "content": "There's a llama in my garden 😱 What should I do?","role": "user"}]
-
-# model = <custom_llm_provider>/<model_id>
-response = completion(model="huggingface/WizardLM/WizardCoder-Python-34B-V1.0", messages=messages, api_base="https://ji16r2iys9a8rjk2.us-east-1.aws.endpoints.huggingface.cloud")
-
-print(response)
-```
 
 # output
 
