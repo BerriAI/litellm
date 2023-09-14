@@ -173,7 +173,7 @@ def completion(
         get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
         if custom_llm_provider == "azure":
             # azure configs
-            openai.api_type = get_secret("AZURE_API_TYPE") or "azure"
+            api_type = get_secret("AZURE_API_TYPE") or "azure"
 
             api_base = (
                 api_base
@@ -212,6 +212,7 @@ def completion(
                 api_key=api_key,
                 api_base=api_base,
                 api_version=api_version,
+                api_type=api_type,
                 **optional_params,
             )
             if "stream" in optional_params and optional_params["stream"] == True:
@@ -234,7 +235,6 @@ def completion(
             or custom_llm_provider == "openai"
             or "ft:gpt-3.5-turbo" in model  # finetuned gpt-3.5-turbo
         ):  # allow user to make an openai call with a custom base
-            openai.api_type = "openai"
             # note: if a user sets a custom base - we should ensure this works
             # allow for the setting of dynamic and stateful api-bases
             api_base = (
@@ -267,6 +267,7 @@ def completion(
                     headers=litellm.headers, # None by default
                     api_base=api_base, # thread safe setting base, key, api_version
                     api_key=api_key,
+                    api_type="openai",
                     api_version=api_version, # default None
                     **optional_params,
                 )
