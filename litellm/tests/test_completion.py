@@ -634,20 +634,36 @@ def test_completion_sagemaker():
         pytest.fail(f"Error occurred: {e}")
 
 
-# def test_completion_bedrock():
-#     try:
-#         response = completion(
-#             model="bedrock/amazon.titan-tg1-large", 
-#             messages=messages,
-#             temperature=0.2,
-#             max_tokens=80,
-#             logger_fn=logger_fn
-#         )
-#         # Add any assertions here to check the response
-#         print(response)
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
-# test_completion_bedrock()
+def test_completion_bedrock_titan():
+    try:
+        response = completion(
+            model="bedrock/amazon.titan-tg1-large", 
+            messages=messages,
+            temperature=0.2,
+            max_tokens=20,
+            logger_fn=logger_fn
+        )
+        # Add any assertions here to check the response
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+test_completion_bedrock_titan()
+
+
+def test_completion_bedrock_ai21():
+    try:
+        response = completion(
+            model="bedrock/ai21.j2-mid", 
+            messages=messages,
+            temperature=0.2,
+            max_tokens=20,
+            logger_fn=logger_fn
+        )
+        # Add any assertions here to check the response
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+test_completion_bedrock_ai21()
 
 
 # test_completion_sagemaker()
