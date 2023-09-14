@@ -783,6 +783,7 @@ def get_optional_params(  # use the openai defaults
     frequency_penalty=0,
     logit_bias={},
     num_beams=1,
+    remove_input=False, # for nlp_cloud
     user="",
     deployment_id=None,
     model=None,
@@ -917,6 +918,29 @@ def get_optional_params(  # use the openai defaults
             optional_params["n"] = n
         if stop != None:
             optional_params["stop_sequences"] = stop
+    elif model in litellm.nlp_cloud_models or custom_llm_provider == "nlp_cloud":
+        if max_tokens != float("inf"):
+            optional_params["max_length"] = max_tokens
+        if stream:
+            optional_params["stream"] = stream
+        if temperature != 1:
+            optional_params["temperature"] = temperature
+        if top_k != 40:
+            optional_params["top_k"] = top_k
+        if top_p != 1:
+            optional_params["top_p"] = top_p
+        if presence_penalty != 0:
+            optional_params["presence_penalty"] = presence_penalty
+        if frequency_penalty != 0:
+            optional_params["frequency_penalty"] = frequency_penalty
+        if num_beams != 1:
+            optional_params["num_beams"] = num_beams
+        if n != 1:
+            optional_params["num_return_sequences"] = n
+        if remove_input == True:
+            optional_params["remove_input"] = True
+        if stop != None:
+            optional_params["stop_sequences"] = stop
     else:  # assume passing in params for openai/azure openai
         if functions != []:
             optional_params["functions"] = functions
@@ -993,6 +1017,9 @@ def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None):
         ## baseten 
         elif model in litellm.baseten_models:
             custom_llm_provider = "baseten"
+        ## nlp_cloud
+        elif model in litellm.nlp_cloud_models:
+            custom_llm_provider = "nlp_cloud"
         
         if custom_llm_provider is None or custom_llm_provider=="":
             raise ValueError(f"LLM Provider NOT provided. Pass in the LLM provider you are trying to call. E.g. For 'Huggingface' inference endpoints pass in `completion(model='huggingface/{model}',..)` Learn more: https://docs.litellm.ai/docs/providers")
@@ -1968,6 +1995,81 @@ def exception_type(model, original_exception, custom_llm_provider):
                             llm_provider="ai21",
                             model=model
                         )
+            elif model in litellm.nlp_cloud_models or custom_llm_provider == "nlp_cloud":
+                if "detail" in error_str:
+                    if "Input text length should not exceed" in error_str:
+                        exception_mapping_worked = True
+                        raise ContextWindowExceededError(
+                            message=f"NLPCloudException - {error_str}",
+                            model=model,
+                            llm_provider="nlp_cloud"
+                        )
+                    elif "value is not a valid" in error_str:
+                        exception_mapping_worked = True
+                        raise InvalidRequestError(
+                            message=f"NLPCloudException - {error_str}",
+                            model=model,
+                            llm_provider="nlp_cloud"
+                        )
+                    else: 
+                        exception_mapping_worked = True
+                        raise APIError(
+                            status_code=500,
+                            message=f"NLPCloudException - {error_str}",
+                            model=model,
+                            llm_provider="nlp_cloud"
+                        )
+                if hasattr(original_exception, "status_code"): # https://docs.nlpcloud.com/?shell#errors
+                    if original_exception.status_code == 400 or original_exception.status_code == 406 or original_exception.status_code == 413 or original_exception.status_code == 422:
+                        exception_mapping_worked = True
+                        raise InvalidRequestError(
+                            message=f"NLPCloudException - {original_exception.message}",
+                            llm_provider="nlp_cloud",
+                            model=model
+                        )
+                    elif original_exception.status_code == 401 or original_exception.status_code == 403:
+                        exception_mapping_worked = True
+                        raise AuthenticationError(
+                            message=f"NLPCloudException - {original_exception.message}",
+                            llm_provider="nlp_cloud",
+                            model=model
+                        )
+                    elif original_exception.status_code == 522 or original_exception.status_code == 524:
+                        exception_mapping_worked = True
+                        raise Timeout(
+                            message=f"NLPCloudException - {original_exception.message}",
+                            model=model,
+                            llm_provider="nlp_cloud"
+                        )
+                    elif original_exception.status_code == 429 or original_exception.status_code == 402:
+                        exception_mapping_worked = True
+                        raise RateLimitError(
+                            message=f"NLPCloudException - {original_exception.message}",
+                            llm_provider="nlp_cloud",
+                        )
+                    elif original_exception.status_code == 500 or original_exception.status_code == 503:
+                        exception_mapping_worked = True
+                        raise APIError(
+                            status_code=original_exception.status_code, 
+                            message=f"NLPCloudException - {original_exception.message}",
+                            llm_provider="nlp_cloud",
+                            model=model
+                        )
+                    elif original_exception.status_code == 504 or original_exception.status_code == 520:
+                        exception_mapping_worked = True
+                        raise ServiceUnavailableError(
+                            message=f"NLPCloudException - {original_exception.message}",
+                            model=model,
+                            llm_provider="nlp_cloud"
+                        )
+                    else:
+                        exception_mapping_worked = True
+                        raise APIError(
+                            status_code=original_exception.status_code, 
+                            message=f"NLPCloudException - {original_exception.message}",
+                            llm_provider="nlp_cloud",
+                            model=model
+                        )
             elif custom_llm_provider == "together_ai":
                 error_response = json.loads(error_str)
                 if "error" in error_response and "`inputs` tokens + `max_new_tokens` must be <=" in error_response["error"]:
@@ -2240,6 +2342,15 @@ class CustomStreamWrapper:
         except:
             raise ValueError(f"Unable to parse response. Original response: {chunk}")
     
+    def handle_nlp_cloud_chunk(self, chunk):
+        chunk = chunk.decode("utf-8")
+        data_json = json.loads(chunk)
+        try:
+            print(f"data json: {data_json}")
+            return data_json["generated_text"]
+        except:
+            raise ValueError(f"Unable to parse response. Original response: {chunk}")
+    
     def handle_aleph_alpha_chunk(self, chunk):
         chunk = chunk.decode("utf-8")
         data_json = json.loads(chunk)
@@ -2320,12 +2431,15 @@ class CustomStreamWrapper:
             elif self.custom_llm_provider and self.custom_llm_provider == "vllm":
                 chunk = next(self.completion_stream)
                 completion_obj["content"] = chunk[0].outputs[0].text
-            elif self.model in litellm.aleph_alpha_models: #ai21 doesn't provide streaming
+            elif self.model in litellm.aleph_alpha_models: #aleph alpha doesn't provide streaming
                 chunk = next(self.completion_stream)
                 completion_obj["content"] = self.handle_aleph_alpha_chunk(chunk)
             elif self.model in litellm.open_ai_text_completion_models:
                 chunk = next(self.completion_stream)
                 completion_obj["content"] = self.handle_openai_text_completion_chunk(chunk)
+            elif self.model in litellm.nlp_cloud_models or self.custom_llm_provider == "nlp_cloud":
+                chunk = next(self.completion_stream)
+                completion_obj["content"] = self.handle_nlp_cloud_chunk(chunk)
             else: # openai chat/azure models
                 chunk = next(self.completion_stream)
                 return chunk # open ai returns finish_reason, we should just return the openai chunk

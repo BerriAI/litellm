@@ -29,6 +29,7 @@ vertex_location: Optional[str] = None
 togetherai_api_key: Optional[str] = None
 baseten_key: Optional[str] = None
 aleph_alpha_key: Optional[str] = None
+nlp_cloud_key: Optional[str] = None
 use_client = False
 logging = True
 caching = False # deprecated son
@@ -152,6 +153,8 @@ huggingface_models = [
 
 ai21_models = ["j2-ultra", "j2-mid", "j2-light"]
 
+nlp_cloud_models = ["dolphin", "chatdolphin"]
+
 together_ai_models = [
     "togethercomputer/llama-2-70b-chat",
     "togethercomputer/Llama-2-7B-32K-Instruct",
@@ -183,6 +186,7 @@ model_list = (
     + together_ai_models
     + baseten_models
     + aleph_alpha_models
+    + nlp_cloud_models
 )
 
 provider_list = [
@@ -200,6 +204,7 @@ provider_list = [
     "sagemaker",
     "bedrock",
     "vllm",
+    "nlp_cloud",
     "custom", # custom apis
 ]
 

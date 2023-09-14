@@ -27,6 +27,7 @@ from .llms import bedrock
 from .llms import huggingface_restapi
 from .llms import replicate
 from .llms import aleph_alpha
+from .llms import nlp_cloud
 from .llms import baseten
 from .llms import vllm
 from .llms import ollama
@@ -111,6 +112,7 @@ def completion(
     # model specific optional params
     top_k=40,# used by text-bison only
     task: Optional[str]="text-generation-inference", # used by huggingface inference endpoints
+    remove_input: bool = True, # used by nlp cloud models - prevents input text from being returned as part of output
     request_timeout=0,  # unused var for old version of OpenAI API
     fallbacks=[],
     caching = False,
@@ -154,7 +156,8 @@ def completion(
             model=model,
             custom_llm_provider=custom_llm_provider,
             top_k=top_k,
-            task=task
+            task=task,
+            remove_input=remove_input
         )
         # For logging - save the values of the litellm-specific params passed in
         litellm_params = get_litellm_params(
@@ -419,6 +422,29 @@ def completion(
             if "stream" in optional_params and optional_params["stream"] == True:
                 # don't try to access stream object,
                 response = CustomStreamWrapper(model_response, model, logging_obj=logging)
+                return response
+            response = model_response
+        elif model in litellm.nlp_cloud_models or custom_llm_provider == "nlp_cloud":
+            nlp_cloud_key = (
+                api_key or litellm.nlp_cloud_key or get_secret("NLP_CLOUD_API_KEY") or litellm.api_key
+            )
+
+            model_response = nlp_cloud.completion(
+                model=model,
+                messages=messages,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                encoding=encoding,
+                api_key=nlp_cloud_key,
+                logging_obj=logging
+            )
+
+            if "stream" in optional_params and optional_params["stream"] == True:
+                # don't try to access stream object,
+                response = CustomStreamWrapper(model_response, model, custom_llm_provider="nlp_cloud", logging_obj=logging)
                 return response
             response = model_response
         elif model in litellm.aleph_alpha_models:

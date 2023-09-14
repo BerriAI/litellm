@@ -75,6 +75,9 @@ def invalid_auth(model):  # set the model key to an invalid key, depending on th
         elif model in litellm.aleph_alpha_models:
             temporary_key = os.environ["ALEPH_ALPHA_API_KEY"]
             os.environ["ALEPH_ALPHA_API_KEY"] = "bad-key"
+        elif model in litellm.nlp_cloud_models:
+            temporary_key = os.environ["NLP_CLOUD_API_KEY"]
+            os.environ["NLP_CLOUD_API_KEY"] = "bad-key"
         elif (
             model
             == "replicate/llama-2-70b-chat:2c1608e18606fad2812020dc541930f2d0495ce32eee50074220b87300bc16e1"
@@ -119,6 +122,8 @@ def invalid_auth(model):  # set the model key to an invalid key, depending on th
             os.environ["TOGETHERAI_API_KEY"] = temporary_key
         elif model in litellm.aleph_alpha_models:
             os.environ["ALEPH_ALPHA_API_KEY"] = temporary_key
+        elif model in litellm.nlp_cloud_models:
+            os.environ["NLP_CLOUD_API_KEY"] = temporary_key
     return
 
 # Test 3: Invalid Request Error 
