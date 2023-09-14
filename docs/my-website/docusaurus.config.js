@@ -40,7 +40,20 @@ const config = {
     ],
     [ require.resolve('docusaurus-lunr-search'), {
       languages: ['en'] // language codes
-    }]
+    }],
+    () => ({
+      name: 'cripchat',
+      injectHtmlTags() {
+        return {
+          headTags: [
+            {
+              tagName: 'script',
+              innerHTML: `window.$crisp=[];window.CRISP_WEBSITE_ID="be07a4d6-dba0-4df7-961d-9302c86b7ebc";(function(){d=document;s=d.createElement("script");s.src="https://client.crisp.chat/l.js";s.async=1;d.getElementsByTagName("head")[0].appendChild(s);})();`,
+            },
+          ],
+        };
+      },
+    }),
   ],
 
   presets: [
