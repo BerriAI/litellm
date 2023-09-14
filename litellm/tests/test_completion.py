@@ -113,8 +113,38 @@ def test_completion_claude_stream():
         pytest.fail(f"Error occurred: {e}")
 # test_completion_claude_stream()
 
+def test_completion_nlp_cloud():
+    try:
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {
+                "role": "user",
+                "content": "how does a court case get to the Supreme Court?",
+            },
+        ]
+        response = completion(model="dolphin", messages=messages, logger_fn=logger_fn)
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
+def test_completion_nlp_cloud_streaming():
+    try:
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {
+                "role": "user",
+                "content": "how does a court case get to the Supreme Court?",
+            },
+        ]
+        response = completion(model="dolphin", messages=messages, stream=True, logger_fn=logger_fn)
+        # Add any assertions here to check the response
+        for chunk in response:
+            print(chunk["choices"][0]["delta"]["content"])  # same as openai format
+            print(chunk["choices"][0]["finish_reason"])
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
+test_completion_nlp_cloud_streaming()
 # def test_completion_hf_api():
 #     try:
 #         user_message = "write some code to find the sum of two numbers"
