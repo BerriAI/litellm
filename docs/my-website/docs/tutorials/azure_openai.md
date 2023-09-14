@@ -3,6 +3,10 @@
 * [Supported OpenAI LLMs](https://docs.litellm.ai/docs/providers/openai)
 * [Supported Azure OpenAI LLMs](https://docs.litellm.ai/docs/providers/azure)
 
+<a target="_blank" href="https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/LiteLLM_Azure_and_OpenAI_example.ipynb">
+  <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
+</a>
+
 ## Completion() - Quick Start
 ```python
 import os 
