@@ -952,7 +952,7 @@ def batch_completion(
     return results
 
 ## Use this in your testing pipeline, if you need to mock an LLM response
-def mock_completion(model: str, messages: List, stream: bool = False, mock_response: str = "This is a mock request"):
+def mock_completion(model: str, messages: List, stream: bool = False, mock_response: str = "This is a mock request", **kwargs):
     try:
         model_response = ModelResponse()
         if stream: # return a generator object, iterate through the text in chunks of 3 char / chunk
