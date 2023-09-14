@@ -10,7 +10,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import litellm 
 litellm.set_verbose = True
-from litellm import BudgetManager, completion 
+from litellm import completion, BudgetManager
 
 budget_manager = BudgetManager(project_name="test_project", client_type="hosted")
 

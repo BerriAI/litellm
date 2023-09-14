@@ -36,7 +36,8 @@ caching = False # deprecated son
 caching_with_models = False  # if you want the caching key to be model + prompt # deprecated soon
 cache: Optional[Cache] = None # cache object
 model_alias_map: Dict[str, str] = {}
-
+max_budget = None # set the max budget across all providers
+_current_cost = 0 # private variable, used if max budget is set 
 #############################################
 
 def get_model_cost_map():
