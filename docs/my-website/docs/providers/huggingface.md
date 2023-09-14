@@ -20,12 +20,12 @@ Do that by setting it as part of the model name -  completion(model="huggingface
 import os 
 from litellm import completion 
 
-# Set env variables
-os.environ["HUGGINGFACE_API_KEY"] = "huggingface_api_key" # [OPTIONAL]
+# [OPTIONAL] set env var
+os.environ["HUGGINGFACE_API_KEY"] = "huggingface_api_key" 
 
 messages = [{ "content": "There's a llama in my garden 😱 What should I do?","role": "user"}]
 
-# e.g. let's do this for 'WizardLM/WizardCoder-Python-34B-V1.0'
+# e.g. Call 'WizardLM/WizardCoder-Python-34B-V1.0' hosted on HF Inference endpoints
 response = completion(model="huggingface/WizardLM/WizardCoder-Python-34B-V1.0", messages=messages, api_base="https://my-endpoint.huggingface.cloud")
 
 print(response)
@@ -39,12 +39,12 @@ print(response)
 import os 
 from litellm import completion 
 
-# Set env variables
-os.environ["HUGGINGFACE_API_KEY"] = "huggingface_api_key" # [OPTIONAL]
+# [OPTIONAL] set env var
+os.environ["HUGGINGFACE_API_KEY"] = "huggingface_api_key" 
 
 messages = [{ "content": "There's a llama in my garden 😱 What should I do?","role": "user"}]
 
-# e.g. let's do this for 'facebook/blenderbot-400M-distill'
+# e.g. Call 'facebook/blenderbot-400M-distill' hosted on HF Inference endpoints
 response = completion(model="huggingface/facebook/blenderbot-400M-distill", messages=messages, api_base="https://my-endpoint.huggingface.cloud", task="conversational")
 
 print(response)
