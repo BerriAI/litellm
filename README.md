@@ -39,7 +39,7 @@
     <a href="https://litellm.ai/playground" target="_blank">Demo Website</a>
 </h4>
 <a target="_blank" href="https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat">
-  <p>📣 We're building a <i>hosted</i> solution that lets you add LLMs without touching any code at all. Grab time, if you're interested!</p>
+  <p>📣 We're building a <i>hosted</i> solution that lets you 1-click deploy your own LLM proxy server. Grab time, if you're interested!</p>
 </a>
 
 LiteLLM manages
