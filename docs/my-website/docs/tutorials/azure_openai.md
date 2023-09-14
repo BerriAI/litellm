@@ -1,4 +1,4 @@
-# Call Azure OpenAI, OpenAI Using LiteLLM
+# Use Completion() for OpenAI, Azure
 
 ## Basic Completion()
 ```python
