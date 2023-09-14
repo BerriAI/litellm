@@ -13,11 +13,13 @@ def test_mock_request():
     try:
         model = "gpt-3.5-turbo"
         messages = [{"role": "user", "content": "Hey, I'm a mock request"}]
-        response = litellm.mock_completion(model=model, messages=messages)
+        response = litellm.mock_completion(model=model, messages=messages, stream=False)
         print(response)
+        print(type(response))
     except:
         traceback.print_exc()
 
+# test_mock_request()
 def test_streaming_mock_request():
     try: 
         model = "gpt-3.5-turbo"

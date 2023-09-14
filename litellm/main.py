@@ -17,7 +17,8 @@ from litellm.utils import (
     CustomStreamWrapper,
     read_config_args,
     completion_with_fallbacks,
-    get_llm_provider
+    get_llm_provider,
+    mock_completion_streaming_obj
 )
 from .llms import anthropic
 from .llms import together_ai
@@ -72,30 +73,22 @@ async def acompletion(*args, **kwargs):
     else:
         return response
 
-## Use this in your testing pipeline, if you need to mock an LLM response
 def mock_completion(model: str, messages: List, stream: bool = False, mock_response: str = "This is a mock request", **kwargs):
     try:
-        model_response = ModelResponse()
-        if stream: # return a generator object, iterate through the text in chunks of 3 char / chunk
-            for i in range(0, len(mock_response), 3):
-                completion_obj = {"role": "assistant", "content": mock_response[i: i+3]}
-                yield {
-                "choices": 
-                    [
-                        {
-                            "delta": completion_obj,
-                            "finish_reason": None
-                        },
-                    ]
-                }
-        else:
-            ## RESPONSE OBJECT
-            completion_response = "This is a mock request"
-            model_response["choices"][0]["message"]["content"] = completion_response
-            model_response["created"] = time.time()
-            model_response["model"] = "MockResponse"
-            return model_response
+        model_response = ModelResponse(stream=stream)
+        if stream is True:
+            # don't try to access stream object,
+            response = mock_completion_streaming_obj(model_response, mock_response=mock_response, model=model)
+            return response
+        
+        completion_response = "This is a mock request"
+        model_response["choices"][0]["message"]["content"] = completion_response
+        model_response["created"] = time.time()
+        model_response["model"] = model
+        return model_response
+
     except:
+        traceback.print_exc()
         raise Exception("Mock completion response failed")
 
 @client
