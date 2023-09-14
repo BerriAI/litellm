@@ -144,7 +144,7 @@ def test_completion_nlp_cloud_streaming():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_completion_nlp_cloud_streaming()
+# test_completion_nlp_cloud_streaming()
 # def test_completion_hf_api():
 #     try:
 #         user_message = "write some code to find the sum of two numbers"
@@ -183,7 +183,6 @@ def test_completion_cohere(): # commenting for now as the cohere endpoint is bei
         # Add any assertions here to check the response
         print(response)
         response_str = response["choices"][0]["message"]["content"]
-        print(f"str response{response_str}")
         response_str_2 = response.choices[0].message.content
         if type(response_str) != str:
             pytest.fail(f"Error occurred: {e}")
@@ -191,6 +190,8 @@ def test_completion_cohere(): # commenting for now as the cohere endpoint is bei
             pytest.fail(f"Error occurred: {e}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+# test_completion_cohere()
 
 def test_completion_cohere_stream():
     try:

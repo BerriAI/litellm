@@ -3,7 +3,7 @@
 
 import sys, os, asyncio
 import traceback
-import time
+import time, pytest
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -23,6 +23,30 @@ def logger_fn(model_call_object: dict):
 
 user_message = "Hello, how are you?"
 messages = [{"content": user_message, "role": "user"}]
+
+def test_completion_cohere_stream():
+    try:
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {
+                "role": "user",
+                "content": "how does a court case get to the Supreme Court?",
+            },
+        ]
+        response = completion(
+            model="command-nightly", messages=messages, stream=True, max_tokens=50
+        )
+        complete_response = ""
+        # Add any assertions here to check the response
+        for chunk in response:
+            print(f"chunk: {chunk}")
+            complete_response += chunk["choices"][0]["delta"]["content"]
+        if complete_response == "": 
+            raise Exception("Empty response received")
+        print(f"completion_response: {complete_response}")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
 
 # test on baseten completion call
 # try:
