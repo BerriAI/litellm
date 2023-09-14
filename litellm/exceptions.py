@@ -108,3 +108,10 @@ class OpenAIError(OpenAIError):  # type: ignore
             code=original_exception.code,
         )
         self.llm_provider = "openai"
+
+class BudgetExceededError(Exception):
+    def __init__(self, current_cost, max_budget):
+        self.current_cost = current_cost
+        self.max_budget = max_budget
+        message = f"Budget has been exceeded! Current cost: {current_cost}, Max budget: {max_budget}"
+        super().__init__(message)

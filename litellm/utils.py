@@ -31,7 +31,8 @@ from .exceptions import (
     ContextWindowExceededError,
     Timeout,
     APIConnectionError,
-    APIError
+    APIError,
+    BudgetExceededError
 )
 from typing import List, Dict, Union, Optional
 from .caching import Cache
@@ -542,6 +543,12 @@ def client(original_function):
         try:
             logging_obj = function_setup(start_time, *args, **kwargs)
             kwargs["litellm_logging_obj"] = logging_obj
+
+            # [OPTIONAL] CHECK BUDGET 
+            if litellm.max_budget:
+                if litellm._current_cost > litellm.max_budget:
+                    raise BudgetExceededError(current_cost=litellm._current_cost, max_budget=litellm.max_budget)
+
             # [OPTIONAL] CHECK CACHE
             # remove this after deprecating litellm.caching
             if (litellm.caching or litellm.caching_with_models) and litellm.cache is None:
@@ -566,6 +573,10 @@ def client(original_function):
             # [OPTIONAL] ADD TO CACHE
             if litellm.caching or litellm.caching_with_models or litellm.cache != None: # user init a cache object
                 litellm.cache.add_cache(result, *args, **kwargs)
+            
+            # [OPTIONAL] UPDATE BUDGET
+            if litellm.max_budget: 
+                litellm._current_cost += litellm.completion_cost(completion_response=result)
             
             # [OPTIONAL] Return LiteLLM call_id
             if litellm.use_client == True:
