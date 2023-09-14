@@ -1,5 +1,8 @@
 # Use Completion() for OpenAI, Azure
 
+* Supported OpenAI LLMs: https://docs.litellm.ai/docs/providers/openai
+* Supported Azure OpenAI LLMs: https://docs.litellm.ai/docs/providers/azure
+
 ## Basic Completion()
 ```python
 import os 
