@@ -3,7 +3,7 @@
 * [Supported OpenAI LLMs](https://docs.litellm.ai/docs/providers/openai)
 * [Supported Azure OpenAI LLMs](https://docs.litellm.ai/docs/providers/azure)
 
-## Basic Completion()
+## Completion() - Quick Start
 ```python
 import os 
 from litellm import completion
@@ -94,7 +94,7 @@ response = acompletion(
 
 ```
 
-## Calling completion() multi-threaded
+## Completion() multi-threaded
 
 ```python
 import os
