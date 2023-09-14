@@ -32,6 +32,7 @@ from .llms import nlp_cloud
 from .llms import baseten
 from .llms import vllm
 from .llms import ollama
+from .llms import cohere
 import tiktoken
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, List, Optional, Dict
@@ -547,12 +548,6 @@ def completion(
                 input=messages, api_key=openai.api_key, original_response=response
             )
         elif model in litellm.cohere_models:
-            # import cohere/if it fails then pip install cohere
-            try:
-                import cohere
-            except:
-                raise Exception("Cohere import failed please run `pip install cohere`")
-
             cohere_key = (
                 api_key
                 or litellm.cohere_key
@@ -560,35 +555,23 @@ def completion(
                 or get_secret("CO_API_KEY")
                 or litellm.api_key
             )
-            co = cohere.Client(cohere_key)
-            prompt = " ".join([message["content"] for message in messages])
-            ## LOGGING
-            logging.pre_call(input=prompt, api_key=cohere_key)
-            ## COMPLETION CALL
-            response = co.generate(model=model, prompt=prompt, **optional_params)
+            model_response = cohere.completion(
+                model=model,
+                messages=messages,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                encoding=encoding,
+                api_key=cohere_key,
+                logging_obj=logging # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
+            )
+
             if "stream" in optional_params and optional_params["stream"] == True:
                 # don't try to access stream object,
-                response = CustomStreamWrapper(response, model, logging_obj=logging)
+                response = CustomStreamWrapper(model_response, model, logging_obj=logging)
                 return response
-            ## LOGGING
-            logging.post_call(
-                input=prompt, api_key=cohere_key, original_response=response
-            )
-            ## USAGE
-            completion_response = response[0].text
-            prompt_tokens = len(encoding.encode(prompt))
-            completion_tokens = len(encoding.encode(completion_response))
-            ## RESPONSE OBJECT
-            model_response["choices"][0]["message"]["content"] = completion_response
-            if response[0].finish_reason:
-                model_response.choices[0].finish_reason = response[0].finish_reason
-            model_response["created"] = time.time()
-            model_response["model"] = model
-            model_response["usage"] = {
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "total_tokens": prompt_tokens + completion_tokens,
-            }
             response = model_response
         elif (
             (
