@@ -23,13 +23,16 @@ response = completion(
     model = "gpt-3.5-turbo", 
     messages = [{ "content": "Hello, how are you?","role": "user"}]
 )
+print("Openai Response\n")
+print(response)
 
 # azure call
 response = completion(
     model = "azure/<your-azure-deployment>",
     messages = [{ "content": "Hello, how are you?","role": "user"}]
 )
-
+print("Azure Response\n")
+print(response)
 ```
 
 ## Completion() with Streaming
@@ -53,6 +56,9 @@ response = completion(
     messages = [{ "content": "Hello, how are you?","role": "user"}],
     stream=True
 )
+print("OpenAI Streaming response")
+for chunk in response:
+  print(chunk)
 
 # azure call
 response = completion(
@@ -60,6 +66,9 @@ response = completion(
     messages = [{ "content": "Hello, how are you?","role": "user"}],
     stream=True
 )
+print("Azure Streaming response")
+for chunk in response:
+  print(chunk)
 
 ```
 
