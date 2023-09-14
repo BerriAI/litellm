@@ -49,7 +49,7 @@ def test_completion_claude():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-
+# test_completion_claude()
 # aleph alpha
 # def test_completion_aleph_alpha():
 #     try:
@@ -119,8 +119,8 @@ def test_completion_claude_stream():
 #     try:
 #         user_message = "write some code to find the sum of two numbers"
 #         messages = [{ "content": user_message,"role": "user"}]
-#         api_base = "https://wyh9bqfgj2r1klv5.us-east-1.aws.endpoints.huggingface.cloud"
-#         response = completion(model="facebook/blenderbot-400M-distill", messages=messages, custom_llm_provider="huggingface", task="conversational", api_base=api_base, logger_fn=logger_fn)
+#         api_base = "https://ecd4sb5n09bo4ei2.us-east-1.aws.endpoints.huggingface.cloud"
+#         response = completion(model="togethercomputer/LLaMA-2-7B-32K", messages=messages, custom_llm_provider="huggingface", api_base=api_base, logger_fn=logger_fn)
 #         # Add any assertions here to check the response
 #         print(response)
 #     except Exception as e:
@@ -141,26 +141,26 @@ def test_completion_claude_stream():
 #         pytest.fail(f"Error occurred: {e}")
 
 
-# def test_completion_cohere(): # commenting for now as the cohere endpoint is being flaky
-#     try:
-#         response = completion(
-#             model="command-nightly",
-#             messages=messages,
-#             max_tokens=100,
-#             logit_bias={40: 10},
-#         )
-#         # Add any assertions here to check the response
-#         print(response)
-#         response_str = response["choices"][0]["message"]["content"]
-#         print(f"str response{response_str}")
-#         response_str_2 = response.choices[0].message.content
-#         if type(response_str) != str:
-#             pytest.fail(f"Error occurred: {e}")
-#         if type(response_str_2) != str:
-#             pytest.fail(f"Error occurred: {e}")
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
-## 
+def test_completion_cohere(): # commenting for now as the cohere endpoint is being flaky
+    try:
+        response = completion(
+            model="command-nightly",
+            messages=messages,
+            max_tokens=100,
+            logit_bias={40: 10},
+            logger_fn=logger_fn
+        )
+        # Add any assertions here to check the response
+        print(response)
+        response_str = response["choices"][0]["message"]["content"]
+        print(f"str response{response_str}")
+        response_str_2 = response.choices[0].message.content
+        if type(response_str) != str:
+            pytest.fail(f"Error occurred: {e}")
+        if type(response_str_2) != str:
+            pytest.fail(f"Error occurred: {e}")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 def test_completion_cohere_stream():
     try:
@@ -750,15 +750,16 @@ def test_completion_with_fallbacks():
 
 
 #### Test A121 ###################
-# def test_completion_ai21():
-#     model_name = "j2-light"
-#     try:
-#         response = completion(model=model_name, messages=messages)
-#         # Add any assertions here to check the response
-#         print(response)
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
+def test_completion_ai21():
+    model_name = "j2-light"
+    try:
+        response = completion(model=model_name, messages=messages)
+        # Add any assertions here to check the response
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
+# test_completion_ai21()
 # test config file with completion #
 # def test_completion_openai_config():
 #     try:

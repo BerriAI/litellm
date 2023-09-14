@@ -529,6 +529,8 @@ def completion(
             completion_tokens = len(encoding.encode(completion_response))
             ## RESPONSE OBJECT
             model_response["choices"][0]["message"]["content"] = completion_response
+            if response[0].finish_reason:
+                model_response.choices[0].finish_reason = response[0].finish_reason
             model_response["created"] = time.time()
             model_response["model"] = model
             model_response["usage"] = {

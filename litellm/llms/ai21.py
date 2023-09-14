@@ -90,7 +90,8 @@ def completion(
         else:
             try:
                 model_response["choices"][0]["message"]["content"] = completion_response["completions"][0]["data"]["text"]
-            except:
+                model_response.choices[0].finish_reason = completion_response["completions"][0]["finishReason"]["reason"]
+            except Exception as e:
                 raise AI21Error(message=json.dumps(completion_response), status_code=response.status_code)
 
         ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here. 

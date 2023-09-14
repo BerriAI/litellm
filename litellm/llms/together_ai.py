@@ -104,14 +104,17 @@ def completion(
                 message=json.dumps(completion_response["output"]), status_code=response.status_code
             )
 
-        completion_response = completion_response["output"]["choices"][0]["text"]
+        print(completion_response)
+        completion_text = completion_response["output"]["choices"][0]["text"]
 
         ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here.
         prompt_tokens = len(encoding.encode(prompt))
         completion_tokens = len(
-            encoding.encode(completion_response)
+            encoding.encode(completion_text)
         )
-        model_response["choices"][0]["message"]["content"] = completion_response
+        model_response["choices"][0]["message"]["content"] = completion_text
+        if "finish_reason" in completion_response["output"]["choices"][0]:
+            model_response.choices[0].finish_reason = completion_response["output"]["choices"][0]["finish_reason"]
         model_response["created"] = time.time()
         model_response["model"] = model
         model_response["usage"] = {
