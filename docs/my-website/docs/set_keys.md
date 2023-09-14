@@ -6,6 +6,10 @@ LiteLLM allows you to specify the following:
 * API Version
 * API Type
 
+Useful Helper functions: 
+* [`check_valid_key()`](#check_valid_key)
+* [`get_valid_models()`](#get_valid_models)
+
 You can set the API configs using:
 * Environment Variables
 * litellm variables `litellm.api_key`
@@ -114,3 +118,34 @@ messages = [{ "content": "Hello, how are you?","role": "user"}]
 response = completion("command-nightly", messages, api_version="2023-02-15")
 ```
 
+## Helper Functions
+
+### `check_valid_key()`
+
+Check if a user submitted a valid key for the model they're trying to call. 
+
+```
+key = "bad-key"
+response = check_valid_key(model="gpt-3.5-turbo", api_key=key)
+assert(response == False)
+```
+
+### `get_valid_models()`
+
+This helper reads the .env and returns a list of supported llms for user
+
+```
+old_environ = os.environ
+os.environ = {'OPENAI_API_KEY': 'temp'} # mock set only openai key in environ
+
+valid_models = get_valid_models()
+print(valid_models)
+
+# list of openai supported llms on litellm
+expected_models = litellm.open_ai_chat_completion_models + litellm.open_ai_text_completion_models
+
+assert(valid_models == expected_models)
+
+# reset replicate env key
+os.environ = old_environ
+```
