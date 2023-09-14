@@ -117,6 +117,7 @@ def completion(
                 model_response["choices"][0]["message"]["content"] = completion_response[0]["generated_text"]
                 ## GETTING LOGPROBS 
                 if "details" in completion_response[0] and "tokens" in completion_response[0]["details"]:
+                    model_response.choices[0].finish_reason = completion_response[0]["details"]["finish_reason"]
                     sum_logprob = 0
                     for token in completion_response[0]["details"]["tokens"]:
                         sum_logprob += token["logprob"]

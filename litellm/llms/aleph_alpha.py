@@ -100,6 +100,7 @@ def completion(
         else:
             try:
                 model_response["choices"][0]["message"]["content"] = completion_response["completions"][0]["completion"]
+                model_response.choices[0].finish_reason = completion_response["completions"][0]["finish_reason"]
             except:
                 raise AlephAlphaError(message=json.dumps(completion_response), status_code=response.status_code)
 

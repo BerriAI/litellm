@@ -487,25 +487,25 @@ def test_completion_azure_deployment_id():
 
 # Replicate API endpoints are unstable -> throw random CUDA errors -> this means our tests can fail even if our tests weren't incorrect.
 
-def test_completion_replicate_llama_2():
-    model_name = "replicate/llama-2-70b-chat:2796ee9483c3fd7aa2e171d38f4ca12251a30609463dcfd4cd76703f22e96cdf"
-    try:
-        response = completion(
-            model=model_name, 
-            messages=messages, 
-            max_tokens=20,
-            custom_llm_provider="replicate"
-        )
-        print(response)
-        cost = completion_cost(completion_response=response)
-        print("Cost for completion call with llama-2: ", f"${float(cost):.10f}")
-        # Add any assertions here to check the response
-        response_str = response["choices"][0]["message"]["content"]
-        print(response_str)
-        if type(response_str) != str:
-            pytest.fail(f"Error occurred: {e}")
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
+# def test_completion_replicate_llama_2():
+#     model_name = "replicate/llama-2-70b-chat:2796ee9483c3fd7aa2e171d38f4ca12251a30609463dcfd4cd76703f22e96cdf"
+#     try:
+#         response = completion(
+#             model=model_name, 
+#             messages=messages, 
+#             max_tokens=20,
+#             custom_llm_provider="replicate"
+#         )
+#         print(response)
+#         cost = completion_cost(completion_response=response)
+#         print("Cost for completion call with llama-2: ", f"${float(cost):.10f}")
+#         # Add any assertions here to check the response
+#         response_str = response["choices"][0]["message"]["content"]
+#         print(response_str)
+#         if type(response_str) != str:
+#             pytest.fail(f"Error occurred: {e}")
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
 # test_completion_replicate_llama_2()
 
 def test_completion_replicate_vicuna():
@@ -601,6 +601,7 @@ def test_completion_sagemaker():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+# test_completion_sagemaker()
 ######## Test VLLM ########
 # def test_completion_vllm():
 #     try:
@@ -658,14 +659,15 @@ def test_completion_sagemaker():
 
 # test_completion_custom_api_base()
 
-# def test_vertex_ai():
-#     model_name = "chat-bison"
-#     try:
-#         response = completion(model=model_name, messages=messages, logger_fn=logger_fn)
-#         print(response)
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
+def test_vertex_ai():
+    model_name = "chat-bison"
+    try:
+        response = completion(model=model_name, messages=messages, logger_fn=logger_fn)
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
+test_vertex_ai()
 # def test_petals():
 #     model_name = "stabilityai/StableBeluga2"
 #     try:
@@ -696,12 +698,13 @@ def test_completion_with_fallbacks():
 # def test_baseten():
 #     try:
 
-#         response = completion(model="baseten/RqgAEn0", messages=messages, logger_fn=logger_fn)
+#         response = completion(model="baseten/7qQNLDB", messages=messages, logger_fn=logger_fn)
 #         # Add any assertions here to check the response
 #         print(response)
 #     except Exception as e:
 #         pytest.fail(f"Error occurred: {e}")
 
+# test_baseten()
 # def test_baseten_falcon_7bcompletion():
 #     model_name = "qvv0xeq"
 #     try:
