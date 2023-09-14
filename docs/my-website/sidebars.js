@@ -61,6 +61,7 @@ const sidebars = {
         "providers/huggingface", 
         "providers/vllm", 
         "providers/ai21", 
+        "providers/nlp_cloud",
         "providers/replicate", 
         "providers/cohere", 
         "providers/togetherai", 
