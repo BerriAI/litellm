@@ -38,14 +38,14 @@
     <a href="https://docs.litellm.ai/docs/" target="_blank">Docs</a> |
     <a href="https://litellm.ai/playground" target="_blank">Demo Website</a>
 </h4>
+<a href="https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat"><p>📣 We're building a <i>hosted</i> solution that lets you add LLMs without touching any code at all. Grab time, if you're interested!</p></a>
 
 LiteLLM manages
-
 - Translating inputs to the provider's completion and embedding endpoints
 - Guarantees [consistent output](https://docs.litellm.ai/docs/completion/output), text responses will always be available at `['choices'][0]['message']['content']`
 - Exception mapping - common exceptions across providers are mapped to the OpenAI exception types
 
-**🤝 Schedule a 1-on-1 Session:** Book a [1-on-1 session](https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat) with Krrish and Ishaan, the founders, to discuss any issues, provide feedback, or explore how we can improve LiteLLM for you.
+
 # Usage
 
 <a target="_blank" href="https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/liteLLM_OpenAI.ipynb">
