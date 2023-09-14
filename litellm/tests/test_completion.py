@@ -659,7 +659,7 @@ def test_completion_bedrock_ai21():
             max_tokens=20,
             logger_fn=logger_fn
         )
-        # Add any assertions here to check the response
+        # Add any assertions here to check the response 
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")

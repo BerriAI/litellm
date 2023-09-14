@@ -2,8 +2,6 @@
 
 ### API KEYS
 ```python
-!pip install boto3 
-
 os.environ["AWS_ACCESS_KEY_ID"] = ""
 os.environ["AWS_SECRET_ACCESS_KEY"] = ""
 os.environ["AWS_REGION_NAME"] = ""
@@ -35,3 +33,9 @@ Here's an example of using a bedrock model with LiteLLM
 | AI21 J2-Ultra       | `completion(model='bedrock/ai21.j2-ultra', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']`     |
 | AI21 J2-Mid      | `completion(model='bedrock/ai21.j2-mid', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']`     |
 
+### Troubleshooting
+If creating a boto3 client fails litellm
+```shell
+pip install https://github.com/BerriAI/litellm/raw/main/cookbook/bedrock_resources/boto3-1.28.21-py3-none-any.whl
+pip install https://github.com/BerriAI/litellm/raw/main/cookbook/bedrock_resources/botocore-1.31.21-py3-none-any.whl
+```
