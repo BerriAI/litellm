@@ -114,6 +114,7 @@ def completion(
             model_response["choices"][0]["message"]["content"] = completion_response[
                 "completion"
             ]
+            model_response.choices[0].finish_reason = completion_response["stop_reason"]
 
         ## CALCULATING USAGE
         prompt_tokens = len(
