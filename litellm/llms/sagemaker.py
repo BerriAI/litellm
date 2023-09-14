@@ -34,7 +34,6 @@ def completion(
     litellm_params=None,
     logger_fn=None,
 ):
-    import sys
     import boto3
 
     region_name = (
