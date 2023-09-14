@@ -51,6 +51,28 @@ These also support the `OPENAI_API_BASE` environment variable, which can be used
 | babbage-002 | `completion('ada-001', messages)` | `os.environ['OPENAI_API_KEY']`       |
 | davinci-002 | `completion('davinci-002', messages)` | `os.environ['OPENAI_API_KEY']`       |
 
+
+### Using Helicone Proxy with LiteLLM
+```python
+import os 
+import litellm
+from litellm import completion
+
+os.environ["OPENAI_API_KEY"] = ""
+
+# os.environ["OPENAI_API_BASE"] = ""
+litellm.api_base = "https://oai.hconeai.com/v1"
+litellm.headers = {
+    "Helicone-Auth": f"Bearer {os.getenv('HELICONE_API_KEY')}",
+    "Helicone-Cache-Enabled": "true",
+}
+
+messages = [{ "content": "Hello, how are you?","role": "user"}]
+
+# openai call
+response = completion("gpt-3.5-turbo", messages)
+```
+
 ### Using OpenAI Proxy with LiteLLM
 ```python
 import os 
