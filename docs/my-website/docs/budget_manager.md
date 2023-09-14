@@ -5,10 +5,28 @@ import TabItem from '@theme/TabItem';
 
 Don't want to get crazy bills because either while you're calling LLM APIs **or** while your users are calling them? use this. 
 
-LiteLLM exposes the `BudgetManager` class to help set budgets per user. BudgetManager creates a dictionary to manage the user budgets, where the key is user and the object is their current cost + model-specific costs. 
+LiteLLM exposes: 
+* `litellm.max_budget`: a global variable you can use to set the max budget (in USD) across all your litellm calls. If this budget is exceeded, it will raise a BudgetExceededError 
+* `BudgetManager`: A class to help set budgets per user. BudgetManager creates a dictionary to manage the user budgets, where the key is user and the object is their current cost + model-specific costs. 
 
 ## quick start
 
+```python 
+import litellm, os 
+from litellm import completion
+
+# set env variable 
+os.environ["OPENAI_API_KEY"] = "your-api-key"
+
+litellm.max_budget = 0.001 # sets a max budget of $0.001
+
+messages = [{"role": "user", "content": "Hey, how's it going"}]
+completion(model="gpt-4", messages=messages)
+print(litellm._current_cost)
+completion(model="gpt-4", messages=messages)
+```
+
+## User-based rate limiting 
 <a target="_blank" href="https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/LiteLLM_User_Based_Rate_Limits.ipynb">
   <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
 </a>
