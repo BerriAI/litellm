@@ -595,13 +595,14 @@ def test_completion_sagemaker():
             messages=messages,
             temperature=0.2,
             max_tokens=80,
+            logger_fn=logger_fn
         )
         # Add any assertions here to check the response
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-# test_completion_sagemaker()
+test_completion_sagemaker()
 ######## Test VLLM ########
 # def test_completion_vllm():
 #     try:
@@ -659,15 +660,15 @@ def test_completion_sagemaker():
 
 # test_completion_custom_api_base()
 
-def test_vertex_ai():
-    model_name = "chat-bison"
-    try:
-        response = completion(model=model_name, messages=messages, logger_fn=logger_fn)
-        print(response)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
+# def test_vertex_ai():
+#     model_name = "chat-bison"
+#     try:
+#         response = completion(model=model_name, messages=messages, logger_fn=logger_fn)
+#         print(response)
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
 
-test_vertex_ai()
+
 # def test_petals():
 #     model_name = "stabilityai/StableBeluga2"
 #     try:
