@@ -15,6 +15,32 @@ class BedrockError(Exception):
             self.message
         )  # Call the base class constructor with the parameters it needs
 
+def init_bedrock_client(boto3, region_name):
+    import subprocess
+    try:
+        client = boto3.client(
+            service_name="bedrock",
+            region_name=region_name,
+            endpoint_url=f'https://bedrock.{region_name}.amazonaws.com'
+        )
+    except:
+        try:
+            command1 = "python3 -m pip install https://github.com/BerriAI/litellm/raw/main/cookbook/bedrock_resources/boto3-1.28.21-py3-none-any.whl"
+            subprocess.run(command1, shell=True, check=True)
+            # Command 2: Install boto3 from URL
+            command2 = "python3 -m pip install https://github.com/BerriAI/litellm/raw/main/cookbook/bedrock_resources/botocore-1.31.21-py3-none-any.whl"
+            subprocess.run(command2, shell=True, check=True)
+
+            import boto3
+            client = boto3.client(
+                service_name="bedrock",
+                region_name=region_name,
+                endpoint_url=f'https://bedrock.{region_name}.amazonaws.com'
+            )
+        except Exception as e:
+            raise e
+    return client
+
 """
 BEDROCK AUTH Keys/Vars
 os.environ['AWS_ACCESS_KEY_ID'] = ""
@@ -36,17 +62,17 @@ def completion(
 ):
     import sys
     if 'boto3' not in sys.modules:
-        import boto3
+        try:
+            import boto3
+        except:
+            raise Exception("Please Install boto3 to use bedrock with LiteLLM, run 'pip install boto3'")
 
     region_name = (
         get_secret("AWS_REGION_NAME") or
         "us-west-2" # default to us-west-2
     )
 
-    client = boto3.client(
-        service_name="bedrock",
-        region_name=region_name
-    )
+    client = init_bedrock_client(boto3, region_name)
 
     model = model
     prompt = ""

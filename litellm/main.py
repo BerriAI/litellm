@@ -750,6 +750,29 @@ def completion(
 
             ## RESPONSE OBJECT
             response = model_response
+        elif custom_llm_provider == "bedrock":
+            # boto3 reads keys from .env
+            model_response = bedrock.completion(
+                model=model,
+                messages=messages,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                encoding=encoding,
+                logging_obj=logging
+            )
+
+            if "stream" in optional_params and optional_params["stream"] == True: ## [BETA]
+                # don't try to access stream object,
+                response = CustomStreamWrapper(
+                    iter(model_response), model, custom_llm_provider="bedrock", logging_obj=logging
+                )
+                return response
+
+            ## RESPONSE OBJECT
+            response = model_response
         elif custom_llm_provider == "vllm":
             model_response = vllm.completion(
                 model=model,

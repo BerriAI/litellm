@@ -179,6 +179,11 @@ aleph_alpha_models = [
 
 baseten_models = ["qvv0xeq", "q841o8w", "31dxrj3"]  # FALCON 7B  # WizardLM  # Mosaic ML
 
+bedrock_models = [
+    "amazon.titan-tg1-large",
+    "ai21.j2-grande-instruct"
+]
+
 model_list = (
     open_ai_chat_completion_models
     + open_ai_text_completion_models
@@ -212,6 +217,7 @@ provider_list = [
     "bedrock",
     "vllm",
     "nlp_cloud",
+    "bedrock",
     "custom", # custom apis
 ]
 
@@ -226,6 +232,7 @@ models_by_provider = {
     "openrouter": openrouter_models,
     "vertex_ai": vertex_chat_models + vertex_text_models,
     "ai21": ai21_models,
+    "bedrock": bedrock_models,
 }
 
 ####### EMBEDDING MODELS ###################
