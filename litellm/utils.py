@@ -180,10 +180,6 @@ class Logging:
         # Log the exact input to the LLM API
         print_verbose(f"Logging Details Pre-API Call for call id {self.litellm_call_id}")
         try:
-            if start_time is None:
-                start_time = self.start_time
-            if end_time is None:
-                end_time = datetime.datetime.now()
             # print_verbose(f"logging pre call for model: {self.model} with call type: {self.call_type}")
             self.model_call_details["input"] = input
             self.model_call_details["api_key"] = api_key
@@ -207,6 +203,8 @@ class Logging:
                     )
 
             if litellm.max_budget and self.stream:
+                start_time = self.start_time
+                end_time = self.start_time # no time has passed as the call hasn't been made yet
                 time_diff = (end_time - start_time).total_seconds()
                 float_diff = float(time_diff)
                 litellm._current_cost += litellm.completion_cost(model=self.model, prompt="".join(message["content"] for message in self.messages), completion="", total_time=float_diff)
