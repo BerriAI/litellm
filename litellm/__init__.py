@@ -269,6 +269,7 @@ from .exceptions import (
     ServiceUnavailableError,
     OpenAIError,
     ContextWindowExceededError,
+    BudgetExceededError
 
 )
 from .budget_manager import BudgetManager
