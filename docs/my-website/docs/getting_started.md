@@ -52,15 +52,15 @@ More details 👉
 LiteLLM maps exceptions across all supported providers to the OpenAI exceptions. All our exceptions inherit from OpenAI's exception types, so any error-handling you have for that, should work out of the box with LiteLLM. 
 
 ```python 
-from openai.errors import AuthenticationError
+from openai.errors import OpenAIError
 from litellm import completion
 
 os.environ["ANTHROPIC_API_KEY"] = "bad-key"
 try: 
     # some code 
     completion(model="claude-instant-1", messages=[{"role": "user", "content": "Hey, how's it going?"}])
-except AuthenticationError as e:
-    print(e.llm_provider)
+except OpenAIError as e:
+    print(e)
 ```
 
 More details 👉 

@@ -1,4 +1,4 @@
-# Use Completion() for OpenAI, Azure
+# Replacing OpenAI ChatCompletion with Completion()
 
 * [Supported OpenAI LLMs](https://docs.litellm.ai/docs/providers/openai)
 * [Supported Azure OpenAI LLMs](https://docs.litellm.ai/docs/providers/azure)
