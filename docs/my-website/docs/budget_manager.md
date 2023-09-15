@@ -1,7 +1,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# 💸 API Budget Manager
+# Budget Manager
 
 Don't want to get crazy bills because either while you're calling LLM APIs **or** while your users are calling them? use this. 
 

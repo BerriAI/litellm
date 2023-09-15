@@ -1,4 +1,4 @@
-# Open Interpreter LLM API 
+# ⚡️ LITELLM API (Access Claude-2/Llama2-70b/etc.)
 
 This is an api built for the Open Interpreter community. It provides access to: 
 * OpenAI models 
@@ -31,16 +31,38 @@ This is an api built for the Open Interpreter community. It provides access to:
 
 Here's how to call it: 
 
+## Through LiteLLM
+```python
+from litellm import completion
+import os 
+## set ENV variables
+os.environ["OPENAI_API_KEY"] = "litellm-api-key"
+
+messages = [{ "content": "Hello, how are you?","role": "user"}]
+
+response = completion(
+    model="command-nightly", 
+    messages=[{ "content": "Hello, how are you?","role": "user"}],
+    api_base="https://proxy.litellm.ai",
+    custom_llm_provider="openai",
+    temperature=0.2,
+    max_tokens=80,
+)
+print(response)
+```
+
+## In CodeInterpreter
+
 **Note**: You will need to clone and modify the Github repo, until [this PR is merged.](https://github.com/KillianLucas/open-interpreter/pull/288)
 
 In `interpreter.py` set,
-```
+```python
 os.environ["OPENAI_API_KEY"] = "openinterpreter-key"
 litellm.api_base = "https://proxy.litellm.ai"
 ```
 
 and change the model on [this line](https://github.com/KillianLucas/open-interpreter/blob/f803d0d7a545edabd541943145a2a60beaf604e4/interpreter/interpreter.py#L342C10-L342C10), to: 
-```
+```python
 self.model = "openai/gpt-4"  # 👈 always add 'openai/' in front of the model name
 ```
 
