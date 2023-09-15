@@ -34,7 +34,7 @@ from .exceptions import (
     APIError,
     BudgetExceededError
 )
-from typing import List, Dict, Union, Optional
+from typing import cast, List, Dict, Union, Optional
 from .caching import Cache
 
 
@@ -103,7 +103,7 @@ class Choices(OpenAIObject):
         self.message = message
 
 class StreamingChoices(OpenAIObject):
-    def __init__(self, finish_reason=None, index=0, delta: Optional[Delta]={}, **params):
+    def __init__(self, finish_reason=None, index=0, delta: Optional[Union[Dict, Delta]]={}, **params):
         super(StreamingChoices, self).__init__(**params)
         self.finish_reason = finish_reason
         self.index = index
