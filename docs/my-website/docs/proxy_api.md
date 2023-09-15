@@ -63,7 +63,11 @@ litellm.api_base = "https://proxy.litellm.ai"
 
 and change the model on [this line](https://github.com/KillianLucas/open-interpreter/blob/f803d0d7a545edabd541943145a2a60beaf604e4/interpreter/interpreter.py#L342C10-L342C10), to: 
 ```python
+# call gpt-4
 self.model = "openai/gpt-4"  # 👈 always add 'openai/' in front of the model name
+
+# call togethercomputer/llama-2-70b-chat
+self.model = "openai/togethercomputer/llama-2-70b-chat"  # 👈 always add 'openai/' in front of the model name
 ```
 
 And that's it! 
