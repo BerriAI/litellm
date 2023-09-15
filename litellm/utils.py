@@ -89,10 +89,11 @@ class Message(OpenAIObject):
         self.logprobs = logprobs
 
 class Delta(OpenAIObject):
-    def __init__(self, content=" ", logprobs=None, **params):
+    def __init__(self, content=" ", logprobs=None, role="assistant", **params):
         super(Delta, self).__init__(**params)
         self.content = content
         self.logprobs = logprobs
+        self.role = role
 
 
 class Choices(OpenAIObject):
@@ -1033,7 +1034,7 @@ def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None):
         elif model in litellm.ai21_models:
             custom_llm_provider = "ai21"
         ## together_ai 
-        elif model in litellm.together_ai_models:
+        elif model in litellm.together_ai_models or "togethercomputer":
             custom_llm_provider = "together_ai"
         ## aleph_alpha 
         elif model in litellm.aleph_alpha_models:
