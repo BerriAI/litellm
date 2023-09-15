@@ -2451,7 +2451,7 @@ class CustomStreamWrapper:
 
     def __next__(self):
         try:
-            completion_obj = {"content": "", "role": "assistant"} # default to role being assistant
+            completion_obj = {"content": "", "role": ""} # default to role being assistant
             if self.model in litellm.anthropic_models:
                 chunk = next(self.completion_stream)
                 completion_obj["content"] = self.handle_anthropic_chunk(chunk)
