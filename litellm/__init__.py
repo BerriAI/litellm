@@ -139,10 +139,31 @@ openrouter_models = [
     "meta-llama/llama-2-70b-chat",
 ]
 
-vertex_chat_models = ["chat-bison", "chat-bison@001"]
+vertex_chat_models = [
+    "chat-bison-32k",
+    "chat-bison", 
+    "chat-bison@001",
+]
 
+vertex_code_chat_models = [
+    "codechat-bison",
+    "codechat-bison-32k",
+    "codechat-bison@001",
+]
 
-vertex_text_models = ["text-bison", "text-bison@001"]
+vertex_text_models = [
+    "text-bison", 
+    "text-bison@001",
+    # "text-bison-32k",
+]
+
+vertex_code_text_models = [
+    "code-bison",
+    # "code-bison-32K",
+    "code-bison@001",
+    "code-gecko@001",
+    "code-gecko@latest",
+]
 
 huggingface_models = [
     "meta-llama/Llama-2-7b-hf",
