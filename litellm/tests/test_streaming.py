@@ -121,13 +121,14 @@ def test_openai_chat_completion_call():
             print(chunk)
             if "content" in chunk["choices"][0]["delta"]:
                 complete_response += chunk["choices"][0]["delta"]["content"]
-        if complete_response == "": 
+            print(f'complete_chunk: {complete_response}')
+        if complete_response.strip() == "": 
             raise Exception("Empty response received")
     except:
         print(f"error occurred: {traceback.format_exc()}")
         pass
 
-# test_openai_chat_completion_call()
+test_openai_chat_completion_call()
 async def completion_call():
     try:
         response = completion(
