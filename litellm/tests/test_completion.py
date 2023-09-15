@@ -734,6 +734,22 @@ def test_completion_bedrock_ai21():
 #             pytest.fail(f"Error occurred: {e}")
 # test_vertex_ai()
 
+# def test_vertex_ai_stream():
+#     litellm.vertex_project = "hardy-device-386718"
+#     litellm.vertex_location = "us-central1"
+#     test_models = litellm.vertex_chat_models + litellm.vertex_code_chat_models + litellm.vertex_text_models + litellm.vertex_code_text_models
+#     for model in test_models:
+#         try:
+#             print("making request", model)
+#             response = completion(model=model, messages=[{"role": "user", "content": "write code for saying hi"}], stream=True)
+#             print(response)
+#             for chunk in response:
+#                 print(chunk)
+#                 # pass
+#         except Exception as e:
+#             pytest.fail(f"Error occurred: {e}")
+# test_vertex_ai_stream()
+
 
 def test_completion_with_fallbacks():
     fallbacks = ["gpt-3.5-turb", "gpt-3.5-turbo", "command-nightly"]
