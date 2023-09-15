@@ -116,9 +116,11 @@ def test_openai_chat_completion_call():
         complete_response = ""
         start_time = time.time()
         for chunk in response:
-            chunk_time = time.time() 
-            print(f"time since initial request: {chunk_time - start_time:.5f}")
             print(chunk)
+            if chunk["choices"][0]["finish_reason"]:
+                break
+            # if chunk["choices"][0]["delta"]["role"] != "assistant":
+            #     raise Exception("invalid role")
             if "content" in chunk["choices"][0]["delta"]:
                 complete_response += chunk["choices"][0]["delta"]["content"]
             print(f'complete_chunk: {complete_response}')

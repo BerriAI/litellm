@@ -89,10 +89,12 @@ class Message(OpenAIObject):
         self.logprobs = logprobs
 
 class Delta(OpenAIObject):
-    def __init__(self, content=" ", logprobs=None, role="assistant", **params):
+    def __init__(self, content="<special_litellm_token>", logprobs=None, role=None, **params):
         super(Delta, self).__init__(**params)
-        self.content = content
-        self.role = role
+        if content != "<special_litellm_token>":
+            self.content = content
+        if role:
+            self.role = role
 
 
 class Choices(OpenAIObject):
@@ -2501,9 +2503,11 @@ class CustomStreamWrapper:
             threading.Thread(target=self.logging_obj.success_handler, args=(completion_obj,)).start()
             # return this for all models
             model_response = ModelResponse(stream=True)
-            model_response.choices[0].delta.content = completion_obj["content"]
+            model_response.choices[0].delta = {
+                "content": completion_obj["content"],
+            }
             if "role" in completion_obj: 
-                model_response.choices[0].delta.role = completion_obj["role"]
+                model_response.choices[0].delta = completion_obj
             return model_response
         except StopIteration:
             raise StopIteration
