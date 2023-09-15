@@ -1,14 +1,14 @@
 # Together AI 
 LiteLLM supports all models on Together AI. 
 
-### API KEYS
+## API KEYS
 
 ```python 
 import os 
 os.environ["TOGETHERAI_API_KEY"] = ""
 ```
 
-### Sample Usage
+## Sample Usage
 
 ```python
 from litellm import completion 
@@ -21,19 +21,18 @@ messages = [{"role": "user", "content": "Write me a poem about the blue sky"}]
 completion(model="togethercomputer/Llama-2-7B-32K-Instruct", messages=messages)
 ```
 
-### Together AI Models
+## Together AI Models
 liteLLM supports `non-streaming` and `streaming` requests to all models on https://api.together.xyz/
 
 Example TogetherAI Usage - Note: liteLLM supports all models deployed on TogetherAI
 
-### Together AI Models
 
-#### Llama LLMs - Chat
+### Llama LLMs - Chat
 | Model Name                        | Function Call                                                          | Required OS Variables           |
 |-----------------------------------|------------------------------------------------------------------------|---------------------------------|
 | togethercomputer/llama-2-70b-chat  | `completion('togethercomputer/llama-2-70b-chat', messages)`            | `os.environ['TOGETHERAI_API_KEY']` |
 
-#### Llama LLMs - Language / Instruct
+### Llama LLMs - Language / Instruct
 | Model Name                        | Function Call                                                          | Required OS Variables           |
 |-----------------------------------|------------------------------------------------------------------------|---------------------------------|
 | togethercomputer/llama-2-70b      | `completion('togethercomputer/llama-2-70b', messages)`                | `os.environ['TOGETHERAI_API_KEY']` |
@@ -41,23 +40,23 @@ Example TogetherAI Usage - Note: liteLLM supports all models deployed on Togethe
 | togethercomputer/Llama-2-7B-32K-Instruct | `completion('togethercomputer/Llama-2-7B-32K-Instruct', messages)`  | `os.environ['TOGETHERAI_API_KEY']` |
 | togethercomputer/llama-2-7b        | `completion('togethercomputer/llama-2-7b', messages)`                  | `os.environ['TOGETHERAI_API_KEY']` |
 
-#### Falcon LLMs
+### Falcon LLMs
 | Model Name                        | Function Call                                                          | Required OS Variables           |
 |-----------------------------------|------------------------------------------------------------------------|---------------------------------|
 | togethercomputer/falcon-40b-instruct | `completion('togethercomputer/falcon-40b-instruct', messages)`      | `os.environ['TOGETHERAI_API_KEY']` |
 | togethercomputer/falcon-7b-instruct  | `completion('togethercomputer/falcon-7b-instruct', messages)`        | `os.environ['TOGETHERAI_API_KEY']` |
 
-#### Alpaca LLMs
+### Alpaca LLMs
 | Model Name                        | Function Call                                                          | Required OS Variables           |
 |-----------------------------------|------------------------------------------------------------------------|---------------------------------|
 | togethercomputer/alpaca-7b        | `completion('togethercomputer/alpaca-7b', messages)`                  | `os.environ['TOGETHERAI_API_KEY']` |
 
-#### Other Chat LLMs
+### Other Chat LLMs
 | Model Name                        | Function Call                                                          | Required OS Variables           |
 |-----------------------------------|------------------------------------------------------------------------|---------------------------------|
 | HuggingFaceH4/starchat-alpha      | `completion('HuggingFaceH4/starchat-alpha', messages)`                | `os.environ['TOGETHERAI_API_KEY']` |
 
-#### Code LLMs
+### Code LLMs
 | Model Name                        | Function Call                                                          | Required OS Variables           |
 |-----------------------------------|------------------------------------------------------------------------|---------------------------------|
 | togethercomputer/CodeLlama-34b     | `completion('togethercomputer/CodeLlama-34b', messages)`              | `os.environ['TOGETHERAI_API_KEY']` |
@@ -68,7 +67,7 @@ Example TogetherAI Usage - Note: liteLLM supports all models deployed on Togethe
 | WizardLM/WizardCoder-15B-V1.0      | `completion('WizardLM/WizardCoder-15B-V1.0', messages)`              | `os.environ['TOGETHERAI_API_KEY']` |
 | WizardLM/WizardCoder-Python-34B-V1.0 | `completion('WizardLM/WizardCoder-Python-34B-V1.0', messages)`    | `os.environ['TOGETHERAI_API_KEY']` |
 
-#### Language LLMs
+### Language LLMs
 | Model Name                        | Function Call                                                          | Required OS Variables           |
 |-----------------------------------|------------------------------------------------------------------------|---------------------------------|
 | NousResearch/Nous-Hermes-Llama2-13b | `completion('NousResearch/Nous-Hermes-Llama2-13b', messages)`    | `os.environ['TOGETHERAI_API_KEY']` |
@@ -77,13 +76,11 @@ Example TogetherAI Usage - Note: liteLLM supports all models deployed on Togethe
 | WizardLM/WizardLM-70B-V1.0          | `completion('WizardLM/WizardLM-70B-V1.0', messages)`              | `os.environ['TOGETHERAI_API_KEY']` |
 
 
-
-
-### Prompt Templates
+## Prompt Templates
 
 Using a chat model on Together AI with it's own prompt format?
 
-#### Using Llama2 Instruct models
+### Using Llama2 Instruct models
 If you're using Together AI's Llama2 variants( `model=togethercomputer/llama-2..-instruct`), LiteLLM can automatically translate between the OpenAI prompt format and the TogetherAI Llama2 one (`[INST]..[/INST]`). 
 
 ```python
@@ -97,7 +94,7 @@ messages = [{"role": "user", "content": "Write me a poem about the blue sky"}]
 completion(model="together_ai/togethercomputer/Llama-2-7B-32K-Instruct", messages=messages)
 ```
 
-#### Using another model
+### Using another model
 
 You can create a custom prompt template on LiteLLM (and we [welcome PRs](https://github.com/BerriAI/litellm) to add them to the main repo 🤗)
 
@@ -209,7 +206,7 @@ print(response)
 }
 ```
 
-### Advanced Usage
+## Advanced Usage
 
 Instead of using the `custom_llm_provider` arg to specify which provider you're using (e.g. together ai), you can just pass the provider name as part of the model name, and LiteLLM will parse it out. 
 
