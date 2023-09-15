@@ -40,7 +40,8 @@ def test_completion_cohere_stream():
         # Add any assertions here to check the response
         for chunk in response:
             print(f"chunk: {chunk}")
-            complete_response += chunk["choices"][0]["delta"]["content"]
+            if "content" in chunk["choices"][0]["delta"]:
+                complete_response += chunk["choices"][0]["delta"]["content"]
         if complete_response == "": 
             raise Exception("Empty response received")
         print(f"completion_response: {complete_response}")
@@ -79,7 +80,8 @@ def test_openai_text_completion_call():
         for chunk in response:
             chunk_time = time.time()
             print(f"chunk: {chunk}")
-            complete_response += chunk["choices"][0]["delta"]["content"]
+            if "content" in chunk["choices"][0]["delta"]:
+                complete_response += chunk["choices"][0]["delta"]["content"]
         if complete_response == "": 
             raise Exception("Empty response received")
     except:
@@ -98,15 +100,15 @@ def ai21_completion_call():
         for chunk in response:
             chunk_time = time.time()
             print(f"time since initial request: {chunk_time - start_time:.5f}")
-            print(chunk["choices"][0]["delta"])
-            complete_response += chunk["choices"][0]["delta"]["content"]
+            print(chunk)
+            if "content" in chunk["choices"][0]["delta"]:
+                complete_response += chunk["choices"][0]["delta"]["content"]
         if complete_response == "": 
             raise Exception("Empty response received")
     except:
         print(f"error occurred: {traceback.format_exc()}")
         pass
 
-ai21_completion_call()
 # test on openai completion call
 def test_openai_chat_completion_call():
     try:
@@ -118,14 +120,16 @@ def test_openai_chat_completion_call():
         for chunk in response:
             chunk_time = time.time() 
             print(f"time since initial request: {chunk_time - start_time:.5f}")
-            print(chunk["choices"][0]["delta"])
-            complete_response += chunk["choices"][0]["delta"]["content"]
+            print(chunk)
+            if "content" in chunk["choices"][0]["delta"]:
+                complete_response += chunk["choices"][0]["delta"]["content"]
         if complete_response == "": 
             raise Exception("Empty response received")
     except:
         print(f"error occurred: {traceback.format_exc()}")
         pass
 
+# test_openai_chat_completion_call()
 async def completion_call():
     try:
         response = completion(
@@ -139,7 +143,8 @@ async def completion_call():
             chunk_time = time.time()
             print(f"time since initial request: {chunk_time - start_time:.5f}")
             print(chunk["choices"][0]["delta"])
-            complete_response += chunk["choices"][0]["delta"]["content"]
+            if "content" in chunk["choices"][0]["delta"]:
+                complete_response += chunk["choices"][0]["delta"]["content"]
         if complete_response == "": 
             raise Exception("Empty response received")
     except:
@@ -205,6 +210,8 @@ def test_together_ai_completion_call_replit():
             )
         if complete_response == "":
             raise Exception("Empty response received")
+    except KeyError as e:
+        pass
     except:
         print(f"error occurred: {traceback.format_exc()}")
         pass
@@ -232,6 +239,8 @@ def test_together_ai_completion_call_starcoder():
                 print(complete_response)
         if complete_response == "":
             raise Exception("Empty response received")
+    except KeyError as e:
+        pass
     except:
         print(f"error occurred: {traceback.format_exc()}")
         pass
@@ -281,6 +290,8 @@ async def ai21_async_completion_call():
             complete_response += chunk["choices"][0]["delta"]["content"]
         if complete_response == "": 
             raise Exception("Empty response received")
+    except KeyError as e:
+        pass
     except:
         print(f"error occurred: {traceback.format_exc()}")
         pass
