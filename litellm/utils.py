@@ -103,7 +103,7 @@ class Choices(OpenAIObject):
         self.message = message
 
 class StreamingChoices(OpenAIObject):
-    def __init__(self, finish_reason=None, index=0, delta: Optional[Union[Dict, Delta]]={}, **params):
+    def __init__(self, finish_reason=None, index=0, delta=Delta(), **params):
         super(StreamingChoices, self).__init__(**params)
         self.finish_reason = finish_reason
         self.index = index
@@ -2492,11 +2492,12 @@ class CustomStreamWrapper:
             model_response = ModelResponse(stream=True)
             model_response.choices[0].delta = completion_obj
             return model_response
+        except StopIteration:
+            raise StopIteration
         except Exception as e:
             model_response = ModelResponse(stream=True)
             model_response.choices[0].finish_reason = "stop"
             return model_response
-            # raise StopIteration
     
     async def __anext__(self):
         try:
