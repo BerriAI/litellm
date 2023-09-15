@@ -609,7 +609,7 @@ def completion(
                 )
                 return response
             response = model_response
-        elif custom_llm_provider == "together_ai" or ("togethercomputer" in model):
+        elif custom_llm_provider == "together_ai" or ("togethercomputer" in model) or (model  in litellm.together_ai_models):
             custom_llm_provider = "together_ai"
             together_ai_key = (
                 api_key
