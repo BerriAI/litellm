@@ -18,7 +18,7 @@ os.environ["TOGETHERAI_API_KEY"] = ""
 
 messages = [{"role": "user", "content": "Write me a poem about the blue sky"}]
 
-completion(model="togethercomputer/Llama-2-7B-32K-Instruct", messages=messages, custom_llm_provider="together_ai")
+completion(model="togethercomputer/Llama-2-7B-32K-Instruct", messages=messages)
 ```
 
 ### Together AI Models
@@ -29,10 +29,15 @@ Example TogetherAI Usage - Note: liteLLM supports all models deployed on Togethe
 | Model Name                        | Function Call                                                          | Required OS Variables           |
 |-----------------------------------|------------------------------------------------------------------------|---------------------------------|
 | togethercomputer/llama-2-70b-chat  | `completion('togethercomputer/llama-2-70b-chat', messages)`            | `os.environ['TOGETHERAI_API_KEY']` |
+| togethercomputer/llama-2-70b      | `completion('togethercomputer/llama-2-70b', messages)`                | `os.environ['TOGETHERAI_API_KEY']` |
 | togethercomputer/LLaMA-2-13b-chat  | `completion('togethercomputer/LLaMA-2-13b-chat', messages)`            | `os.environ['TOGETHERAI_API_KEY']` |
-| togethercomputer/code-and-talk-v1 | `completion('togethercomputer/code-and-talk-v1', messages)`           | `os.environ['TOGETHERAI_API_KEY']` |
-| togethercomputer/creative-v1      | `completion('togethercomputer/creative-v1', messages)`                | `os.environ['TOGETHERAI_API_KEY']` |
-| togethercomputer/yourmodel        | `completion('togethercomputer/yourmodel', messages)`                  | `os.environ['TOGETHERAI_API_KEY']` |
+| togethercomputer/LLaMA-2-7B-32K    | `completion('togethercomputer/LLaMA-2-7B-32K', messages)`              | `os.environ['TOGETHERAI_API_KEY']` |
+| togethercomputer/Llama-2-7B-32K-Instruct | `completion('togethercomputer/Llama-2-7B-32K-Instruct', messages)`  | `os.environ['TOGETHERAI_API_KEY']` |
+| togethercomputer/llama-2-7b        | `completion('togethercomputer/llama-2-7b', messages)`                  | `os.environ['TOGETHERAI_API_KEY']` |
+| togethercomputer/CodeLlama-34b     | `completion('togethercomputer/CodeLlama-34b', messages)`              | `os.environ['TOGETHERAI_API_KEY']` |
+| togethercomputer/CodeLlama-34b-Instruct | `completion('togethercomputer/CodeLlama-34b-Instruct', messages)`  | `os.environ['TOGETHERAI_API_KEY']` |
+| togethercomputer/CodeLlama-34b-Python | `completion('togethercomputer/CodeLlama-34b-Python', messages)`    | `os.environ['TOGETHERAI_API_KEY']` |
+
 
 
 ### Prompt Templates

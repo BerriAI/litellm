@@ -875,10 +875,14 @@ def get_optional_params(  # use the openai defaults
             optional_params["temperature"] = temperature
         if top_p != 1:
             optional_params["top_p"] = top_p
+        if top_k != 40:
+            optional_params["top_k"] = top_k
         if max_tokens != float("inf"):
             optional_params["max_tokens"] = max_tokens
         if frequency_penalty != 0:
-            optional_params["frequency_penalty"] = frequency_penalty
+            optional_params["frequency_penalty"] = frequency_penalty # should be repetition penalty
+        if stop != None:
+            optional_params["stop"] = stop #TG AI expects a list, example ["\n\n\n\n","&lt;|endoftext|&gt;"]
     elif (
         model == "chat-bison"
     ):  # chat-bison has diff args from chat-bison@001 ty Google
