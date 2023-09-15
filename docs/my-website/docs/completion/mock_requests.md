@@ -1,4 +1,4 @@
-# Mock Requests
+# Mock Requests - Save Testing Costs 
 
 For testing purposes, you can use `completion()` with `mock_response` to mock calling the completion endpoint. 
 
@@ -26,18 +26,6 @@ for chunk in response:
     complete_response += chunk["choices"][0]["delta"]["content"]
 ```
 
-## set mock response
-You can also customize the mock response text returned. By default it's set to - `This is a mock request`. But you can override this with `mock_response`. 
-
-```python
-model = "gpt-3.5-turbo"
-messages = [{"role": "user", "content": "Hey, I'm a mock request"}]
-response = litellm.mock_completion(model=model, messages=messages, mock_response="My custom mock response", stream=True)
-for chunk in response: 
-    print(chunk) # {'choices': [{'delta': {'role': 'assistant', 'content': 'My '}, 'finish_reason': None}]}
-    complete_response += chunk["choices"][0]["delta"]["content"]
-```
-
 ## (Non-streaming) Mock Response Object 
 
 ```json
@@ -61,4 +49,24 @@ for chunk in response:
     "total_tokens": null
   }
 }
+```
+
+## Building a pytest function using `completion` with mock_response
+
+```python
+from litellm import completion
+import pytest
+
+def test_completion_openai():
+    try:
+        response = completion(
+            model="gpt-3.5-turbo",
+            messages=[{"role":"user", "content":"Why is LiteLLM amazing?"}],
+            mock_response="LiteLLM is awesome"
+        )
+        # Add any assertions here to check the response
+        print(response)
+        assert(response['choices'][0]['message']['content'] == "LiteLLM is awesome")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 ```
