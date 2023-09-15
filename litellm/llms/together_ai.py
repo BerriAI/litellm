@@ -104,7 +104,6 @@ def completion(
                 message=json.dumps(completion_response["output"]), status_code=response.status_code
             )
 
-        print(completion_response)
         completion_text = completion_response["output"]["choices"][0]["text"]
 
         ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here.
