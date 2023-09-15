@@ -885,8 +885,8 @@ def get_optional_params(  # use the openai defaults
         if stop != None:
             optional_params["stop"] = stop #TG AI expects a list, example ["\n\n\n\n","&lt;|endoftext|&gt;"]
     elif (
-        model == "chat-bison"
-    ):  # chat-bison has diff args from chat-bison@001 ty Google
+        model in litellm.vertex_chat_models or model in litellm.vertex_code_chat_models
+    ):  # chat-bison has diff args from chat-bison@001, ty Google :) 
         if temperature != 1:
             optional_params["temperature"] = temperature
         if top_p != 1:
@@ -900,6 +900,12 @@ def get_optional_params(  # use the openai defaults
         optional_params["temperature"] = temperature
         optional_params["top_p"] = top_p
         optional_params["top_k"] = top_k
+        if max_tokens != float("inf"):
+            optional_params["max_output_tokens"] = max_tokens
+    elif model in model in litellm.vertex_code_text_models:
+        optional_params["temperature"] = temperature
+        if max_tokens != float("inf"):
+            optional_params["max_output_tokens"] = max_tokens
     elif custom_llm_provider == "baseten":
         optional_params["temperature"] = temperature
         optional_params["stream"] = stream
@@ -2482,6 +2488,9 @@ class CustomStreamWrapper:
             elif self.model in litellm.nlp_cloud_models or self.custom_llm_provider == "nlp_cloud":
                 chunk = next(self.completion_stream)
                 completion_obj["content"] = self.handle_nlp_cloud_chunk(chunk)
+            elif self.model in (litellm.vertex_chat_models + litellm.vertex_code_chat_models + litellm.vertex_text_models + litellm.vertex_code_text_models):
+                chunk = next(self.completion_stream)
+                completion_obj["content"] = str(chunk)
             elif self.model in litellm.cohere_models or self.custom_llm_provider == "cohere":
                 chunk = next(self.completion_stream)
                 completion_obj["content"] = self.handle_cohere_chunk(chunk)

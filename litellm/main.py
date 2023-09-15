@@ -659,6 +659,14 @@ def completion(
                 chat_model = CodeChatModel.from_pretrained(model)
 
             chat = chat_model.start_chat()
+
+            if stream:
+                model_response = chat.send_message_streaming(prompt, **optional_params)
+                response = CustomStreamWrapper(
+                    model_response, model, custom_llm_provider="vertexai", logging_obj=logging
+                )
+                return response
+
             completion_response = chat.send_message(prompt, **optional_params)
 
             ## LOGGING
@@ -691,6 +699,13 @@ def completion(
                 vertex_model = TextGenerationModel.from_pretrained(model)
             else:
                 vertex_model = CodeGenerationModel.from_pretrained(model)
+
+            if stream:
+                model_response = vertex_model.predict_streaming(prompt, **optional_params)
+                response = CustomStreamWrapper(
+                    model_response, model, custom_llm_provider="vertexai", logging_obj=logging
+                )
+                return response
 
             completion_response = vertex_model.predict(prompt, **optional_params)
 
