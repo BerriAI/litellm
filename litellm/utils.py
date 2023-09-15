@@ -2452,7 +2452,7 @@ class CustomStreamWrapper:
 
     def __next__(self):
         try:
-            completion_obj = {"content": ""}
+            completion_obj = {"content": "", "role": "assistant"} # default to role being assistant
             if self.model in litellm.anthropic_models:
                 chunk = next(self.completion_stream)
                 completion_obj["content"] = self.handle_anthropic_chunk(chunk)
@@ -2497,6 +2497,7 @@ class CustomStreamWrapper:
             else: # openai chat/azure models
                 chunk = next(self.completion_stream)
                 completion_obj["content"] = chunk["choices"][0]["delta"]["content"]
+                completion_obj["role"] = chunk["choices"][0]["delta"]["role"]
                 # return chunk # open ai returns finish_reason, we should just return the openai chunk
             
                 #completion_obj["content"] = self.handle_openai_chat_completion_chunk(chunk)
