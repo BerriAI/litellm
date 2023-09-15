@@ -12,9 +12,6 @@ import pytest
 import litellm
 from litellm import embedding, completion, text_completion, completion_cost
 
-litellm.vertex_project = "pathrise-convert-1606954137718"
-litellm.vertex_location = "us-central1"
-
 user_message = "Write a short poem about the sky"
 messages = [{"content": user_message, "role": "user"}]
 
@@ -647,7 +644,7 @@ def test_completion_bedrock_titan():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_bedrock_titan()
+# test_completion_bedrock_titan()
 
 
 def test_completion_bedrock_ai21():
@@ -663,7 +660,7 @@ def test_completion_bedrock_ai21():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_bedrock_ai21()
+# test_completion_bedrock_ai21()
 
 
 # test_completion_sagemaker()
@@ -725,28 +722,17 @@ test_completion_bedrock_ai21()
 # test_completion_custom_api_base()
 
 # def test_vertex_ai():
-#     model_name = "chat-bison"
-#     try:
-#         response = completion(model=model_name, messages=messages, logger_fn=logger_fn)
-#         print(response)
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
-
-
-# def test_petals():
-#     model_name = "stabilityai/StableBeluga2"
-#     try:
-#         response = completion(
-#             model=model_name,
-#             messages=messages,
-#             custom_llm_provider="petals",
-#             force_timeout=120,
-#         )
-#         # Add any assertions here to check the response
-#         print(response)
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
-
+#     litellm.vertex_project = "hardy-device-386718"
+#     litellm.vertex_location = "us-central1"
+#     test_models = litellm.vertex_chat_models + litellm.vertex_code_chat_models + litellm.vertex_text_models + litellm.vertex_code_text_models
+#     for model in test_models:
+#         try:
+#             print("making request", model)
+#             response = completion(model=model, messages=[{"role": "user", "content": "write code for saying hi"}])
+#             print(response)
+#         except Exception as e:
+#             pytest.fail(f"Error occurred: {e}")
+# test_vertex_ai()
 
 
 def test_completion_with_fallbacks():
