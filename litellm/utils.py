@@ -92,7 +92,6 @@ class Delta(OpenAIObject):
     def __init__(self, content=" ", logprobs=None, role="assistant", **params):
         super(Delta, self).__init__(**params)
         self.content = content
-        self.logprobs = logprobs
         self.role = role
 
 
