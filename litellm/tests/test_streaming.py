@@ -40,15 +40,13 @@ def test_completion_cohere_stream():
         # Add any assertions here to check the response
         for chunk in response:
             print(f"chunk: {chunk}")
-            if "content" in chunk["choices"][0]["delta"]:
-                complete_response += chunk["choices"][0]["delta"]["content"]
+            complete_response += chunk["choices"][0]["delta"]["content"]
         if complete_response == "": 
             raise Exception("Empty response received")
         print(f"completion_response: {complete_response}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-
-
+        
 # test on baseten completion call
 # try:
 #     response = completion(
@@ -290,8 +288,6 @@ async def ai21_async_completion_call():
             complete_response += chunk["choices"][0]["delta"]["content"]
         if complete_response == "": 
             raise Exception("Empty response received")
-    except KeyError as e:
-        pass
     except:
         print(f"error occurred: {traceback.format_exc()}")
         pass
