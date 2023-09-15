@@ -25,7 +25,7 @@ In order to use your custom OpenAI Chat Completion proxy with LiteLLM, ensure yo
 * `custom_llm_provider` to `openai` this ensures litellm uses the `openai.ChatCompletion` to your api_base
 
 ```python
-
+import os
 from litellm import completion
 
 ## set ENV variables
