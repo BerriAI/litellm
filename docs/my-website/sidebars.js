@@ -88,7 +88,6 @@ const sidebars = {
         'tutorials/ab_test_llms',
         'tutorials/huggingface_tutorial', 
         'tutorials/TogetherAI_liteLLM', 
-        'tutorials/mock_completion',
         'tutorials/finetuned_chat_gpt',
         'tutorials/sagemaker_llms',
         'tutorials/text_completion',
