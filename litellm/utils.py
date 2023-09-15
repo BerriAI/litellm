@@ -89,7 +89,7 @@ class Message(OpenAIObject):
         self.logprobs = logprobs
 
 class Delta(OpenAIObject):
-    def __init__(self, content="default", logprobs=None, **params):
+    def __init__(self, content=" ", logprobs=None, **params):
         super(Delta, self).__init__(**params)
         self.content = content
         self.logprobs = logprobs
