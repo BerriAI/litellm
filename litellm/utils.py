@@ -880,7 +880,7 @@ def get_optional_params(  # use the openai defaults
         if max_tokens != float("inf"):
             optional_params["max_tokens"] = max_tokens
         if frequency_penalty != 0:
-            optional_params["frequency_penalty"] = frequency_penalty # should be repetition penalty
+            optional_params["frequency_penalty"] = frequency_penalty # TODO: Check if should be repetition penalty
         if stop != None:
             optional_params["stop"] = stop #TG AI expects a list, example ["\n\n\n\n","&lt;|endoftext|&gt;"]
     elif (
