@@ -1,4 +1,4 @@
-# ⚡️ LITELLM API (Access Claude-2/Llama2-70b/etc.)
+# 🚨 LITELLM API (Access Claude-2/Llama2-70b/etc.)
 
 This is an api built for the Open Interpreter community. It provides access to: 
 * OpenAI models 
