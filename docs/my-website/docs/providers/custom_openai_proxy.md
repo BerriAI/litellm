@@ -37,7 +37,7 @@ response = completion(
     model="command-nightly", 
     messages=[{ "content": "Hello, how are you?","role": "user"}],
     api_base="https://openai-proxy.berriai.repl.co",
-    custom_llm_provider="openai"
+    custom_llm_provider="openai",
     temperature=0.2,
     max_tokens=80,
 )
