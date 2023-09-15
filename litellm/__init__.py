@@ -164,9 +164,16 @@ ai21_models = ["j2-ultra", "j2-mid", "j2-light"]
 nlp_cloud_models = ["dolphin", "chatdolphin"]
 
 together_ai_models = [
+    # llama llms
     "togethercomputer/llama-2-70b-chat",
+    "togethercomputer/llama-2-70b",
+    "togethercomputer/LLaMA-2-7B-32K",
     "togethercomputer/Llama-2-7B-32K-Instruct",
     "togethercomputer/llama-2-7b",
+    "togethercomputer/CodeLlama-34b",
+    "togethercomputer/CodeLlama-34b-Instruct",
+    "togethercomputer/CodeLlama-34b-Python",
+
 ] # supports all together ai models, just pass in the model id e.g. completion(model="together_computer/replit_code_3b",...)
 
 aleph_alpha_models = [
