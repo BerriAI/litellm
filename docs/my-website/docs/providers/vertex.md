@@ -12,9 +12,9 @@ Sample notebook for calling VertexAI models: https://github.com/BerriAI/litellm/
 ## Set Vertex Project & Vertex Location
 All calls using Vertex AI require the following parameters:
 * Your Project ID
-`litellm.vertex_project` = "hardy-device-38811" Your Project ID
+`litellm.vertex_project = "hardy-device-38811" Your Project ID`
 * Your Project Location
-`litellm.vertex_location` = "us-central1" 
+`litellm.vertex_location = "us-central1" `
 
 ## Sample Usage
 ```python
