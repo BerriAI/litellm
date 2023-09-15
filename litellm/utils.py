@@ -2495,13 +2495,15 @@ class CustomStreamWrapper:
                 completion_obj["content"] = self.handle_cohere_chunk(chunk)
             else: # openai chat/azure models
                 chunk = next(self.completion_stream)
-                completion_obj["content"] = chunk["choices"][0]["delta"]["content"]
+                completion_obj = chunk["choices"][0]["delta"]
 
             # LOGGING
             threading.Thread(target=self.logging_obj.success_handler, args=(completion_obj,)).start()
             # return this for all models
             model_response = ModelResponse(stream=True)
             model_response.choices[0].delta.content = completion_obj["content"]
+            if "role" in completion_obj: 
+                model_response.choices[0].delta.role = completion_obj["role"]
             return model_response
         except StopIteration:
             raise StopIteration
