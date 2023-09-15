@@ -1,22 +1,29 @@
 # VertexAI / Google Palm
-LiteLLM supports chat-bison, chat-bison@001, text-bison, text-bison@001
 
 ## Google VertexAI Models
 Sample notebook for calling VertexAI models: https://github.com/BerriAI/litellm/blob/main/cookbook/liteLLM_VertextAI_Example.ipynb
 
+## Pre-requisites
+* `pip install google-cloud-aiplatform`
+* Authentication: 
+    * run `gcloud auth application-default login` See [Google Cloud Docs](https://cloud.google.com/docs/authentication/external/set-up-adc)
+    * Alternatively you can set `application_default_credentials.json`
+
+## Set Vertex Project & Vertex Location
 All calls using Vertex AI require the following parameters:
 * Your Project ID
 `litellm.vertex_project` = "hardy-device-38811" Your Project ID
 * Your Project Location
 `litellm.vertex_location` = "us-central1" 
 
-## Pre-requisites
-`pip install google-cloud-aiplatform`
+## Sample Usage
+```python
+import litellm
+litellm.vertex_project = "hardy-device-38811" # Your Project ID
+litellm.vertex_location = "us-central1"  # proj location
 
-Authentication:
-VertexAI uses Application Default Credentials, see https://cloud.google.com/docs/authentication/external/set-up-adc for more information on setting this up
-
-VertexAI requires you to set `application_default_credentials.json`, this can be set by running `gcloud auth application-default login` in your terminal
+response = completion(model="chat-bison", messages=[{"role": "user", "content": "write code for saying hi from LiteLLM"}])
+```
 
 ## Chat Models
 | Model Name       | Function Call                        |
