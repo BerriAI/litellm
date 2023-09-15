@@ -26,17 +26,56 @@ liteLLM supports `non-streaming` and `streaming` requests to all models on https
 
 Example TogetherAI Usage - Note: liteLLM supports all models deployed on TogetherAI
 
+### Together AI Models
+
+#### Llama LLMs - Chat
 | Model Name                        | Function Call                                                          | Required OS Variables           |
 |-----------------------------------|------------------------------------------------------------------------|---------------------------------|
 | togethercomputer/llama-2-70b-chat  | `completion('togethercomputer/llama-2-70b-chat', messages)`            | `os.environ['TOGETHERAI_API_KEY']` |
+
+#### Llama LLMs - Language / Instruct
+| Model Name                        | Function Call                                                          | Required OS Variables           |
+|-----------------------------------|------------------------------------------------------------------------|---------------------------------|
 | togethercomputer/llama-2-70b      | `completion('togethercomputer/llama-2-70b', messages)`                | `os.environ['TOGETHERAI_API_KEY']` |
-| togethercomputer/LLaMA-2-13b-chat  | `completion('togethercomputer/LLaMA-2-13b-chat', messages)`            | `os.environ['TOGETHERAI_API_KEY']` |
 | togethercomputer/LLaMA-2-7B-32K    | `completion('togethercomputer/LLaMA-2-7B-32K', messages)`              | `os.environ['TOGETHERAI_API_KEY']` |
 | togethercomputer/Llama-2-7B-32K-Instruct | `completion('togethercomputer/Llama-2-7B-32K-Instruct', messages)`  | `os.environ['TOGETHERAI_API_KEY']` |
 | togethercomputer/llama-2-7b        | `completion('togethercomputer/llama-2-7b', messages)`                  | `os.environ['TOGETHERAI_API_KEY']` |
+
+#### Falcon LLMs
+| Model Name                        | Function Call                                                          | Required OS Variables           |
+|-----------------------------------|------------------------------------------------------------------------|---------------------------------|
+| togethercomputer/falcon-40b-instruct | `completion('togethercomputer/falcon-40b-instruct', messages)`      | `os.environ['TOGETHERAI_API_KEY']` |
+| togethercomputer/falcon-7b-instruct  | `completion('togethercomputer/falcon-7b-instruct', messages)`        | `os.environ['TOGETHERAI_API_KEY']` |
+
+#### Alpaca LLMs
+| Model Name                        | Function Call                                                          | Required OS Variables           |
+|-----------------------------------|------------------------------------------------------------------------|---------------------------------|
+| togethercomputer/alpaca-7b        | `completion('togethercomputer/alpaca-7b', messages)`                  | `os.environ['TOGETHERAI_API_KEY']` |
+
+#### Other Chat LLMs
+| Model Name                        | Function Call                                                          | Required OS Variables           |
+|-----------------------------------|------------------------------------------------------------------------|---------------------------------|
+| HuggingFaceH4/starchat-alpha      | `completion('HuggingFaceH4/starchat-alpha', messages)`                | `os.environ['TOGETHERAI_API_KEY']` |
+
+#### Code LLMs
+| Model Name                        | Function Call                                                          | Required OS Variables           |
+|-----------------------------------|------------------------------------------------------------------------|---------------------------------|
 | togethercomputer/CodeLlama-34b     | `completion('togethercomputer/CodeLlama-34b', messages)`              | `os.environ['TOGETHERAI_API_KEY']` |
 | togethercomputer/CodeLlama-34b-Instruct | `completion('togethercomputer/CodeLlama-34b-Instruct', messages)`  | `os.environ['TOGETHERAI_API_KEY']` |
 | togethercomputer/CodeLlama-34b-Python | `completion('togethercomputer/CodeLlama-34b-Python', messages)`    | `os.environ['TOGETHERAI_API_KEY']` |
+| defog/sqlcoder                     | `completion('defog/sqlcoder', messages)`                                | `os.environ['TOGETHERAI_API_KEY']` |
+| NumbersStation/nsql-llama-2-7B     | `completion('NumbersStation/nsql-llama-2-7B', messages)`            | `os.environ['TOGETHERAI_API_KEY']` |
+| WizardLM/WizardCoder-15B-V1.0      | `completion('WizardLM/WizardCoder-15B-V1.0', messages)`              | `os.environ['TOGETHERAI_API_KEY']` |
+| WizardLM/WizardCoder-Python-34B-V1.0 | `completion('WizardLM/WizardCoder-Python-34B-V1.0', messages)`    | `os.environ['TOGETHERAI_API_KEY']` |
+
+#### Language LLMs
+| Model Name                        | Function Call                                                          | Required OS Variables           |
+|-----------------------------------|------------------------------------------------------------------------|---------------------------------|
+| NousResearch/Nous-Hermes-Llama2-13b | `completion('NousResearch/Nous-Hermes-Llama2-13b', messages)`    | `os.environ['TOGETHERAI_API_KEY']` |
+| Austism/chronos-hermes-13b         | `completion('Austism/chronos-hermes-13b', messages)`              | `os.environ['TOGETHERAI_API_KEY']` |
+| upstage/SOLAR-0-70b-16bit          | `completion('upstage/SOLAR-0-70b-16bit', messages)`              | `os.environ['TOGETHERAI_API_KEY']` |
+| WizardLM/WizardLM-70B-V1.0          | `completion('WizardLM/WizardLM-70B-V1.0', messages)`              | `os.environ['TOGETHERAI_API_KEY']` |
+
 
 
 
