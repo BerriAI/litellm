@@ -51,7 +51,7 @@ for chunk in response:
 }
 ```
 
-## Building a pytest function using `completion` with mock_response
+## Building a pytest function using `completion` with `mock_response`
 
 ```python
 from litellm import completion
