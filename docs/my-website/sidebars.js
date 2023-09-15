@@ -80,6 +80,7 @@ const sidebars = {
     "exception_mapping",
     'debugging/local_debugging',
     "budget_manager",
+    "proxy_api",
     {
       type: 'category',
       label: 'Tutorials',
