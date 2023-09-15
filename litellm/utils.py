@@ -2451,11 +2451,7 @@ class CustomStreamWrapper:
 
     def __next__(self):
         try:
-<<<<<<< HEAD
-            completion_obj = {"content": "", "role": ""} # default to role being assistant
-=======
             completion_obj = {"content": ""} # default to role being assistant
->>>>>>> 31d771b (fix streaming error)
             if self.model in litellm.anthropic_models:
                 chunk = next(self.completion_stream)
                 completion_obj["content"] = self.handle_anthropic_chunk(chunk)
