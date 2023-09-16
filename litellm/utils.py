@@ -2453,6 +2453,8 @@ class CustomStreamWrapper:
 
     def __next__(self):
         try:
+            # return this for all models
+            model_response = ModelResponse(stream=True)
             completion_obj = {"content": ""} # default to role being assistant
             if self.model in litellm.anthropic_models:
                 chunk = next(self.completion_stream)
@@ -2497,21 +2499,23 @@ class CustomStreamWrapper:
                 completion_obj["content"] = self.handle_cohere_chunk(chunk)
             else: # openai chat/azure models
                 chunk = next(self.completion_stream)
-                completion_obj = chunk["choices"][0]["delta"]
+                model_response = chunk
+                # LOGGING
+                threading.Thread(target=self.logging_obj.success_handler, args=(completion_obj,)).start()
+                return model_response
 
             # LOGGING
             threading.Thread(target=self.logging_obj.success_handler, args=(completion_obj,)).start()
-            # return this for all models
-            model_response = ModelResponse(stream=True)
-            model_response.choices[0].delta = {
-                "content": completion_obj["content"],
-            }
-            if "role" in completion_obj: 
-                model_response.choices[0].delta = completion_obj
+
+            if model_response.choices[0].delta.content == "<special_litellm_token>":
+                model_response.choices[0].delta = {
+                    "content": completion_obj["content"],
+                }
             return model_response
         except StopIteration:
             raise StopIteration
         except Exception as e:
+            print(e)
             model_response = ModelResponse(stream=True)
             model_response.choices[0].finish_reason = "stop"
             return model_response
