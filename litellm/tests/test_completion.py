@@ -650,14 +650,15 @@ def test_completion_bedrock_titan():
             model="bedrock/amazon.titan-tg1-large", 
             messages=messages,
             temperature=0.2,
-            max_tokens=20,
+            max_tokens=200,
+            top_p=0.8,
             logger_fn=logger_fn
         )
         # Add any assertions here to check the response
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_completion_bedrock_titan()
+test_completion_bedrock_titan()
 
 
 def test_completion_bedrock_ai21():
