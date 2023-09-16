@@ -1086,7 +1086,7 @@ def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None):
         elif model in litellm.ai21_models:
             custom_llm_provider = "ai21"
         ## together_ai 
-        elif model in litellm.together_ai_models or "togethercomputer":
+        elif model in litellm.together_ai_models:
             custom_llm_provider = "together_ai"
         ## aleph_alpha 
         elif model in litellm.aleph_alpha_models:
@@ -2435,6 +2435,7 @@ class CustomStreamWrapper:
         chunk = chunk.decode("utf-8")
         data_json = json.loads(chunk)
         try:
+            print(f"data json: {data_json}")
             return data_json["generated_text"]
         except:
             raise ValueError(f"Unable to parse response. Original response: {chunk}")
