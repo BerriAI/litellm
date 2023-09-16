@@ -658,7 +658,7 @@ def test_completion_bedrock_titan():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_bedrock_titan()
+# test_completion_bedrock_titan()
 
 
 def test_completion_bedrock_ai21():
