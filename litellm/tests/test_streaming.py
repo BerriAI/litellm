@@ -172,6 +172,7 @@ def validate_last_format(chunk):
 def streaming_format_tests(idx, chunk):
     extracted_chunk = "" 
     finished = False
+    print(f"chunk: {chunk}")
     if idx == 0: # ensure role assistant is set 
         validate_first_format(chunk=chunk)
         role = chunk["choices"][0]["delta"]["role"]
