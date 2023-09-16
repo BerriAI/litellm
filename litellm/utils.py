@@ -828,6 +828,7 @@ def get_optional_params(  # use the openai defaults
     model=None,
     custom_llm_provider="",
     top_k=40,
+    return_full_text=False,
     task=None
 ):
     optional_params = {}
@@ -885,6 +886,7 @@ def get_optional_params(  # use the openai defaults
             optional_params["max_new_tokens"] = max_tokens
         if presence_penalty != 0:
             optional_params["repetition_penalty"] = presence_penalty
+        optional_params["return_full_text"] = return_full_text
         optional_params["details"] = True
         optional_params["task"] = task
     elif custom_llm_provider == "together_ai" or ("togethercomputer" in model):
@@ -2507,7 +2509,6 @@ class CustomStreamWrapper:
         model_response = ModelResponse(stream=True, model=self.model)
         try:
             # return this for all models
-            print_verbose(f"self.sent_first_chunk: {self.sent_first_chunk}")
             if self.sent_first_chunk == False:
                 model_response.choices[0].delta.role = "assistant"
                 self.sent_first_chunk = True

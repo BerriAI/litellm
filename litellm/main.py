@@ -132,6 +132,7 @@ def completion(
     # model specific optional params
     top_k=40,# used by text-bison only
     task: Optional[str]="text-generation-inference", # used by huggingface inference endpoints
+    return_full_text: bool = False, # used by huggingface TGI
     remove_input: bool = True, # used by nlp cloud models - prevents input text from being returned as part of output
     request_timeout=0,  # unused var for old version of OpenAI API
     fallbacks=[],
@@ -181,7 +182,8 @@ def completion(
             custom_llm_provider=custom_llm_provider,
             top_k=top_k,
             task=task,
-            remove_input=remove_input
+            remove_input=remove_input,
+            return_full_text=return_full_text
         )
         # For logging - save the values of the litellm-specific params passed in
         litellm_params = get_litellm_params(

@@ -213,7 +213,31 @@ def test_completion_cohere_stream():
         print(f"completion_response: {complete_response}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-        
+
+
+def test_completion_bedrock_ai21_stream():
+    try:
+        litellm.set_verbose = False
+        response = completion(
+            model="bedrock/amazon.titan-tg1-large", 
+            messages=[{"role": "user", "content": "Be as verbose as possible and give as many details as possible, how does a court case get to the Supreme Court?"}],
+            temperature=1,
+            max_tokens=4096,
+            stream=True,
+        )
+        # Add any assertions here to check the response 
+        print(response)
+        for idx, chunk in enumerate(response):
+            chunk, finished = streaming_format_tests(idx, chunk)
+            if finished:
+                break
+            complete_response += chunk
+        if complete_response.strip() == "": 
+            raise Exception("Empty response received")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 # test_completion_cohere_stream()
 
 # test on openai completion call
@@ -301,34 +325,66 @@ def test_together_ai_completion_call_starcoder():
     except:
         print(f"error occurred: {traceback.format_exc()}")
         pass
-# test_together_ai_completion_call_starcoder()
-# test on aleph alpha completion call - commented out as it's expensive to run this on circle ci for every build
-# def test_aleph_alpha_call():
-#     try:
-#         start_time = time.time()
-#         response = completion(
-#             model="luminous-base",
-#             messages=messages,
-#             logger_fn=logger_fn,
-#             stream=True,
-#         )
-#         complete_response = ""
-#         print(f"returned response object: {response}")
-#         for chunk in response:
-#             chunk_time = time.time()
-#             complete_response += (
-#                 chunk["choices"][0]["delta"]["content"]
-#                 if len(chunk["choices"][0]["delta"].keys()) > 0
-#                 else ""
-#             )
-#             if len(complete_response) > 0:
-#                 print(complete_response)
-#         if complete_response == "":
-#             raise Exception("Empty response received")
-#     except:
-#         print(f"error occurred: {traceback.format_exc()}")
-#         pass
-#### Test Async streaming 
+
+def test_completion_nlp_cloud_streaming():
+    try:
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {
+                "role": "user",
+                "content": "how does a court case get to the Supreme Court?",
+            },
+        ]
+        response = completion(model="dolphin", messages=messages, stream=True, logger_fn=logger_fn)
+        # Add any assertions here to check the response
+        for idx, chunk in enumerate(response):
+            chunk, finished = streaming_format_tests(idx, chunk)
+            if finished:
+                break
+            complete_response += chunk
+        if complete_response == "":
+            raise Exception("Empty response received")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+#### Test Function calling + streaming ####
+
+def test_completion_openai_with_functions():
+    function1 = [
+        {
+            "name": "get_current_weather",
+            "description": "Get the current weather in a given location",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {
+                        "type": "string",
+                        "description": "The city and state, e.g. San Francisco, CA",
+                    },
+                    "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                },
+                "required": ["location"],
+            },
+        }
+    ]
+    try:
+        response = completion(
+            model="gpt-3.5-turbo", messages=messages, functions=function1, stream=True
+        )
+        # Add any assertions here to check the response
+        print(response)
+        for chunk in response:
+            print(chunk)
+            if chunk["choices"][0]["finish_reason"] == "stop":
+                break
+            print(chunk["choices"][0]["finish_reason"])
+            print(chunk["choices"][0]["delta"]["content"])
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+test_completion_openai_with_functions()
+
+#### Test Async streaming ####
 
 # # test on ai21 completion call
 async def ai21_async_completion_call():

@@ -92,25 +92,6 @@ def test_completion_with_litellm_call_id():
         pytest.fail(f"Error occurred: {e}")
 
 
-def test_completion_claude_stream():
-    try:
-        messages = [
-            {"role": "system", "content": "You are a helpful assistant."},
-            {
-                "role": "user",
-                "content": "how does a court case get to the Supreme Court?",
-            },
-        ]
-        response = completion(model="claude-2", messages=messages, stream=True)
-        # Add any assertions here to check the response
-        for chunk in response:
-            print(chunk["choices"][0]["delta"])  # same as openai format
-            print(chunk["choices"][0]["finish_reason"])
-            print(chunk["choices"][0]["delta"]["content"])
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-# test_completion_claude_stream()
-
 def test_completion_nlp_cloud():
     try:
         messages = [
@@ -125,26 +106,6 @@ def test_completion_nlp_cloud():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-def test_completion_nlp_cloud_streaming():
-    try:
-        messages = [
-            {"role": "system", "content": "You are a helpful assistant."},
-            {
-                "role": "user",
-                "content": "how does a court case get to the Supreme Court?",
-            },
-        ]
-        response = completion(model="dolphin", messages=messages, stream=True, logger_fn=logger_fn)
-        # Add any assertions here to check the response
-        for chunk in response:
-            print(chunk["choices"][0]["delta"]["content"])  # same as openai format
-            print(chunk["choices"][0]["finish_reason"])
-            print(chunk["choices"][0]["delta"]["content"])
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-# test_completion_nlp_cloud_streaming()
-
-# test_completion_nlp_cloud_streaming()
 # def test_completion_hf_api():
 #     try:
 #         user_message = "write some code to find the sum of two numbers"
@@ -327,69 +288,6 @@ def test_completion_openai_with_more_optional_params():
         pytest.fail(f"Error occurred: {e}")
 
 
-def test_completion_openai_with_stream():
-    try:
-        response = completion(
-            model="gpt-3.5-turbo",
-            messages=messages,
-            temperature=0.5,
-            top_p=0.1,
-            n=2,
-            max_tokens=150,
-            presence_penalty=0.5,
-            stream=True,
-            frequency_penalty=-0.5,
-            logit_bias={27000: 5},
-            user="ishaan_dev@berri.ai",
-        )
-        # Add any assertions here to check the response
-        print(response)
-        for chunk in response:
-            print(chunk)
-            if chunk["choices"][0]["finish_reason"] == "stop" or chunk["choices"][0]["finish_reason"] == "length":
-                break
-            print(chunk["choices"][0]["finish_reason"])
-            print(chunk["choices"][0]["delta"]["content"])
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-# test_completion_openai_with_stream()
-
-def test_completion_openai_with_functions():
-    function1 = [
-        {
-            "name": "get_current_weather",
-            "description": "Get the current weather in a given location",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "location": {
-                        "type": "string",
-                        "description": "The city and state, e.g. San Francisco, CA",
-                    },
-                    "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
-                },
-                "required": ["location"],
-            },
-        }
-    ]
-    try:
-        response = completion(
-            model="gpt-3.5-turbo", messages=messages, functions=function1, stream=True
-        )
-        # Add any assertions here to check the response
-        print(response)
-        for chunk in response:
-            print(chunk)
-            if chunk["choices"][0]["finish_reason"] == "stop":
-                break
-            print(chunk["choices"][0]["finish_reason"])
-            print(chunk["choices"][0]["delta"]["content"])
-    
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-# test_completion_openai_with_functions()
-
-
 # def test_completion_openai_azure_with_functions():
 #     function1 = [
 #         {
@@ -544,20 +442,6 @@ def test_completion_replicate_vicuna():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-# test_completion_replicate_vicuna()
-
-def test_completion_replicate_llama_stream():
-    model_name = "replicate/llama-2-70b-chat:2c1608e18606fad2812020dc541930f2d0495ce32eee50074220b87300bc16e1"
-    try:
-        response = completion(model=model_name, messages=messages, stream=True)
-        # Add any assertions here to check the response
-        for chunk in response:
-            print(chunk)
-            print(chunk["choices"][0]["delta"]["content"])
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-# test_completion_replicate_llama_stream()
-
 # def test_completion_replicate_stability_stream():
 #     model_name = "stability-ai/stablelm-tuned-alpha-7b:c49dae362cbaecd2ceabb5bd34fdb68413c4ff775111fea065d259d577757beb"
 #     try:
@@ -653,26 +537,7 @@ def test_completion_bedrock_ai21():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-def test_completion_bedrock_ai21_stream():
-    try:
-        litellm.set_verbose = False
-        response = completion(
-            model="bedrock/amazon.titan-tg1-large", 
-            messages=[{"role": "user", "content": "Be as verbose as possible and give as many details as possible, how does a court case get to the Supreme Court?"}],
-            temperature=1,
-            max_tokens=4096,
-            stream=True,
-        )
-        # Add any assertions here to check the response 
-        print(response)
-        for chunk in response:
-            print(chunk)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-# test_completion_bedrock_ai21_stream()
 
-
-# test_completion_sagemaker()
 ######## Test VLLM ########
 # def test_completion_vllm():
 #     try:
