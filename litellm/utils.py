@@ -889,7 +889,7 @@ def get_optional_params(  # use the openai defaults
         optional_params["return_full_text"] = return_full_text
         optional_params["details"] = True
         optional_params["task"] = task
-    elif custom_llm_provider == "together_ai" or ("togethercomputer" in model):
+    elif custom_llm_provider == "together_ai":
         if stream:
             optional_params["stream_tokens"] = stream
         if temperature != 1:
@@ -2520,8 +2520,7 @@ class CustomStreamWrapper:
                 chunk = next(self.completion_stream)
                 completion_obj["content"] = chunk
             elif (
-                self.custom_llm_provider and self.custom_llm_provider == "together_ai"
-            ) or ("togethercomputer" in self.model):
+                self.custom_llm_provider and self.custom_llm_provider == "together_ai"):
                 chunk = next(self.completion_stream)
                 text_data = self.handle_together_ai_chunk(chunk)
                 if text_data == "":

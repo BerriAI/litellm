@@ -698,4 +698,4 @@ def test_openai_streaming_and_function_calling():
         pytest.fail(f"Error occurred: {e}")
         raise e 
 
-test_openai_streaming_and_function_calling()
+# test_openai_streaming_and_function_calling()

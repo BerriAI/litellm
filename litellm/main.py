@@ -162,6 +162,7 @@ def completion(
         ):  # allow custom provider to be passed in via the model name "azure/chatgpt-test"
             custom_llm_provider = model.split("/", 1)[0]
             model = model.split("/", 1)[1]
+        model, custom_llm_provider = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
         # check if user passed in any of the OpenAI optional params
         optional_params = get_optional_params(
             functions=functions,
@@ -199,7 +200,6 @@ def completion(
             completion_call_id=id
         )
         logging.update_environment_variables(model=model, user=user, optional_params=optional_params, litellm_params=litellm_params)
-        model, custom_llm_provider = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
         if custom_llm_provider == "azure":
             # azure configs
             api_type = get_secret("AZURE_API_TYPE") or "azure"
@@ -281,7 +281,6 @@ def completion(
                 litellm.openai_key or
                 get_secret("OPENAI_API_KEY")
             )
-
             ## LOGGING
             logging.pre_call(
                 input=messages,
@@ -375,7 +374,7 @@ def completion(
                 **optional_params
             )
             if "stream" in optional_params and optional_params["stream"] == True:
-                response = CustomStreamWrapper(response, model, logging_obj=logging)
+                response = CustomStreamWrapper(response, model, custom_llm_provider="openai", logging_obj=logging)
                 return response
             ## LOGGING
             logging.post_call(
