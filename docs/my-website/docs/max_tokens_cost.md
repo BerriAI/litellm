@@ -1,4 +1,4 @@
-# /Get Model Context Window & Cost per token [100+ LLMs]
+# /get model context window & cost per token 
 
 For every LLM LiteLLM allows you to:
 * Get model context window 
