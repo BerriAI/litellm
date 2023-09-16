@@ -384,7 +384,6 @@ def test_completion_openai_with_functions():
             print(chunk["choices"][0]["delta"]["content"])
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_openai_with_functions()
 
 #### Test Async streaming ####
 
@@ -441,259 +440,262 @@ async def completion_call():
 
 #### Test Function Calling + Streaming ####
 
-# final_openai_function_call_example = {
-#     "id": "chatcmpl-7zVNA4sXUftpIg6W8WlntCyeBj2JY",
-#     "object": "chat.completion",
-#     "created": 1694892960,
-#     "model": "gpt-3.5-turbo-0613",
-#     "choices": [
-#         {
-#             "index": 0,
-#             "message": {
-#                 "role": "assistant",
-#                 "content": None,
-#                 "function_call": {
-#                     "name": "get_current_weather",
-#                     "arguments": "{\n  \"location\": \"Boston, MA\"\n}"
-#                 }
-#             },
-#             "finish_reason": "function_call"
-#         }
-#     ],
-#     "usage": {
-#         "prompt_tokens": 82,
-#         "completion_tokens": 18,
-#         "total_tokens": 100
-#     }
-# }
+final_openai_function_call_example = {
+    "id": "chatcmpl-7zVNA4sXUftpIg6W8WlntCyeBj2JY",
+    "object": "chat.completion",
+    "created": 1694892960,
+    "model": "gpt-3.5-turbo-0613",
+    "choices": [
+        {
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": None,
+                "function_call": {
+                    "name": "get_current_weather",
+                    "arguments": "{\n  \"location\": \"Boston, MA\"\n}"
+                }
+            },
+            "finish_reason": "function_call"
+        }
+    ],
+    "usage": {
+        "prompt_tokens": 82,
+        "completion_tokens": 18,
+        "total_tokens": 100
+    }
+}
 
-# function_calling_output_structure = {
-#         "id": str,
-#         "object": str,
-#         "created": int,
-#         "model": str,
-#         "choices": [
-#             {
-#                 "index": int,
-#                 "message": {
-#                     "role": str,
-#                     "content": [type(None), str],
-#                     "function_call": {
-#                         "name": str,
-#                         "arguments": str
-#                     }
-#                 },
-#                 "finish_reason": str
-#             }
-#         ],
-#         "usage": {
-#             "prompt_tokens": int,
-#             "completion_tokens": int,
-#             "total_tokens": int
-#         }
-#     }
+function_calling_output_structure = {
+        "id": str,
+        "object": str,
+        "created": int,
+        "model": str,
+        "choices": [
+            {
+                "index": int,
+                "message": {
+                    "role": str,
+                    "content": (type(None), str),
+                    "function_call": {
+                        "name": str,
+                        "arguments": str
+                    }
+                },
+                "finish_reason": str
+            }
+        ],
+        "usage": {
+            "prompt_tokens": int,
+            "completion_tokens": int,
+            "total_tokens": int
+        }
+    }
 
-# def validate_final_structure(item, structure=function_calling_output_structure):
-#     if isinstance(item, list):
-#         if not all(validate_final_structure(i, structure[0]) for i in item):
-#             return Exception("Function calling final output doesn't match expected output format")
-#     elif isinstance(item, dict):
-#         if not all(k in item and validate_final_structure(item[k], v) for k, v in structure.items()):
-#             return Exception("Function calling final output doesn't match expected output format")
-#     else:
-#         if not isinstance(item, structure):
-#             return Exception("Function calling final output doesn't match expected output format")
-#     return True
-
-
-# first_openai_function_call_example = {
-#     "id": "chatcmpl-7zVRoE5HjHYsCMaVSNgOjzdhbS3P0",
-#     "object": "chat.completion.chunk",
-#     "created": 1694893248,
-#     "model": "gpt-3.5-turbo-0613",
-#     "choices": [
-#         {
-#             "index": 0,
-#             "delta": {
-#                 "role": "assistant",
-#                 "content": None,
-#                 "function_call": {
-#                     "name": "get_current_weather",
-#                     "arguments": ""
-#                 }
-#             },
-#             "finish_reason": None
-#         }
-#     ]
-# }
+def validate_final_structure(item, structure=function_calling_output_structure):
+    if isinstance(item, list):
+        if not all(validate_final_structure(i, structure[0]) for i in item):
+            return Exception("Function calling final output doesn't match expected output format")
+    elif isinstance(item, dict):
+        if not all(k in item and validate_final_structure(item[k], v) for k, v in structure.items()):
+            return Exception("Function calling final output doesn't match expected output format")
+    else:
+        if not isinstance(item, structure):
+            return Exception("Function calling final output doesn't match expected output format")
+    return True
 
 
-# first_function_calling_chunk_structure = {
-#         "id": str,
-#         "object": str,
-#         "created": int,
-#         "model": str,
-#         "choices": [
-#             {
-#                 "index": int,
-#                 "delta": {
-#                     "role": str,
-#                     "content": [type(None), str],
-#                     "function_call": {
-#                         "name": str,
-#                         "arguments": str
-#                     }
-#                 },
-#                 "finish_reason": [type(None), str]
-#             }
-#         ]
-#     }
+first_openai_function_call_example = {
+    "id": "chatcmpl-7zVRoE5HjHYsCMaVSNgOjzdhbS3P0",
+    "object": "chat.completion.chunk",
+    "created": 1694893248,
+    "model": "gpt-3.5-turbo-0613",
+    "choices": [
+        {
+            "index": 0,
+            "delta": {
+                "role": "assistant",
+                "content": None,
+                "function_call": {
+                    "name": "get_current_weather",
+                    "arguments": ""
+                }
+            },
+            "finish_reason": None
+        }
+    ]
+}
 
-# def validate_first_function_call_chunk_structure(item, structure = first_function_calling_chunk_structure):
-#     if isinstance(item, list):
-#         if not all(validate_first_function_call_chunk_structure(i, structure[0]) for i in item):
-#             return Exception("Function calling first output doesn't match expected output format")
-#     elif isinstance(item, dict):
-#         if not all(k in item and validate_first_function_call_chunk_structure(item[k], v) for k, v in structure.items()):
-#             return Exception("Function calling first output doesn't match expected output format")
-#     else:
-#         if not isinstance(item, structure):
-#             return Exception("Function calling first output doesn't match expected output format")
-#     return True
+def validate_first_function_call_chunk_structure(item):
+    if not isinstance(item, dict):
+        raise Exception("Incorrect format")
 
-# second_function_call_chunk_format = {
-#     "id": "chatcmpl-7zVRoE5HjHYsCMaVSNgOjzdhbS3P0",
-#     "object": "chat.completion.chunk",
-#     "created": 1694893248,
-#     "model": "gpt-3.5-turbo-0613",
-#     "choices": [
-#         {
-#             "index": 0,
-#             "delta": {
-#                 "function_call": {
-#                     "arguments": "{\n"
-#                 }
-#             },
-#             "finish_reason": None
-#         }
-#     ]
-# }
+    required_keys = {"id", "object", "created", "model", "choices"}
+    for key in required_keys:
+        if key not in item:
+            raise Exception("Incorrect format")
 
+    if not isinstance(item["choices"], list) or not item["choices"]:
+        raise Exception("Incorrect format")
 
-# second_function_calling_chunk_structure = {
-#     "id": str,
-#     "object": str,
-#     "created": int,
-#     "model": str,
-#     "choices": [
-#         {
-#             "index": int,
-#             "delta": {
-#                 "function_call": {
-#                     "arguments": str,
-#                 }
-#             },
-#             "finish_reason": [type(None), str]
-#         }
-#     ]
-# }
+    required_keys_in_choices_array = {"index", "delta", "finish_reason"}
+    for choice in item["choices"]:
+        if not isinstance(choice, dict):
+            raise Exception("Incorrect format")
+        for key in required_keys_in_choices_array:
+            if key not in choice:
+                raise Exception("Incorrect format")
 
-# def validate_second_function_call_chunk_structure(item, structure = second_function_calling_chunk_structure):
-#     if isinstance(item, list):
-#         if not all(validate_second_function_call_chunk_structure(i, structure[0]) for i in item):
-#             return Exception("Function calling second output doesn't match expected output format")
-#     elif isinstance(item, dict):
-#         if not all(k in item and validate_second_function_call_chunk_structure(item[k], v) for k, v in structure.items()):
-#             return Exception("Function calling second output doesn't match expected output format")
-#     else:
-#         if not isinstance(item, structure):
-#             return Exception("Function calling second output doesn't match expected output format")
-#     return True
+        if not isinstance(choice["delta"], dict):
+            raise Exception("Incorrect format")
+
+        required_keys_in_delta = {"role", "content", "function_call"}
+        for key in required_keys_in_delta:
+            if key not in choice["delta"]:
+                raise Exception("Incorrect format")
+            
+        if not isinstance(choice["delta"]["function_call"], dict):
+            raise Exception("Incorrect format")
+
+        required_keys_in_function_call = {"name", "arguments"}
+        for key in required_keys_in_function_call:
+            if key not in choice["delta"]["function_call"]:
+                raise Exception("Incorrect format")
+
+    return True
+
+second_function_call_chunk_format = {
+    "id": "chatcmpl-7zVRoE5HjHYsCMaVSNgOjzdhbS3P0",
+    "object": "chat.completion.chunk",
+    "created": 1694893248,
+    "model": "gpt-3.5-turbo-0613",
+    "choices": [
+        {
+            "index": 0,
+            "delta": {
+                "function_call": {
+                    "arguments": "{\n"
+                }
+            },
+            "finish_reason": None
+        }
+    ]
+}
 
 
-# final_function_call_chunk_example = {
-#     "id": "chatcmpl-7zVRoE5HjHYsCMaVSNgOjzdhbS3P0",
-#     "object": "chat.completion.chunk",
-#     "created": 1694893248,
-#     "model": "gpt-3.5-turbo-0613",
-#     "choices": [
-#         {
-#             "index": 0,
-#             "delta": {},
-#             "finish_reason": "function_call"
-#         }
-#     ]
-# }
+def validate_second_function_call_chunk_structure(data):
+    if not isinstance(data, dict):
+        raise Exception("Incorrect format")
+
+    required_keys = {"id", "object", "created", "model", "choices"}
+    for key in required_keys:
+        if key not in data:
+            raise Exception("Incorrect format")
+
+    if not isinstance(data["choices"], list) or not data["choices"]:
+        raise Exception("Incorrect format")
+
+    required_keys_in_choices_array = {"index", "delta", "finish_reason"}
+    for choice in data["choices"]:
+        if not isinstance(choice, dict):
+            raise Exception("Incorrect format")
+        for key in required_keys_in_choices_array:
+            if key not in choice:
+                raise Exception("Incorrect format")
+
+        if "function_call" not in choice["delta"] or "arguments" not in choice["delta"]["function_call"]:
+            raise Exception("Incorrect format")
+
+    return True
 
 
-# final_function_calling_chunk_structure = {
-#     "id": str,
-#     "object": str,
-#     "created": int,
-#     "model": str,
-#     "choices": [
-#         {
-#             "index": int,
-#             "delta": dict,
-#             "finish_reason": str
-#         }
-#     ]
-# }
+final_function_call_chunk_example = {
+    "id": "chatcmpl-7zVRoE5HjHYsCMaVSNgOjzdhbS3P0",
+    "object": "chat.completion.chunk",
+    "created": 1694893248,
+    "model": "gpt-3.5-turbo-0613",
+    "choices": [
+        {
+            "index": 0,
+            "delta": {},
+            "finish_reason": "function_call"
+        }
+    ]
+}
 
-# def validate_final_function_call_chunk_structure(item, structure = final_function_calling_chunk_structure):
-#     if isinstance(item, list):
-#         if not all(validate_final_function_call_chunk_structure(i, structure[0]) for i in item):
-#             return Exception("Function calling final output doesn't match expected output format")
-#     elif isinstance(item, dict):
-#         if not all(k in item and validate_final_function_call_chunk_structure(item[k], v) for k, v in structure.items()):
-#             return Exception("Function calling final output doesn't match expected output format")
-#     else:
-#         if not isinstance(item, structure):
-#             return Exception("Function calling final output doesn't match expected output format")
-#     return True
 
-# def streaming_and_function_calling_format_tests(idx, chunk):
-#     extracted_chunk = "" 
-#     finished = False
-#     print(f"chunk: {chunk}")
-#     if idx == 0: # ensure role assistant is set 
-#         validate_first_function_call_chunk_structure(item=chunk, structure=first_function_calling_chunk_structure)
-#         role = chunk["choices"][0]["delta"]["role"]
-#         assert role == "assistant"
-#     elif idx != 1: # second chunk 
-#         validate_second_function_call_chunk_structure(item=chunk, structure=second_function_calling_chunk_structure)
-#     if chunk["choices"][0]["finish_reason"]: 
-#         validate_final_function_call_chunk_structure(item=chunk, structure=final_function_calling_chunk_structure)
-#         finished = True
-#     if "content" in chunk["choices"][0]["delta"]:
-#         extracted_chunk = chunk["choices"][0]["delta"]["content"]
-#     return extracted_chunk, finished
+def validate_final_function_call_chunk_structure(data):
+    if not isinstance(data, dict):
+        raise Exception("Incorrect format")
 
-# def test_openai_streaming_and_function_calling():
-#     function1 = [
-#         {
-#             "name": "get_current_weather",
-#             "description": "Get the current weather in a given location",
-#             "parameters": {
-#                 "type": "object",
-#                 "properties": {
-#                     "location": {
-#                         "type": "string",
-#                         "description": "The city and state, e.g. San Francisco, CA",
-#                     },
-#                     "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
-#                 },
-#                 "required": ["location"],
-#             },
-#         }
-#     ]
-#     try:
-#         response = completion(
-#             model="gpt-3.5-turbo", messages=messages, stream=True
-#         )
-#         # Add any assertions here to check the response
-#         print(response)
-#         for idx, chunk in enumerate(response):
-#             streaming_and_function_calling_format_tests(idx=idx, chunk=chunk)
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
+    required_keys = {"id", "object", "created", "model", "choices"}
+    for key in required_keys:
+        if key not in data:
+            raise Exception("Incorrect format")
+
+    if not isinstance(data["choices"], list) or not data["choices"]:
+        raise Exception("Incorrect format")
+
+    required_keys_in_choices_array = {"index", "delta", "finish_reason"}
+    for choice in data["choices"]:
+        if not isinstance(choice, dict):
+            raise Exception("Incorrect format")
+        for key in required_keys_in_choices_array:
+            if key not in choice:
+                raise Exception("Incorrect format")
+
+    return True
+
+def streaming_and_function_calling_format_tests(idx, chunk):
+    extracted_chunk = "" 
+    finished = False
+    print(f"idx: {idx}")
+    print(f"chunk: {chunk}")
+    decision = False
+    if idx == 0: # ensure role assistant is set 
+        decision = validate_first_function_call_chunk_structure(chunk)
+        role = chunk["choices"][0]["delta"]["role"]
+        assert role == "assistant"
+    elif idx != 0: # second chunk 
+        try:
+            decision = validate_second_function_call_chunk_structure(data=chunk)
+        except: # check if it's the last chunk (returns an empty delta {} )
+            decision = validate_final_function_call_chunk_structure(data=chunk)
+            finished = True
+    if "content" in chunk["choices"][0]["delta"]:
+        extracted_chunk = chunk["choices"][0]["delta"]["content"]
+    if decision == False:
+        raise Exception("incorrect format")
+    return extracted_chunk, finished
+
+def test_openai_streaming_and_function_calling():
+    function1 = [
+        {
+            "name": "get_current_weather",
+            "description": "Get the current weather in a given location",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {
+                        "type": "string",
+                        "description": "The city and state, e.g. San Francisco, CA",
+                    },
+                    "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                },
+                "required": ["location"],
+            },
+        }
+    ]
+    messages=[{"role": "user", "content": "What is the weather like in Boston?"}]
+    try:
+        response = completion(
+            model="gpt-3.5-turbo", functions=function1, messages=messages, stream=True
+        )
+        # Add any assertions here to check the response
+        for idx, chunk in enumerate(response):
+            streaming_and_function_calling_format_tests(idx=idx, chunk=chunk)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+        raise e 
+
+test_openai_streaming_and_function_calling()
