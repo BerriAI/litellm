@@ -34,7 +34,7 @@ Here's an example of using a bedrock model with LiteLLM
 | AI21 J2-Mid      | `completion(model='bedrock/ai21.j2-mid', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']`     |
 
 ## Streaming
-Bedrock currently supports treaming for:
+Bedrock currently supports streaming for the following llms:
 * `bedrock/amazon.titan-tg1-large`
 
 Example Usage
