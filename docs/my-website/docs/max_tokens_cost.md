@@ -6,7 +6,7 @@ For every LLM LiteLLM allows you to:
 
 ## using api.litellm.ai
 Usage
-```curl
+```shell
 curl 'https://api.litellm.ai/get_max_tokens?model=claude-2'
 ```
 
