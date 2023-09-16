@@ -781,10 +781,12 @@ def completion(
                 litellm_params=litellm_params,
                 logger_fn=logger_fn,
                 encoding=encoding,
-                logging_obj=logging
+                logging_obj=logging,
+                stream=stream,
             )
 
-            if "stream" in optional_params and optional_params["stream"] == True: ## [BETA]
+
+            if stream == True:
                 # don't try to access stream object,
                 response = CustomStreamWrapper(
                     iter(model_response), model, custom_llm_provider="bedrock", logging_obj=logging

@@ -2475,6 +2475,15 @@ class CustomStreamWrapper:
             traceback.print_exc()
             return ""
 
+    def handle_bedrock_stream(self):
+        if self.completion_stream:
+            event = next(self.completion_stream)
+            chunk = event.get('chunk')
+            if chunk:
+                chunk_data = json.loads(chunk.get('bytes').decode())
+                return chunk_data['outputText']
+        return ""
+
     def __next__(self):
         try:
             # return this for all models
@@ -2520,6 +2529,8 @@ class CustomStreamWrapper:
             elif self.model in litellm.cohere_models or self.custom_llm_provider == "cohere":
                 chunk = next(self.completion_stream)
                 completion_obj["content"] = self.handle_cohere_chunk(chunk)
+            elif self.custom_llm_provider == "bedrock":
+                completion_obj["content"] = self.handle_bedrock_stream()
             else: # openai chat/azure models
                 chunk = next(self.completion_stream)
                 model_response = chunk

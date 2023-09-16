@@ -676,7 +676,24 @@ def test_completion_bedrock_ai21():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_completion_bedrock_ai21()
+
+def test_completion_bedrock_ai21_stream():
+    try:
+        litellm.set_verbose = False
+        response = completion(
+            model="bedrock/amazon.titan-tg1-large", 
+            messages=[{"role": "user", "content": "Be as verbose as possible and give as many details as possible, how does a court case get to the Supreme Court?"}],
+            temperature=1,
+            max_tokens=4096,
+            stream=True,
+        )
+        # Add any assertions here to check the response 
+        print(response)
+        for chunk in response:
+            print(chunk)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+# test_completion_bedrock_ai21_stream()
 
 
 # test_completion_sagemaker()
