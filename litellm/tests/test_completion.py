@@ -109,7 +109,7 @@ def test_completion_claude_stream():
             print(chunk["choices"][0]["delta"]["content"])
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_claude_stream()
+# test_completion_claude_stream()
 
 def test_completion_nlp_cloud():
     try:
@@ -142,7 +142,7 @@ def test_completion_nlp_cloud_streaming():
             print(chunk["choices"][0]["delta"]["content"])
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_nlp_cloud_streaming()
+# test_completion_nlp_cloud_streaming()
 
 # test_completion_nlp_cloud_streaming()
 # def test_completion_hf_api():
@@ -369,7 +369,7 @@ def test_completion_openai_with_stream():
         print(response)
         for chunk in response:
             print(chunk)
-            if chunk["choices"][0]["finish_reason"] == "stop":
+            if chunk["choices"][0]["finish_reason"] == "stop" or chunk["choices"][0]["finish_reason"] == "length":
                 break
             print(chunk["choices"][0]["finish_reason"])
             print(chunk["choices"][0]["delta"]["content"])
