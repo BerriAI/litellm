@@ -112,7 +112,6 @@ class StreamingChoices(OpenAIObject):
         self.finish_reason = finish_reason
         self.index = index
         if delta:
-            print(f"delta passed in: {delta}")
             self.delta = delta
         else:
             self.delta = Delta()
@@ -2456,6 +2455,7 @@ class CustomStreamWrapper:
     
     def handle_openai_text_completion_chunk(self, chunk):
         try:
+            print(f"chunk: {chunk}")
             return chunk["choices"][0]["text"]
         except:
             raise ValueError(f"Unable to parse response. Original response: {chunk}")
@@ -2507,6 +2507,7 @@ class CustomStreamWrapper:
         model_response = ModelResponse(stream=True, model=self.model)
         try:
             # return this for all models
+            print(f"self.sent_first_chunk: {self.sent_first_chunk}")
             if self.sent_first_chunk == False:
                 model_response.choices[0].delta.role = "assistant"
                 self.sent_first_chunk = True
@@ -2563,18 +2564,13 @@ class CustomStreamWrapper:
 
             # LOGGING
             threading.Thread(target=self.logging_obj.success_handler, args=(completion_obj,)).start()
-            model_response = ModelResponse(stream=True)
-            model_response.choices[0].delta = completion_obj
             model_response.model = self.model
-
-            if model_response.choices[0].delta.content == "<special_litellm_token>":
-                model_response.choices[0].delta = {
-                    "content": completion_obj["content"],
-                }
+            model_response.choices[0].delta["content"] = completion_obj["content"]
             return model_response
         except StopIteration:
             raise StopIteration
         except Exception as e:
+            traceback.print_exc()
             model_response.choices[0].finish_reason = "stop"
             return model_response
     
