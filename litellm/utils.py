@@ -2454,7 +2454,6 @@ class CustomStreamWrapper:
     def __next__(self):
         try:
             # return this for all models
-            model_response = ModelResponse(stream=True)
             completion_obj = {"content": ""} # default to role being assistant
             if self.model in litellm.anthropic_models:
                 chunk = next(self.completion_stream)
@@ -2506,8 +2505,11 @@ class CustomStreamWrapper:
 
             # LOGGING
             threading.Thread(target=self.logging_obj.success_handler, args=(completion_obj,)).start()
+            model_response = ModelResponse(stream=True)
+            model_response.choices[0].delta = completion_obj
+            model_response.model = self.model
 
-            if model_response.choices[0].delta.content == "<special_litellm_token>":
+            if model_response.choices[0].delta['content'] == "<special_litellm_token>":
                 model_response.choices[0].delta = {
                     "content": completion_obj["content"],
                 }
