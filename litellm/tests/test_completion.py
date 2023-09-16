@@ -214,7 +214,7 @@ def test_completion_cohere_stream():
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_cohere_stream()
+# test_completion_cohere_stream()
 
 
 def test_completion_openai():
@@ -369,10 +369,10 @@ def test_completion_openai_with_stream():
         print(response)
         for chunk in response:
             print(chunk)
+            if chunk["choices"][0]["finish_reason"] == "stop":
+                break
             print(chunk["choices"][0]["finish_reason"])
             print(chunk["choices"][0]["delta"]["content"])
-    except KeyError:
-        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 # test_completion_openai_with_stream()
@@ -404,8 +404,11 @@ def test_completion_openai_with_functions():
         print(response)
         for chunk in response:
             print(chunk)
+            if chunk["choices"][0]["finish_reason"] == "stop":
+                break
             print(chunk["choices"][0]["finish_reason"])
             print(chunk["choices"][0]["delta"]["content"])
+    
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 # test_completion_openai_with_functions()
