@@ -123,7 +123,7 @@ def test_openai_chat_completion_call():
             #     raise Exception("invalid role")
             if "content" in chunk["choices"][0]["delta"]:
                 complete_response += chunk["choices"][0]["delta"]["content"]
-            print(f'complete_chunk: {complete_response}')
+            # print(f'complete_chunk: {complete_response}')
         if complete_response.strip() == "": 
             raise Exception("Empty response received")
     except:
