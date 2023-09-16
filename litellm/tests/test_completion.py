@@ -140,10 +140,9 @@ def test_completion_nlp_cloud_streaming():
             print(chunk["choices"][0]["delta"]["content"])  # same as openai format
             print(chunk["choices"][0]["finish_reason"])
             print(chunk["choices"][0]["delta"]["content"])
-            print(chunk["choices"][0]["delta"]["role"])
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_completion_nlp_cloud_streaming()
+test_completion_nlp_cloud_streaming()
 
 # test_completion_nlp_cloud_streaming()
 # def test_completion_hf_api():
@@ -211,10 +210,9 @@ def test_completion_cohere_stream():
             print(chunk["choices"][0]["delta"])  # same as openai format
             print(chunk["choices"][0]["finish_reason"])
             print(chunk["choices"][0]["delta"]["content"])
-            print(chunk["choices"][0]["delta"]["role"])
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_completion_cohere_stream()
+test_completion_cohere_stream()
 
 
 def test_completion_openai():
@@ -406,7 +404,6 @@ def test_completion_openai_with_functions():
             print(chunk)
             print(chunk["choices"][0]["finish_reason"])
             print(chunk["choices"][0]["delta"]["content"])
-            print(chunk["choices"][0]["delta"]["role"])
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 # test_completion_openai_with_functions()
@@ -576,7 +573,6 @@ def test_completion_replicate_llama_stream():
         for chunk in response:
             print(chunk)
             print(chunk["choices"][0]["delta"]["content"])
-            print(chunk["choices"][0]["delta"]["role"])
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 # test_completion_replicate_llama_stream()
