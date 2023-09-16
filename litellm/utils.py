@@ -2507,7 +2507,7 @@ class CustomStreamWrapper:
         model_response = ModelResponse(stream=True, model=self.model)
         try:
             # return this for all models
-            print(f"self.sent_first_chunk: {self.sent_first_chunk}")
+            print_verbose(f"self.sent_first_chunk: {self.sent_first_chunk}")
             if self.sent_first_chunk == False:
                 model_response.choices[0].delta.role = "assistant"
                 self.sent_first_chunk = True
