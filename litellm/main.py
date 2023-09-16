@@ -82,8 +82,7 @@ def mock_completion(model: str, messages: List, stream: bool = False, mock_respo
             response = mock_completion_streaming_obj(model_response, mock_response=mock_response, model=model)
             return response
         
-        completion_response = "This is a mock request"
-        model_response["choices"][0]["message"]["content"] = completion_response
+        model_response["choices"][0]["message"]["content"] = mock_response
         model_response["created"] = time.time()
         model_response["model"] = model
         return model_response
