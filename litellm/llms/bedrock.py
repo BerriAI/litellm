@@ -94,14 +94,8 @@ def completion(
     else: # amazon titan
         data = json.dumps({
             "inputText": prompt, 
-            "textGenerationConfig":{
-                "maxTokenCount":4096,
-                "stopSequences":[],
-                "temperature":0,
-                "topP":0.9
-                }
+            "textGenerationConfig": optional_params,
             }) 
-
     ## LOGGING
     logging_obj.pre_call(
             input=prompt,
