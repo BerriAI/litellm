@@ -664,12 +664,13 @@ def test_completion_bedrock_titan():
 
 def test_completion_bedrock_ai21():
     try:
+        litellm.set_verbose = False
         response = completion(
             model="bedrock/ai21.j2-mid", 
             messages=messages,
             temperature=0.2,
-            max_tokens=20,
-            logger_fn=logger_fn
+            top_p=0.2,
+            max_tokens=20
         )
         # Add any assertions here to check the response 
         print(response)
