@@ -349,7 +349,6 @@ def test_completion_nlp_cloud_streaming():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-
 #### Test Function calling + streaming ####
 
 def test_completion_openai_with_functions():
