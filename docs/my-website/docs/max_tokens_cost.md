@@ -24,5 +24,10 @@ print(response.text)
 ```
 
 ```curl
-curl --location 'https://api.litellm.ai/get_max_tokens?model=gpt-3.5-turbo'
+curl 'https://api.litellm.ai/get_max_tokens?model=gpt-3.5-turbo'
 ```
+
+```curl
+curl 'https://api.litellm.ai/get_max_tokens?model=claude-2'
+```
+
