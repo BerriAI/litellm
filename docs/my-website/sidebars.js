@@ -79,6 +79,7 @@ const sidebars = {
     "token_usage",
     "exception_mapping",
     'debugging/local_debugging',
+    "max_tokens_cost",
     "budget_manager",
     "proxy_api",
     {
