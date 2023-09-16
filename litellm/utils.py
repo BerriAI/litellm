@@ -933,7 +933,16 @@ def get_optional_params(  # use the openai defaults
                 optional_params["top_p"] = top_p
     elif custom_llm_provider == "bedrock":
         if "ai21" in model or "anthropic" in model:
-            pass
+            # params "maxTokens":200,"temperature":0,"topP":250,"stop_sequences":[],
+            # https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=j2-ultra
+            if max_tokens != float("inf"):
+                optional_params["maxTokens"] = max_tokens
+            if temperature != 1:
+                optional_params["temperature"] = temperature
+            if stop != None:
+                optional_params["stop_sequences"] = stop
+            if top_p != 1:
+                optional_params["topP"] = top_p
 
         elif "amazon" in model: # amazon titan llms
             # see https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=titan-large
