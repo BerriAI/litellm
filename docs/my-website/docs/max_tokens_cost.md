@@ -1,11 +1,8 @@
 # get context window & cost per token 
 
-For every LLM LiteLLM allows you to:
-* Get model context window 
-* Get cost per token 
+100+ LLMs supported: See full list [here](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json)
 
 ## using api.litellm.ai
-Usage
 ```shell
 curl 'https://api.litellm.ai/get_max_tokens?model=claude-2'
 ```
@@ -21,7 +18,6 @@ curl 'https://api.litellm.ai/get_max_tokens?model=claude-2'
 ```
 
 ## using the litellm python package
-Usage
 ```python
 import litellm
 model_data = litellm.model_cost["gpt-4"]
