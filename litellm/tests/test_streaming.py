@@ -214,6 +214,31 @@ def test_completion_cohere_stream():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+def test_completion_claude_stream():
+    try:
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {
+                "role": "user",
+                "content": "how does a court case get to the Supreme Court?",
+            },
+        ]
+        response = completion(
+            model="claude-instant-1", messages=messages, stream=True, max_tokens=50
+        )
+        complete_response = ""
+        # Add any assertions here to check the response
+        for idx, chunk in enumerate(response):
+            chunk, finished = streaming_format_tests(idx, chunk)
+            if finished:
+                break
+            complete_response += chunk
+        if complete_response.strip() == "": 
+            raise Exception("Empty response received")
+        print(f"completion_response: {complete_response}")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+# test_completion_claude_stream()
 
 def test_completion_bedrock_ai21_stream():
     try:
@@ -326,28 +351,6 @@ def test_together_ai_completion_call_starcoder():
     except:
         print(f"error occurred: {traceback.format_exc()}")
         pass
-
-def test_completion_nlp_cloud_streaming():
-    try:
-        messages = [
-            {"role": "system", "content": "You are a helpful assistant."},
-            {
-                "role": "user",
-                "content": "how does a court case get to the Supreme Court?",
-            },
-        ]
-        response = completion(model="dolphin", messages=messages, stream=True, logger_fn=logger_fn)
-        complete_response = "" 
-        # Add any assertions here to check the response
-        for idx, chunk in enumerate(response):
-            chunk, finished = streaming_format_tests(idx, chunk)
-            if finished:
-                break
-            complete_response += chunk
-        if complete_response == "":
-            raise Exception("Empty response received")
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 #### Test Function calling + streaming ####
 
