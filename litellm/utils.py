@@ -2506,69 +2506,71 @@ class CustomStreamWrapper:
                 return chunk_data['outputText']
         return ""
 
+    ## needs to handle the empty string case (even starting chunk can be an empty string)
     def __next__(self):
         model_response = ModelResponse(stream=True, model=self.model)
         try:
-            # return this for all models
-            completion_obj = {"content": ""}
-            if self.sent_first_chunk == False:
-                completion_obj["role"] = "assistant"
-                self.sent_first_chunk = True
-            if self.custom_llm_provider and self.custom_llm_provider == "anthropic":
-                chunk = next(self.completion_stream)
-                completion_obj["content"] = self.handle_anthropic_chunk(chunk)
-            elif self.model == "replicate" or self.custom_llm_provider == "replicate":
-                chunk = next(self.completion_stream)
-                completion_obj["content"] = chunk
-            elif (
-                self.custom_llm_provider and self.custom_llm_provider == "together_ai"):
-                chunk = next(self.completion_stream)
-                text_data = self.handle_together_ai_chunk(chunk)
-                if text_data == "":
-                    return self.__next__()
-                completion_obj["content"] = text_data
-            elif self.custom_llm_provider and self.custom_llm_provider == "huggingface":
-                chunk = next(self.completion_stream)
-                completion_obj["content"] = self.handle_huggingface_chunk(chunk)
-            elif self.custom_llm_provider and self.custom_llm_provider == "baseten": # baseten doesn't provide streaming
-                chunk = next(self.completion_stream)
-                completion_obj["content"] = self.handle_baseten_chunk(chunk)
-            elif self.custom_llm_provider and self.custom_llm_provider == "ai21": #ai21 doesn't provide streaming
-                chunk = next(self.completion_stream)
-                completion_obj["content"] = self.handle_ai21_chunk(chunk)
-            elif self.custom_llm_provider and self.custom_llm_provider == "vllm":
-                chunk = next(self.completion_stream)
-                completion_obj["content"] = chunk[0].outputs[0].text
-            elif self.custom_llm_provider and self.custom_llm_provider == "aleph-alpha": #aleph alpha doesn't provide streaming
-                chunk = next(self.completion_stream)
-                completion_obj["content"] = self.handle_aleph_alpha_chunk(chunk)
-            elif self.custom_llm_provider and self.custom_llm_provider == "text-completion-openai":
-                chunk = next(self.completion_stream)
-                completion_obj["content"] = self.handle_openai_text_completion_chunk(chunk)
-            elif self.model in litellm.nlp_cloud_models or self.custom_llm_provider == "nlp_cloud":
-                chunk = next(self.completion_stream)
-                completion_obj["content"] = self.handle_nlp_cloud_chunk(chunk)
-            elif self.model in (litellm.vertex_chat_models + litellm.vertex_code_chat_models + litellm.vertex_text_models + litellm.vertex_code_text_models):
-                chunk = next(self.completion_stream)
-                completion_obj["content"] = str(chunk)
-            elif self.custom_llm_provider == "cohere":
-                chunk = next(self.completion_stream)
-                completion_obj["content"] = self.handle_cohere_chunk(chunk)
-            elif self.custom_llm_provider == "bedrock":
-                completion_obj["content"] = self.handle_bedrock_stream()
-            else: # openai chat/azure models
-                chunk = next(self.completion_stream)
-                model_response = chunk
+            while True: # loop until a non-empty string is found
+                # return this for all models
+                completion_obj = {"content": ""}
+                if self.custom_llm_provider and self.custom_llm_provider == "anthropic":
+                    chunk = next(self.completion_stream)
+                    completion_obj["content"] = self.handle_anthropic_chunk(chunk)
+                elif self.model == "replicate" or self.custom_llm_provider == "replicate":
+                    chunk = next(self.completion_stream)
+                    completion_obj["content"] = chunk
+                elif (
+                    self.custom_llm_provider and self.custom_llm_provider == "together_ai"):
+                    chunk = next(self.completion_stream)
+                    text_data = self.handle_together_ai_chunk(chunk)
+                    if text_data == "":
+                        return self.__next__()
+                    completion_obj["content"] = text_data
+                elif self.custom_llm_provider and self.custom_llm_provider == "huggingface":
+                    chunk = next(self.completion_stream)
+                    completion_obj["content"] = self.handle_huggingface_chunk(chunk)
+                elif self.custom_llm_provider and self.custom_llm_provider == "baseten": # baseten doesn't provide streaming
+                    chunk = next(self.completion_stream)
+                    completion_obj["content"] = self.handle_baseten_chunk(chunk)
+                elif self.custom_llm_provider and self.custom_llm_provider == "ai21": #ai21 doesn't provide streaming
+                    chunk = next(self.completion_stream)
+                    completion_obj["content"] = self.handle_ai21_chunk(chunk)
+                elif self.custom_llm_provider and self.custom_llm_provider == "vllm":
+                    chunk = next(self.completion_stream)
+                    completion_obj["content"] = chunk[0].outputs[0].text
+                elif self.custom_llm_provider and self.custom_llm_provider == "aleph-alpha": #aleph alpha doesn't provide streaming
+                    chunk = next(self.completion_stream)
+                    completion_obj["content"] = self.handle_aleph_alpha_chunk(chunk)
+                elif self.custom_llm_provider and self.custom_llm_provider == "text-completion-openai":
+                    chunk = next(self.completion_stream)
+                    completion_obj["content"] = self.handle_openai_text_completion_chunk(chunk)
+                elif self.model in litellm.nlp_cloud_models or self.custom_llm_provider == "nlp_cloud":
+                    chunk = next(self.completion_stream)
+                    completion_obj["content"] = self.handle_nlp_cloud_chunk(chunk)
+                elif self.model in (litellm.vertex_chat_models + litellm.vertex_code_chat_models + litellm.vertex_text_models + litellm.vertex_code_text_models):
+                    chunk = next(self.completion_stream)
+                    completion_obj["content"] = str(chunk)
+                elif self.custom_llm_provider == "cohere":
+                    chunk = next(self.completion_stream)
+                    completion_obj["content"] = self.handle_cohere_chunk(chunk)
+                elif self.custom_llm_provider == "bedrock":
+                    completion_obj["content"] = self.handle_bedrock_stream()
+                else: # openai chat/azure models
+                    chunk = next(self.completion_stream)
+                    model_response = chunk
+                    # LOGGING
+                    threading.Thread(target=self.logging_obj.success_handler, args=(completion_obj,)).start()
+                    return model_response
+                
                 # LOGGING
                 threading.Thread(target=self.logging_obj.success_handler, args=(completion_obj,)).start()
-                return model_response
-
-            # LOGGING
-            threading.Thread(target=self.logging_obj.success_handler, args=(completion_obj,)).start()
-            model_response.model = self.model
-            if len(completion_obj["content"]) > 0: # cannot set content of an OpenAI Object to be an empty string
-                model_response.choices[0].delta = Delta(**completion_obj)
-            return model_response
+                model_response.model = self.model
+                if len(completion_obj["content"]) > 0: # cannot set content of an OpenAI Object to be an empty string
+                    if self.sent_first_chunk == False:
+                        completion_obj["role"] = "assistant"
+                        self.sent_first_chunk = True
+                    model_response.choices[0].delta = Delta(**completion_obj)
+                    return model_response
         except StopIteration:
             raise StopIteration
         except Exception as e:
