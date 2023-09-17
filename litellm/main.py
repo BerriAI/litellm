@@ -163,7 +163,6 @@ def completion(
             custom_llm_provider = model.split("/", 1)[0]
             model = model.split("/", 1)[1]
         model, custom_llm_provider = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
-        print(f"model: {model}; llm provider: {custom_llm_provider}")
         # check if user passed in any of the OpenAI optional params
         optional_params = get_optional_params(
             functions=functions,
