@@ -80,6 +80,8 @@ last_fetched_at_keys = None
 #  'usage': {'prompt_tokens': 18, 'completion_tokens': 23, 'total_tokens': 41}
 # }
 
+def _generate_id(): # private helper function
+    return 'chatcmpl-' + str(uuid.uuid4())
 
 class Message(OpenAIObject):
     def __init__(self, content="default", role="assistant", logprobs=None, **params):
@@ -89,9 +91,9 @@ class Message(OpenAIObject):
         self.logprobs = logprobs
 
 class Delta(OpenAIObject):
-    def __init__(self, content="<special_litellm_token>", logprobs=None, role=None, **params):
+    def __init__(self, content=None, logprobs=None, role=None, **params):
         super(Delta, self).__init__(**params)
-        if content != "<special_litellm_token>":
+        if content is not None:
             self.content = content
         if role:
             self.role = role
@@ -105,20 +107,34 @@ class Choices(OpenAIObject):
         self.message = message
 
 class StreamingChoices(OpenAIObject):
-    def __init__(self, finish_reason=None, index=0, delta=Delta(), **params):
+    def __init__(self, finish_reason=None, index=0, delta: Optional[Delta]=None, **params):
         super(StreamingChoices, self).__init__(**params)
         self.finish_reason = finish_reason
         self.index = index
-        self.delta = delta
+        if delta:
+            self.delta = delta
+        else:
+            self.delta = Delta()
 
 class ModelResponse(OpenAIObject):
-    def __init__(self, choices=None, created=None, model=None, usage=None, stream=False, **params):
-        super(ModelResponse, self).__init__(**params)
+    def __init__(self, id=None, choices=None, created=None, model=None, usage=None, stream=False, **params):
         if stream:
-            self.choices = self.choices = choices if choices else [StreamingChoices()]
+            self.object = "chat.completion.chunk"
+            self.choices = [StreamingChoices()]
         else:
+            if model in litellm.open_ai_embedding_models:
+                self.object = "embedding"
+            else:
+                self.object = "chat.completion"
             self.choices = self.choices = choices if choices else [Choices()]
-        self.created = created
+        if id is None:
+            self.id = _generate_id()
+        else:
+            self.id = id
+        if created is None:
+            self.created = int(time.time())
+        else:
+            self.created = created
         self.model = model
         self.usage = (
             usage
@@ -129,6 +145,7 @@ class ModelResponse(OpenAIObject):
                 "total_tokens": None,
             }
         )
+        super(ModelResponse, self).__init__(**params)
 
     def to_dict_recursive(self):
         d = super().to_dict_recursive()
@@ -811,6 +828,7 @@ def get_optional_params(  # use the openai defaults
     model=None,
     custom_llm_provider="",
     top_k=40,
+    return_full_text=False,
     task=None
 ):
     optional_params = {}
@@ -868,9 +886,10 @@ def get_optional_params(  # use the openai defaults
             optional_params["max_new_tokens"] = max_tokens
         if presence_penalty != 0:
             optional_params["repetition_penalty"] = presence_penalty
+        optional_params["return_full_text"] = return_full_text
         optional_params["details"] = True
         optional_params["task"] = task
-    elif custom_llm_provider == "together_ai" or ("togethercomputer" in model):
+    elif custom_llm_provider == "together_ai":
         if stream:
             optional_params["stream_tokens"] = stream
         if temperature != 1:
@@ -931,6 +950,30 @@ def get_optional_params(  # use the openai defaults
                 optional_params["temperature"] = temperature
             if top_p != 1:
                 optional_params["top_p"] = top_p
+    elif custom_llm_provider == "bedrock":
+        if "ai21" in model or "anthropic" in model:
+            # params "maxTokens":200,"temperature":0,"topP":250,"stop_sequences":[],
+            # https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=j2-ultra
+            if max_tokens != float("inf"):
+                optional_params["maxTokens"] = max_tokens
+            if temperature != 1:
+                optional_params["temperature"] = temperature
+            if stop != None:
+                optional_params["stop_sequences"] = stop
+            if top_p != 1:
+                optional_params["topP"] = top_p
+
+        elif "amazon" in model: # amazon titan llms
+            # see https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=titan-large
+            if max_tokens != float("inf"):
+                optional_params["maxTokenCount"] = max_tokens
+            if temperature != 1:
+                optional_params["temperature"] = temperature
+            if stop != None:
+                optional_params["stopSequences"] = stop
+            if top_p != 1:
+                optional_params["topP"] = top_p
+
     elif model in litellm.aleph_alpha_models:
         if max_tokens != float("inf"):
             optional_params["maximum_tokens"] = max_tokens
@@ -1017,8 +1060,10 @@ def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None):
 
         # check if model in known model provider list 
         ## openai - chatcompletion + text completion
-        if model in litellm.open_ai_chat_completion_models or model in litellm.open_ai_text_completion_models:
+        if model in litellm.open_ai_chat_completion_models:
             custom_llm_provider = "openai"
+        elif model in litellm.open_ai_text_completion_models:
+            custom_llm_provider = "text-completion-openai"
         ## anthropic 
         elif model in litellm.anthropic_models:
             custom_llm_provider = "anthropic"
@@ -1041,7 +1086,7 @@ def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None):
         elif model in litellm.ai21_models:
             custom_llm_provider = "ai21"
         ## together_ai 
-        elif model in litellm.together_ai_models or "togethercomputer":
+        elif model in litellm.together_ai_models:
             custom_llm_provider = "together_ai"
         ## aleph_alpha 
         elif model in litellm.aleph_alpha_models:
@@ -2335,6 +2380,7 @@ class CustomStreamWrapper:
         self.custom_llm_provider = custom_llm_provider
         self.logging_obj = logging_obj
         self.completion_stream = completion_stream
+        self.sent_first_chunk = False
         if self.logging_obj:
                 # Log the type of the received item
                 self.logging_obj.post_call(str(type(completion_stream)))
@@ -2406,13 +2452,13 @@ class CustomStreamWrapper:
         chunk = chunk.decode("utf-8")
         data_json = json.loads(chunk)
         try:
-            print(f"data json: {data_json}")
             return data_json["text"]
         except:
             raise ValueError(f"Unable to parse response. Original response: {chunk}")
     
     def handle_openai_text_completion_chunk(self, chunk):
         try:
+            print(f"chunk: {chunk}")
             return chunk["choices"][0]["text"]
         except:
             raise ValueError(f"Unable to parse response. Original response: {chunk}")
@@ -2451,74 +2497,84 @@ class CustomStreamWrapper:
             traceback.print_exc()
             return ""
 
+    def handle_bedrock_stream(self):
+        if self.completion_stream:
+            event = next(self.completion_stream)
+            chunk = event.get('chunk')
+            if chunk:
+                chunk_data = json.loads(chunk.get('bytes').decode())
+                return chunk_data['outputText']
+        return ""
+
+    ## needs to handle the empty string case (even starting chunk can be an empty string)
     def __next__(self):
+        model_response = ModelResponse(stream=True, model=self.model)
         try:
-            # return this for all models
-            completion_obj = {"content": ""} # default to role being assistant
-            if self.model in litellm.anthropic_models:
-                chunk = next(self.completion_stream)
-                completion_obj["content"] = self.handle_anthropic_chunk(chunk)
-            elif self.model == "replicate" or self.custom_llm_provider == "replicate":
-                chunk = next(self.completion_stream)
-                completion_obj["content"] = chunk
-            elif (
-                self.custom_llm_provider and self.custom_llm_provider == "together_ai"
-            ) or ("togethercomputer" in self.model):
-                chunk = next(self.completion_stream)
-                text_data = self.handle_together_ai_chunk(chunk)
-                if text_data == "":
-                    return self.__next__()
-                completion_obj["content"] = text_data
-            elif self.custom_llm_provider and self.custom_llm_provider == "huggingface":
-                chunk = next(self.completion_stream)
-                completion_obj["content"] = self.handle_huggingface_chunk(chunk)
-            elif self.custom_llm_provider and self.custom_llm_provider == "baseten": # baseten doesn't provide streaming
-                chunk = next(self.completion_stream)
-                completion_obj["content"] = self.handle_baseten_chunk(chunk)
-            elif self.custom_llm_provider and self.custom_llm_provider == "ai21": #ai21 doesn't provide streaming
-                chunk = next(self.completion_stream)
-                completion_obj["content"] = self.handle_ai21_chunk(chunk)
-            elif self.custom_llm_provider and self.custom_llm_provider == "vllm":
-                chunk = next(self.completion_stream)
-                completion_obj["content"] = chunk[0].outputs[0].text
-            elif self.model in litellm.aleph_alpha_models: #aleph alpha doesn't provide streaming
-                chunk = next(self.completion_stream)
-                completion_obj["content"] = self.handle_aleph_alpha_chunk(chunk)
-            elif self.model in litellm.open_ai_text_completion_models:
-                chunk = next(self.completion_stream)
-                completion_obj["content"] = self.handle_openai_text_completion_chunk(chunk)
-            elif self.model in litellm.nlp_cloud_models or self.custom_llm_provider == "nlp_cloud":
-                chunk = next(self.completion_stream)
-                completion_obj["content"] = self.handle_nlp_cloud_chunk(chunk)
-            elif self.model in (litellm.vertex_chat_models + litellm.vertex_code_chat_models + litellm.vertex_text_models + litellm.vertex_code_text_models):
-                chunk = next(self.completion_stream)
-                completion_obj["content"] = str(chunk)
-            elif self.model in litellm.cohere_models or self.custom_llm_provider == "cohere":
-                chunk = next(self.completion_stream)
-                completion_obj["content"] = self.handle_cohere_chunk(chunk)
-            else: # openai chat/azure models
-                chunk = next(self.completion_stream)
-                model_response = chunk
+            while True: # loop until a non-empty string is found
+                # return this for all models
+                completion_obj = {"content": ""}
+                if self.custom_llm_provider and self.custom_llm_provider == "anthropic":
+                    chunk = next(self.completion_stream)
+                    completion_obj["content"] = self.handle_anthropic_chunk(chunk)
+                elif self.model == "replicate" or self.custom_llm_provider == "replicate":
+                    chunk = next(self.completion_stream)
+                    completion_obj["content"] = chunk
+                elif (
+                    self.custom_llm_provider and self.custom_llm_provider == "together_ai"):
+                    chunk = next(self.completion_stream)
+                    text_data = self.handle_together_ai_chunk(chunk)
+                    if text_data == "":
+                        return self.__next__()
+                    completion_obj["content"] = text_data
+                elif self.custom_llm_provider and self.custom_llm_provider == "huggingface":
+                    chunk = next(self.completion_stream)
+                    completion_obj["content"] = self.handle_huggingface_chunk(chunk)
+                elif self.custom_llm_provider and self.custom_llm_provider == "baseten": # baseten doesn't provide streaming
+                    chunk = next(self.completion_stream)
+                    completion_obj["content"] = self.handle_baseten_chunk(chunk)
+                elif self.custom_llm_provider and self.custom_llm_provider == "ai21": #ai21 doesn't provide streaming
+                    chunk = next(self.completion_stream)
+                    completion_obj["content"] = self.handle_ai21_chunk(chunk)
+                elif self.custom_llm_provider and self.custom_llm_provider == "vllm":
+                    chunk = next(self.completion_stream)
+                    completion_obj["content"] = chunk[0].outputs[0].text
+                elif self.custom_llm_provider and self.custom_llm_provider == "aleph-alpha": #aleph alpha doesn't provide streaming
+                    chunk = next(self.completion_stream)
+                    completion_obj["content"] = self.handle_aleph_alpha_chunk(chunk)
+                elif self.custom_llm_provider and self.custom_llm_provider == "text-completion-openai":
+                    chunk = next(self.completion_stream)
+                    completion_obj["content"] = self.handle_openai_text_completion_chunk(chunk)
+                elif self.model in litellm.nlp_cloud_models or self.custom_llm_provider == "nlp_cloud":
+                    chunk = next(self.completion_stream)
+                    completion_obj["content"] = self.handle_nlp_cloud_chunk(chunk)
+                elif self.model in (litellm.vertex_chat_models + litellm.vertex_code_chat_models + litellm.vertex_text_models + litellm.vertex_code_text_models):
+                    chunk = next(self.completion_stream)
+                    completion_obj["content"] = str(chunk)
+                elif self.custom_llm_provider == "cohere":
+                    chunk = next(self.completion_stream)
+                    completion_obj["content"] = self.handle_cohere_chunk(chunk)
+                elif self.custom_llm_provider == "bedrock":
+                    completion_obj["content"] = self.handle_bedrock_stream()
+                else: # openai chat/azure models
+                    chunk = next(self.completion_stream)
+                    model_response = chunk
+                    # LOGGING
+                    threading.Thread(target=self.logging_obj.success_handler, args=(completion_obj,)).start()
+                    return model_response
+                
                 # LOGGING
                 threading.Thread(target=self.logging_obj.success_handler, args=(completion_obj,)).start()
-                return model_response
-
-            # LOGGING
-            threading.Thread(target=self.logging_obj.success_handler, args=(completion_obj,)).start()
-            model_response = ModelResponse(stream=True)
-            model_response.choices[0].delta = completion_obj
-            model_response.model = self.model
-
-            if model_response.choices[0].delta['content'] == "<special_litellm_token>":
-                model_response.choices[0].delta = {
-                    "content": completion_obj["content"],
-                }
-            return model_response
+                model_response.model = self.model
+                if len(completion_obj["content"]) > 0: # cannot set content of an OpenAI Object to be an empty string
+                    if self.sent_first_chunk == False:
+                        completion_obj["role"] = "assistant"
+                        self.sent_first_chunk = True
+                    model_response.choices[0].delta = Delta(**completion_obj)
+                    return model_response
         except StopIteration:
             raise StopIteration
         except Exception as e:
-            print(e)
-            model_response = ModelResponse(stream=True)
+            traceback.print_exc()
             model_response.choices[0].finish_reason = "stop"
             return model_response
     

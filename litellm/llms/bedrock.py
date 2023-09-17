@@ -59,6 +59,7 @@ def completion(
     encoding,
     logging_obj,
     optional_params=None,
+    stream=False,
     litellm_params=None,
     logger_fn=None,
 ):
@@ -94,14 +95,8 @@ def completion(
     else: # amazon titan
         data = json.dumps({
             "inputText": prompt, 
-            "textGenerationConfig":{
-                "maxTokenCount":4096,
-                "stopSequences":[],
-                "temperature":0,
-                "topP":0.9
-                }
+            "textGenerationConfig": optional_params,
             }) 
-
     ## LOGGING
     logging_obj.pre_call(
             input=prompt,
@@ -112,6 +107,15 @@ def completion(
     ## COMPLETION CALL
     accept = 'application/json'
     contentType = 'application/json'
+    if stream == True:
+        response = client.invoke_model_with_response_stream(
+            body=data, 
+            modelId=model, 
+            accept=accept, 
+            contentType=contentType
+        )
+        response = response.get('body')
+        return response
 
     response = client.invoke_model(
         body=data, 
@@ -120,50 +124,48 @@ def completion(
         contentType=contentType
     )
     response_body = json.loads(response.get('body').read())
-    if "stream" in optional_params and optional_params["stream"] == True:
-        return response.iter_lines()
-    else:
-        ## LOGGING
-        logging_obj.post_call(
-                input=prompt,
-                api_key="",
-                original_response=response,
-                additional_args={"complete_input_dict": data},
-            )
-        print_verbose(f"raw model_response: {response}")
-        ## RESPONSE OBJECT
-        outputText = "default"
-        if provider == "ai21":
-            outputText = response_body.get('completions')[0].get('data').get('text')
-        else: # amazon titan
-            outputText = response_body.get('results')[0].get('outputText')
-        if "error" in outputText:
-            raise BedrockError(
-                message=outputText,
-                status_code=response.status_code,
-            )
-        else:
-            try:
-                model_response["choices"][0]["message"]["content"] = outputText
-            except:
-                raise BedrockError(message=json.dumps(outputText), status_code=response.status_code)
 
-        ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here. 
-        prompt_tokens = len(
-            encoding.encode(prompt)
-        ) 
-        completion_tokens = len(
-            encoding.encode(model_response["choices"][0]["message"]["content"])
+    ## LOGGING
+    logging_obj.post_call(
+            input=prompt,
+            api_key="",
+            original_response=response,
+            additional_args={"complete_input_dict": data},
         )
+    print_verbose(f"raw model_response: {response}")
+    ## RESPONSE OBJECT
+    outputText = "default"
+    if provider == "ai21":
+        outputText = response_body.get('completions')[0].get('data').get('text')
+    else: # amazon titan
+        outputText = response_body.get('results')[0].get('outputText')
+    if "error" in outputText:
+        raise BedrockError(
+            message=outputText,
+            status_code=response.status_code,
+        )
+    else:
+        try:
+            model_response["choices"][0]["message"]["content"] = outputText
+        except:
+            raise BedrockError(message=json.dumps(outputText), status_code=response.status_code)
 
-        model_response["created"] = time.time()
-        model_response["model"] = model
-        model_response["usage"] = {
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-            "total_tokens": prompt_tokens + completion_tokens,
-        }
-        return model_response
+    ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here. 
+    prompt_tokens = len(
+        encoding.encode(prompt)
+    ) 
+    completion_tokens = len(
+        encoding.encode(model_response["choices"][0]["message"]["content"])
+    )
+
+    model_response["created"] = time.time()
+    model_response["model"] = model
+    model_response["usage"] = {
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": prompt_tokens + completion_tokens,
+    }
+    return model_response
 
 def embedding():
     # logic for parsing in - calling - parsing out model embedding calls

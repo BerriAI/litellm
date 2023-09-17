@@ -82,8 +82,7 @@ def mock_completion(model: str, messages: List, stream: bool = False, mock_respo
             response = mock_completion_streaming_obj(model_response, mock_response=mock_response, model=model)
             return response
         
-        completion_response = "This is a mock request"
-        model_response["choices"][0]["message"]["content"] = completion_response
+        model_response["choices"][0]["message"]["content"] = mock_response
         model_response["created"] = time.time()
         model_response["model"] = model
         return model_response
@@ -133,6 +132,7 @@ def completion(
     # model specific optional params
     top_k=40,# used by text-bison only
     task: Optional[str]="text-generation-inference", # used by huggingface inference endpoints
+    return_full_text: bool = False, # used by huggingface TGI
     remove_input: bool = True, # used by nlp cloud models - prevents input text from being returned as part of output
     request_timeout=0,  # unused var for old version of OpenAI API
     fallbacks=[],
@@ -162,6 +162,7 @@ def completion(
         ):  # allow custom provider to be passed in via the model name "azure/chatgpt-test"
             custom_llm_provider = model.split("/", 1)[0]
             model = model.split("/", 1)[1]
+        model, custom_llm_provider = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
         # check if user passed in any of the OpenAI optional params
         optional_params = get_optional_params(
             functions=functions,
@@ -182,7 +183,8 @@ def completion(
             custom_llm_provider=custom_llm_provider,
             top_k=top_k,
             task=task,
-            remove_input=remove_input
+            remove_input=remove_input,
+            return_full_text=return_full_text
         )
         # For logging - save the values of the litellm-specific params passed in
         litellm_params = get_litellm_params(
@@ -198,7 +200,6 @@ def completion(
             completion_call_id=id
         )
         logging.update_environment_variables(model=model, user=user, optional_params=optional_params, litellm_params=litellm_params)
-        get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
         if custom_llm_provider == "azure":
             # azure configs
             api_type = get_secret("AZURE_API_TYPE") or "azure"
@@ -244,7 +245,7 @@ def completion(
                 **optional_params,
             )
             if "stream" in optional_params and optional_params["stream"] == True:
-                response = CustomStreamWrapper(response, model, logging_obj=logging)
+                response = CustomStreamWrapper(response, model, custom_llm_provider="openai", logging_obj=logging)
                 return response
             ## LOGGING
             logging.post_call(
@@ -280,7 +281,6 @@ def completion(
                 litellm.openai_key or
                 get_secret("OPENAI_API_KEY")
             )
-
             ## LOGGING
             logging.pre_call(
                 input=messages,
@@ -310,7 +310,7 @@ def completion(
                 raise e
             
             if "stream" in optional_params and optional_params["stream"] == True:
-                response = CustomStreamWrapper(response, model, logging_obj=logging)
+                response = CustomStreamWrapper(response, model, custom_llm_provider="openai", logging_obj=logging)
                 return response
             ## LOGGING
             logging.post_call(
@@ -374,7 +374,7 @@ def completion(
                 **optional_params
             )
             if "stream" in optional_params and optional_params["stream"] == True:
-                response = CustomStreamWrapper(response, model, logging_obj=logging)
+                response = CustomStreamWrapper(response, model, custom_llm_provider="text-completion-openai", logging_obj=logging)
                 return response
             ## LOGGING
             logging.post_call(
@@ -446,7 +446,7 @@ def completion(
             )
             if "stream" in optional_params and optional_params["stream"] == True:
                 # don't try to access stream object,
-                response = CustomStreamWrapper(model_response, model, logging_obj=logging)
+                response = CustomStreamWrapper(model_response, model, custom_llm_provider="anthropic", logging_obj=logging)
                 return response
             response = model_response
         elif model in litellm.nlp_cloud_models or custom_llm_provider == "nlp_cloud":
@@ -493,7 +493,7 @@ def completion(
 
             if "stream" in optional_params and optional_params["stream"] == True:
                 # don't try to access stream object,
-                response = CustomStreamWrapper(model_response, model, logging_obj=logging)
+                response = CustomStreamWrapper(model_response, model, custom_llm_provider="aleph-alpha", logging_obj=logging)
                 return response
             response = model_response
         elif model in litellm.openrouter_models or custom_llm_provider == "openrouter":
@@ -570,7 +570,7 @@ def completion(
 
             if "stream" in optional_params and optional_params["stream"] == True:
                 # don't try to access stream object,
-                response = CustomStreamWrapper(model_response, model, logging_obj=logging)
+                response = CustomStreamWrapper(model_response, model, custom_llm_provider="cohere", logging_obj=logging)
                 return response
             response = model_response
         elif (
@@ -782,10 +782,12 @@ def completion(
                 litellm_params=litellm_params,
                 logger_fn=logger_fn,
                 encoding=encoding,
-                logging_obj=logging
+                logging_obj=logging,
+                stream=stream,
             )
 
-            if "stream" in optional_params and optional_params["stream"] == True: ## [BETA]
+
+            if stream == True:
                 # don't try to access stream object,
                 response = CustomStreamWrapper(
                     iter(model_response), model, custom_llm_provider="bedrock", logging_obj=logging
