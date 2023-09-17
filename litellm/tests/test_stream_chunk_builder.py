@@ -14,6 +14,8 @@ def test_stream_chunk_builder():
         max_tokens=10,
     )
 
+    chunks = []
+
     for chunk in response:
         print(chunk)
 test_stream_chunk_builder()
