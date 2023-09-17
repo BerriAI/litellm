@@ -26,21 +26,24 @@ def falcon_instruct_pt(messages):
     prompt = ""
     for message in messages:
         if message["role"] == "system":
-            prompt += messages["content"]
+            prompt += message["content"]
         else:
             prompt += message['role']+":"+ message["content"].replace("\r\n", "\n").replace("\n\n", "\n")
             prompt += "\n\n"
+    
+    return prompt
 
 def falcon_chat_pt(messages):
     prompt = ""
     for message in messages:
         if message["role"] == "system":
-            prompt += "System: " + messages["content"]
+            prompt += "System: " + message["content"]
         elif message["role"] == "assistant":
             prompt += "Falcon: " + message["content"]
         elif message["role"] == "user":
             prompt += "User: " + message["content"]
 
+    return prompt
 
 # MPT prompt template - from https://github.com/lm-sys/FastChat/blob/main/fastchat/conversation.py#L110
 def mpt_chat_pt(messages):
