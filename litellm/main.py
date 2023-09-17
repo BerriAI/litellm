@@ -1124,7 +1124,7 @@ def config_completion(**kwargs):
             "No config path set, please set a config path using `litellm.config_path = 'path/to/config.json'`"
         )
 
-def stream_chunk_builder(chunks: list, messages: list = None):
+def stream_chunk_builder(chunks: list):
     id = chunks[0]["id"]
     object = chunks[0]["object"]
     created = chunks[0]["created"]
