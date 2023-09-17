@@ -17,5 +17,7 @@ def test_stream_chunk_builder():
     chunks = []
 
     for chunk in response:
-        print(chunk)
+        chunks.append(chunk)
+
+    print(chunks)
 test_stream_chunk_builder()
