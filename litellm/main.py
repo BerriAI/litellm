@@ -1159,21 +1159,43 @@ def stream_chunk_builder(chunks: list):
     content_list = []
 
     if "function_call" in chunks[0]["choices"][0]["delta"]:
-        function_call_name = chunks[0]["choices"][0]["delta"]["function_call"]["name"]
-        print(function_call_name)
+        argument_list = []
+        delta = chunks[0]["choices"][0]["delta"]
+        function_call = delta.get("function_call", "")
+        function_call_name = function_call.get("name", "")
 
-    for chunk in chunks:
-        choices = chunk["choices"]
-        for choice in choices:
-            delta = choice.get("delta", {})
-            content = delta.get("content", "")
-            content_list.append(content)
+        message = response["choices"][0]["message"]
+        message["function_call"] = {}
+        message["function_call"]["name"] = function_call_name
 
-    # Combine the "content" strings into a single string
-    combined_content = "".join(content_list)
+        for chunk in chunks:
+            choices = chunk["choices"]
+            for choice in choices:
+                delta = choice.get("delta", {})
+                function_call = delta.get("function_call", "")
+                
+                # Check if a function call is present
+                if function_call:
+                    # Now, function_call is expected to be a dictionary
+                    arguments = function_call.get("arguments", "")
+                    argument_list.append(arguments)
 
-    # Update the "content" field within the response dictionary
-    response["choices"][0]["message"]["content"] = combined_content
+        combined_arguments = "".join(argument_list)
+        response["choices"][0]["message"]["content"] = None
+        response["choices"][0]["message"]["function_call"]["arguments"] = combined_arguments
+    else:
+        for chunk in chunks:
+            choices = chunk["choices"]
+            for choice in choices:
+                delta = choice.get("delta", {})
+                content = delta.get("content", "")
+                content_list.append(content)
+
+        # Combine the "content" strings into a single string
+        combined_content = "".join(content_list)
+
+        # Update the "content" field within the response dictionary
+        response["choices"][0]["message"]["content"] = combined_content
 
 
     # # Update usage information if needed
