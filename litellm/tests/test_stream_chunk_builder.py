@@ -10,7 +10,8 @@ def test_stream_chunk_builder():
     response = completion(
         model="gpt-3.5-turbo",
         messages=messages,
-        stream=True
+        stream=True,
+        max_tokens=10,
     )
 
     for chunk in response:
