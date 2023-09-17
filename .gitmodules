@@ -1,0 +1,3 @@
+[submodule "fastrepl-proxy"]
+	path = fastrepl-proxy
+	url = https://github.com/BerriAI/litellm
