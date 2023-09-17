@@ -163,6 +163,7 @@ def completion(
             custom_llm_provider = model.split("/", 1)[0]
             model = model.split("/", 1)[1]
         model, custom_llm_provider = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
+        print(f"model: {model}; llm provider: {custom_llm_provider}")
         # check if user passed in any of the OpenAI optional params
         optional_params = get_optional_params(
             functions=functions,
@@ -245,7 +246,7 @@ def completion(
                 **optional_params,
             )
             if "stream" in optional_params and optional_params["stream"] == True:
-                response = CustomStreamWrapper(response, model, logging_obj=logging)
+                response = CustomStreamWrapper(response, model, custom_llm_provider="openai", logging_obj=logging)
                 return response
             ## LOGGING
             logging.post_call(
@@ -310,7 +311,7 @@ def completion(
                 raise e
             
             if "stream" in optional_params and optional_params["stream"] == True:
-                response = CustomStreamWrapper(response, model, logging_obj=logging)
+                response = CustomStreamWrapper(response, model, custom_llm_provider="openai", logging_obj=logging)
                 return response
             ## LOGGING
             logging.post_call(
@@ -374,7 +375,7 @@ def completion(
                 **optional_params
             )
             if "stream" in optional_params and optional_params["stream"] == True:
-                response = CustomStreamWrapper(response, model, custom_llm_provider="openai", logging_obj=logging)
+                response = CustomStreamWrapper(response, model, custom_llm_provider="text-completion-openai", logging_obj=logging)
                 return response
             ## LOGGING
             logging.post_call(
@@ -446,7 +447,7 @@ def completion(
             )
             if "stream" in optional_params and optional_params["stream"] == True:
                 # don't try to access stream object,
-                response = CustomStreamWrapper(model_response, model, logging_obj=logging)
+                response = CustomStreamWrapper(model_response, model, custom_llm_provider="anthropic", logging_obj=logging)
                 return response
             response = model_response
         elif model in litellm.nlp_cloud_models or custom_llm_provider == "nlp_cloud":
@@ -493,7 +494,7 @@ def completion(
 
             if "stream" in optional_params and optional_params["stream"] == True:
                 # don't try to access stream object,
-                response = CustomStreamWrapper(model_response, model, logging_obj=logging)
+                response = CustomStreamWrapper(model_response, model, custom_llm_provider="aleph-alpha", logging_obj=logging)
                 return response
             response = model_response
         elif model in litellm.openrouter_models or custom_llm_provider == "openrouter":
