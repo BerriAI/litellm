@@ -571,7 +571,7 @@ def completion(
 
             if "stream" in optional_params and optional_params["stream"] == True:
                 # don't try to access stream object,
-                response = CustomStreamWrapper(model_response, model, logging_obj=logging)
+                response = CustomStreamWrapper(model_response, model, custom_llm_provider="cohere", logging_obj=logging)
                 return response
             response = model_response
         elif (
