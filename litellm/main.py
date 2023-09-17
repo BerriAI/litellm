@@ -1158,6 +1158,10 @@ def stream_chunk_builder(chunks: list):
     # Extract the "content" strings from the nested dictionaries within "choices"
     content_list = []
 
+    if "function_call" in chunks[0]["choices"][0]["delta"]:
+        function_call_name = chunks[0]["choices"][0]["delta"]["function_call"]["name"]
+        print(function_call_name)
+
     for chunk in chunks:
         choices = chunk["choices"]
         for choice in choices:
