@@ -1123,3 +1123,6 @@ def config_completion(**kwargs):
         raise ValueError(
             "No config path set, please set a config path using `litellm.config_path = 'path/to/config.json'`"
         )
+
+def stream_chunk_builder(chunks:list):
+    pass
