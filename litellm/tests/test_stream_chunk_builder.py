@@ -19,5 +19,21 @@ def test_stream_chunk_builder():
     for chunk in response:
         chunks.append(chunk)
 
-    print(chunks)
+    try:
+        rebuilt_response = stream_chunk_builder(chunks)
+
+        # exract the response from the rebuilt response
+        rebuilt_response["id"]
+        rebuilt_response["object"]
+        rebuilt_response["created"]
+        rebuilt_response["model"]
+        rebuilt_response["choices"]
+        rebuilt_response["choices"][0]["index"]
+        choices = rebuilt_response["choices"][0]
+        message = choices["message"]
+        role = message["role"]
+        content = message["content"]
+        finnish_reason = choices["finish_reason"]
+    except:
+        raise Exception("stream_chunk_builder failed to rebuild response")
 test_stream_chunk_builder()

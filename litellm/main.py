@@ -1124,5 +1124,55 @@ def config_completion(**kwargs):
             "No config path set, please set a config path using `litellm.config_path = 'path/to/config.json'`"
         )
 
-def stream_chunk_builder(chunks:list):
-    pass
+def stream_chunk_builder(chunks: list, messages: list = None):
+    id = chunks[0]["id"]
+    object = chunks[0]["object"]
+    created = chunks[0]["created"]
+    model = chunks[0]["model"]
+    role = chunks[0]["choices"][0]["delta"]["role"]
+    finnish_reason = chunks[-1]["choices"][0]["finish_reason"]
+    
+    # Initialize the response dictionary
+    response = {
+        "id": id,
+        "object": object,
+        "created": created,
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": role,
+                    "content": ""
+                },
+                "finish_reason": finnish_reason,
+            }
+        ],
+        # "usage": {
+        #     "prompt_tokens": 0,  # Modify as needed
+        #     "completion_tokens": 0,  # Modify as needed
+        #     "total_tokens": 0  # Modify as needed
+        # }
+    }
+
+    # Extract the "content" strings from the nested dictionaries within "choices"
+    content_list = []
+
+    for chunk in chunks:
+        choices = chunk["choices"]
+        for choice in choices:
+            delta = choice.get("delta", {})
+            content = delta.get("content", "")
+            content_list.append(content)
+
+    # Combine the "content" strings into a single string
+    combined_content = "".join(content_list)
+
+    # Update the "content" field within the response dictionary
+    response["choices"][0]["message"]["content"] = combined_content
+
+
+    # # Update usage information if needed
+    # response["usage"]["completion_tokens"] = token
+
+    return response
