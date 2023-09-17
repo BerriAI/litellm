@@ -1,4 +1,4 @@
-from litellm import completion
+from litellm import completion, stream_chunk_builder
 import litellm
 import os
 
