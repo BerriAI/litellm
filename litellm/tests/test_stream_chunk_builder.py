@@ -2,16 +2,33 @@ from litellm import completion, stream_chunk_builder
 import litellm
 import os
 
-user_message = "Write a short poem about the sky"
+user_message = "What is the current weather in Boston?"
 messages = [{"content": user_message, "role": "user"}]
+
+function_schema = {
+  "name": "get_weather",
+  "description":
+  "gets the current weather",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "location": {
+        "type": "string",
+        "description":
+        "The city and state, e.g. San Francisco, CA"
+      },
+    },
+    "required": ["location"]
+  },
+}
 
 def test_stream_chunk_builder():
     litellm.api_key = os.environ["OPENAI_API_KEY"]
     response = completion(
         model="gpt-3.5-turbo",
         messages=messages,
+        functions=[function_schema],
         stream=True,
-        max_tokens=10,
     )
 
     chunks = []
