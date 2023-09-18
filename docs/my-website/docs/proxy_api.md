@@ -15,7 +15,7 @@ This is your unique LiteLLM API Key. It has a max budget of $100 which is reset 
 
 Now let's call **claude-2** (Anthropic) and **llama2-70b-32k** (TogetherAI).
 
-```
+```python
 from litellm import completion 
 import os 
 
