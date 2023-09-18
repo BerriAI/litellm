@@ -1,4 +1,39 @@
-import threading, requests
+from .budget_manager import BudgetManager
+from .exceptions import (
+    AuthenticationError,
+    InvalidRequestError,
+    RateLimitError,
+    ServiceUnavailableError,
+    OpenAIError,
+    ContextWindowExceededError,
+    BudgetExceededError
+
+)
+from .integrations import *
+from .main import *  # type: ignore
+from .utils import (
+    client,
+    exception_type,
+    get_optional_params,
+    modify_integration,
+    token_counter,
+    cost_per_token,
+    completion_cost,
+    get_litellm_params,
+    Logging,
+    acreate,
+    get_model_list,
+    completion_with_split_tests,
+    get_max_tokens,
+    register_prompt_template,
+    validate_environment,
+    check_valid_key,
+    get_llm_provider
+)
+from .testing import *
+from .timeout import timeout
+import threading
+import requests
 from typing import Callable, List, Optional, Dict, Union
 from litellm.caching import Cache
 
@@ -32,17 +67,19 @@ aleph_alpha_key: Optional[str] = None
 nlp_cloud_key: Optional[str] = None
 use_client: bool = False
 logging: bool = True
-caching: bool = False # deprecated son
-caching_with_models: bool = False  # if you want the caching key to be model + prompt # deprecated soon
-cache: Optional[Cache] = None # cache object
+caching: bool = False  # deprecated son
+# if you want the caching key to be model + prompt # deprecated soon
+caching_with_models: bool = False
+cache: Optional[Cache] = None  # cache object
 model_alias_map: Dict[str, str] = {}
-max_budget: float = None # set the max budget across all providers
-_current_cost = 0 # private variable, used if max budget is set 
+max_budget: float = None  # set the max budget across all providers
+_current_cost = 0  # private variable, used if max budget is set
 #############################################
+
 
 def get_model_cost_map():
     url = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
-    
+
     try:
         response = requests.get(url)
         response.raise_for_status()  # Raise an exception if request is unsuccessful
@@ -52,9 +89,13 @@ def get_model_cost_map():
         return {}
     except:
         return {}
+
+
 model_cost = get_model_cost_map()
-custom_prompt_dict:Dict[str, dict] = {}
+custom_prompt_dict: Dict[str, dict] = {}
 ####### THREAD-SPECIFIC DATA ###################
+
+
 class MyLocal(threading.local):
     def __init__(self):
         self.user = "Hello World"
@@ -69,7 +110,7 @@ def identify(event_details):
         _thread_context.user = event_details["user"]
 
 
-####### ADDITIONAL PARAMS ################### configurable params if you use proxy models like Helicone, map spend to org id, etc.
+# ADDITIONAL PARAMS ################### configurable params if you use proxy models like Helicone, map spend to org id, etc.
 api_base = None
 headers = None
 api_version = None
@@ -93,11 +134,11 @@ open_ai_chat_completion_models: str = [
     "gpt-3.5-turbo-16k-0613",
 ]
 open_ai_text_completion_models: str = [
-    "text-ada-001", 
-    "text-babbage-001",  
-    "text-curie-001", 
+    "text-ada-001",
+    "text-babbage-001",
+    "text-curie-001",
     "text-davinci-002",
-    "text-davinci-003", 
+    "text-davinci-003",
 ]
 
 cohere_models: str = [
@@ -108,7 +149,11 @@ cohere_models: str = [
     "command-xlarge-beta",
 ]
 
-anthropic_models: str = ["claude-2", "claude-instant-1", "claude-instant-1.2"]
+anthropic_models: str = [
+    "claude-2",
+    "claude-instant-1",
+    "claude-instant-1.2"
+]
 
 # well supported replicate llms
 replicate_models: str = [
@@ -140,7 +185,7 @@ openrouter_models: str = [
 
 vertex_chat_models: str = [
     "chat-bison-32k",
-    "chat-bison", 
+    "chat-bison",
     "chat-bison@001",
 ]
 
@@ -151,7 +196,7 @@ vertex_code_chat_models: str = [
 ]
 
 vertex_text_models: str = [
-    "text-bison", 
+    "text-bison",
     "text-bison@001",
     # "text-bison-32k",
 ]
@@ -187,7 +232,7 @@ together_ai_models: str = [
     # llama llms - chat
     "togethercomputer/llama-2-70b-chat",
 
-    # llama llms - language / instruct 
+    # llama llms - language / instruct
     "togethercomputer/llama-2-70b",
     "togethercomputer/LLaMA-2-7B-32K",
     "togethercomputer/Llama-2-7B-32K-Instruct",
@@ -218,7 +263,7 @@ together_ai_models: str = [
     "upstage/SOLAR-0-70b-16bit",
     "WizardLM/WizardLM-70B-V1.0",
 
-] # supports all together ai models, just pass in the model id e.g. completion(model="together_computer/replit_code_3b",...)
+]  # supports all together ai models, just pass in the model id e.g. completion(model="together_computer/replit_code_3b",...)
 
 aleph_alpha_models: str = [
     "luminous-base",
@@ -229,7 +274,8 @@ aleph_alpha_models: str = [
     "luminous-supreme-control"
 ]
 
-baseten_models: str = ["qvv0xeq", "q841o8w", "31dxrj3"]  # FALCON 7B  # WizardLM  # Mosaic ML
+# FALCON 7B  # WizardLM  # Mosaic ML
+baseten_models: str = ["qvv0xeq", "q841o8w", "31dxrj3"]
 
 bedrock_models: str = [
     "amazon.titan-tg1-large",
@@ -270,7 +316,7 @@ provider_list: str = [
     "vllm",
     "nlp_cloud",
     "bedrock",
-    "custom", # custom apis
+    "custom",  # custom apis
 ]
 
 models_by_provider: dict = {
@@ -289,38 +335,3 @@ models_by_provider: dict = {
 
 ####### EMBEDDING MODELS ###################
 open_ai_embedding_models: str = ["text-embedding-ada-002"]
-
-from .timeout import timeout
-from .testing import *
-from .utils import (
-    client,
-    exception_type,
-    get_optional_params,
-    modify_integration,
-    token_counter,
-    cost_per_token,
-    completion_cost,
-    get_litellm_params,
-    Logging,
-    acreate,
-    get_model_list,
-    completion_with_split_tests,
-    get_max_tokens,
-    register_prompt_template,
-    validate_environment,
-    check_valid_key,
-    get_llm_provider
-)
-from .main import *  # type: ignore
-from .integrations import *
-from .exceptions import (
-    AuthenticationError,
-    InvalidRequestError,
-    RateLimitError,
-    ServiceUnavailableError,
-    OpenAIError,
-    ContextWindowExceededError,
-    BudgetExceededError
-
-)
-from .budget_manager import BudgetManager
