@@ -224,7 +224,11 @@ huggingface_models: str = [
     "meta-llama/Llama-2-70b-chat",
 ]  # these have been tested on extensively. But by default all text2text-generation and text-generation models are supported by liteLLM. - https://docs.litellm.ai/docs/providers
 
-ai21_models: str = ["j2-ultra", "j2-mid", "j2-light"]
+ai21_models: str = [
+    "j2-ultra",
+    "j2-mid",
+    "j2-light"
+]
 
 nlp_cloud_models: str = ["dolphin", "chatdolphin"]
 
