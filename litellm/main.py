@@ -234,10 +234,11 @@ def completion(
             custom_llm_provider = model.split("/", 1)[0]
             model = model.split("/", 1)[1]
         model, custom_llm_provider = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
-        api_key = get_api_key(llm_provider=custom_llm_provider, dynamic_api_key=api_key) # get the api key from the environment if required for the model
-        if api_key and "sk-litellm" in api_key:
+        model_api_key = get_api_key(llm_provider=custom_llm_provider, dynamic_api_key=api_key) # get the api key from the environment if required for the model
+        if model_api_key and "sk-litellm" in model_api_key:
             api_base = "https://proxy.litellm.ai"
             custom_llm_provider = "openai" 
+            api_key = model_api_key
         # check if user passed in any of the OpenAI optional params
         optional_params = get_optional_params(
             functions=functions,
