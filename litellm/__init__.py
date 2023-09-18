@@ -177,8 +177,8 @@ openrouter_models: str = [
     "openai/gpt-3.5-turbo",
     "openai/gpt-3.5-turbo-16k",
     "openai/gpt-4-32k",
-    "anthropic/claude-2",
     "anthropic/claude-instant-v1",
+    "anthropic/claude-2",
     "meta-llama/llama-2-13b-chat",
     "meta-llama/llama-2-70b-chat",
 ]
