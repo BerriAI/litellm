@@ -279,7 +279,11 @@ aleph_alpha_models: str = [
 ]
 
 # FALCON 7B  # WizardLM  # Mosaic ML
-baseten_models: str = ["qvv0xeq", "q841o8w", "31dxrj3"]
+baseten_models: str = [
+    "qvv0xeq",
+    "q841o8w",
+    "31dxrj3"
+]
 
 bedrock_models: str = [
     "amazon.titan-tg1-large",
