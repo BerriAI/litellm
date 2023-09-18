@@ -56,6 +56,7 @@ def completion(
     if task == "conversational":
         inference_params = copy.deepcopy(optional_params)
         inference_params.pop("details")
+        inference_params.pop("return_full_text")
         past_user_inputs = []
         generated_responses = []
         text = ""
