@@ -53,7 +53,7 @@ jobs:
       - run:
           name: Run tests
           command: |
-            python -m pytest --junitxml=test-results/junit.xml
+            python -m pytest -vv --junitxml=test-results/junit.xml
 
       # Store test results
       - store_test_results:
