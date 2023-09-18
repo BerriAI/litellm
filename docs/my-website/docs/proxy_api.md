@@ -1,32 +1,46 @@
 import TokenGen from '../src/components/TokenGen.js'
 
-# 🚨 LITELLM API (Access Claude-2/Llama2-70b/etc.)
+# 🚨 LiteLLM API (Access Claude-2,Llama2-70b,etc.)
 
 Use this if you're trying to add support for new LLMs and need access for testing: 
 
-Here's how to call it: 
+# usage
 
 ## Step 1: Save your LiteLLM API Key 
 
-This is your unique LiteLLM API Key. Save this for later use. 
+This is your unique LiteLLM API Key. It has a max budget of $100 which is reset monthly, and works across all models in [Supported Models](#supported-models). Save this for later use. 
 <TokenGen/>
 
 ## Step 2: Test a new LLM
 
-Now let's test if claude-2 is working in our code
+Now let's call **claude-2** (Anthropic) and **llama2-70b-32k** (TogetherAI).
+
 ```
 from litellm import completion 
 import os 
 
 # set env var
-os.environ["ANTHROPIC_API_KEY"] = "sk-litellm-1234" # 👈 replace with your unique key
+os.environ["ANTHROPIC_API_KEY"] = "sk-litellm-1234" # 👈 replace with your unique key from step 1
+os.environ["TOGETHERAI_API_KEY"] = "sk-litellm-1234" # 👈 replace with your unique key from step 1
 
 messages = [{"role": "user", "content": "Hey, how's it going?"}]
 
+# call claude
 response = completion(model="claude-2", messages=messages) 
+
+# call llama2-70b
+response = completion(model="togethercomputer/LLaMA-2-7B-32K", messages=messages) 
 
 print(response) 
 ```
+
+```
+### Testing Llama2-70b on TogetherAI 
+Let's call 
+
+```
+
+You can use this as a key for any of the [providers we support](./providers/)
 
 ## Supported Models
 
