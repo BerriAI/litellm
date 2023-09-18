@@ -57,6 +57,7 @@ class BudgetManager:
         else:
             raise ValueError("""duration needs to be one of ["daily", "weekly", "monthly", "yearly"]""")
         self.user_dict[user] = {"total_budget": total_budget, "duration": duration_in_days, "created_at": created_at, "last_updated_at": created_at}
+        self._save_data_thread() # [Non-Blocking] Update persistent storage without blocking execution
         return self.user_dict[user]
     
     def projected_cost(self, model: str, messages: list, user: str):
