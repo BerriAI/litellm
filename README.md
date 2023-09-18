@@ -93,6 +93,33 @@ result = completion('claude-2', messages, stream=True)
 for chunk in result:
   print(chunk['choices'][0]['delta'])
 ```
+# Contributing
+To contribute: Clone the repo locally -> Make a change -> Submit a PR with the change. 
+
+Here's how to modify the repo locally: 
+Step 1: Clone the repo 
+```
+git clone https://github.com/BerriAI/litellm.git
+```
+
+Step 2: Navigate into the project, and install dependencies: 
+```
+cd litellm
+poetry install
+```
+
+Step 3: Test your change:
+```
+cd litellm/tests # pwd: Documents/litellm/litellm/tests
+pytest .
+```
+
+Step 4: Submit a PR with your changes! 🚀
+- push your fork to your github repo 
+- submit a PR from there 
+
+[Learn more on how to make a PR](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/creating-a-pull-request)
+
 
 # Support / talk with founders
 - [Schedule Demo 👋](https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version)
