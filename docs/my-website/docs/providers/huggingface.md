@@ -4,18 +4,20 @@ import Image from '@theme/IdealImage';
 
 LiteLLM supports Huggingface models that use the [text-generation-inference](https://github.com/huggingface/text-generation-inference) format or the [Conversational task](https://huggingface.co/docs/api-inference/detailed_parameters#conversational-task) format. 
 
-* text-generation-interface: [Here's all the models that use this format](https://huggingface.co/models?other=text-generation-inference).
-* conversational task: [Here's all the models that use this format](https://huggingface.co/models?pipeline_tag=conversational).
+* Text-generation-interface: [Here's all the models that use this format](https://huggingface.co/models?other=text-generation-inference).
+* Conversational task: [Here's all the models that use this format](https://huggingface.co/models?pipeline_tag=conversational).
+* Non TGI/Conversational-task LLMs
 
-By default, we assume the you're trying to call models with the 'text-generation-interface' format (e.g. Llama2, Falcon, WizardCoder, MPT, etc.)
+**By default, we assume the you're trying to call models with the 'text-generation-interface' format (e.g. Llama2, Falcon, WizardCoder, MPT, etc.)**
 
-This can be changed by setting task="conversational" in the completion call. [Example](#conversational-task-blenderbot-etc)
+This can be changed by setting `task="conversational"` in the completion call. [Example](#conversational-task-blenderbot-etc)
 
-## usage 
+## Usage 
 
 You need to tell LiteLLM when you're calling Huggingface. 
 Do that by setting it as part of the model name -  completion(model="huggingface/<model_name>",...). 
 
+### Text-generation-interface (TGI) - LLMs
 ```python
 import os 
 from litellm import completion 
@@ -31,7 +33,7 @@ response = completion(model="huggingface/WizardLM/WizardCoder-Python-34B-V1.0", 
 print(response)
 ```
 
-### conversational-task (BlenderBot, etc.)
+### Conversational-task (BlenderBot, etc.) LLMs
 
 **Key Change**: `completion(..., task="conversational")`
 
@@ -50,6 +52,25 @@ response = completion(model="huggingface/facebook/blenderbot-400M-distill", mess
 print(response)
 ```
 
+### Non TGI/Conversational-task LLMs
+
+**Key Change**: `completion(..., task=None)`
+```python
+import os 
+from litellm import completion 
+
+# [OPTIONAL] set env var
+os.environ["HUGGINGFACE_API_KEY"] = "huggingface_api_key" 
+
+response = completion(
+  model="huggingface/roneneldan/TinyStories-3M", 
+  messages=[{ "content": "My name is Merve and my favorite", "role": "user"}],
+  api_base="https://p69xlsj6rpno5drq.us-east-1.aws.endpoints.huggingface.cloud",
+  task=None,
+)
+# Add any assertions here to check the response
+print(response)
+```
 
 ### [OPTIONAL] API KEYS
 If the endpoint you're calling requires an api key to be passed, set it in your os environment. [Code for how it's sent](https://github.com/BerriAI/litellm/blob/0100ab2382a0e720c7978fbf662cc6e6920e7e03/litellm/llms/huggingface_restapi.py#L25)
