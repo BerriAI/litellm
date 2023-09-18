@@ -90,25 +90,25 @@
         "output_cost_per_token": 0.000015
     },
     "command": {
-       "max_tokens": 4096,
-       "input_cost_per_token": 0.000015,
-       "output_cost_per_token": 0.000015
-   },
-   "command-light": {
-      "max_tokens": 4096,
-      "input_cost_per_token": 0.000015,
-      "output_cost_per_token": 0.000015
-  },
-  "command-medium-beta": {
-     "max_tokens": 4096,
-     "input_cost_per_token": 0.000015,
-     "output_cost_per_token": 0.000015
- },
-  "command-xlarge-beta": {
-     "max_tokens": 4096,
-     "input_cost_per_token": 0.000015,
-     "output_cost_per_token": 0.000015
- },
+        "max_tokens": 4096,
+        "input_cost_per_token": 0.000015,
+        "output_cost_per_token": 0.000015
+    },
+    "command-light": {
+        "max_tokens": 4096,
+        "input_cost_per_token": 0.000015,
+        "output_cost_per_token": 0.000015
+    },
+    "command-medium-beta": {
+        "max_tokens": 4096,
+        "input_cost_per_token": 0.000015,
+        "output_cost_per_token": 0.000015
+    },
+    "command-xlarge-beta": {
+        "max_tokens": 4096,
+        "input_cost_per_token": 0.000015,
+        "output_cost_per_token": 0.000015
+    },
     "claude-instant-1.2": {
         "max_tokens": 100000,
         "input_cost_per_token": 0.00000163,
