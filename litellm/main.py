@@ -92,6 +92,28 @@ async def acompletion(*args, **kwargs):
         return response
 
 def mock_completion(model: str, messages: List, stream: bool = False, mock_response: str = "This is a mock request", **kwargs):
+    """
+    Generate a mock completion response for testing or debugging purposes.
+
+    This is a helper function that simulates the response structure of the OpenAI completion API.
+
+    Parameters:
+        model (str): The name of the language model for which the mock response is generated.
+        messages (List): A list of message objects representing the conversation context.
+        stream (bool, optional): If True, returns a mock streaming response (default is False).
+        mock_response (str, optional): The content of the mock response (default is "This is a mock request").
+        **kwargs: Additional keyword arguments that can be used but are not required.
+
+    Returns:
+        litellm.ModelResponse: A ModelResponse simulating a completion response with the specified model, messages, and mock response.
+
+    Raises:
+        Exception: If an error occurs during the generation of the mock completion response.
+
+    Note:
+        - This function is intended for testing or debugging purposes to generate mock completion responses.
+        - If 'stream' is True, it returns a response that mimics the behavior of a streaming completion.
+    """
     try:
         model_response = ModelResponse(stream=stream)
         if stream is True:
@@ -156,7 +178,38 @@ def completion(
     caching = False,
     cache_params = {}, # optional to specify metadata for caching
 ) -> ModelResponse:
-    # If `mock_response` is set, execute the `mock_completion` method instead.
+    """
+    Perform a completion() using any of litellm supported llms (example gpt-4, gpt-3.5-turbo, claude-2, command-nightly)
+    Parameters:
+        model (str): The name of the language model to use for text completion. see all supported LLMs: https://docs.litellm.ai/docs/providers/
+        messages (List): A list of message objects representing the conversation context (default is an empty list).
+
+        OPTIONAL PARAMS
+        functions (List, optional): A list of functions to apply to the conversation messages (default is an empty list).
+        function_call (str, optional): The name of the function to call within the conversation (default is an empty string).
+        temperature (float, optional): The temperature parameter for controlling the randomness of the output (default is 1.0).
+        top_p (float, optional): The top-p parameter for nucleus sampling (default is 1.0).
+        n (int, optional): The number of completions to generate (default is 1).
+        stream (bool, optional): If True, return a streaming response (default is False).
+        stop(string/list, optional): - Up to 4 sequences where the LLM API will stop generating further tokens.
+        max_tokens (integer, optional): The maximum number of tokens in the generated completion (default is infinity).
+        presence_penalty (float, optional): It is used to penalize new tokens based on their existence in the text so far.
+        frequency_penalty: It is used to penalize new tokens based on their frequency in the text so far.
+        logit_bias (dict, optional): Used to modify the probability of specific tokens appearing in the completion.
+        user (str, optional):  A unique identifier representing your end-user. This can help the LLM provider to monitor and detect abuse.
+
+        LITELLM Specific Params
+        mock_response (str, optional): If provided, return a mock completion response for testing or debugging purposes (default is None).
+        force_timeout (int, optional): The maximum execution time in seconds for the completion request (default is 600).
+        custom_llm_provider (str, optional): Used for Non-OpenAI LLMs, Example usage for bedrock, set model="amazon.titan-tg1-large" and custom_llm_provider="bedrock"
+    Returns:
+        ModelResponse: A response object containing the generated completion and associated metadata.
+
+    Note:
+        - This function is used to perform completions() using the specified language model.
+        - It supports various optional parameters for customizing the completion behavior.
+        - If 'mock_response' is provided, a mock completion response is returned for testing or debugging.
+    """
     if mock_response:
         return mock_completion(model, messages, stream=stream, mock_response=mock_response)
     
