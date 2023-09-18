@@ -420,6 +420,16 @@ def test_completion_azure_deployment_id():
         pytest.fail(f"Error occurred: {e}")
 # test_completion_azure_deployment_id()
 
+# def test_hf_conversational_task():
+#     try:
+#         messages = [{ "content": "There's a llama in my garden 😱 What should I do?","role": "user"}]
+#         # e.g. Call 'facebook/blenderbot-400M-distill' hosted on HF Inference endpoints
+#         response = completion(model="huggingface/facebook/blenderbot-400M-distill", messages=messages, task="conversational")
+#         print(f"response: {response}")
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
+
+# test_hf_conversational_task()
 # Replicate API endpoints are unstable -> throw random CUDA errors -> this means our tests can fail even if our tests weren't incorrect.
 
 # def test_completion_replicate_llama_2():
