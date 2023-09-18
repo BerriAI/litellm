@@ -93,12 +93,11 @@ open_ai_chat_completion_models: str = [
     "gpt-3.5-turbo-16k-0613",
 ]
 open_ai_text_completion_models: str = [
-    "text-davinci-003", 
-    "text-curie-001", 
-    "text-babbage-001", 
     "text-ada-001", 
-    "text-babbage-002", 
+    "text-babbage-001",  
+    "text-curie-001", 
     "text-davinci-002",
+    "text-davinci-003", 
 ]
 
 cohere_models: str = [
