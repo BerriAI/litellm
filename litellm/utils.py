@@ -742,6 +742,31 @@ def completion_cost(
         completion="",
         total_time=0.0, # used for replicate
     ):
+    """
+    Calculate the cost of a given completion call fot GPT-3.5-turbo, llama2, any litellm supported llm.
+
+    Parameters:
+        completion_response (litellm.ModelResponses): [Required] The response received from a LiteLLM completion request.
+        
+        [OPTIONAL PARAMS]
+        model (str): Optional. The name of the language model used in the completion calls
+        prompt (str): Optional. The input prompt passed to the llm 
+        completion (str): Optional. The output completion text from the llm
+        total_time (float): Optional. (Only used for Replicate LLMs) The total time used for the request in seconds
+
+    Returns:
+        float: The cost in USD dollars for the completion based on the provided parameters.
+
+    Note:
+        - If completion_response is provided, the function extracts token information and the model name from it.
+        - If completion_response is not provided, the function calculates token counts based on the model and input text.
+        - The cost is calculated based on the model, prompt tokens, and completion tokens.
+        - For certain models containing "togethercomputer" in the name, prices are based on the model size.
+        - For Replicate models, the cost is calculated based on the total time used for the request.
+
+    Exceptions:
+        - If an error occurs during execution, the function returns 0.0 without blocking the user's execution path.
+    """
     try:
         # Handle Inputs to completion_cost
         prompt_tokens = 0
