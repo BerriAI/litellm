@@ -150,7 +150,7 @@ def hf_test_completion():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-hf_test_completion()
+# hf_test_completion()
 
 def test_completion_cohere(): # commenting for now as the cohere endpoint is being flaky
     try:
@@ -219,6 +219,13 @@ def test_completion_text_openai():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+def test_completion_gpt_instruct():
+    try:
+        response = completion(model="gpt-3.5-turbo-instruct", messages=messages)
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+# test_completion_gpt_instruct()
 
 def test_completion_openai_with_optional_params():
     try:

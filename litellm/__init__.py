@@ -93,6 +93,7 @@ open_ai_chat_completion_models: List = [
     "gpt-3.5-turbo-16k-0613",
 ]
 open_ai_text_completion_models: List = [
+    "gpt-3.5-turbo-instruct",
     "text-davinci-003", 
     "text-curie-001", 
     "text-babbage-001", 
