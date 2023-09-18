@@ -1193,3 +1193,82 @@ def config_completion(**kwargs):
         raise ValueError(
             "No config path set, please set a config path using `litellm.config_path = 'path/to/config.json'`"
         )
+
+def stream_chunk_builder(chunks: list):
+    id = chunks[0]["id"]
+    object = chunks[0]["object"]
+    created = chunks[0]["created"]
+    model = chunks[0]["model"]
+    role = chunks[0]["choices"][0]["delta"]["role"]
+    finnish_reason = chunks[-1]["choices"][0]["finish_reason"]
+    
+    # Initialize the response dictionary
+    response = {
+        "id": id,
+        "object": object,
+        "created": created,
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": role,
+                    "content": ""
+                },
+                "finish_reason": finnish_reason,
+            }
+        ],
+        # "usage": {
+        #     "prompt_tokens": 0,  # Modify as needed
+        #     "completion_tokens": 0,  # Modify as needed
+        #     "total_tokens": 0  # Modify as needed
+        # }
+    }
+
+    # Extract the "content" strings from the nested dictionaries within "choices"
+    content_list = []
+
+    if "function_call" in chunks[0]["choices"][0]["delta"]:
+        argument_list = []
+        delta = chunks[0]["choices"][0]["delta"]
+        function_call = delta.get("function_call", "")
+        function_call_name = function_call.get("name", "")
+
+        message = response["choices"][0]["message"]
+        message["function_call"] = {}
+        message["function_call"]["name"] = function_call_name
+
+        for chunk in chunks:
+            choices = chunk["choices"]
+            for choice in choices:
+                delta = choice.get("delta", {})
+                function_call = delta.get("function_call", "")
+                
+                # Check if a function call is present
+                if function_call:
+                    # Now, function_call is expected to be a dictionary
+                    arguments = function_call.get("arguments", "")
+                    argument_list.append(arguments)
+
+        combined_arguments = "".join(argument_list)
+        response["choices"][0]["message"]["content"] = None
+        response["choices"][0]["message"]["function_call"]["arguments"] = combined_arguments
+    else:
+        for chunk in chunks:
+            choices = chunk["choices"]
+            for choice in choices:
+                delta = choice.get("delta", {})
+                content = delta.get("content", "")
+                content_list.append(content)
+
+        # Combine the "content" strings into a single string
+        combined_content = "".join(content_list)
+
+        # Update the "content" field within the response dictionary
+        response["choices"][0]["message"]["content"] = combined_content
+
+
+    # # Update usage information if needed
+    # response["usage"]["completion_tokens"] = token
+
+    return response
