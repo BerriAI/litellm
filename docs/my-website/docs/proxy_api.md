@@ -3,6 +3,33 @@ import TokenGen from '../src/components/TokenGen.js'
 # 🚨 LITELLM API (Access Claude-2/Llama2-70b/etc.)
 
 Use this if you're trying to add support for new LLMs and need access for testing: 
+
+Here's how to call it: 
+
+## Step 1: Save your LiteLLM API Key 
+
+This is your unique LiteLLM API Key. Save this for later use. 
+<TokenGen/>
+
+## Step 2: Test a new LLM
+
+Now let's test if claude-2 is working in our code
+```
+from litellm import completion 
+import os 
+
+# set env var
+os.environ["ANTHROPIC_API_KEY"] = "sk-litellm-1234" # 👈 replace with your unique key
+
+messages = [{"role": "user", "content": "Hey, how's it going?"}]
+
+response = completion(model="claude-2", messages=messages) 
+
+print(response) 
+```
+
+## Supported Models
+
 * OpenAI models 
     * gpt-4
     * gpt-3.5-turbo
@@ -30,30 +57,6 @@ Use this if you're trying to add support for new LLMs and need access for testin
     * claude-2
     * claude-instant-v1
 
-
-Here's how to call it: 
-
-## Step 1: Save your LiteLLM API Key 
-
-This is your unique LiteLLM API Key. Save this for later use. 
-<TokenGen/>
-
-## Step 2: Test a new LLM
-
-Now let's test if claude-2 is working in our code
-```
-from litellm import completion 
-import os 
-
-# set env var
-os.environ["ANTHROPIC_API_KEY"] = "sk-litellm-1234" # 👈 replace with your unique key
-
-messages = [{"role": "user", "content": "Hey, how's it going?"}]
-
-response = completion(model="claude-2", messages=messages) 
-
-print(response) 
-```
 
 ## For OpenInterpreter
 This was initially built for the Open Interpreter community. If you're trying to use this feature in there, here's how you can do it:  
