@@ -50,8 +50,25 @@ dotenv.load_dotenv()  # Loading env variables using dotenv
 
 
 ####### COMPLETION ENDPOINTS ################
-#############################################
+
 async def acompletion(*args, **kwargs):
+    """
+    Asynchronously perform a completion() using the any LiteLLM model (ex gpt-3.5-turbo, claude-2)
+
+    This function takes the same arguments as the 'completion' function and is used for asynchronous completion requests.
+
+    Parameters:
+        *args: Positional arguments to pass to the 'litellm.completion' function.
+        **kwargs: Keyword arguments to pass to the 'litellm.completion' function.
+
+    Returns:
+        The completion response, either as a litellm.ModelResponse Object or an async generator if 'stream' is set to True.
+
+    Note:
+        - This function uses asynchronous programming to perform completions.
+        - It leverages the 'loop.run_in_executor' method to execute the synchronous 'completion' function.
+        - If 'stream' is set to True in kwargs, the function returns an async generator.
+    """
     loop = asyncio.get_event_loop()
 
     # Use a partial function to pass your keyword arguments
