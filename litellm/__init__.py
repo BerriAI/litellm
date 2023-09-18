@@ -184,8 +184,8 @@ openrouter_models: str = [
 ]
 
 vertex_chat_models: str = [
-    "chat-bison-32k",
     "chat-bison",
+    "chat-bison-32k",
     "chat-bison@001",
 ]
 
