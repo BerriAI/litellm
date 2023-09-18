@@ -19,12 +19,12 @@
         "input_cost_per_token": 0.0000015,
         "output_cost_per_token": 0.000002
     },
-    "gpt-3.5-turbo-0613": {
+    "gpt-3.5-turbo-0301": {
         "max_tokens": 4097,
         "input_cost_per_token": 0.0000015,
         "output_cost_per_token": 0.000002
     },
-    "gpt-3.5-turbo-0301": {
+    "gpt-3.5-turbo-0613": {
         "max_tokens": 4097,
         "input_cost_per_token": 0.0000015,
         "output_cost_per_token": 0.000002
