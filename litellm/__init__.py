@@ -150,9 +150,9 @@ cohere_models: str = [
 ]
 
 anthropic_models: str = [
-    "claude-2",
     "claude-instant-1",
     "claude-instant-1.2"
+    "claude-2",
 ]
 
 # well supported replicate llms
