@@ -36,7 +36,7 @@ caching: bool = False # deprecated son
 caching_with_models: bool = False  # if you want the caching key to be model + prompt # deprecated soon
 cache: Optional[Cache] = None # cache object
 model_alias_map: Dict[str, str] = {}
-max_budget: float = None # set the max budget across all providers
+max_budget: float = 0.0 # set the max budget across all providers
 _current_cost = 0 # private variable, used if max budget is set 
 #############################################
 
@@ -78,7 +78,7 @@ config_path = None
 ####### Secret Manager #####################
 secret_manager_client = None
 ####### COMPLETION MODELS ###################
-open_ai_chat_completion_models: str = [
+open_ai_chat_completion_models: List = [
     "gpt-4",
     "gpt-4-0613",
     "gpt-4-0314",
@@ -92,7 +92,7 @@ open_ai_chat_completion_models: str = [
     "gpt-3.5-turbo-16k",
     "gpt-3.5-turbo-16k-0613",
 ]
-open_ai_text_completion_models: str = [
+open_ai_text_completion_models: List = [
     "text-davinci-003", 
     "text-curie-001", 
     "text-babbage-001", 
@@ -101,7 +101,7 @@ open_ai_text_completion_models: str = [
     "text-davinci-002",
 ]
 
-cohere_models: str = [
+cohere_models: List = [
     "command-nightly",
     "command",
     "command-light",
@@ -109,10 +109,10 @@ cohere_models: str = [
     "command-xlarge-beta",
 ]
 
-anthropic_models: str = ["claude-2", "claude-instant-1", "claude-instant-1.2"]
+anthropic_models: List = ["claude-2", "claude-instant-1", "claude-instant-1.2"]
 
 # well supported replicate llms
-replicate_models: str = [
+replicate_models: List = [
     # llama replicate supported LLMs
     "replicate/llama-2-70b-chat:2796ee9483c3fd7aa2e171d38f4ca12251a30609463dcfd4cd76703f22e96cdf",
     "a16z-infra/llama-2-13b-chat:2a7f981751ec7fdf87b5b91ad4db53683a98082e9ff7bfd12c8cd5ea85980a52",
@@ -127,7 +127,7 @@ replicate_models: str = [
     "replit/replit-code-v1-3b:b84f4c074b807211cd75e3e8b1589b6399052125b4c27106e43d47189e8415ad",
 ]
 
-openrouter_models: str = [
+openrouter_models: List = [
     "google/palm-2-codechat-bison",
     "google/palm-2-chat-bison",
     "openai/gpt-3.5-turbo",
@@ -139,25 +139,25 @@ openrouter_models: str = [
     "meta-llama/llama-2-70b-chat",
 ]
 
-vertex_chat_models: str = [
+vertex_chat_models: List = [
     "chat-bison-32k",
     "chat-bison", 
     "chat-bison@001",
 ]
 
-vertex_code_chat_models: str = [
+vertex_code_chat_models: List = [
     "codechat-bison",
     "codechat-bison-32k",
     "codechat-bison@001",
 ]
 
-vertex_text_models: str = [
+vertex_text_models: List = [
     "text-bison", 
     "text-bison@001",
     # "text-bison-32k",
 ]
 
-vertex_code_text_models: str = [
+vertex_code_text_models: List = [
     "code-bison",
     # "code-bison-32K",
     "code-bison@001",
@@ -165,7 +165,7 @@ vertex_code_text_models: str = [
     "code-gecko@latest",
 ]
 
-huggingface_models: str = [
+huggingface_models: List = [
     "meta-llama/Llama-2-7b-hf",
     "meta-llama/Llama-2-7b-chat-hf",
     "meta-llama/Llama-2-13b-hf",
@@ -180,11 +180,11 @@ huggingface_models: str = [
     "meta-llama/Llama-2-70b-chat",
 ]  # these have been tested on extensively. But by default all text2text-generation and text-generation models are supported by liteLLM. - https://docs.litellm.ai/docs/providers
 
-ai21_models: str = ["j2-ultra", "j2-mid", "j2-light"]
+ai21_models: List = ["j2-ultra", "j2-mid", "j2-light"]
 
-nlp_cloud_models: str = ["dolphin", "chatdolphin"]
+nlp_cloud_models: List = ["dolphin", "chatdolphin"]
 
-together_ai_models: str = [
+together_ai_models: List = [
     # llama llms - chat
     "togethercomputer/llama-2-70b-chat",
 
@@ -221,7 +221,7 @@ together_ai_models: str = [
 
 ] # supports all together ai models, just pass in the model id e.g. completion(model="together_computer/replit_code_3b",...)
 
-aleph_alpha_models: str = [
+aleph_alpha_models: List = [
     "luminous-base",
     "luminous-base-control",
     "luminous-extended",
@@ -230,9 +230,9 @@ aleph_alpha_models: str = [
     "luminous-supreme-control"
 ]
 
-baseten_models: str = ["qvv0xeq", "q841o8w", "31dxrj3"]  # FALCON 7B  # WizardLM  # Mosaic ML
+baseten_models: List = ["qvv0xeq", "q841o8w", "31dxrj3"]  # FALCON 7B  # WizardLM  # Mosaic ML
 
-bedrock_models: str = [
+bedrock_models: List = [
     "amazon.titan-tg1-large",
     "ai21.j2-grande-instruct"
 ]
@@ -254,7 +254,7 @@ model_list = (
     + nlp_cloud_models
 )
 
-provider_list: str = [
+provider_list: List = [
     "openai",
     "cohere",
     "anthropic",
@@ -289,7 +289,7 @@ models_by_provider: dict = {
 }
 
 ####### EMBEDDING MODELS ###################
-open_ai_embedding_models: str = ["text-embedding-ada-002"]
+open_ai_embedding_models: List = ["text-embedding-ada-002"]
 
 from .timeout import timeout
 from .testing import *
