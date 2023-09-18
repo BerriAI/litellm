@@ -40,10 +40,11 @@ response = completion("gpt-3.5-turbo", messages)
 
 These also support the `OPENAI_API_BASE` environment variable, which can be used to specify a custom API endpoint.
 
-### OpenAI Text Completion Models
+### OpenAI Text Completion Models / Instruct Models
 
 | Model Name       | Function Call                              | Required OS Variables                |
 |------------------|--------------------------------------------|--------------------------------------|
+| gpt-3.5-turbo-instruct | `completion('gpt-3.5-turbo-instruct', messages)` | `os.environ['OPENAI_API_KEY'`       |
 | text-davinci-003 | `completion('text-davinci-003', messages)` | `os.environ['OPENAI_API_KEY']`       |
 | ada-001 | `completion('ada-001', messages)` | `os.environ['OPENAI_API_KEY']`       |
 | curie-001 | `completion('curie-001', messages)` | `os.environ['OPENAI_API_KEY']`       |
