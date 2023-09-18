@@ -39,6 +39,9 @@
         "input_cost_per_token": 0.000003,
         "output_cost_per_token": 0.000004
     },
+    "gpt-3.5-turbo-instruct": {
+        "max_tokens": 8192
+    },
     "claude-instant-1": {
         "max_tokens": 100000,
         "input_cost_per_token": 0.00000163,
