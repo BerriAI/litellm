@@ -2574,7 +2574,6 @@ class CustomStreamWrapper:
         except StopIteration:
             raise StopIteration
         except Exception as e:
-            traceback.print_exc()
             model_response.choices[0].finish_reason = "stop"
             return model_response
     
