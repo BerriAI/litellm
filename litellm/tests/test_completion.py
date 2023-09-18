@@ -133,22 +133,22 @@ def test_completion_with_litellm_call_id():
 #         pytest.fail(f"Error occurred: {e}")
 
 # using Non TGI or conversational LLMs
-def hf_test_completion():
-    try:
-        # litellm.set_verbose=True
-        user_message = "My name is Merve and my favorite"
-        messages = [{ "content": user_message,"role": "user"}]
-        response = completion(
-            model="huggingface/roneneldan/TinyStories-3M", 
-            messages=messages,
-            api_base="https://p69xlsj6rpno5drq.us-east-1.aws.endpoints.huggingface.cloud",
-            task=None,
-        )
-        # Add any assertions here to check the response
-        print(response)
+# def hf_test_completion():
+#     try:
+#         # litellm.set_verbose=True
+#         user_message = "My name is Merve and my favorite"
+#         messages = [{ "content": user_message,"role": "user"}]
+#         response = completion(
+#             model="huggingface/roneneldan/TinyStories-3M", 
+#             messages=messages,
+#             api_base="https://p69xlsj6rpno5drq.us-east-1.aws.endpoints.huggingface.cloud",
+#             task=None,
+#         )
+#         # Add any assertions here to check the response
+#         print(response)
 
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
 
 # hf_test_completion()
 
@@ -427,6 +427,20 @@ def test_completion_azure_deployment_id():
         pytest.fail(f"Error occurred: {e}")
 # test_completion_azure_deployment_id()
 
+
+# def test_completion_anthropic_litellm_proxy():
+#     try:
+#         response = completion(
+#             model="claude-2",
+#             messages=messages,
+#             api_key="sk-litellm-1234"
+#         )
+#         # Add any assertions here to check the response
+#         print(response)
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
+
+# test_completion_anthropic_litellm_proxy()
 # def test_hf_conversational_task():
 #     try:
 #         messages = [{ "content": "There's a llama in my garden 😱 What should I do?","role": "user"}]
