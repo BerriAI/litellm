@@ -26,9 +26,14 @@ def completion(
     litellm_params=None,
     logger_fn=None,
 ):
-    import torch
-    from transformers import AutoTokenizer
-    from petals import AutoDistributedModelForCausalLM
+    try:
+        import torch
+        from transformers import AutoTokenizer
+        from petals import AutoDistributedModelForCausalLM
+    except:
+        raise Exception(
+            "Importing torch, transformers, petals failed\nTry pip installing petals \npip install git+https://github.com/bigscience-workshop/petals"
+        )
 
     model = model
 
