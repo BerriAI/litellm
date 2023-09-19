@@ -73,6 +73,7 @@ const sidebars = {
         "providers/ollama", 
         "providers/custom",
         "providers/custom_openai_proxy",
+        "providers/petals",
       ]
     },
     "set_keys",
