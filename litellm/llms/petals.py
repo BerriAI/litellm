@@ -5,10 +5,6 @@ import requests
 import time
 from typing import Callable
 from litellm.utils import ModelResponse
-import torch
-from transformers import AutoTokenizer
-from petals import AutoDistributedModelForCausalLM
-
 
 class PetalsError(Exception):
     def __init__(self, status_code, message):
@@ -30,7 +26,10 @@ def completion(
     litellm_params=None,
     logger_fn=None,
 ):
-    
+    import torch
+    from transformers import AutoTokenizer
+    from petals import AutoDistributedModelForCausalLM
+
     model = model
 
     # You could also use "meta-llama/Llama-2-70b-chat-hf" or any other supported model from 🤗 Model Hub
