@@ -1122,6 +1122,9 @@ def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None):
         ## nlp_cloud
         elif model in litellm.nlp_cloud_models:
             custom_llm_provider = "nlp_cloud"
+        ## petals
+        elif model in litellm.petals_models:
+            custom_llm_provider = "petals"
         
         if custom_llm_provider is None or custom_llm_provider=="":
             raise ValueError(f"LLM Provider NOT provided. Pass in the LLM provider you are trying to call. E.g. For 'Huggingface' inference endpoints pass in `completion(model='huggingface/{model}',..)` Learn more: https://docs.litellm.ai/docs/providers")

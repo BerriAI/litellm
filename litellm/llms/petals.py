@@ -32,8 +32,6 @@ def completion(
 
     model = model
 
-    # You could also use "meta-llama/Llama-2-70b-chat-hf" or any other supported model from 🤗 Model Hub
-
     tokenizer = AutoTokenizer.from_pretrained(model, use_fast=False, add_bos_token=False)
     model = AutoDistributedModelForCausalLM.from_pretrained(model)
     model = model.cuda()
@@ -76,6 +74,8 @@ def completion(
     print_verbose(f"raw model_response: {outputs}")
     ## RESPONSE OBJECT
     output_text = tokenizer.decode(outputs[0])
+    print("output text")
+    print(output_text)
     model_response["choices"][0]["message"]["content"] = output_text
 
     ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here. 
