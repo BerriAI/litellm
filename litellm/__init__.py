@@ -1,3 +1,4 @@
+import threading, requests
 from typing import Callable, List, Optional, Dict, Union
 from litellm.caching import Cache
 
@@ -31,19 +32,17 @@ aleph_alpha_key: Optional[str] = None
 nlp_cloud_key: Optional[str] = None
 use_client: bool = False
 logging: bool = True
-caching: bool = False  # deprecated son
-# if you want the caching key to be model + prompt # deprecated soon
-caching_with_models: bool = False
-cache: Optional[Cache] = None  # cache object
+caching: bool = False # deprecated son
+caching_with_models: bool = False  # if you want the caching key to be model + prompt # deprecated soon
+cache: Optional[Cache] = None # cache object
 model_alias_map: Dict[str, str] = {}
 max_budget: float = 0.0 # set the max budget across all providers
 _current_cost = 0 # private variable, used if max budget is set 
 #############################################
 
-
 def get_model_cost_map():
     url = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
-
+    
     try:
         response = requests.get(url)
         response.raise_for_status()  # Raise an exception if request is unsuccessful
@@ -53,13 +52,9 @@ def get_model_cost_map():
         return {}
     except:
         return {}
-
-
 model_cost = get_model_cost_map()
-custom_prompt_dict: Dict[str, dict] = {}
+custom_prompt_dict:Dict[str, dict] = {}
 ####### THREAD-SPECIFIC DATA ###################
-
-
 class MyLocal(threading.local):
     def __init__(self):
         self.user = "Hello World"
@@ -74,7 +69,7 @@ def identify(event_details):
         _thread_context.user = event_details["user"]
 
 
-# ADDITIONAL PARAMS ################### configurable params if you use proxy models like Helicone, map spend to org id, etc.
+####### ADDITIONAL PARAMS ################### configurable params if you use proxy models like Helicone, map spend to org id, etc.
 api_base = None
 headers = None
 api_version = None
@@ -99,12 +94,12 @@ open_ai_chat_completion_models: List = [
 ]
 open_ai_text_completion_models: List = [
     "gpt-3.5-turbo-instruct",
+    "text-davinci-003", 
     "text-curie-001", 
     "text-babbage-001", 
     "text-ada-001", 
     "text-babbage-002", 
     "text-davinci-002",
-    "text-davinci-003",
 ]
 
 cohere_models: List = [
@@ -139,15 +134,15 @@ openrouter_models: List = [
     "openai/gpt-3.5-turbo",
     "openai/gpt-3.5-turbo-16k",
     "openai/gpt-4-32k",
-    "anthropic/claude-instant-v1",
     "anthropic/claude-2",
+    "anthropic/claude-instant-v1",
     "meta-llama/llama-2-13b-chat",
     "meta-llama/llama-2-70b-chat",
 ]
 
 vertex_chat_models: List = [
-    "chat-bison"
     "chat-bison-32k",
+    "chat-bison", 
     "chat-bison@001",
 ]
 
@@ -194,7 +189,7 @@ together_ai_models: List = [
     # llama llms - chat
     "togethercomputer/llama-2-70b-chat",
 
-    # llama llms - language / instruct
+    # llama llms - language / instruct 
     "togethercomputer/llama-2-70b",
     "togethercomputer/LLaMA-2-7B-32K",
     "togethercomputer/Llama-2-7B-32K-Instruct",
@@ -225,7 +220,7 @@ together_ai_models: List = [
     "upstage/SOLAR-0-70b-16bit",
     "WizardLM/WizardLM-70B-V1.0",
 
-]  # supports all together ai models, just pass in the model id e.g. completion(model="together_computer/replit_code_3b",...)
+] # supports all together ai models, just pass in the model id e.g. completion(model="together_computer/replit_code_3b",...)
 
 aleph_alpha_models: List = [
     "luminous-base",
@@ -277,11 +272,11 @@ provider_list: List = [
     "baseten",
     "azure",
     "sagemaker",
-    "petals",
     "bedrock",
     "vllm",
     "nlp_cloud",
     "bedrock",
+    "petals",
     "custom", # custom apis
 ]
 
@@ -302,7 +297,6 @@ models_by_provider: dict = {
 
 ####### EMBEDDING MODELS ###################
 open_ai_embedding_models: List = ["text-embedding-ada-002"]
-
 
 from .timeout import timeout
 from .testing import *
