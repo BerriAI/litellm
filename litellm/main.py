@@ -956,12 +956,9 @@ def completion(
             response = model_response
         elif (
             custom_llm_provider == "petals"
-            or custom_llm_provider == "petals-team"
             or model in litellm.petals_models
         ):
             custom_llm_provider = "petals"
-            print("model on petals")
-            print(model)
             model_response = petals.completion(
                 model=model,
                 messages=messages,
