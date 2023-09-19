@@ -1,39 +1,3 @@
-from .budget_manager import BudgetManager
-from .exceptions import (
-    AuthenticationError,
-    InvalidRequestError,
-    RateLimitError,
-    ServiceUnavailableError,
-    OpenAIError,
-    ContextWindowExceededError,
-    BudgetExceededError
-
-)
-from .integrations import *
-from .main import *  # type: ignore
-from .utils import (
-    client,
-    exception_type,
-    get_optional_params,
-    modify_integration,
-    token_counter,
-    cost_per_token,
-    completion_cost,
-    get_litellm_params,
-    Logging,
-    acreate,
-    get_model_list,
-    completion_with_split_tests,
-    get_max_tokens,
-    register_prompt_template,
-    validate_environment,
-    check_valid_key,
-    get_llm_provider
-)
-from .testing import *
-from .timeout import timeout
-import threading
-import requests
 from typing import Callable, List, Optional, Dict, Union
 from litellm.caching import Cache
 
@@ -331,3 +295,39 @@ models_by_provider: dict = {
 
 ####### EMBEDDING MODELS ###################
 open_ai_embedding_models: List = ["text-embedding-ada-002"]
+
+
+from .timeout import timeout
+from .testing import *
+from .utils import (
+    client,
+    exception_type,
+    get_optional_params,
+    modify_integration,
+    token_counter,
+    cost_per_token,
+    completion_cost,
+    get_litellm_params,
+    Logging,
+    acreate,
+    get_model_list,
+    completion_with_split_tests,
+    get_max_tokens,
+    register_prompt_template,
+    validate_environment,
+    check_valid_key,
+    get_llm_provider
+)
+from .main import *  # type: ignore
+from .integrations import *
+from .exceptions import (
+    AuthenticationError,
+    InvalidRequestError,
+    RateLimitError,
+    ServiceUnavailableError,
+    OpenAIError,
+    ContextWindowExceededError,
+    BudgetExceededError
+
+)
+from .budget_manager import BudgetManager
