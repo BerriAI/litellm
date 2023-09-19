@@ -233,6 +233,10 @@ aleph_alpha_models: List = [
 
 baseten_models: List = ["qvv0xeq", "q841o8w", "31dxrj3"]  # FALCON 7B  # WizardLM  # Mosaic ML
 
+petals_models = [
+    "petals-team/StableBeluga2",
+]
+
 bedrock_models: List = [
     "amazon.titan-tg1-large",
     "ai21.j2-grande-instruct"
@@ -272,6 +276,7 @@ provider_list: List = [
     "vllm",
     "nlp_cloud",
     "bedrock",
+    "petals,"
     "custom", # custom apis
 ]
 
@@ -287,6 +292,7 @@ models_by_provider: dict = {
     "vertex_ai": vertex_chat_models + vertex_text_models,
     "ai21": ai21_models,
     "bedrock": bedrock_models,
+    "petals": petals_models,
 }
 
 ####### EMBEDDING MODELS ###################

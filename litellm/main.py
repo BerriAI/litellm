@@ -34,6 +34,7 @@ from .llms import baseten
 from .llms import vllm
 from .llms import ollama
 from .llms import cohere
+from .llms import petals
 import tiktoken
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, List, Optional, Dict
@@ -950,6 +951,32 @@ def completion(
                 # don't try to access stream object,
                 response = CustomStreamWrapper(
                     model_response, model, custom_llm_provider="baseten", logging_obj=logging
+                )
+                return response
+            response = model_response
+        elif (
+            custom_llm_provider == "petals"
+            or custom_llm_provider == "petals-team"
+            or model in litellm.petals_models
+        ):
+            custom_llm_provider = "baseten"
+
+            model_response = petals.completion(
+                model=model,
+                messages=messages,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                encoding=encoding, 
+                api_key=baseten_key, 
+                logging_obj=logging
+            )
+            if inspect.isgenerator(model_response) or (stream == True):
+                # don't try to access stream object,
+                response = CustomStreamWrapper(
+                    model_response, model, custom_llm_provider="petals", logging_obj=logging
                 )
                 return response
             response = model_response
