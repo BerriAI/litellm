@@ -33,8 +33,8 @@ def completion(
     model = model
 
     tokenizer = AutoTokenizer.from_pretrained(model, use_fast=False, add_bos_token=False)
-    model = AutoDistributedModelForCausalLM.from_pretrained(model)
-    model = model.cuda()
+    model_obj = AutoDistributedModelForCausalLM.from_pretrained(model)
+    model_obj = model_obj.cuda()
 
     prompt = ""
     for message in messages:
@@ -60,7 +60,7 @@ def completion(
     
     ## COMPLETION CALL
     inputs = tokenizer(prompt, return_tensors="pt")["input_ids"].cuda()
-    outputs = model.generate(inputs, max_new_tokens=5)
+    outputs = model_obj.generate(inputs, max_new_tokens=5)
     print(outputs)
 
 
@@ -71,14 +71,10 @@ def completion(
             original_response=outputs,
             additional_args={"complete_input_dict": optional_params},
         )
-    print_verbose(f"raw model_response: {outputs}")
     ## RESPONSE OBJECT
     output_text = tokenizer.decode(outputs[0])
-    print("output text")
-    print(output_text)
     model_response["choices"][0]["message"]["content"] = output_text
 
-    ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here. 
     prompt_tokens = len(
         encoding.encode(prompt)
     ) 
