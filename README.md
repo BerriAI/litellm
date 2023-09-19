@@ -77,11 +77,6 @@ response = completion(model="command-nightly", messages=messages)
 
 **Don't have a key? We'll give you access 👉 https://docs.litellm.ai/docs/proxy_api**
 
-Stable version
-```
-pip install litellm==0.1.424
-```
-
 ## Streaming
 liteLLM supports streaming the model response back, pass `stream=True` to get a streaming iterator in response.
 Streaming is supported for OpenAI, Azure, Anthropic, Huggingface models
