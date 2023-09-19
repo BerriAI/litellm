@@ -959,8 +959,9 @@ def completion(
             or custom_llm_provider == "petals-team"
             or model in litellm.petals_models
         ):
-            custom_llm_provider = "baseten"
-
+            custom_llm_provider = "petals"
+            print("model on petals")
+            print(model)
             model_response = petals.completion(
                 model=model,
                 messages=messages,
@@ -970,7 +971,6 @@ def completion(
                 litellm_params=litellm_params,
                 logger_fn=logger_fn,
                 encoding=encoding, 
-                api_key=baseten_key, 
                 logging_obj=logging
             )
             if inspect.isgenerator(model_response) or (stream == True):
