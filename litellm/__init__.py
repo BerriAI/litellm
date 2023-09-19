@@ -181,6 +181,7 @@ openrouter_models: List = [
 ]
 
 vertex_chat_models: List = [
+    "chat-bison"
     "chat-bison-32k",
     "chat-bison@001",
 ]
