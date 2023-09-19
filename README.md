@@ -36,7 +36,6 @@
 <h4 align="center">
     <a href="https://docs.litellm.ai/docs/providers" target="_blank">100+ Supported Models</a> |
     <a href="https://docs.litellm.ai/docs/" target="_blank">Docs</a> |
-    <a href="https://litellm.ai/playground" target="_blank">Demo Website</a>
 </h4>
 <a target="_blank" href="https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat">
   <p>📣<b>1-click deploy</b> your own LLM proxy server. Grab time, if you're interested!</p>
@@ -75,10 +74,7 @@ response = completion(model="gpt-3.5-turbo", messages=messages)
 response = completion(model="command-nightly", messages=messages)
 ```
 
-Stable version
-```
-pip install litellm==0.1.424
-```
+**Don't have a key? We'll give you access 👉 https://docs.litellm.ai/docs/proxy_api**
 
 ## Streaming
 liteLLM supports streaming the model response back, pass `stream=True` to get a streaming iterator in response.

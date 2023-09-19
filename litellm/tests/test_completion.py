@@ -108,11 +108,12 @@ def test_completion_with_litellm_call_id():
 
 # test_completion_nlp_cloud()
 # def test_completion_hf_api():
+# # failing on circle ci commenting out
 #     try:
 #         user_message = "write some code to find the sum of two numbers"
 #         messages = [{ "content": user_message,"role": "user"}]
-#         api_base = "https://ecd4sb5n09bo4ei2.us-east-1.aws.endpoints.huggingface.cloud"
-#         response = completion(model="togethercomputer/LLaMA-2-7B-32K", messages=messages, custom_llm_provider="huggingface", api_base=api_base, logger_fn=logger_fn)
+#         api_base = "https://a8l9e3ucxinyl3oj.us-east-1.aws.endpoints.huggingface.cloud"
+#         response = completion(model="huggingface/meta-llama/Llama-2-7b-chat-hf", messages=messages, api_base=api_base)
 #         # Add any assertions here to check the response
 #         print(response)
 #     except Exception as e:
@@ -132,6 +133,25 @@ def test_completion_with_litellm_call_id():
 #     except Exception as e:
 #         pytest.fail(f"Error occurred: {e}")
 
+# using Non TGI or conversational LLMs
+# def hf_test_completion():
+#     try:
+#         # litellm.set_verbose=True
+#         user_message = "My name is Merve and my favorite"
+#         messages = [{ "content": user_message,"role": "user"}]
+#         response = completion(
+#             model="huggingface/roneneldan/TinyStories-3M", 
+#             messages=messages,
+#             api_base="https://p69xlsj6rpno5drq.us-east-1.aws.endpoints.huggingface.cloud",
+#             task=None,
+#         )
+#         # Add any assertions here to check the response
+#         print(response)
+
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
+
+# hf_test_completion()
 
 def test_completion_cohere(): # commenting for now as the cohere endpoint is being flaky
     try:
@@ -200,6 +220,13 @@ def test_completion_text_openai():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+def test_completion_gpt_instruct():
+    try:
+        response = completion(model="gpt-3.5-turbo-instruct", messages=messages)
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+# test_completion_gpt_instruct()
 
 def test_completion_openai_with_optional_params():
     try:
@@ -401,6 +428,30 @@ def test_completion_azure_deployment_id():
         pytest.fail(f"Error occurred: {e}")
 # test_completion_azure_deployment_id()
 
+
+# def test_completion_anthropic_litellm_proxy():
+#     try:
+#         response = completion(
+#             model="claude-2",
+#             messages=messages,
+#             api_key="sk-litellm-1234"
+#         )
+#         # Add any assertions here to check the response
+#         print(response)
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
+
+# test_completion_anthropic_litellm_proxy()
+# def test_hf_conversational_task():
+#     try:
+#         messages = [{ "content": "There's a llama in my garden 😱 What should I do?","role": "user"}]
+#         # e.g. Call 'facebook/blenderbot-400M-distill' hosted on HF Inference endpoints
+#         response = completion(model="huggingface/facebook/blenderbot-400M-distill", messages=messages, task="conversational")
+#         print(f"response: {response}")
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
+
+# test_hf_conversational_task()
 # Replicate API endpoints are unstable -> throw random CUDA errors -> this means our tests can fail even if our tests weren't incorrect.
 
 # def test_completion_replicate_llama_2():

@@ -214,6 +214,32 @@ def test_completion_cohere_stream():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+# def test_completion_hf_stream():
+#     try:
+#         messages = [
+#             {
+#                 "content": "Hello! How are you today?",
+#                 "role": "user"
+#             },
+#         ]
+#         response = completion(
+#             model="huggingface/meta-llama/Llama-2-7b-chat-hf", messages=messages, api_base="https://a8l9e3ucxinyl3oj.us-east-1.aws.endpoints.huggingface.cloud", stream=True, max_tokens=1000
+#         )
+#         complete_response = ""
+#         # Add any assertions here to check the response
+#         for idx, chunk in enumerate(response):
+#             chunk, finished = streaming_format_tests(idx, chunk)
+#             if finished:
+#                 break
+#             complete_response += chunk
+#         if complete_response.strip() == "": 
+#             raise Exception("Empty response received")
+#         print(f"completion_response: {complete_response}")
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
+
+# test_completion_hf_stream()
+
 def test_completion_claude_stream():
     try:
         messages = [

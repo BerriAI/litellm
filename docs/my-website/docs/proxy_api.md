@@ -1,6 +1,49 @@
-# 🚨 LITELLM API (Access Claude-2/Llama2-70b/etc.)
+import TokenGen from '../src/components/TokenGen.js'
 
-This is an api built for the Open Interpreter community. It provides access to: 
+# 🚨 LiteLLM API (Access Claude-2,Llama2-70b,etc.)
+
+Use this if you're trying to add support for new LLMs and need access for testing: 
+
+# usage
+
+## Step 1: Save your LiteLLM API Key 
+
+This is your unique LiteLLM API Key. It has a max budget of $100 which is reset monthly, and works across all models in [Supported Models](#supported-models). Save this for later use. 
+<TokenGen/>
+
+## Step 2: Test a new LLM
+
+Now let's call **claude-2** (Anthropic) and **llama2-70b-32k** (TogetherAI).
+
+```python
+from litellm import completion 
+import os 
+
+# set env var
+os.environ["ANTHROPIC_API_KEY"] = "sk-litellm-1234" # 👈 replace with your unique key from step 1
+os.environ["TOGETHERAI_API_KEY"] = "sk-litellm-1234" # 👈 replace with your unique key from step 1
+
+messages = [{"role": "user", "content": "Hey, how's it going?"}]
+
+# call claude
+response = completion(model="claude-2", messages=messages) 
+
+# call llama2-70b
+response = completion(model="togethercomputer/LLaMA-2-7B-32K", messages=messages) 
+
+print(response) 
+```
+
+```
+### Testing Llama2-70b on TogetherAI 
+Let's call 
+
+```
+
+You can use this as a key for any of the [providers we support](./providers/)
+
+## Supported Models
+
 * OpenAI models 
     * gpt-4
     * gpt-3.5-turbo
@@ -29,30 +72,8 @@ This is an api built for the Open Interpreter community. It provides access to:
     * claude-instant-v1
 
 
-Here's how to call it: 
-
-## Through LiteLLM
-```python
-from litellm import completion
-import os 
-## set ENV variables
-os.environ["OPENAI_API_KEY"] = "litellm-api-key"
-
-messages = [{ "content": "Hello, how are you?","role": "user"}]
-
-response = completion(
-    model="command-nightly", 
-    messages=[{ "content": "Hello, how are you?","role": "user"}],
-    api_base="https://proxy.litellm.ai",
-    custom_llm_provider="openai",
-    temperature=0.2,
-    max_tokens=80,
-)
-print(response)
-```
-
-## In CodeInterpreter
-
+## For OpenInterpreter
+This was initially built for the Open Interpreter community. If you're trying to use this feature in there, here's how you can do it:  
 **Note**: You will need to clone and modify the Github repo, until [this PR is merged.](https://github.com/KillianLucas/open-interpreter/pull/288)
 
 ```

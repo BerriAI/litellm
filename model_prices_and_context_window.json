@@ -1,17 +1,17 @@
 {
     "gpt-4": {
         "max_tokens": 8192,
-        "input_cost_per_token": 0.000003,
+        "input_cost_per_token": 0.00003,
         "output_cost_per_token": 0.00006
     },
     "gpt-4-0314": {
         "max_tokens": 8192,
-        "input_cost_per_token": 0.000003,
+        "input_cost_per_token": 0.00003,
         "output_cost_per_token": 0.00006
     },
     "gpt-4-0613": {
         "max_tokens": 8192,
-        "input_cost_per_token": 0.000003,
+        "input_cost_per_token": 0.00003,
         "output_cost_per_token": 0.00006
     },
     "gpt-4-32k": {
@@ -53,31 +53,6 @@
         "max_tokens": 16385,
         "input_cost_per_token": 0.000003,
         "output_cost_per_token": 0.000004
-    },
-    "text-ada-001": {
-        "max_tokens": 2049,
-        "input_cost_per_token": 0.0000004,
-        "output_cost_per_token": 0.0000004
-    },
-    "text-babbage-001": {
-        "max_tokens": 2049,
-        "input_cost_per_token": 0.0000005,
-        "output_cost_per_token": 0.0000005
-    },
-    "text-curie-001": {
-        "max_tokens": 2049,
-        "input_cost_per_token": 0.000002,
-        "output_cost_per_token": 0.000002
-    },
-    "text-davinci-002": {
-        "max_tokens": 4097,
-        "input_cost_per_token": 0.00002,
-        "output_cost_per_token": 0.00002
-    },
-    "text-davinci-003": {
-        "max_tokens": 4097,
-        "input_cost_per_token": 0.00002,
-        "output_cost_per_token": 0.00002
     },
     "claude-instant-1": {
         "max_tokens": 100000,
