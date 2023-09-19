@@ -54,6 +54,11 @@
         "input_cost_per_token": 0.000003,
         "output_cost_per_token": 0.000004
     },
+    "gpt-3.5-turbo-instruct": {
+        "max_tokens": 8192,
+        "input_cost_per_token": 0.0000015,
+        "output_cost_per_token": 0.000002
+    },
     "text-ada-001": {
         "max_tokens": 2049,
         "input_cost_per_token": 0.0000004,
@@ -79,11 +84,6 @@
         "input_cost_per_token": 0.00002,
         "output_cost_per_token": 0.00002
     },
-    "claude-instant-1": {
-        "max_tokens": 100000,
-        "input_cost_per_token": 0.00000163,
-        "output_cost_per_token": 0.00000551
-    },
     "command-nightly": {
         "max_tokens": 4096,
         "input_cost_per_token": 0.000015,
@@ -108,6 +108,11 @@
         "max_tokens": 4096,
         "input_cost_per_token": 0.000015,
         "output_cost_per_token": 0.000015
+    },
+    "claude-instant-1": {
+        "max_tokens": 100000,
+        "input_cost_per_token": 0.00000163,
+        "output_cost_per_token": 0.00000551
     },
     "claude-instant-1.2": {
         "max_tokens": 100000,
