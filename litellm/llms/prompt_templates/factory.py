@@ -96,7 +96,7 @@ def custom_prompt(role_dict: dict, messages: list, initial_prompt_value: str="",
 
 def prompt_factory(model: str, messages: list):
     model = model.lower()
-    if "meta-llama/Llama-2" in model:
+    if "meta-llama/llama-2" in model:
         if "chat" in model:
             return llama_2_chat_pt(messages=messages)
     elif "tiiuae/falcon" in model: # Note: for the instruct models, it's best to use a User: .., Assistant:.. approach in your prompt template.
