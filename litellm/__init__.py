@@ -276,6 +276,7 @@ provider_list: List = [
     "baseten",
     "azure",
     "sagemaker",
+    "petals",
     "bedrock",
     "vllm",
     "nlp_cloud",
