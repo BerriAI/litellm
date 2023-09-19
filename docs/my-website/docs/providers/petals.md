@@ -25,7 +25,7 @@ print(response)
 
 | Model Name       | Function Call                              |
 |------------------|--------------------------------------------|
-| StableBeluga | `completion('petals/petals-team/StableBeluga2', messages)` | 
+| petals-team/StableBeluga | `completion('petals/petals-team/StableBeluga2', messages)` | 
 | huggyllama/llama-65b | `completion('petals/huggyllama/llama-65b', messages)` | 
 
 
