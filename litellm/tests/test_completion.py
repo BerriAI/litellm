@@ -688,6 +688,18 @@ def test_completion_with_fallbacks():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+# def test_petals():
+#     try:
+#         response = completion(model="petals-team/StableBeluga2", messages=messages)
+#         # Add any assertions here to check the response
+#         print(response)
+
+#         response = completion(model="petals-team/StableBeluga2", messages=messages)
+#         # Add any assertions here to check the response
+#         print(response)
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
+
 # def test_baseten():
 #     try:
 

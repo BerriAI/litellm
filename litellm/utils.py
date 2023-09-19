@@ -1041,6 +1041,14 @@ def get_optional_params(  # use the openai defaults
             optional_params["remove_input"] = True
         if stop != None:
             optional_params["stop_sequences"] = stop
+    elif model in litellm.petals_models or custom_llm_provider == "petals":
+        # max_new_tokens=1,temperature=0.9, top_p=0.6
+        if max_tokens != float("inf"):
+            optional_params["max_new_tokens"] = max_tokens
+        if temperature != 1:
+            optional_params["temperature"] = temperature
+        if top_p != 1:
+            optional_params["top_p"] = top_p
     else:  # assume passing in params for openai/azure openai
         if functions != []:
             optional_params["functions"] = functions
@@ -1122,6 +1130,9 @@ def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None):
         ## nlp_cloud
         elif model in litellm.nlp_cloud_models:
             custom_llm_provider = "nlp_cloud"
+        ## petals
+        elif model in litellm.petals_models:
+            custom_llm_provider = "petals"
         
         if custom_llm_provider is None or custom_llm_provider=="":
             raise ValueError(f"LLM Provider NOT provided. Pass in the LLM provider you are trying to call. E.g. For 'Huggingface' inference endpoints pass in `completion(model='huggingface/{model}',..)` Learn more: https://docs.litellm.ai/docs/providers")
