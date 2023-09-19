@@ -36,7 +36,6 @@
 <h4 align="center">
     <a href="https://docs.litellm.ai/docs/providers" target="_blank">100+ Supported Models</a> |
     <a href="https://docs.litellm.ai/docs/" target="_blank">Docs</a> |
-    <a href="https://litellm.ai/playground" target="_blank">Demo Website</a>
 </h4>
 <a target="_blank" href="https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat">
   <p>📣<b>1-click deploy</b> your own LLM proxy server. Grab time, if you're interested!</p>
