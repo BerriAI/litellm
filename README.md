@@ -62,8 +62,8 @@ pip install litellm
 from litellm import completion
 import os
 ## set ENV variables
-os.environ["OPENAI_API_KEY"] = "openai key"
-os.environ["COHERE_API_KEY"] = "cohere key"
+os.environ["OPENAI_API_KEY"] = "sk-litellm-5b46387675a944d2" # [OPTIONAL] replace with your openai key
+os.environ["COHERE_API_KEY"] = "sk-litellm-5b46387675a944d2" # [OPTIONAL] replace with your cohere key
 
 messages = [{ "content": "Hello, how are you?","role": "user"}]
 
