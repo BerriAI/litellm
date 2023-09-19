@@ -65,9 +65,9 @@ def completion(
     
     ## COMPLETION CALL
     inputs = tokenizer(prompt, return_tensors="pt")["input_ids"].cuda()
-    outputs = model_obj.generate(inputs, max_new_tokens=5)
-    print(outputs)
-
+    
+    # optional params: max_new_tokens=1,temperature=0.9, top_p=0.6
+    outputs = model_obj.generate(inputs, **optional_params)
 
     ## LOGGING
     logging_obj.post_call(
