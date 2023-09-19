@@ -75,6 +75,8 @@ response = completion(model="gpt-3.5-turbo", messages=messages)
 response = completion(model="command-nightly", messages=messages)
 ```
 
+**Don't have a key? We'll give you access 👉 https://docs.litellm.ai/docs/proxy_api**
+
 Stable version
 ```
 pip install litellm==0.1.424
