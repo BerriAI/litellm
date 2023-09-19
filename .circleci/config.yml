@@ -3,6 +3,7 @@ jobs:
   local_testing:
     docker:
       - image: circleci/python:3.8
+    parallelism: 4
     working_directory: ~/project
 
     steps:
@@ -53,7 +54,7 @@ jobs:
       - run:
           name: Run tests
           command: |
-            python -m pytest -vv --junitxml=test-results/junit.xml
+            python -m pytest -vv --junitxml=test-results/junit.xml | circleci tests split --split-by=timings
 
       # Store test results
       - store_test_results:
