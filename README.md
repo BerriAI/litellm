@@ -63,7 +63,7 @@ pip install litellm
 ```python
 from litellm import completion
 import os
-## set ENV variables
+## set ENV variables - By default we provide a free $10 key to try all providers supported on LiteLLM.
 os.environ["OPENAI_API_KEY"] = "sk-litellm-5b46387675a944d2" # [OPTIONAL] replace with your openai key
 os.environ["COHERE_API_KEY"] = "sk-litellm-5b46387675a944d2" # [OPTIONAL] replace with your cohere key
 
