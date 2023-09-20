@@ -1,8 +1,9 @@
-# Supported Models via API 
+# 🔑 LiteLLM Keys (Access Claude-2, Llama2-70b, etc.)
 
-Use this if you're trying to add support for new LLMs and need access for testing. We provide a free $10 key for testing all providers on LiteLLM: 
+Use this if you're trying to add support for new LLMs and need access for testing. We provide a free $10 community-key for testing all providers on LiteLLM: 
 
-## usage
+## usage (community-key)
+
 ```python
 from litellm import completion
 
@@ -18,6 +19,9 @@ response = completion(model="gpt-3.5-turbo", messages=messages)
 # cohere call
 response = completion("command-nightly", messages)
 ```
+
+**Need a dedicated key?**
+Email us @ krrish@berri.ai 
 
 ## Supported Models
 

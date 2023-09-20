@@ -27,29 +27,20 @@ Demo - https://litellm.ai/playground
 Read the docs - https://docs.litellm.ai/docs/
 
 ## quick start
+Code Sample: [Getting Started Notebook](https://colab.research.google.com/drive/1gR3pY-JzDZahzpVdbGBtrNGDBmzUNJaJ?usp=sharing)
 
 ```
 pip install litellm
 ```
 
-<QueryParamReader/>
 
-Code Sample: [Getting Started Notebook](https://colab.research.google.com/drive/1gR3pY-JzDZahzpVdbGBtrNGDBmzUNJaJ?usp=sharing)
-
-Stable version
-
-```
-pip install litellm==0.1.345
-```
-
-## usage
 
 ```python
 from litellm import completion
 
 ## set ENV variables
-os.environ["OPENAI_API_KEY"] = "openai key"
-os.environ["COHERE_API_KEY"] = "cohere key"
+os.environ["OPENAI_API_KEY"] = "sk-litellm-7_NPZhMGxY2GoHC59LgbDw" # [OPTIONAL] replace with your openai key
+os.environ["COHERE_API_KEY"] = "sk-litellm-7_NPZhMGxY2GoHC59LgbDw" # [OPTIONAL] replace with your cohere key
 
 messages = [{ "content": "Hello, how are you?","role": "user"}]
 
