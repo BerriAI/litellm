@@ -1208,22 +1208,31 @@ def batch_completion_models_all_responses(*args, **kwargs):
         It sends requests concurrently and collects responses from all models that respond.
     """
     import concurrent.futures
+
+    # ANSI escape codes for colored output
+    GREEN = "\033[92m"
+    RED = "\033[91m"
+    RESET = "\033[0m"
+
     if "model" in kwargs:
         kwargs.pop("model")
     if "models" in kwargs:
         models = kwargs["models"]
         kwargs.pop("models")
-        with concurrent.futures.ThreadPoolExecutor(max_workers=len(models)) as executor:
-            futures = [executor.submit(completion, *args, model=model, **kwargs) for model in models]
 
-            # Collect responses from all models that respond
-            responses = [future.result() for future in concurrent.futures.as_completed(futures) if future.result() is not None]
+    responses = []
 
-            return responses
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(models)) as executor:
+        for idx, model in enumerate(models):
+            print(f"{GREEN}LiteLLM: Making request to model: {model}{RESET}")
+            future = executor.submit(completion, *args, model=model, **kwargs)
+            if future.result() is not None:
+                responses.append(future.result())
+                print(f"{GREEN}LiteLLM: Model {model} returned response{RESET}")
+            else:
+                print(f"{RED}LiteLLM: Model {model } did not return a response{RESET}")
 
-    return []  # If no response is received from any model, return an empty list
-
-
+    return responses
 
 ### EMBEDDING ENDPOINTS ####################
 @client
