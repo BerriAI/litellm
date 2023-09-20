@@ -98,8 +98,8 @@ open_ai_text_completion_models: List = [
     "text-curie-001", 
     "text-babbage-001", 
     "text-ada-001", 
-    "text-babbage-002", 
-    "text-davinci-002",
+    "babbage-002", 
+    "davinci-002",
 ]
 
 cohere_models: List = [
