@@ -49,6 +49,8 @@ LiteLLM manages
 
 # Usage
 
+By default we provide a free $10 key to try all providers supported on LiteLLM.
+
 <a target="_blank" href="https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/liteLLM_OpenAI.ipynb">
   <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
 </a>
