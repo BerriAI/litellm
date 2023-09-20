@@ -1189,6 +1189,41 @@ def batch_completion_models(*args, **kwargs):
 
     return None  # If no response is received from any model
 
+def batch_completion_models_all_responses(*args, **kwargs):
+    """
+    Send a request to multiple language models concurrently and return a list of responses
+    from all models that respond.
+
+    Args:
+        *args: Variable-length positional arguments passed to the completion function.
+        **kwargs: Additional keyword arguments:
+            - models (str or list of str): The language models to send requests to.
+            - Other keyword arguments to be passed to the completion function.
+
+    Returns:
+        list: A list of responses from the language models that responded.
+
+    Note:
+        This function utilizes a ThreadPoolExecutor to parallelize requests to multiple models.
+        It sends requests concurrently and collects responses from all models that respond.
+    """
+    import concurrent.futures
+    if "model" in kwargs:
+        kwargs.pop("model")
+    if "models" in kwargs:
+        models = kwargs["models"]
+        kwargs.pop("models")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(models)) as executor:
+            futures = [executor.submit(completion, *args, model=model, **kwargs) for model in models]
+
+            # Collect responses from all models that respond
+            responses = [future.result() for future in concurrent.futures.as_completed(futures) if future.result() is not None]
+
+            return responses
+
+    return []  # If no response is received from any model, return an empty list
+
+
 
 ### EMBEDDING ENDPOINTS ####################
 @client
