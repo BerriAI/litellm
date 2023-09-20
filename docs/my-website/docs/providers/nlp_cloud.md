@@ -2,14 +2,23 @@
 
 LiteLLM supports all LLMs on NLP Cloud.
 
-## quick start
+## API Keys
+We provide a free $10 community-key for testing all providers on LiteLLM. You can replace this with your own key. 
+
+```python 
+import os 
+
+os.environ["NLP_CLOUD_API_KEY"] = "sk-litellm-7_NPZhMGxY2GoHC59LgbDw" # [OPTIONAL] replace with your nlp cloud key
+```
+
+## Sample Usage
 
 ```python
 import os
 from litellm import completion 
 
-# set env 
-os.environ["NLP_CLOUD_API_KEY"] = "your-key"
+# set env - [OPTIONAL] replace with your nlp cloud key
+os.environ["NLP_CLOUD_API_KEY"] = "sk-litellm-7_NPZhMGxY2GoHC59LgbDw" 
 
 messages = [{"role": "user", "content": "Hey! how's it going?"}]
 response = completion(model="dolphin", messages=messages)
@@ -23,8 +32,8 @@ Just set `stream=True` when calling completion.
 import os
 from litellm import completion 
 
-# set env 
-os.environ["NLP_CLOUD_API_KEY"] = "your-key"
+# set env - [OPTIONAL] replace with your nlp cloud key
+os.environ["NLP_CLOUD_API_KEY"] = "sk-litellm-7_NPZhMGxY2GoHC59LgbDw" 
 
 messages = [{"role": "user", "content": "Hey! how's it going?"}]
 response = completion(model="dolphin", messages=messages, stream=True)
@@ -43,8 +52,8 @@ If you're trying to call any other model (e.g. GPT-J, Llama-2, etc.) with nlp cl
 import os
 from litellm import completion 
 
-# set env 
-os.environ["NLP_CLOUD_API_KEY"] = "your-key"
+# set env - [OPTIONAL] replace with your nlp cloud key
+os.environ["NLP_CLOUD_API_KEY"] = "sk-litellm-7_NPZhMGxY2GoHC59LgbDw" 
 
 messages = [{"role": "user", "content": "Hey! how's it going?"}]
 
