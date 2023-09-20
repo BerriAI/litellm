@@ -28,6 +28,7 @@ Next Steps 👉 [All supported models](./proxy_api.md)
 More details 👉 
 * [Completion() function details](./completion/)
 * [All supported models / providers on LiteLLM](./providers/)
+* [Build your own OpenAI proxy](https://github.com/BerriAI/liteLLM-proxy/tree/main)
 
 ## streaming
 
