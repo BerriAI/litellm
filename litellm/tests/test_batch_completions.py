@@ -9,7 +9,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 from openai.error import Timeout
 import litellm
-from litellm import batch_completion, batch_completion_models, completion
+from litellm import batch_completion, batch_completion_models, completion, batch_completion_models_all_responses
 # litellm.set_verbose=True
 
 # def test_batch_completions():
@@ -35,6 +35,14 @@ def test_batch_completions_models():
         pytest.fail(f"An error occurred: {e}")
 # test_batch_completions_models()
 
+def test_batch_completion_models_all_responses():
+    responses = batch_completion_models_all_responses(
+        models=["gpt-3.5-turbo", "claude-instant-1.2", "command-nightly"], 
+        messages=[{"role": "user", "content": "Hey, how's it going"}],
+        max_tokens=5
+    )
+    print(responses)
+# test_batch_completion_models_all_responses()
 
 # def test_batch_completions():
 #     try:
