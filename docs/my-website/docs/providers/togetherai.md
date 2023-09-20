@@ -1,11 +1,12 @@
 # Together AI 
 LiteLLM supports all models on Together AI. 
 
-## API KEYS
+## API Keys
+We provide a free $10 community-key for testing all providers on LiteLLM. You can replace this with your own key. 
 
 ```python 
 import os 
-os.environ["TOGETHERAI_API_KEY"] = ""
+os.environ["TOGETHERAI_API_KEY"] = "sk-litellm-7_NPZhMGxY2GoHC59LgbDw" # [OPTIONAL] replace with your together ai key
 ```
 
 ## Sample Usage
@@ -13,13 +14,18 @@ os.environ["TOGETHERAI_API_KEY"] = ""
 ```python
 from litellm import completion 
 
-# set env variable 
-os.environ["TOGETHERAI_API_KEY"] = ""
+# set env variable - [OPTIONAL] replace with your together ai key
+os.environ["TOGETHERAI_API_KEY"] = "sk-litellm-7_NPZhMGxY2GoHC59LgbDw"
 
 messages = [{"role": "user", "content": "Write me a poem about the blue sky"}]
 
 completion(model="together_ai/togethercomputer/Llama-2-7B-32K-Instruct", messages=messages)
 ```
+
+**Need a dedicated key?**
+Email us @ krrish@berri.ai 
+
+[**See all supported models by the litellm api key**](../proxy_api.md#supported-models-for-litellm-key)
 
 ## Together AI Models
 liteLLM supports `non-streaming` and `streaming` requests to all models on https://api.together.xyz/
