@@ -1046,7 +1046,7 @@ def completion(
     except Exception as e:
         ## Map to OpenAI Exception
         raise exception_type(
-            model=model, custom_llm_provider=custom_llm_provider, original_exception=e
+            model=model, custom_llm_provider=custom_llm_provider, original_exception=e, completion_kwargs=args,
         )
 
 

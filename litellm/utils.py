@@ -198,6 +198,7 @@ class Logging:
     def pre_call(self, input, api_key, model=None, additional_args={}):
         # Log the exact input to the LLM API
         print_verbose(f"Logging Details Pre-API Call for call id {self.litellm_call_id}")
+        litellm.error_logs['PRE_CALL'] = locals()
         try:
             # print_verbose(f"logging pre call for model: {self.model} with call type: {self.call_type}")
             self.model_call_details["input"] = input
@@ -280,6 +281,7 @@ class Logging:
 
     def post_call(self, original_response, input=None, api_key=None,  additional_args={}):
         # Log the exact result from the LLM API, for streaming - log the type of response received
+        litellm.error_logs['POST_CALL'] = locals()
         try:
             self.model_call_details["input"] = input
             self.model_call_details["api_key"] = api_key
@@ -1870,9 +1872,40 @@ def get_model_list():
         )
 
 ####### EXCEPTION MAPPING ################
-def exception_type(model, original_exception, custom_llm_provider):
+def exception_type(
+        model, 
+        original_exception, 
+        custom_llm_provider,
+        completion_kwargs={},
+    ):
     global user_logger_fn, liteDebuggerClient
     exception_mapping_worked = False
+
+    litellm.error_logs['EXCEPTION'] = original_exception
+    litellm.error_logs['KWARGS'] = completion_kwargs
+
+    import urllib.parse
+    import json
+    for log_key in litellm.error_logs:
+        current_logs = litellm.error_logs[log_key]
+        if type(current_logs) == dict:
+            filtered_error_logs = {key: value for key, value in current_logs.items() if isinstance(value, (str, int, float, bool, list, dict))}
+            litellm.error_logs[log_key] = filtered_error_logs
+        else:
+            litellm.error_logs[log_key] = str(current_logs)
+
+    # Convert the filtered_error_logs dictionary to a JSON string
+    error_logs_json = json.dumps(litellm.error_logs)
+    # URL-encode the JSON data
+    encoded_data = urllib.parse.quote(error_logs_json)
+    print(encoded_data)
+    # Print the encoded data (this is what you can include in a URL)
+    print("\033[91m" + str(litellm.error_logs) + "\033[0m")
+
+    decoded_data = urllib.parse.unquote(encoded_data)
+
+    # Print the decoded data
+    print(decoded_data)
     try:
         if isinstance(original_exception, OriginalError):
             # Handle the OpenAIError
