@@ -38,10 +38,11 @@ def test_batch_completions_models():
 def test_batch_completion_models_all_responses():
     responses = batch_completion_models_all_responses(
         models=["gpt-3.5-turbo", "claude-instant-1.2", "command-nightly"], 
-        messages=[{"role": "user", "content": "Hey, how's it going"}],
-        max_tokens=5
+        messages=[{"role": "user", "content": "write a poem"}],
+        max_tokens=500
     )
     print(responses)
+    assert(len(responses) == 3)
 # test_batch_completion_models_all_responses()
 
 # def test_batch_completions():
