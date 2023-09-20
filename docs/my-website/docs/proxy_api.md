@@ -1,46 +1,23 @@
-import TokenGen from '../src/components/TokenGen.js'
+# Supported Models via API 
 
-# 🚨 LiteLLM API (Access Claude-2,Llama2-70b,etc.)
+Use this if you're trying to add support for new LLMs and need access for testing. We provide a free $10 key for testing all providers on LiteLLM: 
 
-Use this if you're trying to add support for new LLMs and need access for testing: 
-
-# usage
-
-## Step 1: Save your LiteLLM API Key 
-
-This is your unique LiteLLM API Key. It has a max budget of $100 which is reset monthly, and works across all models in [Supported Models](#supported-models). Save this for later use. 
-<TokenGen/>
-
-## Step 2: Test a new LLM
-
-Now let's call **claude-2** (Anthropic) and **llama2-70b-32k** (TogetherAI).
-
+## usage
 ```python
-from litellm import completion 
-import os 
+from litellm import completion
 
-# set env var
-os.environ["ANTHROPIC_API_KEY"] = "sk-litellm-1234" # 👈 replace with your unique key from step 1
-os.environ["TOGETHERAI_API_KEY"] = "sk-litellm-1234" # 👈 replace with your unique key from step 1
+## set ENV variables
+os.environ["OPENAI_API_KEY"] = "sk-litellm-7_NPZhMGxY2GoHC59LgbDw" # [OPTIONAL] replace with your openai key
+os.environ["COHERE_API_KEY"] = "sk-litellm-7_NPZhMGxY2GoHC59LgbDw" # [OPTIONAL] replace with your cohere key
 
-messages = [{"role": "user", "content": "Hey, how's it going?"}]
+messages = [{ "content": "Hello, how are you?","role": "user"}]
 
-# call claude
-response = completion(model="claude-2", messages=messages) 
+# openai call
+response = completion(model="gpt-3.5-turbo", messages=messages)
 
-# call llama2-70b
-response = completion(model="togethercomputer/LLaMA-2-7B-32K", messages=messages) 
-
-print(response) 
+# cohere call
+response = completion("command-nightly", messages)
 ```
-
-```
-### Testing Llama2-70b on TogetherAI 
-Let's call 
-
-```
-
-You can use this as a key for any of the [providers we support](./providers/)
 
 ## Supported Models
 
