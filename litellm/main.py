@@ -1280,6 +1280,7 @@ def moderation(*args, **kwargs):
             )
     openai.api_key = api_key
     openai.api_type = "open_ai"
+    openai.api_version = None
     openai.api_base = "https://api.openai.com/v1"
     response = openai.Moderation.create(*args, **kwargs)
     return response
