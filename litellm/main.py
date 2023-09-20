@@ -1266,6 +1266,22 @@ def text_completion(*args, **kwargs):
         kwargs.pop("prompt")
         return completion(*args, **kwargs)
 
+##### Moderation #######################
+def moderation(*args, **kwargs):
+    # only supports open ai for now
+    api_key = None
+    if "api_key" in kwargs:
+        api_key = kwargs["api_key"]
+    
+    api_key = (
+                api_key or
+                litellm.api_key or
+                litellm.openai_key or
+                get_secret("OPENAI_API_KEY")
+            )
+    openai.api_key = api_key
+    response = openai.Moderation.create(*args, **kwargs)
+    return response
 
 ####### HELPER FUNCTIONS ################
 ## Set verbose to true -> ```litellm.set_verbose = True```
