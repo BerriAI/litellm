@@ -9,6 +9,12 @@ import os
 os.environ["TOGETHERAI_API_KEY"] = "sk-litellm-7_NPZhMGxY2GoHC59LgbDw" # [OPTIONAL] replace with your together ai key
 ```
 
+**Need a dedicated key?**
+Email us @ krrish@berri.ai 
+
+[**See all supported models by the litellm api key**](../proxy_api.md#supported-models-for-litellm-key)
+
+
 ## Sample Usage
 
 ```python
@@ -21,11 +27,6 @@ messages = [{"role": "user", "content": "Write me a poem about the blue sky"}]
 
 completion(model="together_ai/togethercomputer/Llama-2-7B-32K-Instruct", messages=messages)
 ```
-
-**Need a dedicated key?**
-Email us @ krrish@berri.ai 
-
-[**See all supported models by the litellm api key**](../proxy_api.md#supported-models-for-litellm-key)
 
 ## Together AI Models
 liteLLM supports `non-streaming` and `streaming` requests to all models on https://api.together.xyz/
