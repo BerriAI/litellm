@@ -41,7 +41,7 @@ const sidebars = {
     },
     {
       type: "category",
-      label: "Embedding()",
+      label: "Embedding() & Moderation()",
       items: ["embedding/supported_embedding"],
     },
     {
