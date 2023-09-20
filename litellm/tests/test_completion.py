@@ -814,6 +814,8 @@ def test_completion_ai21():
 # test_completion_together_ai_stream()
 
 def test_moderation():
+    import openai
+    openai.api_type = "azure" 
     response = litellm.moderation(input="i'm ishaan cto of litellm")   
     print(response)
     output = response["results"][0]

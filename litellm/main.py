@@ -1272,7 +1272,6 @@ def moderation(*args, **kwargs):
     api_key = None
     if "api_key" in kwargs:
         api_key = kwargs["api_key"]
-    
     api_key = (
                 api_key or
                 litellm.api_key or
@@ -1280,6 +1279,8 @@ def moderation(*args, **kwargs):
                 get_secret("OPENAI_API_KEY")
             )
     openai.api_key = api_key
+    openai.api_type = "open_ai"
+    openai.api_base = "https://api.openai.com/v1"
     response = openai.Moderation.create(*args, **kwargs)
     return response
 
