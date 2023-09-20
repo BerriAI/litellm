@@ -89,22 +89,22 @@
         "input_cost_per_token": 0.000015,
         "output_cost_per_token": 0.000015
     },
-    "command": {
+     "command": {
         "max_tokens": 4096,
         "input_cost_per_token": 0.000015,
         "output_cost_per_token": 0.000015
     },
-    "command-light": {
+     "command-light": {
         "max_tokens": 4096,
         "input_cost_per_token": 0.000015,
         "output_cost_per_token": 0.000015
     },
-    "command-medium-beta": {
+     "command-medium-beta": {
         "max_tokens": 4096,
         "input_cost_per_token": 0.000015,
         "output_cost_per_token": 0.000015
     },
-    "command-xlarge-beta": {
+     "command-xlarge-beta": {
         "max_tokens": 4096,
         "input_cost_per_token": 0.000015,
         "output_cost_per_token": 0.000015
