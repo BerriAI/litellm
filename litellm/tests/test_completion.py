@@ -812,3 +812,12 @@ def test_completion_ai21():
 #     return
 
 # test_completion_together_ai_stream()
+
+def test_moderation():
+    response = litellm.moderation(input="i'm ishaan cto of litellm")   
+    print(response)
+    output = response["results"][0]
+    print(output)
+    return output
+
+# test_moderation()
