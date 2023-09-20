@@ -35,6 +35,7 @@ from .llms import vllm
 from .llms import ollama
 from .llms import cohere
 from .llms import petals
+from .llms import oobabooga
 import tiktoken
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, List, Optional, Dict
@@ -683,6 +684,28 @@ def completion(
                 # don't try to access stream object,
                 response = CustomStreamWrapper(
                     model_response, model, custom_llm_provider="huggingface", logging_obj=logging
+                )
+                return response
+            response = model_response
+        elif custom_llm_provider == "oobabooga":
+            custom_llm_provider = "oobabooga"
+            model_response = oobabooga.completion(
+                model=model,
+                messages=messages,
+                model_response=model_response,
+                api_base=api_base, # type: ignore
+                print_verbose=print_verbose,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                api_key=None,
+                logger_fn=logger_fn,
+                encoding=encoding,
+                logging_obj=logging
+            )
+            if "stream" in optional_params and optional_params["stream"] == True:
+                # don't try to access stream object,
+                response = CustomStreamWrapper(
+                    model_response, model, custom_llm_provider="oobabooga", logging_obj=logging
                 )
                 return response
             response = model_response

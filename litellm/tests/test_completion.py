@@ -47,6 +47,18 @@ def test_completion_claude():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 # test_completion_claude()
+
+# def test_completion_oobabooga():
+#     try:
+#         response = completion(
+#             model="oobabooga/vicuna-1.3b", messages=messages, api_base="http://127.0.0.1:5000"
+#         )
+#         # Add any assertions here to check the response
+#         print(response)
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
+
+# test_completion_oobabooga()
 # aleph alpha
 # def test_completion_aleph_alpha():
 #     try:

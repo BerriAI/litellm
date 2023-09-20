@@ -277,6 +277,7 @@ provider_list: List = [
     "nlp_cloud",
     "bedrock",
     "petals",
+    "oobabooga",
     "custom", # custom apis
 ]
 
