@@ -74,6 +74,7 @@ response = completion(model="gpt-3.5-turbo", messages=messages)
 
 # cohere call
 response = completion(model="command-nightly", messages=messages)
+print(response)
 ```
 
 **Don't have a key? We'll give you access 👉 https://docs.litellm.ai/docs/proxy_api**
