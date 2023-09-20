@@ -143,6 +143,7 @@ const sidebars = {
       },
       items: [
         "projects/FastREPL",
+        "projects/PROMPTMETHEUS",
         "projects/Codium PR Agent", 
         "projects/Prompt2Model",
         "projects/SalesGPT",
