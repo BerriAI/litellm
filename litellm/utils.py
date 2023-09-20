@@ -902,7 +902,8 @@ def get_optional_params(  # use the openai defaults
         if top_p != 1:
             optional_params["top_p"] = top_p
         if n != 1:
-            optional_params["n"] = n
+            optional_params["best_of"] = n
+            optional_params["do_sample"] = True # need to sample if you want best of for hf inference endpoints
         if stream:
             optional_params["stream"] = stream
         if stop != None:
