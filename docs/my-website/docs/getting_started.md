@@ -1,15 +1,19 @@
 # Getting Started
 
+import QuickStart from '../src/components/QuickStart.js'
+
 LiteLLM simplifies LLM API calls by mapping them all to the [OpenAI ChatCompletion format](https://platform.openai.com/docs/api-reference/chat). 
 
 ## basic usage 
+
+By default we provide a free $10 key to try all providers supported on LiteLLM. 
 
 ```python
 from litellm import completion
 
 ## set ENV variables
-os.environ["OPENAI_API_KEY"] = "openai key"
-os.environ["COHERE_API_KEY"] = "cohere key"
+os.environ["OPENAI_API_KEY"] = "sk-litellm-7_NPZhMGxY2GoHC59LgbDw" # [OPTIONAL] replace with your openai key
+os.environ["COHERE_API_KEY"] = "sk-litellm-7_NPZhMGxY2GoHC59LgbDw" # [OPTIONAL] replace with your cohere key
 
 messages = [{ "content": "Hello, how are you?","role": "user"}]
 
@@ -19,10 +23,11 @@ response = completion(model="gpt-3.5-turbo", messages=messages)
 # cohere call
 response = completion("command-nightly", messages)
 ```
+Next Steps 👉 [All supported models](./proxy_api.md)
 
 More details 👉 
 * [Completion() function details](./completion/)
-* [Supported models / providers](./providers/)
+* [All supported models / providers on LiteLLM](./providers/)
 
 ## streaming
 
@@ -41,6 +46,8 @@ response = completion(model="gpt-3.5-turbo", messages=messages, stream=True)
 
 # cohere call
 response = completion("command-nightly", messages, stream=True)
+
+print(response)
 ```
 
 More details 👉 
