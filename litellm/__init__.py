@@ -78,39 +78,43 @@ config_path = None
 ####### Secret Manager #####################
 secret_manager_client = None
 ####### COMPLETION MODELS ###################
-open_ai_chat_completion_models: List = [
-    "gpt-4",
-    "gpt-4-0613",
-    "gpt-4-0314",
-    "gpt-4-32k",
-    "gpt-4-32k-0314",
-    "gpt-4-32k-0613",
-    #################
-    "gpt-3.5-turbo",
-    "gpt-3.5-turbo-0301",
-    "gpt-3.5-turbo-0613",
-    "gpt-3.5-turbo-16k",
-    "gpt-3.5-turbo-16k-0613",
-]
-open_ai_text_completion_models: List = [
-    "gpt-3.5-turbo-instruct",
-    "text-davinci-003", 
-    "text-curie-001", 
-    "text-babbage-001", 
-    "text-ada-001", 
-    "babbage-002", 
-    "davinci-002",
-]
-
-cohere_models: List = [
-    "command-nightly",
-    "command",
-    "command-light",
-    "command-medium-beta",
-    "command-xlarge-beta",
-]
-
-anthropic_models: List = ["claude-2", "claude-instant-1", "claude-instant-1.2"]
+open_ai_chat_completion_models: List = []
+open_ai_text_completion_models: List = []
+cohere_models: List = []
+anthropic_models: List = []
+openrouter_models: List = []
+vertex_chat_models: List = []
+vertex_code_chat_models: List = []
+vertex_text_models: List = []
+vertex_code_text_models: List = []
+ai21_models: List = []
+nlp_cloud_models: List = []
+aleph_alpha_models: List = []
+for key, value in model_cost.items():
+    if value.get('litellm_provider') == 'openai':
+        open_ai_chat_completion_models.append(key)
+    elif value.get('litellm_provider') == 'text-completion-openai':
+        open_ai_text_completion_models.append(key)
+    elif value.get('litellm_provider') == 'cohere':
+        cohere_models.append(key)
+    elif value.get('litellm_provider') == 'anthropic':
+        anthropic_models.append(key)
+    elif value.get('litellm_provider') == 'openrouter':
+        openrouter_models.append(key)
+    elif value.get('litellm_provider') == 'vertex_ai-text-models':
+        vertex_text_models.append(key)
+    elif value.get('litellm_provider') == 'vertex_ai-code-text-models':
+        vertex_code_text_models.append(key)
+    elif value.get('litellm_provider') == 'vertex_ai-chat-models':
+        vertex_chat_models.append(key)
+    elif value.get('litellm_provider') == 'vertex_ai-code-chat-models':
+        vertex_code_chat_models.append(key)
+    elif value.get('litellm_provider') == 'ai21':
+        ai21_models.append(key)
+    elif value.get('litellm_provider') == 'nlp_cloud':
+        nlp_cloud_models.append(key)
+    elif value.get('litellm_provider') == 'aleph_alpha':
+        aleph_alpha_models.append(key)
 
 # well supported replicate llms
 replicate_models: List = [
@@ -128,44 +132,6 @@ replicate_models: List = [
     "replit/replit-code-v1-3b:b84f4c074b807211cd75e3e8b1589b6399052125b4c27106e43d47189e8415ad",
 ]
 
-openrouter_models: List = [
-    "google/palm-2-codechat-bison",
-    "google/palm-2-chat-bison",
-    "openai/gpt-3.5-turbo",
-    "openai/gpt-3.5-turbo-16k",
-    "openai/gpt-4-32k",
-    "anthropic/claude-2",
-    "anthropic/claude-instant-v1",
-    "meta-llama/llama-2-13b-chat",
-    "meta-llama/llama-2-70b-chat",
-]
-
-vertex_chat_models: List = [
-    "chat-bison-32k",
-    "chat-bison", 
-    "chat-bison@001",
-]
-
-vertex_code_chat_models: List = [
-    "codechat-bison",
-    "codechat-bison-32k",
-    "codechat-bison@001",
-]
-
-vertex_text_models: List = [
-    "text-bison", 
-    "text-bison@001",
-    # "text-bison-32k",
-]
-
-vertex_code_text_models: List = [
-    "code-bison",
-    # "code-bison-32K",
-    "code-bison@001",
-    "code-gecko@001",
-    "code-gecko@latest",
-]
-
 huggingface_models: List = [
     "meta-llama/Llama-2-7b-hf",
     "meta-llama/Llama-2-7b-chat-hf",
@@ -180,10 +146,6 @@ huggingface_models: List = [
     "meta-llama/Llama-2-70b",
     "meta-llama/Llama-2-70b-chat",
 ]  # these have been tested on extensively. But by default all text2text-generation and text-generation models are supported by liteLLM. - https://docs.litellm.ai/docs/providers
-
-ai21_models: List = ["j2-ultra", "j2-mid", "j2-light"]
-
-nlp_cloud_models: List = ["dolphin", "chatdolphin"]
 
 together_ai_models: List = [
     # llama llms - chat
@@ -222,14 +184,6 @@ together_ai_models: List = [
 
 ] # supports all together ai models, just pass in the model id e.g. completion(model="together_computer/replit_code_3b",...)
 
-aleph_alpha_models: List = [
-    "luminous-base",
-    "luminous-base-control",
-    "luminous-extended",
-    "luminous-extended-control",
-    "luminous-supreme",
-    "luminous-supreme-control"
-]
 
 baseten_models: List = ["qvv0xeq", "q841o8w", "31dxrj3"]  # FALCON 7B  # WizardLM  # Mosaic ML
 
