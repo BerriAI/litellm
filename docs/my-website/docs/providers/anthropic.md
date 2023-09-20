@@ -9,6 +9,11 @@ import os
 
 os.environ["ANTHROPIC_API_KEY"] = "sk-litellm-7_NPZhMGxY2GoHC59LgbDw" # [OPTIONAL] replace with your anthropic key
 ```
+**Need a dedicated key?**
+Email us @ krrish@berri.ai 
+
+## Supported Models for LiteLLM Key
+These are the models that currently work with the "sk-litellm-.." keys.
 
 ## Sample Usage
 

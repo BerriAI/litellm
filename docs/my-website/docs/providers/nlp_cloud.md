@@ -10,6 +10,10 @@ import os
 
 os.environ["NLP_CLOUD_API_KEY"] = "sk-litellm-7_NPZhMGxY2GoHC59LgbDw" # [OPTIONAL] replace with your nlp cloud key
 ```
+**Need a dedicated key?**
+Email us @ krrish@berri.ai 
+
+[**See all supported models by the litellm api key**](../proxy_api.md#supported-models-for-litellm-key)
 
 ## Sample Usage
 
