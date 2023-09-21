@@ -621,7 +621,7 @@ def test_completion_sagemaker():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-
+test_completion_sagemaker()
 def test_completion_bedrock_titan():
     try:
         response = completion(
@@ -828,8 +828,7 @@ def test_completion_ai21():
     try:
         response = completion(model=model_name, messages=messages)
         # Add any assertions here to check the response
-        print(response["response_ms"])
-        print(dir(response))
+        print(response)
         print(response.response_ms)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
