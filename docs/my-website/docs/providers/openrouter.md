@@ -1,6 +1,10 @@
 # OpenRouter
 LiteLLM supports all the text models from [OpenRouter](https://openrouter.ai/docs)
 
+<a target="_blank" href="https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/LiteLLM_OpenRouter.ipynb">
+  <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
+</a>
+
 ## Usage
 ```python
 import os
