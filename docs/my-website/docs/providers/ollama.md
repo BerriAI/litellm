@@ -34,6 +34,11 @@ for chunk in response:
 ```
 
 ## Example usage - Streaming + Acompletion
+Ensure you have async_generator installed for using ollama acompletion with streaming
+```shell
+pip install async_generator
+```
+
 ```python
 async def async_ollama():
     response = await litellm.acompletion(
