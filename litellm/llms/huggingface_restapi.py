@@ -191,7 +191,7 @@ def completion(
                             for token in item["tokens"]:
                                 sum_logprob += token["logprob"]
                             message_obj = Message(content=item["generated_text"], logprobs=sum_logprob)
-                            choice_obj = Choices(finish_reason=item["finish_reason"], index=idx, message=message_obj)
+                            choice_obj = Choices(finish_reason=item["finish_reason"], index=idx+1, message=message_obj)
                             choices_list.append(choice_obj)
                         model_response["choices"].extend(choices_list)
             else:
