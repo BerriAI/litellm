@@ -101,7 +101,8 @@ for key, value in model_cost.items():
     elif value.get('litellm_provider') == 'anthropic':
         anthropic_models.append(key)
     elif value.get('litellm_provider') == 'openrouter':
-        openrouter_models.append(key)
+        split_string = key.split('/', 1)
+        openrouter_models.append(split_string[1])
     elif value.get('litellm_provider') == 'vertex_ai-text-models':
         vertex_text_models.append(key)
     elif value.get('litellm_provider') == 'vertex_ai-code-text-models':
