@@ -621,7 +621,26 @@ def test_completion_sagemaker():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_completion_sagemaker()
+# test_completion_sagemaker()
+
+def test_completion_sagemaker_stream():
+    litellm.set_verbose = False
+    try:
+        response = completion(
+            model="sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b", 
+            messages=messages,
+            temperature=0.2,
+            max_tokens=80,
+            stream=True,
+        )
+        # Add any assertions here to check the response
+        for chunk in response:
+            print(chunk)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+# test_completion_sagemaker_stream()
+
 def test_completion_bedrock_titan():
     try:
         response = completion(

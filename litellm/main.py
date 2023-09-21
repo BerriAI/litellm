@@ -866,10 +866,15 @@ def completion(
                 logging_obj=logging
             )
 
-            if "stream" in optional_params and optional_params["stream"] == True: ## [BETA]
-                # don't try to access stream object,
+            if stream==True: ## [BETA]
+                # sagemaker does not support streaming as of now so we're faking streaming:
+                # https://discuss.huggingface.co/t/streaming-output-text-when-deploying-on-sagemaker/39611
+                # "SageMaker is currently not supporting streaming responses."
+                
+                # fake streaming for sagemaker
+                resp_string = model_response["choices"][0]["message"]["content"]
                 response = CustomStreamWrapper(
-                    iter(model_response), model, custom_llm_provider="sagemaker", logging_obj=logging
+                    resp_string, model, custom_llm_provider="sagemaker", logging_obj=logging
                 )
                 return response
 
