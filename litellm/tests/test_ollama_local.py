@@ -27,7 +27,7 @@
 #     except Exception as e:
 #         pytest.fail(f"Error occurred: {e}")
 
-# test_completion_ollama()
+# # test_completion_ollama()
 
 # def test_completion_ollama_stream():
 #     user_message = "what is litellm?"
@@ -47,7 +47,7 @@
 #     except Exception as e:
 #         pytest.fail(f"Error occurred: {e}")
 
-# test_completion_ollama_stream()
+# # test_completion_ollama_stream()
 
 
 # async def test_completion_ollama_async_stream():
@@ -68,10 +68,8 @@
 #     except Exception as e:
 #         pytest.fail(f"Error occurred: {e}")
 
-# import asyncio
-# asyncio.run(test_completion_ollama_async_stream())
-
-
+# # import asyncio
+# # asyncio.run(test_completion_ollama_async_stream())
 
 # def prepare_messages_for_chat(text: str) -> list:
 #     messages = [
