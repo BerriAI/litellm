@@ -33,6 +33,24 @@ for chunk in response:
     print(chunk['choices'][0]['delta'])
 
 ```
+
+## Example usage - Streaming + Acompletion
+```python
+async def async_ollama():
+    response = await litellm.acompletion(
+        model="ollama/llama2", 
+        messages=[{ "content": "what's the weather" ,"role": "user"}], 
+        api_base="http://localhost:11434", 
+        stream=True
+    )
+    async for chunk in response:
+        print(chunk)
+
+# call async_ollama
+import asyncio
+asyncio.run(async_ollama())
+
+```
 ### Ollama Models
 Ollama supported models: https://github.com/jmorganca/ollama
 
