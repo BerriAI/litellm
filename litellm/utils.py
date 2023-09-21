@@ -2720,6 +2720,14 @@ class CustomStreamWrapper:
                     completion_obj["content"] = self.handle_cohere_chunk(chunk)
                 elif self.custom_llm_provider == "bedrock":
                     completion_obj["content"] = self.handle_bedrock_stream()
+                elif self.custom_llm_provider == "sagemaker":
+                    if len(self.completion_stream)==0:
+                        raise StopIteration
+                    chunk_size = 30
+                    new_chunk = self.completion_stream[:chunk_size]
+                    completion_obj["content"] = new_chunk
+                    self.completion_stream = self.completion_stream[chunk_size:]
+                    time.sleep(0.05)
                 else: # openai chat/azure models
                     chunk = next(self.completion_stream)
                     model_response = chunk
