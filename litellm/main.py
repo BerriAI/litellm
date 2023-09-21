@@ -171,6 +171,7 @@ def completion(
     litellm_logging_obj=None,
     use_client=False,
     id=None, # this is an optional param to tag individual completion calls 
+    metadata: Optional[dict]=None,
     # model specific optional params
     top_k=40,# used by text-bison only
     task: Optional[str]="text-generation-inference", # used by huggingface inference endpoints
@@ -201,6 +202,7 @@ def completion(
         frequency_penalty: It is used to penalize new tokens based on their frequency in the text so far.
         logit_bias (dict, optional): Used to modify the probability of specific tokens appearing in the completion.
         user (str, optional):  A unique identifier representing your end-user. This can help the LLM provider to monitor and detect abuse.
+        metadata (dict, optional): Pass in additional metadata to tag your completion calls - eg. prompt version, details, etc. 
 
         LITELLM Specific Params
         mock_response (str, optional): If provided, return a mock completion response for testing or debugging purposes (default is None).
@@ -276,7 +278,8 @@ def completion(
             api_base=api_base,
             litellm_call_id=litellm_call_id,
             model_alias_map=litellm.model_alias_map,
-            completion_call_id=id
+            completion_call_id=id,
+            metadata=metadata
         )
         logging.update_environment_variables(model=model, user=user, optional_params=optional_params, litellm_params=litellm_params)
         if custom_llm_provider == "azure":

@@ -25,7 +25,7 @@ Complete code
 from litellm import completion
 
 ## set env variables
-os.environ["PROMPTLAYER_API_KEY"] = "your"
+os.environ["PROMPTLAYER_API_KEY"] = "your-promptlayer-key"
 
 os.environ["OPENAI_API_KEY"], os.environ["COHERE_API_KEY"] = "", ""
 
@@ -38,3 +38,33 @@ response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content
 #cohere call
 response = completion(model="command-nightly", messages=[{"role": "user", "content": "Hi 👋 - i'm cohere"}])
 ```
+
+### Logging Metadata 
+
+You can also log completion call metadata to Promptlayer. 
+
+You can add metadata to a completion call through the metadata param: 
+```python 
+completion(model,messages, metadata={"model": "ai21"})
+```
+
+**Complete Code**
+```python
+from litellm import completion
+
+## set env variables
+os.environ["PROMPTLAYER_API_KEY"] = "your-promptlayer-key"
+
+os.environ["OPENAI_API_KEY"], os.environ["COHERE_API_KEY"] = "", ""
+
+# set callbacks
+litellm.success_callback = ["promptlayer"]
+
+#openai call - log llm provider is openai
+response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}], metadata={"provider": "openai"})
+
+#cohere call - log llm provider is cohere
+response = completion(model="command-nightly", messages=[{"role": "user", "content": "Hi 👋 - i'm cohere"}], metadata={"provider": "cohere"})
+```
+
+Credits to [Nick Bradford](https://github.com/nsbradford), from [Vim-GPT](https://github.com/nsbradford/VimGPT), for the suggestion. 

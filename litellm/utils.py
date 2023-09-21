@@ -177,7 +177,7 @@ class CallTypes(Enum):
 
 # Logging function -> log the exact model details + what's being sent | Non-Blocking
 class Logging:
-    global supabaseClient, liteDebuggerClient
+    global supabaseClient, liteDebuggerClient, promptLayerLogger
 
     def __init__(self, model, messages, stream, call_type, start_time, litellm_call_id, function_id):
         if call_type not in [item.value for item in CallTypes]:
@@ -395,6 +395,15 @@ class Logging:
                                 self.litellm_params["stream_response"][litellm_call_id] = new_model_response
                             #print("adding to cache for", litellm_call_id)                              
                             litellm.cache.add_cache(self.litellm_params["stream_response"][litellm_call_id], **self.model_call_details)
+                    if callback == "promptlayer":
+                        print_verbose("reaches promptlayer for logging!")
+                        promptLayerLogger.log_event(
+                            kwargs=self.model_call_details,
+                            response_obj=result,
+                            start_time=start_time,
+                            end_time=end_time,
+                            print_verbose=print_verbose,
+                        )
 
                 except Exception as e:
                     print_verbose(
@@ -827,7 +836,8 @@ def get_litellm_params(
     api_base=None,
     litellm_call_id=None,
     model_alias_map=None,
-    completion_call_id=None
+    completion_call_id=None,
+    metadata=None
 ):
     litellm_params = {
         "return_async": return_async,
@@ -840,6 +850,7 @@ def get_litellm_params(
         "litellm_call_id": litellm_call_id,
         "model_alias_map": model_alias_map,
         "completion_call_id": completion_call_id,
+        "metadata": metadata,
         "stream_response": {} # litellm_call_id: ModelResponse Dict
     }
 
@@ -1628,15 +1639,6 @@ def handle_success(args, kwargs, result, start_time, end_time):
                         start_time=start_time,
                         end_time=end_time,
                         run_id=kwargs["litellm_call_id"],
-                        print_verbose=print_verbose,
-                    )
-                elif callback == "promptlayer":
-                    print_verbose("reaches promptlayer for logging!")
-                    promptLayerLogger.log_event(
-                        kwargs=kwargs,
-                        response_obj=result,
-                        start_time=start_time,
-                        end_time=end_time,
                         print_verbose=print_verbose,
                     )
                 elif callback == "langfuse":

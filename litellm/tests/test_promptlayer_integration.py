@@ -13,18 +13,46 @@ import time
 
 
 
-def test_promptlayer_logging():
+# def test_promptlayer_logging():
+#     try:
+#         # Redirect stdout
+#         old_stdout = sys.stdout
+#         sys.stdout = new_stdout = io.StringIO()
+
+
+#         response = completion(model="claude-instant-1.2",
+#                               messages=[{
+#                                   "role": "user",
+#                                   "content": "Hi 👋 - i'm claude"
+#                               }])
+
+#         # Restore stdout
+#         time.sleep(1)
+#         sys.stdout = old_stdout
+#         output = new_stdout.getvalue().strip()
+#         print(output)
+#         if "LiteLLM: Prompt Layer Logging: success" not in output:
+#             raise Exception("Required log message not found!")
+
+#     except Exception as e:
+#         print(e)
+
+# test_promptlayer_logging()
+
+
+def test_promptlayer_logging_with_metadata():
     try:
         # Redirect stdout
         old_stdout = sys.stdout
         sys.stdout = new_stdout = io.StringIO()
 
 
-        response = completion(model="claude-instant-1.2",
+        response = completion(model="j2-light",
                               messages=[{
                                   "role": "user",
-                                  "content": "Hi 👋 - i'm openai"
-                              }])
+                                  "content": "Hi 👋 - i'm ai21"
+                              }], 
+                              metadata={"model": "ai21"})
 
         # Restore stdout
         time.sleep(1)
@@ -37,7 +65,7 @@ def test_promptlayer_logging():
     except Exception as e:
         print(e)
 
-test_promptlayer_logging()
+# test_promptlayer_logging_with_metadata()
 
 
 
