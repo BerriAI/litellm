@@ -142,9 +142,9 @@ class ModelResponse(OpenAIObject):
         else:
             self.created = created
         if response_ms:
-            self.response_ms = response_ms
+            self._response_ms = response_ms
         else:
-            self.response_ms = None
+            self._response_ms = None
         self.model = model
         self.usage = (
             usage
@@ -639,7 +639,7 @@ def client(original_function):
             )  # don't interrupt execution of main thread
             my_thread.start()
             # RETURN RESULT
-            result.response_ms = (end_time - start_time).total_seconds() * 1000 # return response latency in ms like openai
+            result._response_ms = (end_time - start_time).total_seconds() * 1000 # return response latency in ms like openai
             return result
         except Exception as e:
             traceback_exception = traceback.format_exc()
