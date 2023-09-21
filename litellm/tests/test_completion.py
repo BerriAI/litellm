@@ -162,23 +162,23 @@ def test_completion_with_litellm_call_id():
 #         pytest.fail(f"Error occurred: {e}")
 
 # using Non TGI or conversational LLMs
-# def hf_test_completion():
-#     try:
-#         # litellm.set_verbose=True
-#         user_message = "My name is Merve and my favorite"
-#         messages = [{ "content": user_message,"role": "user"}]
-#         response = completion(
-#             model="huggingface/roneneldan/TinyStories-3M", 
-#             messages=messages,
-#             api_base="https://p69xlsj6rpno5drq.us-east-1.aws.endpoints.huggingface.cloud",
-#             task=None,
-#         )
-#         # Add any assertions here to check the response
-#         print(response)
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
+def hf_test_completion():
+    try:
+        # litellm.set_verbose=True
+        user_message = "My name is Merve and my favorite"
+        messages = [{ "content": user_message,"role": "user"}]
+        response = completion(
+            model="huggingface/roneneldan/TinyStories-3M", 
+            messages=messages,
+            api_base="https://p69xlsj6rpno5drq.us-east-1.aws.endpoints.huggingface.cloud",
+            task=None,
+        )
+        # Add any assertions here to check the response
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
-# hf_test_completion()
+hf_test_completion()
 
 
 # this should throw an exception, to trigger https://logs.litellm.ai/
@@ -323,33 +323,29 @@ def test_completion_openai_litellm_key():
 # test_completion_openai_litellm_key()
 
 # commented out for now, as openrouter is quite flaky - causing our deployments to fail. Please run this before pushing changes.
-# def test_completion_openrouter():
-#     try:
-#         response = completion(
-#             model="openrouter/google/palm-2-chat-bison",
-#             messages=messages,
-#             temperature=0.5,
-#             top_p=0.1,
-#         )
-#         # Add any assertions here to check the response
-#         print(response)
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
-# test_completion_openrouter()
+def test_completion_openrouter1():
+    try:
+        response = completion(
+            model="openrouter/google/palm-2-chat-bison",
+            messages=messages,
+            max_tokens=5,
+        )
+        # Add any assertions here to check the response
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
-# def test_completion_openrouter():
-#     try:
-#         response = completion(
-#             model="google/palm-2-chat-bison",
-#             messages=messages,
-#             temperature=0.5,
-#             top_p=0.1,
-#         )
-#         # Add any assertions here to check the response
-#         print(response)
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
-# test_completion_openrouter()
+def test_completion_openrouter2():
+    try:
+        response = completion(
+            model="google/palm-2-chat-bison",
+            messages=messages,
+            max_tokens=5,
+        )
+        # Add any assertions here to check the response
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 # test_completion_openrouter()
 
@@ -834,6 +830,7 @@ def test_completion_ai21():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+# test_completion_ai21()
 # test config file with completion #
 # def test_completion_openai_config():
 #     try:
