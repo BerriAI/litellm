@@ -40,10 +40,11 @@ def test_completion_custom_provider_model_name():
 def test_completion_claude():
     try:
         response = completion(
-            model="claude-instant-1", messages=messages, logger_fn=logger_fn
+            model="claude-instant-1", messages=messages, max_tokens=10
         )
         # Add any assertions here to check the response
         print(response)
+        print(response.response_ms)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 # test_completion_claude()
@@ -178,7 +179,7 @@ def hf_test_completion():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-hf_test_completion()
+# hf_test_completion()
 
 
 # this should throw an exception, to trigger https://logs.litellm.ai/
@@ -227,11 +228,14 @@ def test_completion_cohere(): # commenting for now as the cohere endpoint is bei
 def test_completion_openai():
     try:
         litellm.api_key = os.environ['OPENAI_API_KEY']
-        response = completion(model="gpt-3.5-turbo", messages=messages)
+        response = completion(model="gpt-3.5-turbo", messages=messages, max_tokens=10)
+        print("This is the response object\n", response)
+        print("\n\nThis is response ms:", response.response_ms)
+
         
         response_str = response["choices"][0]["message"]["content"]
         response_str_2 = response.choices[0].message.content
-        print("response\n", response)
+
         cost = completion_cost(completion_response=response)
         print("Cost for completion call with gpt-3.5-turbo: ", f"${float(cost):.10f}")
         assert response_str == response_str_2
