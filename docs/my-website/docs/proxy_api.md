@@ -5,6 +5,7 @@ Use this if you're trying to add support for new LLMs and need access for testin
 ## usage (community-key)
 
 ```python
+import os
 from litellm import completion
 
 ## set ENV variables
