@@ -3,7 +3,7 @@ import json
 from enum import Enum
 import requests
 import time
-from typing import Callable
+from typing import Callable, Optional
 from litellm.utils import ModelResponse
 
 
@@ -55,10 +55,10 @@ def completion(
     encoding,
     api_key,
     logging_obj,
+    gradient_workspace_id: str,
     optional_params=None,
     litellm_params=None,
     logger_fn=None,
-    gradient_workspace_id: str = None,
 ):
     """Completion to gradient.ai
 
