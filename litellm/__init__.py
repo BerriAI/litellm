@@ -28,6 +28,8 @@ vertex_project: Optional[str] = None
 vertex_location: Optional[str] = None
 togetherai_api_key: Optional[str] = None
 baseten_key: Optional[str] = None
+gradient_key: Optional[str] = None
+gradient_workspace_id: Optional[str] = None
 aleph_alpha_key: Optional[str] = None
 nlp_cloud_key: Optional[str] = None
 use_client: bool = False
@@ -276,6 +278,7 @@ provider_list: List = [
     "vllm",
     "nlp_cloud",
     "bedrock",
+    "gradient",
     "petals",
     "oobabooga",
     "custom", # custom apis

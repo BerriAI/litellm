@@ -960,6 +960,14 @@ def get_optional_params(  # use the openai defaults
         optional_params["num_beams"] = num_beams
         if max_tokens != float("inf"):
             optional_params["max_new_tokens"] = max_tokens
+    elif custom_llm_provider == "gradient":
+        optional_params["temperature"] = temperature
+        optional_params["stream"] = stream
+        if top_p != 1:
+            optional_params["topP"] = top_p
+        optional_params["topK"] = top_k
+        if max_tokens != float("inf"):
+            optional_params["maxGeneratedTokenCount"] = max_tokens
     elif custom_llm_provider == "sagemaker":
         if "llama-2" in model:
             # llama-2 models on sagemaker support the following args
@@ -1178,6 +1186,14 @@ def get_api_key(llm_provider: str, dynamic_api_key: Optional[str]):
                 litellm.baseten_key or
                 get_secret("BASETEN_API_KEY")
         )
+    # baseten 
+    elif llm_provider == "gradient":
+        api_key = (
+                api_key or
+                litellm.gradient_key or
+                get_secret("GRADIENT_API_KEY") or 
+                get_secret("GRADIENT_ACCESS_TOKEN")
+        )
     # cohere 
     elif llm_provider == "cohere":
         api_key = (
@@ -1215,6 +1231,7 @@ def get_api_key(llm_provider: str, dynamic_api_key: Optional[str]):
                 get_secret("TOGETHER_AI_TOKEN")
         )
     return api_key
+
 def get_max_tokens(model: str):
     try:
         return litellm.model_cost[model]
@@ -1265,28 +1282,30 @@ def load_test_model(
         }
 
 def validate_environment():
-        api_key = None
-        if "OPENAI_API_KEY" in os.environ:
-            api_key = os.getenv("OPENAI_API_KEY")
-        elif "ANTHROPIC_API_KEY" in os.environ:
-            api_key = os.getenv("ANTHROPIC_API_KEY")
-        elif "REPLICATE_API_KEY" in os.environ:
-            api_key = os.getenv("REPLICATE_API_KEY")
-        elif "AZURE_API_KEY" in os.environ:
-            api_key = os.getenv("AZURE_API_KEY")
-        elif "COHERE_API_KEY" in os.environ:
-            api_key = os.getenv("COHERE_API_KEY")
-        elif "TOGETHERAI_API_KEY" in os.environ:
-            api_key = os.getenv("TOGETHERAI_API_KEY")
-        elif "BASETEN_API_KEY" in os.environ:
-            api_key = os.getenv("BASETEN_API_KEY")
-        elif "AI21_API_KEY" in os.environ:
-            api_key = os.getenv("AI21_API_KEY")
-        elif "OPENROUTER_API_KEY" in os.environ:
-            api_key = os.getenv("OPENROUTER_API_KEY")
-        elif "ALEPHALPHA_API_KEY" in os.environ:
-            api_key = os.getenv("ALEPHALPHA_API_KEY")
-        return api_key
+    api_key = None
+    if "OPENAI_API_KEY" in os.environ:
+        api_key = os.getenv("OPENAI_API_KEY")
+    elif "ANTHROPIC_API_KEY" in os.environ:
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+    elif "REPLICATE_API_KEY" in os.environ:
+        api_key = os.getenv("REPLICATE_API_KEY")
+    elif "AZURE_API_KEY" in os.environ:
+        api_key = os.getenv("AZURE_API_KEY")
+    elif "COHERE_API_KEY" in os.environ:
+        api_key = os.getenv("COHERE_API_KEY")
+    elif "TOGETHERAI_API_KEY" in os.environ:
+        api_key = os.getenv("TOGETHERAI_API_KEY")
+    elif "BASETEN_API_KEY" in os.environ:
+        api_key = os.getenv("BASETEN_API_KEY")
+    elif "GRADIENT_API_KEY" in os.environ:
+        api_key = os.getenv("GRADIENT_API_KEY")
+    elif "AI21_API_KEY" in os.environ:
+        api_key = os.getenv("AI21_API_KEY")
+    elif "OPENROUTER_API_KEY" in os.environ:
+        api_key = os.getenv("OPENROUTER_API_KEY")
+    elif "ALEPHALPHA_API_KEY" in os.environ:
+        api_key = os.getenv("ALEPHALPHA_API_KEY")
+    return api_key
 
 def set_callbacks(callback_list, function_id=None):
     global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, llmonitorLogger, promptLayerLogger, langFuseLogger, customLogger
@@ -2650,6 +2669,8 @@ class CustomStreamWrapper:
                 elif self.custom_llm_provider and self.custom_llm_provider == "ai21": #ai21 doesn't provide streaming
                     chunk = next(self.completion_stream)
                     completion_obj["content"] = self.handle_ai21_chunk(chunk)
+                elif self.custom_llm_provider and self.custom_llm_provider == "gradient": #gradient doesn't provide streaming
+                    pass
                 elif self.custom_llm_provider and self.custom_llm_provider == "vllm":
                     chunk = next(self.completion_stream)
                     completion_obj["content"] = chunk[0].outputs[0].text

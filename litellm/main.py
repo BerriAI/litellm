@@ -30,6 +30,7 @@ from .llms import huggingface_restapi
 from .llms import replicate
 from .llms import aleph_alpha
 from .llms import nlp_cloud
+from .llms import gradient
 from .llms import baseten
 from .llms import vllm
 from .llms import ollama
@@ -172,7 +173,7 @@ def completion(
     use_client=False,
     id=None, # this is an optional param to tag individual completion calls 
     # model specific optional params
-    top_k=40,# used by text-bison only
+    top_k=40,
     task: Optional[str]="text-generation-inference", # used by huggingface inference endpoints
     return_full_text: bool = False, # used by huggingface TGI
     remove_input: bool = True, # used by nlp cloud models - prevents input text from being returned as part of output
@@ -649,6 +650,38 @@ def completion(
             if "stream" in optional_params and optional_params["stream"] == True:
                 # don't try to access stream object,
                 response = CustomStreamWrapper(model_response, model, custom_llm_provider="cohere", logging_obj=logging)
+                return response
+            response = model_response
+        elif (
+            custom_llm_provider == "gradient"
+            or litellm.api_base == "https://api.gradient.ai/api"
+        ):
+            custom_llm_provider = "gradient"
+            gradient_key = (
+                api_key or litellm.gradient_key or os.environ.get("GRADIENT_API_KEY") or os.environ.get("GRADIENT_ACCESS_TOKEN") or litellm.api_key
+            )
+            gradient_workspace_id = (
+                api_key or litellm.gradient_workspace_id or os.environ.get("GRADIENT_WORKSPACE_ID")
+            )
+
+            model_response = gradient.completion(
+                model=model,
+                messages=messages,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                encoding=encoding, 
+                api_key=gradient_key, 
+                logging_obj=logging,
+                gradient_workspace_id=gradient_workspace_id
+            )
+            if inspect.isgenerator(model_response) or ("stream" in optional_params and optional_params["stream"] == True):
+                # gradient does not support streaming.
+                response = CustomStreamWrapper(
+                    model_response, model, custom_llm_provider="baseten", logging_obj=logging
+                )
                 return response
             response = model_response
         elif (
