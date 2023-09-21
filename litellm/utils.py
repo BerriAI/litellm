@@ -105,7 +105,7 @@ class Choices(OpenAIObject):
         if finish_reason:
             self.finish_reason = finish_reason
         else:
-            finish_reason = "stop"
+            self.finish_reason = "stop"
         self.index = index
         if message is None:
             self.message = Message(content=None)
@@ -142,9 +142,9 @@ class ModelResponse(OpenAIObject):
         else:
             self.created = created
         if response_ms:
-            response_ms = response_ms
+            self.response_ms = response_ms
         else:
-            response_ms = None
+            self.response_ms = None
         self.model = model
         self.usage = (
             usage
