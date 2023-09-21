@@ -100,11 +100,17 @@ class Delta(OpenAIObject):
 
 
 class Choices(OpenAIObject):
-    def __init__(self, finish_reason="stop", index=0, message=Message(), **params):
+    def __init__(self, finish_reason=None, index=0, message=None, **params):
         super(Choices, self).__init__(**params)
-        self.finish_reason = finish_reason
+        if finish_reason:
+            self.finish_reason = finish_reason
+        else:
+            finish_reason = "stop"
         self.index = index
-        self.message = message
+        if message is None:
+            self.message = Message(content=None)
+        else:
+            self.message = message
 
 class StreamingChoices(OpenAIObject):
     def __init__(self, finish_reason=None, index=0, delta: Optional[Delta]=None, **params):
@@ -126,7 +132,7 @@ class ModelResponse(OpenAIObject):
                 self.object = "embedding"
             else:
                 self.object = "chat.completion"
-            self.choices = self.choices = choices if choices else [Choices()]
+            self.choices = [Choices()]
         if id is None:
             self.id = _generate_id()
         else:

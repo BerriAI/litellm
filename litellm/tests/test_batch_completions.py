@@ -27,7 +27,7 @@ from litellm import batch_completion, batch_completion_models, completion, batch
 def test_batch_completions_models():
     try:
         result = batch_completion_models(
-            models=["gpt-3.5-turbo", "claude-instant-1.2", "command-nightly"], 
+            models=["gpt-3.5-turbo", "gpt-3.5-turbo", "gpt-3.5-turbo"], 
             messages=[{"role": "user", "content": "Hey, how's it going"}]
         )
         print(result)
@@ -37,13 +37,13 @@ def test_batch_completions_models():
 
 def test_batch_completion_models_all_responses():
     responses = batch_completion_models_all_responses(
-        models=["gpt-3.5-turbo", "claude-instant-1.2", "command-nightly"], 
+        models=["j2-light", "claude-instant-1.2", "command-nightly"], 
         messages=[{"role": "user", "content": "write a poem"}],
         max_tokens=500
     )
     print(responses)
     assert(len(responses) == 3)
-# test_batch_completion_models_all_responses()
+test_batch_completion_models_all_responses()
 
 # def test_batch_completions():
 #     try:
