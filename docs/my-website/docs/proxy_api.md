@@ -1,8 +1,9 @@
-# Supported Models via API 
+# 🔑 LiteLLM Keys (Access Claude-2, Llama2-70b, etc.)
 
-Use this if you're trying to add support for new LLMs and need access for testing. We provide a free $10 key for testing all providers on LiteLLM: 
+Use this if you're trying to add support for new LLMs and need access for testing. We provide a free $10 community-key for testing all providers on LiteLLM: 
 
-## usage
+## usage (community-key)
+
 ```python
 from litellm import completion
 
@@ -19,13 +20,19 @@ response = completion(model="gpt-3.5-turbo", messages=messages)
 response = completion("command-nightly", messages)
 ```
 
-## Supported Models
+**Need a dedicated key?**
+Email us @ krrish@berri.ai 
 
-* OpenAI models 
+## Supported Models for LiteLLM Key
+These are the models that currently work with the "sk-litellm-.." keys.
+
+For a complete list of models/providers that you can call with LiteLLM, [check out our provider list](./providers/)
+
+* OpenAI models - [OpenAI docs](./providers/openai.md)
     * gpt-4
     * gpt-3.5-turbo
     * gpt-3.5-turbo-16k
-* Llama2 models
+* Llama2 models - [TogetherAI docs](./providers/togetherai.md)
     * togethercomputer/llama-2-70b-chat
     * togethercomputer/llama-2-70b
     * togethercomputer/LLaMA-2-7B-32K
@@ -34,17 +41,17 @@ response = completion("command-nightly", messages)
     * togethercomputer/CodeLlama-34b
     * WizardLM/WizardCoder-Python-34B-V1.0
     * NousResearch/Nous-Hermes-Llama2-13b
-* Falcon models
+* Falcon models - [TogetherAI docs](./providers/togetherai.md)
     * togethercomputer/falcon-40b-instruct
     * togethercomputer/falcon-7b-instruct
-* Jurassic/AI21 models 
+* Jurassic/AI21 models - [AI21 docs](./providers/ai21.md)
     * j2-ultra
     * j2-mid
     * j2-light
-* NLP Cloud models 
+* NLP Cloud models - [NLPCloud docs](./providers/nlp_cloud.md)
     * dolpin
     * chatdolphin 
-* Anthropic models 
+* Anthropic models - [Anthropic docs](./providers/anthropic.md)
     * claude-2
     * claude-instant-v1
 

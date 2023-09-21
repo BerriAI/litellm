@@ -135,6 +135,22 @@ def test_completion_with_litellm_call_id():
 
 # test_completion_hf_api()
 
+# def test_completion_hf_api_best_of():
+# # failing on circle ci commenting out
+#     try:
+#         user_message = "write some code to find the sum of two numbers"
+#         messages = [{ "content": user_message,"role": "user"}]
+#         api_base = "https://a8l9e3ucxinyl3oj.us-east-1.aws.endpoints.huggingface.cloud"
+#         response = completion(model="huggingface/meta-llama/Llama-2-7b-chat-hf", messages=messages, api_base=api_base, n=2)
+#         # Add any assertions here to check the response
+#         print(response)
+#     except Exception as e:
+#         if "loading" in str(e):
+#             pass
+#         pytest.fail(f"Error occurred: {e}")
+
+# test_completion_hf_api_best_of()
+
 # def test_completion_hf_deployed_api():
 #     try:
 #         user_message = "There's a llama in my garden 😱 What should I do?"
@@ -146,16 +162,36 @@ def test_completion_with_litellm_call_id():
 #         pytest.fail(f"Error occurred: {e}")
 
 # using Non TGI or conversational LLMs
-# def hf_test_completion():
+def hf_test_completion():
+    try:
+        # litellm.set_verbose=True
+        user_message = "My name is Merve and my favorite"
+        messages = [{ "content": user_message,"role": "user"}]
+        response = completion(
+            model="huggingface/roneneldan/TinyStories-3M", 
+            messages=messages,
+            api_base="https://p69xlsj6rpno5drq.us-east-1.aws.endpoints.huggingface.cloud",
+            task=None,
+        )
+        # Add any assertions here to check the response
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+hf_test_completion()
+
+
+# this should throw an exception, to trigger https://logs.litellm.ai/
+# def hf_test_error_logs():
 #     try:
-#         # litellm.set_verbose=True
+#         litellm.set_verbose=True
 #         user_message = "My name is Merve and my favorite"
 #         messages = [{ "content": user_message,"role": "user"}]
 #         response = completion(
 #             model="huggingface/roneneldan/TinyStories-3M", 
 #             messages=messages,
 #             api_base="https://p69xlsj6rpno5drq.us-east-1.aws.endpoints.huggingface.cloud",
-#             task=None,
+
 #         )
 #         # Add any assertions here to check the response
 #         print(response)
@@ -163,7 +199,7 @@ def test_completion_with_litellm_call_id():
 #     except Exception as e:
 #         pytest.fail(f"Error occurred: {e}")
 
-# hf_test_completion()
+# hf_test_error_logs()
 
 def test_completion_cohere(): # commenting for now as the cohere endpoint is being flaky
     try:
@@ -287,18 +323,31 @@ def test_completion_openai_litellm_key():
 # test_completion_openai_litellm_key()
 
 # commented out for now, as openrouter is quite flaky - causing our deployments to fail. Please run this before pushing changes.
-# def test_completion_openrouter():
-#     try:
-#         response = completion(
-#             model="google/palm-2-chat-bison",
-#             messages=messages,
-#             temperature=0.5,
-#             top_p=0.1,
-#         )
-#         # Add any assertions here to check the response
-#         print(response)
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
+def test_completion_openrouter1():
+    try:
+        response = completion(
+            model="openrouter/google/palm-2-chat-bison",
+            messages=messages,
+            max_tokens=5,
+        )
+        # Add any assertions here to check the response
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+def test_completion_openrouter2():
+    try:
+        response = completion(
+            model="google/palm-2-chat-bison",
+            messages=messages,
+            max_tokens=5,
+        )
+        # Add any assertions here to check the response
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+# test_completion_openrouter()
 
 def test_completion_openai_with_more_optional_params():
     try:
@@ -775,7 +824,9 @@ def test_completion_ai21():
     try:
         response = completion(model=model_name, messages=messages)
         # Add any assertions here to check the response
-        print(response)
+        print(response["response_ms"])
+        print(dir(response))
+        print(response.response_ms)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 

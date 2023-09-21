@@ -1,4 +1,6 @@
-# Output Format
+# Output 
+
+## Format
 Here's the exact json output and type you can expect from all litellm `completion` calls for all models
 
 ```python 
@@ -47,4 +49,19 @@ Here's what an example response looks like
  'model': 'claude-instant-1',
  'usage': {'prompt_tokens': 18, 'completion_tokens': 23, 'total_tokens': 41}
 }
+```
+
+## Additional Attributes
+
+You can also access information like latency. 
+
+```
+import litellm
+os.environ["ANTHROPIC_API_KEY"] = "sk-litellm-5b46387675a944d2"
+
+messages=[{"role": "user", "content": "Hey!"}]
+
+response = completion(model="claude-2", messages=messages)
+
+print(response.response_ms) # 616.25
 ```

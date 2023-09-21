@@ -1,19 +1,25 @@
 # OpenAI
 LiteLLM supports OpenAI Chat + Text completion and embedding calls.
 
-### API KEYS
+### API Keys
+We provide a free $10 community-key for testing all providers on LiteLLM. You can replace this with your own key. 
+
 ```python
 import os 
 
-os.environ["OPENAI_API_KEY"] = ""
+os.environ["OPENAI_API_KEY"] = "sk-litellm-7_NPZhMGxY2GoHC59LgbDw" # [OPTIONAL] replace with your openai key
 ```
+**Need a dedicated key?**
+Email us @ krrish@berri.ai 
+
+[**See all supported models by the litellm api key**](../proxy_api.md#supported-models-for-litellm-key)
 
 ### Usage
 ```python
 import os 
 from litellm import completion
 
-os.environ["OPENAI_API_KEY"] = ""
+os.environ["OPENAI_API_KEY"] = "sk-litellm-7_NPZhMGxY2GoHC59LgbDw" # [OPTIONAL] replace with your openai key
 
 
 messages = [{ "content": "Hello, how are you?","role": "user"}]

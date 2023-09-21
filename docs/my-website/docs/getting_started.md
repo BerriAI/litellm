@@ -6,7 +6,7 @@ LiteLLM simplifies LLM API calls by mapping them all to the [OpenAI ChatCompleti
 
 ## basic usage 
 
-By default we provide a free $10 key to try all providers supported on LiteLLM. 
+By default we provide a free $10 community-key to try all providers supported on LiteLLM. 
 
 ```python
 from litellm import completion
@@ -23,7 +23,11 @@ response = completion(model="gpt-3.5-turbo", messages=messages)
 # cohere call
 response = completion("command-nightly", messages)
 ```
-Next Steps 👉 [All supported models](./proxy_api.md)
+
+**Need a dedicated key?**
+Email us @ krrish@berri.ai
+
+Next Steps 👉 [Call all supported models - e.g. Claude-2, Llama2-70b, etc.](./proxy_api.md#supported-models)
 
 More details 👉 
 * [Completion() function details](./completion/)

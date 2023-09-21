@@ -1102,7 +1102,7 @@ def completion(
     except Exception as e:
         ## Map to OpenAI Exception
         raise exception_type(
-            model=model, custom_llm_provider=custom_llm_provider, original_exception=e
+            model=model, custom_llm_provider=custom_llm_provider, original_exception=e, completion_kwargs=args,
         )
 
 
@@ -1213,15 +1213,61 @@ def batch_completion_models(*args, **kwargs):
     if "models" in kwargs:
         models = kwargs["models"]
         kwargs.pop("models")
+        futures = {}
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(models)) as executor:
-            futures = [executor.submit(completion, *args, model=model, **kwargs) for model in models]
+            for model in models:
+                futures[model] = executor.submit(completion, *args, model=model, **kwargs)
 
-            for future in concurrent.futures.as_completed(futures):
+            for model, future in sorted(futures.items(), key=lambda x: models.index(x[0])):
                 if future.result() is not None:
                     return future.result()
 
     return None  # If no response is received from any model
 
+def batch_completion_models_all_responses(*args, **kwargs):
+    """
+    Send a request to multiple language models concurrently and return a list of responses
+    from all models that respond.
+
+    Args:
+        *args: Variable-length positional arguments passed to the completion function.
+        **kwargs: Additional keyword arguments:
+            - models (str or list of str): The language models to send requests to.
+            - Other keyword arguments to be passed to the completion function.
+
+    Returns:
+        list: A list of responses from the language models that responded.
+
+    Note:
+        This function utilizes a ThreadPoolExecutor to parallelize requests to multiple models.
+        It sends requests concurrently and collects responses from all models that respond.
+    """
+    import concurrent.futures
+
+    # ANSI escape codes for colored output
+    GREEN = "\033[92m"
+    RED = "\033[91m"
+    RESET = "\033[0m"
+
+    if "model" in kwargs:
+        kwargs.pop("model")
+    if "models" in kwargs:
+        models = kwargs["models"]
+        kwargs.pop("models")
+
+    responses = []
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(models)) as executor:
+        for idx, model in enumerate(models):
+            print(f"{GREEN}LiteLLM: Making request to model: {model}{RESET}")
+            future = executor.submit(completion, *args, model=model, **kwargs)
+            if future.result() is not None:
+                responses.append(future.result())
+                print(f"{GREEN}LiteLLM: Model {model} returned response{RESET}")
+            else:
+                print(f"{RED}LiteLLM: Model {model } did not return a response{RESET}")
+
+    return responses
 
 ### EMBEDDING ENDPOINTS ####################
 @client

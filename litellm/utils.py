@@ -100,11 +100,17 @@ class Delta(OpenAIObject):
 
 
 class Choices(OpenAIObject):
-    def __init__(self, finish_reason="stop", index=0, message=Message(), **params):
+    def __init__(self, finish_reason=None, index=0, message=None, **params):
         super(Choices, self).__init__(**params)
-        self.finish_reason = finish_reason
+        if finish_reason:
+            self.finish_reason = finish_reason
+        else:
+            self.finish_reason = "stop"
         self.index = index
-        self.message = message
+        if message is None:
+            self.message = Message(content=None)
+        else:
+            self.message = message
 
 class StreamingChoices(OpenAIObject):
     def __init__(self, finish_reason=None, index=0, delta: Optional[Delta]=None, **params):
@@ -117,7 +123,7 @@ class StreamingChoices(OpenAIObject):
             self.delta = Delta()
 
 class ModelResponse(OpenAIObject):
-    def __init__(self, id=None, choices=None, created=None, model=None, usage=None, stream=False, **params):
+    def __init__(self, id=None, choices=None, created=None, model=None, usage=None, stream=False, response_ms=None, **params):
         if stream:
             self.object = "chat.completion.chunk"
             self.choices = [StreamingChoices()]
@@ -126,7 +132,7 @@ class ModelResponse(OpenAIObject):
                 self.object = "embedding"
             else:
                 self.object = "chat.completion"
-            self.choices = self.choices = choices if choices else [Choices()]
+            self.choices = [Choices()]
         if id is None:
             self.id = _generate_id()
         else:
@@ -135,6 +141,10 @@ class ModelResponse(OpenAIObject):
             self.created = int(time.time())
         else:
             self.created = created
+        if response_ms:
+            self.response_ms = response_ms
+        else:
+            self.response_ms = None
         self.model = model
         self.usage = (
             usage
@@ -198,6 +208,7 @@ class Logging:
     def pre_call(self, input, api_key, model=None, additional_args={}):
         # Log the exact input to the LLM API
         print_verbose(f"Logging Details Pre-API Call for call id {self.litellm_call_id}")
+        litellm.error_logs['PRE_CALL'] = locals()
         try:
             # print_verbose(f"logging pre call for model: {self.model} with call type: {self.call_type}")
             self.model_call_details["input"] = input
@@ -280,6 +291,7 @@ class Logging:
 
     def post_call(self, original_response, input=None, api_key=None,  additional_args={}):
         # Log the exact result from the LLM API, for streaming - log the type of response received
+        litellm.error_logs['POST_CALL'] = locals()
         try:
             self.model_call_details["input"] = input
             self.model_call_details["api_key"] = api_key
@@ -618,6 +630,7 @@ def client(original_function):
             )  # don't interrupt execution of main thread
             my_thread.start()
             # RETURN RESULT
+            result.response_ms = (end_time - start_time).total_seconds() * 1000 # return response latency in ms like openai
             return result
         except Exception as e:
             traceback_exception = traceback.format_exc()
@@ -902,7 +915,8 @@ def get_optional_params(  # use the openai defaults
         if top_p != 1:
             optional_params["top_p"] = top_p
         if n != 1:
-            optional_params["n"] = n
+            optional_params["best_of"] = n
+            optional_params["do_sample"] = True # need to sample if you want best of for hf inference endpoints
         if stream:
             optional_params["stream"] = stream
         if stop != None:
@@ -1889,9 +1903,40 @@ def get_model_list():
         )
 
 ####### EXCEPTION MAPPING ################
-def exception_type(model, original_exception, custom_llm_provider):
+def exception_type(
+        model, 
+        original_exception, 
+        custom_llm_provider,
+        completion_kwargs={},
+    ):
     global user_logger_fn, liteDebuggerClient
     exception_mapping_worked = False
+
+    if litellm.set_verbose == True:
+        litellm.error_logs['EXCEPTION'] = original_exception
+        litellm.error_logs['KWARGS'] = completion_kwargs
+        try:
+            # code to show users their litellm error dashboard
+            import urllib.parse
+            import json
+            for log_key in litellm.error_logs:
+                current_logs = litellm.error_logs[log_key]
+                if type(current_logs) == dict:
+                    filtered_error_logs = {key: str(value) for key, value in current_logs.items()}
+                    litellm.error_logs[log_key] = filtered_error_logs
+                else:
+                    litellm.error_logs[log_key] = str(current_logs)
+
+            # Convert the filtered_error_logs dictionary to a JSON string
+            error_logs_json = json.dumps(litellm.error_logs)
+            # URL-encode the JSON data
+            encoded_data = urllib.parse.quote(error_logs_json)
+
+            print("👉 view error logs:")
+            print("\033[91m" + '\033[4m' + 'https://logs.litellm.ai/?data=' + str(encoded_data) + "\033[0m")
+
+        except:
+            pass
     try:
         if isinstance(original_exception, OriginalError):
             # Handle the OpenAIError
