@@ -24,8 +24,7 @@ from litellm import completion
 response = completion(
     model="ollama/llama2", 
     messages=[{ "content": "respond in 20 words. who are you?","role": "user"}], 
-    api_base="http://localhost:11434", 
-    custom_llm_provider="ollama",
+    api_base="http://localhost:11434",
     stream=True
 )
 print(response)
