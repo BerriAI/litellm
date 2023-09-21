@@ -1321,11 +1321,8 @@ def text_completion(*args, **kwargs):
         return completion(*args, **kwargs)
 
 ##### Moderation #######################
-def moderation(*args, **kwargs):
+def moderation(input: str, api_key: Optional[str]=None):
     # only supports open ai for now
-    api_key = None
-    if "api_key" in kwargs:
-        api_key = kwargs["api_key"]
     api_key = (
                 api_key or
                 litellm.api_key or
@@ -1336,7 +1333,7 @@ def moderation(*args, **kwargs):
     openai.api_type = "open_ai"
     openai.api_version = None
     openai.api_base = "https://api.openai.com/v1"
-    response = openai.Moderation.create(*args, **kwargs)
+    response = openai.Moderation.create(input)
     return response
 
 ####### HELPER FUNCTIONS ################

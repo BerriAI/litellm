@@ -2772,6 +2772,62 @@ def read_config_args(config_path):
 
 ########## experimental completion variants ############################
 
+def completion_with_config(*args, config: Union[dict, str], **kwargs):
+    if config is not None:
+        if isinstance(config, str):
+            config = read_config_args(config)
+        elif isinstance(config, dict):
+            config = config
+        else:
+            raise Exception("Config path must be a string or a dictionary.")
+    else:
+        raise Exception("Config path not passed in.")
+    
+    ## load the completion config 
+    completion_config = None
+
+    if config["function"] == "completion":
+        completion_config = config
+
+    if completion_config is None:
+        raise Exception("No completion config in the config file")
+    
+    models_with_config = completion_config["model"].keys() 
+    model = args[0] if len(args) > 0 else kwargs["model"]
+    messages = args[1] if len(args) > 1 else kwargs["messages"]
+    if model in models_with_config: 
+        ## Moderation check
+        if completion_config["model"][model].get("needs_moderation"):
+            input = " ".join(message["content"] for message in messages)
+            response = litellm.moderation(input=input)
+            flagged = response["results"][0]["flagged"]
+            if flagged: 
+                raise Exception("This response was flagged as inappropriate")
+        
+        ## Load Error Handling Logic
+        error_handling = None
+        if completion_config["model"][model].get("error_handling"):
+            error_handling = completion_config["model"][model]["error_handling"]
+
+        try:
+            response = litellm.completion(*args, **kwargs)
+            return response
+        except Exception as e:
+            exception_name = type(e).__name__
+            fallback_model = None
+            if exception_name in error_handling: 
+                error_handler = error_handling[exception_name]
+                # either switch model or api key 
+                fallback_model = error_handler.get("fallback_model", None)
+            if fallback_model: 
+                kwargs["model"] = fallback_model
+                return litellm.completion(*args, **kwargs)
+            raise e
+    else: 
+        return litellm.completion(*args, **kwargs)
+
+
+
 def get_model_split_test(models, completion_call_id):
     global last_fetched_at
     try:

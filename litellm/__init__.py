@@ -281,7 +281,8 @@ from .utils import (
     register_prompt_template,
     validate_environment,
     check_valid_key,
-    get_llm_provider
+    get_llm_provider,
+    completion_with_config
 )
 from .main import *  # type: ignore
 from .integrations import *
