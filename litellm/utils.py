@@ -2756,7 +2756,7 @@ def mock_completion_streaming_obj(model_response, mock_response, model):
         yield model_response
 
 ########## Reading Config File ############################
-def read_config_args(config_path):
+def read_config_args(config_path) -> dict:
     try:
         import os
 
@@ -2815,7 +2815,7 @@ def completion_with_config(*args, config: Union[dict, str], **kwargs):
         except Exception as e:
             exception_name = type(e).__name__
             fallback_model = None
-            if exception_name in error_handling: 
+            if error_handling and exception_name in error_handling: 
                 error_handler = error_handling[exception_name]
                 # either switch model or api key 
                 fallback_model = error_handler.get("fallback_model", None)
