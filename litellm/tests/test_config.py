@@ -14,6 +14,7 @@ from litellm import completion_with_config
 
 config = {
     "function": "completion",
+    "default_fallback_models": ["gpt-3.5-turbo", "claude-instant-1", "j2-ultra"],
     "model": {
         "claude-instant-1": {
             "needs_moderation": True
@@ -26,12 +27,20 @@ config = {
     }
 }
 
-def test_config():
+def test_config_context_window_exceeded():
     try:
         sample_text = "how does a court case get to the Supreme Court?" * 1000
         messages = [{"content": sample_text, "role": "user"}]
         response = completion_with_config(model="gpt-3.5-turbo", messages=messages, config=config)
         print(response)
+    except Exception as e:
+        print(f"Exception: {e}")
+        pytest.fail(f"An exception occurred: {e}")
+
+# test_config_context_window_exceeded() 
+
+def test_config_context_moderation():
+    try:
         messages=[{"role": "user", "content": "I want to kill them."}]
         response = completion_with_config(model="claude-instant-1", messages=messages, config=config)
         print(response)
@@ -39,4 +48,15 @@ def test_config():
         print(f"Exception: {e}")
         pytest.fail(f"An exception occurred: {e}")
 
-# test_config() 
+# test_config_context_moderation() 
+
+def test_config_context_default_fallback():
+    try:
+        messages=[{"role": "user", "content": "Hey, how's it going?"}]
+        response = completion_with_config(model="claude-instant-1", messages=messages, config=config, api_key="bad-key")
+        print(response)
+    except Exception as e:
+        print(f"Exception: {e}")
+        pytest.fail(f"An exception occurred: {e}")
+
+test_config_context_default_fallback() 
