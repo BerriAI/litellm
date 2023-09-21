@@ -1180,10 +1180,12 @@ def batch_completion_models(*args, **kwargs):
     if "models" in kwargs:
         models = kwargs["models"]
         kwargs.pop("models")
+        futures = {}
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(models)) as executor:
-            futures = [executor.submit(completion, *args, model=model, **kwargs) for model in models]
+            for model in models:
+                futures[model] = executor.submit(completion, *args, model=model, **kwargs)
 
-            for future in concurrent.futures.as_completed(futures):
+            for model, future in sorted(futures.items(), key=lambda x: models.index(x[0])):
                 if future.result() is not None:
                     return future.result()
 
