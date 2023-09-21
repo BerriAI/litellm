@@ -2421,6 +2421,9 @@ def exception_type(
                             llm_provider="vllm",
                             model=model
                         )
+            elif custom_llm_provider == "ollama":
+                if "no attribute 'async_get_ollama_response_stream" in error_str:
+                    raise ImportError("Import error - trying to use async for ollama. import async_generator failed. Try 'pip install async_generator'")
         raise original_exception
     except Exception as e:
         # LOGGING
