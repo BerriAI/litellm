@@ -134,24 +134,40 @@ def test_completion_with_litellm_call_id():
 #         pytest.fail(f"Error occurred: {e}")
 
 # using Non TGI or conversational LLMs
-def hf_test_completion():
-    try:
-        # litellm.set_verbose=True
-        user_message = "My name is Merve and my favorite"
-        messages = [{ "content": user_message,"role": "user"}]
-        response = completion(
-            model="huggingface/roneneldan/TinyStories-3M", 
-            messages=messages,
-            api_base="https://p69xlsj6rpno5drq.us-east-1.aws.endpoints.huggingface.cloud",
+# def hf_test_completion():
+#     try:
+#         # litellm.set_verbose=True
+#         user_message = "My name is Merve and my favorite"
+#         messages = [{ "content": user_message,"role": "user"}]
+#         response = completion(
+#             model="huggingface/roneneldan/TinyStories-3M", 
+#             messages=messages,
+#             api_base="https://p69xlsj6rpno5drq.us-east-1.aws.endpoints.huggingface.cloud",
+#             task=None,
+#         )
+#         # Add any assertions here to check the response
+#         print(response)
 
-        )
-        # Add any assertions here to check the response
-        print(response)
 
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
+# this should throw an exception, to trigger https://logs.litellm.ai/
+# def hf_test_error_logs():
+#     try:
+#         litellm.set_verbose=True
+#         user_message = "My name is Merve and my favorite"
+#         messages = [{ "content": user_message,"role": "user"}]
+#         response = completion(
+#             model="huggingface/roneneldan/TinyStories-3M", 
+#             messages=messages,
+#             api_base="https://p69xlsj6rpno5drq.us-east-1.aws.endpoints.huggingface.cloud",
 
-hf_test_completion()
+#         )
+#         # Add any assertions here to check the response
+#         print(response)
+
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
+
+# hf_test_error_logs()
 
 def test_completion_cohere(): # commenting for now as the cohere endpoint is being flaky
     try:
