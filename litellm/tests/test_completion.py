@@ -147,6 +147,10 @@ def test_completion_with_litellm_call_id():
 #         )
 #         # Add any assertions here to check the response
 #         print(response)
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
+
+# hf_test_completion()
 
 
 # this should throw an exception, to trigger https://logs.litellm.ai/
@@ -368,7 +372,7 @@ def test_completion_azure():
     try:
         print("azure gpt-3.5 test\n\n")
         response = completion(
-            model="chatgpt-v-2",
+            model="azure/chatgpt-v-2",
             messages=messages,
         )
         # Add any assertions here to check the response
@@ -434,7 +438,7 @@ def test_completion_azure_with_litellm_key():
 def test_completion_azure_deployment_id():
     try:
         response = completion(
-            deployment_id="azure/chatgpt-v-2",
+            deployment_id="chatgpt-v-2",
             model="gpt-3.5-turbo",
             messages=messages,
         )
