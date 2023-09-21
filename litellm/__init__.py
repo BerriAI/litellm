@@ -38,6 +38,7 @@ cache: Optional[Cache] = None # cache object
 model_alias_map: Dict[str, str] = {}
 max_budget: float = 0.0 # set the max budget across all providers
 _current_cost = 0 # private variable, used if max budget is set 
+error_logs: Dict = {}
 #############################################
 
 def get_model_cost_map():
