@@ -147,6 +147,7 @@ def test_completion_with_litellm_call_id():
 #         )
 #         # Add any assertions here to check the response
 #         print(response)
+#
 #     except Exception as e:
 #         pytest.fail(f"Error occurred: {e}")
 
@@ -297,6 +298,8 @@ def test_completion_openai_litellm_key():
 # commented out for now, as openrouter is quite flaky - causing our deployments to fail. Please run this before pushing changes.
 # def test_completion_openrouter():
 #     try:
+#         print(litellm.openrouter_models)
+#         # litellm.set_verbose = True
 #         response = completion(
 #             model="google/palm-2-chat-bison",
 #             messages=messages,
@@ -307,6 +310,7 @@ def test_completion_openai_litellm_key():
 #         print(response)
 #     except Exception as e:
 #         pytest.fail(f"Error occurred: {e}")
+# test_completion_openrouter()
 
 def test_completion_openai_with_more_optional_params():
     try:
