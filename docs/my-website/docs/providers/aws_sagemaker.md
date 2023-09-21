@@ -27,6 +27,28 @@ response = completion(
         )
 ```
 
+### Usage - Streaming
+Sagemaker currently does not support streaming - LiteLLM fakes streaming by returning chunks of the response string
+
+```python
+import os 
+from litellm import completion
+
+os.environ["AWS_ACCESS_KEY_ID"] = ""
+os.environ["AWS_SECRET_ACCESS_KEY"] = ""
+os.environ["AWS_REGION_NAME"] = ""
+
+response = completion(
+            model="sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b", 
+            messages=[{ "content": "Hello, how are you?","role": "user"}],
+            temperature=0.2,
+            max_tokens=80,
+            stream=True,
+        )
+for chunk in response:
+    print(chunk)
+```
+
 ### AWS Sagemaker Models
 Here's an example of using a sagemaker model with LiteLLM 
 
