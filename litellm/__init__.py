@@ -198,6 +198,10 @@ bedrock_models: List = [
     "ai21.j2-grande-instruct"
 ]
 
+ollama_models = [
+    "llama2"
+]
+
 model_list = (
     open_ai_chat_completion_models
     + open_ai_text_completion_models
@@ -213,6 +217,7 @@ model_list = (
     + baseten_models
     + aleph_alpha_models
     + nlp_cloud_models
+    + ollama_models
 )
 
 provider_list: List = [
@@ -234,6 +239,7 @@ provider_list: List = [
     "bedrock",
     "petals",
     "oobabooga",
+    "ollama",
     "custom", # custom apis
 ]
 
@@ -250,6 +256,7 @@ models_by_provider: dict = {
     "ai21": ai21_models,
     "bedrock": bedrock_models,
     "petals": petals_models,
+    "ollama": ollama_models,
 }
 
 ####### EMBEDDING MODELS ###################
