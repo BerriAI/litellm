@@ -67,7 +67,7 @@ config = {
     "default_fallback_models": ["gpt-3.5-turbo", "claude-instant-1", "j2-ultra"],
     "available_models": ["gpt-3.5-turbo", "gpt-3.5-turbo-0301", "gpt-3.5-turbo-0613", "gpt-4", "gpt-4-0314", "gpt-4-0613", 
                          "j2-ultra", "command-nightly", "togethercomputer/llama-2-70b-chat", "chat-bison", "chat-bison@001", "claude-2"],
-    "adapt_to_prompt_size": True,
+    "adapt_to_prompt_size": True, # type: ignore
     "model": {
         "claude-instant-1": {
             "needs_moderation": True
