@@ -1,6 +1,10 @@
 import requests
 import json
-from async_generator import async_generator, yield_
+
+try:
+    from async_generator import async_generator, yield_  # optional dependancy if you want to use acompletion + streaming
+except:
+    pass # this should not throw an error, it will impact the 'import litellm' statement
 
 # ollama implementation
 def get_ollama_response_stream(
