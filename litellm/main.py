@@ -75,7 +75,7 @@ async def acompletion(*args, **kwargs):
     loop = asyncio.get_event_loop()
 
     # Use a partial function to pass your keyword arguments
-    func = partial(completion, *args, **kwargs)
+    func = partial(completion, *args, **kwargs, acompletion=True)
 
     # Add the context to the function
     ctx = contextvars.copy_context()
@@ -180,6 +180,7 @@ def completion(
     fallbacks=[],
     caching = False,
     cache_params = {}, # optional to specify metadata for caching
+    acompletion=False,
 ) -> ModelResponse:
     """
     Perform a completion() using any of litellm supported llms (example gpt-4, gpt-3.5-turbo, claude-2, command-nightly)
@@ -215,7 +216,7 @@ def completion(
     """
     if mock_response:
         return mock_completion(model, messages, stream=stream, mock_response=mock_response)
-    
+
     args = locals()
     try:
         logging = litellm_logging_obj
@@ -928,6 +929,10 @@ def completion(
             logging.pre_call(
                 input=prompt, api_key=None, additional_args={"endpoint": endpoint}
             )
+            if acompletion == True:
+                async_generator = ollama.async_get_ollama_response_stream(endpoint, model, prompt)
+                return async_generator
+
             generator = ollama.get_ollama_response_stream(endpoint, model, prompt)
             if optional_params.get("stream", False) == True:
                 # assume all ollama responses are streamed
