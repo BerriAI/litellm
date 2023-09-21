@@ -123,7 +123,7 @@ class StreamingChoices(OpenAIObject):
             self.delta = Delta()
 
 class ModelResponse(OpenAIObject):
-    def __init__(self, id=None, choices=None, created=None, model=None, usage=None, stream=False, **params):
+    def __init__(self, id=None, choices=None, created=None, model=None, usage=None, stream=False, response_ms=None, **params):
         if stream:
             self.object = "chat.completion.chunk"
             self.choices = [StreamingChoices()]
@@ -141,6 +141,10 @@ class ModelResponse(OpenAIObject):
             self.created = int(time.time())
         else:
             self.created = created
+        if response_ms:
+            response_ms = response_ms
+        else:
+            response_ms = None
         self.model = model
         self.usage = (
             usage
@@ -624,6 +628,7 @@ def client(original_function):
             )  # don't interrupt execution of main thread
             my_thread.start()
             # RETURN RESULT
+            result.response_ms = (end_time - start_time).total_seconds() * 1000 # return response latency in ms like openai
             return result
         except Exception as e:
             traceback_exception = traceback.format_exc()
