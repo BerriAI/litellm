@@ -434,7 +434,7 @@ def test_completion_azure_with_litellm_key():
 def test_completion_azure_deployment_id():
     try:
         response = completion(
-            deployment_id="chatgpt-v-2",
+            deployment_id="azure/chatgpt-v-2",
             model="gpt-3.5-turbo",
             messages=messages,
         )
