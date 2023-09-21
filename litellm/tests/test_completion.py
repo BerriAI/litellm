@@ -336,6 +336,8 @@ def test_completion_openai_litellm_key():
 #     except Exception as e:
 #         pytest.fail(f"Error occurred: {e}")
 
+# test_completion_openrouter()
+
 def test_completion_openai_with_more_optional_params():
     try:
         response = completion(
@@ -816,7 +818,7 @@ def test_completion_ai21():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-# test_completion_ai21()
+test_completion_ai21()
 # test config file with completion #
 # def test_completion_openai_config():
 #     try:
