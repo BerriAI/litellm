@@ -829,11 +829,11 @@ def test_completion_ai21():
         response = completion(model=model_name, messages=messages)
         # Add any assertions here to check the response
         print(response["response_ms"])
+        print(dir(response))
         print(response.response_ms)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_completion_ai21()
 # test config file with completion #
 # def test_completion_openai_config():
 #     try:
