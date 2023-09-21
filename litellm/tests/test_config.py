@@ -1,0 +1,42 @@
+import sys, os
+import traceback
+from dotenv import load_dotenv
+
+load_dotenv()
+import os
+
+sys.path.insert(
+    0, os.path.abspath("../..")
+)  # Adds the parent directory to the system path
+import pytest
+import litellm
+from litellm import completion_with_config
+
+config = {
+    "function": "completion",
+    "model": {
+        "claude-instant-1": {
+            "needs_moderation": True
+        },
+        "gpt-3.5-turbo": {
+            "error_handling": {
+                "ContextWindowExceededError": {"fallback_model": "gpt-3.5-turbo-16k"} 
+            }
+        }
+    }
+}
+
+def test_config():
+    try:
+        sample_text = "how does a court case get to the Supreme Court?" * 1000
+        messages = [{"content": sample_text, "role": "user"}]
+        response = completion_with_config(model="gpt-3.5-turbo", messages=messages, config=config)
+        print(response)
+        messages=[{"role": "user", "content": "I want to kill them."}]
+        response = completion_with_config(model="claude-instant-1", messages=messages, config=config)
+        print(response)
+    except Exception as e:
+        print(f"Exception: {e}")
+        pytest.fail(f"An exception occurred: {e}")
+
+# test_config() 
