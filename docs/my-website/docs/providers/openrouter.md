@@ -1,11 +1,16 @@
 # OpenRouter
 LiteLLM supports all the text models from [OpenRouter](https://openrouter.ai/docs)
 
-### API KEYS
-
+## Usage
 ```python
-import os 
-os.environ["OPENROUTER_API_KEYS"] = ""
+import os
+from litellm import completion
+os.environ["OPENROUTER_API_KEY"] = ""
+
+response = completion(
+            model="google/palm-2-chat-bison",
+            messages=messages,
+        )
 ```
 
 ### OpenRouter Completion Models
