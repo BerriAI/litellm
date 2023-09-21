@@ -41,8 +41,25 @@ class PromptLayerLogger:
                 },
             )
             print_verbose(
-                f"Prompt Layer Logging: success - final response object: {request_response}"
+                f"Prompt Layer Logging: success - final response object: {request_response.text}"
             )
+            response_json = request_response.json()
+            if "success" not in request_response.json(): 
+                raise Exception("Promptlayer did not successfully log the response!") 
+
+            if "request_id" in response_json:
+                print(kwargs["litellm_params"]["metadata"])
+                if kwargs["litellm_params"]["metadata"] is not None:
+                    response = requests.post(
+                        "https://api.promptlayer.com/rest/track-metadata",
+                        json={
+                            "request_id": response_json["request_id"],
+                            "api_key": self.key,
+                            "metadata": kwargs["litellm_params"]["metadata"]
+                        },
+                    )
+                    print_verbose(f"Prompt Layer Logging: success - metadata post response object: {response.text}")
+
         except:
             print_verbose(f"error: Prompt Layer Error - {traceback.format_exc()}")
             pass
