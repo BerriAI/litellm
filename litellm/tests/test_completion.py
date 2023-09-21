@@ -326,6 +326,20 @@ def test_completion_openai_litellm_key():
 # def test_completion_openrouter():
 #     try:
 #         response = completion(
+#             model="openrouter/google/palm-2-chat-bison",
+#             messages=messages,
+#             temperature=0.5,
+#             top_p=0.1,
+#         )
+#         # Add any assertions here to check the response
+#         print(response)
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
+# test_completion_openrouter()
+
+# def test_completion_openrouter():
+#     try:
+#         response = completion(
 #             model="google/palm-2-chat-bison",
 #             messages=messages,
 #             temperature=0.5,
@@ -335,6 +349,7 @@ def test_completion_openai_litellm_key():
 #         print(response)
 #     except Exception as e:
 #         pytest.fail(f"Error occurred: {e}")
+# test_completion_openrouter()
 
 # test_completion_openrouter()
 
