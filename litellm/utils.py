@@ -702,19 +702,19 @@ def get_replicate_completion_pricing(completion_response=None, total_time=0.0):
     return a100_80gb_price_per_second_public*total_time
 
 
-def token_counter(model="", text=None, messages: Optional[list]=None):
+def token_counter(model="", text=None,  messages: Optional[List] = None):
     # Args:
     # text: raw text string passed to model
     # messages: Optional, alternative to passing in text. List of Dicts passed to completion, messages = [{"role": "user", "content": "hello"}]
     # use tiktoken or anthropic's tokenizer depending on the model
     if text == None:
-        if messages != None:
+        if messages is not None:
             text = " ".join([message["content"] for message in messages])
         else:
             raise ValueError("text and messages cannot both be None")
     num_tokens = 0
 
-    if model != None: 
+    if model is not None: 
         # cohere 
         if model in litellm.cohere_models:
             tokenizer = Tokenizer.from_pretrained("Cohere/command-nightly")
