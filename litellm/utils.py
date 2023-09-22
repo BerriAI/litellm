@@ -7,7 +7,7 @@ import datetime, time
 import tiktoken
 import uuid
 import aiohttp
-
+from tokenizers import Tokenizer
 encoding = tiktoken.get_encoding("cl100k_base")
 import importlib.metadata
 from .integrations.traceloop import TraceloopLogger
@@ -702,28 +702,45 @@ def get_replicate_completion_pricing(completion_response=None, total_time=0.0):
     return a100_80gb_price_per_second_public*total_time
 
 
-def token_counter(model="", text=None, messages = None):
+def token_counter(model="", text=None, messages: Optional[list]=None):
     # Args:
     # text: raw text string passed to model
-    # messages: List of Dicts passed to completion, messages = [{"role": "user", "content": "hello"}]
+    # messages: Optional, alternative to passing in text. List of Dicts passed to completion, messages = [{"role": "user", "content": "hello"}]
     # use tiktoken or anthropic's tokenizer depending on the model
     if text == None:
         if messages != None:
             text = " ".join([message["content"] for message in messages])
+        else:
+            raise ValueError("text and messages cannot both be None")
     num_tokens = 0
 
-    if model != None and "claude" in model:
-        try:
-            import anthropic
-        except Exception:
-            # if importing anthropic fails
-            # don't raise an exception
+    if model != None: 
+        # cohere 
+        if model in litellm.cohere_models:
+            tokenizer = Tokenizer.from_pretrained("Cohere/command-nightly")
+            enc = tokenizer.encode(text)
+            num_tokens = len(enc.ids)
+        # anthropic 
+        elif model in litellm.anthropic_models:
+            # Read the JSON file
+            with open('../llms/tokenizers/anthropic_tokenizer.json', 'r') as f:
+                json_data = json.load(f)
+            # Decode the JSON data from utf-8
+            json_data_decoded = json.dumps(json_data, ensure_ascii=False)
+            # Convert to str
+            json_str = str(json_data_decoded)
+            # load tokenizer
+            tokenizer = Tokenizer.from_str(json_str)
+            enc = tokenizer.encode(text)
+            num_tokens = len(enc.ids)
+        # llama2 
+        elif "llama-2" in model.lower(): 
+            tokenizer = Tokenizer.from_pretrained("hf-internal-testing/llama-tokenizer")
+            enc = tokenizer.encode(text)
+            num_tokens = len(enc.ids)
+        # default - tiktoken
+        else: 
             num_tokens = len(encoding.encode(text))
-            return num_tokens
-
-        from anthropic import Anthropic, HUMAN_PROMPT, AI_PROMPT
-        anthropic = Anthropic()
-        num_tokens = anthropic.count_tokens(text)
     else:
         num_tokens = len(encoding.encode(text))
     return num_tokens
@@ -2832,7 +2849,7 @@ def completion_with_config(config: Union[dict, str], **kwargs):
         if prompt_larger_than_model:
             messages = trim_messages(messages=messages, model=max_model)
             kwargs["messages"] = messages
-            
+
     kwargs["model"] = model
     try: 
         if model in models_with_config: 
