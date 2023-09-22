@@ -13,9 +13,29 @@
 ## Set Vertex Project & Vertex Location
 All calls using Vertex AI require the following parameters:
 * Your Project ID
-`litellm.vertex_project = "hardy-device-38811" Your Project ID`
+```python
+import os, litellm 
+
+# set via env var
+os.environ["VERTEXAI_PROJECT"] = "hardy-device-38811" # Your Project ID`
+
+### OR ###
+
+# set directly on module 
+litellm.vertex_project = "hardy-device-38811" # Your Project ID`
+```
 * Your Project Location
-`litellm.vertex_location = "us-central1" `
+```python
+import os, litellm 
+
+# set via env var
+os.environ["VERTEXAI_LOCATION"] = "us-central1 # Your Location
+
+### OR ###
+
+# set directly on module 
+litellm.vertex_location = "us-central1 # Your Location
+```
 
 ## Sample Usage
 ```python
