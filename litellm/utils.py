@@ -2780,7 +2780,7 @@ def read_config_args(config_path) -> dict:
 
 ########## experimental completion variants ############################
 
-def completion_with_config(*, config: Union[dict, str], **kwargs):
+def completion_with_config(config: Union[dict, str], **kwargs):
     if config is not None:
         if isinstance(config, str):
             config = read_config_args(config)
@@ -2791,23 +2791,17 @@ def completion_with_config(*, config: Union[dict, str], **kwargs):
     else:
         raise Exception("Config path not passed in.")
     
-    ## load the completion config 
-    completion_config = None
-
-    if config["function"] == "completion":
-        completion_config = config
-
-    if completion_config is None:
+    if config is None:
         raise Exception("No completion config in the config file")
     
-    models_with_config = completion_config["model"].keys() 
+    models_with_config = config["model"].keys() 
     model = kwargs["model"]
     messages = kwargs["messages"]
 
     ## completion config
-    fallback_models = completion_config.get("default_fallback_models", None)
-    available_models = completion_config.get("available_models", None)
-    adapt_to_prompt_size = completion_config.get("adapt_to_prompt_size", False)
+    fallback_models = config.get("default_fallback_models", None)
+    available_models = config.get("available_models", None)
+    adapt_to_prompt_size = config.get("adapt_to_prompt_size", False)
     start_time = time.time()
     if adapt_to_prompt_size:
         ## Pick model based on token window 
@@ -2829,7 +2823,7 @@ def completion_with_config(*, config: Union[dict, str], **kwargs):
     try: 
         if model in models_with_config: 
             ## Moderation check
-            if completion_config["model"][model].get("needs_moderation"):
+            if config["model"][model].get("needs_moderation"):
                 input = " ".join(message["content"] for message in messages)
                 response = litellm.moderation(input=input)
                 flagged = response["results"][0]["flagged"]
@@ -2838,8 +2832,8 @@ def completion_with_config(*, config: Union[dict, str], **kwargs):
             
             ## Model-specific Error Handling
             error_handling = None
-            if completion_config["model"][model].get("error_handling"):
-                error_handling = completion_config["model"][model]["error_handling"]
+            if config["model"][model].get("error_handling"):
+                error_handling = config["model"][model]["error_handling"]
 
             try:
                 response = litellm.completion(**kwargs)
@@ -2968,7 +2962,6 @@ def completion_with_fallbacks(**kwargs):
                     return response
 
             except Exception as e:
-                print(f"got exception {e} for model {model}")
                 rate_limited_models.add(model)
                 model_expiration_times[model] = (
                     time.time() + 60

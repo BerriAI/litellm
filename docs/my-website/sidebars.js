@@ -35,6 +35,7 @@ const sidebars = {
         "completion/message_trimming",
         "completion/model_alias", 
         "completion/reliable_completions", 
+        "completion/config",
         "completion/batching",
         "completion/mock_requests",
       ],
