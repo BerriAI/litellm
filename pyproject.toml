@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "litellm"
-version = "0.1.732"
+version = "0.1.733"
 description = "Library to easily interface with LLM API providers"
 authors = ["BerriAI"]
 license = "MIT License"
@@ -12,6 +12,7 @@ openai = "^0.28.0 || ^0.27.0"
 python-dotenv = ">=0.2.0"
 tiktoken = "^0.4.0"
 importlib-metadata = "^6.8.0"
+tokenizers = "^0.14.0"
 
 [build-system]
 requires = ["poetry-core"]
