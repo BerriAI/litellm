@@ -4,11 +4,7 @@ Model-specific changes can make our code complicated, making it harder to debug 
 
 ### usage
 
-Handling prompt logic.
-
-It checks the number of tokens in the prompt and max tokens for each model. It selects the model with max tokens > prompt tokens. 
-
-If the prompt is larger than any available model, it'll automatically trim the prompt (from the middle + preserve any system message), and fit it to the largest model available.
+Handling prompt logic. Different models have different context windows. Use `adapt_to_prompt_size` to select the right model for the prompt (in case the current model is too small).
 
 ```python
 from litellm import completion_with_config 
