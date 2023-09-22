@@ -6,6 +6,7 @@ Model-specific changes can make our code complicated, making it harder to debug 
 
 Handling prompt logic. Different models have different context windows. Use `adapt_to_prompt_size` to select the right model for the prompt (in case the current model is too small).
 
+
 ```python
 from litellm import completion_with_config 
 import os 
