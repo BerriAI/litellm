@@ -49,6 +49,8 @@ def completion(
         completion_url = api_base
     elif "HF_API_BASE" in os.environ:
         completion_url = os.getenv("HF_API_BASE", "")
+    elif "HUGGINGFACE_API_BASE" in os.environ:
+        completion_url = os.getenv("HUGGINGFACE_API_BASE", "")
     else:
         completion_url = f"https://api-inference.huggingface.co/models/{model}"
 

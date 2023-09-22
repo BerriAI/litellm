@@ -749,8 +749,10 @@ def completion(
                 raise Exception("vertexai import failed please run `pip install google-cloud-aiplatform`")
             from vertexai.preview.language_models import ChatModel, CodeChatModel, InputOutputTextPair
 
+            vertex_project = (litellm.vertex_project or get_secret("VERTEXAI_PROJECT"))
+            vertex_location = (litellm.vertex_location or get_secret("VERTEXAI_LOCATION"))
             vertexai.init(
-                project=litellm.vertex_project, location=litellm.vertex_location
+                project=vertex_project, location=vertex_location
             )
             # vertexai does not use an API key, it looks for credentials.json in the environment
 

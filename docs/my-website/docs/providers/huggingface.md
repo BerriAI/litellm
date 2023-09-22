@@ -72,12 +72,13 @@ response = completion(
 print(response)
 ```
 
-### [OPTIONAL] API KEYS
-If the endpoint you're calling requires an api key to be passed, set it in your os environment. [Code for how it's sent](https://github.com/BerriAI/litellm/blob/0100ab2382a0e720c7978fbf662cc6e6920e7e03/litellm/llms/huggingface_restapi.py#L25)
+### [OPTIONAL] API KEYS + API BASE
+If required, you can set the api key + api base, set it in your os environment. [Code for how it's sent](https://github.com/BerriAI/litellm/blob/0100ab2382a0e720c7978fbf662cc6e6920e7e03/litellm/llms/huggingface_restapi.py#L25)
 
 ```python
 import os 
 os.environ["HUGGINGFACE_API_KEY"] = ""
+os.environ["HUGGINGFACE_API_BASE"] = "" 
 ```
 
 ### Models with Prompt Formatting
