@@ -40,6 +40,8 @@ response = completion_with_config(model="gpt-3.5-turbo", messages=messages, conf
 
 You can also use model configs to automatically select a model based on the prompt size. It checks the number of tokens in the prompt and max tokens for each model. It selects the model with max tokens > prompt tokens. 
 
+If the prompt is larger than any available model, it'll automatically trim the prompt (from the middle + preserve any system message), and fit it to the largest model available.
+
 ```python
 from litellm import completion_with_config 
 import os 
