@@ -88,4 +88,4 @@ def test_config_context_adapt_to_prompt():
         print(f"Exception: {e}")
         pytest.fail(f"An exception occurred: {e}")
 
-# test_config_context_adapt_to_prompt() 
+test_config_context_adapt_to_prompt() 
