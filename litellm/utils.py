@@ -8,6 +8,7 @@ import tiktoken
 import uuid
 import aiohttp
 from tokenizers import Tokenizer
+import pkg_resources
 encoding = tiktoken.get_encoding("cl100k_base")
 import importlib.metadata
 from .integrations.traceloop import TraceloopLogger
@@ -723,7 +724,8 @@ def token_counter(model="", text=None,  messages: Optional[List] = None):
         # anthropic 
         elif model in litellm.anthropic_models:
             # Read the JSON file
-            with open('../llms/tokenizers/anthropic_tokenizer.json', 'r') as f:
+            filename = pkg_resources.resource_filename(__name__, 'llms/tokenizers/anthropic_tokenizer.json')
+            with open(filename, 'r') as f:
                 json_data = json.load(f)
             # Decode the JSON data from utf-8
             json_data_decoded = json.dumps(json_data, ensure_ascii=False)
