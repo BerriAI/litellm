@@ -4,41 +4,9 @@ Model-specific changes can make our code complicated, making it harder to debug 
 
 ### usage
 
-E.g. If we want to implement: 
-* Moderations check for Anthropic models (to avoid violating their safety policy)
-* Model Fallbacks - specific + general
+Handling prompt logic.
 
-```python
-from litellm import completion_with_config 
-import os 
-
-config = {
-    "default_fallback_models": ["gpt-3.5-turbo", "claude-instant-1", "gpt-3.5-turbo-16k"],
-    "model": {
-        "claude-instant-1": {
-            "needs_moderation": True
-        },
-        "gpt-3.5-turbo": {
-            "error_handling": {
-                "ContextWindowExceededError": {"fallback_model": "gpt-3.5-turbo-16k"} 
-            }
-        },
-    }
-}
-
-# set env var
-os.environ["OPENAI_API_KEY"] = "sk-litellm-7_NPZhMGxY2GoHC59LgbDw" # [OPTIONAL] replace with your openai key
-os.environ["ANTHROPIC_API_KEY"] = "sk-litellm-7_NPZhMGxY2GoHC59LgbDw" # [OPTIONAL] replace with your anthropic key
-
-
-sample_text = "how does a court case get to the Supreme Court?" * 1000
-messages = [{"content": sample_text, "role": "user"}]
-response = completion_with_config(model="gpt-3.5-turbo", messages=messages, config=config)
-```
-[**See Code**](https://github.com/BerriAI/litellm/blob/30724d9e51cdc2c3e0eb063271b4f171bc01b382/litellm/utils.py#L2783)
-### select model based on prompt size 
-
-You can also use model configs to automatically select a model based on the prompt size. It checks the number of tokens in the prompt and max tokens for each model. It selects the model with max tokens > prompt tokens. 
+It checks the number of tokens in the prompt and max tokens for each model. It selects the model with max tokens > prompt tokens. 
 
 If the prompt is larger than any available model, it'll automatically trim the prompt (from the middle + preserve any system message), and fit it to the largest model available.
 
@@ -60,6 +28,8 @@ sample_text = "how does a court case get to the Supreme Court?" * 1000
 messages = [{"content": sample_text, "role": "user"}]
 response = completion_with_config(model="gpt-3.5-turbo", messages=messages, config=config)
 ```
+
+[**See Code**](https://github.com/BerriAI/litellm/blob/30724d9e51cdc2c3e0eb063271b4f171bc01b382/litellm/utils.py#L2783)
 
 ### Complete Config Structure
 
