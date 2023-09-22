@@ -32,7 +32,6 @@ response = completion_with_config(model="gpt-3.5-turbo", messages=messages, conf
 
 ```python
 config = {
-    "function": "completion", 
     "default_fallback_models": # [Optional] List of model names to try if a call fails
     "available_models": # [Optional] List of all possible models you could call 
     "adapt_to_prompt_size": # [Optional] True/False - if you want to select model based on prompt size (will pick from available_models)
