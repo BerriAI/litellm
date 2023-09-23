@@ -77,14 +77,16 @@ def handle_prediction_response_streaming(prediction_url, api_token, print_verbos
     }
     status = ""
     while True and (status not in ["succeeded", "failed", "canceled"]):
-        time.sleep(0.0001)
+        time.sleep(0.0001) # prevent being rate limited by replicate
         response = requests.get(prediction_url, headers=headers)
         if response.status_code == 200:
             response_data = response.json()
+            status = response_data['status']
+            print(f"response data: {response_data}")
             if "output" in response_data:
                 output_string = "".join(response_data['output'])
                 new_output = output_string[len(previous_output):]
-                yield new_output
+                yield {"output": new_output, "status": status}
                 previous_output = output_string
             status = response_data['status']
 
