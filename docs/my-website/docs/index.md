@@ -12,6 +12,9 @@ import QuickStart from '../src/components/QuickStart.js'
   <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
 </a>
 
+```shell
+pip install litellm
+```
 <Tabs>
 <TabItem value="openai" label="OpenAI">
 
