@@ -1,27 +1,17 @@
----
-displayed_sidebar: tutorialSidebar
----
-# 🚅 LiteLLM
+# LiteLLM - Getting Started
 
-import CrispChat from '../src/components/CrispChat.js'
+import QuickStart from '../src/components/QuickStart.js'
 
-Call all LLM APIs using the OpenAI format [Anthropic, Huggingface, Cohere, TogetherAI, Azure, OpenAI, etc.]
+LiteLLM simplifies LLM API calls by mapping them all to the OpenAI ChatCompletion format
 
-LiteLLM manages:
-- Translating inputs to the provider's completion and embedding endpoints
-- Guarantees consistent output, text responses will always be available at `['choices'][0]['message']['content']`
-- Exception mapping - common exceptions across providers are mapped to the OpenAI exception types
+## **Call 100+ LLMs using the same Input/Output Format**
 
-## Quick Start
-Code Sample: [Getting Started Notebook](https://colab.research.google.com/drive/1gR3pY-JzDZahzpVdbGBtrNGDBmzUNJaJ?usp=sharing)
-
-```shell
-pip install litellm
-```
+## Basic usage 
 
 ```python
 from litellm import completion
 import os
+
 
 ## set ENV variables
 os.environ["OPENAI_API_KEY"] = "sk-litellm-7_NPZhMGxY2GoHC59LgbDw" # [OPTIONAL] replace with your openai key
@@ -38,27 +28,55 @@ response = completion("command-nightly", messages)
 
 ## Streaming
 
-LiteLLM supports streaming the model response back, pass `stream=True` to get a streaming iterator in response.
-Streaming is supported for all models.
-
+Same example from before. Just pass in `stream=True` in the completion args. 
 ```python
-response = completion(model="gpt-3.5-turbo", messages=messages, stream=True)
-for chunk in response:
-    print(chunk['choices'][0]['delta'])
+from litellm import completion
 
-# claude 2
-result = completion('claude-2', messages, stream=True)
-for chunk in result:
-  print(chunk['choices'][0]['delta'])
+## set ENV variables
+os.environ["OPENAI_API_KEY"] = "openai key"
+os.environ["COHERE_API_KEY"] = "cohere key"
+
+messages = [{ "content": "Hello, how are you?","role": "user"}]
+
+# openai call
+response = completion(model="gpt-3.5-turbo", messages=messages, stream=True)
+
+# cohere call
+response = completion("command-nightly", messages, stream=True)
+
+print(response)
 ```
 
-# Support / talk with founders
+More details 👉 
+* [streaming + async](./completion/stream.md)
+* [tutorial for streaming Llama2 on TogetherAI](./tutorials/TogetherAI_liteLLM.md)
 
-- [Our calendar 👋](https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version)
-- [Community Discord 💭](https://discord.gg/wuPM9dRgDw)
-- Our numbers 📞 +1 (770) 8783-106 / ‭+1 (412) 618-6238‬
-- Our emails ✉️ ishaan@berri.ai / krrish@berri.ai
+## Exception handling 
 
-# Why did we build this
+LiteLLM maps exceptions across all supported providers to the OpenAI exceptions. All our exceptions inherit from OpenAI's exception types, so any error-handling you have for that, should work out of the box with LiteLLM. 
 
-- **Need for simplicity**: Our code started to get extremely complicated managing & translating calls between Azure, OpenAI, Cohere
+```python 
+from openai.errors import OpenAIError
+from litellm import completion
+
+os.environ["ANTHROPIC_API_KEY"] = "bad-key"
+try: 
+    # some code 
+    completion(model="claude-instant-1", messages=[{"role": "user", "content": "Hey, how's it going?"}])
+except OpenAIError as e:
+    print(e)
+```
+
+## Calculate Costs & Usage
+
+## Caching with LiteLLM
+
+## LiteLLM API
+
+## Send Logs to Promptlayer
+
+
+More details 👉 
+* [exception mapping](./exception_mapping.md)
+* [retries + model fallbacks for completion()](./completion/reliable_completions.md)
+* [tutorial for model fallbacks with completion()](./tutorials/fallbacks.md)
