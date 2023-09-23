@@ -123,25 +123,120 @@ response = completion(
 
 
 ## Streaming
+Set `stream=True` in the `completion` args. 
+<Tabs>
+<TabItem value="openai" label="OpenAI">
 
-Same example from before. Just pass in `stream=True` in the completion args. 
 ```python
 from litellm import completion
+import os
 
 ## set ENV variables
-os.environ["OPENAI_API_KEY"] = "openai key"
-os.environ["COHERE_API_KEY"] = "cohere key"
+os.environ["OPENAI_API_KEY"] = "sk-litellm-7_NPZhMGxY2GoHC59LgbDw" # [OPTIONAL] replace with your openai key
 
-messages = [{ "content": "Hello, how are you?","role": "user"}]
+response = completion(
+  model="gpt-3.5-turbo", 
+  messages=[{ "content": "Hello, how are you?","role": "user"}],
+  stream=True,
+)
+```
 
-# openai call
-response = completion(model="gpt-3.5-turbo", messages=messages, stream=True)
+</TabItem>
+<TabItem value="anthropic" label="Anthropic">
 
-# cohere call
-response = completion("command-nightly", messages, stream=True)
+```python
+from litellm import completion
+import os
+
+## set ENV variables
+os.environ["ANTHROPIC_API_KEY"] = "sk-litellm-7_NPZhMGxY2GoHC59LgbDw" # [OPTIONAL] replace with your openai key
+
+response = completion(
+  model="claude-2", 
+  messages=[{ "content": "Hello, how are you?","role": "user"}],
+  stream=True,
+)
+```
+
+</TabItem>
+
+<TabItem value="vertex" label="VertexAI">
+
+```python
+from litellm import completion
+import os
+
+# auth: run 'gcloud auth application-default'
+os.environ["VERTEX_PROJECT"] = "hardy-device-386718"
+os.environ["VERTEX_LOCATION"] = "us-central1"
+
+response = completion(
+  model="chat-bison", 
+  messages=[{ "content": "Hello, how are you?","role": "user"}],
+  stream=True,
+)
+```
+
+</TabItem>
+
+<TabItem value="hugging" label="HuggingFace">
+
+```python
+from litellm import completion 
+import os
+
+os.environ["HUGGINGFACE_API_KEY"] = "huggingface_api_key" 
+
+# e.g. Call 'WizardLM/WizardCoder-Python-34B-V1.0' hosted on HF Inference endpoints
+response = completion(
+  model="huggingface/WizardLM/WizardCoder-Python-34B-V1.0",
+  messages=[{ "content": "Hello, how are you?","role": "user"}], 
+  api_base="https://my-endpoint.huggingface.cloud",
+  stream=True,
+)
 
 print(response)
 ```
+
+</TabItem>
+
+<TabItem value="azure" label="Azure OpenAI">
+
+```python
+from litellm import completion
+import os
+
+## set ENV variables
+os.environ["AZURE_API_KEY"] = ""
+os.environ["AZURE_API_BASE"] = ""
+os.environ["AZURE_API_VERSION"] = ""
+
+# azure call
+response = completion(
+  "azure/<your_deployment_id>", 
+  messages = [{ "content": "Hello, how are you?","role": "user"}],
+  stream=True,
+)
+```
+
+</TabItem>
+
+
+<TabItem value="ollama" label="Ollama">
+
+```python
+from litellm import completion
+
+response = completion(
+            model="ollama/llama2", 
+            messages = [{ "content": "Hello, how are you?","role": "user"}], 
+            api_base="http://localhost:11434",
+            stream=True,
+)
+```
+</TabItem>
+
+</Tabs>
 
 More details 👉 
 * [streaming + async](./completion/stream.md)
