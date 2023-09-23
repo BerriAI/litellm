@@ -100,11 +100,6 @@ const config = {
             label: 'Discord',
             position: 'right',
           },
-          {
-            href: 'https://github.com/BerriAI/litellm',
-            label: 'Feedback',
-            position: 'right',
-          },
         ],
       },
       footer: {
