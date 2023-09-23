@@ -59,14 +59,11 @@ def completion(
         else:
             prompt += f"{AnthropicConstants.HUMAN_PROMPT.value}{message['content']}"
     prompt += f"{AnthropicConstants.AI_PROMPT.value}"
-    if "max_tokens" in optional_params and optional_params["max_tokens"] != float("inf"):
-        max_tokens = optional_params["max_tokens"]
-    else:
-        max_tokens = 256 # required anthropic param, default to 256 if user does not provide an input
+    max_tokens_to_sample = optional_params.get("max_tokens_to_sample", 256) # required anthropic param, default to 256 if user does not provide an input
     data = {
         "model": model,
         "prompt": prompt,
-        "max_tokens_to_sample": max_tokens,
+        "max_tokens_to_sample": max_tokens_to_sample,
         **optional_params,
     }
 

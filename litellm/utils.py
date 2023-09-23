@@ -910,6 +910,8 @@ def get_optional_params(  # use the openai defaults
             optional_params["temperature"] = temperature
         if top_p != 1:
             optional_params["top_p"] = top_p
+        if max_tokens != float("inf"):
+            optional_params["max_tokens_to_sample"] = max_tokens
         return optional_params
     elif model in litellm.cohere_models:
         # handle cohere params
