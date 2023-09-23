@@ -485,11 +485,11 @@ def completion(
             # Setting the relevant API KEY for replicate, replicate defaults to using os.environ.get("REPLICATE_API_TOKEN")
             replicate_key = None
             replicate_key = (
-                get_secret("REPLICATE_API_KEY")
-                or get_secret("REPLICATE_API_TOKEN")
-                or api_key
+                api_key
                 or litellm.replicate_key
-                or litellm.api_key
+                or litellm.api_key 
+                or get_secret("REPLICATE_API_KEY")
+                or get_secret("REPLICATE_API_TOKEN")
             )
 
             model_response = replicate.completion(
@@ -575,7 +575,7 @@ def completion(
 
             if "stream" in optional_params and optional_params["stream"] == True:
                 # don't try to access stream object,
-                response = CustomStreamWrapper(model_response, model, custom_llm_provider="aleph-alpha", logging_obj=logging)
+                response = CustomStreamWrapper(model_response, model, custom_llm_provider="aleph_alpha", logging_obj=logging)
                 return response
             response = model_response
         elif model in litellm.openrouter_models or custom_llm_provider == "openrouter":
@@ -769,7 +769,7 @@ def completion(
             if stream:
                 model_response = chat.send_message_streaming(prompt, **optional_params)
                 response = CustomStreamWrapper(
-                    model_response, model, custom_llm_provider="vertexai", logging_obj=logging
+                    model_response, model, custom_llm_provider="vertex_ai", logging_obj=logging
                 )
                 return response
 
