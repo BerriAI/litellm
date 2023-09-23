@@ -39,8 +39,9 @@ def test_completion_custom_provider_model_name():
 
 def test_completion_claude():
     try:
+        # test without max tokens
         response = completion(
-            model="claude-instant-1", messages=messages, max_tokens=10
+            model="claude-instant-1", messages=messages
         )
         # Add any assertions here to check the response
         print(response)
@@ -48,6 +49,25 @@ def test_completion_claude():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 # test_completion_claude()
+
+def test_completion_claude_max_tokens():
+    try:
+        # test setting max tokens for claude-2
+        user_message = "tell me everything about YC - be verbose"
+        messages = [{"content": user_message, "role": "user"}]
+        litellm.set_verbose = True
+        response = completion(
+            model="claude-instant-1", messages=messages, max_tokens=1200
+        )
+        # Add any assertions here to check the response
+        print(response)
+        text_response = response['choices'][0]['message']['content']
+        print(len(text_response))
+        assert(len(text_response) > 2000)
+        print(response.response_ms)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+# test_completion_claude_max_tokens()
 
 # def test_completion_oobabooga():
 #     try:
