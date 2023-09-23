@@ -120,7 +120,7 @@ response = completion(
 
 </Tabs>
 
-
+### [Supported Providers 100+ LLMs](./providers)
 
 ## Streaming
 Set `stream=True` in the `completion` args. 
@@ -237,10 +237,6 @@ response = completion(
 </TabItem>
 
 </Tabs>
-
-More details 👉 
-* [streaming + async](./completion/stream.md)
-* [tutorial for streaming Llama2 on TogetherAI](./tutorials/TogetherAI_liteLLM.md)
 
 ## Exception handling 
 
