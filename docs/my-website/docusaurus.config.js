@@ -95,6 +95,16 @@ const config = {
             label: 'GitHub',
             position: 'right',
           },
+          {
+            href: 'https://discord.com/invite/wuPM9dRgDw',
+            label: 'Discord',
+            position: 'right',
+          },
+          {
+            href: 'https://github.com/BerriAI/litellm',
+            label: 'Feedback',
+            position: 'right',
+          },
         ],
       },
       footer: {
