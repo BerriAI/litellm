@@ -1,42 +1,27 @@
 ---
 displayed_sidebar: tutorialSidebar
 ---
-# LiteLLM
+# 🚅 LiteLLM
 
 import CrispChat from '../src/components/CrispChat.js'
 
-[![PyPI Version](https://img.shields.io/pypi/v/litellm.svg)](https://pypi.org/project/litellm/)
-[![PyPI Version](https://img.shields.io/badge/stable%20version-v0.1.583-blue?color=green&link=https://pypi.org/project/litellm/0.1.1/)](https://pypi.org/project/litellm/0.1.1/)
-[![CircleCI](https://dl.circleci.com/status-badge/img/gh/BerriAI/litellm/tree/main.svg?style=svg)](https://dl.circleci.com/status-badge/redirect/gh/BerriAI/litellm/tree/main)
-![Downloads](https://img.shields.io/pypi/dm/litellm)
-[![litellm](https://img.shields.io/badge/%20%F0%9F%9A%85%20liteLLM-OpenAI%7CAzure%7CAnthropic%7CPalm%7CCohere%7CReplicate%7CHugging%20Face-blue?color=green)](https://github.com/BerriAI/litellm)
+Call all LLM APIs using the OpenAI format [Anthropic, Huggingface, Cohere, TogetherAI, Azure, OpenAI, etc.]
 
-[![](https://dcbadge.vercel.app/api/server/wuPM9dRgDw)](https://discord.gg/wuPM9dRgDw)
+LiteLLM manages:
+- Translating inputs to the provider's completion and embedding endpoints
+- Guarantees consistent output, text responses will always be available at `['choices'][0]['message']['content']`
+- Exception mapping - common exceptions across providers are mapped to the OpenAI exception types
 
-a light package to simplify calling OpenAI, Azure, Cohere, Anthropic, Huggingface API Endpoints. It manages:
-
-- translating inputs to the provider's completion and embedding endpoints
-- guarantees [consistent output](https://litellm.readthedocs.io/en/latest/output/), text responses will always be available at `['choices'][0]['message']['content']`
-- exception mapping - common exceptions across providers are mapped to the [OpenAI exception types](https://help.openai.com/en/articles/6897213-openai-library-error-types-guidance)
-
-# usage
-
-<a href='https://docs.litellm.ai/docs/providers' target="_blank"><img alt='None' src='https://img.shields.io/badge/Supported_LLMs-100000?style=for-the-badge&logo=None&logoColor=000000&labelColor=000000&color=8400EA'/></a>
-
-Demo - https://litellm.ai/playground  
-Read the docs - https://docs.litellm.ai/docs/
-
-## quick start
+## Quick Start
 Code Sample: [Getting Started Notebook](https://colab.research.google.com/drive/1gR3pY-JzDZahzpVdbGBtrNGDBmzUNJaJ?usp=sharing)
 
-```
+```shell
 pip install litellm
 ```
 
-
-
 ```python
 from litellm import completion
+import os
 
 ## set ENV variables
 os.environ["OPENAI_API_KEY"] = "sk-litellm-7_NPZhMGxY2GoHC59LgbDw" # [OPTIONAL] replace with your openai key
@@ -51,7 +36,7 @@ response = completion(model="gpt-3.5-turbo", messages=messages)
 response = completion("command-nightly", messages)
 ```
 
-## streaming
+## Streaming
 
 LiteLLM supports streaming the model response back, pass `stream=True` to get a streaming iterator in response.
 Streaming is supported for all models.
@@ -67,13 +52,13 @@ for chunk in result:
   print(chunk['choices'][0]['delta'])
 ```
 
-# support / talk with founders
+# Support / talk with founders
 
 - [Our calendar 👋](https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version)
 - [Community Discord 💭](https://discord.gg/wuPM9dRgDw)
 - Our numbers 📞 +1 (770) 8783-106 / ‭+1 (412) 618-6238‬
 - Our emails ✉️ ishaan@berri.ai / krrish@berri.ai
 
-# why did we build this
+# Why did we build this
 
 - **Need for simplicity**: Our code started to get extremely complicated managing & translating calls between Azure, OpenAI, Cohere
