@@ -120,8 +120,6 @@ response = completion(
 
 </Tabs>
 
-### [Supported Providers 100+ LLMs](./providers)
-
 ## Streaming
 Set `stream=True` in the `completion` args. 
 <Tabs>
@@ -254,7 +252,29 @@ except OpenAIError as e:
     print(e)
 ```
 
-## Calculate Costs & Usage
+## Calculate Costs, Usage, Latency
+
+Pass the completion response to `litellm.completion_cost(completion_response=response)` and get the cost
+
+```python
+from litellm import completion, completion_cost
+import os
+os.environ["OPENAI_API_KEY"] = "sk-litellm-7_NPZhMGxY2GoHC59LgbDw"
+
+response = completion(
+  model="gpt-3.5-turbo", 
+  messages=[{ "content": "Hello, how are you?","role": "user"}]
+)
+
+cost = completion_cost(completion_response=response)
+print("Cost for completion call with gpt-3.5-turbo: ", f"${float(cost):.10f}")
+```
+
+**Output**
+```shell
+Cost for completion call with gpt-3.5-turbo:  $0.0000775000
+```
+
 
 ## Caching with LiteLLM
 
