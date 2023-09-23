@@ -784,6 +784,19 @@ def completion(
             model_response["choices"][0]["message"]["content"] = str(completion_response)
             model_response["created"] = time.time()
             model_response["model"] = model
+            ## CALCULATING USAGE
+            prompt_tokens = len(
+                encoding.encode(prompt)
+            ) 
+            completion_tokens = len(
+                encoding.encode(model_response["choices"][0]["message"]["content"])
+            )
+
+            model_response["usage"] = {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": prompt_tokens + completion_tokens,
+            }
             response = model_response
         elif model in litellm.vertex_text_models or model in litellm.vertex_code_text_models:
             try:
@@ -823,6 +836,19 @@ def completion(
             model_response["choices"][0]["message"]["content"] = str(completion_response)
             model_response["created"] = time.time()
             model_response["model"] = model
+            ## CALCULATING USAGE
+            prompt_tokens = len(
+                encoding.encode(prompt)
+            ) 
+            completion_tokens = len(
+                encoding.encode(model_response["choices"][0]["message"]["content"])
+            )
+
+            model_response["usage"] = {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": prompt_tokens + completion_tokens,
+            }
             response = model_response
         elif model in litellm.ai21_models:
             custom_llm_provider = "ai21"
