@@ -2,8 +2,6 @@
 
 import QuickStart from '../src/components/QuickStart.js'
 
-LiteLLM simplifies LLM API calls by mapping them all to the OpenAI ChatCompletion format
-
 ## **Call 100+ LLMs using the same Input/Output Format**
 
 ## Basic usage 
