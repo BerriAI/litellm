@@ -275,15 +275,79 @@ print("Cost for completion call with gpt-3.5-turbo: ", f"${float(cost):.10f}")
 Cost for completion call with gpt-3.5-turbo:  $0.0000775000
 ```
 
-
-## Caching with LiteLLM
-
 ## LiteLLM API
+The LiteLLM API allows you to access LLMs you might not have access to (example Claude-2)
 
-## Send Logs to Promptlayer
+<Tabs>
+<TabItem value="claude-2" label="Claude-2">
+
+```python
+import os
+from litellm import completion
+
+# use the LiteLLM API Key
+os.environ["ANTHROPIC_API_KEY"] = "sk-litellm-7_NPZhMGxY2GoHC59LgbDw"
+
+messages = [{ "content": "Hello, how are you?","role": "user"}]
+
+response = completion(model="togethercomputer/falcon-40b-instruct", messages=messages)
+print(response)
+```
+</TabItem>
+<TabItem value="gpt-4" label="GPT-4">
+
+```python
+import os
+from litellm import completion
+
+# use the LiteLLM API Key
+os.environ["OPENAI_API_KEY"] = "sk-litellm-7_NPZhMGxY2GoHC59LgbDw"
+
+messages = [{ "content": "Hello, how are you?","role": "user"}]
+
+response = completion(model="gpt-4", messages=messages)
+print(response)
+```
+</TabItem>
+<TabItem value="llama2" label="Llama2-70B">
+
+```python
+import os
+from litellm import completion
+
+# use the LiteLLM API Key
+os.environ["TOGETHERAI_API_KEY"] = "sk-litellm-7_NPZhMGxY2GoHC59LgbDw"
+
+messages = [{ "content": "Hello, how are you?","role": "user"}]
+
+response = completion(model="togethercomputer/llama-2-70b-chat", messages=messages)
+print(response)
+```
+</TabItem>
+
+<TabItem value="falcon-40b-instruct" label="Falcon-40B">
+
+```python
+import os
+from litellm import completion
+
+# use the LiteLLM API Key
+os.environ["TOGETHERAI_API_KEY"] = "sk-litellm-7_NPZhMGxY2GoHC59LgbDw"
+
+messages = [{ "content": "Hello, how are you?","role": "user"}]
+
+response = completion(model="togethercomputer/falcon-40b-instruct", messages=messages)
+print(response)
+```
+</TabItem>
+</Tabs>
+
+👉 See all supported providers on [LiteLLM API](./proxy.md)
+
+Need a dedicated key? Email us @ krrish@berri.ai
 
 
-More details 👉 
+## More details
 * [exception mapping](./exception_mapping.md)
 * [retries + model fallbacks for completion()](./completion/reliable_completions.md)
 * [tutorial for model fallbacks with completion()](./tutorials/fallbacks.md)
