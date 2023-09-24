@@ -1311,29 +1311,161 @@ def load_test_model(
             "exception": e,
         }
 
-def validate_environment():
-        api_key = None
-        if "OPENAI_API_KEY" in os.environ:
-            api_key = os.getenv("OPENAI_API_KEY")
-        elif "ANTHROPIC_API_KEY" in os.environ:
-            api_key = os.getenv("ANTHROPIC_API_KEY")
-        elif "REPLICATE_API_KEY" in os.environ:
-            api_key = os.getenv("REPLICATE_API_KEY")
-        elif "AZURE_API_KEY" in os.environ:
-            api_key = os.getenv("AZURE_API_KEY")
-        elif "COHERE_API_KEY" in os.environ:
-            api_key = os.getenv("COHERE_API_KEY")
-        elif "TOGETHERAI_API_KEY" in os.environ:
-            api_key = os.getenv("TOGETHERAI_API_KEY")
-        elif "BASETEN_API_KEY" in os.environ:
-            api_key = os.getenv("BASETEN_API_KEY")
-        elif "AI21_API_KEY" in os.environ:
-            api_key = os.getenv("AI21_API_KEY")
-        elif "OPENROUTER_API_KEY" in os.environ:
-            api_key = os.getenv("OPENROUTER_API_KEY")
-        elif "ALEPHALPHA_API_KEY" in os.environ:
-            api_key = os.getenv("ALEPHALPHA_API_KEY")
-        return api_key
+def validate_environment(model: str) -> dict:
+    keys_in_environment = False
+    missing_keys = []
+    ## EXTRACT LLM PROVIDER - if model name provided
+    custom_llm_provider = None
+    # check if llm provider part of model name
+    if model.split("/",1)[0] in litellm.provider_list:
+        custom_llm_provider = model.split("/", 1)[0]
+        model = model.split("/", 1)[1]
+        custom_llm_provider_passed_in = True
+    
+    if custom_llm_provider:
+        if custom_llm_provider == "openai":
+            if "OPENAI_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("OPENAI_API_KEY")
+        elif custom_llm_provider == "azure":
+            if ("AZURE_API_BASE" in os.environ 
+                and "AZURE_API_VERSION" in os.environ
+                and "AZURE_API_KEY" in os.environ):
+                keys_in_environment = True
+            else:
+                missing_keys.extend(["AZURE_API_BASE", "AZURE_API_VERSION", "AZURE_API_KEY"])
+        elif custom_llm_provider == "anthropic":
+            if "ANTHROPIC_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("ANTHROPIC_API_KEY")
+        elif custom_llm_provider == "cohere":
+            if "COHERE_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("COHERE_API_KEY")
+        elif custom_llm_provider == "replicate":
+            if "REPLICATE_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("REPLICATE_API_KEY")
+        elif custom_llm_provider == "openrouter":
+            if "OPENROUTER_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("OPENROUTER_API_KEY")
+        elif custom_llm_provider == "vertex_ai":
+            if ("VERTEXAI_PROJECT" in os.environ 
+                and "VERTEXAI_LOCATION" in os.environ):
+                keys_in_environment = True
+            else:
+                missing_keys.extend(["VERTEXAI_PROJECT", "VERTEXAI_PROJECT"])
+        elif custom_llm_provider == "huggingface":
+            if "HUGGINGFACE_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("HUGGINGFACE_API_KEY")
+        elif custom_llm_provider == "ai21":
+            if "AI21_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("AI21_API_KEY")
+        elif custom_llm_provider == "together_ai":
+            if "TOGETHERAI_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("TOGETHERAI_API_KEY")
+        elif custom_llm_provider == "aleph_alpha":
+            if "ALEPH_ALPHA_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("ALEPH_ALPHA_API_KEY")
+        elif custom_llm_provider == "baseten":
+            if "BASETEN_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("BASETEN_API_KEY")
+        elif custom_llm_provider == "nlp_cloud":
+            if "NLP_CLOUD_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("NLP_CLOUD_API_KEY")
+    else:
+        ## openai - chatcompletion + text completion
+        if model in litellm.open_ai_chat_completion_models or litellm.open_ai_text_completion_models:
+            if "OPENAI_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("OPENAI_API_KEY")
+        ## anthropic 
+        elif model in litellm.anthropic_models:
+            if "ANTHROPIC_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("ANTHROPIC_API_KEY")
+        ## cohere
+        elif model in litellm.cohere_models:
+            if "COHERE_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("COHERE_API_KEY")
+        ## replicate
+        elif model in litellm.replicate_models:
+            if "REPLICATE_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("REPLICATE_API_KEY")
+        ## openrouter
+        elif model in litellm.openrouter_models:
+            if "OPENROUTER_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("OPENROUTER_API_KEY")
+        ## vertex - text + chat models
+        elif model in litellm.vertex_chat_models or model in litellm.vertex_text_models:
+            if ("VERTEXAI_PROJECT" in os.environ 
+                and "VERTEXAI_LOCATION" in os.environ):
+                keys_in_environment = True
+            else:
+                missing_keys.extend(["VERTEXAI_PROJECT", "VERTEXAI_PROJECT"])
+        ## huggingface 
+        elif model in litellm.huggingface_models:
+            if "HUGGINGFACE_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("HUGGINGFACE_API_KEY")
+        ## ai21 
+        elif model in litellm.ai21_models:
+            if "AI21_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("AI21_API_KEY")
+        ## together_ai 
+        elif model in litellm.together_ai_models:
+            if "TOGETHERAI_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("TOGETHERAI_API_KEY")
+        ## aleph_alpha 
+        elif model in litellm.aleph_alpha_models:
+            if "ALEPH_ALPHA_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("ALEPH_ALPHA_API_KEY")
+        ## baseten 
+        elif model in litellm.baseten_models:
+            if "BASETEN_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("BASETEN_API_KEY")
+        ## nlp_cloud
+        elif model in litellm.nlp_cloud_models:
+            if "NLP_CLOUD_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("NLP_CLOUD_API_KEY")
+    return {"keys_in_environment": keys_in_environment, "missing_keys": missing_keys} 
 
 def set_callbacks(callback_list, function_id=None):
     global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, llmonitorLogger, promptLayerLogger, langFuseLogger, customLogger
