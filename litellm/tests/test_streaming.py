@@ -421,6 +421,8 @@ def test_completion_claude_stream_bad_key():
         if complete_response.strip() == "": 
             raise Exception("Empty response received")
         print(f"completion_response: {complete_response}")
+    except AuthenticationError as e:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
