@@ -10,4 +10,4 @@ sys.path.insert(
 import time
 import litellm
 
-api_key = litellm.validate_environment()
+print(litellm.validate_environment("openai/gpt-3.5-turbo"))
