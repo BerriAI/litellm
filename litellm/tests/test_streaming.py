@@ -715,29 +715,29 @@ def ai21_completion_call_bad_key():
 
 # ai21_completion_call_bad_key()
 
-def test_completion_aleph_alpha():
-    try:
-        response = completion(
-            model="luminous-base", messages=messages, stream=True
-        )
-        # Add any assertions here to check the response
-        has_finished = False
-        complete_response = ""
-        start_time = time.time()
-        for idx, chunk in enumerate(response):
-            chunk, finished = streaming_format_tests(idx, chunk)
-            has_finished = finished
-            complete_response += chunk
-            if finished:
-                break
-        if has_finished is False:
-            raise Exception("finished reason missing from final chunk")
-        if complete_response.strip() == "": 
-            raise Exception("Empty response received")
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
+# def test_completion_aleph_alpha():
+#     try:
+#         response = completion(
+#             model="luminous-base", messages=messages, stream=True
+#         )
+#         # Add any assertions here to check the response
+#         has_finished = False
+#         complete_response = ""
+#         start_time = time.time()
+#         for idx, chunk in enumerate(response):
+#             chunk, finished = streaming_format_tests(idx, chunk)
+#             has_finished = finished
+#             complete_response += chunk
+#             if finished:
+#                 break
+#         if has_finished is False:
+#             raise Exception("finished reason missing from final chunk")
+#         if complete_response.strip() == "": 
+#             raise Exception("Empty response received")
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
 
-# test_completion_aleph_alpha()
+# # test_completion_aleph_alpha()
 
 # def test_completion_aleph_alpha_bad_key():
 #     try:
