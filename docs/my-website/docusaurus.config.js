@@ -76,6 +76,15 @@ const config = {
     ],
   ],
 
+  scripts: [
+    {
+      async: true,
+      src: 'https://www.feedbackrocket.io/sdk/v1.2.js',
+      'data-fr-id': '<your-21-character-id>',
+      'data-fr-theme': 'dynamic',
+    }
+  ],
+
   themeConfig:
     /** @type {import('@docusaurus/preset-classic').ThemeConfig} */
     ({
@@ -99,6 +108,14 @@ const config = {
             href: 'https://discord.com/invite/wuPM9dRgDw',
             label: 'Discord',
             position: 'right',
+          },
+          {
+            type: 'html',
+            position: 'right',
+            value:
+              `<a href=# class=navbar__link data-fr-widget>
+                Feedback
+              </a>`
           },
         ],
       },
