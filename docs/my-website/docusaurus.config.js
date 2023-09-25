@@ -80,7 +80,7 @@ const config = {
     {
       async: true,
       src: 'https://www.feedbackrocket.io/sdk/v1.2.js',
-      'data-fr-id': '<your-21-character-id>',
+      'data-fr-id': 'GQwepB0f0L-x_ZH63kR_V',
       'data-fr-theme': 'dynamic',
     }
   ],
