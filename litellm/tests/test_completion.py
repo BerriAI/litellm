@@ -15,7 +15,7 @@ from litellm import embedding, completion, text_completion, completion_cost
 user_message = "Write a short poem about the sky"
 messages = [{"content": user_message, "role": "user"}]
 
-
+print(f"os path: {os.path.isfile('litellm_uuid.txt')}")
 def logger_fn(user_model_dict):
     print(f"user_model_dict: {user_model_dict}")
 
@@ -48,7 +48,7 @@ def test_completion_claude():
         print(response.response_ms)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_completion_claude()
+test_completion_claude()
 
 def test_completion_claude_max_tokens():
     try:
@@ -67,7 +67,7 @@ def test_completion_claude_max_tokens():
         print(response.response_ms)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_completion_claude_max_tokens()
+test_completion_claude_max_tokens()
 
 # def test_completion_oobabooga():
 #     try:
