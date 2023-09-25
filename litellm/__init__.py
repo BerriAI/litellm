@@ -1,3 +1,54 @@
+### GET HELP/SUPPORT MESSAGE ### 
+import shutil, os
+show_get_help_message = True
+def print_box(message, link):
+    # get the longest line to set the box width
+    max_length = max(len(message), len(link))
+
+    # get terminal size
+    columns, rows = shutil.get_terminal_size(fallback=(80, 24))
+
+    # set the width and height to 50% of terminal size
+    width = max_length + 4  # adding 4 to consider the padding spaces and border
+    height = 20
+
+    # define left and top margins for centering the box
+    left_margin = (columns - width) // 2
+    top_margin = (rows - height) // 2
+
+    # create box border lines
+    horizontal_line = "+" + "-" * (width - 2) + "+"
+    empty_line = "|" + " " * (width - 2) + "|"
+
+    # print top margin
+    for _ in range(top_margin):
+        print()
+
+    # print top border
+    print(" " * left_margin + horizontal_line)
+
+    # print padding and message
+    print(" " * left_margin + empty_line)
+    print(" " * left_margin + empty_line)
+    print(" " * left_margin + "| " + message.center(max_length) + " |")
+    print(" " * left_margin + "| " + link.center(max_length) + " |")
+    print(" " * left_margin + empty_line)
+    print(" " * left_margin + empty_line)
+
+    # print bottom border
+    print(" " * left_margin + horizontal_line)
+
+    # print bottom margin
+    for _ in range(rows - height - top_margin):
+        print()
+
+
+message = "Add new LLMs: Give Feedback / Get Help"
+link = "https://github.com/BerriAI/litellm/issues/new"
+if show_get_help_message and not os.path.isfile('litellm_uuid.txt'):  # only show once
+    print_box(message, link)
+
+### INIT VARIABLES ###
 import threading, requests
 from typing import Callable, List, Optional, Dict, Union
 from litellm.caching import Cache
