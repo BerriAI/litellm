@@ -1,6 +1,6 @@
 import requests
 import json
-
+import traceback
 try:
     from async_generator import async_generator, yield_  # optional dependency
     async_generator_imported = True
@@ -13,7 +13,10 @@ def get_ollama_response_stream(
         model="llama2",
         prompt="Why is the sky blue?"
     ):
-    url = f"{api_base}/api/generate"
+    if api_base.endswith("/api/generate"):
+        url = api_base
+    else: 
+        url = f"{api_base}/api/generate"
     data = {
         "model": model,
         "prompt": prompt,
@@ -37,6 +40,7 @@ def get_ollama_response_stream(
                                 completion_obj["content"] = j["response"]
                                 yield {"choices": [{"delta": completion_obj}]}
                 except Exception as e:
+                    traceback.print_exc()
                     print(f"Error decoding JSON: {e}")
     session.close()
 
