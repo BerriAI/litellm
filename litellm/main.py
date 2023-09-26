@@ -794,7 +794,7 @@ def completion(
                 return response
             response = model_response
         elif custom_llm_provider == "palm":
-            api_key = (
+            palm_api_key = (
                 api_key
                 or get_secret("PALM_API_KEY")
                 or litellm.api_key
@@ -809,7 +809,7 @@ def completion(
                 litellm_params=litellm_params,
                 logger_fn=logger_fn,
                 encoding=encoding,
-                api_key=api_key,
+                api_key=palm_api_key,
                 logging_obj=logging
             )
             if "stream_tokens" in optional_params and optional_params["stream_tokens"] == True:
