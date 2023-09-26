@@ -37,9 +37,6 @@
     <a href="https://docs.litellm.ai/docs/providers" target="_blank">100+ Supported Models</a> |
     <a href="https://docs.litellm.ai/docs/" target="_blank">Docs</a> |
 </h4>
-<a target="_blank" href="https://calendly.com/d/4mp-gd3-k5k/litellm-1-1-onboarding-chat">
-  <p>📣<b>1-click deploy</b> your own LLM proxy server. Grab time, if you're interested!</p>
-</a>
 
 LiteLLM manages
 - Translating inputs to the provider's completion and embedding endpoints
@@ -78,8 +75,6 @@ response = completion(model="command-nightly", messages=messages)
 print(response)
 ```
 
-**Don't have a key? We'll give you access 👉 https://docs.litellm.ai/docs/proxy_api**
-
 ## Streaming
 liteLLM supports streaming the model response back, pass `stream=True` to get a streaming iterator in response.
 Streaming is supported for OpenAI, Azure, Anthropic, Huggingface models
@@ -93,6 +88,16 @@ result = completion('claude-2', messages, stream=True)
 for chunk in result:
   print(chunk['choices'][0]['delta'])
 ```
+
+## OpenAI Proxy Server 
+Spin up a local server to translate openai api calls to any non-openai model (e.g. Huggingface, TogetherAI, Ollama, etc.)
+
+This works for async + streaming as well. 
+```python
+litellm --model <model_name>
+```
+Running your model locally or on a custom endpoint ? Set the `--api-base` parameter [see how](https://docs.litellm.ai/docs/proxy_server#advanced-setting-api-base)
+
 # Contributing
 To contribute: Clone the repo locally -> Make a change -> Submit a PR with the change. 
 
