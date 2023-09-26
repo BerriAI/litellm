@@ -1,10 +1,36 @@
 # Reliability
 
+
+
+## Helper utils 
 LiteLLM supports the following functions for reliability:
+* `litellm.longer_context_model_fallback_dict`: Dictionary which has a mapping for those models which have larger equivalents  
 * `completion_with_retries`: use tenacity retries
 * `completion()` with fallback models: set `fallback_models=['gpt-3.5-turbo', 'command-nightly', 'llama2`]. If primary model fails try fallback models
 
-## Completion with Retries
+## Context Window Errors 
+
+```python 
+from litellm import longer_context_model_fallback_dict, ContextWindowExceededError
+
+sample_text = "how does a court case get to the Supreme Court?" * 1000
+messages = [{"content": user_message, "role": "user"}]
+model = "gpt-3.5-turbo"
+try: 
+    # try the original model
+    response = completion(model=model, messages=messages) 
+# catch the context window error
+except ContextWindowExceededError as e:
+    if model in longer_context_model_fallback_dict: 
+        # switch to the equivalent larger model -> gpt.3.5-turbo-16k 
+        new_model = longer_context_model_fallback_dict[model]
+        response = completion(new_model, messages)
+
+print(response)
+```
+
+
+## Retry failed requests
 
 You can use this as a drop-in replacement for the `completion()` function to use tenacity retries - by default we retry the call 3 times. 
 
@@ -29,7 +55,7 @@ def test_completion_custom_provider_model_name():
         printf"Error occurred: {e}")
 ```
 
-## Completion with Fallbacks
+## Specify fallback models
 LLM APIs can be unstable, completion() with fallbacks ensures you'll always get a response from your calls
 
 ## Usage 
