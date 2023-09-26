@@ -96,7 +96,7 @@ This works for async + streaming as well.
 ```python
 litellm --model <model_name>
 ```
-Running your model locally or on a custom endpoint ? Set the `--api-base` parameter [see how](https://docs.litellm.ai/docs/proxy_server#advanced-setting-api-base)
+Running your model locally or on a custom endpoint ? Set the `--api-base` parameter [see how](https://docs.litellm.ai/docs/proxy_server)
 
 # Contributing
 To contribute: Clone the repo locally -> Make a change -> Submit a PR with the change. 
