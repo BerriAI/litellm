@@ -230,6 +230,7 @@ provider_list: List = [
     "together_ai",
     "openrouter",
     "vertex_ai",
+    "palm",
     "ai21",
     "baseten",
     "azure",
