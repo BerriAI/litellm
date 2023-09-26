@@ -985,6 +985,11 @@ def get_optional_params(  # use the openai defaults
             optional_params["frequency_penalty"] = frequency_penalty # TODO: Check if should be repetition penalty
         if stop != None:
             optional_params["stop"] = stop #TG AI expects a list, example ["\n\n\n\n","&lt;|endoftext|&gt;"]
+    elif custom_llm_provider == "palm":
+        if temperature != 1:
+            optional_params["temperature"] = temperature
+        if top_p != 1:
+            optional_params["top_p"] = top_p
     elif (
         model in litellm.vertex_chat_models or model in litellm.vertex_code_chat_models
     ):  # chat-bison has diff args from chat-bison@001, ty Google :) 
@@ -3077,6 +3082,19 @@ class CustomStreamWrapper:
                     if response_obj["is_finished"]: 
                         model_response.choices[0].finish_reason = response_obj["finish_reason"]
                 elif self.custom_llm_provider == "sagemaker":
+                    if len(self.completion_stream)==0:
+                        if self.sent_last_chunk: 
+                            raise StopIteration
+                        else:
+                            model_response.choices[0].finish_reason = "stop"
+                            self.sent_last_chunk = True
+                    chunk_size = 30
+                    new_chunk = self.completion_stream[:chunk_size]
+                    completion_obj["content"] = new_chunk
+                    self.completion_stream = self.completion_stream[chunk_size:]
+                    time.sleep(0.05)
+                elif self.custom_llm_provider == "palm":
+                    # fake streaming
                     if len(self.completion_stream)==0:
                         if self.sent_last_chunk: 
                             raise StopIteration
