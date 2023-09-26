@@ -61,6 +61,7 @@ const sidebars = {
         "providers/palm", 
         "providers/anthropic", 
         "providers/vllm", 
+        "providers/deepinfra",
         "providers/ai21", 
         "providers/nlp_cloud",
         "providers/replicate", 
