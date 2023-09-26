@@ -15,7 +15,6 @@ from litellm import embedding, completion, text_completion, completion_cost
 user_message = "Write a short poem about the sky"
 messages = [{"content": user_message, "role": "user"}]
 
-print(f"os path: {os.path.isfile('litellm_uuid.txt')}")
 def logger_fn(user_model_dict):
     print(f"user_model_dict: {user_model_dict}")
 
@@ -774,6 +773,20 @@ def test_completion_with_fallbacks():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+
+def test_completion_with_fallbacks_multiple_keys():
+    backup_keys = [{"api_key": os.getenv("BACKUP_OPENAI_API_KEY_1")}, {"api_key": os.getenv("BACKUP_OPENAI_API_KEY_2")}]
+    try:
+        api_key = "bad-key"
+        response = completion(
+            model="gpt-3.5-turbo", messages=messages, force_timeout=120, fallbacks=backup_keys, api_key=api_key
+        )
+        # Add any assertions here to check the response
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+# test_completion_with_fallbacks_multiple_keys() 
 # def test_petals():
 #     try:
 #         response = completion(model="petals-team/StableBeluga2", messages=messages)
