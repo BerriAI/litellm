@@ -56,9 +56,10 @@ const sidebars = {
       items: [
         "providers/openai", 
         "providers/azure", 
-        "providers/vertex", 
-        "providers/anthropic", 
         "providers/huggingface", 
+        "providers/vertex", 
+        "providers/palm", 
+        "providers/anthropic", 
         "providers/vllm", 
         "providers/ai21", 
         "providers/nlp_cloud",
