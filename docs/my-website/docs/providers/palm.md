@@ -1,5 +1,4 @@
 # PaLM API - Google
-https://developers.generativeai.google/products/palm
 
 ## Pre-requisites
 * `pip install -q google-generativeai`
