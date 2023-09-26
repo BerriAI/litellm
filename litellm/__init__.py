@@ -241,6 +241,7 @@ provider_list: List = [
     "petals",
     "oobabooga",
     "ollama",
+    "deepinfra",
     "custom", # custom apis
 ]
 

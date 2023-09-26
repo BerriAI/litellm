@@ -663,6 +663,48 @@ def completion(
                 response = CustomStreamWrapper(model_response, model, custom_llm_provider="cohere", logging_obj=logging)
                 return response
             response = model_response
+        elif custom_llm_provider == "deepinfra": # for know this NEEDS to be above Hugging Face otherwise all calls to meta-llama/Llama-2-70b-chat-hf go to hf, we need this to go to deep infra if user sets provider to deep infra 
+            # this can be called with the openai python package
+            api_key = (
+                api_key or
+                litellm.api_key or
+                litellm.openai_key or
+                get_secret("DEEPINFRA_API_KEY")
+            )
+            ## LOGGING
+            logging.pre_call(
+                input=messages,
+                api_key=api_key,
+            )
+            ## COMPLETION CALL
+            openai.api_key = api_key # set key for deep infra 
+            try:
+                response = openai.ChatCompletion.create(
+                    model=model,
+                    messages=messages,
+                    api_base="https://api.deepinfra.com/v1/openai", # use the deepinfra api base
+                    api_type="openai",
+                    api_version=api_version, # default None
+                    **optional_params,
+                )
+            except Exception as e:
+                ## LOGGING - log the original exception returned
+                logging.post_call(
+                    input=messages,
+                    api_key=api_key,
+                    original_response=str(e),
+                )
+                raise e
+            if "stream" in optional_params and optional_params["stream"] == True:
+                response = CustomStreamWrapper(response, model, custom_llm_provider="openai", logging_obj=logging)
+                return response
+            ## LOGGING
+            logging.post_call(
+                input=messages,
+                api_key=api_key,
+                original_response=response,
+                additional_args={"headers": litellm.headers},
+            )
         elif (
             (
                 model in litellm.huggingface_models and 
