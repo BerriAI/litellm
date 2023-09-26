@@ -261,7 +261,7 @@ models_by_provider: dict = {
 }
 
 # mapping for those models which have larger equivalents 
-longer_context_model_fallback_dict = {
+longer_context_model_fallback_dict: dict = {
     # openai chat completion models
     "gpt-3.5-turbo": "gpt-3.5-turbo-16k", 
     "gpt-3.5-turbo-0301": "gpt-3.5-turbo-16k-0301", 
