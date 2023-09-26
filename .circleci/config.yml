@@ -29,6 +29,7 @@ jobs:
             pip install pytest
             pip install pytest-asyncio
             pip install mypy
+            pip install -q google-generativeai
             pip install openai[datalib]
             pip install -Uq chromadb==0.3.29
             pip install https://github.com/BerriAI/litellm/raw/main/cookbook/bedrock_resources/boto3-1.28.21-py3-none-any.whl
