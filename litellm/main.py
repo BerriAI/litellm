@@ -800,6 +800,7 @@ def completion(
                 or litellm.api_key
             )
             
+            # palm does not support streaming as yet :(
             model_response = palm.completion(
                 model=model,
                 messages=messages,
@@ -812,10 +813,12 @@ def completion(
                 api_key=palm_api_key,
                 logging_obj=logging
             )
-            if "stream_tokens" in optional_params and optional_params["stream_tokens"] == True:
-                # don't try to access stream object,
+            # fake palm streaming
+            if stream == True:
+                # fake streaming for palm
+                resp_string = model_response["choices"][0]["message"]["content"]
                 response = CustomStreamWrapper(
-                    model_response, model, custom_llm_provider="palm", logging_obj=logging
+                    resp_string, model, custom_llm_provider="palm", logging_obj=logging
                 )
                 return response
             response = model_response
