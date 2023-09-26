@@ -882,6 +882,21 @@ def test_completion_deep_infra():
         print(response.response_ms)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
+# Palm tests
+def test_completion_palm():
+    # litellm.set_verbose = True
+    model_name = "palm/chat-bison"
+    try:
+        response = completion(model=model_name, messages=messages)
+        # Add any assertions here to check the response
+        print(response)
+        print(response.response_ms)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+# test_completion_palm()
+
 # test_completion_deep_infra()
 # test_completion_ai21()
 # test config file with completion #
