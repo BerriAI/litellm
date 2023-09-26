@@ -2282,6 +2282,24 @@ def exception_type(
                         model=model, 
                         llm_provider="vertex_ai"
                     )
+            elif custom_llm_provider == "palm":
+                if "503 Getting metadata" in error_str:
+                    # auth errors look like this
+                    # 503 Getting metadata from plugin failed with error: Reauthentication is needed. Please run `gcloud auth application-default login` to reauthenticate.
+                    exception_mapping_worked = True
+                    raise InvalidRequestError(
+                        message=f"PalmException - Invalid api key", 
+                        model=model, 
+                        llm_provider="palm"
+                    )
+                if "400 Request payload size exceeds" in error_str:
+                    exception_mapping_worked = True
+                    raise ContextWindowExceededError(
+                        message=f"PalmException - {error_str}",
+                        model=model,
+                        llm_provider="palm",
+                    )
+                # Dailed: Error occurred: 400 Request payload size exceeds the limit: 20000 bytes
             elif custom_llm_provider == "cohere":  # Cohere
                 if (
                     "invalid api token" in error_str
