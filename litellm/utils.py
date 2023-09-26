@@ -3288,6 +3288,7 @@ def completion_with_fallbacks(**kwargs):
     rate_limited_models = set()
     model_expiration_times = {}
     start_time = time.time()
+    original_model = kwargs["model"]
     fallbacks = [kwargs["model"]] + kwargs["fallbacks"]
     del kwargs["fallbacks"]  # remove fallbacks so it's not recursive
 
@@ -3295,7 +3296,13 @@ def completion_with_fallbacks(**kwargs):
         for model in fallbacks:
             # loop thru all models
             try:
-                if (
+                # check if it's dict or new model string 
+                if isinstance(model, dict): # completion(model="gpt-4", fallbacks=[{"api_key": "", "api_base": ""}, {"api_key": "", "api_base": ""}])
+                    kwargs["api_key"] = model.get("api_key", None)
+                    kwargs["api_base"] = model.get("api_base", None)
+                    model = original_model
+                    print(f"switched api keys")
+                elif (
                     model in rate_limited_models
                 ):  # check if model is currently cooling down
                     if (
@@ -3318,6 +3325,7 @@ def completion_with_fallbacks(**kwargs):
                     return response
 
             except Exception as e:
+                print(e)
                 rate_limited_models.add(model)
                 model_expiration_times[model] = (
                     time.time() + 60
