@@ -44,6 +44,7 @@ from .llms import ollama
 from .llms import cohere
 from .llms import petals
 from .llms import oobabooga
+from .llms import palm
 import tiktoken
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, List, Optional, Dict
@@ -789,6 +790,32 @@ def completion(
                 # don't try to access stream object,
                 response = CustomStreamWrapper(
                     model_response, model, custom_llm_provider="together_ai", logging_obj=logging
+                )
+                return response
+            response = model_response
+        elif custom_llm_provider == "palm":
+            api_key = (
+                api_key
+                or get_secret("PALM_API_KEY")
+                or litellm.api_key
+            )
+            
+            model_response = palm.completion(
+                model=model,
+                messages=messages,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                encoding=encoding,
+                api_key=api_key,
+                logging_obj=logging
+            )
+            if "stream_tokens" in optional_params and optional_params["stream_tokens"] == True:
+                # don't try to access stream object,
+                response = CustomStreamWrapper(
+                    model_response, model, custom_llm_provider="palm", logging_obj=logging
                 )
                 return response
             response = model_response
