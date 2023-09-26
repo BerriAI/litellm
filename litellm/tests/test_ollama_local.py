@@ -47,7 +47,7 @@
 #     except Exception as e:
 #         pytest.fail(f"Error occurred: {e}")
 
-# # test_completion_ollama_stream()
+# test_completion_ollama_stream()
 
 
 # async def test_completion_ollama_async_stream():

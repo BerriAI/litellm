@@ -2807,7 +2807,6 @@ class CustomStreamWrapper:
 
     def handle_anthropic_chunk(self, chunk):
         str_line = chunk.decode("utf-8")  # Convert bytes to string
-        print(f"str_line: {str_line}")
         text = "" 
         is_finished = False
         finish_reason = None
