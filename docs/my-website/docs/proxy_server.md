@@ -4,6 +4,7 @@ Use this to spin up a proxy api to translate openai api calls to any non-openai 
 
 This works for async + streaming as well. 
 
+**Requirements** Make sure relevant keys are set in the local .env. [Provider List](https://docs.litellm.ai/docs/providers)
 ## usage
 ```shell 
 pip install litellm
