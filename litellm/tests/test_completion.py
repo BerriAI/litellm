@@ -48,7 +48,7 @@ def test_completion_claude():
         print(response.response_ms)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_claude()
+# test_completion_claude()
 
 def test_completion_claude_max_tokens():
     try:
@@ -67,7 +67,7 @@ def test_completion_claude_max_tokens():
         print(response.response_ms)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_claude_max_tokens()
+# test_completion_claude_max_tokens()
 
 # def test_completion_oobabooga():
 #     try:
@@ -854,6 +854,19 @@ def test_completion_ai21():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+
+## test deep infra 
+def test_completion_deep_infra():
+    # litellm.set_verbose = True
+    model_name = "deepinfra/meta-llama/Llama-2-70b-chat-hf"
+    try:
+        response = completion(model=model_name, messages=messages)
+        # Add any assertions here to check the response
+        print(response)
+        print(response.response_ms)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+# test_completion_deep_infra()
 # test_completion_ai21()
 # test config file with completion #
 # def test_completion_openai_config():
