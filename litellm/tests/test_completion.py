@@ -882,8 +882,7 @@ def test_completion_deep_infra():
         print(response.response_ms)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-
-
+# test_completion_deep_infra()
 # Palm tests
 def test_completion_palm():
     # litellm.set_verbose = True
