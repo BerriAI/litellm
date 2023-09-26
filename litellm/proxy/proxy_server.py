@@ -1,3 +1,4 @@
+import litellm
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse
 import json
@@ -11,6 +12,12 @@ def initialize(model, api_base):
     user_model = model
     user_api_base = api_base
 
+
+# for streaming
+def data_generator(response):
+    for chunk in response:
+        yield f"data: {json.dumps(chunk)}\n\n"
+        
 @app.get("/models") # if project requires model list 
 def model_list(): 
     return dict(
