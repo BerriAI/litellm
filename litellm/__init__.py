@@ -322,4 +322,4 @@ from .exceptions import (
 
 )
 from .budget_manager import BudgetManager
-from .proxy import run_server
+from .proxy_server.proxy_cli import run_server
