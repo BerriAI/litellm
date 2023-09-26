@@ -27,8 +27,10 @@ def completion(
     litellm_params=None,
     logger_fn=None,
 ):
-
-    import google.generativeai as palm
+    try:
+        import google.generativeai as palm
+    except:
+        raise Exception("Importing google.generativeai failed, please run 'pip install -q google-generativeai")
     palm.configure(api_key=api_key)
 
     model = model
