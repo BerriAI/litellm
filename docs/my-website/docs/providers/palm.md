@@ -2,10 +2,7 @@
 https://developers.generativeai.google/products/palm
 
 ## Pre-requisites
-* `pip install google-cloud-aiplatform`
-* Authentication: 
-    * run `gcloud auth application-default login` See [Google Cloud Docs](https://cloud.google.com/docs/authentication/external/set-up-adc)
-    * Alternatively you can set `application_default_credentials.json`
+* `pip install -q google-generativeai`
 
 ## Sample Usage
 ```python
@@ -36,6 +33,6 @@ for chunk in response:
 ```
 
 ## Chat Models
-| Model Name       | Function Call                        |
-|------------------|--------------------------------------|
-| chat-bison       | `completion('palm/chat-bison', messages)`     |
+| Model Name       | Function Call                        | Required OS Variables    |
+|------------------|--------------------------------------|-------------------------|
+| chat-bison       | `completion('palm/chat-bison', messages)` | `os.environ['PALM_API_KEY']` |
