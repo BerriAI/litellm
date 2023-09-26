@@ -5,17 +5,27 @@ Use this to spin up a proxy api to translate openai api calls to any non-openai 
 This works for async + streaming as well. 
 
 ## usage
-```python 
+```shell 
 pip install litellm
 ```
 
-```python
+```shell
 litellm --model <your-model-name>
 ```
 
 This will host a local proxy api at : **http://localhost:8000**
 
 [**Jump to Code**](https://github.com/BerriAI/litellm/blob/fef4146396d5d87006259e00095a62e3900d6bb4/litellm/proxy.py#L36)
+
+## [Advanced] setting api base
+If your model is running locally or on a custom endpoint
+
+Pass in the api_base as well
+
+```shell
+litellm --model huggingface/meta-llama/llama2 --api_base https://my-endpoint.huggingface.cloud
+```
+
 ## test it 
 
 ```curl 
