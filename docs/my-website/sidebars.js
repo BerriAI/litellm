@@ -126,6 +126,13 @@ const sidebars = {
       ],
     },
     {
+      type: "category",
+      label: "LangChain, LlamaIndex Integration",
+      items: [
+        "langchain/langchain"
+      ],
+    },
+    {
       type: 'category',
       label: 'Extras',
       items: [
