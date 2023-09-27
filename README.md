@@ -12,10 +12,6 @@
     <a href="https://dl.circleci.com/status-badge/redirect/gh/BerriAI/litellm/tree/main" target="_blank">
         <img src="https://dl.circleci.com/status-badge/img/gh/BerriAI/litellm/tree/main.svg?style=svg" alt="CircleCI">
     </a>
-    <img src="https://img.shields.io/pypi/dm/litellm" alt="Downloads">
-    <a href="https://discord.gg/wuPM9dRgDw" target="_blank">
-        <img src="https://dcbadge.vercel.app/api/server/wuPM9dRgDw?style=flat">
-    </a>
     <a href="https://www.ycombinator.com/companies/berriai">
         <img src="https://img.shields.io/badge/Y%20Combinator-W23-orange?style=flat-square" alt="Y Combinator W23">
     </a>
@@ -23,7 +19,7 @@
 <table align="center" style="border:0; padding-top: 20px; border-collapse: separate; border-spacing: 10px;">
 <tr>
     <td style="border:none;"><a href="https://docs.litellm.ai/docs/" target="_blank">Docs</a></td>
-    <td style="border:none;"><a href="https://docs.litellm.ai/docs/providers" target="_blank">Discord</a></td>
+    <td style="border:none;"><a href="https://discord.gg/wuPM9dRgDw" target="_blank">Discord</a></td>
     <td style="border:none;"><a href="https://docs.litellm.ai/docs/providers" target="_blank">100+ Supported Models</a></td>
 </tr>
 </table>
