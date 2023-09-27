@@ -1325,9 +1325,12 @@ def load_test_model(
             "exception": e,
         }
 
-def validate_environment(model: str) -> dict:
+def validate_environment(model: Optional[str]=None) -> dict:
     keys_in_environment = False
     missing_keys = []
+
+    if model is None:
+        return {"keys_in_environment": keys_in_environment, "missing_keys": missing_keys} 
     ## EXTRACT LLM PROVIDER - if model name provided
     custom_llm_provider = None
     # check if llm provider part of model name
