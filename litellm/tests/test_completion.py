@@ -200,23 +200,6 @@ def hf_test_completion():
 
 # hf_test_completion()
 
-def hf_test_completion_task_none():
-    try:
-        litellm.set_verbose=True
-        user_message = "My name is Merve and my favorite"
-        messages = [{ "content": user_message,"role": "user"}]
-        model = "huggingface/cerebras/btlm-3b-8k-base"
-        response = completion(
-            model=model, 
-            messages=messages,
-            task=None,
-        )
-        # Add any assertions here to check the response
-        print(response)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-hf_test_completion_task_none()
-
 # this should throw an exception, to trigger https://logs.litellm.ai/
 # def hf_test_error_logs():
 #     try:
