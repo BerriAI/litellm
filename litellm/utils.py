@@ -1327,7 +1327,7 @@ def load_test_model(
 
 def validate_environment(model: Optional[str]=None) -> dict:
     keys_in_environment = False
-    missing_keys = []
+    missing_keys: List[str] = []
 
     if model is None:
         return {"keys_in_environment": keys_in_environment, "missing_keys": missing_keys} 
