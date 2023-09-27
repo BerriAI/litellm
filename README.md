@@ -23,6 +23,7 @@
     <td style="border:none;"><a href="https://docs.litellm.ai/docs/providers" target="_blank">100+ Supported Models</a></td>
 </tr>
 </table>
+
 LiteLLM manages
 - Translating inputs to the provider's completion and embedding endpoints
 - Guarantees [consistent output](https://docs.litellm.ai/docs/completion/output), text responses will always be available at `['choices'][0]['message']['content']`
