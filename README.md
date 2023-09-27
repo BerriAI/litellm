@@ -9,9 +9,6 @@
     <a href="https://pypi.org/project/litellm/" target="_blank">
         <img src="https://img.shields.io/pypi/v/litellm.svg" alt="PyPI Version">
     </a>
-    <a href="https://pypi.org/project/litellm/0.1.1/" target="_blank">
-        <img src="https://img.shields.io/badge/stable%20version-v0.1.424-blue?color=green&link=https://pypi.org/project/litellm/0.1.1/" alt="Stable Version">
-    </a>
     <a href="https://dl.circleci.com/status-badge/redirect/gh/BerriAI/litellm/tree/main" target="_blank">
         <img src="https://dl.circleci.com/status-badge/img/gh/BerriAI/litellm/tree/main.svg?style=svg" alt="CircleCI">
     </a>
@@ -22,22 +19,14 @@
     <a href="https://www.ycombinator.com/companies/berriai">
         <img src="https://img.shields.io/badge/Y%20Combinator-W23-orange?style=flat-square" alt="Y Combinator W23">
     </a>
-    <a href="https://github.com/BerriAI/litellm/issues">
-      <img src="https://img.shields.io/github/commit-activity/m/BerriAI/litellm" alt="git commit activity" />
-    </a>
 </h4>
-
-<h4 align="center">
-<a target="_blank" href="https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/liteLLM_OpenAI.ipynb">
-  <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
-</a>    
-</h4>
-
-<h4 align="center">
-    <a href="https://docs.litellm.ai/docs/providers" target="_blank">100+ Supported Models</a> |
-    <a href="https://docs.litellm.ai/docs/" target="_blank">Docs</a> |
-</h4>
-
+<table align="center" style="border:0; padding-top: 20px; border-collapse: separate; border-spacing: 10px;">
+<tr>
+    <td style="border:none;"><a href="https://docs.litellm.ai/docs/" target="_blank">Docs</a></td>
+    <td style="border:none;"><a href="https://docs.litellm.ai/docs/providers" target="_blank">Discord</a></td>
+    <td style="border:none;"><a href="https://docs.litellm.ai/docs/providers" target="_blank">100+ Supported Models</a></td>
+</tr>
+</table>
 LiteLLM manages
 - Translating inputs to the provider's completion and embedding endpoints
 - Guarantees [consistent output](https://docs.litellm.ai/docs/completion/output), text responses will always be available at `['choices'][0]['message']['content']`
