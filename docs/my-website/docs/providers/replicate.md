@@ -12,9 +12,9 @@ os.environ["REPLICATE_API_KEY"] = ""
 ### Example Call
 
 ```python
-
+# !pip install litellm
 from litellm import completion
-
+import os
 ## set ENV variables
 os.environ["REPLICATE_API_KEY"] = "replicate key"
 
