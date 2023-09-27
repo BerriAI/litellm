@@ -274,7 +274,7 @@ def completion(
             top_k=top_k,
             task=task,
             remove_input=remove_input,
-            return_full_text=return_full_text
+            return_full_text=return_full_text,
         )
         # For logging - save the values of the litellm-specific params passed in
         litellm_params = get_litellm_params(

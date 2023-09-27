@@ -907,7 +907,7 @@ def get_optional_params(  # use the openai defaults
     custom_llm_provider="",
     top_k=40,
     return_full_text=False,
-    task=None
+    task=None,
 ):
     optional_params = {}
     if model in litellm.anthropic_models:
