@@ -1,12 +1,9 @@
 # Reliability
-
-
-
 ## Helper utils 
 LiteLLM supports the following functions for reliability:
 * `litellm.longer_context_model_fallback_dict`: Dictionary which has a mapping for those models which have larger equivalents  
 * `completion_with_retries`: use tenacity retries
-* `completion()` with fallback models: set `fallback_models=['gpt-3.5-turbo', 'command-nightly', 'llama2`]. If primary model fails try fallback models
+* `completion()` with fallbacks: switch between models/keys/api bases in case of errors. 
 
 ## Context Window Errors 
 
@@ -55,7 +52,8 @@ def test_completion_custom_provider_model_name():
         printf"Error occurred: {e}")
 ```
 
-## Specify fallback models
+## Switch Models/API Keys/API Bases
+
 LLM APIs can be unstable, completion() with fallbacks ensures you'll always get a response from your calls
 
 ## Usage 
@@ -63,8 +61,19 @@ To use fallback models with `completion()`, specify a list of models in the `fal
 
 The `fallbacks` list should include the primary model you want to use, followed by additional models that can be used as backups in case the primary model fails to provide a response.
 
+### switch models 
 ```python
-response = completion(model="bad-model", fallbacks=["gpt-3.5-turbo" "command-nightly"], messages=messages)
+response = completion(model="bad-model", messages=messages, 
+    fallbacks=["gpt-3.5-turbo" "command-nightly"])
+```
+
+### switch api keys/bases (E.g. azure deployment)
+Switch between different keys for the same azure deployment, or use another deployment as well. 
+
+```python
+api_key="bad-key"
+response = completion(model="azure/gpt-4", messages=messages, api_key=api_key,
+    fallbacks=[{"api_key": "good-key-1"}, {"api_key": "good-key-2", "api_base": "good-api-base-2"}])
 ```
 
 ### Output from calls
