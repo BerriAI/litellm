@@ -10,7 +10,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import pytest
 import litellm
-from litellm.utils import trim_messages, get_token_count, get_valid_models, check_valid_key
+from litellm.utils import trim_messages, get_token_count, get_valid_models, check_valid_key, validate_environment
 
 # Assuming your trim_messages, shorten_message_to_fit_limit, and get_token_count functions are all in a module named 'message_utils'
 
@@ -93,3 +93,12 @@ def test_good_key():
     key = os.environ['OPENAI_API_KEY']
     response = check_valid_key(model="gpt-3.5-turbo", api_key=key)
     assert(response == True)
+
+# test validate environment 
+
+def test_validate_environment_empty_model():
+    api_key = validate_environment()
+    if api_key is None:
+        raise Exception() 
+
+# test_validate_environment_empty_model()
