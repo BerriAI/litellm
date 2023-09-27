@@ -82,7 +82,6 @@ def handle_prediction_response_streaming(prediction_url, api_token, print_verbos
         if response.status_code == 200:
             response_data = response.json()
             status = response_data['status']
-            print(f"response data: {response_data}")
             if "output" in response_data:
                 output_string = "".join(response_data['output'])
                 new_output = output_string[len(previous_output):]
