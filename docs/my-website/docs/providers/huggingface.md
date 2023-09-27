@@ -14,6 +14,10 @@ This can be changed by setting `task="conversational"` in the completion call. [
 
 ## Usage 
 
+<a target="_blank" href="https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/LiteLLM_HuggingFace.ipynb">
+  <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
+</a>
+
 You need to tell LiteLLM when you're calling Huggingface. 
 Do that by setting it as part of the model name -  completion(model="huggingface/<model_name>",...). 
 
