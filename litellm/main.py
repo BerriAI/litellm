@@ -672,29 +672,22 @@ def completion(
                 litellm.openai_key or
                 get_secret("DEEPINFRA_API_KEY")
             )
-            openai.api_base = "https://api.deepinfra.com/v1/openai"
             ## LOGGING
             logging.pre_call(
                 input=messages,
                 api_key=api_key,
             )
             ## COMPLETION CALL
-            openai.api_key = "1LntUh4fmg5z6iEW7UPPRhGdBDNuJx5y"
-            openai.api_base = "https://api.deepinfra.com/v1/openai"
+            openai.api_key = api_key # set key for deep infra 
             try:
-                chat_completion = openai.ChatCompletion.create(
-                    model="meta-llama/Llama-2-70b-chat-hf",
-                    messages=[{"role": "user", "content": "Hello world"}]
+                response = openai.ChatCompletion.create(
+                    model=model,
+                    messages=messages,
+                    api_base="https://api.deepinfra.com/v1/openai", # use the deepinfra api base
+                    api_type="openai",
+                    api_version=api_version, # default None
+                    **optional_params,
                 )
-                print(f"chat_completion: {chat_completion}")
-                # response = openai.ChatCompletion.create(
-                #     model=model,
-                #     messages=messages,
-                #     api_base="https://api.deepinfra.com/v1/openai", # use the deepinfra api base
-                #     api_type="openai",
-                #     api_version=api_version, # default None
-                #     **optional_params,
-                # )
             except Exception as e:
                 ## LOGGING - log the original exception returned
                 logging.post_call(
