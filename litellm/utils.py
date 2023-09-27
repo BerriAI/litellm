@@ -2062,6 +2062,10 @@ def exception_type(
     ):
     global user_logger_fn, liteDebuggerClient
     exception_mapping_worked = False
+    print()
+    print("\033[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new\033[0m")
+    print()
+    print()
     if litellm.set_verbose == True:
         litellm.error_logs['EXCEPTION'] = original_exception
         litellm.error_logs['KWARGS'] = completion_kwargs
