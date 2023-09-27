@@ -45,6 +45,7 @@ def test_context_window(model):
     with pytest.raises(ContextWindowExceededError):
         completion(model=model, messages=messages)
 
+test_context_window(model="gpt-3.5-turbo")
 # Test 2: InvalidAuth Errors
 @pytest.mark.parametrize("model", models)
 def invalid_auth(model):  # set the model key to an invalid key, depending on the model

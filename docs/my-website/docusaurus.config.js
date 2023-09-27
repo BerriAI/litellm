@@ -114,7 +114,7 @@ const config = {
             position: 'right',
             value:
               `<a href=# class=navbar__link data-fr-widget>
-                Feedback
+                I'm Confused
               </a>`
           },
         ],
