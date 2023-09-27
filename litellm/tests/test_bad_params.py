@@ -12,7 +12,7 @@ import litellm
 from litellm import embedding, completion
 
 
-litellm.set_verbose = True
+# litellm.set_verbose = True
 user_message = "Hello, how are you?"
 messages = [{"content": user_message, "role": "user"}]
 model_val = None
@@ -41,7 +41,7 @@ def test_completion_with_no_provider():
         print(f"error occurred: {e}")
         pass
 
-test_completion_with_no_provider()
+# test_completion_with_no_provider()
 # # bad key
 # temp_key = os.environ.get("OPENAI_API_KEY")
 # os.environ["OPENAI_API_KEY"] = "bad-key"
@@ -53,3 +53,10 @@ test_completion_with_no_provider()
 #     print(f"error occurred: {traceback.format_exc()}")
 #     pass
 # os.environ["OPENAI_API_KEY"] = str(temp_key)  # this passes linting#5
+
+def logger_fn(model_details):
+    print(model_details)
+os.environ['OPENAI_API_KEY'] = "1LntUh4fmg5z6iEW7UPPRhGdBDNuJx5y"
+messages = [{"role":"user","content":"Request boss to grant me 1 day leave"}]
+litellm.api_base = "https://api.deepinfra.com/v1/"
+response = litellm.completion(model="meta-llama/Llama-2-70b-chat-hf", messages=messages, custom_llm_provider="openai", logger_fn=logger_fn)
