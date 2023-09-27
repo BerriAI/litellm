@@ -19,7 +19,7 @@ This can be changed by setting `task="conversational"` in the completion call. [
 </a>
 
 You need to tell LiteLLM when you're calling Huggingface. 
-Do that by setting it as part of the model name -  completion(model="huggingface/<model_name>",...). 
+This is done by adding the "huggingface/" prefix to `model`, example `completion(model="huggingface/<model_name>",...)`. 
 
 ### Text-generation-interface (TGI) - LLMs
 ```python
