@@ -151,6 +151,7 @@ const sidebars = {
         slug: '/project',
       },
       items: [
+        "projects/OpenInterpreter",
         "projects/FastREPL",
         "projects/PROMPTMETHEUS",
         "projects/Codium PR Agent", 
