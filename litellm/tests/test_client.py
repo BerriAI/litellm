@@ -52,7 +52,7 @@ def test_completion_claude():
 def test_completion_non_openai():
     try:
         response = completion(
-            model="command-nightly", messages=messages, logger_fn=logger_fn
+            model="claude-instant-1", messages=messages, logger_fn=logger_fn
         )
         # Add any assertions here to check the response
     except Exception as e:
