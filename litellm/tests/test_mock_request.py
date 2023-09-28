@@ -27,7 +27,6 @@ def test_streaming_mock_request():
         response = litellm.mock_completion(model=model, messages=messages, stream=True)
         complete_response = "" 
         for chunk in response: 
-            print(f"chunk: {chunk}")
             complete_response += chunk["choices"][0]["delta"]["content"]
         if complete_response == "": 
             raise Exception("Empty response received")
