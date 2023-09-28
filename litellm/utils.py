@@ -1126,6 +1126,8 @@ def get_optional_params(  # use the openai defaults
         # max_new_tokens=1,temperature=0.9, top_p=0.6
         if max_tokens != float("inf"):
             optional_params["max_new_tokens"] = max_tokens
+        else:
+            optional_params["max_new_tokens"] = 256 # petals always needs max_new_tokens
         if temperature != 1:
             optional_params["temperature"] = temperature
         if top_p != 1:
