@@ -10,20 +10,54 @@ This works for async + streaming as well.
 Works with **ALL MODELS** supported by LiteLLM. To see supported providers check out this list - [Provider List](https://docs.litellm.ai/docs/providers).
 
 **Requirements** Make sure relevant keys are set in the local .env. 
+
+[**Jump to tutorial**](#tutorial---using-with-aider)
 ## quick start
 Call Huggingface models through your OpenAI proxy.
 
+**Start Proxy**  
 Run this in your CLI.
-```shell 
+```python
 $ pip install litellm
 ```
-```shell
-$ export HUGGINGFACE_API_KEY=your-api-key # [OPTIONAL]
+```python 
+$ litellm --model huggingface/bigcode/starcoder
 
-$ litellm --model huggingface/stabilityai/stablecode-instruct-alpha-3b
+#INFO:     Uvicorn running on http://0.0.0.0:8000
 ```
 
 This will host a local proxy api at: **http://0.0.0.0:8000**
+
+**Test it**
+<Tabs>
+<TabItem value="openai" label="OpenAI">
+
+```python
+import openai 
+
+openai.api_base = "http://0.0.0.0:8000"
+
+print(openai.ChatCompletion.create(model="test", messages=[{"role":"user", "content":"Hey!"}]))
+```
+
+</TabItem>
+
+<TabItem value="curl" label="curl">
+
+```curl 
+curl --location 'http://0.0.0.0:8000/chat/completions' \
+--header 'Content-Type: application/json' \
+--data '{
+  "messages": [
+    {
+      "role": "user", 
+      "content": "what do you know?"
+    }
+  ], 
+}'
+```
+</TabItem>
+</Tabs>
 
 Other supported models:
 <Tabs>
@@ -31,6 +65,15 @@ Other supported models:
 
 ```shell
 $ export ANTHROPIC_API_KEY=my-api-key
+$ litellm --model claude-instant-1
+```
+
+</TabItem>
+
+<TabItem value="huggingface" label="Huggingface">
+
+```shell
+$ export HUGGINGFACE_API_KEY=my-api-key #[OPTIONAL]
 $ litellm --model claude-instant-1
 ```
 
@@ -115,32 +158,10 @@ Pass in the api_base as well
 litellm --model huggingface/meta-llama/llama2 --api_base https://my-endpoint.huggingface.cloud
 ```
 
-Other examples
-<Tabs>
-<TabItem value="ollama_2" label="Ollama">
+**Ollama example**
 
 ```shell
 $ litellm --model ollama/llama2 --api_base http://localhost:11434
-```
-
-
-</TabItem>
-
-</Tabs>
-
-## test it 
-
-```curl 
-curl --location 'http://0.0.0.0:8000/chat/completions' \
---header 'Content-Type: application/json' \
---data '{
-  "messages": [
-    {
-      "role": "user", 
-      "content": "what do you know?"
-    }
-  ], 
-}'
 ```
 
 ## tutorial - using with aider 
@@ -182,3 +203,4 @@ $ aider --openai-api-base http://0.0.0.0:8000
 
 
 
+And that's it! 

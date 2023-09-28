@@ -2876,9 +2876,10 @@ class CustomStreamWrapper:
         text = "" 
         is_finished = False
         finish_reason = ""
+        print_verbose(f"chunk: {chunk}")
         if chunk.startswith("data:"):
             data_json = json.loads(chunk[5:])
-            print(f"data json: {data_json}")
+            print_verbose(f"data json: {data_json}")
             if "token" in data_json and "text" in data_json["token"]:
                 text = data_json["token"]["text"]
                 if "meta-llama/Llama-2" in self.model: #clean eos tokens like </s> from the returned output text
