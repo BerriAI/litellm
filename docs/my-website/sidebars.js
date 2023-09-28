@@ -90,6 +90,7 @@ const sidebars = {
       items: [
         'tutorials/azure_openai',
         'tutorials/ab_test_llms',
+        'tutorials/oobabooga',
         'tutorials/huggingface_codellama',
         'tutorials/huggingface_tutorial', 
         'tutorials/TogetherAI_liteLLM', 
