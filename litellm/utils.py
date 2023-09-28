@@ -2922,7 +2922,6 @@ class CustomStreamWrapper:
             raise ValueError(f"Unable to parse response. Original response: {chunk}")
     
     def handle_replicate_chunk(self, chunk):
-        print(f"chunk: {chunk}")
         try:
             text = "" 
             is_finished = False
@@ -2941,7 +2940,6 @@ class CustomStreamWrapper:
     
     def handle_openai_text_completion_chunk(self, chunk):
         try:
-            print(f"chunk: {chunk}")
             return chunk["choices"][0]["text"]
         except:
             raise ValueError(f"Unable to parse response. Original response: {chunk}")
