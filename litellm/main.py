@@ -1431,7 +1431,25 @@ def text_completion(*args, **kwargs):
         messages = [{"role": "system", "content": kwargs["prompt"]}]
         kwargs["messages"] = messages
         kwargs.pop("prompt")
-        return completion(*args, **kwargs)
+        response = completion(*args, **kwargs) # assume the response is the openai response object 
+        response_2 = {
+            "id": response["id"],
+            "object": "text_completion",
+            "created": response["created"],
+            "model": response["model"],
+            "choices": [
+            {
+                "text": response["choices"][0]["message"]["content"],
+                "index": response["choices"][0]["index"],
+                "logprobs": None,
+                "finish_reason": response["choices"][0]["finish_reason"]
+            }
+            ],
+            "usage": response["usage"]
+        }
+        return response_2
+    else:
+        raise ValueError("please pass prompt into the `text_completion` endpoint - `text_completion(model, prompt='hello world')`")
 
 ##### Moderation #######################
 def moderation(input: str, api_key: Optional[str]=None):

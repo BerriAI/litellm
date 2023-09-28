@@ -7,7 +7,8 @@ load_dotenv()
 @click.option('--api_base', default=None, help='API base URL.')
 @click.option('--model', required=True, help='The model name to pass to litellm expects') 
 def run_server(port, api_base, model):
-    from .proxy_server import app, initialize
+    # from .proxy_server import app, initialize
+    from proxy_server import app, initialize
     initialize(model, api_base)
     try:
         import uvicorn
