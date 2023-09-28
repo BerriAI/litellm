@@ -188,7 +188,7 @@ class CallTypes(Enum):
 
 # Logging function -> log the exact model details + what's being sent | Non-Blocking
 class Logging:
-    global supabaseClient, liteDebuggerClient, promptLayerLogger
+    global supabaseClient, liteDebuggerClient, promptLayerLogger, capture_exception, add_breadcrumb
 
     def __init__(self, model, messages, stream, call_type, start_time, litellm_call_id, function_id):
         if call_type not in [item.value for item in CallTypes]:
@@ -281,6 +281,13 @@ class Logging:
                             print_verbose=print_verbose,
                             call_type=self.call_type
                         )
+                    elif callback == "sentry" and add_breadcrumb:
+                        print_verbose("reaches sentry breadcrumbing")
+                        add_breadcrumb(
+                            category="litellm.llm_call",
+                            message=f"Model Call Details pre-call: {self.model_call_details}",
+                            level="info",
+                        )
                 except Exception as e:
                     print_verbose(
                         f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while input logging with integrations {traceback.format_exc()}"
@@ -336,6 +343,13 @@ class Logging:
                             print_verbose=print_verbose,
                             call_type = self.call_type, 
                             stream = self.stream,
+                        )
+                    elif callback == "sentry" and add_breadcrumb:
+                        print_verbose("reaches sentry breadcrumbing")
+                        add_breadcrumb(
+                            category="litellm.llm_call",
+                            message=f"Model Call Details post-call: {self.model_call_details}",
+                            level="info",
                         )
                 except:
                     print_verbose(
@@ -469,6 +483,12 @@ class Logging:
                                 call_type = self.call_type, 
                                 stream = self.stream,
                             )
+                    elif callback == "sentry":
+                        print_verbose("sending exception to sentry")
+                        if capture_exception:
+                            capture_exception(exception)
+                        else:
+                            print_verbose(f"capture exception not initialized: {capture_exception}")
                 except Exception as e:
                     print_verbose(
                         f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while failure logging with integrations {traceback.format_exc()}"
@@ -3131,7 +3151,10 @@ class CustomStreamWrapper:
         except StopIteration:
             raise StopIteration
         except Exception as e: 
+            traceback_exception = traceback.print_exc()
             e.message = str(e)
+             # LOG FAILURE - handle streaming failure logging in the _next_ object, remove `handle_failure` once it's deprecated
+            threading.Thread(target=self.logging_obj.failure_handler, args=(e, traceback_exception)).start()
             return exception_type(model=self.model, custom_llm_provider=self.custom_llm_provider, original_exception=e)
     
     async def __anext__(self):
