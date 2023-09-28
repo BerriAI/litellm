@@ -1432,7 +1432,7 @@ def text_completion(*args, **kwargs):
         kwargs["messages"] = messages
         kwargs.pop("prompt")
         response = completion(*args, **kwargs) # assume the response is the openai response object 
-        response_2 = {
+        formatted_response_obj = {
             "id": response["id"],
             "object": "text_completion",
             "created": response["created"],
@@ -1447,7 +1447,7 @@ def text_completion(*args, **kwargs):
             ],
             "usage": response["usage"]
         }
-        return response_2
+        return formatted_response_obj
     else:
         raise ValueError("please pass prompt into the `text_completion` endpoint - `text_completion(model, prompt='hello world')`")
 
