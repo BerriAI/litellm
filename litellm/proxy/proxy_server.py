@@ -1,4 +1,10 @@
+import sys, os
+sys.path.insert(
+    0, os.path.abspath("../..")
+)  # Adds the parent directory to the system path
+
 import litellm
+print(litellm.__file__)
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse
 import json
@@ -25,8 +31,21 @@ def model_list():
         object="list",
     )
 
-@app.post("/chat/completions")
+@app.post("/completions")
 async def completion(request: Request):
+    data = await request.json()
+    if (user_model is None):
+        raise ValueError("Proxy model needs to be set")
+    data["model"] = user_model
+    if user_api_base:
+        data["api_base"] = user_api_base
+    response = litellm.text_completion(**data)
+    if 'stream' in data and data['stream'] == True: # use generate_responses to stream responses
+            return StreamingResponse(data_generator(response), media_type='text/event-stream')
+    return response
+
+@app.post("/chat/completions")
+async def chat_completion(request: Request):
     data = await request.json()
     if (user_model is None):
         raise ValueError("Proxy model needs to be set")
