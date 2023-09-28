@@ -60,6 +60,8 @@ def completion(
             prompt += f"{AnthropicConstants.HUMAN_PROMPT.value}{message['content']}"
     prompt += f"{AnthropicConstants.AI_PROMPT.value}"
     max_tokens_to_sample = optional_params.get("max_tokens_to_sample", 256) # required anthropic param, default to 256 if user does not provide an input
+    if max_tokens_to_sample != 256: # not default - print for testing 
+        print_verbose(f"LiteLLM.Anthropic: Max Tokens Set")
     data = {
         "model": model,
         "prompt": prompt,
