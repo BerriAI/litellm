@@ -1,0 +1,6 @@
+version: '3'
+services:
+  litellm:
+    build: .
+    ports:
+      - "8000:8000"
