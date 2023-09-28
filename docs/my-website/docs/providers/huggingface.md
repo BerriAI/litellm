@@ -1,16 +1,13 @@
 import Image from '@theme/IdealImage';
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
 
 # Huggingface
 
-LiteLLM supports Huggingface models that use the [text-generation-inference](https://github.com/huggingface/text-generation-inference) format or the [Conversational task](https://huggingface.co/docs/api-inference/detailed_parameters#conversational-task) format. 
-
+LiteLLM supports the following types of Huggingface models:
 * Text-generation-interface: [Here's all the models that use this format](https://huggingface.co/models?other=text-generation-inference).
 * Conversational task: [Here's all the models that use this format](https://huggingface.co/models?pipeline_tag=conversational).
 * Non TGI/Conversational-task LLMs
-
-**By default, we assume the you're trying to call models with the 'text-generation-interface' format (e.g. Llama2, Falcon, WizardCoder, MPT, etc.)**
-
-This can be changed by setting `task="conversational"` in the completion call. [Example](#conversational-task-blenderbot-etc)
 
 ## Usage 
 
@@ -21,7 +18,9 @@ This can be changed by setting `task="conversational"` in the completion call. [
 You need to tell LiteLLM when you're calling Huggingface. 
 This is done by adding the "huggingface/" prefix to `model`, example `completion(model="huggingface/<model_name>",...)`. 
 
-### Text-generation-interface (TGI) - LLMs
+<Tabs>
+<TabItem value="tgi" label="Text-generation-interface (TGI)">
+
 ```python
 import os 
 from litellm import completion 
@@ -32,14 +31,17 @@ os.environ["HUGGINGFACE_API_KEY"] = "huggingface_api_key"
 messages = [{ "content": "There's a llama in my garden 😱 What should I do?","role": "user"}]
 
 # e.g. Call 'WizardLM/WizardCoder-Python-34B-V1.0' hosted on HF Inference endpoints
-response = completion(model="huggingface/WizardLM/WizardCoder-Python-34B-V1.0", messages=messages, api_base="https://my-endpoint.huggingface.cloud")
+response = completion(
+  model="huggingface/WizardLM/WizardCoder-Python-34B-V1.0", 
+  messages=messages, 
+  api_base="https://my-endpoint.huggingface.cloud"
+)
 
 print(response)
 ```
 
-### Conversational-task (BlenderBot, etc.) LLMs
-
-**Key Change**: `completion(..., task="conversational")`
+</TabItem>
+<TabItem value="conv" label="Conversational-task (BlenderBot, etc.)">
 
 ```python
 import os 
@@ -51,14 +53,17 @@ os.environ["HUGGINGFACE_API_KEY"] = "huggingface_api_key"
 messages = [{ "content": "There's a llama in my garden 😱 What should I do?","role": "user"}]
 
 # e.g. Call 'facebook/blenderbot-400M-distill' hosted on HF Inference endpoints
-response = completion(model="huggingface/facebook/blenderbot-400M-distill", messages=messages, api_base="https://my-endpoint.huggingface.cloud", task="conversational")
+response = completion(
+  model="huggingface/facebook/blenderbot-400M-distill", 
+  messages=messages, 
+  api_base="https://my-endpoint.huggingface.cloud"
+)
 
 print(response)
 ```
+</TabItem>
+<TabItem value="none" label="Non TGI/Conversational-task LLMs">
 
-### Non TGI/Conversational-task LLMs
-
-**Key Change**: `completion(..., task=None)`
 ```python
 import os 
 from litellm import completion 
@@ -66,15 +71,19 @@ from litellm import completion
 # [OPTIONAL] set env var
 os.environ["HUGGINGFACE_API_KEY"] = "huggingface_api_key" 
 
+messages = [{ "content": "There's a llama in my garden 😱 What should I do?","role": "user"}]
+
+# e.g. Call 'roneneldan/TinyStories-3M' hosted on HF Inference endpoints
 response = completion(
   model="huggingface/roneneldan/TinyStories-3M", 
-  messages=[{ "content": "My name is Merve and my favorite", "role": "user"}],
+  messages=messages,
   api_base="https://p69xlsj6rpno5drq.us-east-1.aws.endpoints.huggingface.cloud",
-  task=None,
 )
-# Add any assertions here to check the response
+
 print(response)
 ```
+</TabItem>
+</Tabs>
 
 ### [OPTIONAL] API KEYS + API BASE
 If required, you can set the api key + api base, set it in your os environment. [Code for how it's sent](https://github.com/BerriAI/litellm/blob/0100ab2382a0e720c7978fbf662cc6e6920e7e03/litellm/llms/huggingface_restapi.py#L25)
