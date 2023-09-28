@@ -239,6 +239,7 @@ def completion(
                 model
             ]  # update the model to the actual value if an alias has been passed in
         model_response = ModelResponse()
+
         if deployment_id != None: # azure llms
                 model=deployment_id
                 custom_llm_provider="azure"
@@ -706,11 +707,7 @@ def completion(
                 original_response=response,
                 additional_args={"headers": litellm.headers},
             )
-        elif (
-            (
-                model in litellm.huggingface_models and 
-                custom_llm_provider!="custom" # if users use a hf model, with a custom/provider. See implementation of custom_llm_provider == custom
-            ) or 
+        elif ( 
             custom_llm_provider == "huggingface"
         ):
             custom_llm_provider = "huggingface"
