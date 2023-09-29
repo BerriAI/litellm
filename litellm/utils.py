@@ -2776,10 +2776,16 @@ def litellm_telemetry(data):
         uuid_value = str(uuid.uuid4())
     try:
         # Prepare the data to send to litellm logging api
+        try: 
+            pkg_version = importlib.metadata.version("litellm")
+        except:
+            pkg_version = None
+        if "model" not in data:
+            data["model"] = None
         payload = {
             "uuid": uuid_value,
             "data": data,
-            "version:": importlib.metadata.version("litellm"),
+            "version:": pkg_version 
         }
         # Make the POST request to litellm logging api
         response = requests.post(
