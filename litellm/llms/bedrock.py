@@ -114,7 +114,6 @@ def completion(
     if provider == "anthropic":
         data = json.dumps({
             "prompt": prompt,
-            "max_tokens_to_sample": 256,
             **optional_params
         })
     elif provider == "ai21":
