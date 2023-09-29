@@ -149,13 +149,13 @@ $ litellm --model command-nightly
 
 [**Jump to Code**](https://github.com/BerriAI/litellm/blob/fef4146396d5d87006259e00095a62e3900d6bb4/litellm/proxy.py#L36)
 
-## setting api base
-For **local model** or model on **custom endpoint**
-
-Pass in the api_base as well
+## setting api base, temperature, max tokens
 
 ```shell
-litellm --model huggingface/meta-llama/llama2 --api_base https://my-endpoint.huggingface.cloud
+litellm --model huggingface/bigcode/starcoder \
+  --api_base https://my-endpoint.huggingface.cloud \
+  --max_tokens 250 \
+  --temperature 0.5
 ```
 
 **Ollama example**
