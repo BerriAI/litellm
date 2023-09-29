@@ -1240,8 +1240,8 @@ def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None):
         elif model in litellm.open_ai_embedding_models:
             custom_llm_provider = "openai"
         elif model in litellm.cohere_embedding_models:
-            custom_llm_provider == "cohere"
-        
+            custom_llm_provider = "cohere"
+
         if custom_llm_provider is None or custom_llm_provider=="":
             print()
             print("\033[1;31mProvider List: https://docs.litellm.ai/docs/providers\033[0m")
