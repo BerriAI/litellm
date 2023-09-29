@@ -784,13 +784,15 @@ def test_completion_bedrock_claude():
         response = completion(
             model="bedrock/anthropic.claude-instant-v1", 
             messages=messages,
+            max_tokens=10,
+            temperature=0.1,
             logger_fn=logger_fn
         )
         # Add any assertions here to check the response
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_completion_bedrock_claude()
+test_completion_bedrock_claude()
 
 def test_completion_bedrock_claude_stream():
     print("calling claude")
@@ -807,7 +809,7 @@ def test_completion_bedrock_claude_stream():
             print(chunk)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_bedrock_claude_stream()
+# test_completion_bedrock_claude_stream()
 
 def test_completion_bedrock_ai21():
     try:
