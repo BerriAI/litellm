@@ -236,11 +236,6 @@ def completion(
         if deployment_id != None: # azure llms
                 model=deployment_id
                 custom_llm_provider="azure"
-        elif (
-            model.split("/", 1)[0] in litellm.provider_list
-        ):  # allow custom provider to be passed in via the model name "azure/chatgpt-test"
-            custom_llm_provider = model.split("/", 1)[0]
-            model = model.split("/", 1)[1]
         model, custom_llm_provider = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
         model_api_key = get_api_key(llm_provider=custom_llm_provider, dynamic_api_key=api_key) # get the api key from the environment if required for the model
         if model_api_key and "sk-litellm" in model_api_key:
@@ -1419,6 +1414,15 @@ def embedding(
                 model_response= EmbeddingResponse()
 
             )
+        # elif custom_llm_provider == "huggingface":
+        #     response = huggingface_restapi.embedding(
+        #         model=model,
+        #         input=input,
+        #         encoding=encoding,
+        #         api_key=cohere_key,
+        #         logging_obj=logging,
+        #         model_response= EmbeddingResponse()
+        #     )
         else:
             args = locals()
             raise ValueError(f"No valid embedding model args passed in - {args}")
