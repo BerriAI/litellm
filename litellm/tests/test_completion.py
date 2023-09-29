@@ -73,7 +73,7 @@ def test_completion_claude_max_tokens():
         litellm.set_verbose = False
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_claude_max_tokens()
+# test_completion_claude_max_tokens()
 
 # def test_completion_oobabooga():
 #     try:
@@ -208,6 +208,22 @@ def test_get_hf_task_for_model():
 #     except Exception as e:
 #         pytest.fail(f"Error occurred: {e}")
 # hf_test_completion_tgi()
+
+# def hf_test_completion_tgi_stream():
+#     try:
+#         response = litellm.completion(
+#             model="huggingface/glaiveai/glaive-coder-7b",
+#             messages=[{ "content": "Hello, how are you?","role": "user"}],
+#             api_base="https://wjiegasee9bmqke2.us-east-1.aws.endpoints.huggingface.cloud",
+#             stream=True
+#         )
+#         # Add any assertions here to check the response
+#         print(response)
+#         for chunk in response:
+#             print(chunk)
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
+# hf_test_completion_tgi_stream()
 
 # ################### Hugging Face Conversational models ########################
 # def hf_test_completion_conv():
