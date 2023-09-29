@@ -164,33 +164,7 @@ def completion(
     user: str = "",
     deployment_id = None,
     # Optional liteLLM function params
-    *,
-    return_async=False,
-    mock_response: Optional[str] = None,
-    api_key: Optional[str] = None,
-    api_version: Optional[str] = None,
-    api_base: Optional[str] = None,
-    force_timeout=600,
-    num_beams=1,
-    logger_fn=None,
-    verbose=False,
-    azure=False,
-    custom_llm_provider=None,
-    litellm_call_id=None,
-    litellm_logging_obj=None,
-    use_client=False,
-    id=None, # this is an optional param to tag individual completion calls 
-    metadata: Optional[dict]=None,
-    # model specific optional params
-    top_k=40,# used by text-bison only
-    task: Optional[str]="text-generation-inference", # used by huggingface inference endpoints
-    return_full_text: bool = False, # used by huggingface TGI
-    remove_input: bool = True, # used by nlp cloud models - prevents input text from being returned as part of output
-    request_timeout=0,  # unused var for old version of OpenAI API
-    fallbacks=[],
-    caching = False,
-    cache_params = {}, # optional to specify metadata for caching
-    acompletion=False,
+    **kwargs,
 ) -> ModelResponse:
     """
     Perform a completion() using any of litellm supported llms (example gpt-4, gpt-3.5-turbo, claude-2, command-nightly)
@@ -225,6 +199,34 @@ def completion(
         - It supports various optional parameters for customizing the completion behavior.
         - If 'mock_response' is provided, a mock completion response is returned for testing or debugging.
     """
+    ######### unpacking kwargs #####################
+    return_async = kwargs.get('return_async', False)
+    mock_response = kwargs.get('mock_response', None)
+    api_key = kwargs.get('api_key', None)
+    api_version = kwargs.get('api_version', None)
+    api_base = kwargs.get('api_base', None)
+    force_timeout= kwargs.get('force_timeout', 600)
+    num_beams = kwargs.get('num_beams', 1)
+    logger_fn = kwargs.get('logger_fn', None)
+    verbose = kwargs.get('verbose', False)
+    azure = kwargs.get('azure', False)
+    custom_llm_provider = kwargs.get('custom_llm_provider', None)
+    litellm_call_id = kwargs.get('litellm_call_id', None)
+    litellm_logging_obj = kwargs.get('litellm_logging_obj', None)
+    use_client = kwargs.get('use_client', False)
+    id = kwargs.get('id', None)
+    metadata = kwargs.get('metadata', None)
+    top_k=40,# used by text-bison only
+    task = kwargs.get('task', "text-generation-inference")
+    return_full_text = kwargs.get('return_full_text', False)
+    remove_input = kwargs.get('remove_input', True)
+    request_timeout = kwargs.get('request_timeout', 0)
+    fallbacks = kwargs.get('fallbacks', [])
+    caching = kwargs.get('caching', False)
+    cache_params = kwargs.get('cache_params', {})
+    acompletion = kwargs.get('acompletion', False)
+    ######## end of unpacking kwargs ###########
+
     if mock_response:
         return mock_completion(model, messages, stream=stream, mock_response=mock_response)
 
