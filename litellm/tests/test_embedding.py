@@ -33,3 +33,17 @@ def test_cohere_embedding():
 
 # test_cohere_embedding()
 
+# comment out hf tests - since hf endpoints are unstable
+# def test_hf_embedding():
+#     try:
+#         # huggingface/microsoft/codebert-base
+#         # huggingface/facebook/bart-large
+#         response = embedding(
+#             model="huggingface/BAAI/bge-large-zh", input=["good morning from litellm", "this is another item"]
+#         )
+#         print(f"response:", response)
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
+# test_hf_embedding()
+
+
