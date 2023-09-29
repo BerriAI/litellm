@@ -15,6 +15,10 @@ class BedrockError(Exception):
             self.message
         )  # Call the base class constructor with the parameters it needs
 
+class AnthropicConstants(Enum):
+    HUMAN_PROMPT = "\n\nHuman:"
+    AI_PROMPT = "\n\nAssistant:"
+
 def init_bedrock_client(region_name):
     import sys
     import boto3
@@ -43,6 +47,39 @@ def init_bedrock_client(region_name):
             raise e
     return client
 
+def convert_messages_to_prompt(messages, provider):
+    # handle anthropic prompts using anthropic constants
+    if provider == "anthropic":
+        prompt = ""
+        for message in messages:
+            if "role" in message:
+                if message["role"] == "user":
+                    prompt += (
+                        f"{AnthropicConstants.HUMAN_PROMPT.value}{message['content']}"
+                    )
+                else:
+                    prompt += (
+                        f"{AnthropicConstants.AI_PROMPT.value}{message['content']}"
+                    )
+            else:
+                prompt += f"{AnthropicConstants.HUMAN_PROMPT.value}{message['content']}"
+        prompt += f"{AnthropicConstants.AI_PROMPT.value}"
+    else:
+        prompt = ""
+        for message in messages:
+            if "role" in message:
+                if message["role"] == "user":
+                    prompt += (
+                        f"{message['content']}"
+                    )
+                else:
+                    prompt += (
+                        f"{message['content']}"
+                    )
+            else:
+                prompt += f"{message['content']}"
+    return prompt
+
 """
 BEDROCK AUTH Keys/Vars
 os.environ['AWS_ACCESS_KEY_ID'] = ""
@@ -66,28 +103,21 @@ def completion(
 
     region_name = (
         get_secret("AWS_REGION_NAME") or
-        "us-west-2" # default to us-west-2
+        "us-west-2" # default to us-west-2 if user not specified
     )
 
     client = init_bedrock_client(region_name)
 
     model = model
     provider = model.split(".")[0]
-    prompt = ""
-    for message in messages:
-        if "role" in message:
-            if message["role"] == "user":
-                prompt += (
-                    f"{message['content']}"
-                )
-            else:
-                prompt += (
-                    f"{message['content']}"
-                )
-        else:
-            prompt += f"{message['content']}"
-    
-    if provider == "ai21":
+    prompt = convert_messages_to_prompt(messages, provider)
+    if provider == "anthropic":
+        data = json.dumps({
+            "prompt": prompt,
+            "max_tokens_to_sample": 256,
+            **optional_params
+        })
+    elif provider == "ai21":
         data = json.dumps({
             "prompt": prompt,
         }) 
@@ -137,6 +167,9 @@ def completion(
     outputText = "default"
     if provider == "ai21":
         outputText = response_body.get('completions')[0].get('data').get('text')
+    elif provider == "anthropic":
+        outputText = response_body['completion']
+        model_response["finish_reason"] = response_body["stop_reason"]
     else: # amazon titan
         outputText = response_body.get('results')[0].get('outputText')
     if "error" in outputText:
