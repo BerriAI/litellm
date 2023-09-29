@@ -650,7 +650,7 @@ def test_completion_replicate_stream_bad_key():
 #     except Exception as e:
 #         pytest.fail(f"Error occurred: {e}")
 
-test_completion_bedrock_ai21_stream() 
+# test_completion_bedrock_ai21_stream() 
 
 
 def test_completion_sagemaker_stream():
