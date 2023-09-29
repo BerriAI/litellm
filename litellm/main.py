@@ -207,7 +207,6 @@ def completion(
     api_version = kwargs.get('api_version', None)
     api_base = kwargs.get('api_base', None)
     force_timeout= kwargs.get('force_timeout', 600)
-    num_beams = kwargs.get('num_beams', 1)
     logger_fn = kwargs.get('logger_fn', None)
     verbose = kwargs.get('verbose', False)
     custom_llm_provider = kwargs.get('custom_llm_provider', None)
@@ -220,7 +219,6 @@ def completion(
     fallbacks = kwargs.get('fallbacks', [])
     caching = kwargs.get('caching', False)
     cache_params = kwargs.get('cache_params', {})
-    acompletion = kwargs.get('acompletion', False)
     ######## end of unpacking kwargs ###########
 
     if mock_response:
