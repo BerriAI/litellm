@@ -213,8 +213,6 @@ def completion(
     litellm_logging_obj = kwargs.get('litellm_logging_obj', None)
     id = kwargs.get('id', None)
     metadata = kwargs.get('metadata', None)
-    task = kwargs.get('task', "text-generation-inference")
-    return_full_text = kwargs.get('return_full_text', False)
     request_timeout = kwargs.get('request_timeout', 0)
     fallbacks = kwargs.get('fallbacks', [])
     ######## end of unpacking kwargs ###########
@@ -267,9 +265,9 @@ def completion(
             model=model,
             custom_llm_provider=custom_llm_provider,
             top_k=kwargs.get('top_k', 40),
-            task=task,
+            task=kwargs.get('task', "text-generation-inference"),
             remove_input=kwargs.get('remove_input', True),
-            return_full_text=return_full_text,
+            return_full_text=kwargs.get('return_full_text', False),
         )
         # For logging - save the values of the litellm-specific params passed in
         litellm_params = get_litellm_params(
