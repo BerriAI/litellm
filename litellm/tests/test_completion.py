@@ -492,18 +492,6 @@ def test_completion_hf_model_no_provider_2():
 
 # test_completion_hf_model_no_provider_2()
 
-def test_completion_openrouter2():
-    try:
-        response = completion(
-            model="openrouter/openai/gpt-4-32k",
-            messages=messages,
-            max_tokens=5,
-        )
-        # Add any assertions here to check the response
-        print(response)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
 def test_completion_openai_with_more_optional_params():
     try:
         response = completion(
@@ -803,6 +791,24 @@ def test_completion_bedrock_claude():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 # test_completion_bedrock_claude()
+
+def test_completion_bedrock_claude_stream():
+    print("calling claude")
+    litellm.set_verbose = False
+    try:
+        response = completion(
+            model="bedrock/anthropic.claude-instant-v1", 
+            messages=messages,
+            logger_fn=logger_fn,
+            stream=True
+        )
+        # Add any assertions here to check the response
+        print(response)
+        for chunk in response:
+            print(chunk)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+test_completion_bedrock_claude_stream()
 
 def test_completion_bedrock_ai21():
     try:
