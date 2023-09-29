@@ -799,7 +799,6 @@ def test_completion_bedrock_claude_stream():
         response = completion(
             model="bedrock/anthropic.claude-instant-v1", 
             messages=messages,
-            logger_fn=logger_fn,
             stream=True
         )
         # Add any assertions here to check the response
