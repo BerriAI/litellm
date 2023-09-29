@@ -19,3 +19,20 @@ response = embedding('text-embedding-ada-002', input=["good morning from litellm
 | Model Name           | Function Call                               | Required OS Variables                |
 |----------------------|---------------------------------------------|--------------------------------------|
 | text-embedding-ada-002 | `embedding('embedding-model-deployment', input=input, custom_llm_provider="azure")` | `os.environ['AZURE_API_KEY']`,`os.environ['AZURE_API_BASE']`,`os.environ['AZURE_API_VERSION']` |
+
+## Cohere Embedding Models
+https://docs.cohere.com/reference/embed
+
+```python
+from litellm import embedding
+import os
+os.environ['COHERE_API_KEY'] = ""
+response = embedding('embed-english-v2.0', input=["good morning from litellm"])
+```
+
+| Model Name            | Function Call | Required OS Variables                        |
+|-----------------------|--------------------------------------------------------------|-------------------------------------------------|
+| embed-english-v2.0    | `embedding('embed-english-v2.0', input=input)`               | `os.environ['COHERE_API_KEY']`                                             |
+| embed-english-light-v2.0 | `embedding('embed-english-light-v2.0', input=input)`         | `os.environ['COHERE_API_KEY']`                                             |
+| embed-multilingual-v2.0 | `embedding('embed-multilingual-v2.0', input=input)`         | `os.environ['COHERE_API_KEY']`                                             |
+
