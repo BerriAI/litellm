@@ -1404,6 +1404,9 @@ def embedding(
             )
             ## EMBEDDING CALL
             response = openai.Embedding.create(input=input, model=model)
+
+            ## LOGGING
+            logging.post_call(input=input, api_key=openai.api_key, original_response=response)
         elif model in litellm.cohere_embedding_models:
             cohere_key = (
                 api_key
