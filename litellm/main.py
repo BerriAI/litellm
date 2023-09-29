@@ -217,8 +217,6 @@ def completion(
     return_full_text = kwargs.get('return_full_text', False)
     request_timeout = kwargs.get('request_timeout', 0)
     fallbacks = kwargs.get('fallbacks', [])
-    caching = kwargs.get('caching', False)
-    cache_params = kwargs.get('cache_params', {})
     ######## end of unpacking kwargs ###########
 
     if mock_response:
