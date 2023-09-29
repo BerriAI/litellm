@@ -35,10 +35,7 @@ Here's an example of using a bedrock model with LiteLLM
 
 
 ## Streaming
-Bedrock currently supports streaming for the following llms:
-* `bedrock/amazon.titan-tg1-large`
 
-Example Usage
 ```python
 import os 
 from litellm import completion
