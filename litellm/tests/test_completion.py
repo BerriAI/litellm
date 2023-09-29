@@ -476,7 +476,7 @@ def test_completion_hf_model_no_provider():
     except Exception as e:
         pass
 
-test_completion_hf_model_no_provider()
+# test_completion_hf_model_no_provider()
 
 def test_completion_hf_model_no_provider_2():
     try:
@@ -490,7 +490,7 @@ def test_completion_hf_model_no_provider_2():
     except Exception as e:
         pass
 
-test_completion_hf_model_no_provider_2()
+# test_completion_hf_model_no_provider_2()
 
 def test_completion_openrouter2():
     try:
@@ -790,6 +790,19 @@ def test_completion_bedrock_titan():
         pytest.fail(f"Error occurred: {e}")
 # test_completion_bedrock_titan()
 
+def test_completion_bedrock_claude():
+    print("calling claude")
+    try:
+        response = completion(
+            model="bedrock/anthropic.claude-instant-v1", 
+            messages=messages,
+            logger_fn=logger_fn
+        )
+        # Add any assertions here to check the response
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+# test_completion_bedrock_claude()
 
 def test_completion_bedrock_ai21():
     try:
