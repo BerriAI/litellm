@@ -9,9 +9,10 @@ load_dotenv()
 @click.option('--debug', is_flag=True, help='To debug the input') 
 @click.option('--temperature', default=None, type=float, help='Set temperature for the model') 
 @click.option('--max_tokens', default=None, help='Set max tokens for the model') 
-def run_server(port, api_base, model, debug, temperature, max_tokens):
+@click.option('--telemetry', default=True, type=bool, help='Helps us know if people are using this feature. Turn this off by doing `--telemetry False`') 
+def run_server(port, api_base, model, debug, temperature, max_tokens, telemetry):
     from .proxy_server import app, initialize
-    initialize(model, api_base, debug, temperature, max_tokens)
+    initialize(model, api_base, debug, temperature, max_tokens, telemetry)
     try:
         import uvicorn
     except:
