@@ -96,6 +96,74 @@ def completion(
         }
         return model_response
 
-def embedding():
-    # logic for parsing in - calling - parsing out model embedding calls
-    pass
+def embedding(
+    model: str,
+    input: list,
+    api_key: str,
+    logging_obj=None,
+    model_response=None,
+    encoding=None,
+):
+    headers = validate_environment(api_key)
+    embed_url = "https://api.cohere.ai/v1/embed"
+    model = model
+    data = {
+        "model": model,
+        "texts": input,
+    }
+
+    ## LOGGING
+    logging_obj.pre_call(
+            input=input,
+            api_key=api_key,
+            additional_args={"complete_input_dict": data},
+        )
+    ## COMPLETION CALL
+    response = requests.post(
+        embed_url, headers=headers, data=json.dumps(data)
+    )
+
+    ## LOGGING
+    logging_obj.post_call(
+            input=input,
+            api_key=api_key,
+            additional_args={"complete_input_dict": data},
+            original_response=response,
+        )
+    # print(response.json())
+    """
+        response 
+        {
+            'object': "list",
+            'data': [
+            
+            ]
+            'model', 
+            'usage'
+        }
+    """
+    embeddings = response.json()['embeddings']
+    output_data = []
+    for idx, embedding in enumerate(embeddings):
+        output_data.append(
+            {
+                "object": "embedding",
+                "index": idx,
+                "embedding": embedding
+            }
+        )
+    model_response["object"] = "list"
+    model_response["data"] = output_data
+    model_response["model"] = model
+    input_tokens = 0
+    for text in input:
+        input_tokens+=len(encoding.encode(text)) 
+
+    model_response["usage"] = { 
+        "prompt_tokens": input_tokens, 
+        "total_tokens": input_tokens,
+    }
+    return model_response
+
+
+    
