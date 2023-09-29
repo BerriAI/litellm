@@ -3,17 +3,12 @@
 LiteLLM supports all LLMs on NLP Cloud.
 
 ## API Keys
-We provide a free $10 community-key for testing all providers on LiteLLM. You can replace this with your own key. 
 
 ```python 
 import os 
 
-os.environ["NLP_CLOUD_API_KEY"] = "sk-litellm-7_NPZhMGxY2GoHC59LgbDw" # [OPTIONAL] replace with your nlp cloud key
+os.environ["NLP_CLOUD_API_KEY"] = "your-api-key"
 ```
-**Need a dedicated key?**
-Email us @ krrish@berri.ai 
-
-[**See all supported models by the litellm api key**](../proxy_api.md#supported-models-for-litellm-key)
 
 ## Sample Usage
 
@@ -21,8 +16,8 @@ Email us @ krrish@berri.ai
 import os
 from litellm import completion 
 
-# set env - [OPTIONAL] replace with your nlp cloud key
-os.environ["NLP_CLOUD_API_KEY"] = "sk-litellm-7_NPZhMGxY2GoHC59LgbDw" 
+# set env
+os.environ["NLP_CLOUD_API_KEY"] = "your-api-key" 
 
 messages = [{"role": "user", "content": "Hey! how's it going?"}]
 response = completion(model="dolphin", messages=messages)
@@ -36,8 +31,8 @@ Just set `stream=True` when calling completion.
 import os
 from litellm import completion 
 
-# set env - [OPTIONAL] replace with your nlp cloud key
-os.environ["NLP_CLOUD_API_KEY"] = "sk-litellm-7_NPZhMGxY2GoHC59LgbDw" 
+# set env
+os.environ["NLP_CLOUD_API_KEY"] = "your-api-key" 
 
 messages = [{"role": "user", "content": "Hey! how's it going?"}]
 response = completion(model="dolphin", messages=messages, stream=True)
@@ -57,7 +52,7 @@ import os
 from litellm import completion 
 
 # set env - [OPTIONAL] replace with your nlp cloud key
-os.environ["NLP_CLOUD_API_KEY"] = "sk-litellm-7_NPZhMGxY2GoHC59LgbDw" 
+os.environ["NLP_CLOUD_API_KEY"] = "your-api-key" 
 
 messages = [{"role": "user", "content": "Hey! how's it going?"}]
 

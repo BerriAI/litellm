@@ -2,18 +2,12 @@
 LiteLLM supports Claude-1, 1.2 and Claude-2.
 
 ## API Keys
-We provide a free $10 community-key for testing all providers on LiteLLM. You can replace this with your own key. 
 
 ```python 
 import os 
 
-os.environ["ANTHROPIC_API_KEY"] = "sk-litellm-7_NPZhMGxY2GoHC59LgbDw" # [OPTIONAL] replace with your anthropic key
+os.environ["ANTHROPIC_API_KEY"] = "your-api-key"
 ```
-**Need a dedicated key?**
-Email us @ krrish@berri.ai 
-
-## Supported Models for LiteLLM Key
-These are the models that currently work with the "sk-litellm-.." keys.
 
 ## Sample Usage
 
@@ -22,7 +16,7 @@ import os
 from litellm import completion 
 
 # set env - [OPTIONAL] replace with your anthropic key
-os.environ["ANTHROPIC_API_KEY"] = "sk-litellm-7_NPZhMGxY2GoHC59LgbDw" 
+os.environ["ANTHROPIC_API_KEY"] = "your-api-key" 
 
 messages = [{"role": "user", "content": "Hey! how's it going?"}]
 response = completion(model="claude-instant-1", messages=messages)
@@ -36,8 +30,8 @@ Just set `stream=True` when calling completion.
 import os
 from litellm import completion 
 
-# set env - [OPTIONAL] replace with your anthropic key
-os.environ["ANTHROPIC_API_KEY"] = "sk-litellm-7_NPZhMGxY2GoHC59LgbDw" 
+# set env 
+os.environ["ANTHROPIC_API_KEY"] = "your-api-key" 
 
 messages = [{"role": "user", "content": "Hey! how's it going?"}]
 response = completion(model="claude-instant-1", messages=messages, stream=True)
