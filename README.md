@@ -45,8 +45,13 @@ from litellm import completion
 import os
 
 ## set ENV variables 
+<<<<<<< HEAD
 os.environ["OPENAI_API_KEY"] = "your-openai-key" 
 os.environ["COHERE_API_KEY"] = "your-cohere-key" 
+=======
+os.environ["OPENAI_API_KEY"] = "your-api-key"
+os.environ["COHERE_API_KEY"] = "your-api-key"
+>>>>>>> 6a9d754 (remove api key from docs)
 
 messages = [{ "content": "Hello, how are you?","role": "user"}]
 

@@ -17,8 +17,8 @@ config = {
 }
 
 # set env var
-os.environ["OPENAI_API_KEY"] = "sk-litellm-7_NPZhMGxY2GoHC59LgbDw" # [OPTIONAL] replace with your openai key
-os.environ["ANTHROPIC_API_KEY"] = "sk-litellm-7_NPZhMGxY2GoHC59LgbDw" # [OPTIONAL] replace with your anthropic key
+os.environ["OPENAI_API_KEY"] = "your-api-key"
+os.environ["ANTHROPIC_API_KEY"] = "your-api-key"
 
 
 sample_text = "how does a court case get to the Supreme Court?" * 1000

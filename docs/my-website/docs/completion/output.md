@@ -57,7 +57,7 @@ You can also access information like latency.
 
 ```python
 import litellm
-os.environ["ANTHROPIC_API_KEY"] = "sk-litellm-5b46387675a944d2"
+os.environ["ANTHROPIC_API_KEY"] = "your-api-key"
 
 messages=[{"role": "user", "content": "Hey!"}]
 

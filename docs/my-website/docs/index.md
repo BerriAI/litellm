@@ -23,7 +23,7 @@ from litellm import completion
 import os
 
 ## set ENV variables
-os.environ["OPENAI_API_KEY"] = "sk-litellm-7_NPZhMGxY2GoHC59LgbDw" # [OPTIONAL] replace with your openai key
+os.environ["OPENAI_API_KEY"] = "your-api-key"
 
 response = completion(
   model="gpt-3.5-turbo", 
@@ -39,7 +39,7 @@ from litellm import completion
 import os
 
 ## set ENV variables
-os.environ["ANTHROPIC_API_KEY"] = "sk-litellm-7_NPZhMGxY2GoHC59LgbDw" # [OPTIONAL] replace with your openai key
+os.environ["ANTHROPIC_API_KEY"] = "your-api-key"
 
 response = completion(
   model="claude-2", 
@@ -133,7 +133,7 @@ from litellm import completion
 import os
 
 ## set ENV variables
-os.environ["OPENAI_API_KEY"] = "sk-litellm-7_NPZhMGxY2GoHC59LgbDw" # [OPTIONAL] replace with your openai key
+os.environ["OPENAI_API_KEY"] = "your-api-key"
 
 response = completion(
   model="gpt-3.5-turbo", 
@@ -150,7 +150,7 @@ from litellm import completion
 import os
 
 ## set ENV variables
-os.environ["ANTHROPIC_API_KEY"] = "sk-litellm-7_NPZhMGxY2GoHC59LgbDw" # [OPTIONAL] replace with your openai key
+os.environ["ANTHROPIC_API_KEY"] = "your-api-key"
 
 response = completion(
   model="claude-2", 
@@ -262,7 +262,7 @@ Pass the completion response to `litellm.completion_cost(completion_response=res
 ```python
 from litellm import completion, completion_cost
 import os
-os.environ["OPENAI_API_KEY"] = "sk-litellm-7_NPZhMGxY2GoHC59LgbDw"
+os.environ["OPENAI_API_KEY"] = "your-api-key"
 
 response = completion(
   model="gpt-3.5-turbo", 
@@ -289,7 +289,7 @@ import os
 from litellm import completion
 
 # use the LiteLLM API Key
-os.environ["ANTHROPIC_API_KEY"] = "sk-litellm-7_NPZhMGxY2GoHC59LgbDw"
+os.environ["ANTHROPIC_API_KEY"] = "your-api-key"
 
 messages = [{ "content": "Hello, how are you?","role": "user"}]
 
@@ -304,7 +304,7 @@ import os
 from litellm import completion
 
 # use the LiteLLM API Key
-os.environ["OPENAI_API_KEY"] = "sk-litellm-7_NPZhMGxY2GoHC59LgbDw"
+os.environ["OPENAI_API_KEY"] = "your-api-key"
 
 messages = [{ "content": "Hello, how are you?","role": "user"}]
 
@@ -319,7 +319,7 @@ import os
 from litellm import completion
 
 # use the LiteLLM API Key
-os.environ["TOGETHERAI_API_KEY"] = "sk-litellm-7_NPZhMGxY2GoHC59LgbDw"
+os.environ["TOGETHERAI_API_KEY"] = "your-api-key"
 
 messages = [{ "content": "Hello, how are you?","role": "user"}]
 
@@ -335,7 +335,7 @@ import os
 from litellm import completion
 
 # use the LiteLLM API Key
-os.environ["TOGETHERAI_API_KEY"] = "sk-litellm-7_NPZhMGxY2GoHC59LgbDw"
+os.environ["TOGETHERAI_API_KEY"] = "your-api-key"
 
 messages = [{ "content": "Hello, how are you?","role": "user"}]
 

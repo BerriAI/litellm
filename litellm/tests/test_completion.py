@@ -437,7 +437,6 @@ def test_completion_openai_litellm_key():
 
 # test_completion_openai_litellm_key()
 
-# commented out for now, as openrouter is quite flaky - causing our deployments to fail. Please run this before pushing changes.
 def test_completion_openrouter1():
     try:
         response = completion(
@@ -453,7 +452,7 @@ def test_completion_openrouter1():
 def test_completion_openrouter2():
     try:
         response = completion(
-            model="google/palm-2-chat-bison",
+            model="openrouter/openai/gpt-4-32k",
             messages=messages,
             max_tokens=5,
         )
@@ -463,6 +462,47 @@ def test_completion_openrouter2():
         pytest.fail(f"Error occurred: {e}")
 
 # test_completion_openrouter()
+
+def test_completion_hf_model_no_provider():
+    try:
+        response = completion(
+            model="WizardLM/WizardLM-70B-V1.0",
+            messages=messages,
+            max_tokens=5,
+        )
+        # Add any assertions here to check the response
+        print(response)
+        pytest.fail(f"Error occurred: {e}")
+    except Exception as e:
+        pass
+
+test_completion_hf_model_no_provider()
+
+def test_completion_hf_model_no_provider_2():
+    try:
+        response = completion(
+            model="meta-llama/Llama-2-70b-chat-hf",
+            messages=messages,
+            max_tokens=5,
+        )
+        # Add any assertions here to check the response
+        pytest.fail(f"Error occurred: {e}")
+    except Exception as e:
+        pass
+
+test_completion_hf_model_no_provider_2()
+
+def test_completion_openrouter2():
+    try:
+        response = completion(
+            model="openrouter/openai/gpt-4-32k",
+            messages=messages,
+            max_tokens=5,
+        )
+        # Add any assertions here to check the response
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 def test_completion_openai_with_more_optional_params():
     try:
@@ -864,7 +904,6 @@ def test_completion_with_fallbacks():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-
 
 # def test_completion_with_fallbacks_multiple_keys():
 #     print(f"backup key 1: {os.getenv('BACKUP_OPENAI_API_KEY_1')}")
