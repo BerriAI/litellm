@@ -22,7 +22,7 @@ prompt_suffix = "\n    return result"
 prompt = f"<PRE> {prompt_prefix} <SUF>{prompt_suffix} <MID>"
 
 messages = [{"content": prompt, "role": "user"}]
-model = "huggingface/meta-llama/Llama-2-70b-chat-hf" # specify huggingface as the provider 'huggingface/'
+model = "huggingface/codellama/CodeLlama-34b-Instruct-hf" # specify huggingface as the provider 'huggingface/'
 response = completion(model=model, messages=messages, max_tokens=500)
 ```
 
