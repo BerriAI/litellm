@@ -173,6 +173,19 @@ class ModelResponse(OpenAIObject):
         d["choices"] = [choice.to_dict_recursive() for choice in self.choices]
         return d
 
+class EmbeddingResponse(OpenAIObject):
+    def __init__(self, id=None, choices=None, created=None, model=None, usage=None, stream=False, response_ms=None, **params):
+        self.object = "list"
+        if response_ms:
+            self._response_ms = response_ms
+        else:
+            self._response_ms = None
+        self.data = []
+        self.model = model
+
+    def to_dict_recursive(self):
+        d = super().to_dict_recursive()
+        return d
 
 ############################################################
 def print_verbose(print_statement):
