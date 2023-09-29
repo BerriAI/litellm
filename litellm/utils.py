@@ -1070,7 +1070,7 @@ def get_optional_params(  # use the openai defaults
             if top_p != 1:
                 optional_params["top_p"] = top_p
     elif custom_llm_provider == "bedrock":
-        if "ai21" in model or "anthropic" in model:
+        if "ai21" in model:
             # params "maxTokens":200,"temperature":0,"topP":250,"stop_sequences":[],
             # https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=j2-ultra
             if max_tokens != float("inf"):
@@ -1081,7 +1081,21 @@ def get_optional_params(  # use the openai defaults
                 optional_params["stop_sequences"] = stop
             if top_p != 1:
                 optional_params["topP"] = top_p
-
+        elif "anthropic" in model:
+            # anthropic params on bedrock
+            # \"max_tokens_to_sample\":300,\"temperature\":0.5,\"top_k\":250,\"top_p\":1,\"stop_sequences\":[\"\\\\n\\\\nHuman:\"]}"
+            if max_tokens != float("inf"):
+                optional_params["max_tokens_to_sample"] = max_tokens
+            else:
+                optional_params["max_tokens_to_sample"] = 256 # anthropic fails without max_tokens_to_sample
+            if temperature != 1:
+                optional_params["temperature"] = temperature
+            if top_p != 1:
+                optional_params["top_p"] = top_p
+            if top_k != 40:
+                optional_params["top_k"] = top_k
+            if stop != None:
+                optional_params["stop_sequences"] = stop
         elif "amazon" in model: # amazon titan llms
             # see https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=titan-large
             if max_tokens != float("inf"):
