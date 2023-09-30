@@ -83,20 +83,20 @@ async def completion(request: Request):
         model=user_model, 
         roles={
             "system": {
-                "pre_message": os.getenv.get("MODEL_SYSTEM_MESSAGE_START_TOKEN", ""),
-                "post_message": os.getenv.get("MODEL_SYSTEM_MESSAGE_END_TOKEN", ""),    
+                "pre_message": os.getenv("MODEL_SYSTEM_MESSAGE_START_TOKEN", ""),
+                "post_message": os.getenv("MODEL_SYSTEM_MESSAGE_END_TOKEN", ""),    
             }, 
             "assistant": {
-                "pre_message": os.getenv.get("MODEL_ASSISTANT_MESSAGE_START_TOKEN", ""), 
-                "post_message": os.getenv.get("MODEL_ASSISTANT_MESSAGE_END_TOKEN", "")
+                "pre_message": os.getenv("MODEL_ASSISTANT_MESSAGE_START_TOKEN", ""), 
+                "post_message": os.getenv("MODEL_ASSISTANT_MESSAGE_END_TOKEN", "")
             }, 
             "user": {
-                "pre_message": os.getenv.get("MODEL_USER_MESSAGE_START_TOKEN", ""), 
-                "post_message": os.getenv.get("MODEL_USER_MESSAGE_END_TOKEN", "")
+                "pre_message": os.getenv("MODEL_USER_MESSAGE_START_TOKEN", ""), 
+                "post_message": os.getenv("MODEL_USER_MESSAGE_END_TOKEN", "")
             }
         },
-        initial_prompt_value=os.getenv.get("MODEL_PRE_PROMPT", ""), 
-        final_prompt_value=os.getenv.get("MODEL_POST_PROMPT", "")
+        initial_prompt_value=os.getenv("MODEL_PRE_PROMPT", ""), 
+        final_prompt_value=os.getenv("MODEL_POST_PROMPT", "")
     )
     response = litellm.text_completion(**data)
     if 'stream' in data and data['stream'] == True: # use generate_responses to stream responses
