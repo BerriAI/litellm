@@ -33,9 +33,14 @@ def run_server(port, api_base, model, deploy, debug, temperature, max_tokens, te
     from .proxy_server import app, initialize, deploy_proxy
     # from proxy_server import app, initialize, deploy_proxy
     if deploy == True:
-        click.echo('LiteLLM: Deploying your proxy server')
+        print(f"\033[32mLiteLLM: Deploying your proxy to api.litellm.ai\033[0m\n")
+        print(f"\033[32mLiteLLM: Deploying proxy for model: {model}\033[0m\n")
         url = deploy_proxy(model, api_base, debug, temperature, max_tokens, telemetry, deploy)
-        click.echo(f'LiteLLM: Your deployed url: {url}')
+        print(f"\033[32mLiteLLM: Deploy Successfull\033[0m\n")
+        print(f"\033[32mLiteLLM: Your deployed url: {url}\033[0m\n")
+
+        print(f"\033[32mLiteLLM: Test your URL using the following: \"litellm --test {url}\"\033[0m")
+        return
     if test != None:
         click.echo('LiteLLM: Making a test ChatCompletions request to your proxy')
         import openai
@@ -50,6 +55,7 @@ def run_server(port, api_base, model, deploy, debug, temperature, max_tokens, te
             }
         ])
         click.echo(f'LiteLLM: response from proxy {response}')
+        return
     else:
         initialize(model, api_base, debug, temperature, max_tokens, telemetry)
 
@@ -58,6 +64,10 @@ def run_server(port, api_base, model, deploy, debug, temperature, max_tokens, te
             import uvicorn
         except:
             raise ImportError("Uvicorn needs to be imported. Run - `pip install uvicorn`")
+        print(f"\033[32mLiteLLM:Deployed Proxy Locally\033[0m\n\n")
+        print(f"\033[32mLiteLLM: Test your URL using the following: \"litellm --test http://0.0.0.0/{port}\"\033[0m\n\n")
+
+        
         uvicorn.run(app, host='0.0.0.0', port=port)
 
 
