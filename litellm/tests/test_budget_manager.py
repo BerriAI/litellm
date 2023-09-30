@@ -67,8 +67,8 @@ def test_save_user_budget():
         if response["status"] == "error":
             raise Exception(f"An error occurred - {json.dumps(response)}")
         print(response)
-    except:
-        pytest.fail(f"An error occurred")
+    except Exception as e:
+        pytest.fail(f"An error occurred: {str(e)}")
 
 ## Scenario 4: Getting list of users 
 def test_get_users():
