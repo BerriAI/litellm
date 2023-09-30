@@ -33,7 +33,6 @@ user_telemetry = False
 #### HELPER FUNCTIONS ####
 def print_verbose(print_statement):
     global user_debug 
-    print(f"user_debug: {user_debug}")
     if user_debug: 
          print(print_statement)
 
@@ -79,6 +78,26 @@ async def completion(request: Request):
     data["model"] = user_model
     if user_api_base:
         data["api_base"] = user_api_base
+    ## check for custom prompt template ## 
+    litellm.register_prompt_template(
+        model=user_model, 
+        roles={
+            "system": {
+                "pre_message": os.getenv.get("MODEL_SYSTEM_MESSAGE_START_TOKEN", ""),
+                "post_message": os.getenv.get("MODEL_SYSTEM_MESSAGE_END_TOKEN", ""),    
+            }, 
+            "assistant": {
+                "pre_message": os.getenv.get("MODEL_ASSISTANT_MESSAGE_START_TOKEN", ""), 
+                "post_message": os.getenv.get("MODEL_ASSISTANT_MESSAGE_END_TOKEN", "")
+            }, 
+            "user": {
+                "pre_message": os.getenv.get("MODEL_USER_MESSAGE_START_TOKEN", ""), 
+                "post_message": os.getenv.get("MODEL_USER_MESSAGE_END_TOKEN", "")
+            }
+        },
+        initial_prompt_value=os.getenv.get("MODEL_PRE_PROMPT", ""), 
+        final_prompt_value=os.getenv.get("MODEL_POST_PROMPT", "")
+    )
     response = litellm.text_completion(**data)
     if 'stream' in data and data['stream'] == True: # use generate_responses to stream responses
         return StreamingResponse(data_generator(response), media_type='text/event-stream')
@@ -91,7 +110,6 @@ async def chat_completion(request: Request):
     if (user_model is None):
         raise ValueError("Proxy model needs to be set")
     data["model"] = user_model
-
     # override with user settings
     if user_temperature: 
         data["temperature"] = user_temperature
@@ -99,8 +117,26 @@ async def chat_completion(request: Request):
         data["max_tokens"] = user_max_tokens
     if user_api_base: 
         data["api_base"] = user_api_base
-
-
+    ## check for custom prompt template ## 
+    litellm.register_prompt_template(
+        model=user_model, 
+        roles={
+            "system": {
+                "pre_message": os.getenv("MODEL_SYSTEM_MESSAGE_START_TOKEN", ""),
+                "post_message": os.getenv("MODEL_SYSTEM_MESSAGE_END_TOKEN", ""),    
+            }, 
+            "assistant": {
+                "pre_message": os.getenv("MODEL_ASSISTANT_MESSAGE_START_TOKEN", ""), 
+                "post_message": os.getenv("MODEL_ASSISTANT_MESSAGE_END_TOKEN", "")
+            }, 
+            "user": {
+                "pre_message": os.getenv("MODEL_USER_MESSAGE_START_TOKEN", ""), 
+                "post_message": os.getenv("MODEL_USER_MESSAGE_END_TOKEN", "")
+            }
+        },
+        initial_prompt_value=os.getenv("MODEL_PRE_PROMPT", ""), 
+        final_prompt_value=os.getenv("MODEL_POST_PROMPT", "")
+    )
     response = litellm.completion(**data)
     if 'stream' in data and data['stream'] == True: # use generate_responses to stream responses
         print("reaches stream")
