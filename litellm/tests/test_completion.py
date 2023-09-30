@@ -713,7 +713,7 @@ def test_completion_replicate_vicuna():
 
 ######## Test TogetherAI ########
 def test_completion_together_ai():
-    model_name = "togethercomputer/llama-2-70b-chat"
+    model_name = "together_ai/togethercomputer/llama-2-70b-chat"
     try:
         response = completion(model=model_name, messages=messages, max_tokens=256, logger_fn=logger_fn)
         # Add any assertions here to check the response
