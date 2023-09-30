@@ -1,17 +1,22 @@
-# import sys, os
-# import traceback
-# from dotenv import load_dotenv
+import sys, os
+import traceback
+from dotenv import load_dotenv
 
-# load_dotenv()
-# import os
+load_dotenv()
+import os
 
-# sys.path.insert(
-#     0, os.path.abspath("../..")
-# )  # Adds the parent directory to the system path
-# import pytest
-# import litellm
-# from litellm import embedding, completion, text_completion
+sys.path.insert(
+    0, os.path.abspath("../..")
+)  # Adds the parent directory to the system path
+import pytest
+from litellm.llms.prompt_templates.factory import prompt_factory
 
+def test_prompt_formatting(): 
+    try:
+        prompt = prompt_factory(model="mistralai/Mistral-7B-Instruct-v0.1", messages=[{"role": "system", "content": "Be a good bot"}, {"role": "user", "content": "Hello world"}])
+        assert prompt == "<s>[INST] Be a good bot [/INST]</s> [INST] Hello world [/INST]"
+    except Exception as e: 
+        pytest.fail(f"An exception occurred: {str(e)}")
 # def logger_fn(user_model_dict):
 #     return
 #     print(f"user_model_dict: {user_model_dict}")
