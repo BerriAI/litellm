@@ -53,6 +53,39 @@ def initialize(model, api_base, debug, temperature, max_tokens, telemetry):
     user_telemetry = telemetry
     usage_telemetry()
 
+def deploy_proxy(model, api_base, debug, temperature, max_tokens, telemetry, deploy):
+    # Load .env file
+
+    # Prepare data for posting
+    data = {
+        "model": model,
+        "api_base": api_base,
+        "debug": debug,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
+
+    print(data)
+
+    # Make post request to the url
+    url = "https://api.litellm.ai/deploy"
+    files = {"file": open(".env", "rb")}
+    print(files)
+    # response = requests.post(url, data=data, files=files)
+
+    # # Check the status of the request
+    # if response.status_code != 200:
+    #     return f"Request to url: {url} failed with status: {response.status_code}"
+
+    # # Reading the response
+    # response_data = response.json()
+    # print(response_data)
+
+    # # Do something with response_data
+
+    return url
+
+
 # for streaming
 def data_generator(response):
     print("inside generator")

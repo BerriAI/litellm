@@ -30,15 +30,20 @@ def run_server(port, api_base, model, deploy, debug, temperature, max_tokens, te
             click.echo('No .env.template file found.')
     
     # from .proxy_server import app, initialize
-    from proxy_server import app, initialize
-    initialize(model, api_base, debug, temperature, max_tokens, telemetry)
+    from proxy_server import app, initialize, deploy_proxy
+    if deploy == True:
+        click.echo('LiteLLM: Deploying your proxy server')
+        url = deploy_proxy(model, api_base, debug, temperature, max_tokens, telemetry, deploy)
+        click.echo(f'LiteLLM: Your deployed url: {url}')
+    else:
+        initialize(model, api_base, debug, temperature, max_tokens, telemetry)
 
 
-    try:
-        import uvicorn
-    except:
-        raise ImportError("Uvicorn needs to be imported. Run - `pip install uvicorn`")
-    uvicorn.run(app, host='0.0.0.0', port=port)
+        try:
+            import uvicorn
+        except:
+            raise ImportError("Uvicorn needs to be imported. Run - `pip install uvicorn`")
+        uvicorn.run(app, host='0.0.0.0', port=port)
 
 
 if __name__ == "__main__":
