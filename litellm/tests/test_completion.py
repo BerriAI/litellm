@@ -199,9 +199,9 @@ def test_get_hf_task_for_model():
 # def hf_test_completion_tgi():
 #     try:
 #         response = litellm.completion(
-#             model="huggingface/glaiveai/glaive-coder-7b",
+#             model="huggingface/mistralai/Mistral-7B-Instruct-v0.1",
 #             messages=[{ "content": "Hello, how are you?","role": "user"}],
-#             api_base="https://wjiegasee9bmqke2.us-east-1.aws.endpoints.huggingface.cloud",
+#             api_base="https://n9ox93a8sv5ihsow.us-east-1.aws.endpoints.huggingface.cloud",
 #         )
 #         # Add any assertions here to check the response
 #         print(response)
@@ -646,16 +646,7 @@ def test_completion_azure_deployment_id():
 #         pytest.fail(f"Error occurred: {e}")
 
 # test_completion_anthropic_litellm_proxy()
-# def test_hf_conversational_task():
-#     try:
-#         messages = [{ "content": "There's a llama in my garden 😱 What should I do?","role": "user"}]
-#         # e.g. Call 'facebook/blenderbot-400M-distill' hosted on HF Inference endpoints
-#         response = completion(model="huggingface/facebook/blenderbot-400M-distill", messages=messages, task="conversational")
-#         print(f"response: {response}")
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
 
-# test_hf_conversational_task()
 # Replicate API endpoints are unstable -> throw random CUDA errors -> this means our tests can fail even if our tests weren't incorrect.
 
 # def test_completion_replicate_llama_2():
@@ -792,7 +783,7 @@ def test_completion_bedrock_claude():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_bedrock_claude()
+# test_completion_bedrock_claude()
 
 def test_completion_bedrock_claude_stream():
     print("calling claude")

@@ -2916,12 +2916,14 @@ class CustomStreamWrapper:
             print_verbose(f"data json: {data_json}")
             if "token" in data_json and "text" in data_json["token"]:
                 text = data_json["token"]["text"]
-                if "meta-llama/Llama-2" in self.model: #clean eos tokens like </s> from the returned output text
-                    if any(token in text for token in llama_2_special_tokens):
-                        text = text.replace("<s>", "").replace("</s>", "")
             if data_json.get("details", False) and data_json["details"].get("finish_reason", False):
                 is_finished = True
                 finish_reason = data_json["details"]["finish_reason"]
+            elif data_json.get("generated_text", False): # if full generated text exists, then stream is complete
+                text = "" # don't return the final bos token
+                is_finished = True
+                finish_reason = "stop"
+
             return {"text": text, "is_finished": is_finished, "finish_reason": finish_reason}
         elif "error" in chunk: 
             raise ValueError(chunk)
