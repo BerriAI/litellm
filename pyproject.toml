@@ -14,6 +14,7 @@ tiktoken = ">=0.4.0"
 importlib-metadata = ">=6.8.0"
 tokenizers = "*"
 click = "*"
+boto3 = ">=1.28.57"
 
 [tool.poetry.scripts]
 litellm = 'litellm:run_server'
