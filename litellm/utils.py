@@ -3158,6 +3158,18 @@ class CustomStreamWrapper:
                     completion_obj["content"] = new_chunk
                     self.completion_stream = self.completion_stream[chunk_size:]
                     time.sleep(0.05)
+                elif self.custom_llm_provider == "petals":
+                    if len(self.completion_stream)==0:
+                        if self.sent_last_chunk: 
+                            raise StopIteration
+                        else:
+                            model_response.choices[0].finish_reason = "stop"
+                            self.sent_last_chunk = True
+                    chunk_size = 30
+                    new_chunk = self.completion_stream[:chunk_size]
+                    completion_obj["content"] = new_chunk
+                    self.completion_stream = self.completion_stream[chunk_size:]
+                    time.sleep(0.05)
                 elif self.custom_llm_provider == "palm":
                     # fake streaming
                     if len(self.completion_stream)==0:
