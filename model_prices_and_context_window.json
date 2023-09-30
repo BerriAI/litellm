@@ -382,6 +382,13 @@
         "litellm_provider": "openrouter",
         "mode": "chat"
     },
+    "openrouter/mistralai/mistral-7b-instruct": {
+        "max_tokens": 4096,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "openrouter",
+        "mode": "chat"
+    },
     "j2-ultra": {
         "max_tokens": 8192,
         "input_cost_per_token": 0.000015,
