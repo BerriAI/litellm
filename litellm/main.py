@@ -1099,10 +1099,11 @@ def completion(
                 encoding=encoding, 
                 logging_obj=logging
             )
-            if inspect.isgenerator(model_response) or (stream == True):
-                # don't try to access stream object,
+            if stream==True: ## [BETA]
+                # Fake streaming for petals
+                resp_string = model_response["choices"][0]["message"]["content"]
                 response = CustomStreamWrapper(
-                    model_response, model, custom_llm_provider="petals", logging_obj=logging
+                    resp_string, model, custom_llm_provider="petals", logging_obj=logging
                 )
                 return response
             response = model_response
