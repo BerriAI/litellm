@@ -90,11 +90,15 @@ os.environ["OPENAI_API_KEY"] = ""
 # set custom api base to your proxy
 # either set .env or litellm.api_base
 # os.environ["OPENAI_API_BASE"] = ""
-litellm.api_base = "https://openai-proxy.berriai.repl.co"
+litellm.api_base = "your-openai-proxy-url"
 
 
 messages = [{ "content": "Hello, how are you?","role": "user"}]
 
 # openai call
-response = completion("gpt-3.5-turbo", messages)
+response = completion("openai/your-model-name", messages)
 ```
+
+If you need to set api_base dynamically, just pass it in completions instead - `completions(...,api_base="your-proxy-api-base")`
+
+For more check out [setting API Base/Keys](../set_keys.md)
