@@ -33,9 +33,6 @@ def run_server(port, api_base, model, deploy, debug, temperature, max_tokens, te
     from proxy_server import app, initialize
     initialize(model, api_base, debug, temperature, max_tokens, telemetry)
 
-def run_server(port, api_base, model, debug, temperature, max_tokens, telemetry, deploy):
-    from .proxy_server import app, initialize
-    initialize(model, api_base, debug, temperature, max_tokens, telemetry, deploy)
 
     try:
         import uvicorn
