@@ -58,7 +58,7 @@ response = completion(model="command-nightly", messages=messages)
 print(response)
 ```
 
-## Streaming
+## Streaming ([Docs](https://docs.litellm.ai/docs/completion/stream))
 liteLLM supports streaming the model response back, pass `stream=True` to get a streaming iterator in response.
 Streaming is supported for OpenAI, Azure, Anthropic, Huggingface models
 ```python
@@ -72,7 +72,7 @@ for chunk in result:
   print(chunk['choices'][0]['delta'])
 ```
 
-## OpenAI Proxy Server 
+## OpenAI Proxy Server ([Docs](https://docs.litellm.ai/docs/proxy_server))
 Spin up a local server to translate openai api calls to any non-openai model (e.g. Huggingface, TogetherAI, Ollama, etc.)
 
 This works for async + streaming as well. 
@@ -81,6 +81,31 @@ litellm --model <model_name>
 ```
 Running your model locally or on a custom endpoint ? Set the `--api-base` parameter [see how](https://docs.litellm.ai/docs/proxy_server)
 
+## Supported Provider ([Docs](https://docs.litellm.ai/docs/providers))
+| Provider      | Completion | Streaming  | Async Completion  | Async Streaming  |
+| ------------- | ------------- | ------------- | ------------- | ------------- |
+| [openai](https://docs.litellm.ai/docs/providers/openai)  | ✅ | ✅ | ✅ | ✅ |
+| [cohere](https://docs.litellm.ai/docs/providers/cohere)  | ✅ | ✅ | ✅ | ✅ |
+| [anthropic](https://docs.litellm.ai/docs/providers/anthropic)  | ✅ | ✅ | ✅ | ✅ |
+| [replicate](https://docs.litellm.ai/docs/providers/replicate)  | ✅ | ✅ | ✅ | ✅ |
+| [huggingface](https://docs.litellm.ai/docs/providers/huggingface)  | ✅ | ✅ | ✅ | ✅ |
+| [together_ai](https://docs.litellm.ai/docs/providers/togetherai)  | ✅ | ✅ | ✅ | ✅ |
+| [openrouter](https://docs.litellm.ai/docs/providers/openrouter)  | ✅ | ✅ | ✅ | ✅ |
+| [vertex_ai](https://docs.litellm.ai/docs/providers/vertex)  | ✅ | ✅ | ✅ | ✅ |
+| [palm](https://docs.litellm.ai/docs/providers/palm)  | ✅ | ✅ | ✅ | ✅ |
+| [ai21](https://docs.litellm.ai/docs/providers/ai21)  | ✅ | ✅ | ✅ | ✅ |
+| [baseten](https://docs.litellm.ai/docs/providers/baseten)  | ✅ | ✅ | ✅ | ✅ |
+| [azure](https://docs.litellm.ai/docs/providers/azure)  | ✅ | ✅ | ✅ | ✅ |
+| [sagemaker](https://docs.litellm.ai/docs/providers/aws_sagemaker)  | ✅ | ✅ | ✅ | ✅ |
+| [bedrock](https://docs.litellm.ai/docs/providers/bedrock)  | ✅ | ✅ | ✅ | ✅ |
+| [vllm](https://docs.litellm.ai/docs/providers/vllm)  | ✅ | ✅ | ✅ | ✅ |
+| [nlp_cloud](https://docs.litellm.ai/docs/providers/nlp_cloud)  | ✅ | ✅ | ✅ | ✅ |
+| [aleph alpha](https://docs.litellm.ai/docs/providers/aleph_alpha)  | ✅ | ✅ | ✅ | ✅ |
+| [petals](https://docs.litellm.ai/docs/providers/petals)  | ✅ | ❌ | ✅ | ❌ |
+| [ollama](https://docs.litellm.ai/docs/providers/ollama)  | ✅ | ✅ | ✅ | ✅ |
+| [deepinfra](https://docs.litellm.ai/docs/providers/deepinfra)  | ✅ | ✅ | ✅ | ✅ |
+
+[**Read the Docs**](https://docs.litellm.ai/docs/)
 # Contributing
 To contribute: Clone the repo locally -> Make a change -> Submit a PR with the change. 
 
