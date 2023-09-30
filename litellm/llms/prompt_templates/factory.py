@@ -22,6 +22,28 @@ def llama_2_chat_pt(messages):
     )
     return prompt
 
+def mistral_instruct_pt(messages): 
+    prompt = custom_prompt(
+        initial_prompt_value="<s>",
+        role_dict={
+            "system": {
+                "pre_message": "[INST]",
+                "post_message": "[/INST]"
+            }, 
+            "user": {
+                "pre_message": "[INST]", 
+                "post_message": "[/INST]"
+            },
+            "assistant": {
+                "pre_message": "[INST]",
+                "post_message": "[/INST]"
+            }
+        },
+        final_prompt_value="</s>",
+        messages=messages
+    )
+    return prompt
+
 # Falcon prompt template - from https://github.com/lm-sys/FastChat/blob/main/fastchat/conversation.py#L110
 def falcon_instruct_pt(messages):
     prompt = ""
@@ -116,4 +138,6 @@ def prompt_factory(model: str, messages: list):
         return phind_codellama_pt(messages=messages)
     elif "togethercomputer/llama-2" in model and ("instruct" in model or "chat" in model):
         return llama_2_chat_pt(messages=messages)
+    elif "mistralai/mistral" in model and "instruct" in model: 
+        return mistral_instruct_pt(messages=messages)
     return default_pt(messages=messages) # default that covers Bloom, T-5, any non-chat tuned model (e.g. base Llama2)
