@@ -149,6 +149,8 @@ class BudgetManager:
                 'project_name' : self.project_name, 
                 "user_dict": self.user_dict
             }
+            print(f"data: {data}")
             response = requests.post(url, headers=headers, json=data)
+            print(f"response: {response.text}")
             response = response.json()
             return response
