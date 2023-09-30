@@ -15,7 +15,8 @@ load_dotenv()
 @click.option('--max_tokens', default=None, help='Set max tokens for the model') 
 @click.option('--telemetry', default=True, type=bool, help='Helps us know if people are using this feature. Turn this off by doing `--telemetry False`') 
 @click.option('--config', is_flag=True, help='Create and open .env file from .env.template')
-def run_server(port, api_base, model, deploy, debug, temperature, max_tokens, telemetry, config):
+@click.option('--test', default=None, help='proxy chat completions url to make a test request to')
+def run_server(port, api_base, model, deploy, debug, temperature, max_tokens, telemetry, config, test):
     if config:
         if os.path.exists('.env.template'):
             if not os.path.exists('.env'):
@@ -29,12 +30,26 @@ def run_server(port, api_base, model, deploy, debug, temperature, max_tokens, te
         else:
             click.echo('No .env.template file found.')
     
-    # from .proxy_server import app, initialize
-    from proxy_server import app, initialize, deploy_proxy
+    from .proxy_server import app, initialize, deploy_proxy
+    # from proxy_server import app, initialize, deploy_proxy
     if deploy == True:
         click.echo('LiteLLM: Deploying your proxy server')
         url = deploy_proxy(model, api_base, debug, temperature, max_tokens, telemetry, deploy)
         click.echo(f'LiteLLM: Your deployed url: {url}')
+    if test != None:
+        click.echo('LiteLLM: Making a test ChatCompletions request to your proxy')
+        import openai
+        openai.api_base = test
+        openai.api_key = "temp-key"
+        print(openai.api_base)
+
+        response = openai.ChatCompletion.create(model="gpt-3.5-turbo", messages = [
+            {
+                "role": "user",
+                "content": "this is a test request, acknowledge that you got it"
+            }
+        ])
+        click.echo(f'LiteLLM: response from proxy {response}')
     else:
         initialize(model, api_base, debug, temperature, max_tokens, telemetry)
 
