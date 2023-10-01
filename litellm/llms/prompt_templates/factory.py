@@ -217,5 +217,4 @@ def prompt_factory(model: str, messages: list):
         else: 
             return hf_chat_template(original_model_name, messages)
     except:
-        traceback.print_exc()
         return default_pt(messages=messages) # default that covers Bloom, T-5, any non-chat tuned model (e.g. base Llama2)

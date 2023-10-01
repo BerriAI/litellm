@@ -94,6 +94,14 @@ last_fetched_at_keys = None
 def _generate_id(): # private helper function
     return 'chatcmpl-' + str(uuid.uuid4())
 
+def map_finish_reason(finish_reason: str): # openai supports 5 stop sequences - 'stop', 'length', 'function_call', 'content_filter', 'null'
+    # anthropic mapping
+    print(f"receives finish reason: {finish_reason}")
+    if finish_reason == "stop_sequence":
+        return "stop"
+    return finish_reason
+
+
 class Message(OpenAIObject):
     def __init__(self, content="default", role="assistant", logprobs=None, **params):
         super(Message, self).__init__(**params)
@@ -114,7 +122,7 @@ class Choices(OpenAIObject):
     def __init__(self, finish_reason=None, index=0, message=None, **params):
         super(Choices, self).__init__(**params)
         if finish_reason:
-            self.finish_reason = finish_reason
+            self.finish_reason = map_finish_reason(finish_reason)
         else:
             self.finish_reason = "stop"
         self.index = index
@@ -3200,6 +3208,7 @@ class CustomStreamWrapper:
                     model_response.choices[0].delta = Delta(**completion_obj)
                     return model_response
                 elif model_response.choices[0].finish_reason:
+                    model_response.choices[0].finish_reason = map_finish_reason(model_response.choices[0].finish_reason) # ensure consistent output to openai
                     return model_response
         except StopIteration:
             raise StopIteration
