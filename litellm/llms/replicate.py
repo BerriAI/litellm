@@ -5,6 +5,7 @@ import time
 from typing import Callable
 from litellm.utils import ModelResponse
 
+
 class ReplicateError(Exception):
     def __init__(self, status_code, message):
         self.status_code = status_code
@@ -13,12 +14,13 @@ class ReplicateError(Exception):
             self.message
         )  # Call the base class constructor with the parameters it needs
 
+
 # Function to start a prediction and get the prediction URL
 def start_prediction(version_id, input_data, api_token, logging_obj):
     base_url = "https://api.replicate.com/v1"
     headers = {
         "Authorization": f"Token {api_token}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
     }
 
     initial_prediction_data = {
@@ -27,26 +29,34 @@ def start_prediction(version_id, input_data, api_token, logging_obj):
         "max_new_tokens": 500,
     }
 
-        ## LOGGING
+    ## LOGGING
     logging_obj.pre_call(
-            input=input_data["prompt"],
-            api_key="",
-            additional_args={"complete_input_dict": initial_prediction_data, "headers": headers},
+        input=input_data["prompt"],
+        api_key="",
+        additional_args={
+            "complete_input_dict": initial_prediction_data,
+            "headers": headers,
+        },
     )
 
-    response = requests.post(f"{base_url}/predictions", json=initial_prediction_data, headers=headers)
+    response = requests.post(
+        f"{base_url}/predictions", json=initial_prediction_data, headers=headers
+    )
     if response.status_code == 201:
         response_data = response.json()
         return response_data.get("urls", {}).get("get")
     else:
-        raise ReplicateError(response.status_code, f"Failed to start prediction {response.text}")
+        raise ReplicateError(
+            response.status_code, f"Failed to start prediction {response.text}"
+        )
+
 
 # Function to handle prediction response (non-streaming)
 def handle_prediction_response(prediction_url, api_token, print_verbose):
     output_string = ""
     headers = {
         "Authorization": f"Token {api_token}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
     }
 
     status = ""
@@ -58,13 +68,14 @@ def handle_prediction_response(prediction_url, api_token, print_verbose):
         if response.status_code == 200:
             response_data = response.json()
             if "output" in response_data:
-                output_string = "".join(response_data['output'])
+                output_string = "".join(response_data["output"])
                 print_verbose(f"Non-streamed output:{output_string}")
-            status = response_data['status']
+            status = response_data["status"]
             logs = response_data.get("logs", "")
         else:
             print_verbose("Failed to fetch prediction status and output.")
     return output_string, logs
+
 
 # Function to handle prediction response (streaming)
 def handle_prediction_response_streaming(prediction_url, api_token, print_verbose):
@@ -73,21 +84,22 @@ def handle_prediction_response_streaming(prediction_url, api_token, print_verbos
 
     headers = {
         "Authorization": f"Token {api_token}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
     }
     status = ""
     while True and (status not in ["succeeded", "failed", "canceled"]):
-        time.sleep(0.0001) # prevent being rate limited by replicate
+        time.sleep(0.0001)  # prevent being rate limited by replicate
         response = requests.get(prediction_url, headers=headers)
         if response.status_code == 200:
             response_data = response.json()
-            status = response_data['status']
+            status = response_data["status"]
             if "output" in response_data:
-                output_string = "".join(response_data['output'])
-                new_output = output_string[len(previous_output):]
+                output_string = "".join(response_data["output"])
+                new_output = output_string[len(previous_output) :]
                 yield {"output": new_output, "status": status}
                 previous_output = output_string
-            status = response_data['status']
+            status = response_data["status"]
+
 
 # Function to extract version ID from model string
 def model_to_version_id(model):
@@ -95,6 +107,7 @@ def model_to_version_id(model):
         split_model = model.split(":")
         return split_model[1]
     return model
+
 
 # Main function for prediction completion
 def completion(
@@ -116,46 +129,55 @@ def completion(
 
     # Start a prediction and get the prediction URL
     version_id = model_to_version_id(model)
-    input_data = {
-        "prompt": prompt,
-        **optional_params
-    }
+    input_data = {"prompt": prompt, **optional_params}
 
     ## COMPLETION CALL
     ## Replicate Compeltion calls have 2 steps
     ## Step1: Start Prediction: gets a prediction url
     ## Step2: Poll prediction url for response
     ## Step2: is handled with and without streaming
-    model_response["created"] = time.time() # for pricing this must remain right before calling api
-    prediction_url = start_prediction(version_id, input_data, api_key, logging_obj=logging_obj)
+    model_response[
+        "created"
+    ] = time.time()  # for pricing this must remain right before calling api
+    prediction_url = start_prediction(
+        version_id, input_data, api_key, logging_obj=logging_obj
+    )
     print_verbose(prediction_url)
 
     # Handle the prediction response (streaming or non-streaming)
     if "stream" in optional_params and optional_params["stream"] == True:
         print_verbose("streaming request")
-        return handle_prediction_response_streaming(prediction_url, api_key, print_verbose)
+        return handle_prediction_response_streaming(
+            prediction_url, api_key, print_verbose
+        )
     else:
-        result, logs = handle_prediction_response(prediction_url, api_key, print_verbose)
-        model_response["ended"] = time.time() # for pricing this must remain right after calling api
+        result, logs = handle_prediction_response(
+            prediction_url, api_key, print_verbose
+        )
+        model_response[
+            "ended"
+        ] = time.time()  # for pricing this must remain right after calling api
         ## LOGGING
         logging_obj.post_call(
-                input=prompt,
-                api_key="",
-                original_response=result,
-                additional_args={"complete_input_dict": input_data,"logs": logs},
+            input=prompt,
+            api_key="",
+            original_response=result,
+            additional_args={"complete_input_dict": input_data, "logs": logs},
         )
 
         print_verbose(f"raw model_response: {result}")
 
-        if len(result) == 0: # edge case, where result from replicate is empty
+        if len(result) == 0:  # edge case, where result from replicate is empty
             result = " "
-        
+
         ## Building RESPONSE OBJECT
         model_response["choices"][0]["message"]["content"] = result
 
         # Calculate usage
         prompt_tokens = len(encoding.encode(prompt))
-        completion_tokens = len(encoding.encode(model_response["choices"][0]["message"]["content"]))
+        completion_tokens = len(
+            encoding.encode(model_response["choices"][0]["message"]["content"])
+        )
         model_response["model"] = "replicate/" + model
         model_response["usage"] = {
             "prompt_tokens": prompt_tokens,

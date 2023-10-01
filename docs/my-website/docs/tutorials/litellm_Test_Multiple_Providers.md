@@ -84,9 +84,9 @@ plt.show()
 ```
 
 
-    
+
 ![png](litellm_Test_Multiple_Providers_files/litellm_Test_Multiple_Providers_11_0.png)
-    
+
 
 
 # Duration Test endpoint
@@ -130,7 +130,5 @@ plt.show()
 ```
 
 
-    
-![png](litellm_Test_Multiple_Providers_files/litellm_Test_Multiple_Providers_14_0.png)
-    
 
+![png](litellm_Test_Multiple_Providers_files/litellm_Test_Multiple_Providers_14_0.png)

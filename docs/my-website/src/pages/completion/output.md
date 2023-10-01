@@ -1,7 +1,7 @@
 # Completion Function - completion()
 Here's the exact json output you can expect from a litellm `completion` call:
 
-```python 
+```python
 {'choices': [{'finish_reason': 'stop',
    'index': 0,
    'message': {'role': 'assistant',

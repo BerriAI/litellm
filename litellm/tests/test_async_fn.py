@@ -11,6 +11,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 from litellm import acompletion, acreate
 
+
 @pytest.mark.asyncio
 async def test_get_response():
     user_message = "Hello, how are you?"
@@ -25,12 +26,15 @@ async def test_get_response():
 # response = asyncio.run(test_get_response())
 # print(response)
 
+
 @pytest.mark.asyncio
 async def test_get_response_streaming():
     user_message = "Hello, how are you?"
     messages = [{"content": user_message, "role": "user"}]
     try:
-        response = await acompletion(model="gpt-3.5-turbo", messages=messages, stream=True)
+        response = await acompletion(
+            model="gpt-3.5-turbo", messages=messages, stream=True
+        )
         print(type(response))
 
         import inspect
@@ -52,7 +56,6 @@ async def test_get_response_streaming():
         pass
     return response
 
+
 # response = asyncio.run(test_get_response_streaming())
 # print(response)
-
-

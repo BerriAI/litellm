@@ -8,12 +8,12 @@ nav:
       - Streaming & Async Calls: stream.md
     - token usage:
       - Helper Functions: token_usage.md
-  - 🤖 Supported LLM APIs: 
+  - 🤖 Supported LLM APIs:
     - Supported Completion & Chat APIs: supported.md
     - Supported Embedding APIs: supported_embedding.md
-  - 🏃‍♂️ Fetching Inputs: 
+  - 🏃‍♂️ Fetching Inputs:
     - Secret Managers: secret.md
-  - 💾 Callbacks - Logging Output: 
+  - 💾 Callbacks - Logging Output:
     - Quick Start: advanced.md
     - Output Integrations: client_integrations.md
     - LLMonitor Tutorial: llmonitor_integration.md

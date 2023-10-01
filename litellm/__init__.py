@@ -33,18 +33,21 @@ aleph_alpha_key: Optional[str] = None
 nlp_cloud_key: Optional[str] = None
 use_client: bool = False
 logging: bool = True
-caching: bool = False # deprecated son
-caching_with_models: bool = False  # if you want the caching key to be model + prompt # deprecated soon
-cache: Optional[Cache] = None # cache object
+caching: bool = False  # deprecated son
+caching_with_models: bool = (
+    False  # if you want the caching key to be model + prompt # deprecated soon
+)
+cache: Optional[Cache] = None  # cache object
 model_alias_map: Dict[str, str] = {}
-max_budget: float = 0.0 # set the max budget across all providers
-_current_cost = 0 # private variable, used if max budget is set 
+max_budget: float = 0.0  # set the max budget across all providers
+_current_cost = 0  # private variable, used if max budget is set
 error_logs: Dict = {}
 #############################################
 
+
 def get_model_cost_map():
     url = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
-    
+
     try:
         response = requests.get(url)
         response.raise_for_status()  # Raise an exception if request is unsuccessful
@@ -54,8 +57,12 @@ def get_model_cost_map():
         return {}
     except:
         return {}
+
+
 model_cost = get_model_cost_map()
-custom_prompt_dict:Dict[str, dict] = {}
+custom_prompt_dict: Dict[str, dict] = {}
+
+
 ####### THREAD-SPECIFIC DATA ###################
 class MyLocal(threading.local):
     def __init__(self):
@@ -93,30 +100,30 @@ ai21_models: List = []
 nlp_cloud_models: List = []
 aleph_alpha_models: List = []
 for key, value in model_cost.items():
-    if value.get('litellm_provider') == 'openai':
+    if value.get("litellm_provider") == "openai":
         open_ai_chat_completion_models.append(key)
-    elif value.get('litellm_provider') == 'text-completion-openai':
+    elif value.get("litellm_provider") == "text-completion-openai":
         open_ai_text_completion_models.append(key)
-    elif value.get('litellm_provider') == 'cohere':
+    elif value.get("litellm_provider") == "cohere":
         cohere_models.append(key)
-    elif value.get('litellm_provider') == 'anthropic':
+    elif value.get("litellm_provider") == "anthropic":
         anthropic_models.append(key)
-    elif value.get('litellm_provider') == 'openrouter':
-        split_string = key.split('/', 1)
+    elif value.get("litellm_provider") == "openrouter":
+        split_string = key.split("/", 1)
         openrouter_models.append(split_string[1])
-    elif value.get('litellm_provider') == 'vertex_ai-text-models':
+    elif value.get("litellm_provider") == "vertex_ai-text-models":
         vertex_text_models.append(key)
-    elif value.get('litellm_provider') == 'vertex_ai-code-text-models':
+    elif value.get("litellm_provider") == "vertex_ai-code-text-models":
         vertex_code_text_models.append(key)
-    elif value.get('litellm_provider') == 'vertex_ai-chat-models':
+    elif value.get("litellm_provider") == "vertex_ai-chat-models":
         vertex_chat_models.append(key)
-    elif value.get('litellm_provider') == 'vertex_ai-code-chat-models':
+    elif value.get("litellm_provider") == "vertex_ai-code-chat-models":
         vertex_code_chat_models.append(key)
-    elif value.get('litellm_provider') == 'ai21':
+    elif value.get("litellm_provider") == "ai21":
         ai21_models.append(key)
-    elif value.get('litellm_provider') == 'nlp_cloud':
+    elif value.get("litellm_provider") == "nlp_cloud":
         nlp_cloud_models.append(key)
-    elif value.get('litellm_provider') == 'aleph_alpha':
+    elif value.get("litellm_provider") == "aleph_alpha":
         aleph_alpha_models.append(key)
 
 # well supported replicate llms
@@ -153,23 +160,18 @@ huggingface_models: List = [
 together_ai_models: List = [
     # llama llms - chat
     "togethercomputer/llama-2-70b-chat",
-
-    # llama llms - language / instruct 
+    # llama llms - language / instruct
     "togethercomputer/llama-2-70b",
     "togethercomputer/LLaMA-2-7B-32K",
     "togethercomputer/Llama-2-7B-32K-Instruct",
     "togethercomputer/llama-2-7b",
-
     # falcon llms
     "togethercomputer/falcon-40b-instruct",
     "togethercomputer/falcon-7b-instruct",
-
     # alpaca
     "togethercomputer/alpaca-7b",
-
     # chat llms
     "HuggingFaceH4/starchat-alpha",
-
     # code llms
     "togethercomputer/CodeLlama-34b",
     "togethercomputer/CodeLlama-34b-Instruct",
@@ -178,30 +180,27 @@ together_ai_models: List = [
     "NumbersStation/nsql-llama-2-7B",
     "WizardLM/WizardCoder-15B-V1.0",
     "WizardLM/WizardCoder-Python-34B-V1.0",
-
     # language llms
     "NousResearch/Nous-Hermes-Llama2-13b",
     "Austism/chronos-hermes-13b",
     "upstage/SOLAR-0-70b-16bit",
     "WizardLM/WizardLM-70B-V1.0",
+]  # supports all together ai models, just pass in the model id e.g. completion(model="together_computer/replit_code_3b",...)
 
-] # supports all together ai models, just pass in the model id e.g. completion(model="together_computer/replit_code_3b",...)
 
-
-baseten_models: List = ["qvv0xeq", "q841o8w", "31dxrj3"]  # FALCON 7B  # WizardLM  # Mosaic ML
+baseten_models: List = [
+    "qvv0xeq",
+    "q841o8w",
+    "31dxrj3",
+]  # FALCON 7B  # WizardLM  # Mosaic ML
 
 petals_models = [
     "petals-team/StableBeluga2",
 ]
 
-bedrock_models: List = [
-    "amazon.titan-tg1-large",
-    "ai21.j2-grande-instruct"
-]
+bedrock_models: List = ["amazon.titan-tg1-large", "ai21.j2-grande-instruct"]
 
-ollama_models = [
-    "llama2"
-]
+ollama_models = ["llama2"]
 
 model_list = (
     open_ai_chat_completion_models
@@ -243,7 +242,7 @@ provider_list: List = [
     "oobabooga",
     "ollama",
     "deepinfra",
-    "custom", # custom apis
+    "custom",  # custom apis
 ]
 
 models_by_provider: dict = {
@@ -262,31 +261,35 @@ models_by_provider: dict = {
     "ollama": ollama_models,
 }
 
-# mapping for those models which have larger equivalents 
+# mapping for those models which have larger equivalents
 longer_context_model_fallback_dict: dict = {
     # openai chat completion models
-    "gpt-3.5-turbo": "gpt-3.5-turbo-16k", 
-    "gpt-3.5-turbo-0301": "gpt-3.5-turbo-16k-0301", 
-    "gpt-3.5-turbo-0613": "gpt-3.5-turbo-16k-0613", 
-    "gpt-4": "gpt-4-32k", 
-    "gpt-4-0314": "gpt-4-32k-0314", 
-    "gpt-4-0613": "gpt-4-32k-0613", 
-    # anthropic 
-    "claude-instant-1": "claude-2", 
+    "gpt-3.5-turbo": "gpt-3.5-turbo-16k",
+    "gpt-3.5-turbo-0301": "gpt-3.5-turbo-16k-0301",
+    "gpt-3.5-turbo-0613": "gpt-3.5-turbo-16k-0613",
+    "gpt-4": "gpt-4-32k",
+    "gpt-4-0314": "gpt-4-32k-0314",
+    "gpt-4-0613": "gpt-4-32k-0613",
+    # anthropic
+    "claude-instant-1": "claude-2",
     "claude-instant-1.2": "claude-2",
     # vertexai
     "chat-bison": "chat-bison-32k",
     "chat-bison@001": "chat-bison-32k",
-    "codechat-bison": "codechat-bison-32k", 
+    "codechat-bison": "codechat-bison-32k",
     "codechat-bison@001": "codechat-bison-32k",
-    # openrouter 
-    "openrouter/openai/gpt-3.5-turbo": "openrouter/openai/gpt-3.5-turbo-16k", 
+    # openrouter
+    "openrouter/openai/gpt-3.5-turbo": "openrouter/openai/gpt-3.5-turbo-16k",
     "openrouter/anthropic/claude-instant-v1": "openrouter/anthropic/claude-2",
 }
 
 ####### EMBEDDING MODELS ###################
 open_ai_embedding_models: List = ["text-embedding-ada-002"]
-cohere_embedding_models: List = ["embed-english-v2.0", "embed-english-light-v2.0", "embed-multilingual-v2.0"]
+cohere_embedding_models: List = [
+    "embed-english-v2.0",
+    "embed-english-light-v2.0",
+    "embed-multilingual-v2.0",
+]
 
 from .timeout import timeout
 from .testing import *
@@ -308,7 +311,7 @@ from .utils import (
     validate_environment,
     check_valid_key,
     get_llm_provider,
-    completion_with_config
+    completion_with_config,
 )
 from .main import *  # type: ignore
 from .integrations import *
@@ -319,8 +322,7 @@ from .exceptions import (
     ServiceUnavailableError,
     OpenAIError,
     ContextWindowExceededError,
-    BudgetExceededError
-
+    BudgetExceededError,
 )
 from .budget_manager import BudgetManager
 from .proxy.proxy_cli import run_server

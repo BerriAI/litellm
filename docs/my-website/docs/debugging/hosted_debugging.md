@@ -33,7 +33,7 @@ Go to [admin.litellm.ai](https://admin.litellm.ai/) and copy the code snippet wi
 **Add it to your .env**
 
 ```python
-import os 
+import os
 
 os.env["LITELLM_TOKEN"] = "e24c4c06-d027-4c30-9e78-18bc3a50aebb" # replace with your unique token
 
@@ -41,21 +41,21 @@ os.env["LITELLM_TOKEN"] = "e24c4c06-d027-4c30-9e78-18bc3a50aebb" # replace with 
 
 **Turn on LiteLLM Client**
 ```python
-import litellm 
+import litellm
 litellm.client = True
 ```
 
 ### 3. Make a normal `completion()` call
 ```python
-import litellm 
+import litellm
 from litellm import completion
-import os 
+import os
 
 # set env variables
 os.environ["LITELLM_TOKEN"] = "e24c4c06-d027-4c30-9e78-18bc3a50aebb" # replace with your unique token
 os.environ["OPENAI_API_KEY"] = "openai key"
 
-litellm.use_client = True # enable logging dashboard 
+litellm.use_client = True # enable logging dashboard
 messages = [{ "content": "Hello, how are you?","role": "user"}]
 
 # openai call
@@ -70,13 +70,13 @@ Click on your personal dashboard link. Here's how you can find it 👇
 
 <Image img={require('../../img/dash_output.png')} alt="Dashboard" />
 
-[👋 Tell us if you need better privacy controls](https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version?month=2023-08)  
+[👋 Tell us if you need better privacy controls](https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version?month=2023-08)
 
-### 3. Review request log 
+### 3. Review request log
 
-Oh! Looks like our request was made successfully. Let's click on it and see exactly what got sent to the LLM provider. 
+Oh! Looks like our request was made successfully. Let's click on it and see exactly what got sent to the LLM provider.
 
-<Image img={require('../../img/dashboard_log_row.png')} alt="Dashboard Log Row" />    
+<Image img={require('../../img/dashboard_log_row.png')} alt="Dashboard Log Row" />
 
 
 

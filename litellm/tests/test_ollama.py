@@ -61,7 +61,6 @@
 # asyncio.run(get_response())
 
 
-
 ##### latest implementation of making raw http post requests to local ollama server
 
 # import requests

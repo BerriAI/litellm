@@ -9,7 +9,7 @@
 
 ## Completion() - Quick Start
 ```python
-import os 
+import os
 from litellm import completion
 
 # openai configs
@@ -24,7 +24,7 @@ os.environ["AZURE_API_VERSION"] = "2023-05-15"
 
 # openai call
 response = completion(
-    model = "gpt-3.5-turbo", 
+    model = "gpt-3.5-turbo",
     messages = [{ "content": "Hello, how are you?","role": "user"}]
 )
 print("Openai Response\n")
@@ -41,7 +41,7 @@ print(response)
 
 ## Completion() with Streaming
 ```python
-import os 
+import os
 from litellm import completion
 
 # openai configs
@@ -56,7 +56,7 @@ os.environ["AZURE_API_VERSION"] = "2023-05-15"
 
 # openai call
 response = completion(
-    model = "gpt-3.5-turbo", 
+    model = "gpt-3.5-turbo",
     messages = [{ "content": "Hello, how are you?","role": "user"}],
     stream=True
 )
@@ -78,7 +78,7 @@ for chunk in response:
 
 ## Completion() with Streaming + Async
 ```python
-import os 
+import os
 from litellm import acompletion
 
 # openai configs
@@ -93,7 +93,7 @@ os.environ["AZURE_API_VERSION"] = "2023-05-15"
 
 # openai call
 response = acompletion(
-    model = "gpt-3.5-turbo", 
+    model = "gpt-3.5-turbo",
     messages = [{ "content": "Hello, how are you?","role": "user"}],
     stream=True
 )

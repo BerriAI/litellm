@@ -1,21 +1,22 @@
 import requests
 import json
 import traceback
+
 try:
     from async_generator import async_generator, yield_  # optional dependency
+
     async_generator_imported = True
 except ImportError:
     async_generator_imported = False  # this should not throw an error, it will impact the 'import litellm' statement
 
+
 # ollama implementation
 def get_ollama_response_stream(
-        api_base="http://localhost:11434",
-        model="llama2",
-        prompt="Why is the sky blue?"
-    ):
+    api_base="http://localhost:11434", model="llama2", prompt="Why is the sky blue?"
+):
     if api_base.endswith("/api/generate"):
         url = api_base
-    else: 
+    else:
         url = f"{api_base}/api/generate"
     data = {
         "model": model,
@@ -44,14 +45,13 @@ def get_ollama_response_stream(
                     print(f"Error decoding JSON: {e}")
     session.close()
 
+
 if async_generator_imported:
     # ollama implementation
     @async_generator
     async def async_get_ollama_response_stream(
-            api_base="http://localhost:11434",
-            model="llama2",
-            prompt="Why is the sky blue?"
-        ):
+        api_base="http://localhost:11434", model="llama2", prompt="Why is the sky blue?"
+    ):
         url = f"{api_base}/api/generate"
         data = {
             "model": model,
@@ -74,7 +74,9 @@ if async_generator_imported:
                                         "content": "",
                                     }
                                     completion_obj["content"] = j["response"]
-                                    await yield_({"choices": [{"delta": completion_obj}]})
+                                    await yield_(
+                                        {"choices": [{"delta": completion_obj}]}
+                                    )
                     except Exception as e:
                         print(f"Error decoding JSON: {e}")
         session.close()

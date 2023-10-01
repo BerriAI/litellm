@@ -6,7 +6,7 @@ LiteLLM allows you to specify the following:
 * API Version
 * API Type
 
-Useful Helper functions: 
+Useful Helper functions:
 * [`check_valid_key()`](#check_valid_key)
 * [`get_valid_models()`](#get_valid_models)
 
@@ -22,7 +22,7 @@ You can set the API configs using:
 Set the liteLLM API key or specific provider key:
 
 ```python
-import os 
+import os
 
 # Set OpenAI API key
 os.environ["OPENAI_API_KEY"] = "Your API Key"
@@ -122,7 +122,7 @@ response = completion("command-nightly", messages, api_version="2023-02-15")
 
 ### `check_valid_key()`
 
-Check if a user submitted a valid key for the model they're trying to call. 
+Check if a user submitted a valid key for the model they're trying to call.
 
 ```
 key = "bad-key"

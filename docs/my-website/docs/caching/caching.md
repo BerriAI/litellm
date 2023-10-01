@@ -6,7 +6,7 @@ liteLLM implements exact match caching and supports the following Caching:
 * In-Memory Caching [Default]
 * Redis Caching Local
 * Redis Caching Hosted
-* GPTCache 
+* GPTCache
 
 ## Quick Start Usage - Completion
 Caching - cache
@@ -66,7 +66,7 @@ cache = Cache(type="redis", host=os.environ['REDIS_HOST'], port=os.environ['REDI
 
 cache.get_cache_key = custom_get_cache_key # set get_cache_key function for your cache
 
-litellm.cache = cache # set litellm.cache to your cache 
+litellm.cache = cache # set litellm.cache to your cache
 
 ```
 
@@ -83,28 +83,28 @@ from litellm import completion
 response2 = completion(model="gpt-3.5-turbo", messages=messages, temperature=0.1, caching=True)
 
 response3 = completion(model="gpt-3.5-turbo", messages=messages, temperature=0.1, caching=False)
-    
+
 ```
 ### Detecting Cached Responses
-For resposes that were returned as cache hit, the response includes a param `cache` = True 
+For resposes that were returned as cache hit, the response includes a param `cache` = True
 
 Example response with cache hit
 ```python
 {
     'cache': True,
-    'id': 'chatcmpl-7wggdzd6OXhgE2YhcLJHJNZsEWzZ2', 
-    'created': 1694221467, 
-    'model': 'gpt-3.5-turbo-0613', 
+    'id': 'chatcmpl-7wggdzd6OXhgE2YhcLJHJNZsEWzZ2',
+    'created': 1694221467,
+    'model': 'gpt-3.5-turbo-0613',
     'choices': [
         {
             'index': 0, 'message': {'role': 'assistant', 'content': 'I\'m sorry, but I couldn\'t find any information about "litellm" or how many stars it has. It is possible that you may be referring to a specific product, service, or platform that I am not familiar with. Can you please provide more context or clarify your question?'
         }, 'finish_reason': 'stop'}
-    ], 
-    'usage': {'prompt_tokens': 17, 'completion_tokens': 59, 'total_tokens': 76}, 
+    ],
+    'usage': {'prompt_tokens': 17, 'completion_tokens': 59, 'total_tokens': 76},
 }
 
 ```
-## Caching with Streaming 
+## Caching with Streaming
 LiteLLM can cache your streamed responses for you
 
 ### Usage

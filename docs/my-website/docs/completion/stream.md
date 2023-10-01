@@ -32,10 +32,10 @@ print(response)
 ```
 
 ## Async Streaming
-We've implemented an `__anext__()` function in the streaming object returned. This enables async iteration over the streaming object. 
+We've implemented an `__anext__()` function in the streaming object returned. This enables async iteration over the streaming object.
 
 ### Usage
-Here's an example of using it with openai. But this 
+Here's an example of using it with openai. But this
 ```python
 from litellm import completion
 import asyncio
@@ -61,7 +61,7 @@ async def completion_call():
             print(f"time since initial request: {chunk_time - start_time:.5f}")
             print(chunk["choices"][0]["delta"])
             complete_response += chunk["choices"][0]["delta"]["content"]
-        if complete_response == "": 
+        if complete_response == "":
             raise Exception("Empty response received")
     except:
         print(f"error occurred: {traceback.format_exc()}")

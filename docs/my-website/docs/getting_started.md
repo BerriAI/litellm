@@ -2,11 +2,11 @@
 
 import QuickStart from '../src/components/QuickStart.js'
 
-LiteLLM simplifies LLM API calls by mapping them all to the [OpenAI ChatCompletion format](https://platform.openai.com/docs/api-reference/chat). 
+LiteLLM simplifies LLM API calls by mapping them all to the [OpenAI ChatCompletion format](https://platform.openai.com/docs/api-reference/chat).
 
-## basic usage 
+## basic usage
 
-By default we provide a free $10 community-key to try all providers supported on LiteLLM. 
+By default we provide a free $10 community-key to try all providers supported on LiteLLM.
 
 ```python
 from litellm import completion
@@ -29,14 +29,14 @@ Email us @ krrish@berri.ai
 
 Next Steps 👉 [Call all supported models - e.g. Claude-2, Llama2-70b, etc.](./proxy_api.md#supported-models)
 
-More details 👉 
+More details 👉
 * [Completion() function details](./completion/)
 * [All supported models / providers on LiteLLM](./providers/)
 * [Build your own OpenAI proxy](https://github.com/BerriAI/liteLLM-proxy/tree/main)
 
 ## streaming
 
-Same example from before. Just pass in `stream=True` in the completion args. 
+Same example from before. Just pass in `stream=True` in the completion args.
 ```python
 from litellm import completion
 
@@ -55,27 +55,27 @@ response = completion("command-nightly", messages, stream=True)
 print(response)
 ```
 
-More details 👉 
+More details 👉
 * [streaming + async](./completion/stream.md)
 * [tutorial for streaming Llama2 on TogetherAI](./tutorials/TogetherAI_liteLLM.md)
 
-## exception handling 
+## exception handling
 
-LiteLLM maps exceptions across all supported providers to the OpenAI exceptions. All our exceptions inherit from OpenAI's exception types, so any error-handling you have for that, should work out of the box with LiteLLM. 
+LiteLLM maps exceptions across all supported providers to the OpenAI exceptions. All our exceptions inherit from OpenAI's exception types, so any error-handling you have for that, should work out of the box with LiteLLM.
 
-```python 
+```python
 from openai.errors import OpenAIError
 from litellm import completion
 
 os.environ["ANTHROPIC_API_KEY"] = "bad-key"
-try: 
-    # some code 
+try:
+    # some code
     completion(model="claude-instant-1", messages=[{"role": "user", "content": "Hey, how's it going?"}])
 except OpenAIError as e:
     print(e)
 ```
 
-More details 👉 
+More details 👉
 * [exception mapping](./exception_mapping.md)
 * [retries + model fallbacks for completion()](./completion/reliable_completions.md)
 * [tutorial for model fallbacks with completion()](./tutorials/fallbacks.md)

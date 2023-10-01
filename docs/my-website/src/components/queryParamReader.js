@@ -5,7 +5,7 @@ const CodeBlock = ({ token }) => {
 import os
 from litellm import completion
 
-# set ENV variables 
+# set ENV variables
 os.environ["LITELLM_TOKEN"] = '${token}'
 
 messages = [{ "content": "Hello, how are you?","role": "user"}]

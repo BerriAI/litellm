@@ -72,15 +72,3 @@ response = completion(
 print(response)
 
 ```
-
-
-
-
-
-
-
-
-
-
-
-

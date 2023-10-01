@@ -12,6 +12,7 @@ import sys, os, io
 import traceback, logging
 import pytest
 import dotenv
+
 dotenv.load_dotenv()
 
 # Create logger
@@ -22,9 +23,11 @@ logger.setLevel(logging.DEBUG)
 stream_handler = logging.StreamHandler(sys.stdout)
 logger.addHandler(stream_handler)
 
+
 # Create a function to log information
 def logger_fn(message):
     logger.info(message)
+
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -32,13 +35,11 @@ sys.path.insert(
 import litellm
 from litellm import completion
 from openai.error import AuthenticationError
+
 litellm.set_verbose = True
 
 score = 0
-split_per_model = {
-	"gpt-4": 0, 
-	"claude-instant-1.2": 1
-}
+split_per_model = {"gpt-4": 0, "claude-instant-1.2": 1}
 
 
 user_message = "Hello, how are you?"
@@ -109,4 +110,3 @@ messages = [{"content": user_message, "role": "user"}]
 #         raise Exception("LiteLLMDebugger: success/failure call not logged!")
 # except Exception as e:
 #     pytest.fail(f"Error occurred: {e}")
-

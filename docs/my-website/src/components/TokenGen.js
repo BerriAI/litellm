@@ -24,11 +24,11 @@ const TokenGen = () => {
           },
           body: JSON.stringify({'total_budget': 100})
         });
-        
+
         if (!response.ok) {
           throw new Error('Network response was not ok');
         }
-        
+
         const data = await response.json();
 
         setToken(`${data.api_key}`);

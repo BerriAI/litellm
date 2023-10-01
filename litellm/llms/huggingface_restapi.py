@@ -9,6 +9,7 @@ from litellm.utils import ModelResponse, Choices, Message
 from typing import Optional
 from .prompt_templates.factory import prompt_factory, custom_prompt
 
+
 class HuggingfaceError(Exception):
     def __init__(self, status_code, message):
         self.status_code = status_code
@@ -16,6 +17,7 @@ class HuggingfaceError(Exception):
         super().__init__(
             self.message
         )  # Call the base class constructor with the parameters it needs
+
 
 def validate_environment(api_key):
     headers = {
@@ -25,8 +27,11 @@ def validate_environment(api_key):
         headers["Authorization"] = f"Bearer {api_key}"
     return headers
 
+
 tgi_models_cache = None
 conv_models_cache = None
+
+
 def read_tgi_conv_models():
     try:
         global tgi_models_cache, conv_models_cache
@@ -38,30 +43,38 @@ def read_tgi_conv_models():
         tgi_models = set()
         script_directory = os.path.dirname(os.path.abspath(__file__))
         # Construct the file path relative to the script's directory
-        file_path = os.path.join(script_directory, "huggingface_llms_metadata", "hf_text_generation_models.txt")
+        file_path = os.path.join(
+            script_directory,
+            "huggingface_llms_metadata",
+            "hf_text_generation_models.txt",
+        )
 
-        with open(file_path, 'r') as file:
+        with open(file_path, "r") as file:
             for line in file:
                 tgi_models.add(line.strip())
-        
+
         # Cache the set for future use
         tgi_models_cache = tgi_models
-        
+
         # If not, read the file and populate the cache
-        file_path = os.path.join(script_directory, "huggingface_llms_metadata", "hf_conversational_models.txt")
+        file_path = os.path.join(
+            script_directory,
+            "huggingface_llms_metadata",
+            "hf_conversational_models.txt",
+        )
         conv_models = set()
-        with open(file_path, 'r') as file:
+        with open(file_path, "r") as file:
             for line in file:
                 conv_models.add(line.strip())
         # Cache the set for future use
-        conv_models_cache = conv_models        
+        conv_models_cache = conv_models
         return tgi_models, conv_models
     except:
         return set(), set()
 
 
 def get_hf_task_for_model(model):
-    # read text file, cast it to set 
+    # read text file, cast it to set
     # read the file called "huggingface_llms_metadata/hf_text_generation_models.txt"
     tgi_models, conversational_models = read_tgi_conv_models()
     if model in tgi_models:
@@ -70,6 +83,7 @@ def get_hf_task_for_model(model):
         return "conversational"
     else:
         return None
+
 
 def completion(
     model: str,
@@ -119,11 +133,11 @@ def completion(
                 generated_responses.append(message["content"])
         data = {
             "inputs": {
-                "text": text, 
-                "past_user_inputs": past_user_inputs, 
-                "generated_responses": generated_responses
+                "text": text,
+                "past_user_inputs": past_user_inputs,
+                "generated_responses": generated_responses,
             },
-            "parameters": inference_params
+            "parameters": inference_params,
         }
         input_text = "".join(message["content"] for message in messages)
     elif task == "text-generation-inference":
@@ -132,38 +146,42 @@ def completion(
             # check if the model has a registered custom prompt
             model_prompt_details = custom_prompt_dict[model]
             prompt = custom_prompt(
-                role_dict=model_prompt_details["roles"], 
-                initial_prompt_value=model_prompt_details["initial_prompt_value"],  
-                final_prompt_value=model_prompt_details["final_prompt_value"], 
-                messages=messages
+                role_dict=model_prompt_details["roles"],
+                initial_prompt_value=model_prompt_details["initial_prompt_value"],
+                final_prompt_value=model_prompt_details["final_prompt_value"],
+                messages=messages,
             )
         else:
             prompt = prompt_factory(model=model, messages=messages)
-        if "https://api-inference.huggingface.co/models" in completion_url: 
+        if "https://api-inference.huggingface.co/models" in completion_url:
             inference_params = copy.deepcopy(optional_params)
             data = {
                 "inputs": prompt,
                 "parameters": inference_params,
-                "stream": True if "stream" in inference_params and inference_params["stream"] == True else False,
+                "stream": True
+                if "stream" in inference_params and inference_params["stream"] == True
+                else False,
             }
         else:
             data = {
                 "inputs": prompt,
                 "parameters": optional_params,
-                "stream": True if "stream" in optional_params and optional_params["stream"] == True else False,
+                "stream": True
+                if "stream" in optional_params and optional_params["stream"] == True
+                else False,
             }
         input_text = prompt
     else:
         # Non TGI and Conversational llms
-        # We need this branch, it removes 'details' and 'return_full_text' from params 
+        # We need this branch, it removes 'details' and 'return_full_text' from params
         if model in custom_prompt_dict:
             # check if the model has a registered custom prompt
             model_prompt_details = custom_prompt_dict[model]
             prompt = custom_prompt(
-                role_dict=model_prompt_details["roles"], 
-                initial_prompt_value=model_prompt_details["initial_prompt_value"],  
-                final_prompt_value=model_prompt_details["final_prompt_value"], 
-                messages=messages
+                role_dict=model_prompt_details["roles"],
+                initial_prompt_value=model_prompt_details["initial_prompt_value"],
+                final_prompt_value=model_prompt_details["final_prompt_value"],
+                messages=messages,
             )
         else:
             prompt = prompt_factory(model=model, messages=messages)
@@ -174,30 +192,28 @@ def completion(
         data = {
             "inputs": prompt,
             "parameters": inference_params,
-            "stream": True if "stream" in optional_params and optional_params["stream"] == True else False,
+            "stream": True
+            if "stream" in optional_params and optional_params["stream"] == True
+            else False,
         }
         input_text = prompt
     ## LOGGING
     logging_obj.pre_call(
-            input=input_text,
-            api_key=api_key,
-            additional_args={"complete_input_dict": data, "task": task},
-        )
+        input=input_text,
+        api_key=api_key,
+        additional_args={"complete_input_dict": data, "task": task},
+    )
     ## COMPLETION CALL
     if "stream" in optional_params and optional_params["stream"] == True:
         response = requests.post(
-            completion_url, 
-            headers=headers, 
-            data=json.dumps(data), 
-            stream=optional_params["stream"]
+            completion_url,
+            headers=headers,
+            data=json.dumps(data),
+            stream=optional_params["stream"],
         )
         return response.iter_lines()
     else:
-        response = requests.post(
-            completion_url, 
-            headers=headers, 
-            data=json.dumps(data)
-        )
+        response = requests.post(completion_url, headers=headers, data=json.dumps(data))
         ## LOGGING
         logging_obj.post_call(
             input=input_text,
@@ -221,34 +237,52 @@ def completion(
                 status_code=response.status_code,
             )
         else:
-            if task == "conversational": 
+            if task == "conversational":
                 model_response["choices"][0]["message"][
                     "content"
                 ] = completion_response["generated_text"]
-            elif task == "text-generation-inference": 
+            elif task == "text-generation-inference":
                 model_response["choices"][0]["message"][
                     "content"
-                ] = completion_response[0]["generated_text"]   
-                ## GETTING LOGPROBS + FINISH REASON 
-                if "details" in completion_response[0] and "tokens" in completion_response[0]["details"]:
-                    model_response.choices[0].finish_reason = completion_response[0]["details"]["finish_reason"]
+                ] = completion_response[0]["generated_text"]
+                ## GETTING LOGPROBS + FINISH REASON
+                if (
+                    "details" in completion_response[0]
+                    and "tokens" in completion_response[0]["details"]
+                ):
+                    model_response.choices[0].finish_reason = completion_response[0][
+                        "details"
+                    ]["finish_reason"]
                     sum_logprob = 0
                     for token in completion_response[0]["details"]["tokens"]:
                         sum_logprob += token["logprob"]
                     model_response["choices"][0]["message"]["logprobs"] = sum_logprob
-                if "best_of" in optional_params and optional_params["best_of"] > 1: 
-                    if "details" in completion_response[0] and "best_of_sequences" in completion_response[0]["details"]:
+                if "best_of" in optional_params and optional_params["best_of"] > 1:
+                    if (
+                        "details" in completion_response[0]
+                        and "best_of_sequences" in completion_response[0]["details"]
+                    ):
                         choices_list = []
-                        for idx, item in enumerate(completion_response[0]["details"]["best_of_sequences"]):
+                        for idx, item in enumerate(
+                            completion_response[0]["details"]["best_of_sequences"]
+                        ):
                             sum_logprob = 0
                             for token in item["tokens"]:
                                 sum_logprob += token["logprob"]
-                            message_obj = Message(content=item["generated_text"], logprobs=sum_logprob)
-                            choice_obj = Choices(finish_reason=item["finish_reason"], index=idx+1, message=message_obj)
+                            message_obj = Message(
+                                content=item["generated_text"], logprobs=sum_logprob
+                            )
+                            choice_obj = Choices(
+                                finish_reason=item["finish_reason"],
+                                index=idx + 1,
+                                message=message_obj,
+                            )
                             choices_list.append(choice_obj)
                         model_response["choices"].extend(choices_list)
             else:
-                model_response["choices"][0]["message"]["content"] = completion_response[0]["generated_text"]
+                model_response["choices"][0]["message"][
+                    "content"
+                ] = completion_response[0]["generated_text"]
         ## CALCULATING USAGE
         prompt_tokens = len(
             encoding.encode(input_text)
@@ -289,31 +323,25 @@ def embedding(
         embed_url = os.getenv("HUGGINGFACE_API_BASE", "")
     else:
         embed_url = f"https://api-inference.huggingface.co/models/{model}"
-    
-    data = {
-        "inputs": input
-    }
-    
+
+    data = {"inputs": input}
+
     ## LOGGING
     logging_obj.pre_call(
-            input=input,
-            api_key=api_key,
-            additional_args={"complete_input_dict": data},
-        )
-    ## COMPLETION CALL
-    response = requests.post(
-        embed_url, headers=headers, data=json.dumps(data)
+        input=input,
+        api_key=api_key,
+        additional_args={"complete_input_dict": data},
     )
+    ## COMPLETION CALL
+    response = requests.post(embed_url, headers=headers, data=json.dumps(data))
 
-  
     ## LOGGING
     logging_obj.post_call(
-            input=input,
-            api_key=api_key,
-            additional_args={"complete_input_dict": data},
-            original_response=response,
-        )
-
+        input=input,
+        api_key=api_key,
+        additional_args={"complete_input_dict": data},
+        original_response=response,
+    )
 
     embeddings = response.json()
 
@@ -323,7 +351,7 @@ def embedding(
             {
                 "object": "embedding",
                 "index": idx,
-                "embedding": embedding[0][0] # flatten list returned from hf
+                "embedding": embedding[0][0],  # flatten list returned from hf
             }
         )
     model_response["object"] = "list"
@@ -331,13 +359,10 @@ def embedding(
     model_response["model"] = model
     input_tokens = 0
     for text in input:
-        input_tokens+=len(encoding.encode(text)) 
+        input_tokens += len(encoding.encode(text))
 
-    model_response["usage"] = { 
-        "prompt_tokens": input_tokens, 
+    model_response["usage"] = {
+        "prompt_tokens": input_tokens,
         "total_tokens": input_tokens,
     }
     return model_response
-
-
-    

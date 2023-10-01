@@ -6,7 +6,7 @@
 
 ## Pre-requisites
 * `pip install google-cloud-aiplatform`
-* Authentication: 
+* Authentication:
     * run `gcloud auth application-default login` See [Google Cloud Docs](https://cloud.google.com/docs/authentication/external/set-up-adc)
     * Alternatively you can set `application_default_credentials.json`
 
@@ -14,26 +14,26 @@
 All calls using Vertex AI require the following parameters:
 * Your Project ID
 ```python
-import os, litellm 
+import os, litellm
 
 # set via env var
 os.environ["VERTEXAI_PROJECT"] = "hardy-device-38811" # Your Project ID`
 
 ### OR ###
 
-# set directly on module 
+# set directly on module
 litellm.vertex_project = "hardy-device-38811" # Your Project ID`
 ```
 * Your Project Location
 ```python
-import os, litellm 
+import os, litellm
 
 # set via env var
 os.environ["VERTEXAI_LOCATION"] = "us-central1 # Your Location
 
 ### OR ###
 
-# set directly on module 
+# set directly on module
 litellm.vertex_location = "us-central1 # Your Location
 ```
 

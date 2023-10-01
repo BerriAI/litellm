@@ -11,7 +11,7 @@ const CrispChat = () => {
         s.async = 1;
         document.getElementsByTagName("head")[0].appendChild(s);
     }, [])
-  
+
     return null;
 };
 

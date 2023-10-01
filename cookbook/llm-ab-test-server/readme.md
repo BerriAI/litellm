@@ -56,20 +56,20 @@ response = completion(model=selected_model, messages=[{ "content": "Hello, how a
 
 ```
 
-### Viewing Logs, Feedback 
+### Viewing Logs, Feedback
 In order to view logs set `litellm.token=<your-email>`
 ```python
 import litellm
 litellm.token='ishaan_discord@berri.ai'
 ```
 
-Your logs will be available at: 
+Your logs will be available at:
 https://lite-llm-abtest-nckmhi7ue-clerkieai.vercel.app/<your-token>
 
 ### Live Demo UI
 👉https://lite-llm-abtest-nckmhi7ue-clerkieai.vercel.app/ishaan_discord@berri.ai
 
-## Viewing Responses + Custom Scores 
+## Viewing Responses + Custom Scores
 LiteLLM UI allows you to view responses and set custom scores for each response
 
 <img width="626" alt="Screenshot 2023-08-30 at 8 08 59 PM" src="https://github.com/BerriAI/litellm/assets/29436595/7dc62d98-fb47-4b86-ad6f-f302b28bf15d">
@@ -93,13 +93,13 @@ git clone https://github.com/BerriAI/litellm/
 cd litellm/cookbook/llm-ab-test-server
 ```
 
-### Run the Server 
+### Run the Server
 ```
 python3 main.py
 ```
 
 ### Set your LLM Configs
-Set your LLMs and LLM weights you want to run A/B testing with 
+Set your LLMs and LLM weights you want to run A/B testing with
 In main.py set your selected LLMs you want to AB test in `llm_dict`
 You can A/B test more than 100+ LLMs using LiteLLM https://docs.litellm.ai/docs/providers
 ```python
@@ -111,15 +111,15 @@ llm_dict = {
 }
 ```
 
-#### Setting your API Keys 
+#### Setting your API Keys
 Set your LLM API keys in a .env file in the directory or set them as `os.environ` variables.
 
-See https://docs.litellm.ai/docs/providers for the format of API keys 
+See https://docs.litellm.ai/docs/providers for the format of API keys
 
-LiteLLM generalizes api keys to follow the following format 
+LiteLLM generalizes api keys to follow the following format
 `PROVIDER_API_KEY`
 
-## Making Requests to the LiteLLM Server Locally 
+## Making Requests to the LiteLLM Server Locally
 The server follows the Input/Output format set by the OpenAI Chat Completions API
 Here is an example request made the LiteLLM Server
 
@@ -154,12 +154,12 @@ curl --location 'http://localhost:5000/chat/completions' \
 --header 'Content-Type: application/json' \
 --data '{
     "messages": [
-                    { 
+                    {
                         "content": "who is CTO of litellm",
                         "role": "user"
                     }
                 ]
-    
+
 }
 '
 ```
@@ -170,5 +170,5 @@ curl --location 'http://localhost:5000/chat/completions' \
 - Our numbers 📞 +1 (770) 8783-106 / ‭+1 (412) 618-6238‬
 - Our emails ✉️ ishaan@berri.ai / krrish@berri.ai
 
-# why did we build this 
+# why did we build this
 - **Need for simplicity**: Our code started to get extremely complicated managing & translating calls between Azure, OpenAI, Cohere

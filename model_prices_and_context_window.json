@@ -117,7 +117,7 @@
         "output_cost_per_token": 0.000002,
         "litellm_provider": "text-completion-openai",
         "mode": "completion"
-    },    
+    },
     "gpt-3.5-turbo-instruct": {
         "max_tokens": 8192,
         "input_cost_per_token": 0.0000015,
@@ -425,42 +425,42 @@
         "mode": "chat"
     },
     "luminous-base": {
-        "max_tokens": 2048, 
+        "max_tokens": 2048,
         "input_cost_per_token": 0.00003,
         "output_cost_per_token": 0.000033,
         "litellm_provider": "aleph_alpha",
         "mode": "completion"
     },
     "luminous-base-control": {
-        "max_tokens": 2048, 
+        "max_tokens": 2048,
         "input_cost_per_token": 0.0000375,
         "output_cost_per_token": 0.00004125,
         "litellm_provider": "aleph_alpha",
         "mode": "chat"
     },
     "luminous-extended": {
-        "max_tokens": 2048, 
+        "max_tokens": 2048,
         "input_cost_per_token": 0.000045,
         "output_cost_per_token": 0.0000495,
         "litellm_provider": "aleph_alpha",
         "mode": "completion"
     },
     "luminous-extended-control": {
-        "max_tokens": 2048, 
+        "max_tokens": 2048,
         "input_cost_per_token": 0.00005625,
         "output_cost_per_token": 0.000061875,
         "litellm_provider": "aleph_alpha",
         "mode": "chat"
     },
     "luminous-supreme": {
-        "max_tokens": 2048, 
+        "max_tokens": 2048,
         "input_cost_per_token": 0.000175,
         "output_cost_per_token": 0.0001925,
         "litellm_provider": "aleph_alpha",
         "mode": "completion"
     },
     "luminous-supreme-control": {
-        "max_tokens": 2048, 
+        "max_tokens": 2048,
         "input_cost_per_token": 0.00021875,
         "output_cost_per_token": 0.000240625,
         "litellm_provider": "aleph_alpha",

@@ -1,8 +1,8 @@
 # Model Alias
 
-The model name you show an end-user might be different from the one you pass to LiteLLM - e.g. Displaying `GPT-3.5` while calling `gpt-3.5-turbo-16k` on the backend. 
+The model name you show an end-user might be different from the one you pass to LiteLLM - e.g. Displaying `GPT-3.5` while calling `gpt-3.5-turbo-16k` on the backend.
 
-LiteLLM simplifies this by letting you pass in a model alias mapping. 
+LiteLLM simplifies this by letting you pass in a model alias mapping.
 
 # expected format
 
@@ -13,7 +13,7 @@ litellm.model_alias_map = {
 }
 ```
 
-# usage 
+# usage
 
 ### Relevant Code
 ```python
@@ -27,8 +27,8 @@ litellm.model_alias_map = model_alias_map
 
 ### Complete Code
 ```python
-import litellm 
-from litellm import completion 
+import litellm
+from litellm import completion
 
 
 ## set ENV variables

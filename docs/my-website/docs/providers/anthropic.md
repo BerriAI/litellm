@@ -3,8 +3,8 @@ LiteLLM supports Claude-1, 1.2 and Claude-2.
 
 ## API Keys
 
-```python 
-import os 
+```python
+import os
 
 os.environ["ANTHROPIC_API_KEY"] = "your-api-key"
 ```
@@ -13,25 +13,25 @@ os.environ["ANTHROPIC_API_KEY"] = "your-api-key"
 
 ```python
 import os
-from litellm import completion 
+from litellm import completion
 
 # set env - [OPTIONAL] replace with your anthropic key
-os.environ["ANTHROPIC_API_KEY"] = "your-api-key" 
+os.environ["ANTHROPIC_API_KEY"] = "your-api-key"
 
 messages = [{"role": "user", "content": "Hey! how's it going?"}]
 response = completion(model="claude-instant-1", messages=messages)
 print(response)
 ```
 
-## streaming 
+## streaming
 Just set `stream=True` when calling completion.
 
 ```python
 import os
-from litellm import completion 
+from litellm import completion
 
-# set env 
-os.environ["ANTHROPIC_API_KEY"] = "your-api-key" 
+# set env
+os.environ["ANTHROPIC_API_KEY"] = "your-api-key"
 
 messages = [{"role": "user", "content": "Hey! how's it going?"}]
 response = completion(model="claude-instant-1", messages=messages, stream=True)

@@ -19,8 +19,8 @@
 # def test_completion_ollama():
 #     try:
 #         response = completion(
-#             model="ollama/llama2", 
-#             messages=messages, 
+#             model="ollama/llama2",
+#             messages=messages,
 #             api_base="http://localhost:11434"
 #         )
 #         print(response)
@@ -34,9 +34,9 @@
 #     messages = [{ "content": user_message,"role": "user"}]
 #     try:
 #         response = completion(
-#             model="ollama/llama2", 
-#             messages=messages, 
-#             api_base="http://localhost:11434", 
+#             model="ollama/llama2",
+#             messages=messages,
+#             api_base="http://localhost:11434",
 #             stream=True
 #         )
 #         print(response)
@@ -55,9 +55,9 @@
 #     messages = [{ "content": user_message,"role": "user"}]
 #     try:
 #         response = await litellm.acompletion(
-#             model="ollama/llama2", 
-#             messages=messages, 
-#             api_base="http://localhost:11434", 
+#             model="ollama/llama2",
+#             messages=messages,
+#             api_base="http://localhost:11434",
 #             stream=True
 #         )
 #         async for chunk in response:

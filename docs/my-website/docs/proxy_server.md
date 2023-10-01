@@ -12,7 +12,7 @@ Call Huggingface models through your OpenAI proxy.
 ```shell
 $ pip install litellm
 ```
-```shell 
+```shell
 $ litellm --model huggingface/bigcode/starcoder
 
 #INFO:     Uvicorn running on http://0.0.0.0:8000
@@ -33,7 +33,7 @@ litellm --test http://0.0.0.0:8000
 <TabItem value="openai" label="OpenAI">
 
 ```python
-import openai 
+import openai
 
 openai.api_base = "http://0.0.0.0:8000"
 
@@ -44,16 +44,16 @@ print(openai.ChatCompletion.create(model="test", messages=[{"role":"user", "cont
 
 <TabItem value="curl" label="curl">
 
-```curl 
+```curl
 curl --location 'http://0.0.0.0:8000/chat/completions' \
 --header 'Content-Type: application/json' \
 --data '{
   "messages": [
     {
-      "role": "user", 
+      "role": "user",
       "content": "what do you know?"
     }
-  ], 
+  ],
 }'
 ```
 </TabItem>
@@ -153,7 +153,7 @@ $ litellm --model command-nightly
 ### Deploy Proxy
 Deploy the proxy to https://api.litellm.ai
 
-```shell 
+```shell
 $ export ANTHROPIC_API_KEY=sk-ant-api03-1..
 $ litellm --model claude-instant-1 --deploy
 
@@ -255,7 +255,7 @@ litellm --test https://api.litellm.ai/44508ad4
 <TabItem value="openai" label="OpenAI">
 
 ```python
-import openai 
+import openai
 
 openai.api_base = "https://api.litellm.ai/44508ad4"
 
@@ -266,16 +266,16 @@ print(openai.ChatCompletion.create(model="test", messages=[{"role":"user", "cont
 
 <TabItem value="curl" label="curl">
 
-```curl 
+```curl
 curl --location 'https://api.litellm.ai/44508ad4/chat/completions' \
 --header 'Content-Type: application/json' \
 --data '{
   "messages": [
     {
-      "role": "user", 
+      "role": "user",
       "content": "what do you know?"
     }
-  ], 
+  ],
 }'
 ```
 </TabItem>
@@ -296,17 +296,17 @@ litellm --model huggingface/bigcode/starcoder \
 $ litellm --model ollama/llama2 --api_base http://localhost:11434
 ```
 
-## Tutorial - using HuggingFace LLMs with aider 
+## Tutorial - using HuggingFace LLMs with aider
 [Aider](https://github.com/paul-gauthier/aider) is an AI pair programming in your terminal.
 
-But it only accepts OpenAI API Calls. 
+But it only accepts OpenAI API Calls.
 
 In this tutorial we'll use Aider with WizardCoder (hosted on HF Inference Endpoints).
 
-[NOTE]: To learn how to deploy a model on Huggingface 
+[NOTE]: To learn how to deploy a model on Huggingface
 
 ### Step 1: Install aider and litellm
-```shell 
+```shell
 $ pip install aider-chat litellm
 ```
 
@@ -319,7 +319,7 @@ $ export HUGGINGFACE_API_KEY=my-huggingface-api-key
 
 Point your local proxy to your model endpoint
 
-```shell 
+```shell
 $ litellm \
   --model huggingface/WizardLM/WizardCoder-Python-34B-V1.0 \
   --api_base https://my-endpoint.huggingface.com
@@ -327,7 +327,7 @@ $ litellm \
 This will host a local proxy api at: **http://0.0.0.0:8000**
 
 ### Step 3: Replace openai api base in Aider
-Aider lets you set the openai api base. So lets point it to our proxy instead. 
+Aider lets you set the openai api base. So lets point it to our proxy instead.
 
 ```shell
 $ aider --openai-api-base http://0.0.0.0:8000
@@ -335,4 +335,4 @@ $ aider --openai-api-base http://0.0.0.0:8000
 
 
 
-And that's it! 
+And that's it!

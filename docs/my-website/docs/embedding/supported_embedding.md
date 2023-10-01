@@ -44,7 +44,7 @@ from litellm import embedding
 import os
 os.environ['HUGGINGFACE_API_KEY'] = ""
 response = embedding(
-    model='huggingface/microsoft/codebert-base', 
+    model='huggingface/microsoft/codebert-base',
     input=["good morning from litellm"]
 )
 ```
@@ -54,4 +54,3 @@ response = embedding(
 | microsoft/codebert-base    | `embedding('huggingface/microsoft/codebert-base', input=input)`               | `os.environ['HUGGINGFACE_API_KEY']`                                             |
 | BAAI/bge-large-zh | `embedding('huggingface/BAAI/bge-large-zh', input=input)`         | `os.environ['HUGGINGFACE_API_KEY']`                                             |
 | any-hf-embedding-model | `embedding('huggingface/hf-embedding-model', input=input)`         | `os.environ['HUGGINGFACE_API_KEY']`                                             |
-

@@ -10,7 +10,7 @@ import os
 
 os.environ['PALM_API_KEY'] = ""
 response = completion(
-    model="palm/chat-bison", 
+    model="palm/chat-bison",
     messages=[{"role": "user", "content": "write code for saying hi from LiteLLM"}]
 )
 ```
@@ -22,7 +22,7 @@ import os
 
 os.environ['PALM_API_KEY'] = ""
 response = completion(
-    model="palm/chat-bison", 
+    model="palm/chat-bison",
     messages=[{"role": "user", "content": "write code for saying hi from LiteLLM"}],
     stream=True
 )

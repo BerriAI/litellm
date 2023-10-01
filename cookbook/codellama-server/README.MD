@@ -12,9 +12,9 @@ Works with: Anthropic, Huggingface, Cohere, TogetherAI, Azure, OpenAI, etc.
 
 ## What does CodeLlama Server do
 
-- Uses Together AI's CodeLlama to answer coding questions, with GPT-4 + Claude-2 as backups (you can easily switch this to any model from Huggingface, Replicate, Cohere, AI21, Azure, OpenAI, etc.) 
+- Uses Together AI's CodeLlama to answer coding questions, with GPT-4 + Claude-2 as backups (you can easily switch this to any model from Huggingface, Replicate, Cohere, AI21, Azure, OpenAI, etc.)
 - Sets default system prompt for guardrails `system_prompt = "Only respond to questions about code. Say 'I don't know' to anything outside of that."`
-- Integrates with Promptlayer for model + prompt tracking 
+- Integrates with Promptlayer for model + prompt tracking
 - Example output
 
 <img src="imgs/code-output.png" alt="Code Output" width="600"/>

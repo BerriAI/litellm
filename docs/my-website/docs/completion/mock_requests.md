@@ -1,12 +1,12 @@
 # Mock Completion() Responses - Save Testing Costs 💰
 
-For testing purposes, you can use `completion()` with `mock_response` to mock calling the completion endpoint. 
+For testing purposes, you can use `completion()` with `mock_response` to mock calling the completion endpoint.
 
-This will return a response object with a default response (works for streaming as well), without calling the LLM APIs. 
+This will return a response object with a default response (works for streaming as well), without calling the LLM APIs.
 
 ## quick start
 ```python
-from litellm import completion 
+from litellm import completion
 
 model = "gpt-3.5-turbo"
 messages = [{"role":"user", "content":"This is a test request"}]
@@ -17,16 +17,16 @@ completion(model=model, messages=messages, mock_response="It's simple to use and
 ## streaming
 
 ```python
-from litellm import completion 
+from litellm import completion
 model = "gpt-3.5-turbo"
 messages = [{"role": "user", "content": "Hey, I'm a mock request"}]
 response = completion(model=model, messages=messages, stream=True, mock_response="It's simple to use and easy to get started")
-for chunk in response: 
+for chunk in response:
     print(chunk) # {'choices': [{'delta': {'role': 'assistant', 'content': 'Thi'}, 'finish_reason': None}]}
     complete_response += chunk["choices"][0]["delta"]["content"]
 ```
 
-## (Non-streaming) Mock Response Object 
+## (Non-streaming) Mock Response Object
 
 ```json
 {

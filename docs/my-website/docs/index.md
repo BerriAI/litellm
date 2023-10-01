@@ -7,7 +7,7 @@ import QuickStart from '../src/components/QuickStart.js'
 
 ## **Call 100+ LLMs using the same Input/Output Format**
 
-## Basic usage 
+## Basic usage
 <a target="_blank" href="https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/liteLLM_Getting_Started.ipynb">
   <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
 </a>
@@ -26,7 +26,7 @@ import os
 os.environ["OPENAI_API_KEY"] = "your-api-key"
 
 response = completion(
-  model="gpt-3.5-turbo", 
+  model="gpt-3.5-turbo",
   messages=[{ "content": "Hello, how are you?","role": "user"}]
 )
 ```
@@ -42,7 +42,7 @@ import os
 os.environ["ANTHROPIC_API_KEY"] = "your-api-key"
 
 response = completion(
-  model="claude-2", 
+  model="claude-2",
   messages=[{ "content": "Hello, how are you?","role": "user"}]
 )
 ```
@@ -60,7 +60,7 @@ os.environ["VERTEX_PROJECT"] = "hardy-device-386718"
 os.environ["VERTEX_LOCATION"] = "us-central1"
 
 response = completion(
-  model="chat-bison", 
+  model="chat-bison",
   messages=[{ "content": "Hello, how are you?","role": "user"}]
 )
 ```
@@ -70,15 +70,15 @@ response = completion(
 <TabItem value="hugging" label="HuggingFace">
 
 ```python
-from litellm import completion 
+from litellm import completion
 import os
 
-os.environ["HUGGINGFACE_API_KEY"] = "huggingface_api_key" 
+os.environ["HUGGINGFACE_API_KEY"] = "huggingface_api_key"
 
 # e.g. Call 'WizardLM/WizardCoder-Python-34B-V1.0' hosted on HF Inference endpoints
 response = completion(
   model="huggingface/WizardLM/WizardCoder-Python-34B-V1.0",
-  messages=[{ "content": "Hello, how are you?","role": "user"}], 
+  messages=[{ "content": "Hello, how are you?","role": "user"}],
   api_base="https://my-endpoint.huggingface.cloud"
 )
 
@@ -100,7 +100,7 @@ os.environ["AZURE_API_VERSION"] = ""
 
 # azure call
 response = completion(
-  "azure/<your_deployment_id>", 
+  "azure/<your_deployment_id>",
   messages = [{ "content": "Hello, how are you?","role": "user"}]
 )
 ```
@@ -114,8 +114,8 @@ response = completion(
 from litellm import completion
 
 response = completion(
-            model="ollama/llama2", 
-            messages = [{ "content": "Hello, how are you?","role": "user"}], 
+            model="ollama/llama2",
+            messages = [{ "content": "Hello, how are you?","role": "user"}],
             api_base="http://localhost:11434"
 )
 ```
@@ -124,7 +124,7 @@ response = completion(
 </Tabs>
 
 ## Streaming
-Set `stream=True` in the `completion` args. 
+Set `stream=True` in the `completion` args.
 <Tabs>
 <TabItem value="openai" label="OpenAI">
 
@@ -136,7 +136,7 @@ import os
 os.environ["OPENAI_API_KEY"] = "your-api-key"
 
 response = completion(
-  model="gpt-3.5-turbo", 
+  model="gpt-3.5-turbo",
   messages=[{ "content": "Hello, how are you?","role": "user"}],
   stream=True,
 )
@@ -153,7 +153,7 @@ import os
 os.environ["ANTHROPIC_API_KEY"] = "your-api-key"
 
 response = completion(
-  model="claude-2", 
+  model="claude-2",
   messages=[{ "content": "Hello, how are you?","role": "user"}],
   stream=True,
 )
@@ -172,7 +172,7 @@ os.environ["VERTEX_PROJECT"] = "hardy-device-386718"
 os.environ["VERTEX_LOCATION"] = "us-central1"
 
 response = completion(
-  model="chat-bison", 
+  model="chat-bison",
   messages=[{ "content": "Hello, how are you?","role": "user"}],
   stream=True,
 )
@@ -183,15 +183,15 @@ response = completion(
 <TabItem value="hugging" label="HuggingFace">
 
 ```python
-from litellm import completion 
+from litellm import completion
 import os
 
-os.environ["HUGGINGFACE_API_KEY"] = "huggingface_api_key" 
+os.environ["HUGGINGFACE_API_KEY"] = "huggingface_api_key"
 
 # e.g. Call 'WizardLM/WizardCoder-Python-34B-V1.0' hosted on HF Inference endpoints
 response = completion(
   model="huggingface/WizardLM/WizardCoder-Python-34B-V1.0",
-  messages=[{ "content": "Hello, how are you?","role": "user"}], 
+  messages=[{ "content": "Hello, how are you?","role": "user"}],
   api_base="https://my-endpoint.huggingface.cloud",
   stream=True,
 )
@@ -214,7 +214,7 @@ os.environ["AZURE_API_VERSION"] = ""
 
 # azure call
 response = completion(
-  "azure/<your_deployment_id>", 
+  "azure/<your_deployment_id>",
   messages = [{ "content": "Hello, how are you?","role": "user"}],
   stream=True,
 )
@@ -229,8 +229,8 @@ response = completion(
 from litellm import completion
 
 response = completion(
-            model="ollama/llama2", 
-            messages = [{ "content": "Hello, how are you?","role": "user"}], 
+            model="ollama/llama2",
+            messages = [{ "content": "Hello, how are you?","role": "user"}],
             api_base="http://localhost:11434",
             stream=True,
 )
@@ -239,17 +239,17 @@ response = completion(
 
 </Tabs>
 
-## Exception handling 
+## Exception handling
 
-LiteLLM maps exceptions across all supported providers to the OpenAI exceptions. All our exceptions inherit from OpenAI's exception types, so any error-handling you have for that, should work out of the box with LiteLLM. 
+LiteLLM maps exceptions across all supported providers to the OpenAI exceptions. All our exceptions inherit from OpenAI's exception types, so any error-handling you have for that, should work out of the box with LiteLLM.
 
-```python 
+```python
 from openai.errors import OpenAIError
 from litellm import completion
 
 os.environ["ANTHROPIC_API_KEY"] = "bad-key"
-try: 
-    # some code 
+try:
+    # some code
     completion(model="claude-instant-1", messages=[{"role": "user", "content": "Hey, how's it going?"}])
 except OpenAIError as e:
     print(e)
@@ -265,7 +265,7 @@ import os
 os.environ["OPENAI_API_KEY"] = "your-api-key"
 
 response = completion(
-  model="gpt-3.5-turbo", 
+  model="gpt-3.5-turbo",
   messages=[{ "content": "Hello, how are you?","role": "user"}]
 )
 

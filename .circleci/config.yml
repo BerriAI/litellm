@@ -48,7 +48,7 @@ jobs:
               exit 1
             fi
             cd ..
-  
+
 
       # Run pytest and generate JUnit XML report
       - run:

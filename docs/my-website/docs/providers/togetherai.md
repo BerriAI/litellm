@@ -1,16 +1,16 @@
-# Together AI 
-LiteLLM supports all models on Together AI. 
+# Together AI
+LiteLLM supports all models on Together AI.
 
 ## API Keys
 
-```python 
-import os 
+```python
+import os
 os.environ["TOGETHERAI_API_KEY"] = "your-api-key"
 ```
 ## Sample Usage
 
 ```python
-from litellm import completion 
+from litellm import completion
 
 os.environ["TOGETHERAI_API_KEY"] = "your-api-key"
 
@@ -79,12 +79,12 @@ Example TogetherAI Usage - Note: liteLLM supports all models deployed on Togethe
 Using a chat model on Together AI with it's own prompt format?
 
 ### Using Llama2 Instruct models
-If you're using Together AI's Llama2 variants( `model=togethercomputer/llama-2..-instruct`), LiteLLM can automatically translate between the OpenAI prompt format and the TogetherAI Llama2 one (`[INST]..[/INST]`). 
+If you're using Together AI's Llama2 variants( `model=togethercomputer/llama-2..-instruct`), LiteLLM can automatically translate between the OpenAI prompt format and the TogetherAI Llama2 one (`[INST]..[/INST]`).
 
 ```python
-from litellm import completion 
+from litellm import completion
 
-# set env variable 
+# set env variable
 os.environ["TOGETHERAI_API_KEY"] = ""
 
 messages = [{"role": "user", "content": "Write me a poem about the blue sky"}]
@@ -111,7 +111,7 @@ The accepted template format is: [Reference](https://huggingface.co/OpenAssistan
 
 Let's register our custom prompt template: [Implementation Code](https://github.com/BerriAI/litellm/blob/64f3d3c56ef02ac5544983efc78293de31c1c201/litellm/llms/prompt_templates/factory.py#L77)
 ```python
-import litellm 
+import litellm
 
 litellm.register_prompt_template(
 	    model="OpenAssistant/llama2-70b-oasst-sft-v10",
@@ -123,7 +123,7 @@ litellm.register_prompt_template(
             "user": {
                 "pre_message": "<|im_start|>user",
                 "post_message": "\n"
-            }, 
+            },
             "assistant": {
                 "pre_message": "<|im_start|>assistant",
                 "post_message": "\n"
@@ -132,12 +132,12 @@ litellm.register_prompt_template(
     )
 ```
 
-Let's use it! 
+Let's use it!
 
 ```python
-from litellm import completion 
+from litellm import completion
 
-# set env variable 
+# set env variable
 os.environ["TOGETHERAI_API_KEY"] = ""
 
 messages=[{"role":"user", "content": "Write me a poem about the blue sky"}]
@@ -148,10 +148,10 @@ completion(model="together_ai/OpenAssistant/llama2-70b-oasst-sft-v10", messages=
 **Complete Code**
 
 ```python
-import litellm 
+import litellm
 from litellm import completion
 
-# set env variable 
+# set env variable
 os.environ["TOGETHERAI_API_KEY"] = ""
 
 litellm.register_prompt_template(
@@ -164,7 +164,7 @@ litellm.register_prompt_template(
             "user": {
                 "pre_message": "<|im_start|>user",
                 "post_message": "\n"
-            }, 
+            },
             "assistant": {
                 "pre_message": "<|im_start|>assistant",
                 "post_message": "\n"
@@ -206,16 +206,16 @@ print(response)
 
 ## Advanced Usage
 
-Instead of using the `custom_llm_provider` arg to specify which provider you're using (e.g. together ai), you can just pass the provider name as part of the model name, and LiteLLM will parse it out. 
+Instead of using the `custom_llm_provider` arg to specify which provider you're using (e.g. together ai), you can just pass the provider name as part of the model name, and LiteLLM will parse it out.
 
 Expected format: <custom_llm_provider>/<model_name>
 
 e.g. completion(model="together_ai/togethercomputer/Llama-2-7B-32K-Instruct", ...)
 
 ```python
-from litellm import completion 
+from litellm import completion
 
-# set env variable 
+# set env variable
 os.environ["TOGETHERAI_API_KEY"] = ""
 
 messages = [{"role": "user", "content": "Write me a poem about the blue sky"}]

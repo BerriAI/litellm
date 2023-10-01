@@ -1,4 +1,4 @@
-# Ollama 
+# Ollama
 LiteLLM supports all models from [Ollama](https://github.com/jmorganca/ollama)
 
 <a target="_blank" href="https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/liteLLM_Ollama.ipynb">
@@ -13,8 +13,8 @@ Ensure you have your ollama server running
 from litellm import completion
 
 response = completion(
-    model="ollama/llama2", 
-    messages=[{ "content": "respond in 20 words. who are you?","role": "user"}], 
+    model="ollama/llama2",
+    messages=[{ "content": "respond in 20 words. who are you?","role": "user"}],
     api_base="http://localhost:11434"
 )
 print(response)
@@ -26,8 +26,8 @@ print(response)
 from litellm import completion
 
 response = completion(
-    model="ollama/llama2", 
-    messages=[{ "content": "respond in 20 words. who are you?","role": "user"}], 
+    model="ollama/llama2",
+    messages=[{ "content": "respond in 20 words. who are you?","role": "user"}],
     api_base="http://localhost:11434",
     stream=True
 )
@@ -46,9 +46,9 @@ pip install async_generator
 ```python
 async def async_ollama():
     response = await litellm.acompletion(
-        model="ollama/llama2", 
-        messages=[{ "content": "what's the weather" ,"role": "user"}], 
-        api_base="http://localhost:11434", 
+        model="ollama/llama2",
+        messages=[{ "content": "what's the weather" ,"role": "user"}],
+        api_base="http://localhost:11434",
         stream=True
     )
     async for chunk in response:

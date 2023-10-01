@@ -17,18 +17,14 @@ class CustomLogger:
     def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
         # Method definition
         try:
-            print_verbose(
-                f"Custom Logger - Enters logging function for model {kwargs}"
-            )
+            print_verbose(f"Custom Logger - Enters logging function for model {kwargs}")
             self.callback_func(
-                kwargs, # kwargs to func
+                kwargs,  # kwargs to func
                 response_obj,
                 start_time,
                 end_time,
             )
-            print_verbose(
-                f"Custom Logger - final response object: {response_obj}"
-            )
+            print_verbose(f"Custom Logger - final response object: {response_obj}")
         except:
             # traceback.print_exc()
             print_verbose(f"Custom Logger Error - {traceback.format_exc()}")

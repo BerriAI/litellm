@@ -1,5 +1,5 @@
 # 🚅 litellm
-a light 100 line package to simplify calling OpenAI, Azure, Cohere, Anthropic APIs 
+a light 100 line package to simplify calling OpenAI, Azure, Cohere, Anthropic APIs
 
 ###### litellm manages:
 * Calling all LLM APIs using the OpenAI format - `completion(model, messages)`
@@ -35,7 +35,7 @@ response = completion("command-nightly", messages)
 ```
 Need Help / Support : [see troubleshooting](https://litellm.readthedocs.io/en/latest/troubleshoot)
 
-## Why did we build liteLLM 
+## Why did we build liteLLM
 - **Need for simplicity**: Our code started to get extremely complicated managing & translating calls between Azure, OpenAI, Cohere
 
 ## Support

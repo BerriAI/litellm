@@ -5,6 +5,7 @@
 import sys, os
 import traceback
 import pytest
+
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
@@ -16,6 +17,7 @@ from litellm import embedding, completion
 user_message = "Hello, how are you?"
 messages = [{"content": user_message, "role": "user"}]
 model_val = None
+
 
 def test_completion_with_no_model():
     # test on empty
@@ -40,6 +42,7 @@ def test_completion_with_no_provider():
     except Exception as e:
         print(f"error occurred: {e}")
         pass
+
 
 # test_completion_with_no_provider()
 # # bad key

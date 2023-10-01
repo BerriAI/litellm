@@ -1,12 +1,12 @@
 # Mock Completion Responses - Save Testing Costs
 
-Trying to test making LLM Completion calls without calling the LLM APIs ? 
-Pass `mock_response` to `litellm.completion` and litellm will directly return the response without neededing the call the LLM API and spend $$ 
+Trying to test making LLM Completion calls without calling the LLM APIs ?
+Pass `mock_response` to `litellm.completion` and litellm will directly return the response without neededing the call the LLM API and spend $$
 
 ## Using `completion()` with `mock_response`
 
 ```python
-from litellm import completion 
+from litellm import completion
 
 model = "gpt-3.5-turbo"
 messages = [{"role":"user", "content":"Why is LiteLLM amazing?"}]

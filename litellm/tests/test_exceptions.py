@@ -1,4 +1,9 @@
-from openai.error import AuthenticationError, InvalidRequestError, RateLimitError, OpenAIError
+from openai.error import (
+    AuthenticationError,
+    InvalidRequestError,
+    RateLimitError,
+    OpenAIError,
+)
 import os
 import sys
 import traceback
@@ -11,15 +16,16 @@ import litellm
 from litellm import (
     embedding,
     completion,
-#     AuthenticationError,
+    #     AuthenticationError,
     InvalidRequestError,
     ContextWindowExceededError,
-#     RateLimitError,
-#     ServiceUnavailableError,
-#     OpenAIError,
+    #     RateLimitError,
+    #     ServiceUnavailableError,
+    #     OpenAIError,
 )
 from concurrent.futures import ThreadPoolExecutor
 import pytest
+
 litellm.vertex_project = "pathrise-convert-1606954137718"
 litellm.vertex_location = "us-central1"
 
@@ -36,7 +42,8 @@ litellm.vertex_location = "us-central1"
 
 models = ["command-nightly"]
 
-# Test 1: Context Window Errors 
+
+# Test 1: Context Window Errors
 @pytest.mark.parametrize("model", models)
 def test_context_window(model):
     sample_text = "how does a court case get to the Supreme Court?" * 1000
@@ -45,7 +52,10 @@ def test_context_window(model):
     with pytest.raises(ContextWindowExceededError):
         completion(model=model, messages=messages)
 
+
 test_context_window(model="gpt-3.5-turbo")
+
+
 # Test 2: InvalidAuth Errors
 @pytest.mark.parametrize("model", models)
 def invalid_auth(model):  # set the model key to an invalid key, depending on the model
@@ -69,7 +79,9 @@ def invalid_auth(model):  # set the model key to an invalid key, depending on th
             os.environ["AI21_API_KEY"] = "bad-key"
         elif "togethercomputer" in model:
             temporary_key = os.environ["TOGETHERAI_API_KEY"]
-            os.environ["TOGETHERAI_API_KEY"] = "84060c79880fc49df126d3e87b53f8a463ff6e1c6d27fe64207cde25cdfcd1f24a"
+            os.environ[
+                "TOGETHERAI_API_KEY"
+            ] = "84060c79880fc49df126d3e87b53f8a463ff6e1c6d27fe64207cde25cdfcd1f24a"
         elif model in litellm.openrouter_models:
             temporary_key = os.environ["OPENROUTER_API_KEY"]
             os.environ["OPENROUTER_API_KEY"] = "bad-key"
@@ -86,9 +98,7 @@ def invalid_auth(model):  # set the model key to an invalid key, depending on th
             temporary_key = os.environ["REPLICATE_API_KEY"]
             os.environ["REPLICATE_API_KEY"] = "bad-key"
         print(f"model: {model}")
-        response = completion(
-            model=model, messages=messages
-        )
+        response = completion(model=model, messages=messages)
         print(f"response: {response}")
     except AuthenticationError as e:
         print(f"AuthenticationError Caught Exception - {e.llm_provider}")
@@ -119,7 +129,7 @@ def invalid_auth(model):  # set the model key to an invalid key, depending on th
             os.environ["REPLICATE_API_KEY"] = temporary_key
         elif "j2" in model:
             os.environ["AI21_API_KEY"] = temporary_key
-        elif ("togethercomputer" in model):
+        elif "togethercomputer" in model:
             os.environ["TOGETHERAI_API_KEY"] = temporary_key
         elif model in litellm.aleph_alpha_models:
             os.environ["ALEPH_ALPHA_API_KEY"] = temporary_key
@@ -127,13 +137,15 @@ def invalid_auth(model):  # set the model key to an invalid key, depending on th
             os.environ["NLP_CLOUD_API_KEY"] = temporary_key
     return
 
-# Test 3: Invalid Request Error 
+
+# Test 3: Invalid Request Error
 @pytest.mark.parametrize("model", models)
 def test_invalid_request_error(model):
     messages = [{"content": "hey, how's it going?", "role": "user"}]
 
     with pytest.raises(InvalidRequestError):
         completion(model=model, messages=messages, max_tokens="hello world")
+
 
 # Test 3: Rate Limit Errors
 # def test_model_call(model):

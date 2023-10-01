@@ -6,6 +6,7 @@ import time
 from typing import Callable
 from litellm.utils import ModelResponse
 
+
 class AI21Error(Exception):
     def __init__(self, status_code, message):
         self.status_code = status_code
@@ -13,6 +14,7 @@ class AI21Error(Exception):
         super().__init__(
             self.message
         )  # Call the base class constructor with the parameters it needs
+
 
 def validate_environment(api_key):
     if api_key is None:
@@ -25,6 +27,7 @@ def validate_environment(api_key):
         "Authorization": "Bearer " + api_key,
     }
     return headers
+
 
 def completion(
     model: str,
@@ -44,13 +47,9 @@ def completion(
     for message in messages:
         if "role" in message:
             if message["role"] == "user":
-                prompt += (
-                    f"{message['content']}"
-                )
+                prompt += f"{message['content']}"
             else:
-                prompt += (
-                    f"{message['content']}"
-                )
+                prompt += f"{message['content']}"
         else:
             prompt += f"{message['content']}"
     data = {
@@ -61,24 +60,26 @@ def completion(
 
     ## LOGGING
     logging_obj.pre_call(
-            input=prompt,
-            api_key=api_key,
-            additional_args={"complete_input_dict": data},
-        )
+        input=prompt,
+        api_key=api_key,
+        additional_args={"complete_input_dict": data},
+    )
     ## COMPLETION CALL
     response = requests.post(
-        "https://api.ai21.com/studio/v1/" + model + "/complete", headers=headers, data=json.dumps(data)
+        "https://api.ai21.com/studio/v1/" + model + "/complete",
+        headers=headers,
+        data=json.dumps(data),
     )
     if "stream" in optional_params and optional_params["stream"] == True:
         return response.iter_lines()
     else:
         ## LOGGING
         logging_obj.post_call(
-                input=prompt,
-                api_key=api_key,
-                original_response=response.text,
-                additional_args={"complete_input_dict": data},
-            )
+            input=prompt,
+            api_key=api_key,
+            original_response=response.text,
+            additional_args={"complete_input_dict": data},
+        )
         print_verbose(f"raw model_response: {response.text}")
         ## RESPONSE OBJECT
         completion_response = response.json()
@@ -89,15 +90,20 @@ def completion(
             )
         else:
             try:
-                model_response["choices"][0]["message"]["content"] = completion_response["completions"][0]["data"]["text"]
-                model_response.choices[0].finish_reason = completion_response["completions"][0]["finishReason"]["reason"]
+                model_response["choices"][0]["message"][
+                    "content"
+                ] = completion_response["completions"][0]["data"]["text"]
+                model_response.choices[0].finish_reason = completion_response[
+                    "completions"
+                ][0]["finishReason"]["reason"]
             except Exception as e:
-                raise AI21Error(message=json.dumps(completion_response), status_code=response.status_code)
+                raise AI21Error(
+                    message=json.dumps(completion_response),
+                    status_code=response.status_code,
+                )
 
-        ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here. 
-        prompt_tokens = len(
-            encoding.encode(prompt)
-        ) 
+        ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here.
+        prompt_tokens = len(encoding.encode(prompt))
         completion_tokens = len(
             encoding.encode(model_response["choices"][0]["message"]["content"])
         )
@@ -110,6 +116,7 @@ def completion(
             "total_tokens": prompt_tokens + completion_tokens,
         }
         return model_response
+
 
 def embedding():
     # logic for parsing in - calling - parsing out model embedding calls

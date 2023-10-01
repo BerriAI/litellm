@@ -11,6 +11,7 @@ import sys, os, io
 import traceback, logging
 import pytest
 import dotenv
+
 dotenv.load_dotenv()
 
 # Create logger
@@ -21,9 +22,11 @@ logger.setLevel(logging.DEBUG)
 stream_handler = logging.StreamHandler(sys.stdout)
 logger.addHandler(stream_handler)
 
+
 # Create a function to log information
 def logger_fn(message):
     logger.info(message)
+
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -31,6 +34,7 @@ sys.path.insert(
 import litellm
 from litellm import embedding, completion
 from openai.error import AuthenticationError
+
 litellm.set_verbose = True
 
 score = 0
@@ -39,7 +43,7 @@ user_message = "Hello, how are you?"
 messages = [{"content": user_message, "role": "user"}]
 
 # 1. On Call Success
-# normal completion 
+# normal completion
 ## test on openai completion call
 try:
     # Redirect stdout
@@ -69,7 +73,7 @@ try:
     sys.stdout = new_stdout = io.StringIO()
 
     response = completion(model="claude-instant-1", messages=messages)
-    
+
     # Restore stdout
     sys.stdout = old_stdout
     output = new_stdout.getvalue().strip()
@@ -116,7 +120,7 @@ try:
     sys.stdout = new_stdout = io.StringIO()
 
     response = completion(model="claude-instant-1", messages=messages)
-    
+
     # Restore stdout
     sys.stdout = old_stdout
     output = new_stdout.getvalue().strip()
@@ -135,11 +139,13 @@ except Exception as e:
 # embedding
 
 try:
-     # Redirect stdout
+    # Redirect stdout
     old_stdout = sys.stdout
     sys.stdout = new_stdout = io.StringIO()
 
-    response = embedding(model="text-embedding-ada-002", input=["good morning from litellm"])
+    response = embedding(
+        model="text-embedding-ada-002", input=["good morning from litellm"]
+    )
 
     # Restore stdout
     sys.stdout = old_stdout
@@ -157,7 +163,7 @@ except Exception as e:
 # ## 2. On LiteLLM Call failure
 # ## TEST BAD KEY
 
-# # normal completion 
+# # normal completion
 # ## test on openai completion call
 # try:
 #     temporary_oai_key = os.environ["OPENAI_API_KEY"]
@@ -170,7 +176,7 @@ except Exception as e:
 #     # Redirect stdout
 #     old_stdout = sys.stdout
 #     sys.stdout = new_stdout = io.StringIO()
-    
+
 #     try:
 #         response = completion(model="gpt-3.5-turbo", messages=messages)
 #     except AuthenticationError:
@@ -184,14 +190,14 @@ except Exception as e:
 
 #     if "Logging Details Pre-API Call" not in output:
 #         raise Exception("Required log message not found!")
-#     elif "Logging Details Post-API Call" not in output: 
+#     elif "Logging Details Post-API Call" not in output:
 #         raise Exception("Required log message not found!")
 #     elif "Logging Details LiteLLM-Failure Call" not in output:
 #         raise Exception("Required log message not found!")
 
 #     os.environ["OPENAI_API_KEY"] = temporary_oai_key
 #     os.environ["ANTHROPIC_API_KEY"] = temporary_anthropic_key
-    
+
 #     score += 1
 # except Exception as e:
 #     print(f"exception type: {type(e).__name__}")
@@ -262,7 +268,7 @@ except Exception as e:
 #         raise Exception("Required log message not found!")
 #     elif "Logging Details LiteLLM-Failure Call" not in output:
 #         raise Exception("Required log message not found!")
-    
+
 #     os.environ["OPENAI_API_KEY"] = temporary_oai_key
 #     os.environ["ANTHROPIC_API_KEY"] = temporary_anthropic_key
 #     score += 1
@@ -285,7 +291,7 @@ except Exception as e:
 #         response = completion(model="claude-instant-1", messages=messages)
 #     except AuthenticationError:
 #         pass
-    
+
 #     # Restore stdout
 #     sys.stdout = old_stdout
 #     output = new_stdout.getvalue().strip()

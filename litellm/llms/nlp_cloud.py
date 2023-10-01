@@ -6,6 +6,7 @@ import time
 from typing import Callable
 from litellm.utils import ModelResponse
 
+
 class NLPCloudError(Exception):
     def __init__(self, status_code, message):
         self.status_code = status_code
@@ -13,6 +14,7 @@ class NLPCloudError(Exception):
         super().__init__(
             self.message
         )  # Call the base class constructor with the parameters it needs
+
 
 def validate_environment(api_key):
     headers = {
@@ -22,6 +24,7 @@ def validate_environment(api_key):
     if api_key:
         headers["Authorization"] = f"Token {api_key}"
     return headers
+
 
 def completion(
     model: str,
@@ -50,24 +53,27 @@ def completion(
     completion_url = completion_url_fragment_1 + model + completion_url_fragment_2
     ## LOGGING
     logging_obj.pre_call(
-            input=text,
-            api_key=api_key,
-            additional_args={"complete_input_dict": data},
-        )
+        input=text,
+        api_key=api_key,
+        additional_args={"complete_input_dict": data},
+    )
     ## COMPLETION CALL
     response = requests.post(
-        completion_url, headers=headers, data=json.dumps(data), stream=optional_params["stream"] if "stream" in optional_params else False
+        completion_url,
+        headers=headers,
+        data=json.dumps(data),
+        stream=optional_params["stream"] if "stream" in optional_params else False,
     )
     if "stream" in optional_params and optional_params["stream"] == True:
         return response.iter_lines()
     else:
         ## LOGGING
         logging_obj.post_call(
-                input=text,
-                api_key=api_key,
-                original_response=response.text,
-                additional_args={"complete_input_dict": data},
-            )
+            input=text,
+            api_key=api_key,
+            original_response=response.text,
+            additional_args={"complete_input_dict": data},
+        )
         print_verbose(f"raw model_response: {response.text}")
         ## RESPONSE OBJECT
         try:
@@ -81,11 +87,16 @@ def completion(
             )
         else:
             try:
-                model_response["choices"][0]["message"]["content"] = completion_response["generated_text"]
+                model_response["choices"][0]["message"][
+                    "content"
+                ] = completion_response["generated_text"]
             except:
-                raise NLPCloudError(message=json.dumps(completion_response), status_code=response.status_code)
+                raise NLPCloudError(
+                    message=json.dumps(completion_response),
+                    status_code=response.status_code,
+                )
 
-        ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here. 
+        ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here.
         prompt_tokens = completion_response["nb_input_tokens"]
         completion_tokens = completion_response["nb_generated_tokens"]
 
@@ -97,6 +108,7 @@ def completion(
             "total_tokens": prompt_tokens + completion_tokens,
         }
         return model_response
+
 
 def embedding():
     # logic for parsing in - calling - parsing out model embedding calls

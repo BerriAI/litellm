@@ -1,11 +1,11 @@
-# Baseten 
+# Baseten
 LiteLLM supports any Text-Gen-Interface models on Baseten.
 
 [Here's a tutorial on deploying a huggingface TGI model (Llama2, CodeLlama, WizardCoder, Falcon, etc.) on Baseten](https://truss.baseten.co/examples/performance/tgi-server)
 
 ### API KEYS
 ```python
-import os 
+import os
 os.environ["BASETEN_API_KEY"] = ""
 ```
 

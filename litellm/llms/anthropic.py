@@ -6,9 +6,11 @@ import time
 from typing import Callable
 from litellm.utils import ModelResponse
 
+
 class AnthropicConstants(Enum):
     HUMAN_PROMPT = "\n\nHuman:"
     AI_PROMPT = "\n\nAssistant:"
+
 
 class AnthropicError(Exception):
     def __init__(self, status_code, message):
@@ -17,6 +19,7 @@ class AnthropicError(Exception):
         super().__init__(
             self.message
         )  # Call the base class constructor with the parameters it needs
+
 
 # makes headers for API call
 def validate_environment(api_key):
@@ -31,6 +34,7 @@ def validate_environment(api_key):
         "x-api-key": api_key,
     }
     return headers
+
 
 def completion(
     model: str,
@@ -49,18 +53,16 @@ def completion(
     for message in messages:
         if "role" in message:
             if message["role"] == "user":
-                prompt += (
-                    f"{AnthropicConstants.HUMAN_PROMPT.value}{message['content']}"
-                )
+                prompt += f"{AnthropicConstants.HUMAN_PROMPT.value}{message['content']}"
             else:
-                prompt += (
-                    f"{AnthropicConstants.AI_PROMPT.value}{message['content']}"
-                )
+                prompt += f"{AnthropicConstants.AI_PROMPT.value}{message['content']}"
         else:
             prompt += f"{AnthropicConstants.HUMAN_PROMPT.value}{message['content']}"
     prompt += f"{AnthropicConstants.AI_PROMPT.value}"
-    max_tokens_to_sample = optional_params.get("max_tokens_to_sample", 256) # required anthropic param, default to 256 if user does not provide an input
-    if max_tokens_to_sample != 256: # not default - print for testing 
+    max_tokens_to_sample = optional_params.get(
+        "max_tokens_to_sample", 256
+    )  # required anthropic param, default to 256 if user does not provide an input
+    if max_tokens_to_sample != 256:  # not default - print for testing
         print_verbose(f"LiteLLM.Anthropic: Max Tokens Set")
     data = {
         "model": model,
@@ -75,7 +77,7 @@ def completion(
         api_key=api_key,
         additional_args={"complete_input_dict": data},
     )
-    
+
     ## COMPLETION CALL
     if "stream" in optional_params and optional_params["stream"] == True:
         response = requests.post(
@@ -87,7 +89,9 @@ def completion(
         return response.iter_lines()
     else:
         response = requests.post(
-            "https://api.anthropic.com/v1/complete", headers=headers, data=json.dumps(data)
+            "https://api.anthropic.com/v1/complete",
+            headers=headers,
+            data=json.dumps(data),
         )
         ## LOGGING
         logging_obj.post_call(
@@ -131,6 +135,7 @@ def completion(
             "total_tokens": prompt_tokens + completion_tokens,
         }
         return model_response
+
 
 def embedding():
     # logic for parsing in - calling - parsing out model embedding calls

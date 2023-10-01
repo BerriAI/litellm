@@ -17,8 +17,8 @@ class PromptLayerLogger:
     def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
         # Method definition
         try:
-            if 'litellm_logging_obj' in kwargs:
-                kwargs.pop('litellm_logging_obj')
+            if "litellm_logging_obj" in kwargs:
+                kwargs.pop("litellm_logging_obj")
 
             print_verbose(
                 f"Prompt Layer Logging - Enters logging function for model kwargs: {kwargs}\n, response: {response_obj}"
@@ -44,8 +44,8 @@ class PromptLayerLogger:
                 f"Prompt Layer Logging: success - final response object: {request_response.text}"
             )
             response_json = request_response.json()
-            if "success" not in request_response.json(): 
-                raise Exception("Promptlayer did not successfully log the response!") 
+            if "success" not in request_response.json():
+                raise Exception("Promptlayer did not successfully log the response!")
 
             if "request_id" in response_json:
                 print(kwargs["litellm_params"]["metadata"])
@@ -55,10 +55,12 @@ class PromptLayerLogger:
                         json={
                             "request_id": response_json["request_id"],
                             "api_key": self.key,
-                            "metadata": kwargs["litellm_params"]["metadata"]
+                            "metadata": kwargs["litellm_params"]["metadata"],
                         },
                     )
-                    print_verbose(f"Prompt Layer Logging: success - metadata post response object: {response.text}")
+                    print_verbose(
+                        f"Prompt Layer Logging: success - metadata post response object: {response.text}"
+                    )
 
         except:
             print_verbose(f"error: Prompt Layer Error - {traceback.format_exc()}")

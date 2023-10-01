@@ -1,5 +1,5 @@
 # Azure
-LiteLLM supports Azure Chat + Embedding calls. 
+LiteLLM supports Azure Chat + Embedding calls.
 
 ### API KEYS
 ```python

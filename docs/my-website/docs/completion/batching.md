@@ -1,4 +1,4 @@
-# Batching Completion() Calls 
+# Batching Completion() Calls
 LiteLLM allows you to:
 * Send many completion calls to 1 model
 * Send 1 completion call to many models: Return Fastest Response
@@ -41,7 +41,7 @@ responses = batch_completion(
 ```
 
 ## Send 1 completion call to many models: Return Fastest Response
-This makes parallel calls to the specified `models` and returns the first response 
+This makes parallel calls to the specified `models` and returns the first response
 
 Use this to reduce latency
 
@@ -56,7 +56,7 @@ os.environ['OPENAI_API_KEY'] = ""
 os.environ['COHERE_API_KEY'] = ""
 
 response = batch_completion_models(
-    models=["gpt-3.5-turbo", "claude-instant-1.2", "command-nightly"], 
+    models=["gpt-3.5-turbo", "claude-instant-1.2", "command-nightly"],
     messages=[{"role": "user", "content": "Hey, how's it going"}]
 )
 print(result)
@@ -105,7 +105,7 @@ os.environ['OPENAI_API_KEY'] = ""
 os.environ['COHERE_API_KEY'] = ""
 
 responses = batch_completion_models_all_responses(
-    models=["gpt-3.5-turbo", "claude-instant-1.2", "command-nightly"], 
+    models=["gpt-3.5-turbo", "claude-instant-1.2", "command-nightly"],
     messages=[{"role": "user", "content": "Hey, how's it going"}]
 )
 print(responses)

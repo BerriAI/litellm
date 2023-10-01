@@ -17,7 +17,7 @@ However, we also expose 5 helper functions + **[NEW]** an API to calculate token
 
 📣 This is a community maintained list. Contributions are welcome! ❤️
 
-## Example Usage 
+## Example Usage
 
 ### 1. `token_counter`
 
@@ -43,7 +43,7 @@ print(prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar)
 ### 3. `completion_cost`
 
 * Input: Accepts a `litellm.completion()` response
-* Output: Returns a `float` of cost for the `completion` call 
+* Output: Returns a `float` of cost for the `completion` call
 
 ```python
 from litellm import completion, completion_cost
@@ -64,8 +64,8 @@ print(formatted_string)
 * Input: Accepts a model name - e.g. `gpt-3.5-turbo` (to get a complete list, call `litellm.model_list`)
 * Output: Returns a dict object containing the max_tokens, input_cost_per_token, output_cost_per_token
 
-```python 
-from litellm import get_max_tokens 
+```python
+from litellm import get_max_tokens
 
 model = "gpt-3.5-turbo"
 
@@ -76,8 +76,8 @@ print(get_max_tokens(model)) # {'max_tokens': 4000, 'input_cost_per_token': 1.5e
 
 * Output: Returns a dict object containing the max_tokens, input_cost_per_token, output_cost_per_token for all models on [community-maintained list](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json)
 
-```python 
-from litellm import model_cost 
+```python
+from litellm import model_cost
 
 print(model_cost) # {'gpt-3.5-turbo': {'max_tokens': 4000, 'input_cost_per_token': 1.5e-06, 'output_cost_per_token': 2e-06}, ...}
 ```
@@ -97,4 +97,3 @@ curl 'https://api.litellm.ai/get_max_tokens?model=claude-2'
     "output_cost_per_token": 3.268e-05
 }
 ```
-

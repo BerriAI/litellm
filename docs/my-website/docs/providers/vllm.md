@@ -9,7 +9,7 @@ LiteLLM supports all models on VLLM.
 pip install litellm vllm
 ```
 ```python
-import litellm 
+import litellm
 
 response = completion(
             model="vllm/facebook/opt-125m", # add a vllm prefix so litellm knows the custom_llm_provider==vllm
@@ -27,7 +27,7 @@ In order to use litellm to call a hosted vllm server add the following to your c
 * `api_base = "your-hosted-vllm-server"`
 
 ```python
-import litellm 
+import litellm
 
 response = completion(
             model="facebook/opt-125m", # pass the vllm model name
@@ -51,7 +51,7 @@ provider = "vllm"
 messages = [[{"role": "user", "content": "Hey, how's it going"}] for _ in range(5)]
 
 response_list = batch_completion(
-            model=model_name, 
+            model=model_name,
             custom_llm_provider=provider, # can easily switch to huggingface, replicate, together ai, sagemaker, etc.
             messages=messages,
             temperature=0.2,
@@ -64,7 +64,7 @@ print(response_list)
 For models with special prompt templates (e.g. Llama2), we format the prompt to fit their template.
 
 **What if we don't support a model you need?**
-You can also specify you're own custom prompt formatting, in case we don't have your model covered yet. 
+You can also specify you're own custom prompt formatting, in case we don't have your model covered yet.
 
 **Does this mean you have to specify a prompt for all models?**
 No. By default we'll concatenate your message content to make a prompt (expected format for Bloom, T-5, Llama-2 base models, etc.)
@@ -91,8 +91,8 @@ def default_pt(messages):
 
 #### Custom prompt templates
 
-```python 
-# Create your own custom prompt template works 
+```python
+# Create your own custom prompt template works
 litellm.register_prompt_template(
 	model="togethercomputer/LLaMA-2-7B-32K",
 	roles={
@@ -100,10 +100,10 @@ litellm.register_prompt_template(
                 "pre_message": "[INST] <<SYS>>\n",
                 "post_message": "\n<</SYS>>\n [/INST]\n"
             },
-            "user": { 
+            "user": {
                 "pre_message": "[INST] ",
                 "post_message": " [/INST]\n"
-            }, 
+            },
             "assistant": {
                 "pre_message": "\n",
                 "post_message": "\n",
@@ -121,4 +121,3 @@ test_vllm_custom_model()
 ```
 
 [Implementation Code](https://github.com/BerriAI/litellm/blob/6b3cb1898382f2e4e80fd372308ea232868c78d1/litellm/utils.py#L1414)
-

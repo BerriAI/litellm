@@ -6,21 +6,20 @@ user_message = "What is the current weather in Boston?"
 messages = [{"content": user_message, "role": "user"}]
 
 function_schema = {
-  "name": "get_weather",
-  "description":
-  "gets the current weather",
-  "parameters": {
-    "type": "object",
-    "properties": {
-      "location": {
-        "type": "string",
-        "description":
-        "The city and state, e.g. San Francisco, CA"
-      },
+    "name": "get_weather",
+    "description": "gets the current weather",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "location": {
+                "type": "string",
+                "description": "The city and state, e.g. San Francisco, CA",
+            },
+        },
+        "required": ["location"],
     },
-    "required": ["location"]
-  },
 }
+
 
 def test_stream_chunk_builder():
     litellm.api_key = os.environ["OPENAI_API_KEY"]
@@ -53,4 +52,6 @@ def test_stream_chunk_builder():
         finnish_reason = choices["finish_reason"]
     except:
         raise Exception("stream_chunk_builder failed to rebuild response")
+
+
 test_stream_chunk_builder()

@@ -1,17 +1,17 @@
-# Supabase Tutorial 
+# Supabase Tutorial
 [Supabase](https://supabase.com/) is an open source Firebase alternative.
 Start your project with a Postgres database, Authentication, instant APIs, Edge Functions, Realtime subscriptions, Storage, and Vector embeddings.
 
 ## Use Supabase to log requests and see total spend across all LLM Providers (OpenAI, Azure, Anthropic, Cohere, Replicate, PaLM)
-liteLLM provides `success_callbacks` and `failure_callbacks`, making it easy for you to send data to a particular provider depending on the status of your responses. 
+liteLLM provides `success_callbacks` and `failure_callbacks`, making it easy for you to send data to a particular provider depending on the status of your responses.
 
-In this case, we want to log requests to Supabase in both scenarios - when it succeeds and fails. 
+In this case, we want to log requests to Supabase in both scenarios - when it succeeds and fails.
 
-### Create a supabase table 
+### Create a supabase table
 
 Go to your Supabase project > go to the [Supabase SQL Editor](https://supabase.com/dashboard/projects) and create a new table with this configuration.
 
-Note: You can change the table name. Just don't change the column names. 
+Note: You can change the table name. Just don't change the column names.
 
 ```sql
 create table
@@ -32,8 +32,8 @@ create table
   ) tablespace pg_default;
 ```
 
-### Use Callbacks 
-Use just 2 lines of code, to instantly see costs and log your responses **across all providers** with Supabase: 
+### Use Callbacks
+Use just 2 lines of code, to instantly see costs and log your responses **across all providers** with Supabase:
 
 ```python
 litellm.success_callback=["supabase"]
@@ -46,8 +46,8 @@ from litellm import completion
 
 ## set env variables
 ### SUPABASE
-os.environ["SUPABASE_URL"] = "your-supabase-url" 
-os.environ["SUPABASE_KEY"] = "your-supabase-key" 
+os.environ["SUPABASE_URL"] = "your-supabase-url"
+os.environ["SUPABASE_KEY"] = "your-supabase-key"
 
 ## LLM API KEY
 os.environ["OPENAI_API_KEY"] = ""
@@ -57,25 +57,25 @@ litellm.success_callback=["supabase"]
 litellm.failure_callback=["supabase"]
 
 #openai call
-response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}]) 
+response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])
 
 #bad call
-response = completion(model="chatgpt-test", messages=[{"role": "user", "content": "Hi 👋 - i'm a bad call to test error logging"}]) 
+response = completion(model="chatgpt-test", messages=[{"role": "user", "content": "Hi 👋 - i'm a bad call to test error logging"}])
 ```
 
-### Additional Controls 
+### Additional Controls
 
 **Different Table name**
 
 If you modified your table name, here's how to pass the new name.
 
-```python 
+```python
 litellm.modify_integration("supabase",{"table_name": "litellm_logs"})
 ```
 
 **Identify end-user**
 
-Here's how to map your llm call to an end-user 
+Here's how to map your llm call to an end-user
 
 ```python
 litellm.identify({"end_user": "krrish@berri.ai"})

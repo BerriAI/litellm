@@ -2,8 +2,8 @@
 
 This tutorial demonstrates how to employ the `completion()` function with model fallbacks to ensure reliability. LLM APIs can be unstable, completion() with fallbacks ensures you'll always get a response from your calls
 
-## Usage 
-To use fallback models with `completion()`, specify a list of models in the `fallbacks` parameter. 
+## Usage
+To use fallback models with `completion()`, specify a list of models in the `fallbacks` parameter.
 
 The `fallbacks` list should include the primary model you want to use, followed by additional models that can be used as backups in case the primary model fails to provide a response.
 
@@ -51,7 +51,7 @@ completion call gpt-3.5-turbo
 * Cool-Downs for rate-limited models
 
 #### Looping through `fallbacks`
-Allow `45seconds` for each request. In the 45s this function tries calling the primary model set as `model`. If model fails it loops through the backup `fallbacks` models and attempts to get a response in the allocated `45s` time set here: 
+Allow `45seconds` for each request. In the 45s this function tries calling the primary model set as `model`. If model fails it loops through the backup `fallbacks` models and attempts to get a response in the allocated `45s` time set here:
 ```python
 while response == None and time.time() - start_time < 45:
         for model in fallbacks:

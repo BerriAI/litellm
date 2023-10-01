@@ -14,16 +14,16 @@ Create a playground to **evaluate multiple LLM Providers in less than 10 minutes
 
 :::info
 
- Before you start, make sure you have followed the [environment-setup](./installation) guide. Please note, that this tutorial relies on you having API keys from at least 1 model provider (E.g. OpenAI). 
+ Before you start, make sure you have followed the [environment-setup](./installation) guide. Please note, that this tutorial relies on you having API keys from at least 1 model provider (E.g. OpenAI).
 :::
 
-## 1. Quick start 
+## 1. Quick start
 
 Let's make sure our keys are working. Run this script in any environment of your choice (e.g. [Google Colab](https://colab.research.google.com/#create=true)).
 
 🚨 Don't forget to replace the placeholder key values with your keys!
 
-```python 
+```python
 pip install litellm
 ```
 
@@ -50,17 +50,17 @@ response = completion("j2-mid", messages)
 
 ## 2. Set-up Server
 
-Let's build a basic Flask app as our backend server. We'll give it a specific route for our completion calls.  
+Let's build a basic Flask app as our backend server. We'll give it a specific route for our completion calls.
 
 **Notes**:
 * 🚨 Don't forget to replace the placeholder key values with your keys!
-* `completion_with_retries`: LLM API calls can fail in production. This function wraps the normal litellm completion() call with [tenacity](https://tenacity.readthedocs.io/en/latest/) to retry the call in case it fails. 
+* `completion_with_retries`: LLM API calls can fail in production. This function wraps the normal litellm completion() call with [tenacity](https://tenacity.readthedocs.io/en/latest/) to retry the call in case it fails.
 
 LiteLLM specific snippet:
 
-```python 
+```python
 import os
-from litellm import completion_with_retries 
+from litellm import completion_with_retries
 
 ## set ENV variables
 os.environ["OPENAI_API_KEY"] = "openai key" ## REPLACE THIS
@@ -83,10 +83,10 @@ def api_completion():
 
 The complete code:
 
-```python 
+```python
 import os
 from flask import Flask, jsonify, request
-from litellm import completion_with_retries 
+from litellm import completion_with_retries
 
 
 ## set ENV variables
@@ -121,7 +121,7 @@ if __name__ == '__main__':
 
 ### Let's test it
 Start the server:
-```python 
+```python
 python main.py
 ```
 
@@ -148,7 +148,7 @@ This is what you should see
 
 For our frontend, we'll use [Streamlit](https://streamlit.io/) - this enables us to build a simple python web-app.
 
-Let's download the playground template we (LiteLLM) have created: 
+Let's download the playground template we (LiteLLM) have created:
 
 ```zsh
 git clone https://github.com/BerriAI/litellm_playground_fe_template.git
@@ -163,7 +163,7 @@ Make sure our server from [step 2](#2-set-up-server) is still running at port 40
  If you used another port, no worries - just make sure you change [this line](https://github.com/BerriAI/litellm_playground_fe_template/blob/411bea2b6a2e0b079eb0efd834886ad783b557ef/app.py#L7) in your playground template's app.py
 :::
 
-Now let's run our app: 
+Now let's run our app:
 
 ```zsh
 cd litellm_playground_fe_template && streamlit run app.py
@@ -175,15 +175,15 @@ If you're missing Streamlit - just pip install it (or check out their [installat
 pip install streamlit
 ```
 
-This is what you should see: 
+This is what you should see:
 <Image img={require('../../img/litellm_streamlit_playground.png')} alt="streamlit_playground" />
 
 
-# Congratulations 🚀 
+# Congratulations 🚀
 
-You've created your first LLM Playground - with the ability to call 50+ LLM APIs. 
+You've created your first LLM Playground - with the ability to call 50+ LLM APIs.
 
-Next Steps: 
+Next Steps:
 * [Check out the full list of LLM Providers you can now add](../completion/supported)
 * [Deploy your server using Render](https://render.com/docs/deploy-flask)
 * [Deploy your playground using Streamlit](https://docs.streamlit.io/streamlit-community-cloud/deploy-your-app)

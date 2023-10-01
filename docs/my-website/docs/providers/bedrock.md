@@ -9,7 +9,7 @@ os.environ["AWS_REGION_NAME"] = ""
 
 ## Usage
 ```python
-import os 
+import os
 from litellm import completion
 
 os.environ["AWS_ACCESS_KEY_ID"] = ""
@@ -17,13 +17,13 @@ os.environ["AWS_SECRET_ACCESS_KEY"] = ""
 os.environ["AWS_REGION_NAME"] = ""
 
 response = completion(
-            model="bedrock/anthropic.claude-instant-v1", 
+            model="bedrock/anthropic.claude-instant-v1",
             messages=[{ "content": "Hello, how are you?","role": "user"}]
 )
 ```
 
 ## Supported AWS Bedrock Models
-Here's an example of using a bedrock model with LiteLLM 
+Here's an example of using a bedrock model with LiteLLM
 
 | Model Name               | Command                                                          | Environment Variables                                              |
 |--------------------------|------------------------------------------------------------------|---------------------------------------------------------------------|
@@ -37,7 +37,7 @@ Here's an example of using a bedrock model with LiteLLM
 ## Streaming
 
 ```python
-import os 
+import os
 from litellm import completion
 
 os.environ["AWS_ACCESS_KEY_ID"] = ""
@@ -45,7 +45,7 @@ os.environ["AWS_SECRET_ACCESS_KEY"] = ""
 os.environ["AWS_REGION_NAME"] = ""
 
 response = completion(
-            model="bedrock/anthropic.claude-instant-v1", 
+            model="bedrock/anthropic.claude-instant-v1",
             messages=[{ "content": "Hello, how are you?","role": "user"}],
             stream=True
 )

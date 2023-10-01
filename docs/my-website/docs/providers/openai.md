@@ -4,18 +4,18 @@ LiteLLM supports OpenAI Chat + Text completion and embedding calls.
 ### API Keys
 
 ```python
-import os 
+import os
 
 os.environ["OPENAI_API_KEY"] = "your-api-key"
 ```
 **Need a dedicated key?**
-Email us @ krrish@berri.ai 
+Email us @ krrish@berri.ai
 
 [**See all supported models by the litellm api key**](../proxy_api.md#supported-models-for-litellm-key)
 
 ### Usage
 ```python
-import os 
+import os
 from litellm import completion
 
 os.environ["OPENAI_API_KEY"] = "your-api-key"
@@ -60,7 +60,7 @@ These also support the `OPENAI_API_BASE` environment variable, which can be used
 
 ### Using Helicone Proxy with LiteLLM
 ```python
-import os 
+import os
 import litellm
 from litellm import completion
 
@@ -81,7 +81,7 @@ response = completion("gpt-3.5-turbo", messages)
 
 ### Using OpenAI Proxy with LiteLLM
 ```python
-import os 
+import os
 import litellm
 from litellm import completion
 

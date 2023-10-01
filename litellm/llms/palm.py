@@ -7,6 +7,7 @@ from typing import Callable
 from litellm.utils import ModelResponse, get_secret
 import sys
 
+
 class PalmError(Exception):
     def __init__(self, status_code, message):
         self.status_code = status_code
@@ -14,6 +15,7 @@ class PalmError(Exception):
         super().__init__(
             self.message
         )  # Call the base class constructor with the parameters it needs
+
 
 def completion(
     model: str,
@@ -30,7 +32,9 @@ def completion(
     try:
         import google.generativeai as palm
     except:
-        raise Exception("Importing google.generativeai failed, please run 'pip install -q google-generativeai")
+        raise Exception(
+            "Importing google.generativeai failed, please run 'pip install -q google-generativeai"
+        )
     palm.configure(api_key=api_key)
 
     model = model
@@ -38,36 +42,31 @@ def completion(
     for message in messages:
         if "role" in message:
             if message["role"] == "user":
-                prompt += (
-                    f"{message['content']}"
-                )
+                prompt += f"{message['content']}"
             else:
-                prompt += (
-                    f"{message['content']}"
-                )
+                prompt += f"{message['content']}"
         else:
             prompt += f"{message['content']}"
-    
+
     ## LOGGING
     logging_obj.pre_call(
-            input=prompt,
-            api_key="",
-            additional_args={"complete_input_dict": {}},
-        )
+        input=prompt,
+        api_key="",
+        additional_args={"complete_input_dict": {}},
+    )
     ## COMPLETION CALL
     response = palm.chat(messages=prompt)
-
 
     if "stream" in optional_params and optional_params["stream"] == True:
         return response.iter_lines()
     else:
         ## LOGGING
         logging_obj.post_call(
-                input=prompt,
-                api_key="",
-                original_response=response,
-                additional_args={"complete_input_dict": {}},
-            )
+            input=prompt,
+            api_key="",
+            original_response=response,
+            additional_args={"complete_input_dict": {}},
+        )
         print_verbose(f"raw model_response: {response}")
         ## RESPONSE OBJECT
         completion_response = response.last
@@ -81,12 +80,13 @@ def completion(
             try:
                 model_response["choices"][0]["message"]["content"] = completion_response
             except:
-                raise PalmError(message=json.dumps(completion_response), status_code=response.status_code)
+                raise PalmError(
+                    message=json.dumps(completion_response),
+                    status_code=response.status_code,
+                )
 
-        ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here. 
-        prompt_tokens = len(
-            encoding.encode(prompt)
-        ) 
+        ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here.
+        prompt_tokens = len(encoding.encode(prompt))
         completion_tokens = len(
             encoding.encode(model_response["choices"][0]["message"]["content"])
         )
@@ -99,6 +99,7 @@ def completion(
             "total_tokens": prompt_tokens + completion_tokens,
         }
         return model_response
+
 
 def embedding():
     # logic for parsing in - calling - parsing out model embedding calls

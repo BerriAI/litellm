@@ -2,24 +2,25 @@
 import sys
 import os
 
-sys.path.insert(0, os.path.abspath('../..'))
+sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm import completion, embedding
 import litellm
 
+
 def custom_callback(
-        kwargs,
-        completion_response,
-        start_time,
-        end_time,
+    kwargs,
+    completion_response,
+    start_time,
+    end_time,
 ):
-    print(
-        "in custom callback func"
-    )
+    print("in custom callback func")
     print("kwargs", kwargs)
     print(completion_response)
     print(start_time)
     print(end_time)
+
+
 litellm.success_callback = [custom_callback]
 
 

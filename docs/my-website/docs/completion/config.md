@@ -1,6 +1,6 @@
 # Model Config
 
-Model-specific changes can make our code complicated, making it harder to debug errors. Use model configs to simplify this. 
+Model-specific changes can make our code complicated, making it harder to debug errors. Use model configs to simplify this.
 
 ### usage
 
@@ -8,8 +8,8 @@ Handling prompt logic. Different models have different context windows. Use `ada
 
 
 ```python
-from litellm import completion_with_config 
-import os 
+from litellm import completion_with_config
+import os
 
 config = {
     "available_models": ["gpt-3.5-turbo", "claude-instant-1", "gpt-3.5-turbo-16k"],
@@ -33,14 +33,14 @@ response = completion_with_config(model="gpt-3.5-turbo", messages=messages, conf
 ```python
 config = {
     "default_fallback_models": # [Optional] List of model names to try if a call fails
-    "available_models": # [Optional] List of all possible models you could call 
+    "available_models": # [Optional] List of all possible models you could call
     "adapt_to_prompt_size": # [Optional] True/False - if you want to select model based on prompt size (will pick from available_models)
     "model": {
         "model-name": {
-            "needs_moderation": # [Optional] True/False - if you want to call openai moderations endpoint before making completion call. Will raise exception, if flagged. 
+            "needs_moderation": # [Optional] True/False - if you want to call openai moderations endpoint before making completion call. Will raise exception, if flagged.
             "error_handling": {
                 "error-type": { # One of the errors listed here - https://docs.litellm.ai/docs/exception_mapping#custom-mapping-list
-                    "fallback_model": "" # str, name of the model it should try instead, when that error occurs 
+                    "fallback_model": "" # str, name of the model it should try instead, when that error occurs
                 }
             }
         }

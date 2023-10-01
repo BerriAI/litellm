@@ -1,14 +1,14 @@
 # Model Fallbacks w/ LiteLLM
 
-Here's how you can implement model fallbacks across 3 LLM providers (OpenAI, Anthropic, Azure) using LiteLLM. 
+Here's how you can implement model fallbacks across 3 LLM providers (OpenAI, Anthropic, Azure) using LiteLLM.
 
 ## 1. Install LiteLLM
-```python 
+```python
 !pip install litellm
 ```
 
-## 2. Basic Fallbacks Code 
-```python 
+## 2. Basic Fallbacks Code
+```python
 import litellm
 from litellm import embedding, completion
 
@@ -31,14 +31,14 @@ for model in model_fallback_list:
       print(f"error occurred: {traceback.format_exc()}")
 ```
 
-## 3. Context Window Exceptions 
+## 3. Context Window Exceptions
 LiteLLM provides a sub-class of the InvalidRequestError class for Context Window Exceeded errors ([docs](https://docs.litellm.ai/docs/exception_mapping)).
 
-Implement model fallbacks based on context window exceptions. 
+Implement model fallbacks based on context window exceptions.
 
-LiteLLM also exposes a `get_max_tokens()` function, which you can use to identify the context window limit that's been exceeded. 
+LiteLLM also exposes a `get_max_tokens()` function, which you can use to identify the context window limit that's been exceeded.
 
-```python 
+```python
 import litellm
 from litellm import completion, ContextWindowExceededError, get_max_tokens
 

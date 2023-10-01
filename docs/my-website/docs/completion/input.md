@@ -1,5 +1,5 @@
 # Input Format
-The Input params are **exactly the same** as the <a href="https://platform.openai.com/docs/api-reference/chat/create" target="_blank" rel="noopener noreferrer">OpenAI Create chat completion</a>, and let you call 100+ models in the same format. 
+The Input params are **exactly the same** as the <a href="https://platform.openai.com/docs/api-reference/chat/create" target="_blank" rel="noopener noreferrer">OpenAI Create chat completion</a>, and let you call 100+ models in the same format.
 
 ## Input - Request Body
 # Request Body
@@ -7,7 +7,7 @@ The Input params are **exactly the same** as the <a href="https://platform.opena
 ### Required Fields
 
 - `model`: *string* - ID of the model to use. Refer to the model endpoint compatibility table for details on which models work with the Chat API.
-  
+
 - `messages`: *array* - A list of messages comprising the conversation so far.
 
 #### Properties of `messages`
@@ -28,14 +28,14 @@ The Input params are **exactly the same** as the <a href="https://platform.opena
 - `functions`: *array* - A list of functions that the model may use to generate JSON inputs. Each function should have the following properties:
 
     - `name`: *string* - The name of the function to be called. It should contain a-z, A-Z, 0-9, underscores and dashes, with a maximum length of 64 characters.
-    
+
     - `description`: *string (optional)* - A description explaining what the function does. It helps the model to decide when and how to call the function.
-    
+
     - `parameters`: *object* - The parameters that the function accepts, described as a JSON Schema object.
-    
+
     - `function_call`: *string or object (optional)* - Controls how the model responds to function calls.
 
-- `temperature`: *number or null (optional)* - The sampling temperature to be used, between 0 and 2. Higher values like 0.8 produce more random outputs, while lower values like 0.2 make outputs more focused and deterministic. 
+- `temperature`: *number or null (optional)* - The sampling temperature to be used, between 0 and 2. Higher values like 0.8 produce more random outputs, while lower values like 0.2 make outputs more focused and deterministic.
 
 - `top_p`: *number or null (optional)* - An alternative to sampling with temperature. It instructs the model to consider the results of the tokens with top_p probability. For example, 0.1 means only the tokens comprising the top 10% probability mass are considered.
 

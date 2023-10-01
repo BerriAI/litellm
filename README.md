@@ -44,9 +44,9 @@ pip install litellm
 from litellm import completion
 import os
 
-## set ENV variables 
-os.environ["OPENAI_API_KEY"] = "your-openai-key" 
-os.environ["COHERE_API_KEY"] = "your-cohere-key" 
+## set ENV variables
+os.environ["OPENAI_API_KEY"] = "your-openai-key"
+os.environ["COHERE_API_KEY"] = "your-cohere-key"
 
 messages = [{ "content": "Hello, how are you?","role": "user"}]
 
@@ -75,7 +75,7 @@ for chunk in result:
 ## OpenAI Proxy Server ([Docs](https://docs.litellm.ai/docs/proxy_server))
 Spin up a local server to translate openai api calls to any non-openai model (e.g. Huggingface, TogetherAI, Ollama, etc.)
 
-This works for async + streaming as well. 
+This works for async + streaming as well.
 ```python
 litellm --model <model_name>
 ```
@@ -107,15 +107,15 @@ Running your model locally or on a custom endpoint ? Set the `--api-base` parame
 
 [**Read the Docs**](https://docs.litellm.ai/docs/)
 # Contributing
-To contribute: Clone the repo locally -> Make a change -> Submit a PR with the change. 
+To contribute: Clone the repo locally -> Make a change -> Submit a PR with the change.
 
-Here's how to modify the repo locally: 
-Step 1: Clone the repo 
+Here's how to modify the repo locally:
+Step 1: Clone the repo
 ```
 git clone https://github.com/BerriAI/litellm.git
 ```
 
-Step 2: Navigate into the project, and install dependencies: 
+Step 2: Navigate into the project, and install dependencies:
 ```
 cd litellm
 poetry install
@@ -128,8 +128,8 @@ pytest .
 ```
 
 Step 4: Submit a PR with your changes! 🚀
-- push your fork to your github repo 
-- submit a PR from there 
+- push your fork to your github repo
+- submit a PR from there
 
 [Learn more on how to make a PR](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/creating-a-pull-request)
 
@@ -140,7 +140,7 @@ Step 4: Submit a PR with your changes! 🚀
 - Our numbers 📞 +1 (770) 8783-106 / ‭+1 (412) 618-6238‬
 - Our emails ✉️ ishaan@berri.ai / krrish@berri.ai
 
-# Why did we build this 
+# Why did we build this
 - **Need for simplicity**: Our code started to get extremely complicated managing & translating calls between Azure, OpenAI, Cohere
 
 # Contributors
@@ -157,4 +157,3 @@ Step 4: Submit a PR with your changes! 🚀
 <a href="https://github.com/BerriAI/litellm/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=BerriAI/litellm" />
 </a>
-

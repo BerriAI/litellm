@@ -18,7 +18,7 @@ Ensure you add `petals/` as a prefix for all petals LLMs. This sets the custom_l
 from litellm import completion
 
 response = completion(
-    model="petals/petals-team/StableBeluga2", 
+    model="petals/petals-team/StableBeluga2",
     messages=[{ "content": "Hello, how are you?","role": "user"}]
 )
 
@@ -29,7 +29,5 @@ print(response)
 
 | Model Name       | Function Call                              |
 |------------------|--------------------------------------------|
-| petals-team/StableBeluga | `completion('petals/petals-team/StableBeluga2', messages)` | 
-| huggyllama/llama-65b | `completion('petals/huggyllama/llama-65b', messages)` | 
-
-
+| petals-team/StableBeluga | `completion('petals/petals-team/StableBeluga2', messages)` |
+| huggyllama/llama-65b | `completion('petals/huggyllama/llama-65b', messages)` |

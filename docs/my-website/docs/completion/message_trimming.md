@@ -1,15 +1,15 @@
 # Trimming Input Messages
 **Use litellm.trim_messages() to ensure messages does not exceed a model's token limit or specified `max_tokens`**
 
-## Usage 
+## Usage
 ```python
 from litellm import completion
 from litellm.utils import trim_messages
 
 response = completion(
-    model=model, 
+    model=model,
     messages=trim_messages(messages, model) # trim_messages ensures tokens(messages) < max_tokens(model)
-) 
+)
 ```
 
 ## Usage - set max_tokens
@@ -18,16 +18,16 @@ from litellm import completion
 from litellm.utils import trim_messages
 
 response = completion(
-    model=model, 
+    model=model,
     messages=trim_messages(messages, model, max_tokens=10), # trim_messages ensures tokens(messages) < max_tokens
-) 
+)
 ```
 
 ## Parameters
 
 The function uses the following parameters:
 
-- `messages`:[Required] This should be a list of input messages 
+- `messages`:[Required] This should be a list of input messages
 
 - `model`:[Optional] This is the LiteLLM model being used. This parameter is optional, as you can alternatively specify the `max_tokens` parameter.
 

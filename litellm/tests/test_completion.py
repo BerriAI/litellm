@@ -15,6 +15,7 @@ from litellm import embedding, completion, text_completion, completion_cost
 user_message = "Write a short poem about the sky"
 messages = [{"content": user_message, "role": "user"}]
 
+
 def logger_fn(user_model_dict):
     print(f"user_model_dict: {user_model_dict}")
 
@@ -28,7 +29,7 @@ def test_completion_custom_provider_model_name():
         )
         # Add any assertions here to check the response
         print(response)
-        print(response['choices'][0]['finish_reason'])
+        print(response["choices"][0]["finish_reason"])
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -39,15 +40,16 @@ def test_completion_custom_provider_model_name():
 def test_completion_claude():
     try:
         # test without max tokens
-        response = completion(
-            model="claude-instant-1", messages=messages
-        )
+        response = completion(model="claude-instant-1", messages=messages)
         # Add any assertions here to check the response
         print(response)
         print(response.response_ms)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
 # test_completion_claude()
+
 
 def test_completion_claude_max_tokens():
     try:
@@ -73,6 +75,8 @@ def test_completion_claude_max_tokens():
         litellm.set_verbose = False
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
 # test_completion_claude_max_tokens()
 
 # def test_completion_oobabooga():
@@ -110,25 +114,27 @@ def test_completion_claude_max_tokens():
 #         pytest.fail(f"Error occurred: {e}")
 # test_completion_aleph_alpha_control_models()
 
+
 def test_completion_with_litellm_call_id():
     try:
         litellm.use_client = False
-        response = completion(
-            model="gpt-3.5-turbo", messages=messages)
+        response = completion(model="gpt-3.5-turbo", messages=messages)
         print(response)
-        if 'litellm_call_id' in response:
+        if "litellm_call_id" in response:
             pytest.fail(f"Error occurred: litellm_call_id in response objects")
-        
+
         litellm.use_client = True
-        response2 = completion(
-            model="gpt-3.5-turbo", messages=messages)
-        
-        if 'litellm_call_id' not in response2:
-            pytest.fail(f"Error occurred: litellm_call_id not in response object when use_client = True")
+        response2 = completion(model="gpt-3.5-turbo", messages=messages)
+
+        if "litellm_call_id" not in response2:
+            pytest.fail(
+                f"Error occurred: litellm_call_id not in response object when use_client = True"
+            )
         # Add any assertions here to check the response
         print(response2)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
 
 # commenting out as this is a flaky test on circle ci
 # def test_completion_nlp_cloud():
@@ -150,17 +156,19 @@ def test_completion_with_litellm_call_id():
 ######### HUGGING FACE TESTS ########################
 #####################################################
 """
-HF Tests we should pass 
-- TGI: 
-    - Pro Inference API 
-    - Deployed Endpoint 
-- Coversational 
-    - Free Inference API 
-    - Deployed Endpoint 
+HF Tests we should pass
+- TGI:
+    - Pro Inference API
+    - Deployed Endpoint
+- Coversational
+    - Free Inference API
+    - Deployed Endpoint
 - Neither TGI or Coversational
-    - Free Inference API 
-    - Deployed Endpoint 
+    - Free Inference API
+    - Deployed Endpoint
 """
+
+
 #####################################################
 #####################################################
 # Test util to sort models to TGI, conv, None
@@ -168,28 +176,29 @@ def test_get_hf_task_for_model():
     model = "glaiveai/glaive-coder-7b"
     model_type = litellm.llms.huggingface_restapi.get_hf_task_for_model(model)
     print(f"model:{model}, model type: {model_type}")
-    assert(model_type == "text-generation-inference")
+    assert model_type == "text-generation-inference"
 
     model = "meta-llama/Llama-2-7b-hf"
     model_type = litellm.llms.huggingface_restapi.get_hf_task_for_model(model)
     print(f"model:{model}, model type: {model_type}")
-    assert(model_type == "text-generation-inference")
+    assert model_type == "text-generation-inference"
 
     model = "facebook/blenderbot-400M-distill"
     model_type = litellm.llms.huggingface_restapi.get_hf_task_for_model(model)
     print(f"model:{model}, model type: {model_type}")
-    assert(model_type == "conversational")
+    assert model_type == "conversational"
 
     model = "facebook/blenderbot-3B"
     model_type = litellm.llms.huggingface_restapi.get_hf_task_for_model(model)
     print(f"model:{model}, model type: {model_type}")
-    assert(model_type == "conversational")
+    assert model_type == "conversational"
 
     # neither Conv or None
     model = "roneneldan/TinyStories-3M"
     model_type = litellm.llms.huggingface_restapi.get_hf_task_for_model(model)
     print(f"model:{model}, model type: {model_type}")
-    assert(model_type == None)
+    assert model_type == None
+
 
 # test_get_hf_task_for_model()
 # litellm.set_verbose=False
@@ -245,7 +254,7 @@ def test_get_hf_task_for_model():
 #         user_message = "My name is Merve and my favorite"
 #         messages = [{ "content": user_message,"role": "user"}]
 #         response = completion(
-#             model="huggingface/roneneldan/TinyStories-3M", 
+#             model="huggingface/roneneldan/TinyStories-3M",
 #             messages=messages,
 #             api_base="https://p69xlsj6rpno5drq.us-east-1.aws.endpoints.huggingface.cloud",
 #         )
@@ -305,7 +314,7 @@ def test_get_hf_task_for_model():
 #         user_message = "My name is Merve and my favorite"
 #         messages = [{ "content": user_message,"role": "user"}]
 #         response = completion(
-#             model="huggingface/roneneldan/TinyStories-3M", 
+#             model="huggingface/roneneldan/TinyStories-3M",
 #             messages=messages,
 #             api_base="https://p69xlsj6rpno5drq.us-east-1.aws.endpoints.huggingface.cloud",
 
@@ -318,14 +327,15 @@ def test_get_hf_task_for_model():
 
 # hf_test_error_logs()
 
-def test_completion_cohere(): # commenting for now as the cohere endpoint is being flaky
+
+def test_completion_cohere():  # commenting for now as the cohere endpoint is being flaky
     try:
         response = completion(
             model="command-nightly",
             messages=messages,
             max_tokens=100,
             logit_bias={40: 10},
-            logger_fn=logger_fn
+            logger_fn=logger_fn,
         )
         # Add any assertions here to check the response
         print(response)
@@ -338,17 +348,17 @@ def test_completion_cohere(): # commenting for now as the cohere endpoint is bei
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+
 # test_completion_cohere()
 
 
 def test_completion_openai():
     try:
-        litellm.api_key = os.environ['OPENAI_API_KEY']
+        litellm.api_key = os.environ["OPENAI_API_KEY"]
         response = completion(model="gpt-3.5-turbo", messages=messages, max_tokens=10)
         print("This is the response object\n", response)
         print("\n\nThis is response ms:", response.response_ms)
 
-        
         response_str = response["choices"][0]["message"]["content"]
         response_str_2 = response.choices[0].message.content
 
@@ -361,6 +371,8 @@ def test_completion_openai():
         litellm.api_key = None
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
 # test_completion_openai()
 
 
@@ -383,13 +395,17 @@ def test_completion_text_openai():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+
 def test_completion_gpt_instruct():
     try:
         response = completion(model="gpt-3.5-turbo-instruct", messages=messages)
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
 # test_completion_gpt_instruct()
+
 
 def test_completion_openai_with_optional_params():
     try:
@@ -408,11 +424,12 @@ def test_completion_openai_with_optional_params():
 
 def test_completion_openai_litellm_key():
     try:
-        litellm.api_key = os.environ['OPENAI_API_KEY']
+        litellm.api_key = os.environ["OPENAI_API_KEY"]
 
         # ensure key is set to None in .env and in openai.api_key
-        os.environ['OPENAI_API_KEY'] = ""
+        os.environ["OPENAI_API_KEY"] = ""
         import openai
+
         openai.api_key = ""
         ##########################################################
 
@@ -428,14 +445,16 @@ def test_completion_openai_litellm_key():
         print(response)
 
         ###### reset environ key
-        os.environ['OPENAI_API_KEY'] = litellm.api_key
+        os.environ["OPENAI_API_KEY"] = litellm.api_key
 
         ##### unset litellm var
         litellm.api_key = None
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+
 # test_completion_openai_litellm_key()
+
 
 def test_completion_openrouter1():
     try:
@@ -449,6 +468,7 @@ def test_completion_openrouter1():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+
 def test_completion_openrouter2():
     try:
         response = completion(
@@ -460,6 +480,7 @@ def test_completion_openrouter2():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
 
 def test_completion_openrouter3():
     try:
@@ -473,7 +494,9 @@ def test_completion_openrouter3():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+
 # test_completion_openrouter()
+
 
 def test_completion_hf_model_no_provider():
     try:
@@ -488,7 +511,9 @@ def test_completion_hf_model_no_provider():
     except Exception as e:
         pass
 
+
 # test_completion_hf_model_no_provider()
+
 
 def test_completion_hf_model_no_provider_2():
     try:
@@ -502,7 +527,9 @@ def test_completion_hf_model_no_provider_2():
     except Exception as e:
         pass
 
+
 # test_completion_hf_model_no_provider_2()
+
 
 def test_completion_openai_with_more_optional_params():
     try:
@@ -576,30 +603,31 @@ def test_completion_azure():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+
 # test_completion_azure()
 
-# new azure test for using litellm. vars, 
+
+# new azure test for using litellm. vars,
 # use the following vars in this test and make an azure_api_call
-#  litellm.api_type = self.azure_api_type 
-#  litellm.api_base = self.azure_api_base 
-#  litellm.api_version = self.azure_api_version 
-#  litellm.api_key = self.api_key 
+#  litellm.api_type = self.azure_api_type
+#  litellm.api_base = self.azure_api_base
+#  litellm.api_version = self.azure_api_version
+#  litellm.api_key = self.api_key
 def test_completion_azure_with_litellm_key():
     try:
         print("azure gpt-3.5 test\n\n")
         import openai
 
-
         #### set litellm vars
         litellm.api_type = "azure"
-        litellm.api_base = os.environ['AZURE_API_BASE']
-        litellm.api_version = os.environ['AZURE_API_VERSION']
-        litellm.api_key = os.environ['AZURE_API_KEY']
+        litellm.api_base = os.environ["AZURE_API_BASE"]
+        litellm.api_version = os.environ["AZURE_API_VERSION"]
+        litellm.api_key = os.environ["AZURE_API_KEY"]
 
         ######### UNSET ENV VARs for this ################
-        os.environ['AZURE_API_BASE'] = ""
-        os.environ['AZURE_API_VERSION'] = ""
-        os.environ['AZURE_API_KEY'] = ""
+        os.environ["AZURE_API_BASE"] = ""
+        os.environ["AZURE_API_VERSION"] = ""
+        os.environ["AZURE_API_KEY"] = ""
 
         ######### UNSET OpenAI vars for this ##############
         openai.api_type = ""
@@ -614,11 +642,10 @@ def test_completion_azure_with_litellm_key():
         # Add any assertions here to check the response
         print(response)
 
-
         ######### RESET ENV VARs for this ################
-        os.environ['AZURE_API_BASE'] = litellm.api_base
-        os.environ['AZURE_API_VERSION'] = litellm.api_version
-        os.environ['AZURE_API_KEY'] = litellm.api_key
+        os.environ["AZURE_API_BASE"] = litellm.api_base
+        os.environ["AZURE_API_VERSION"] = litellm.api_version
+        os.environ["AZURE_API_KEY"] = litellm.api_key
 
         ######### UNSET litellm vars
         litellm.api_type = None
@@ -628,6 +655,8 @@ def test_completion_azure_with_litellm_key():
 
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
 # test_completion_azure()
 
 
@@ -642,6 +671,8 @@ def test_completion_azure_deployment_id():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
 # test_completion_azure_deployment_id()
 
 
@@ -665,8 +696,8 @@ def test_completion_azure_deployment_id():
 #     model_name = "replicate/llama-2-70b-chat:2796ee9483c3fd7aa2e171d38f4ca12251a30609463dcfd4cd76703f22e96cdf"
 #     try:
 #         response = completion(
-#             model=model_name, 
-#             messages=messages, 
+#             model=model_name,
+#             messages=messages,
 #             max_tokens=20,
 #             custom_llm_provider="replicate"
 #         )
@@ -682,12 +713,13 @@ def test_completion_azure_deployment_id():
 #         pytest.fail(f"Error occurred: {e}")
 # test_completion_replicate_llama_2()
 
+
 def test_completion_replicate_vicuna():
     model_name = "replicate/vicuna-13b:6282abe6a492de4145d7bb601023762212f9ddbbe78278bd6771c8b3b2f2a13b"
     try:
         response = completion(
-            model=model_name, 
-            messages=messages, 
+            model=model_name,
+            messages=messages,
             custom_llm_provider="replicate",
             temperature=0.1,
             max_tokens=20,
@@ -700,6 +732,7 @@ def test_completion_replicate_vicuna():
             pytest.fail(f"Error occurred: {e}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
 
 # def test_completion_replicate_stability_stream():
 #     model_name = "stability-ai/stablelm-tuned-alpha-7b:c49dae362cbaecd2ceabb5bd34fdb68413c4ff775111fea065d259d577757beb"
@@ -720,20 +753,23 @@ def test_completion_replicate_vicuna():
 # test_completion_replicate_stability_stream()
 
 
-
-
-
 ######## Test TogetherAI ########
 def test_completion_together_ai():
     model_name = "together_ai/togethercomputer/llama-2-70b-chat"
     try:
-        response = completion(model=model_name, messages=messages, max_tokens=256, logger_fn=logger_fn)
+        response = completion(
+            model=model_name, messages=messages, max_tokens=256, logger_fn=logger_fn
+        )
         # Add any assertions here to check the response
         print(response)
         cost = completion_cost(completion_response=response)
-        print("Cost for completion call together-computer/llama-2-70b: ", f"${float(cost):.10f}")
+        print(
+            "Cost for completion call together-computer/llama-2-70b: ",
+            f"${float(cost):.10f}",
+        )
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
 
 # test_completion_together_ai()
 # def test_customprompt_together_ai():
@@ -749,62 +785,69 @@ def test_completion_together_ai():
 #     except Exception as e:
 #         pytest.fail(f"Error occurred: {e}")
 
+
 def test_completion_sagemaker():
     try:
         response = completion(
-            model="sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b", 
+            model="sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b",
             messages=messages,
             temperature=0.2,
             max_tokens=80,
-            logger_fn=logger_fn
+            logger_fn=logger_fn,
         )
         # Add any assertions here to check the response
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+
 # test_completion_sagemaker()
+
 
 def test_completion_bedrock_titan():
     try:
         response = completion(
-            model="bedrock/amazon.titan-tg1-large", 
+            model="bedrock/amazon.titan-tg1-large",
             messages=messages,
             temperature=0.2,
             max_tokens=200,
             top_p=0.8,
-            logger_fn=logger_fn
+            logger_fn=logger_fn,
         )
         # Add any assertions here to check the response
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
 # test_completion_bedrock_titan()
+
 
 def test_completion_bedrock_claude():
     print("calling claude")
     try:
         response = completion(
-            model="bedrock/anthropic.claude-instant-v1", 
+            model="bedrock/anthropic.claude-instant-v1",
             messages=messages,
             max_tokens=10,
             temperature=0.1,
-            logger_fn=logger_fn
+            logger_fn=logger_fn,
         )
         # Add any assertions here to check the response
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
 # test_completion_bedrock_claude()
+
 
 def test_completion_bedrock_claude_stream():
     print("calling claude")
     litellm.set_verbose = False
     try:
         response = completion(
-            model="bedrock/anthropic.claude-instant-v1", 
-            messages=messages,
-            stream=True
+            model="bedrock/anthropic.claude-instant-v1", messages=messages, stream=True
         )
         # Add any assertions here to check the response
         print(response)
@@ -812,19 +855,22 @@ def test_completion_bedrock_claude_stream():
             print(chunk)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
 # test_completion_bedrock_claude_stream()
+
 
 def test_completion_bedrock_ai21():
     try:
         litellm.set_verbose = False
         response = completion(
-            model="bedrock/ai21.j2-mid", 
+            model="bedrock/ai21.j2-mid",
             messages=messages,
             temperature=0.2,
             top_p=0.2,
-            max_tokens=20
+            max_tokens=20,
         )
-        # Add any assertions here to check the response 
+        # Add any assertions here to check the response
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
@@ -834,7 +880,7 @@ def test_completion_bedrock_ai21():
 # def test_completion_vllm():
 #     try:
 #         response = completion(
-#             model="vllm/facebook/opt-125m", 
+#             model="vllm/facebook/opt-125m",
 #             messages=messages,
 #             temperature=0.2,
 #             max_tokens=80,
@@ -853,7 +899,7 @@ def test_completion_bedrock_ai21():
 #     try:
 #         litellm.set_verbose = True
 #         response = completion(
-#             model="facebook/opt-125m", 
+#             model="facebook/opt-125m",
 #             messages=messages,
 #             temperature=0.2,
 #             max_tokens=80,
@@ -873,7 +919,7 @@ def test_completion_bedrock_ai21():
 # def test_completion_custom_api_base():
 #     try:
 #         response = completion(
-#             model="custom/meta-llama/Llama-2-13b-hf", 
+#             model="custom/meta-llama/Llama-2-13b-hf",
 #             messages=messages,
 #             temperature=0.2,
 #             max_tokens=10,
@@ -914,7 +960,7 @@ def test_completion_bedrock_ai21():
 #                 # pass
 #         except Exception as e:
 #             pytest.fail(f"Error occurred: {e}")
-# test_vertex_ai_stream() 
+# test_vertex_ai_stream()
 
 
 def test_completion_with_fallbacks():
@@ -927,6 +973,7 @@ def test_completion_with_fallbacks():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
 
 # def test_completion_with_fallbacks_multiple_keys():
 #     print(f"backup key 1: {os.getenv('BACKUP_OPENAI_API_KEY_1')}")
@@ -943,7 +990,7 @@ def test_completion_with_fallbacks():
 #         error_str = traceback.format_exc()
 #         pytest.fail(f"Error occurred: {error_str}")
 
-# test_completion_with_fallbacks_multiple_keys() 
+# test_completion_with_fallbacks_multiple_keys()
 # def test_petals():
 #     try:
 #         response = completion(model="petals-team/StableBeluga2", messages=messages)
@@ -1025,7 +1072,7 @@ def test_completion_ai21():
         pytest.fail(f"Error occurred: {e}")
 
 
-## test deep infra 
+## test deep infra
 def test_completion_deep_infra():
     # litellm.set_verbose = True
     model_name = "deepinfra/meta-llama/Llama-2-70b-chat-hf"
@@ -1036,6 +1083,8 @@ def test_completion_deep_infra():
         print(response.response_ms)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
 # test_completion_deep_infra()
 # Palm tests
 def test_completion_palm():
@@ -1048,6 +1097,8 @@ def test_completion_palm():
         print(response.response_ms)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
 # test_completion_palm()
 
 # test_completion_deep_infra()
@@ -1085,14 +1136,17 @@ def test_completion_palm():
 
 # test_completion_together_ai_stream()
 
+
 def test_moderation():
     import openai
-    openai.api_type = "azure" 
+
+    openai.api_type = "azure"
     openai.api_version = "GM"
-    response = litellm.moderation(input="i'm ishaan cto of litellm")   
+    response = litellm.moderation(input="i'm ishaan cto of litellm")
     print(response)
     output = response["results"][0]
     print(output)
     return output
+
 
 # test_moderation()

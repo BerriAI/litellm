@@ -18,7 +18,7 @@ For calls to your custom API base ensure:
 ```python
 from litellm import completion
 response = completion(
-    model="custom/meta-llama/Llama-2-13b-hf", 
+    model="custom/meta-llama/Llama-2-13b-hf",
     messages= [{"content": "what is custom llama?", "role": "user"}],
     temperature=0.2,
     max_tokens=10,
@@ -34,7 +34,7 @@ Inputs to your custom LLM api bases should follow this format:
 
 ```python
 resp = requests.post(
-    your-api_base, 
+    your-api_base,
     json={
         'model': 'meta-llama/Llama-2-13b-hf', # model name
         'params': {
@@ -48,7 +48,7 @@ resp = requests.post(
 )
 ```
 
-Outputs from your custom LLM api bases should follow this format:   
+Outputs from your custom LLM api bases should follow this format:
 ```python
 {
     'data': [
@@ -58,8 +58,8 @@ Outputs from your custom LLM api bases should follow this format:
                 'The capital of France is PARIS.\nThe capital of France is PARIS.\nThe capital of France is PARIS.\nThe capital of France is PARIS.\nThe capital of France is PARIS.\nThe capital of France is PARIS.\nThe capital of France is PARIS.\nThe capital of France is PARIS.\nThe capital of France is PARIS.\nThe capital of France is PARIS.\nThe capital of France is PARIS.\nThe capital of France is PARIS.\nThe capital of France is PARIS.\nThe capital of France'
             ],
             'params': {
-                'temperature': 0.7, 
-                'top_k': 40, 
+                'temperature': 0.7,
+                'top_k': 40,
                 'top_p': 1
             }
         }

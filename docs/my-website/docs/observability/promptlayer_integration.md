@@ -39,12 +39,12 @@ response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content
 response = completion(model="command-nightly", messages=[{"role": "user", "content": "Hi 👋 - i'm cohere"}])
 ```
 
-### Logging Metadata 
+### Logging Metadata
 
-You can also log completion call metadata to Promptlayer. 
+You can also log completion call metadata to Promptlayer.
 
-You can add metadata to a completion call through the metadata param: 
-```python 
+You can add metadata to a completion call through the metadata param:
+```python
 completion(model,messages, metadata={"model": "ai21"})
 ```
 
@@ -67,4 +67,4 @@ response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content
 response = completion(model="command-nightly", messages=[{"role": "user", "content": "Hi 👋 - i'm cohere"}], metadata={"provider": "cohere"})
 ```
 
-Credits to [Nick Bradford](https://github.com/nsbradford), from [Vim-GPT](https://github.com/nsbradford/VimGPT), for the suggestion. 
+Credits to [Nick Bradford](https://github.com/nsbradford), from [Vim-GPT](https://github.com/nsbradford/VimGPT), for the suggestion.

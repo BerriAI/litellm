@@ -1,25 +1,25 @@
 # Reliability
-## Helper utils 
+## Helper utils
 LiteLLM supports the following functions for reliability:
-* `litellm.longer_context_model_fallback_dict`: Dictionary which has a mapping for those models which have larger equivalents  
+* `litellm.longer_context_model_fallback_dict`: Dictionary which has a mapping for those models which have larger equivalents
 * `completion_with_retries`: use tenacity retries
-* `completion()` with fallbacks: switch between models/keys/api bases in case of errors. 
+* `completion()` with fallbacks: switch between models/keys/api bases in case of errors.
 
-## Context Window Errors 
+## Context Window Errors
 
-```python 
+```python
 from litellm import longer_context_model_fallback_dict, ContextWindowExceededError
 
 sample_text = "how does a court case get to the Supreme Court?" * 1000
 messages = [{"content": user_message, "role": "user"}]
 model = "gpt-3.5-turbo"
-try: 
+try:
     # try the original model
-    response = completion(model=model, messages=messages) 
+    response = completion(model=model, messages=messages)
 # catch the context window error
 except ContextWindowExceededError as e:
-    if model in longer_context_model_fallback_dict: 
-        # switch to the equivalent larger model -> gpt.3.5-turbo-16k 
+    if model in longer_context_model_fallback_dict:
+        # switch to the equivalent larger model -> gpt.3.5-turbo-16k
         new_model = longer_context_model_fallback_dict[model]
         response = completion(new_model, messages)
 
@@ -29,17 +29,17 @@ print(response)
 
 ## Retry failed requests
 
-You can use this as a drop-in replacement for the `completion()` function to use tenacity retries - by default we retry the call 3 times. 
+You can use this as a drop-in replacement for the `completion()` function to use tenacity retries - by default we retry the call 3 times.
 
-Here's a quick look at how you can use it: 
+Here's a quick look at how you can use it:
 
-```python 
+```python
 from litellm import completion_with_retries
 
 user_message = "Hello, whats the weather in San Francisco??"
 messages = [{"content": user_message, "role": "user"}]
 
-# normal call 
+# normal call
 def test_completion_custom_provider_model_name():
     try:
         response = completion_with_retries(
@@ -56,19 +56,19 @@ def test_completion_custom_provider_model_name():
 
 LLM APIs can be unstable, completion() with fallbacks ensures you'll always get a response from your calls
 
-## Usage 
-To use fallback models with `completion()`, specify a list of models in the `fallbacks` parameter. 
+## Usage
+To use fallback models with `completion()`, specify a list of models in the `fallbacks` parameter.
 
 The `fallbacks` list should include the primary model you want to use, followed by additional models that can be used as backups in case the primary model fails to provide a response.
 
-### switch models 
+### switch models
 ```python
-response = completion(model="bad-model", messages=messages, 
+response = completion(model="bad-model", messages=messages,
     fallbacks=["gpt-3.5-turbo" "command-nightly"])
 ```
 
 ### switch api keys/bases (E.g. azure deployment)
-Switch between different keys for the same azure deployment, or use another deployment as well. 
+Switch between different keys for the same azure deployment, or use another deployment as well.
 
 ```python
 api_key="bad-key"
@@ -117,7 +117,7 @@ When you pass `fallbacks` to `completion`, it makes the first `completion` call 
 * Cool-Downs for rate-limited models
 
 #### Looping through `fallbacks`
-Allow `45seconds` for each request. In the 45s this function tries calling the primary model set as `model`. If model fails it loops through the backup `fallbacks` models and attempts to get a response in the allocated `45s` time set here: 
+Allow `45seconds` for each request. In the 45s this function tries calling the primary model set as `model`. If model fails it loops through the backup `fallbacks` models and attempts to get a response in the allocated `45s` time set here:
 ```python
 while response == None and time.time() - start_time < 45:
         for model in fallbacks:

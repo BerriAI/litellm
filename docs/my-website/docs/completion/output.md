@@ -1,9 +1,9 @@
-# Output 
+# Output
 
 ## Format
 Here's the exact json output and type you can expect from all litellm `completion` calls for all models
 
-```python 
+```python
 {
   'choices': [
     {
@@ -32,7 +32,7 @@ print(response.choices[0].message.content)
 print(response['choices'][0]['message']['content'])
 ```
 
-Here's what an example response looks like 
+Here's what an example response looks like
 ```python
 {
   'choices': [
@@ -53,7 +53,7 @@ Here's what an example response looks like
 
 ## Additional Attributes
 
-You can also access information like latency. 
+You can also access information like latency.
 
 ```python
 import litellm
