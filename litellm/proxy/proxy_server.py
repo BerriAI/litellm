@@ -120,9 +120,8 @@ def model_list():
 async def completion(request: Request):
     data = await request.json()
     print_verbose(f"data passed in: {data}")
-    if (user_model is None):
-        raise ValueError("Proxy model needs to be set")
-    data["model"] = user_model
+    if user_model:
+        data["model"] = user_model
     if user_api_base:
         data["api_base"] = user_api_base
     ## check for custom prompt template ## 
@@ -154,9 +153,8 @@ async def completion(request: Request):
 async def chat_completion(request: Request):
     data = await request.json()
     print_verbose(f"data passed in: {data}")
-    if (user_model is None):
-        raise ValueError("Proxy model needs to be set")
-    data["model"] = user_model
+    if user_model:
+        data["model"] = user_model
     # override with user settings
     if user_temperature: 
         data["temperature"] = user_temperature
@@ -186,7 +184,6 @@ async def chat_completion(request: Request):
     )
     response = litellm.completion(**data)
     if 'stream' in data and data['stream'] == True: # use generate_responses to stream responses
-        print("reaches stream")
         return StreamingResponse(data_generator(response), media_type='text/event-stream')
     print_verbose(f"response: {response}")
     return response

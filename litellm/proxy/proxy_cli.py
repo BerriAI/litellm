@@ -1,9 +1,55 @@
 import click
 import subprocess
-import os
+import os, appdirs
 from dotenv import load_dotenv
 
 load_dotenv()
+from importlib import resources
+import shutil
+
+config_filename = ".env.litellm"
+
+# Using appdirs to determine user-specific config path
+config_dir = appdirs.user_config_dir("litellm")
+user_config_path = os.path.join(config_dir, config_filename)
+
+def load_config():
+    try: 
+        if not os.path.exists(user_config_path):
+            # If user's config doesn't exist, copy the default config from the package
+            here = os.path.abspath(os.path.dirname(__file__))
+            parent_dir = os.path.dirname(here)
+            default_config_path = os.path.join(parent_dir, '.env.template')
+            # Ensure the user-specific directory exists
+            os.makedirs(config_dir, exist_ok=True)
+            # Copying the file using shutil.copy
+            shutil.copy(default_config_path, user_config_path)
+
+        # As the .env file is typically much simpler in structure, we use load_dotenv here directly
+        load_dotenv(dotenv_path=user_config_path)
+    except:
+        pass
+
+def open_config():
+    # Create the .env file if it doesn't exist
+    if not os.path.exists(user_config_path):
+        # If user's env doesn't exist, copy the default env from the package
+        here = os.path.abspath(os.path.dirname(__file__))
+        parent_dir = os.path.dirname(here)
+        default_env_path = os.path.join(parent_dir, '.env.template')
+        # Ensure the user-specific directory exists
+        os.makedirs(config_dir, exist_ok=True)
+        # Copying the file using shutil.copy
+        try:
+            shutil.copy(default_env_path, user_config_path)
+        except Exception as e:
+            print(f"Failed to copy .env.template: {e}")
+
+    # Open the .env file in the default editor 
+    if os.name == 'nt': # For Windows
+        os.startfile(user_config_path)
+    elif os.name == 'posix': # For MacOS, Linux, and anything using Bash
+        subprocess.call(('open', '-t', user_config_path)) 
 
 @click.command()
 @click.option('--port', default=8000, help='Port to bind the server to.')
@@ -16,22 +62,17 @@ load_dotenv()
 @click.option('--telemetry', default=True, type=bool, help='Helps us know if people are using this feature. Turn this off by doing `--telemetry False`') 
 @click.option('--config', is_flag=True, help='Create and open .env file from .env.template')
 @click.option('--test', default=None, help='proxy chat completions url to make a test request to')
-def run_server(port, api_base, model, deploy, debug, temperature, max_tokens, telemetry, config, test):
+@click.option('--local', is_flag=True, default=False, help='for local debugging')
+def run_server(port, api_base, model, deploy, debug, temperature, max_tokens, telemetry, config, test, local):
     if config:
-        if os.path.exists('.env.template'):
-            if not os.path.exists('.env'):
-                with open('.env.template', 'r') as source:
-                    data = source.read()
-                    with open('.env', 'w') as destination:
-                        destination.write(data)
-            
-            click.echo('Opening .env file...')
-            subprocess.call(['open', '.env'])  # replace `open` with `start` on Windows
-        else:
-            click.echo('No .env.template file found.')
+        open_config()
     
-    from .proxy_server import app, initialize, deploy_proxy
-    # from proxy_server import app, initialize, deploy_proxy
+    if local:
+        from proxy_server import app, initialize, deploy_proxy
+        debug = True
+    else:
+        from .proxy_server import app, initialize, deploy_proxy
+
     if deploy == True:
         print(f"\033[32mLiteLLM: Deploying your proxy to api.litellm.ai\033[0m\n")
         print(f"\033[32mLiteLLM: Deploying proxy for model: {model}\033[0m\n")
@@ -57,6 +98,7 @@ def run_server(port, api_base, model, deploy, debug, temperature, max_tokens, te
         click.echo(f'LiteLLM: response from proxy {response}')
         return
     else:
+        load_config()
         initialize(model, api_base, debug, temperature, max_tokens, telemetry)
 
 
