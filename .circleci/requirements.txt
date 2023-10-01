@@ -11,3 +11,4 @@ replicate
 anthropic
 gptcache
 boto3
+appdirs
