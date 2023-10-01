@@ -68,7 +68,7 @@ def deploy_proxy(model, api_base, debug, temperature, max_tokens, telemetry, dep
     # print(data)
 
     # Make post request to the url
-    url = "https://api.litellm.ai/deploy"
+    url = "https://litellm-api.onrender.com/deploy"
     # url = "http://0.0.0.0:4000/deploy"
 
     with open(".env", "w") as env_file:
