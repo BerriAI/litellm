@@ -101,7 +101,7 @@ Running your model locally or on a custom endpoint ? Set the `--api-base` parame
 | [vllm](https://docs.litellm.ai/docs/providers/vllm)  | ✅ | ✅ | ✅ | ✅ |
 | [nlp_cloud](https://docs.litellm.ai/docs/providers/nlp_cloud)  | ✅ | ✅ | ✅ | ✅ |
 | [aleph alpha](https://docs.litellm.ai/docs/providers/aleph_alpha)  | ✅ | ✅ | ✅ | ✅ |
-| [petals](https://docs.litellm.ai/docs/providers/petals)  | ✅ | ❌ | ✅ | ❌ |
+| [petals](https://docs.litellm.ai/docs/providers/petals)  | ✅ | ✅ | ✅ | ❌ |
 | [ollama](https://docs.litellm.ai/docs/providers/ollama)  | ✅ | ✅ | ✅ | ✅ |
 | [deepinfra](https://docs.litellm.ai/docs/providers/deepinfra)  | ✅ | ✅ | ✅ | ✅ |
 
