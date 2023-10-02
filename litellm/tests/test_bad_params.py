@@ -32,6 +32,44 @@ def test_completion_with_empty_model():
         pass
 
 
+def test_completion_function_call_cohere():
+    try: 
+        response = completion(model="command-nightly", messages=messages, function_call="TEST-FUNCTION")
+    except Exception as e: 
+        if "Function calling is not supported by this provider" in str(e): 
+            pass
+        else: 
+            pytest.fail(f'An error occurred {e}')
+
+def test_completion_function_call_openai(): 
+    try: 
+        messages = [{"role": "user", "content": "What is the weather like in Boston?"}]
+        response = completion(model="gpt-3.5-turbo", messages=messages, functions=[
+            {
+            "name": "get_current_weather",
+            "description": "Get the current weather in a given location",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                "location": {
+                    "type": "string",
+                    "description": "The city and state, e.g. San Francisco, CA"
+                },
+                "unit": {
+                    "type": "string",
+                    "enum": ["celsius", "fahrenheit"]
+                }
+                },
+                "required": ["location"]
+            }
+            }
+        ])
+        print(f"response: {response}")
+    except: 
+        pass
+
+# test_completion_function_call_openai() 
+
 def test_completion_with_no_provider():
     # test on empty
     try:
@@ -53,3 +91,4 @@ def test_completion_with_no_provider():
 #     print(f"error occurred: {traceback.format_exc()}")
 #     pass
 # os.environ["OPENAI_API_KEY"] = str(temp_key)  # this passes linting#5
+
