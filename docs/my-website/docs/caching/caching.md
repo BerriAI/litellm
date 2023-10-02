@@ -18,8 +18,16 @@ from litellm.caching import Cache
 litellm.cache = Cache()
 
 # Make completion calls
-response1 = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Tell me a joke."}])
-response2 = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Tell me a joke."}])
+response1 = completion(
+    model="gpt-3.5-turbo", 
+    messages=[{"role": "user", "content": "Tell me a joke."}]
+    caching=True
+)
+response2 = completion(
+    model="gpt-3.5-turbo", 
+    messages=[{"role": "user", "content": "Tell me a joke."}],
+    caching=True
+)
 
 # response1 == response2, response 1 is cached
 ```
@@ -39,8 +47,16 @@ from litellm.caching import Cache
 litellm.cache = Cache(type="redis", host=<host>, port=<port>, password=<password>)
 
 # Make completion calls
-response1 = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Tell me a joke."}])
-response2 = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Tell me a joke."}])
+response1 = completion(
+    model="gpt-3.5-turbo", 
+    messages=[{"role": "user", "content": "Tell me a joke."}],
+    caching=True
+)
+response2 = completion(
+    model="gpt-3.5-turbo", 
+    messages=[{"role": "user", "content": "Tell me a joke."}],
+    caching=True
+)
 
 # response1 == response2, response 1 is cached
 ```
@@ -70,21 +86,6 @@ litellm.cache = cache # set litellm.cache to your cache
 
 ```
 
-### Controlling Caching for each litellm.completion call
-
-`completion()` lets you pass in `caching` (bool) [default False] to control whether to returned cached responses or not
-
-Using the caching flag
-**Ensure you have initialized litellm.cache to your cache object**
-
-```python
-from litellm import completion
-
-response2 = completion(model="gpt-3.5-turbo", messages=messages, temperature=0.1, caching=True)
-
-response3 = completion(model="gpt-3.5-turbo", messages=messages, temperature=0.1, caching=False)
-    
-```
 ### Detecting Cached Responses
 For resposes that were returned as cache hit, the response includes a param `cache` = True 
 
@@ -115,10 +116,18 @@ from litellm.caching import Cache
 litellm.cache = Cache()
 
 # Make completion calls
-response1 = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Tell me a joke."}], stream=True)
+response1 = completion(
+    model="gpt-3.5-turbo", 
+    messages=[{"role": "user", "content": "Tell me a joke."}], 
+    stream=True,
+    caching=True)
 for chunk in response1:
     print(chunk)
-response2 = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Tell me a joke."}], stream=True)
+response2 = completion(
+    model="gpt-3.5-turbo", 
+    messages=[{"role": "user", "content": "Tell me a joke."}], 
+    stream=True,
+    caching=True)
 for chunk in response2:
     print(chunk)
 ```
@@ -134,12 +143,12 @@ from litellm.caching import Cache
 litellm.cache = Cache()
 
 start_time = time.time()
-embedding1 = embedding(model="text-embedding-ada-002", input=["hello from litellm"*5])
+embedding1 = embedding(model="text-embedding-ada-002", input=["hello from litellm"*5], caching=True)
 end_time = time.time()
 print(f"Embedding 1 response time: {end_time - start_time} seconds")
 
 start_time = time.time()
-embedding2 = embedding(model="text-embedding-ada-002", input=["hello from litellm"*5])
+embedding2 = embedding(model="text-embedding-ada-002", input=["hello from litellm"*5], caching=True)
 end_time = time.time()
 print(f"Embedding 2 response time: {end_time - start_time} seconds")
 ```
