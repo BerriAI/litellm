@@ -1,4 +1,4 @@
-import json
+import json, copy
 from enum import Enum
 import time
 from typing import Callable
@@ -85,7 +85,6 @@ def completion(
         encoding,
         logging_obj,
         optional_params=None,
-        stream=False,
         litellm_params=None,
         logger_fn=None,
 ):
@@ -99,10 +98,12 @@ def completion(
     model = model
     provider = model.split(".")[0]
     prompt = convert_messages_to_prompt(messages, provider)
+    inference_params = copy.deepcopy(optional_params)
+    stream = inference_params.pop("stream", False)
     if provider == "anthropic":
         data = json.dumps({
             "prompt": prompt,
-            **optional_params
+            **inference_params
         })
     elif provider == "ai21":
         data = json.dumps({
@@ -112,7 +113,7 @@ def completion(
     else:  # amazon titan
         data = json.dumps({
             "inputText": prompt,
-            "textGenerationConfig": optional_params,
+            "textGenerationConfig": inference_params,
         })
         ## LOGGING
     logging_obj.pre_call(
