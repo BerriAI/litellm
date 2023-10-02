@@ -53,7 +53,7 @@ def handle_prediction_response(prediction_url, api_token, print_verbose):
     logs = ""
     while True and (status not in ["succeeded", "failed", "canceled"]):
         print_verbose("making request")
-        time.sleep(0.0001)
+        time.sleep(0.5)
         response = requests.get(prediction_url, headers=headers)
         if response.status_code == 200:
             response_data = response.json()
@@ -77,7 +77,7 @@ def handle_prediction_response_streaming(prediction_url, api_token, print_verbos
     }
     status = ""
     while True and (status not in ["succeeded", "failed", "canceled"]):
-        time.sleep(0.0001) # prevent being rate limited by replicate
+        time.sleep(0.5) # prevent being rate limited by replicate
         response = requests.get(prediction_url, headers=headers)
         if response.status_code == 200:
             response_data = response.json()
