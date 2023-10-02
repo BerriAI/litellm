@@ -19,7 +19,8 @@ class HuggingfaceError(Exception):
 
 # contains any default values we need to pass to the provider
 HuggingfaceConfig = { 
-    "return_full_text": False # override by setting - completion(..,return_full_text=True)
+    "return_full_text": False, # override by setting - completion(..,return_full_text=True)
+    "details": True # needed for getting logprobs etc. for tgi models. override by setting - completion(..., details=False)
 }
 
 def validate_environment(api_key):
