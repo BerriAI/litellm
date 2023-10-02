@@ -44,7 +44,6 @@ def convert_messages_to_prompt(messages, provider):
                     prompt += (
                         f"{AnthropicConstants.HUMAN_PROMPT.value}<admin>{message['content']}</admin>"
                     )
-
                 else:
                     prompt += (
                         f"{AnthropicConstants.AI_PROMPT.value}{message['content']}"

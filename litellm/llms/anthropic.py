@@ -52,6 +52,10 @@ def completion(
                 prompt += (
                     f"{AnthropicConstants.HUMAN_PROMPT.value}{message['content']}"
                 )
+            elif message["role"] == "system":
+                prompt += (
+                    f"{AnthropicConstants.HUMAN_PROMPT.value}<admin>{message['content']}</admin>"
+                )
             else:
                 prompt += (
                     f"{AnthropicConstants.AI_PROMPT.value}{message['content']}"
