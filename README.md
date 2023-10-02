@@ -82,7 +82,7 @@ litellm --model <model_name>
 Running your model locally or on a custom endpoint ? Set the `--api-base` parameter [see how](https://docs.litellm.ai/docs/proxy_server)
 
 ## Supported Provider ([Docs](https://docs.litellm.ai/docs/providers))
-| Provider      | Completion | Streaming  | Async Completion  | Async Streaming  |
+| Provider      | [Completion](https://docs.litellm.ai/docs/#basic-usage) | [Streaming](https://docs.litellm.ai/docs/completion/stream#streaming-responses)  | [Async Completion](https://docs.litellm.ai/docs/completion/stream#async-completion)  | [Async Streaming](https://docs.litellm.ai/docs/completion/stream#async-streaming)  |
 | ------------- | ------------- | ------------- | ------------- | ------------- |
 | [openai](https://docs.litellm.ai/docs/providers/openai)  | ✅ | ✅ | ✅ | ✅ |
 | [cohere](https://docs.litellm.ai/docs/providers/cohere)  | ✅ | ✅ | ✅ | ✅ |
