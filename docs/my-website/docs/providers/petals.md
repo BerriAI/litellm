@@ -25,6 +25,20 @@ response = completion(
 print(response)
 ```
 
+## Usage with Streaming
+
+```python
+response = completion(
+    model="petals/petals-team/StableBeluga2", 
+    messages=[{ "content": "Hello, how are you?","role": "user"}],
+    stream=True
+)
+
+print(response)
+for chunk in response:
+  print(chunk)
+```
+
 ### Model Details
 
 | Model Name       | Function Call                              |
