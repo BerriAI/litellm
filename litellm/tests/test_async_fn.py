@@ -19,10 +19,8 @@ async def test_get_response():
         response = await acompletion(model="gpt-3.5-turbo", messages=messages)
     except Exception as e:
         pass
-    return response
 
-
-# response = asyncio.run(test_get_response())
+response = asyncio.run(test_get_response())
 # print(response)
 
 @pytest.mark.asyncio
