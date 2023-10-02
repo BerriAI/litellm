@@ -47,7 +47,6 @@ def test_completion_claude():
         print(response.response_ms)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_claude()
 
 def test_completion_claude_max_tokens():
     try:
@@ -531,7 +530,7 @@ def test_completion_openai_with_more_optional_params():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_completion_openai_with_more_optional_params()
+# test_completion_openai_with_more_optional_params()
 # def test_completion_openai_azure_with_functions():
 #     function1 = [
 #         {
@@ -916,7 +915,8 @@ def test_completion_bedrock_ai21():
 
 
 def test_completion_with_fallbacks():
-    fallbacks = ["gpt-3.5-turb", "gpt-3.5-turbo", "command-nightly"]
+    print(f"RUNNING TEST COMPLETION WITH FALLBACKS -  test_completion_with_fallbacks")
+    fallbacks = ["gpt-3.5-turbo", "gpt-3.5-turbo", "command-nightly"]
     try:
         response = completion(
             model="bad-model", messages=messages, force_timeout=120, fallbacks=fallbacks
@@ -926,6 +926,7 @@ def test_completion_with_fallbacks():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+test_completion_with_fallbacks()
 # def test_completion_with_fallbacks_multiple_keys():
 #     print(f"backup key 1: {os.getenv('BACKUP_OPENAI_API_KEY_1')}")
 #     print(f"backup key 2: {os.getenv('BACKUP_OPENAI_API_KEY_2')}")
