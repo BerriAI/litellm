@@ -1003,7 +1003,6 @@ def completion(
                 logger_fn=logger_fn,
                 encoding=encoding,
                 logging_obj=logging,
-                stream=stream,
             )
 
 
