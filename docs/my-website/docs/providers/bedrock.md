@@ -1,10 +1,10 @@
 # AWS Bedrock
-
-## API KEYS
+Anthropic, Amazon Titan, A121 LLMs are Supported on Bedrock
+## Required Environment Variables
 ```python
 os.environ["AWS_ACCESS_KEY_ID"] = ""
 os.environ["AWS_SECRET_ACCESS_KEY"] = ""
-os.environ["AWS_REGION_NAME"] = ""
+os.environ["AWS_REGION_NAME"] = "" # us-east-1, us-east-2, us-west-1, us-west-2
 ```
 
 ## Usage
