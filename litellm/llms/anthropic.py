@@ -18,6 +18,13 @@ class AnthropicError(Exception):
             self.message
         )  # Call the base class constructor with the parameters it needs
 
+
+# contains any default values we need to pass to the provider
+AnthropicConfig = { 
+    "max_tokens_to_sample": 256 # override by setting - completion(..,max_tokens=300)
+}
+
+
 # makes headers for API call
 def validate_environment(api_key):
     if api_key is None:
@@ -63,13 +70,16 @@ def completion(
         else:
             prompt += f"{AnthropicConstants.HUMAN_PROMPT.value}{message['content']}"
     prompt += f"{AnthropicConstants.AI_PROMPT.value}"
-    max_tokens_to_sample = optional_params.get("max_tokens_to_sample", 256) # required anthropic param, default to 256 if user does not provide an input
-    if max_tokens_to_sample != 256: # not default - print for testing 
+
+    ## Load Config
+    for k, v in AnthropicConfig.items(): 
+        if k not in optional_params: 
+            optional_params[k] = v
+    if optional_params["max_tokens_to_sample"] != 256: # not default - print for testing 
         print_verbose(f"LiteLLM.Anthropic: Max Tokens Set")
     data = {
         "model": model,
         "prompt": prompt,
-        "max_tokens_to_sample": max_tokens_to_sample,
         **optional_params,
     }
 

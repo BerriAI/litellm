@@ -47,7 +47,7 @@ def test_completion_claude():
         print(response.response_ms)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_completion_claude()
+test_completion_claude()
 
 def test_completion_claude_max_tokens():
     try:

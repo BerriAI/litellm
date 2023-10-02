@@ -1,6 +1,7 @@
 from litellm import completion, stream_chunk_builder
 import litellm
-import os
+import os, dotenv
+dotenv.load_dotenv()
 
 user_message = "What is the current weather in Boston?"
 messages = [{"content": user_message, "role": "user"}]

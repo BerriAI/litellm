@@ -14,6 +14,10 @@ class PetalsError(Exception):
             self.message
         )  # Call the base class constructor with the parameters it needs
 
+PetalsConfig = {
+    "max_new_tokens": 256
+}
+
 def completion(
     model: str,
     messages: list,
@@ -54,6 +58,10 @@ def completion(
         else:
             prompt += f"{message['content']}"
     
+    ## Load Config
+    for k, v in PetalsConfig.items(): 
+        if k not in optional_params: 
+            optional_params[k] = v
 
     ## LOGGING
     logging_obj.pre_call(
