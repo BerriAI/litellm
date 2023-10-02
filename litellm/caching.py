@@ -42,6 +42,27 @@ class RedisCache():
             cached_response['cache'] = True # set cache-hit flag to True
             return cached_response
 
+class HostedCache():
+    def set_cache(self, key, value):
+        # make a post request to api.litellm.ai/set_cache
+        import requests
+        url = f"https://api.litellm.ai/set_cache?key={key}&value={str(value)}"
+        requests.request("POST", url) # post request to set this in the hosted litellm cache
+
+    def get_cache(self, key):
+        import requests
+        url = f"https://api.litellm.ai/get_cache?key={key}"
+        cached_response = requests.request("GET", url)
+        cached_response = cached_response.text
+        if cached_response == "NONE": # api.litellm.ai returns "NONE" if it's not a cache hit
+            return None        
+        if cached_response!=None:
+            try:
+                cached_response = json.loads(cached_response)  # Convert string to dictionary
+                cached_response['cache'] = True # set cache-hit flag to True
+                return cached_response
+            except:
+                return cached_response
 
 class InMemoryCache():
     def __init__(self):
@@ -62,11 +83,19 @@ class InMemoryCache():
         return None
 
 class Cache():
-    def __init__(self, type="local", host="", port="", password=""):
+    def __init__(
+            self, 
+            type = "local",
+            host = None,
+            port = None,
+            password = None
+        ):
         if type == "redis":
             self.cache = RedisCache(host, port, password)
         if type == "local":
             self.cache = InMemoryCache()
+        if type == "hosted":
+            self.cache = HostedCache()
         if "cache" not in litellm.input_callback:
             litellm.input_callback.append("cache")
         if "cache" not in litellm.success_callback:
@@ -108,7 +137,6 @@ class Cache():
 
     def add_cache(self, result, *args, **kwargs):
         try:
-            
             cache_key = self.get_cache_key(*args, **kwargs)
             # print("adding to cache", cache_key, result)
             # print(cache_key)
