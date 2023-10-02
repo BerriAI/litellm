@@ -105,7 +105,7 @@ async def acompletion(*args, **kwargs):
     else:
         return response
 
-def mock_completion(model: str, messages: List, stream: bool = False, mock_response: str = "This is a mock request", **kwargs):
+def mock_completion(model: str, messages: List, stream: Optional[bool] = False, mock_response: str = "This is a mock request", **kwargs):
     """
     Generate a mock completion response for testing or debugging purposes.
 
