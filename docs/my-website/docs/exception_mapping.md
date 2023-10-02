@@ -55,6 +55,7 @@ Base case - we return the original exception.
 | AI21          | ✅                          | ✅                   | ✅                   | ✅             |                         |
 | VertexAI          |                           |                   |✅                   |             |                         |
 | Bedrock          |                           |                   |✅                   |             |                         |
+| Sagemaker          |                           |                   |✅                   |             |                         |
 | TogetherAI    | ✅                          | ✅                   | ✅                   | ✅             |                         |
 | AlephAlpha    | ✅                          | ✅                   | ✅                   | ✅             | ✅                        |
 
