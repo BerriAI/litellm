@@ -13,7 +13,7 @@ Base case we return APIError
 
 All our exceptions inherit from OpenAI's exception types, so any error-handling you have for that, should work out of the box with LiteLLM. 
 
-For all 4 cases, the exception returned inherits from the original OpenAI Exception but contains 3 additional attributes: 
+For all cases, the exception returned inherits from the original OpenAI Exception but contains 3 additional attributes: 
 * status_code - the http status code of the exception
 * message - the error message
 * llm_provider - the provider raising the exception
@@ -53,6 +53,8 @@ Base case - we return the original exception.
 | Huggingface   | ✅                          | ✅                   | ✅                   | ✅             |                         |
 | Openrouter    | ✅                          | ✅                   | ✅                    | ✅             |                         |
 | AI21          | ✅                          | ✅                   | ✅                   | ✅             |                         |
+| VertexAI          |                           |                   |✅                   |             |                         |
+| Bedrock          |                           |                   |✅                   |             |                         |
 | TogetherAI    | ✅                          | ✅                   | ✅                   | ✅             |                         |
 | AlephAlpha    | ✅                          | ✅                   | ✅                   | ✅             | ✅                        |
 
@@ -61,4 +63,4 @@ Base case - we return the original exception.
 
 The `ContextWindowExceededError` is a sub-class of `InvalidRequestError`. It was introduced to provide more granularity for exception-handling scenarios. Please refer to [this issue to learn more](https://github.com/BerriAI/litellm/issues/228).
 
-
+Contributions to improve exception mapping are [welcome](https://github.com/BerriAI/litellm#contributing)
