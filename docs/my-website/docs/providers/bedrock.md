@@ -7,10 +7,6 @@ LiteLLM requires `boto3` to be installed on your system for Bedrock requests
 pip install boto3>=1.28.57
 ```
 
-<a target="_blank" href="https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/LiteLLM_Bedrock.ipynb">
-  <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
-</a>
-
 ## Required Environment Variables
 ```python
 os.environ["AWS_ACCESS_KEY_ID"] = ""  # Access key
@@ -19,6 +15,11 @@ os.environ["AWS_REGION_NAME"] = "" # us-east-1, us-east-2, us-west-1, us-west-2
 ```
 
 ## Usage
+
+<a target="_blank" href="https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/LiteLLM_Bedrock.ipynb">
+  <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
+</a>
+
 ```python
 import os 
 from litellm import completion
