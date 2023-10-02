@@ -977,7 +977,6 @@ def completion(
                 encoding=encoding,
                 logging_obj=logging
             )
-
             if "stream" in optional_params and optional_params["stream"]==True: ## [BETA]
                 # sagemaker does not support streaming as of now so we're faking streaming:
                 # https://discuss.huggingface.co/t/streaming-output-text-when-deploying-on-sagemaker/39611

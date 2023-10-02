@@ -926,7 +926,7 @@ def test_completion_with_fallbacks():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_completion_with_fallbacks()
+# test_completion_with_fallbacks()
 # def test_completion_with_fallbacks_multiple_keys():
 #     print(f"backup key 1: {os.getenv('BACKUP_OPENAI_API_KEY_1')}")
 #     print(f"backup key 2: {os.getenv('BACKUP_OPENAI_API_KEY_2')}")
