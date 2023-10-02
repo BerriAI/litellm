@@ -1,9 +1,16 @@
 # AWS Bedrock
 Anthropic, Amazon Titan, A121 LLMs are Supported on Bedrock
+
+## Pre-Requisites
+LiteLLM requires `boto3` to be installed on your system for Bedrock requests
+```shell
+pip install boto3>=1.28.57
+```
+
 ## Required Environment Variables
 ```python
-os.environ["AWS_ACCESS_KEY_ID"] = ""
-os.environ["AWS_SECRET_ACCESS_KEY"] = ""
+os.environ["AWS_ACCESS_KEY_ID"] = ""  # Access key
+os.environ["AWS_SECRET_ACCESS_KEY"] = "" # Secret access key
 os.environ["AWS_REGION_NAME"] = "" # us-east-1, us-east-2, us-west-1, us-west-2
 ```
 
