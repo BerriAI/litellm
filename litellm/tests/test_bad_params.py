@@ -31,6 +31,29 @@ def test_completion_with_empty_model():
         print(f"error occurred: {e}")
         pass
 
+def test_completion_return_full_text_hf():
+    try: 
+        response = completion(model="dolphin", messages=messages, remove_input=True)
+        # check if input in response 
+        assert "Hello, how are you?" not in response["choices"][0]["message"]["content"]
+    except Exception as e: 
+        if "Function calling is not supported by this provider" in str(e): 
+            pass
+        else: 
+            pytest.fail(f'An error occurred {e}')
+
+# test_completion_return_full_text_hf() 
+
+def test_completion_invalid_param_cohere():
+    try: 
+        response = completion(model="command-nightly", messages=messages, top_p=1)
+    except Exception as e: 
+        if "Function calling is not supported by this provider" in str(e): 
+            pass
+        else: 
+            pytest.fail(f'An error occurred {e}')
+
+# test_completion_invalid_param_cohere()
 
 def test_completion_function_call_cohere():
     try: 

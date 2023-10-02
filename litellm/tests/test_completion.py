@@ -888,8 +888,6 @@ def test_completion_bedrock_ai21():
 # test_completion_custom_api_base()
 
 # def test_vertex_ai():
-#     litellm.vertex_project = "hardy-device-386718"
-#     litellm.vertex_location = "us-central1"
 #     test_models = litellm.vertex_chat_models + litellm.vertex_code_chat_models + litellm.vertex_text_models + litellm.vertex_code_text_models
 #     for model in test_models:
 #         try:
