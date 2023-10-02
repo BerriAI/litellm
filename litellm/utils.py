@@ -950,8 +950,40 @@ def get_optional_params(  # use the openai defaults
     return_full_text=False,
     task=None,
 ):
+    # retrieve all parameters passed to the function
+    passed_params = locals()
+    default_params = {
+        "functions":[],
+        "function_call":"",
+        "temperature":1,
+        "top_p":1,
+        "n":1,
+        "stream":False,
+        "stop":None,
+        "max_tokens":float("inf"),
+        "presence_penalty":0,
+        "frequency_penalty":0,
+        "logit_bias":{},
+        "num_beams":1,
+        "remove_input":False, # for nlp_cloud
+        "user":"",
+        "deployment_id":None,
+        "model":None,
+        "custom_llm_provider":"",
+        "top_k":40,
+        "return_full_text":False,
+        "task":None,
+    }
+    # filter out those parameters that were passed with non-default values
+    non_default_params = {k: v for k, v in passed_params.items() if v != default_params[k]}
+    
+    ## raise exception if function calling passed in for a provider that doesn't support it
+    if "functions" in non_default_params or "function_call" in non_default_params:
+        if custom_llm_provider != "openai" and custom_llm_provider != "text-completion-openai" and custom_llm_provider != "azure": 
+            raise ValueError("LiteLLM.Exception: Function calling is not supported by this provider")
+
     optional_params = {}
-    if model in litellm.anthropic_models:
+    if custom_llm_provider == "anthropic":
         # handle anthropic params
         if stream:
             optional_params["stream"] = stream
@@ -964,7 +996,7 @@ def get_optional_params(  # use the openai defaults
         if max_tokens != float("inf"):
             optional_params["max_tokens_to_sample"] = max_tokens
         return optional_params
-    elif model in litellm.cohere_models:
+    elif custom_llm_provider == "cohere":
         # handle cohere params
         if stream:
             optional_params["stream"] = stream
