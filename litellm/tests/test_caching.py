@@ -126,12 +126,13 @@ def test_embedding_caching():
     print(f"Embedding 2 response time: {end_time - start_time} seconds")
     
     litellm.cache = None
+    assert end_time - start_time <= 0.1 # ensure 2nd response comes in in under 0.1 s 
     if embedding2['data'][0]['embedding'] != embedding1['data'][0]['embedding']:
         print(f"embedding1: {embedding1}")
         print(f"embedding2: {embedding2}")
         pytest.fail("Error occurred: Embedding caching failed")
 
-# test_embedding_caching()
+test_embedding_caching()
 
 
 # test caching with streaming
