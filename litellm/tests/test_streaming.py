@@ -709,7 +709,7 @@ def test_completion_sagemaker_stream():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-# test_completion_sagemaker_stream()
+test_completion_sagemaker_stream()
 
 # test on openai completion call
 def test_openai_text_completion_call():

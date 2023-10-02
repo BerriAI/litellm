@@ -977,9 +977,9 @@ def get_optional_params(  # use the openai defaults
             raise ValueError("LiteLLM.Exception: Function calling is not supported by this provider")
 
     def _check_valid_arg(supported_params): 
-        print(f"checking params for {model}")
-        print(f"params passed in {passed_params}")
-        print(f"non-default params passed in {non_default_params}")
+        print_verbose(f"checking params for {model}")
+        print_verbose(f"params passed in {passed_params}")
+        print_verbose(f"non-default params passed in {non_default_params}")
         unsupported_params = [k for k in non_default_params.keys() if k not in supported_params]
         if unsupported_params:
             raise ValueError("LiteLLM.Exception: Unsupported parameters passed: {}".format(', '.join(unsupported_params)))
@@ -1225,7 +1225,6 @@ def get_optional_params(  # use the openai defaults
     for k in passed_params.keys(): 
         if k not in default_params.keys(): 
             optional_params[k] = passed_params[k]
-    print(f"final params going to model: {optional_params}")
     return optional_params
 
 def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None):
@@ -3441,14 +3440,15 @@ def completion_with_split_tests(models={}, messages=[], use_client=False, overri
 
 def completion_with_fallbacks(**kwargs):
     print(f"kwargs inside completion_with_fallbacks: {kwargs}")
-    nested_kwargs = kwargs.pop("kwargs")
+    nested_kwargs = kwargs.pop("kwargs", {})
     response = None
     rate_limited_models = set()
     model_expiration_times = {}
     start_time = time.time()
     original_model = kwargs["model"]
-    fallbacks = [kwargs["model"]] + nested_kwargs["fallbacks"]
-    del nested_kwargs["fallbacks"]  # remove fallbacks so it's not recursive
+    fallbacks = [kwargs["model"]] + nested_kwargs.get("fallbacks", [])
+    if "fallbacks" in nested_kwargs:
+        del nested_kwargs["fallbacks"]  # remove fallbacks so it's not recursive
 
     while response == None and time.time() - start_time < 45:
         for model in fallbacks:

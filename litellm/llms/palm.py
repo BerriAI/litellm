@@ -56,48 +56,44 @@ def completion(
     ## COMPLETION CALL
     response = palm.chat(messages=prompt)
 
-
-    if "stream" in optional_params and optional_params["stream"] == True:
-        return response.iter_lines()
-    else:
-        ## LOGGING
-        logging_obj.post_call(
-                input=prompt,
-                api_key="",
-                original_response=response,
-                additional_args={"complete_input_dict": {}},
-            )
-        print_verbose(f"raw model_response: {response}")
-        ## RESPONSE OBJECT
-        completion_response = response.last
-
-        if "error" in completion_response:
-            raise PalmError(
-                message=completion_response["error"],
-                status_code=response.status_code,
-            )
-        else:
-            try:
-                model_response["choices"][0]["message"]["content"] = completion_response
-            except:
-                raise PalmError(message=json.dumps(completion_response), status_code=response.status_code)
-
-        ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here. 
-        prompt_tokens = len(
-            encoding.encode(prompt)
-        ) 
-        completion_tokens = len(
-            encoding.encode(model_response["choices"][0]["message"]["content"])
+    ## LOGGING
+    logging_obj.post_call(
+            input=prompt,
+            api_key="",
+            original_response=response,
+            additional_args={"complete_input_dict": {}},
         )
+    print_verbose(f"raw model_response: {response}")
+    ## RESPONSE OBJECT
+    completion_response = response.last
 
-        model_response["created"] = time.time()
-        model_response["model"] = "palm/" + model
-        model_response["usage"] = {
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-            "total_tokens": prompt_tokens + completion_tokens,
-        }
-        return model_response
+    if "error" in completion_response:
+        raise PalmError(
+            message=completion_response["error"],
+            status_code=response.status_code,
+        )
+    else:
+        try:
+            model_response["choices"][0]["message"]["content"] = completion_response
+        except:
+            raise PalmError(message=json.dumps(completion_response), status_code=response.status_code)
+
+    ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here. 
+    prompt_tokens = len(
+        encoding.encode(prompt)
+    ) 
+    completion_tokens = len(
+        encoding.encode(model_response["choices"][0]["message"]["content"])
+    )
+
+    model_response["created"] = time.time()
+    model_response["model"] = "palm/" + model
+    model_response["usage"] = {
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": prompt_tokens + completion_tokens,
+    }
+    return model_response
 
 def embedding():
     # logic for parsing in - calling - parsing out model embedding calls
