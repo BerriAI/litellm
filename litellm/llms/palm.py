@@ -1,7 +1,6 @@
 import os
 import json
 from enum import Enum
-import requests
 import time
 from typing import Callable
 from litellm.utils import ModelResponse, get_secret
