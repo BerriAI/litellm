@@ -1209,7 +1209,7 @@ def get_optional_params(  # use the openai defaults
         if top_p:
             optional_params["top_p"] = top_p
     else:  # assume passing in params for openai/azure openai
-        supported_params = ["functions", "function_call", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "logit_bias", "user", "deployment_id"]
+        supported_params = ["functions", "function_call", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "deployment_id"]
         _check_valid_arg(supported_params=supported_params)
         optional_params = non_default_params
     # if user passed in non-default kwargs for specific providers/models, pass them along 

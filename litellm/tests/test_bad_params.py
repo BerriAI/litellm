@@ -48,7 +48,7 @@ def test_completion_invalid_param_cohere():
     try: 
         response = completion(model="command-nightly", messages=messages, top_p=1)
     except Exception as e: 
-        if "Function calling is not supported by this provider" in str(e): 
+        if "Unsupported parameters passed: top_p" in str(e): 
             pass
         else: 
             pytest.fail(f'An error occurred {e}')

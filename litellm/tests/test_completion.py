@@ -531,7 +531,7 @@ def test_completion_openai_with_more_optional_params():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-
+test_completion_openai_with_more_optional_params()
 # def test_completion_openai_azure_with_functions():
 #     function1 = [
 #         {
