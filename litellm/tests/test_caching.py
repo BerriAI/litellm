@@ -287,4 +287,20 @@ def test_custom_redis_cache_with_key():
 
 # test_custom_redis_cache_with_key()
 
+def test_hosted_cache():
+    litellm.cache = Cache(type="hosted") # use api.litellm.ai for caching
+
+    messages = [{"role": "user", "content": "what is litellm arr today?"}]
+    response1 = completion(model="gpt-3.5-turbo", messages=messages, caching=True)
+    print("response1", response1)
+
+    response2 = completion(model="gpt-3.5-turbo", messages=messages, caching=True)
+    print("response2", response2)
+
+    if response1['choices'][0]['message']['content'] != response2['choices'][0]['message']['content']: # 1 and 2 should be the same
+        print(f"response1: {response1}")
+        print(f"response2: {response2}")
+        pytest.fail(f"Hosted cache: Response2 is not cached and the same as response 1")
+
+# test_hosted_cache()
 
