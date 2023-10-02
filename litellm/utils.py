@@ -931,59 +931,62 @@ def get_optional_params(  # use the openai defaults
     # 12 optional params
     functions=[],
     function_call="",
-    temperature=1,
-    top_p=1,
-    n=1,
+    temperature=None,
+    top_p=None,
+    n=None,
     stream=False,
     stop=None,
-    max_tokens=float("inf"),
-    presence_penalty=0,
+    max_tokens=None,
+    presence_penalty=None,
     frequency_penalty=0,
     logit_bias={},
-    num_beams=1,
-    remove_input=False, # for nlp_cloud
     user="",
     deployment_id=None,
     model=None,
     custom_llm_provider="",
-    top_k=40,
-    return_full_text=False,
-    task=None,
+    **kwargs
 ):
     # retrieve all parameters passed to the function
     passed_params = locals()
+    special_params = passed_params.pop("kwargs")
+    for k, v in special_params.items():
+        passed_params[k] = v
     default_params = {
         "functions":[],
         "function_call":"",
-        "temperature":1,
-        "top_p":1,
-        "n":1,
-        "stream":False,
+        "temperature":None,
+        "top_p":None,
+        "n":None,
+        "stream":None,
         "stop":None,
-        "max_tokens":float("inf"),
-        "presence_penalty":0,
-        "frequency_penalty":0,
+        "max_tokens":None,
+        "presence_penalty":None,
+        "frequency_penalty":None,
         "logit_bias":{},
-        "num_beams":1,
-        "remove_input":False, # for nlp_cloud
         "user":"",
         "deployment_id":None,
         "model":None,
         "custom_llm_provider":"",
-        "top_k":40,
-        "return_full_text":False,
-        "task":None,
     }
     # filter out those parameters that were passed with non-default values
-    non_default_params = {k: v for k, v in passed_params.items() if v != default_params[k]}
+    non_default_params = {k: v for k, v in passed_params.items() if (k != "model" and k != "custom_llm_provider" and k in default_params and v != default_params[k])}
     
     ## raise exception if function calling passed in for a provider that doesn't support it
     if "functions" in non_default_params or "function_call" in non_default_params:
         if custom_llm_provider != "openai" and custom_llm_provider != "text-completion-openai" and custom_llm_provider != "azure": 
             raise ValueError("LiteLLM.Exception: Function calling is not supported by this provider")
 
+    def _check_valid_arg(supported_params): 
+        unsupported_params = [k for k in non_default_params.keys() if k not in supported_params]
+        if unsupported_params:
+            raise ValueError("LiteLLM.Exception: Unsupported parameters passed: {}".format(', '.join(unsupported_params)))
+
+    ## raise exception if provider doesn't support passed in param 
     optional_params = {}
     if custom_llm_provider == "anthropic":
+        ## check if unsupported param passed in 
+        supported_params = ["stream", "stop", "temperature", "top_p", "max_tokens"]
+        _check_valid_arg(supported_params=supported_params)
         # handle anthropic params
         if stream:
             optional_params["stream"] = stream
@@ -997,6 +1000,9 @@ def get_optional_params(  # use the openai defaults
             optional_params["max_tokens_to_sample"] = max_tokens
         return optional_params
     elif custom_llm_provider == "cohere":
+        ## check if unsupported param passed in 
+        supported_params = ["stream", "temperature", "max_tokens", "logit_bias"]
+        _check_valid_arg(supported_params=supported_params)
         # handle cohere params
         if stream:
             optional_params["stream"] = stream
@@ -1008,6 +1014,10 @@ def get_optional_params(  # use the openai defaults
             optional_params["logit_bias"] = logit_bias
         return optional_params
     elif custom_llm_provider == "replicate":
+        ## check if unsupported param passed in 
+        supported_params = ["stream", "temperature", "max_tokens", "top_p", "stop"]
+        _check_valid_arg(supported_params=supported_params)
+        
         if stream:
             optional_params["stream"] = stream
             return optional_params
@@ -1020,11 +1030,13 @@ def get_optional_params(  # use the openai defaults
             optional_params["temperature"] = temperature
         if top_p != 1:
             optional_params["top_p"] = top_p
-        if top_k != 40:
-            optional_params["top_k"] = top_k
         if stop != None:
             optional_params["stop_sequences"] = stop
     elif custom_llm_provider == "huggingface":
+        ## check if unsupported param passed in 
+        supported_params = ["stream", "temperature", "max_tokens", "top_p", "stop", "return_full_text", "details"]
+        _check_valid_arg(supported_params=supported_params)
+        
         if temperature != 1:
             optional_params["temperature"] = temperature
         if top_p != 1:
@@ -1042,16 +1054,17 @@ def get_optional_params(  # use the openai defaults
             optional_params["repetition_penalty"] = presence_penalty
         optional_params["return_full_text"] = return_full_text
         optional_params["details"] = True
-        optional_params["task"] = task
     elif custom_llm_provider == "together_ai":
+        ## check if unsupported param passed in 
+        supported_params = ["stream", "temperature", "max_tokens", "top_p", "stop", "frequency_penalty"]
+        _check_valid_arg(supported_params=supported_params)
+        
         if stream:
             optional_params["stream_tokens"] = stream
         if temperature != 1:
             optional_params["temperature"] = temperature
         if top_p != 1:
             optional_params["top_p"] = top_p
-        if top_k != 40:
-            optional_params["top_k"] = top_k
         if max_tokens != float("inf"):
             optional_params["max_tokens"] = max_tokens
         if frequency_penalty != 0:
@@ -1059,41 +1072,29 @@ def get_optional_params(  # use the openai defaults
         if stop != None:
             optional_params["stop"] = stop #TG AI expects a list, example ["\n\n\n\n","&lt;|endoftext|&gt;"]
     elif custom_llm_provider == "palm":
+        ## check if unsupported param passed in 
+        supported_params = ["temperature", "top_p"]
+        _check_valid_arg(supported_params=supported_params)
+        
         if temperature != 1:
             optional_params["temperature"] = temperature
         if top_p != 1:
             optional_params["top_p"] = top_p
     elif (
-        model in litellm.vertex_chat_models or model in litellm.vertex_code_chat_models
-    ):  # chat-bison has diff args from chat-bison@001, ty Google :) 
+        custom_llm_provider == "vertex_ai"
+    ): 
+        ## check if unsupported param passed in 
+        supported_params = ["temperature", "top_p", "max_tokens", "stream"]
+        _check_valid_arg(supported_params=supported_params)
+        
         if temperature != 1:
             optional_params["temperature"] = temperature
         if top_p != 1:
             optional_params["top_p"] = top_p
+        if stream:
+            optional_params["stream"] = stream
         if max_tokens != float("inf"):
             optional_params["max_output_tokens"] = max_tokens
-    elif model in litellm.vertex_text_models:
-        # required params for all text vertex calls
-        # temperature=0.2, top_p=0.1, top_k=20
-        # always set temperature, top_p, top_k else, text bison fails
-        optional_params["temperature"] = temperature
-        optional_params["top_p"] = top_p
-        optional_params["top_k"] = top_k
-        if max_tokens != float("inf"):
-            optional_params["max_output_tokens"] = max_tokens
-    elif model in model in litellm.vertex_code_text_models:
-        optional_params["temperature"] = temperature
-        if max_tokens != float("inf"):
-            optional_params["max_output_tokens"] = max_tokens
-    elif custom_llm_provider == "baseten":
-        optional_params["temperature"] = temperature
-        optional_params["stream"] = stream
-        if top_p != 1:
-            optional_params["top_p"] = top_p
-        optional_params["top_k"] = top_k
-        optional_params["num_beams"] = num_beams
-        if max_tokens != float("inf"):
-            optional_params["max_new_tokens"] = max_tokens
     elif custom_llm_provider == "sagemaker":
         if "llama-2" in model:
             # llama-2 models on sagemaker support the following args
@@ -1103,14 +1104,24 @@ def get_optional_params(  # use the openai defaults
             top_p: In each step of text generation, sample from the smallest possible set of words with cumulative probability top_p. If specified, it must be a float between 0 and 1.
             return_full_text: If True, input text will be part of the output generated text. If specified, it must be boolean. The default value for it is False.
             """
+            ## check if unsupported param passed in 
+            supported_params = ["temperature", "max_tokens"]
+            _check_valid_arg(supported_params=supported_params)
+            
             if max_tokens != float("inf"):
                 optional_params["max_new_tokens"] = max_tokens
             if temperature != 1:
                 optional_params["temperature"] = temperature
             if top_p != 1:
                 optional_params["top_p"] = top_p
+        else:
+            ## check if unsupported param passed in 
+            supported_params = []
+            _check_valid_arg(supported_params=supported_params)
     elif custom_llm_provider == "bedrock":
         if "ai21" in model:
+            supported_params = ["max_tokens", "temperature", "stop", "top_p"]
+            _check_valid_arg(supported_params=supported_params)
             # params "maxTokens":200,"temperature":0,"topP":250,"stop_sequences":[],
             # https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=j2-ultra
             if max_tokens != float("inf"):
@@ -1122,8 +1133,10 @@ def get_optional_params(  # use the openai defaults
             if top_p != 1:
                 optional_params["topP"] = top_p
         elif "anthropic" in model:
+            supported_params = ["max_tokens", "temperature", "stop", "top_p"]
+            _check_valid_arg(supported_params=supported_params)
             # anthropic params on bedrock
-            # \"max_tokens_to_sample\":300,\"temperature\":0.5,\"top_k\":250,\"top_p\":1,\"stop_sequences\":[\"\\\\n\\\\nHuman:\"]}"
+            # \"max_tokens_to_sample\":300,\"temperature\":0.5,\"top_p\":1,\"stop_sequences\":[\"\\\\n\\\\nHuman:\"]}"
             if max_tokens != float("inf"):
                 optional_params["max_tokens_to_sample"] = max_tokens
             else:
@@ -1132,11 +1145,11 @@ def get_optional_params(  # use the openai defaults
                 optional_params["temperature"] = temperature
             if top_p != 1:
                 optional_params["top_p"] = top_p
-            if top_k != 40:
-                optional_params["top_k"] = top_k
             if stop != None:
                 optional_params["stop_sequences"] = stop
         elif "amazon" in model: # amazon titan llms
+            supported_params = ["max_tokens", "temperature", "stop", "top_p"]
+            _check_valid_arg(supported_params=supported_params)
             # see https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=titan-large
             if max_tokens != float("inf"):
                 optional_params["maxTokenCount"] = max_tokens
@@ -1148,14 +1161,14 @@ def get_optional_params(  # use the openai defaults
                 optional_params["topP"] = top_p
 
     elif model in litellm.aleph_alpha_models:
+        supported_params = ["max_tokens", "stream", "top_p", "temperature", "presence_penalty", "frequency_penalty", "n", "stop"]
+        _check_valid_arg(supported_params=supported_params)
         if max_tokens != float("inf"):
             optional_params["maximum_tokens"] = max_tokens
         if stream:
             optional_params["stream"] = stream
         if temperature != 1:
             optional_params["temperature"] = temperature
-        if top_k != 40:
-            optional_params["top_k"] = top_k
         if top_p != 1:
             optional_params["top_p"] = top_p
         if presence_penalty != 0:
@@ -1167,29 +1180,28 @@ def get_optional_params(  # use the openai defaults
         if stop != None:
             optional_params["stop_sequences"] = stop
     elif model in litellm.nlp_cloud_models or custom_llm_provider == "nlp_cloud":
+        supported_params = ["max_tokens", "stream", "temperature", "top_p", "presence_penalty", "frequency_penalty", "n", "stop"]
+        _check_valid_arg(supported_params=supported_params)
+
         if max_tokens != float("inf"):
             optional_params["max_length"] = max_tokens
         if stream:
             optional_params["stream"] = stream
         if temperature != 1:
             optional_params["temperature"] = temperature
-        if top_k != 40:
-            optional_params["top_k"] = top_k
         if top_p != 1:
             optional_params["top_p"] = top_p
         if presence_penalty != 0:
             optional_params["presence_penalty"] = presence_penalty
         if frequency_penalty != 0:
             optional_params["frequency_penalty"] = frequency_penalty
-        if num_beams != 1:
-            optional_params["num_beams"] = num_beams
         if n != 1:
             optional_params["num_return_sequences"] = n
-        if remove_input == True:
-            optional_params["remove_input"] = True
         if stop != None:
             optional_params["stop_sequences"] = stop
     elif model in litellm.petals_models or custom_llm_provider == "petals":
+        supported_params = ["max_tokens", "temperature", "top_p"]
+        _check_valid_arg(supported_params=supported_params)
         # max_new_tokens=1,temperature=0.9, top_p=0.6
         if max_tokens != float("inf"):
             optional_params["max_new_tokens"] = max_tokens
@@ -1200,33 +1212,13 @@ def get_optional_params(  # use the openai defaults
         if top_p != 1:
             optional_params["top_p"] = top_p
     else:  # assume passing in params for openai/azure openai
-        if functions != []:
-            optional_params["functions"] = functions
-        if function_call != "":
-            optional_params["function_call"] = function_call
-        if temperature != 1:
-            optional_params["temperature"] = temperature
-        if top_p != 1:
-            optional_params["top_p"] = top_p
-        if n != 1:
-            optional_params["n"] = n
-        if stream:
-            optional_params["stream"] = stream
-        if stop != None:
-            optional_params["stop"] = stop
-        if max_tokens != float("inf"):
-            optional_params["max_tokens"] = max_tokens
-        if presence_penalty != 0:
-            optional_params["presence_penalty"] = presence_penalty
-        if frequency_penalty != 0:
-            optional_params["frequency_penalty"] = frequency_penalty
-        if logit_bias != {}:
-            optional_params["logit_bias"] = logit_bias
-        if user != "":
-            optional_params["user"] = user
-        if deployment_id != None:
-            optional_params["deployment_id"] = deployment_id
-        return optional_params
+        supported_params = ["functions", "function_call", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "logit_bias", "user", "deployment_id"]
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = non_default_params
+    # if user passed in non-default kwargs for specific providers/models, pass them along 
+    for k in passed_params.keys(): 
+        if k not in default_params.keys(): 
+            optional_params[k] = passed_params[k]
     return optional_params
 
 def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None):

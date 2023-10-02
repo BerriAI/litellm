@@ -17,6 +17,11 @@ class HuggingfaceError(Exception):
             self.message
         )  # Call the base class constructor with the parameters it needs
 
+# contains any default values we need to pass to the provider
+HuggingfaceConfig = { 
+    "return_full_text": False # override by setting - completion(..,return_full_text=True)
+}
+
 def validate_environment(api_key):
     headers = {
         "content-type": "application/json",
@@ -100,6 +105,11 @@ def completion(
         completion_url = os.getenv("HUGGINGFACE_API_BASE", "")
     else:
         completion_url = f"https://api-inference.huggingface.co/models/{model}"
+
+    ## Load Config
+    for k, v in HuggingfaceConfig.items(): 
+        if k not in optional_params: 
+            optional_params[k] = v
 
     ### MAP INPUT PARAMS
     if task == "conversational":
