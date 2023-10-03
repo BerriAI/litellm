@@ -351,7 +351,7 @@ def test_completion_cohere_stream_bad_key():
 #             },
 #         ]
 #         response = completion(
-#             model="huggingface/mistralai/Mistral-7B-Instruct-v0.1", messages=messages, api_base="https://n9ox93a8sv5ihsow.us-east-1.aws.endpoints.huggingface.cloud", stream=True, max_tokens=1000
+#             model="huggingface/mistralai/Mistral-7B-Instruct-v0.1", messages=messages, api_base="https://n9ox93a8sv5ihsow.us-east-1.aws.endpoints.huggingface.cloud", stream=True, max_tokens=1000, n=1
 #         )
 #         complete_response = ""
 #         # Add any assertions here to check the response

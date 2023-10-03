@@ -1039,7 +1039,7 @@ def get_optional_params(  # use the openai defaults
             optional_params["stop_sequences"] = stop
     elif custom_llm_provider == "huggingface":
         ## check if unsupported param passed in 
-        supported_params = ["stream", "temperature", "max_tokens", "top_p", "stop",]
+        supported_params = ["stream", "temperature", "max_tokens", "top_p", "stop", "n"]
         _check_valid_arg(supported_params=supported_params)
         
         if temperature:
@@ -1055,6 +1055,8 @@ def get_optional_params(  # use the openai defaults
             optional_params["stop"] = stop
         if max_tokens:
             optional_params["max_new_tokens"] = max_tokens
+        if n: 
+            optional_params["best_of"] = n
         if presence_penalty:
             optional_params["repetition_penalty"] = presence_penalty
     elif custom_llm_provider == "together_ai":
