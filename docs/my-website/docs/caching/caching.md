@@ -1,4 +1,4 @@
-# LiteLLM - Caching
+# LiteLLM - Local Caching
 
 ## Caching `completion()` and `embedding()` calls when switched on
 
