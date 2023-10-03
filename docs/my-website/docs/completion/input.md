@@ -54,3 +54,28 @@ The Input params are **exactly the same** as the <a href="https://platform.opena
 - `logit_bias`: *map (optional)* - Used to modify the probability of specific tokens appearing in the completion.
 
 - `user`: *string (optional)* - A unique identifier representing your end-user. This can help OpenAI to monitor and detect abuse.
+
+# Params supported across providers
+This is a list of openai params we translate across providers. You can  send any provider-specific param by just including it in completion(). 
+
+E.g. If Anthropic supports top_k, then `completion(model="claude-2", .., top_k=3)` would send the value straight to Anthropic.
+
+This list is constantly being updated.
+
+| Provider | functions | function_call | temperature | top_p | n | stream | stop | max_tokens | presence_penalty | frequency_penalty | logit_bias | user |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+|Anthropic| | | ✅ | ✅ | |  ✅ | ✅ | ✅ |  |   |
+|OpenAI| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+|Replicate| | | ✅ | ✅ | ✅ | ✅ | ✅ | ✅|  |   |
+|Cohere| | | ✅ | ✅ | |  ✅ | |  ✅|  |   | ✅ |
+|Huggingface| | | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  | | |
+|Openrouter| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+|AI21|  | | | | | | | |  | | |
+|VertexAI| | | ✅ | ✅ | | ✅ | | ✅ |  |  |   |
+|Bedrock| | | ✅ | ✅ | | ✅ | ✅ | ✅ |  | | |
+|Sagemaker| | | ✅ | | | ✅ | | ✅ |  | | |
+|TogetherAI| | | ✅ | ✅ | | ✅ | ✅ | ✅ |  | ✅ | |
+|AlephAlpha| | | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | | |
+|Palm| | | ✅ | ✅ | | ✅ | |  |  |  | |
+|NLP Cloud| | | ✅ | ✅ | ✅ | ✅ | ✅ | ✅  | ✅ | ✅ | | |
+|Petals| | | ✅ | ✅ | | | | ✅ |  |   |
