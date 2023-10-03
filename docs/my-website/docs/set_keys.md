@@ -36,8 +36,8 @@ os.environ["TOGETHERAI_API_KEY"] = "Your API Key"
 ```python
 # for azure openai
 os.environ['AZURE_API_BASE'] = "https://openai-gpt-4-test2-v-12.openai.azure.com/"
-os.environ['AZURE_API_VERSION'] = "2023-05-15"
-os.environ['AZURE_API_TYPE'] = "your-custom-type"
+os.environ['AZURE_API_VERSION'] = "2023-05-15" # [OPTIONAL]
+os.environ['AZURE_API_TYPE'] = "azure" # [OPTIONAL]
 
 # for openai
 os.environ['OPENAI_API_BASE'] = "https://openai-gpt-4-test2-v-12.openai.azure.com/"
