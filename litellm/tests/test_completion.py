@@ -726,7 +726,7 @@ def test_completion_replicate_vicuna():
 def test_completion_together_ai():
     model_name = "together_ai/togethercomputer/llama-2-70b-chat"
     try:
-        response = completion(model=model_name, messages=messages, max_tokens=256, logger_fn=logger_fn)
+        response = completion(model=model_name, messages=messages, max_tokens=256, n=1, logger_fn=logger_fn)
         # Add any assertions here to check the response
         print(response)
         cost = completion_cost(completion_response=response)

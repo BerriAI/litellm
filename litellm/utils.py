@@ -980,7 +980,13 @@ def get_optional_params(  # use the openai defaults
         print_verbose(f"checking params for {model}")
         print_verbose(f"params passed in {passed_params}")
         print_verbose(f"non-default params passed in {non_default_params}")
-        unsupported_params = [k for k in non_default_params.keys() if k not in supported_params]
+        unsupported_params = []
+        for k in non_default_params.keys():
+            if k not in supported_params:
+                if k == "n" and n == 1: # langchain sends n=1 as a default value
+                    pass
+                else: 
+                    unsupported_params.append(k)
         if unsupported_params:
             raise ValueError("LiteLLM.Exception: Unsupported parameters passed: {}".format(', '.join(unsupported_params)))
 
