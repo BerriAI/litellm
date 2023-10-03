@@ -157,7 +157,7 @@ pytest .
 ```
 
 Step 4: Submit a PR with your changes! 🚀
-- push your fork to your github repo 
+- push your fork to your GitHub repo 
 - submit a PR from there 
 
 [Learn more on how to make a PR](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/creating-a-pull-request)
