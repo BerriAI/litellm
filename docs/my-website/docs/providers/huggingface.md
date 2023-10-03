@@ -94,34 +94,6 @@ print(response)
 You need to tell LiteLLM when you're calling Huggingface. 
 This is done by adding the "huggingface/" prefix to `model`, example `completion(model="huggingface/<model_name>",...)`. 
 
-<Tabs>
-<TabItem value="tgi" label="Text-generation-interface (TGI)">
-
-```python
-import os 
-from litellm import completion 
-
-# [OPTIONAL] set env var
-os.environ["HUGGINGFACE_API_KEY"] = "huggingface_api_key" 
-
-messages = [{ "content": "There's a llama in my garden 😱 What should I do?","role": "user"}]
-
-# e.g. Call 'WizardLM/WizardCoder-Python-34B-V1.0' hosted on HF Inference endpoints
-response = completion(
-  model="huggingface/WizardLM/WizardCoder-Python-34B-V1.0", 
-  messages=messages, 
-  api_base="https://my-endpoint.huggingface.cloud",
-  stream=True
-)
-
-print(response)
-for chunk in response:
-  print(chunk)
-```
-
-</TabItem>
-<TabItem value="conv" label="Conversational-task (BlenderBot, etc.)">
-
 ```python
 import os 
 from litellm import completion 
@@ -143,32 +115,6 @@ print(response)
 for chunk in response:
   print(chunk)
 ```
-</TabItem>
-<TabItem value="none" label="Non TGI/Conversational-task LLMs">
-
-```python
-import os 
-from litellm import completion 
-
-# [OPTIONAL] set env var
-os.environ["HUGGINGFACE_API_KEY"] = "huggingface_api_key" 
-
-messages = [{ "content": "There's a llama in my garden 😱 What should I do?","role": "user"}]
-
-# e.g. Call 'roneneldan/TinyStories-3M' hosted on HF Inference endpoints
-response = completion(
-  model="huggingface/roneneldan/TinyStories-3M", 
-  messages=messages,
-  api_base="https://p69xlsj6rpno5drq.us-east-1.aws.endpoints.huggingface.cloud",
-  stream=True
-)
-
-print(response)
-for chunk in response:
-  print(chunk)
-```
-</TabItem>
-</Tabs>
 
 ### [OPTIONAL] API KEYS + API BASE
 If required, you can set the api key + api base, set it in your os environment. [Code for how it's sent](https://github.com/BerriAI/litellm/blob/0100ab2382a0e720c7978fbf662cc6e6920e7e03/litellm/llms/huggingface_restapi.py#L25)
