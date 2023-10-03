@@ -117,7 +117,6 @@ def completion(
         inference_params = copy.deepcopy(optional_params)
         inference_params.pop("details")
         inference_params.pop("return_full_text")
-        inference_params.pop("task")
         past_user_inputs = []
         generated_responses = []
         text = ""
@@ -181,7 +180,6 @@ def completion(
         inference_params = copy.deepcopy(optional_params)
         inference_params.pop("details")
         inference_params.pop("return_full_text")
-        inference_params.pop("task")
         data = {
             "inputs": prompt,
             "parameters": inference_params,
