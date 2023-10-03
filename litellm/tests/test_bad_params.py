@@ -47,13 +47,14 @@ def test_completion_return_full_text_hf():
 def test_completion_invalid_param_cohere():
     try: 
         response = completion(model="command-nightly", messages=messages, top_p=1)
+        print(f"response: {response}")
     except Exception as e: 
         if "Unsupported parameters passed: top_p" in str(e): 
             pass
         else: 
             pytest.fail(f'An error occurred {e}')
 
-# test_completion_invalid_param_cohere()
+test_completion_invalid_param_cohere()
 
 def test_completion_function_call_cohere():
     try: 

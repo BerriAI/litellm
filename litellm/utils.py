@@ -1003,7 +1003,7 @@ def get_optional_params(  # use the openai defaults
             optional_params["max_tokens_to_sample"] = max_tokens
     elif custom_llm_provider == "cohere":
         ## check if unsupported param passed in 
-        supported_params = ["stream", "temperature", "max_tokens", "logit_bias"]
+        supported_params = ["stream", "temperature", "max_tokens", "logit_bias", "top_p"]
         _check_valid_arg(supported_params=supported_params)
         # handle cohere params
         if stream:
@@ -1014,6 +1014,8 @@ def get_optional_params(  # use the openai defaults
             optional_params["max_tokens"] = max_tokens
         if logit_bias != {}:
             optional_params["logit_bias"] = logit_bias
+        if top_p: 
+            optional_params["p"] = top_p
     elif custom_llm_provider == "replicate":
         ## check if unsupported param passed in 
         supported_params = ["stream", "temperature", "max_tokens", "top_p", "stop", "seed"]
