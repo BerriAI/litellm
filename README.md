@@ -29,7 +29,7 @@ LiteLLM manages
 - Guarantees [consistent output](https://docs.litellm.ai/docs/completion/output), text responses will always be available at `['choices'][0]['message']['content']`
 - Exception mapping - common exceptions across providers are mapped to the OpenAI exception types
 
-🚨 Seeing errors? [![Chat on WhatsApp](https://img.shields.io/static/v1?label=Chat%20on&message=WhatsApp&color=success&logo=WhatsApp&style=flat-square)](https://wa.link/huol9n) [![Chat via SMS](https://img.shields.io/static/v1?label=Chat%20via&message=SMS&color=green&logo=android&style=flat-square)](sms:1234567890) 
+🚨 Seeing errors? [![Chat on WhatsApp](https://img.shields.io/static/v1?label=Chat%20on&message=WhatsApp&color=success&logo=WhatsApp&style=flat-square)](https://wa.link/huol9n)
 
 # Usage
 
