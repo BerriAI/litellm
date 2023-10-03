@@ -1016,7 +1016,7 @@ def get_optional_params(  # use the openai defaults
             optional_params["logit_bias"] = logit_bias
     elif custom_llm_provider == "replicate":
         ## check if unsupported param passed in 
-        supported_params = ["stream", "temperature", "max_tokens", "top_p", "stop"]
+        supported_params = ["stream", "temperature", "max_tokens", "top_p", "stop", "seed"]
         _check_valid_arg(supported_params=supported_params)
         
         if stream:
@@ -1025,6 +1025,8 @@ def get_optional_params(  # use the openai defaults
         if max_tokens:
             if "vicuna" in model or "flan" in model:
                 optional_params["max_length"] = max_tokens
+            elif "meta/codellama-13b" in model: 
+                optional_params["max_tokens"] = max_tokens
             else:
                 optional_params["max_new_tokens"] = max_tokens
         if temperature:
@@ -1288,7 +1290,6 @@ def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None):
         return model, custom_llm_provider
     except Exception as e: 
         raise e
-
 
 def get_api_key(llm_provider: str, dynamic_api_key: Optional[str]):
     api_key = (dynamic_api_key or litellm.api_key)
