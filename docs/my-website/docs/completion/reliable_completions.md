@@ -56,18 +56,18 @@ def test_completion_custom_provider_model_name():
 
 LLM APIs can be unstable, completion() with fallbacks ensures you'll always get a response from your calls
 
-## Usage 
+### Usage 
 To use fallback models with `completion()`, specify a list of models in the `fallbacks` parameter. 
 
 The `fallbacks` list should include the primary model you want to use, followed by additional models that can be used as backups in case the primary model fails to provide a response.
 
-### switch models 
+#### switch models 
 ```python
 response = completion(model="bad-model", messages=messages, 
     fallbacks=["gpt-3.5-turbo" "command-nightly"])
 ```
 
-### switch api keys/bases (E.g. azure deployment)
+#### switch api keys/bases (E.g. azure deployment)
 Switch between different keys for the same azure deployment, or use another deployment as well. 
 
 ```python
@@ -76,7 +76,7 @@ response = completion(model="azure/gpt-4", messages=messages, api_key=api_key,
     fallbacks=[{"api_key": "good-key-1"}, {"api_key": "good-key-2", "api_base": "good-api-base-2"}])
 ```
 
-### Output from calls
+#### Output from calls
 ```
 Completion with 'bad-model': got exception Unable to map your input to a model. Check your input - {'model': 'bad-model'
 
@@ -107,7 +107,7 @@ completion call gpt-3.5-turbo
 
 ```
 
-## How does fallbacks work
+#### How does fallbacks work
 
 When you pass `fallbacks` to `completion`, it makes the first `completion` call using the primary model specified as `model` in `completion(model=model)`. If the primary model fails or encounters an error, it automatically tries the `fallbacks` models in the specified order. This ensures a response even if the primary model is unavailable.
 
