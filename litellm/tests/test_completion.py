@@ -1016,14 +1016,14 @@ def test_completion_with_fallbacks():
 def test_completion_ai21():
     model_name = "j2-light"
     try:
-        response = completion(model=model_name, messages=messages)
+        response = completion(model=model_name, messages=messages, max_tokens=100, temperature=0.8, logger_fn=logger_fn)
         # Add any assertions here to check the response
         print(response)
         print(response.response_ms)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-
+test_completion_ai21()
 ## test deep infra 
 def test_completion_deep_infra():
     # litellm.set_verbose = True
