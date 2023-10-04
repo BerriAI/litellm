@@ -1237,7 +1237,6 @@ def get_optional_params(  # use the openai defaults
     for k in passed_params.keys(): 
         if k not in default_params.keys(): 
             optional_params[k] = passed_params[k]
-    print(f"final params going to model: {optional_params}")
     return optional_params
 
 def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None):
