@@ -323,7 +323,9 @@ def test_completion_cohere(): # commenting for now as the cohere endpoint is bei
             model="command-nightly",
             messages=messages,
             max_tokens=100,
+            n=1,
             logit_bias={40: 10},
+            stop=["a"],
             logger_fn=logger_fn
         )
         # Add any assertions here to check the response
@@ -337,7 +339,7 @@ def test_completion_cohere(): # commenting for now as the cohere endpoint is bei
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-# test_completion_cohere()
+test_completion_cohere()
 
 
 def test_completion_openai():

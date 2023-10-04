@@ -15,6 +15,7 @@ token: Optional[
 ] = None  # for hosted dashboard. Learn more - https://docs.litellm.ai/docs/debugging/hosted_debugging
 telemetry = True
 max_tokens = 256  # OpenAI Defaults
+drop_params = False
 retry = True
 api_key: Optional[str] = None
 openai_key: Optional[str] = None
