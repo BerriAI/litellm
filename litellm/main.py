@@ -28,7 +28,6 @@ from litellm.utils import (
     get_llm_provider,
     get_api_key,
     mock_completion_streaming_obj,
-    batch_completion_rate_limits
 )
 from .llms import anthropic
 from .llms import together_ai
