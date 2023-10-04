@@ -37,7 +37,6 @@ const sidebars = {
         "completion/config",
         "completion/batching",
         "completion/mock_requests",
-        "completion/token_usage",
         "exception_mapping",
       ],
     },
@@ -83,6 +82,7 @@ const sidebars = {
     "set_keys",
     "proxy_server",
     "budget_manager",
+    "completion/token_usage",
     {
       type: 'category',
       label: 'Tutorials',
