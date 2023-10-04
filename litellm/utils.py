@@ -1082,6 +1082,27 @@ def get_optional_params(  # use the openai defaults
             optional_params["frequency_penalty"] = frequency_penalty # TODO: Check if should be repetition penalty
         if stop:
             optional_params["stop"] = stop #TG AI expects a list, example ["\n\n\n\n","&lt;|endoftext|&gt;"]
+    elif custom_llm_provider == "ai21":
+        ## check if unsupported param passed in 
+        supported_params = ["stream", "n", "temperature", "max_tokens", "top_p", "stop", "frequency_penalty", "presence_penalty"]
+        _check_valid_arg(supported_params=supported_params)
+
+        if stream:
+            optional_params["stream"] = stream
+        if n: 
+            optional_params["numResults"] = n
+        if max_tokens:
+            optional_params["maxTokens"] = max_tokens
+        if temperature:
+            optional_params["temperature"] = temperature
+        if top_p:
+            optional_params["topP"] = top_p
+        if stop:
+            optional_params["stopSequences"] = stop
+        if frequency_penalty:
+            optional_params["frequencyPenalty"] = {"scale": frequency_penalty}
+        if presence_penalty: 
+            optional_params["presencePenalty"] = {"scale": presence_penalty}
     elif custom_llm_provider == "palm":
         ## check if unsupported param passed in 
         supported_params = ["temperature", "top_p", "stream"]
