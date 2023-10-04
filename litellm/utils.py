@@ -3761,7 +3761,6 @@ class APIRequest:
             response = await litellm.acompletion(
                 **self.request_json
             )
-            print(response)
             logging.info(f"Completed request #{self.task_id}")
         except Exception as e:
             logging.warning(
@@ -3771,7 +3770,7 @@ class APIRequest:
             error = e
             print(f"got exception {e}")
             if "Rate limit" in str(e):
-                status_tracker.time_of_last_rate_limit_error = time.time()
+                status_tracker.time_of_last_rate_limit_error = int(time.time())
                 status_tracker.num_rate_limit_errors += 1
                 status_tracker.num_api_errors -= (
                     1  # rate limit errors are counted separately
@@ -3812,7 +3811,7 @@ class APIRequest:
             f.write(json_string + "\n")
 
 
-class RateLimitHandler():
+class RateLimitManager():
     def __init__(self, max_tokens_per_minute, max_requests_per_minute):
         self.max_tokens_per_minute = max_tokens_per_minute
         self.max_requests_per_minute = max_requests_per_minute
@@ -3823,8 +3822,8 @@ class RateLimitHandler():
         self,
         requests_filepath: str = "",
         jobs: list = [],
-        save_filepath: str = None,
-        api_key: str = os.getenv("OPENAI_API_KEY"),
+        save_filepath: Optional[str] = None,
+        api_key: Optional[str] = os.getenv("OPENAI_API_KEY"),
         max_requests_per_minute: float = 3_000 * 0.5,
         max_tokens_per_minute: float = 250_000 * 0.5,
         token_encoding_name: str = "cl100k_base",
@@ -3851,7 +3850,7 @@ class RateLimitHandler():
         request_header = {"Authorization": f"Bearer {api_key}"}
 
         # initialize trackers
-        queue_of_requests_to_retry = asyncio.Queue()
+        queue_of_requests_to_retry = asyncio.Queue() # type: ignore
         task_id_generator = (
             self.task_id_generator_function()
         )  # generates integer IDs of 1, 2, 3, ...
