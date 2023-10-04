@@ -20,6 +20,8 @@
 <tr>
     <td style="border:none;"><a href="https://docs.litellm.ai/docs/" target="_blank">Docs</a></td>
     <td style="border:none;"><a href="https://docs.litellm.ai/docs/providers" target="_blank">100+ Supported Models</a></td>
+    <td style="border:none;"><a href="https://www.loom.com/share/bd4e9029a1da4fd4a3e40e41c87ebb3a?sid=d6c82c80-1e57-4519-a9df-0c5cc8c4c40d" target="_blank">Demo Video</a></td>
+        
 </tr>
 </table>
 
