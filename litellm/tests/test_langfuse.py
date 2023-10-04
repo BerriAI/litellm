@@ -20,6 +20,7 @@ def test_langfuse_logging():
                                   "role": "user",
                                   "content": "Hi 👋 - i'm claude"
                               }])
+        print(response)
     except Exception as e:
         print(e)
 
