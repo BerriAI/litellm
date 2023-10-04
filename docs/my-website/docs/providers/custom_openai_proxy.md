@@ -1,7 +1,6 @@
-# OpenAI Proxy Servers (ChatCompletion)
+# Custom API Server (OpenAI Format)
 
-LiteLLM allows you to call your OpenAI ChatCompletion proxy server
-
+LiteLLM allows you to call your custom endpoint in the OpenAI ChatCompletion format
 
 ### API KEYS
 No api keys required
