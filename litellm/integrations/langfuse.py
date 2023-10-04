@@ -22,7 +22,7 @@ class LangFuseLogger:
         self.Langfuse =  Langfuse(
                         public_key=self.public_key,
                         secret_key=self.secret_key,
-                        host="https://cloud.langfuse.com",
+                        host=self.langfuse_host,
                     )
 
     def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
