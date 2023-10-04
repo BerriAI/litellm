@@ -9,7 +9,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 from openai.error import Timeout
 import litellm
-from litellm import batch_completion, batch_completion_models, completion, batch_completion_models_all_responses, batch_completion_rate_limits
+from litellm import batch_completion, batch_completion_models, completion, batch_completion_models_all_responses
 # litellm.set_verbose=True
 
 # def test_batch_completions():
@@ -58,21 +58,27 @@ def test_batch_completion_models_all_responses():
 
 
 
-# import asyncio
-# ##### USAGE ################
-# jobs = [
-#     {"model": "gpt-4", "messages": [{"content": "Please provide a summary of the latest scientific discoveries."*500, "role": "user"}]},
-#     {"model": "gpt-4", "messages": [{"content": "Please provide a summary of the latest scientific discoveries."*800, "role": "user"}]},
-#     {"model": "gpt-4", "messages": [{"content": "Please provide a summary of the latest scientific discoveries."*900, "role": "user"}]},
-#     {"model": "gpt-4", "messages": [{"content": "Please provide a summary of the latest scientific discoveries."*900, "role": "user"}]},
-#     {"model": "gpt-4", "messages": [{"content": "Please provide a summary of the latest scientific discoveries."*900, "role": "user"}]}
-# ]
+import asyncio
+##### USAGE ################
 
-# asyncio.run(
-#         batch_completion_rate_limits(
-#             jobs = jobs,
-#             api_key=os.environ['OPENAI_API_KEY'],
-#             max_requests_per_minute=60,
-#             max_tokens_per_minute=20000
-#         )
-# )
+jobs = [
+    {"model": "gpt-3.5-turbo-16k", "messages": [{"content": "Please provide a summary of the latest scientific discoveries.", "role": "user"}]},
+    {"model": "gpt-3.5-turbo-16k", "messages": [{"content": "Please provide a summary of the latest scientific discoveries.", "role": "user"}]},
+]
+
+from litellm import RateLimitManager
+
+handler = RateLimitManager(
+    max_requests_per_minute = 60,
+    max_tokens_per_minute = 20000
+)
+
+try:
+    asyncio.run(
+     handler.batch_completion(
+        jobs = jobs,
+        api_key=os.environ['OPENAI_API_KEY'],
+    )
+)
+except Exception as e:
+    print(e)
