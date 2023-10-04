@@ -16,6 +16,11 @@ pip install litellm langfuse
 ```
 
 ### Using Callbacks
+
+<a target="_blank" href="https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/logging_observability/LiteLLM_Langfuse.ipynb">
+  <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
+</a>
+
 Get your Langfuse API Keys from https://cloud.langfuse.com/
 
 Use just 2 lines of code, to instantly log your responses **across all providers** with langfuse:
