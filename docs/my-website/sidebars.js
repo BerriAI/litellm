@@ -37,6 +37,8 @@ const sidebars = {
         "completion/config",
         "completion/batching",
         "completion/mock_requests",
+        "completion/token_usage",
+        "exception_mapping",
       ],
     },
     {
@@ -46,7 +48,7 @@ const sidebars = {
     },
     {
       type: "category",
-      label: "Supported Models + Providers",
+      label: "Supported Models & Providers",
       link: {
         type: 'generated-index',
         title: 'Providers',
@@ -73,17 +75,14 @@ const sidebars = {
         "providers/aleph_alpha", 
         "providers/baseten", 
         "providers/openrouter", 
-        "providers/custom",
+        // "providers/custom",
         "providers/custom_openai_proxy",
         "providers/petals",
       ]
     },
     "set_keys",
-    "token_usage",
-    "exception_mapping",
-    'debugging/local_debugging',
-    "budget_manager",
     "proxy_server",
+    "budget_manager",
     {
       type: 'category',
       label: 'Tutorials',
@@ -141,6 +140,7 @@ const sidebars = {
       items: [
         'extras/contributing',
         'debugging/hosted_debugging',
+        'debugging/local_debugging',
         {
           type: "category",
           label: "❤️ 🚅 Projects built on LiteLLM",
@@ -168,7 +168,6 @@ const sidebars = {
       ],
     },
     "troubleshoot",
-    "contact",
   ],
 };
 
