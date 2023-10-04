@@ -9,7 +9,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 from openai.error import Timeout
 import litellm
-from litellm import batch_completion, batch_completion_models, completion, batch_completion_models_all_responses
+from litellm import batch_completion, batch_completion_models, completion, batch_completion_models_all_responses, batch_completion_rate_limits
 # litellm.set_verbose=True
 
 # def test_batch_completions():
@@ -43,7 +43,7 @@ def test_batch_completion_models_all_responses():
     )
     print(responses)
     assert(len(responses) == 3)
-test_batch_completion_models_all_responses()
+# test_batch_completion_models_all_responses()
 
 # def test_batch_completions():
 #     try:
@@ -55,3 +55,24 @@ test_batch_completion_models_all_responses()
 #     except Exception as e:
 #         pytest.fail(f"An error occurred: {e}")
 # test_batch_completions()
+
+
+
+# import asyncio
+# ##### USAGE ################
+# jobs = [
+#     {"model": "gpt-4", "messages": [{"content": "Please provide a summary of the latest scientific discoveries."*500, "role": "user"}]},
+#     {"model": "gpt-4", "messages": [{"content": "Please provide a summary of the latest scientific discoveries."*800, "role": "user"}]},
+#     {"model": "gpt-4", "messages": [{"content": "Please provide a summary of the latest scientific discoveries."*900, "role": "user"}]},
+#     {"model": "gpt-4", "messages": [{"content": "Please provide a summary of the latest scientific discoveries."*900, "role": "user"}]},
+#     {"model": "gpt-4", "messages": [{"content": "Please provide a summary of the latest scientific discoveries."*900, "role": "user"}]}
+# ]
+
+# asyncio.run(
+#         batch_completion_rate_limits(
+#             jobs = jobs,
+#             api_key=os.environ['OPENAI_API_KEY'],
+#             max_requests_per_minute=60,
+#             max_tokens_per_minute=20000
+#         )
+# )
