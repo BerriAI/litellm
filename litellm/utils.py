@@ -987,7 +987,7 @@ def get_optional_params(  # use the openai defaults
                     pass
                 else: 
                     unsupported_params.append(k)
-        if unsupported_params:
+        if unsupported_params and not litellm.drop_params:
             raise ValueError("LiteLLM.Exception: Unsupported parameters passed: {}".format(', '.join(unsupported_params)))
 
     ## raise exception if provider doesn't support passed in param 
@@ -1009,7 +1009,7 @@ def get_optional_params(  # use the openai defaults
             optional_params["max_tokens_to_sample"] = max_tokens
     elif custom_llm_provider == "cohere":
         ## check if unsupported param passed in 
-        supported_params = ["stream", "temperature", "max_tokens", "logit_bias", "top_p"]
+        supported_params = ["stream", "temperature", "max_tokens", "logit_bias", "top_p", "frequency_penalty", "presence_penalty", "stop"]
         _check_valid_arg(supported_params=supported_params)
         # handle cohere params
         if stream:
@@ -1018,10 +1018,18 @@ def get_optional_params(  # use the openai defaults
             optional_params["temperature"] = temperature
         if max_tokens:
             optional_params["max_tokens"] = max_tokens
+        if n: 
+            optional_params["num_generations"] = n
         if logit_bias != {}:
             optional_params["logit_bias"] = logit_bias
         if top_p: 
             optional_params["p"] = top_p
+        if frequency_penalty: 
+            optional_params["frequency_penalty"] = frequency_penalty
+        if presence_penalty: 
+            optional_params["presence_penalty"] = presence_penalty
+        if stop:
+            optional_params["stop_sequences"] = stop
     elif custom_llm_provider == "replicate":
         ## check if unsupported param passed in 
         supported_params = ["stream", "temperature", "max_tokens", "top_p", "stop", "seed"]
@@ -1079,9 +1087,9 @@ def get_optional_params(  # use the openai defaults
         if max_tokens:
             optional_params["max_tokens"] = max_tokens
         if frequency_penalty:
-            optional_params["frequency_penalty"] = frequency_penalty # TODO: Check if should be repetition penalty
+            optional_params["repetition_penalty"] = frequency_penalty # https://docs.together.ai/reference/inference
         if stop:
-            optional_params["stop"] = stop #TG AI expects a list, example ["\n\n\n\n","&lt;|endoftext|&gt;"]
+            optional_params["stop"] = stop 
     elif custom_llm_provider == "ai21":
         ## check if unsupported param passed in 
         supported_params = ["stream", "n", "temperature", "max_tokens", "top_p", "stop", "frequency_penalty", "presence_penalty"]
@@ -1103,9 +1111,9 @@ def get_optional_params(  # use the openai defaults
             optional_params["frequencyPenalty"] = {"scale": frequency_penalty}
         if presence_penalty: 
             optional_params["presencePenalty"] = {"scale": presence_penalty}
-    elif custom_llm_provider == "palm":
+    elif custom_llm_provider == "palm": # https://developers.generativeai.google/tutorials/curl_quickstart
         ## check if unsupported param passed in 
-        supported_params = ["temperature", "top_p", "stream"]
+        supported_params = ["temperature", "top_p", "stream", "n", "stop", "max_tokens"]
         _check_valid_arg(supported_params=supported_params)
         
         if temperature:
@@ -1114,6 +1122,12 @@ def get_optional_params(  # use the openai defaults
             optional_params["top_p"] = top_p
         if stream:
             optional_params["stream"] = stream
+        if n: 
+            optional_params["candidate_count"] = n
+        if stop: 
+            optional_params["stopSequences"] = stop
+        if max_tokens: 
+            optional_params["maxOutputTokens"] = max_tokens
     elif (
         custom_llm_provider == "vertex_ai"
     ): 
@@ -1241,7 +1255,7 @@ def get_optional_params(  # use the openai defaults
         if stop:
             optional_params["stop_sequences"] = stop
     elif model in litellm.petals_models or custom_llm_provider == "petals":
-        supported_params = ["max_tokens", "temperature", "top_p"]
+        supported_params = ["max_tokens", "temperature", "top_p", "stream"]
         _check_valid_arg(supported_params=supported_params)
         # max_new_tokens=1,temperature=0.9, top_p=0.6
         if max_tokens:
@@ -1250,6 +1264,8 @@ def get_optional_params(  # use the openai defaults
             optional_params["temperature"] = temperature
         if top_p:
             optional_params["top_p"] = top_p
+        if stream:
+            optional_params["stream"] = stream
     else:  # assume passing in params for openai/azure openai
         supported_params = ["functions", "function_call", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "deployment_id"]
         _check_valid_arg(supported_params=supported_params)
