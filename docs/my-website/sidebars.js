@@ -139,7 +139,6 @@ const sidebars = {
       type: 'category',
       label: 'Extras',
       items: [
-        'extras/secret',
         'extras/contributing',
         'debugging/hosted_debugging',
       ],
