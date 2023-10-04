@@ -1,8 +1,35 @@
-# Batching Completion() Calls 
+# Batching Completion(), Handling Rate Limits
 LiteLLM allows you to:
-* Send many completion calls to 1 model
+* Send many completion calls to 1 model [while handling rate limits]
 * Send 1 completion call to many models: Return Fastest Response
 * Send 1 completion call to many models: Return All Responses
+
+## Handling Rate Limits with batch completion
+## Batch Completion with only 1 model
+### Usage 
+```python
+import asyncio
+from litellm import batch_completion_rate_limits
+
+# kwargs to litellm.completion
+jobs = [
+    {"model": "gpt-4", "messages": [{"content": "Please provide a summary of the latest scientific discoveries."*500, "role": "user"}]},
+    {"model": "gpt-4", "messages": [{"content": "Please provide a summary of the latest scientific discoveries."*800, "role": "user"}]},
+    {"model": "gpt-4", "messages": [{"content": "Please provide a summary of the latest scientific discoveries."*900, "role": "user"}]},
+    {"model": "gpt-4", "messages": [{"content": "Please provide a summary of the latest scientific discoveries."*900, "role": "user"}]},
+    {"model": "gpt-4", "messages": [{"content": "Please provide a summary of the latest scientific discoveries."*900, "role": "user"}]}
+]
+
+asyncio.run(
+        batch_completion_rate_limits(
+            jobs = jobs,
+            api_key=os.environ['OPENAI_API_KEY'], # pass your api key for your selected model
+            max_requests_per_minute=60,
+            max_tokens_per_minute=40000
+        )
+)
+
+```
 
 ## Send multiple completion calls to 1 model
 
