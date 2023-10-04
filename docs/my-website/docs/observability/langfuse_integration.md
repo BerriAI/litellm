@@ -29,6 +29,14 @@ Use just 2 lines of code, to instantly log your responses **across all providers
 litellm.success_callback = ["langfuse"]
 ```
 
+### Required API keys for Langfuse
+Set the following variables in your .env
+```python
+os.environ["LANGFUSE_SECRET_KEY"]
+os.environ["LANGFUSE_PUBLIC_KEY"]
+os.environ["LANGFUSE_HOST", "https://cloud.langfuse.com"]
+```
+
 ### Complete code
 
 ```python
