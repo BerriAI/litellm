@@ -11,7 +11,10 @@ import traceback
 class LangFuseLogger:
     # Class variables or attributes
     def __init__(self):
-        from langfuse import Langfuse
+        try:
+            from langfuse import Langfuse
+        except:
+            raise Exception("\033[91mLangfuse not installed, try running 'pip install langfuse' to fix this error\033[0m")
         # Instance variables
         self.secret_key = os.getenv("LANGFUSE_SECRET_KEY")
         self.public_key = os.getenv("LANGFUSE_PUBLIC_KEY")
