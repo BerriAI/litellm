@@ -168,6 +168,7 @@ const sidebars = {
         },
       ],
     },
+    "migration",
     "troubleshoot",
   ],
 };
