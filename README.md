@@ -4,7 +4,6 @@
     <p align="center">
         <p align="center">Call all LLM APIs using the OpenAI format [Anthropic, Huggingface, Cohere, TogetherAI, Azure, OpenAI, etc.]</p>
     </p>
-05/10/2023: LiteLLM is adopting Semantic Versioning for all commits. [Learn more](https://github.com/BerriAI/litellm/issues/532)
 <h4 align="center">
     <a href="https://pypi.org/project/litellm/" target="_blank">
         <img src="https://img.shields.io/pypi/v/litellm.svg" alt="PyPI Version">
@@ -31,6 +30,8 @@ LiteLLM manages
 - Exception mapping - common exceptions across providers are mapped to the OpenAI exception types
 
 **🚨 Seeing errors?** [![Chat on WhatsApp](https://img.shields.io/static/v1?label=Chat%20on&message=WhatsApp&color=success&logo=WhatsApp&style=flat-square)](https://wa.link/huol9n) [![Chat on Discord](https://img.shields.io/static/v1?label=Chat%20on&message=Discord&color=blue&logo=Discord&style=flat-square)](https://discord.gg/wuPM9dRgDw) 
+
+**05/10/2023:** LiteLLM is adopting Semantic Versioning for all commits. [Learn more](https://github.com/BerriAI/litellm/issues/532)
 
 # Usage
 
