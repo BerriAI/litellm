@@ -469,7 +469,8 @@ def completion(
             )
             ## RESPONSE OBJECT
             completion_response = response["choices"][0]["text"]
-            model_response["choices"][0]["message"]["content"] = completion_response
+            if completion_response != "":
+                model_response["choices"][0]["message"]["content"] = completion_response
             model_response["created"] = response.get("created", time.time())
             model_response["model"] = model
             model_response["usage"] = response.get("usage", 0)
@@ -855,7 +856,8 @@ def completion(
             )
 
             ## RESPONSE OBJECT
-            model_response["choices"][0]["message"]["content"] = str(completion_response)
+            if str(completion_response) != "":
+                model_response["choices"][0]["message"]["content"] = str(completion_response)
             model_response["created"] = time.time()
             model_response["model"] = model
             ## CALCULATING USAGE
@@ -918,7 +920,8 @@ def completion(
                 input=prompt, api_key=None, original_response=completion_response
             )
             ## RESPONSE OBJECT
-            model_response["choices"][0]["message"]["content"] = str(completion_response)
+            if str(completion_response) != "":
+                model_response["choices"][0]["message"]["content"] = str(completion_response)
             model_response["created"] = time.time()
             model_response["model"] = model
             ## CALCULATING USAGE
