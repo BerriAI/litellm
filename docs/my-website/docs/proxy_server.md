@@ -151,6 +151,38 @@ $ litellm --model command-nightly
 
 
 ### Deploy Proxy
+
+<Tabs>
+<TabItem value="self-hosted" label="Self-Hosted">
+
+**Step 1: Clone the repo**
+```shell
+git clone https://github.com/BerriAI/liteLLM-proxy.git
+```
+
+**Step 2: Put your API keys in .env** 
+Copy the .env.template and put in the relevant keys (e.g. OPENAI_API_KEY="sk-..")
+
+**Step 3: Test your proxy**
+Start your proxy server
+```shell
+cd litellm-proxy && python3 main.py 
+```
+
+Make your first call 
+```python
+import openai 
+
+openai.api_key = "sk-litellm-master-key"
+openai.api_base = "http://0.0.0.0:8080"
+
+response = openai.ChatCompletion.create(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hey"}])
+
+print(response)
+```
+</TabItem>
+<TabItem value="litellm-hosted" label="LiteLLM-Hosted">
+
 Deploy the proxy to https://api.litellm.ai
 
 ```shell 
@@ -161,7 +193,6 @@ $ litellm --model claude-instant-1 --deploy
 ```
 
 This will host a ChatCompletions API at: https://api.litellm.ai/44508ad4
-
 #### Other supported models:
 <Tabs>
 <TabItem value="anthropic" label="Anthropic">
@@ -278,6 +309,8 @@ curl --location 'https://api.litellm.ai/44508ad4/chat/completions' \
   ], 
 }'
 ```
+</TabItem>
+</Tabs>
 </TabItem>
 </Tabs>
 
