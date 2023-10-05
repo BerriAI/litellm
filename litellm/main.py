@@ -1041,10 +1041,11 @@ def completion(
             ## RESPONSE OBJECT
             response = model_response
         elif custom_llm_provider == "ollama":
-            endpoint = (
-                litellm.api_base 
-                or api_base
-                or "http://localhost:11434"
+            api_base = (
+                litellm.api_base or
+                api_base or
+                "http://localhost:11434"
+                
             )
             if model in litellm.custom_prompt_dict:
                 # check if the model has a registered custom prompt
@@ -1060,13 +1061,13 @@ def completion(
 
             ## LOGGING
             logging.pre_call(
-                input=prompt, api_key=None, additional_args={"endpoint": endpoint, "custom_prompt_dict": litellm.custom_prompt_dict}
+                input=prompt, api_key=None, additional_args={"api_base": api_base, "custom_prompt_dict": litellm.custom_prompt_dict}
             )
             if kwargs.get('acompletion', False) == True:
-                async_generator = ollama.async_get_ollama_response_stream(endpoint, model, prompt)
+                async_generator = ollama.async_get_ollama_response_stream(api_base, model, prompt)
                 return async_generator
 
-            generator = ollama.get_ollama_response_stream(endpoint, model, prompt)
+            generator = ollama.get_ollama_response_stream(api_base, model, prompt)
             if optional_params.get("stream", False) == True:
                 # assume all ollama responses are streamed
                 return generator

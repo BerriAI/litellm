@@ -16,18 +16,33 @@
 # user_message = "respond in 20 words. who are you?"
 # messages = [{ "content": user_message,"role": "user"}]
 
-# # def test_completion_ollama():
-# #     try:
-# #         response = completion(
-# #             model="ollama/llama2", 
-# #             messages=messages, 
-# #             api_base="http://localhost:11434"
-# #         )
-# #         print(response)
-# #     except Exception as e:
-# #         pytest.fail(f"Error occurred: {e}")
+# def test_completion_ollama():
+#     try:
+#         response = completion(
+#             model="ollama/llama2", 
+#             messages=messages, 
+#             max_tokens=200,
+#             request_timeout = 10,
 
-# # test_completion_ollama()
+#         )
+#         print(response)
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
+
+# test_completion_ollama()
+
+# def test_completion_ollama_with_api_base():
+#     try:
+#         response = completion(
+#             model="ollama/llama2", 
+#             messages=messages, 
+#             api_base="http://localhost:11434"
+#         )
+#         print(response)
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
+
+# test_completion_ollama_with_api_base()
 
 # # def test_completion_ollama_stream():
 # #     user_message = "what is litellm?"
