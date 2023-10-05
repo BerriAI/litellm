@@ -2081,24 +2081,28 @@ def modify_integration(integration_name, integration_params):
 # custom prompt helper function
 def register_prompt_template(model: str, roles: dict, initial_prompt_value: str = "", final_prompt_value: str = ""):
     """
+    Format the openai prompt, to follow your custom format. 
     Example usage:
     ```
     import litellm 
     litellm.register_prompt_template(
 	    model="llama-2",
+        initial_prompt_value="You are a good assistant" # [OPTIONAL]
 	    roles={
             "system": {
-                "pre_message": "[INST] <<SYS>>\n",
-                "post_message": "\n<</SYS>>\n [/INST]\n"
+                "pre_message": "[INST] <<SYS>>\n", # [OPTIONAL]
+                "post_message": "\n<</SYS>>\n [/INST]\n" # [OPTIONAL]
             },
-            "user": { # follow this format https://github.com/facebookresearch/llama/blob/77062717054710e352a99add63d160274ce670c6/llama/generation.py#L348
-                "pre_message": "[INST] ",
-                "post_message": " [/INST]\n"
+            "user": { 
+                "pre_message": "[INST] ", # [OPTIONAL]
+                "post_message": " [/INST]" # [OPTIONAL]
             }, 
             "assistant": {
-                "post_message": "\n" # follows this - https://replicate.com/blog/how-to-prompt-llama
+                "pre_message": "\n" # [OPTIONAL]
+                "post_message": "\n" # [OPTIONAL]
             }
         }
+        final_prompt_value="Now answer as best you can:" # [OPTIONAL]
     )
     ```
     """
