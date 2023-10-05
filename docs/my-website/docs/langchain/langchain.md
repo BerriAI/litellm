@@ -3,7 +3,7 @@ import TabItem from '@theme/TabItem';
 
 # Using ChatLiteLLM() - Langchain
 
-## Pre-Requisits
+## Pre-Requisites
 ```shell
 !pip install litellm langchain
 ```
