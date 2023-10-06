@@ -50,7 +50,7 @@ def test_completion_claude():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-# test_completion_claude()
+test_completion_claude()
 
 # def test_completion_oobabooga():
 #     try:
@@ -561,7 +561,7 @@ def test_completion_azure():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_completion_azure()
+# test_completion_azure()
 
 # new azure test for using litellm. vars, 
 # use the following vars in this test and make an azure_api_call
@@ -779,7 +779,7 @@ def test_completion_bedrock_claude():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_completion_bedrock_claude()
+test_completion_bedrock_claude()
 
 def test_completion_bedrock_claude_stream():
     print("calling claude")

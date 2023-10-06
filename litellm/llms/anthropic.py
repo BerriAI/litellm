@@ -25,7 +25,7 @@ class AnthropicConfig():
 
     to pass metadata to anthropic, it's {"user_id": "any-relevant-information"}
     """
-    max_tokens_to_sample: Optional[int]=256 # anthropic requires a default 
+    max_tokens_to_sample: Optional[int]=litellm.max_tokens # anthropic requires a default 
     stop_sequences: Optional[list]=None
     temperature: Optional[int]=None
     top_p: Optional[int]=None
