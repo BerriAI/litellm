@@ -11,6 +11,9 @@ import os
 from litellm import completion
 os.environ["OPENROUTER_API_KEY"] = ""
 
+os.environ["OR_SITE_URL"] = "" # optional
+os.environ["OR_APP_NAME"] = "" # optional
+
 response = completion(
             model="openrouter/google/palm-2-chat-bison",
             messages=messages,
