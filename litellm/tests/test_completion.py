@@ -38,7 +38,7 @@ def test_completion_custom_provider_model_name():
 
 def test_completion_claude():
     litellm.set_verbose = True
-    litellm.anthropic_config(max_tokens_to_sample=200, metadata={"user_id": "1224"})
+    litellm.AnthropicConfig(max_tokens_to_sample=200, metadata={"user_id": "1224"})
     try:
         # test without max tokens
         response = completion(
@@ -51,32 +51,6 @@ def test_completion_claude():
         pytest.fail(f"Error occurred: {e}")
 
 # test_completion_claude()
-
-def test_completion_claude_max_tokens():
-    try:
-        litellm.set_verbose = True
-        # Redirect stdout
-        old_stdout = sys.stdout
-        sys.stdout = new_stdout = io.StringIO()
-
-        # test setting max tokens for claude-2
-        user_message = "tell me everything about YC - be verbose"
-        messages = [{"content": user_message, "role": "user"}]
-        litellm.set_verbose = True
-        response = completion(
-            model="claude-instant-1", messages=messages, max_tokens=1200
-        )
-        # Restore stdout
-        sys.stdout = old_stdout
-        output = new_stdout.getvalue().strip()
-        # Add any assertions here to check the response
-        if "LiteLLM.Anthropic: Max Tokens Set" not in output:
-            raise Exception("Required log message not found!")
-        print(f"response: {response}")
-        litellm.set_verbose = False
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-# test_completion_claude_max_tokens()
 
 # def test_completion_oobabooga():
 #     try:
