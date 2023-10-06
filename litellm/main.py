@@ -1180,7 +1180,7 @@ def batch_completion(
             custom_llm_provider=custom_llm_provider
         )
         results = vllm.batch_completions(model=model, messages=batch_messages, custom_prompt_dict=litellm.custom_prompt_dict, optional_params=optional_params)
-    # all non VLLM models for batch completion models
+    # all non VLLM models for batch completion models 
     else:
         def chunks(lst, n):
             """Yield successive n-sized chunks from lst."""
