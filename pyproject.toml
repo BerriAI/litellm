@@ -23,3 +23,7 @@ litellm = 'litellm:run_server'
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.commitizen]
+version = "0.2.0"
+
