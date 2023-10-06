@@ -3864,7 +3864,27 @@ class RateLimitManager():
     def __init__(self, max_tokens_per_minute, max_requests_per_minute):
         self.max_tokens_per_minute = max_tokens_per_minute
         self.max_requests_per_minute = max_requests_per_minute
-        print("init rate limit handler")
+        # print("init rate limit handler")
+        self.status_tracker = StatusTracker()
+
+    # async def acompletion(self, max_attempts=5, kwargs):
+    #     # init request
+    #     request = APIRequest(
+    #             task_id=next(self.task_id_generator_function()),
+    #             request_json=kwargs,
+    #             token_consumption=self.num_tokens_consumed_from_request(
+    #                 request_json, token_encoding_name
+    #             ),
+    #             attempts_left=max_attempts,
+    #             metadata=request_json.pop("metadata", None),
+    #     )
+
+    #     # check current capacity for model
+
+    #     # if under capacity
+    #         # check if fallback model specified 
+
+    #         # if no fallback model specified then wait to process request 
     
 
     async def batch_completion(
