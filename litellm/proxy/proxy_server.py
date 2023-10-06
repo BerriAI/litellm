@@ -116,7 +116,7 @@ def model_list():
         object="list",
     )
 
-@app.post("/completions")
+@app.post("/{version}/completions")
 async def completion(request: Request):
     data = await request.json()
     print_verbose(f"data passed in: {data}")
