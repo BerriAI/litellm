@@ -1,7 +1,8 @@
-import json, copy
+import json, copy, types
 from enum import Enum
 import time
-from typing import Callable
+from typing import Callable, Optional
+import litellm
 from litellm.utils import ModelResponse, get_secret
 
 class BedrockError(Exception):
@@ -12,6 +13,155 @@ class BedrockError(Exception):
             self.message
         )  # Call the base class constructor with the parameters it needs
 
+class AmazonTitanConfig(): 
+    """
+    Reference: https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=titan-text-express-v1
+
+    Supported Params for the Amazon Titan models:
+
+    - `maxTokenCount` (integer) max tokens,
+    - `stopSequences` (string[]) list of stop sequence strings
+    - `temperature` (float) temperature for model,
+    - `topP` (int) top p for model
+    """
+    maxTokenCount: Optional[int]=None
+    stopSequences: Optional[list]=None
+    temperature: Optional[float]=None
+    topP: Optional[int]=None
+
+    def __init__(self, 
+                 maxTokenCount: Optional[int]=None,
+                 stopSequences: Optional[list]=None,
+                 temperature: Optional[float]=None,
+                 topP: Optional[int]=None) -> None:
+        locals_ = locals()
+        for key, value in locals_.items():
+            if key != 'self' and value is not None:
+                setattr(self.__class__, key, value)
+    
+    @classmethod
+    def get_config(cls):
+        return {k: v for k, v in cls.__dict__.items() 
+                if not k.startswith('__') 
+                and not isinstance(v, (types.FunctionType, types.BuiltinFunctionType, classmethod, staticmethod)) 
+                and v is not None}
+
+class AmazonAnthropicConfig(): 
+    """
+    Reference: https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=claude
+
+    Supported Params for the Amazon / Anthropic models:
+
+    - `max_tokens_to_sample` (integer) max tokens,
+    - `temperature` (float) model temperature,
+    - `top_k` (integer) top k,
+    - `top_p` (integer) top p,
+    - `stop_sequences` (string[]) list of stop sequences - e.g. ["\\n\\nHuman:"],
+    - `anthropic_version` (string) version of anthropic for bedrock - e.g. "bedrock-2023-05-31"
+    """
+    max_tokens_to_sample: Optional[int]=litellm.max_tokens
+    stop_sequences: Optional[list]=None
+    temperature: Optional[float]=None
+    top_k: Optional[int]=None
+    top_p: Optional[int]=None
+    anthropic_version: Optional[str]=None
+
+    def __init__(self, 
+                 max_tokens_to_sample: Optional[int]=None,
+                 stop_sequences: Optional[list]=None,
+                 temperature: Optional[float]=None,
+                 top_k: Optional[int]=None,
+                 top_p: Optional[int]=None,
+                 anthropic_version: Optional[str]=None) -> None:
+        locals_ = locals()
+        for key, value in locals_.items():
+            if key != 'self' and value is not None:
+                setattr(self.__class__, key, value)
+    
+    @classmethod
+    def get_config(cls):
+        return {k: v for k, v in cls.__dict__.items() 
+                if not k.startswith('__') 
+                and not isinstance(v, (types.FunctionType, types.BuiltinFunctionType, classmethod, staticmethod)) 
+                and v is not None}
+
+class AmazonCohereConfig(): 
+    """
+    Reference: https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=command
+
+    Supported Params for the Amazon / Cohere models:
+
+    - `max_tokens` (integer) max tokens,
+    - `temperature` (float) model temperature,
+    - `return_likelihood` (string) n/a
+    """
+    max_tokens: Optional[int]=None
+    temperature: Optional[float]=None
+    return_likelihood: Optional[str]=None
+
+    def __init__(self, 
+                 max_tokens: Optional[int]=None,
+                 temperature: Optional[float]=None,
+                 return_likelihood: Optional[str]=None) -> None:
+        locals_ = locals()
+        for key, value in locals_.items():
+            if key != 'self' and value is not None:
+                setattr(self.__class__, key, value)
+    
+    @classmethod
+    def get_config(cls):
+        return {k: v for k, v in cls.__dict__.items() 
+                if not k.startswith('__') 
+                and not isinstance(v, (types.FunctionType, types.BuiltinFunctionType, classmethod, staticmethod)) 
+                and v is not None}
+
+class AmazonAI21Config(): 
+    """
+    Reference: https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=j2-ultra
+
+    Supported Params for the Amazon / AI21 models:
+        
+    - `maxTokens` (int32): The maximum number of tokens to generate per result. Optional, default is 16. If no `stopSequences` are given, generation stops after producing `maxTokens`.
+        
+    - `temperature` (float): Modifies the distribution from which tokens are sampled. Optional, default is 0.7. A value of 0 essentially disables sampling and results in greedy decoding.
+        
+    - `topP` (float): Used for sampling tokens from the corresponding top percentile of probability mass. Optional, default is 1. For instance, a value of 0.9 considers only tokens comprising the top 90% probability mass.
+        
+    - `stopSequences` (array of strings): Stops decoding if any of the input strings is generated. Optional.
+        
+    - `frequencyPenalty` (object): Placeholder for frequency penalty object.
+        
+    - `presencePenalty` (object): Placeholder for presence penalty object.
+        
+    - `countPenalty` (object): Placeholder for count penalty object.
+    """
+    maxTokens: Optional[int]=None
+    temperature: Optional[float]=None
+    topP: Optional[float]=None
+    stopSequences: Optional[list]=None
+    frequencePenalty: Optional[dict]=None
+    presencePenalty: Optional[dict]=None
+    countPenalty: Optional[dict]=None
+
+    def __init__(self,
+                 maxTokens: Optional[int]=None,
+                 temperature: Optional[float]=None,
+                 topP: Optional[float]=None,
+                 stopSequences: Optional[list]=None,
+                 frequencePenalty: Optional[dict]=None,
+                 presencePenalty: Optional[dict]=None,
+                 countPenalty: Optional[dict]=None) -> None:
+        locals_ = locals()
+        for key, value in locals_.items():
+            if key != 'self' and value is not None:
+                setattr(self.__class__, key, value)
+    
+    @classmethod
+    def get_config(cls):
+        return {k: v for k, v in cls.__dict__.items() 
+                if not k.startswith('__') 
+                and not isinstance(v, (types.FunctionType, types.BuiltinFunctionType, classmethod, staticmethod)) 
+                and v is not None}
 
 class AnthropicConstants(Enum):
     HUMAN_PROMPT = "\n\nHuman:"
@@ -100,22 +250,52 @@ def completion(
     prompt = convert_messages_to_prompt(messages, provider)
     inference_params = copy.deepcopy(optional_params)
     stream = inference_params.pop("stream", False)
+
+    print(f"bedrock provider: {provider}")
     if provider == "anthropic":
+        ## LOAD CONFIG
+        config = litellm.AmazonAnthropicConfig.get_config() 
+        for k, v in config.items(): 
+            if k not in inference_params: # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
+                inference_params[k] = v
         data = json.dumps({
             "prompt": prompt,
             **inference_params
         })
     elif provider == "ai21":
+        ## LOAD CONFIG
+        config = litellm.AmazonAI21Config.get_config() 
+        for k, v in config.items(): 
+            if k not in inference_params: # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
+                inference_params[k] = v
+
         data = json.dumps({
             "prompt": prompt,
+            **inference_params
         })
+    elif provider == "cohere":
+        ## LOAD CONFIG
+        config = litellm.AmazonCohereConfig.get_config() 
+        for k, v in config.items(): 
+            if k not in inference_params: # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
+                inference_params[k] = v
+        data = json.dumps({
+            "prompt": prompt,
+            **inference_params
+        })
+    elif provider == "amazon":  # amazon titan
+        ## LOAD CONFIG
+        config = litellm.AmazonTitanConfig.get_config() 
+        for k, v in config.items(): 
+            if k not in inference_params: # completion(top_k=3) > amazon_config(top_k=3) <- allows for dynamic variables to be passed in
+                inference_params[k] = v
 
-    else:  # amazon titan
         data = json.dumps({
             "inputText": prompt,
             "textGenerationConfig": inference_params,
         })
-        ## LOGGING
+    
+    ## LOGGING
     logging_obj.pre_call(
         input=prompt,
         api_key="",
@@ -147,7 +327,7 @@ def completion(
     logging_obj.post_call(
         input=prompt,
         api_key="",
-        original_response=response,
+        original_response=response_body,
         additional_args={"complete_input_dict": data},
     )
     print_verbose(f"raw model_response: {response}")
@@ -158,6 +338,8 @@ def completion(
     elif provider == "anthropic":
         outputText = response_body['completion']
         model_response["finish_reason"] = response_body["stop_reason"]
+    elif provider == "cohere": 
+        outputText = response_body["generations"][0]["text"]
     else:  # amazon titan
         outputText = response_body.get('results')[0].get('outputText')
     if "error" in outputText:

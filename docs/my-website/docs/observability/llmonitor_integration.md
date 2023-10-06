@@ -37,10 +37,18 @@ litellm.success_callback = ["llmonitor"]
 litellm.failure_callback = ["llmonitor"]
 
 #openai call
-response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])
+response = completion(
+  model="gpt-3.5-turbo", 
+  messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}],
+  user="ishaan_litellm"
+)
 
 #cohere call
-response = completion(model="command-nightly", messages=[{"role": "user", "content": "Hi 👋 - i'm cohere"}])
+response = completion(
+  model="command-nightly", 
+  messages=[{"role": "user", "content": "Hi 👋 - i'm cohere"}],
+  user="ishaan_litellm"
+)
 ```
 
 ## Support

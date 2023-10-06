@@ -947,6 +947,7 @@ def get_optional_params(  # use the openai defaults
     frequency_penalty=0,
     logit_bias={},
     user="",
+    request_timeout=None,
     deployment_id=None,
     model=None,
     custom_llm_provider="",
@@ -971,12 +972,13 @@ def get_optional_params(  # use the openai defaults
         "logit_bias":{},
         "user":"",
         "deployment_id":None,
+        "request_timeout":None,
         "model":None,
         "custom_llm_provider":"",
     }
     # filter out those parameters that were passed with non-default values
     non_default_params = {k: v for k, v in passed_params.items() if (k != "model" and k != "custom_llm_provider" and k in default_params and v != default_params[k])}
-    
+
     ## raise exception if function calling passed in for a provider that doesn't support it
     if "functions" in non_default_params or "function_call" in non_default_params:
         if custom_llm_provider != "openai" and custom_llm_provider != "text-completion-openai" and custom_llm_provider != "azure": 
@@ -990,6 +992,9 @@ def get_optional_params(  # use the openai defaults
         for k in non_default_params.keys():
             if k not in supported_params:
                 if k == "n" and n == 1: # langchain sends n=1 as a default value
+                    pass
+                # Always keeps this in elif code blocks
+                elif k == "request_timeout": # litellm handles request time outs
                     pass
                 else: 
                     unsupported_params.append(k)
@@ -1015,7 +1020,7 @@ def get_optional_params(  # use the openai defaults
             optional_params["max_tokens_to_sample"] = max_tokens
     elif custom_llm_provider == "cohere":
         ## check if unsupported param passed in 
-        supported_params = ["stream", "temperature", "max_tokens", "logit_bias", "top_p", "frequency_penalty", "presence_penalty", "stop"]
+        supported_params = ["stream", "temperature", "max_tokens", "logit_bias", "top_p", "frequency_penalty", "presence_penalty", "stop", "n"]
         _check_valid_arg(supported_params=supported_params)
         # handle cohere params
         if stream:
@@ -1197,8 +1202,6 @@ def get_optional_params(  # use the openai defaults
             # \"max_tokens_to_sample\":300,\"temperature\":0.5,\"top_p\":1,\"stop_sequences\":[\"\\\\n\\\\nHuman:\"]}"
             if max_tokens:
                 optional_params["max_tokens_to_sample"] = max_tokens
-            else:
-                optional_params["max_tokens_to_sample"] = 256 # anthropic fails without max_tokens_to_sample
             if temperature:
                 optional_params["temperature"] = temperature
             if top_p:
@@ -1221,6 +1224,28 @@ def get_optional_params(  # use the openai defaults
                 optional_params["topP"] = top_p
             if stream: 
                 optional_params["stream"] = stream
+        elif "cohere" in model: # cohere models on bedrock
+            supported_params = ["stream", "temperature", "max_tokens", "logit_bias", "top_p", "frequency_penalty", "presence_penalty", "stop"]
+            _check_valid_arg(supported_params=supported_params)
+            # handle cohere params
+            if stream:
+                optional_params["stream"] = stream
+            if temperature:
+                optional_params["temperature"] = temperature
+            if max_tokens:
+                optional_params["max_tokens"] = max_tokens
+            if n: 
+                optional_params["num_generations"] = n
+            if logit_bias != {}:
+                optional_params["logit_bias"] = logit_bias
+            if top_p: 
+                optional_params["p"] = top_p
+            if frequency_penalty: 
+                optional_params["frequency_penalty"] = frequency_penalty
+            if presence_penalty: 
+                optional_params["presence_penalty"] = presence_penalty
+            if stop:
+                optional_params["stop_sequences"] = stop
     elif model in litellm.aleph_alpha_models:
         supported_params = ["max_tokens", "stream", "top_p", "temperature", "presence_penalty", "frequency_penalty", "n", "stop"]
         _check_valid_arg(supported_params=supported_params)
@@ -1273,7 +1298,7 @@ def get_optional_params(  # use the openai defaults
         if stream:
             optional_params["stream"] = stream
     else:  # assume passing in params for openai/azure openai
-        supported_params = ["functions", "function_call", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "deployment_id"]
+        supported_params = ["functions", "function_call", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "deployment_id", "request_timeout"]
         _check_valid_arg(supported_params=supported_params)
         optional_params = non_default_params
     # if user passed in non-default kwargs for specific providers/models, pass them along 
@@ -1307,8 +1332,12 @@ def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None):
         elif model in litellm.cohere_models:
             custom_llm_provider = "cohere"
         ## replicate
-        elif model in litellm.replicate_models:
-            custom_llm_provider = "replicate"
+        elif model in litellm.replicate_models or ":" in model:
+            model_parts = model.split(":")
+            if len(model_parts) > 1 and len(model_parts[1])==64: ## checks if model name has a 64 digit code - e.g. "meta/llama-2-70b-chat:02e509c789964a7ea8736978a43525956ef40397be9033abf9fd2badfe68c9e3"
+                custom_llm_provider = "replicate"
+            elif model in litellm.replicate_models:
+                custom_llm_provider = "replicate"
         ## openrouter
         elif model in litellm.openrouter_models:
             custom_llm_provider = "openrouter"
@@ -1827,7 +1856,7 @@ def handle_failure(exception, traceback_exception, start_time, end_time, args, k
                     llmonitorLogger.log_event(
                         type=type,
                         event="error",
-                        user_id=litellm._thread_context.user,
+                        user_id=kwargs.get("user", "default"),
                         model=model,
                         input=input,
                         error=traceback_exception,
@@ -1947,7 +1976,7 @@ def handle_success(args, kwargs, result, start_time, end_time):
                         event="end",
                         model=model,
                         input=input,
-                        user_id=litellm._thread_context.user,
+                        user_id=kwargs.get("user", "default"),
                         response_obj=result,
                         start_time=start_time,
                         end_time=end_time,
@@ -2081,24 +2110,28 @@ def modify_integration(integration_name, integration_params):
 # custom prompt helper function
 def register_prompt_template(model: str, roles: dict, initial_prompt_value: str = "", final_prompt_value: str = ""):
     """
+    Format the openai prompt, to follow your custom format. 
     Example usage:
     ```
     import litellm 
     litellm.register_prompt_template(
 	    model="llama-2",
+        initial_prompt_value="You are a good assistant" # [OPTIONAL]
 	    roles={
             "system": {
-                "pre_message": "[INST] <<SYS>>\n",
-                "post_message": "\n<</SYS>>\n [/INST]\n"
+                "pre_message": "[INST] <<SYS>>\n", # [OPTIONAL]
+                "post_message": "\n<</SYS>>\n [/INST]\n" # [OPTIONAL]
             },
-            "user": { # follow this format https://github.com/facebookresearch/llama/blob/77062717054710e352a99add63d160274ce670c6/llama/generation.py#L348
-                "pre_message": "[INST] ",
-                "post_message": " [/INST]\n"
+            "user": { 
+                "pre_message": "[INST] ", # [OPTIONAL]
+                "post_message": " [/INST]" # [OPTIONAL]
             }, 
             "assistant": {
-                "post_message": "\n" # follows this - https://replicate.com/blog/how-to-prompt-llama
+                "pre_message": "\n" # [OPTIONAL]
+                "post_message": "\n" # [OPTIONAL]
             }
         }
+        final_prompt_value="Now answer as best you can:" # [OPTIONAL]
     )
     ```
     """

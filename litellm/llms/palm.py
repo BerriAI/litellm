@@ -1,9 +1,10 @@
-import os
+import os, types
 import json
 from enum import Enum
 import time
-from typing import Callable
+from typing import Callable, Optional
 from litellm.utils import ModelResponse, get_secret
+import litellm
 import sys
 
 class PalmError(Exception):
@@ -13,6 +14,57 @@ class PalmError(Exception):
         super().__init__(
             self.message
         )  # Call the base class constructor with the parameters it needs
+
+class PalmConfig(): 
+    """
+    Reference: https://developers.generativeai.google/api/python/google/generativeai/chat
+
+    The class `PalmConfig` provides configuration for the Palm's API interface. Here are the parameters:
+
+    - `context` (string): Text that should be provided to the model first, to ground the response. This could be a prompt to guide the model's responses.
+
+    - `examples` (list): Examples of what the model should generate. They are treated identically to conversation messages except that they take precedence over the history in messages if the total input size exceeds the model's input_token_limit.
+
+    - `temperature` (float): Controls the randomness of the output. Must be positive. Higher values produce a more random and varied response. A temperature of zero will be deterministic.
+
+    - `candidate_count` (int): Maximum number of generated response messages to return. This value must be between [1, 8], inclusive. Only unique candidates are returned.
+
+    - `top_k` (int): The API uses combined nucleus and top-k sampling. `top_k` sets the maximum number of tokens to sample from on each step.
+
+    - `top_p` (float): The API uses combined nucleus and top-k sampling. `top_p` configures the nucleus sampling. It sets the maximum cumulative probability of tokens to sample from.
+
+    - `maxOutputTokens` (int): Sets the maximum number of tokens to be returned in the output
+    """
+    context: Optional[str]=None
+    examples: Optional[list]=None
+    temperature: Optional[float]=None
+    candidate_count: Optional[int]=None
+    top_k: Optional[int]=None
+    top_p: Optional[float]=None
+    maxOutputTokens: Optional[int]=None
+
+    def __init__(self,
+                 context: Optional[str]=None,
+                 examples: Optional[list]=None,
+                 temperature: Optional[float]=None,
+                 candidate_count: Optional[int]=None,
+                 top_k: Optional[int]=None,
+                 top_p: Optional[float]=None,
+                 maxOutputTokens: Optional[int]=None) -> None:
+        
+        locals_ = locals()
+        for key, value in locals_.items():
+            if key != 'self' and value is not None:
+                setattr(self.__class__, key, value)
+    
+    @classmethod
+    def get_config(cls):
+        return {k: v for k, v in cls.__dict__.items() 
+                if not k.startswith('__') 
+                and not isinstance(v, (types.FunctionType, types.BuiltinFunctionType, classmethod, staticmethod)) 
+                and v is not None}
+
+
 
 def completion(
     model: str,
@@ -33,6 +85,13 @@ def completion(
     palm.configure(api_key=api_key)
 
     model = model
+    
+    ## Load Config
+    config = litellm.PalmConfig.get_config() 
+    for k, v in config.items(): 
+        if k not in optional_params: # completion(top_k=3) > palm_config(top_k=3) <- allows for dynamic variables to be passed in
+            optional_params[k] = v
+
     prompt = ""
     for message in messages:
         if "role" in message:

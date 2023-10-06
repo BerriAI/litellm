@@ -1,5 +1,5 @@
-# ##### THESE TESTS CAN ONLY RUN LOCALLY WITH THE OLLAMA SERVER RUNNING ######
-# # https://ollama.ai/
+# # ##### THESE TESTS CAN ONLY RUN LOCALLY WITH THE OLLAMA SERVER RUNNING ######
+# # # https://ollama.ai/
 
 # import sys, os
 # import traceback
@@ -21,13 +21,28 @@
 #         response = completion(
 #             model="ollama/llama2", 
 #             messages=messages, 
+#             max_tokens=200,
+#             request_timeout = 10,
+
+#         )
+#         print(response)
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
+
+# test_completion_ollama()
+
+# def test_completion_ollama_with_api_base():
+#     try:
+#         response = completion(
+#             model="ollama/llama2", 
+#             messages=messages, 
 #             api_base="http://localhost:11434"
 #         )
 #         print(response)
 #     except Exception as e:
 #         pytest.fail(f"Error occurred: {e}")
 
-# # test_completion_ollama()
+# test_completion_ollama_with_api_base()
 
 # def test_completion_ollama_stream():
 #     user_message = "what is litellm?"
@@ -36,7 +51,6 @@
 #         response = completion(
 #             model="ollama/llama2", 
 #             messages=messages, 
-#             api_base="http://localhost:11434", 
 #             stream=True
 #         )
 #         print(response)
@@ -49,6 +63,35 @@
 
 # test_completion_ollama_stream()
 
+
+# def test_completion_ollama_custom_prompt_template():
+#     user_message = "what is litellm?"
+#     litellm.register_prompt_template(
+#         model="llama2",
+#         roles={
+#             "system": {"pre_message": "System: "},
+#             "user": {"pre_message": "User: "},
+#             "assistant": {"pre_message": "Assistant: "}
+#         }
+#     )
+#     messages = [{ "content": user_message,"role": "user"}]
+#     litellm.set_verbose = True
+#     try:
+#         response = completion(
+#             model="ollama/llama2", 
+#             messages=messages, 
+#             stream=True
+#         )
+#         print(response)
+#         for chunk in response:
+#             print(chunk)
+#             # print(chunk['choices'][0]['delta'])
+
+#     except Exception as e:
+#         traceback.print_exc()
+#         pytest.fail(f"Error occurred: {e}")
+
+# test_completion_ollama_custom_prompt_template()
 
 # async def test_completion_ollama_async_stream():
 #     user_message = "what is the weather"

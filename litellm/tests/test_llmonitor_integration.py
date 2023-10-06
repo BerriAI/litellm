@@ -20,6 +20,7 @@ def test_chat_openai():
         response = completion(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}],
+            user="ishaan_from_litellm"
         )
 
         print(response)

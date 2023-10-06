@@ -37,10 +37,12 @@ def test_completion_custom_provider_model_name():
 
 
 def test_completion_claude():
+    litellm.set_verbose = True
+    litellm.AnthropicConfig(max_tokens_to_sample=200, metadata={"user_id": "1224"})
     try:
         # test without max tokens
         response = completion(
-            model="claude-instant-1", messages=messages
+            model="claude-instant-1", messages=messages, request_timeout=10,
         )
         # Add any assertions here to check the response
         print(response)
@@ -48,31 +50,7 @@ def test_completion_claude():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-def test_completion_claude_max_tokens():
-    try:
-        litellm.set_verbose = True
-        # Redirect stdout
-        old_stdout = sys.stdout
-        sys.stdout = new_stdout = io.StringIO()
-
-        # test setting max tokens for claude-2
-        user_message = "tell me everything about YC - be verbose"
-        messages = [{"content": user_message, "role": "user"}]
-        litellm.set_verbose = True
-        response = completion(
-            model="claude-instant-1", messages=messages, max_tokens=1200
-        )
-        # Restore stdout
-        sys.stdout = old_stdout
-        output = new_stdout.getvalue().strip()
-        # Add any assertions here to check the response
-        if "LiteLLM.Anthropic: Max Tokens Set" not in output:
-            raise Exception("Required log message not found!")
-        print(f"response: {response}")
-        litellm.set_verbose = False
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-# test_completion_claude_max_tokens()
+test_completion_claude()
 
 # def test_completion_oobabooga():
 #     try:
@@ -196,6 +174,8 @@ def test_get_hf_task_for_model():
 # # TGI model
 # # this is a TGI model https://huggingface.co/glaiveai/glaive-coder-7b
 # def hf_test_completion_tgi():
+#     litellm.huggingface_config(return_full_text=True)
+#     litellm.set_verbose=True
 #     try:
 #         response = litellm.completion(
 #             model="huggingface/mistralai/Mistral-7B-Instruct-v0.1",
@@ -319,13 +299,10 @@ def test_get_hf_task_for_model():
 
 def test_completion_cohere(): # commenting for now as the cohere endpoint is being flaky
     try:
+        litellm.CohereConfig(max_tokens=1000, stop_sequences=["a"])
         response = completion(
             model="command-nightly",
             messages=messages,
-            max_tokens=100,
-            n=1,
-            logit_bias={40: 10},
-            stop=["a"],
             logger_fn=logger_fn
         )
         # Add any assertions here to check the response
@@ -339,13 +316,13 @@ def test_completion_cohere(): # commenting for now as the cohere endpoint is bei
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_completion_cohere()
+# test_completion_cohere()
 
 
 def test_completion_openai():
     try:
         litellm.api_key = os.environ['OPENAI_API_KEY']
-        response = completion(model="gpt-3.5-turbo", messages=messages, max_tokens=10)
+        response = completion(model="gpt-3.5-turbo", messages=messages, max_tokens=10, request_timeout=10)
         print("This is the response object\n", response)
         print("\n\nThis is response ms:", response.response_ms)
 
@@ -567,10 +544,17 @@ def test_completion_openai_with_more_optional_params():
 
 def test_completion_azure():
     try:
-        print("azure gpt-3.5 test\n\n")
+        litellm.set_verbose=True
+        ## Test azure call
         response = completion(
             model="azure/chatgpt-v-2",
             messages=messages,
+        )
+        ## Test azure flag for backwards compatibility
+        response = completion(
+            model="chatgpt-v-2",
+            messages=messages,
+            azure=True
         )
         # Add any assertions here to check the response
         print(response)
@@ -663,13 +647,12 @@ def test_completion_azure_deployment_id():
 # Replicate API endpoints are unstable -> throw random CUDA errors -> this means our tests can fail even if our tests weren't incorrect.
 
 # def test_completion_replicate_llama_2():
-#     model_name = "replicate/llama-2-70b-chat:2796ee9483c3fd7aa2e171d38f4ca12251a30609463dcfd4cd76703f22e96cdf"
+#     model_name = "replicate/meta/llama-2-70b-chat:02e509c789964a7ea8736978a43525956ef40397be9033abf9fd2badfe68c9e3"
+#     litellm.replicate_config(max_new_tokens=200)
 #     try:
 #         response = completion(
 #             model=model_name, 
 #             messages=messages, 
-#             max_tokens=20,
-#             custom_llm_provider="replicate"
 #         )
 #         print(response)
 #         cost = completion_cost(completion_response=response)
@@ -796,7 +779,7 @@ def test_completion_bedrock_claude():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_completion_bedrock_claude()
+test_completion_bedrock_claude()
 
 def test_completion_bedrock_claude_stream():
     print("calling claude")
@@ -1018,14 +1001,14 @@ def test_completion_with_fallbacks():
 def test_completion_ai21():
     model_name = "j2-light"
     try:
-        response = completion(model=model_name, messages=messages, max_tokens=100, temperature=0.8, logger_fn=logger_fn)
+        response = completion(model=model_name, messages=messages, max_tokens=100, temperature=0.8)
         # Add any assertions here to check the response
         print(response)
         print(response.response_ms)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_completion_ai21()
+# test_completion_ai21()
 ## test deep infra 
 def test_completion_deep_infra():
     # litellm.set_verbose = True

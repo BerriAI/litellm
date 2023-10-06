@@ -78,6 +78,6 @@ This list is constantly being updated.
 |AlephAlpha| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |   |  |   |
 |Palm| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |  |   |
 |NLP Cloud| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |  |   |
-|Petals| ✅ | ✅ |  | ✅ | ✅ |  |   |  |  |   |
+|Petals| ✅ | ✅ |  | ✅ | | ✅ |   |  |  |   |
 
 By default, LiteLLM raises an exception if the param being passed in isn't supported. However, if you want to just drop the param, instead of raising an exception, just set `litellm.drop_params = True`. 

@@ -6,6 +6,7 @@
 # +-----------------------------------------------+
 #
 #  Thank you ! We ❤️ you! - Krrish & Ishaan
+
 import os, openai, sys, json, inspect
 from typing import Any
 from functools import partial
@@ -29,22 +30,25 @@ from litellm.utils import (
     get_api_key,
     mock_completion_streaming_obj,
 )
-from .llms import anthropic
-from .llms import together_ai
-from .llms import ai21
-from .llms import sagemaker
-from .llms import bedrock
-from .llms import huggingface_restapi
-from .llms import replicate
-from .llms import aleph_alpha
-from .llms import nlp_cloud
-from .llms import baseten
-from .llms import vllm
-from .llms import ollama
-from .llms import cohere
-from .llms import petals
-from .llms import oobabooga
-from .llms import palm
+from .llms import (
+    anthropic,
+    together_ai,
+    ai21,
+    sagemaker,
+    bedrock,
+    huggingface_restapi,
+    replicate,
+    aleph_alpha,
+    nlp_cloud,
+    baseten,
+    vllm,
+    ollama,
+    cohere,
+    petals,
+    oobabooga,
+    palm,
+    vertex_ai)
+from .llms.prompt_templates.factory import prompt_factory, custom_prompt
 import tiktoken
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, List, Optional, Dict
@@ -166,6 +170,7 @@ def completion(
     logit_bias: dict = {},
     user: str = "",
     deployment_id = None,
+    request_timeout: Optional[int] = None,
     # Optional liteLLM function params
     **kwargs,
 ) -> ModelResponse:
@@ -218,8 +223,8 @@ def completion(
     metadata = kwargs.get('metadata', None)
     fallbacks = kwargs.get('fallbacks', [])
     ######## end of unpacking kwargs ###########
-    openai_params = ["functions", "function_call", "temperature", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user"]
-    litellm_params = ["metadata", "acompletion", "caching", "return_async", "mock_response", "api_key", "api_version", "api_base", "force_timeout", "logger_fn", "verbose", "custom_llm_provider", "litellm_logging_obj", "litellm_call_id", "use_client", "id", "metadata", "fallbacks"]
+    openai_params = ["functions", "function_call", "temperature", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "request_timeout"]
+    litellm_params = ["metadata", "acompletion", "caching", "return_async", "mock_response", "api_key", "api_version", "api_base", "force_timeout", "logger_fn", "verbose", "custom_llm_provider", "litellm_logging_obj", "litellm_call_id", "use_client", "id", "metadata", "fallbacks", "azure"]
     default_params = openai_params + litellm_params
     non_default_params = {k: v for k,v in kwargs.items() if k not in default_params} # model-specific params - pass them straight to the model/provider
     if mock_response:
@@ -235,7 +240,9 @@ def completion(
             ]  # update the model to the actual value if an alias has been passed in
         model_response = ModelResponse()
 
-        if deployment_id != None: # azure llms
+        if kwargs.get('azure', False) == True: # don't remove flag check, to remain backwards compatible for repos like Codium
+            custom_llm_provider="azure"
+        if deployment_id != None: # azure llms 
                 model=deployment_id
                 custom_llm_provider="azure"
         model, custom_llm_provider = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
@@ -258,6 +265,7 @@ def completion(
             frequency_penalty=frequency_penalty,
             logit_bias=logit_bias,
             user=user,
+            request_timeout=request_timeout,
             deployment_id=deployment_id,
             # params to identify the model
             model=model,
@@ -807,136 +815,32 @@ def completion(
                 )
                 return response
             response = model_response
-        elif model in litellm.vertex_chat_models or model in litellm.vertex_code_chat_models:
-            try:
-                import vertexai
-            except:
-                raise Exception("vertexai import failed please run `pip install google-cloud-aiplatform`")
-            from vertexai.preview.language_models import ChatModel, CodeChatModel, InputOutputTextPair
+        elif model in litellm.vertex_chat_models or model in litellm.vertex_code_chat_models or model in litellm.vertex_text_models or model in litellm.vertex_code_text_models:
+            vertex_ai_project = (litellm.vertex_project 
+                                 or get_secret("VERTEXAI_PROJECT"))
+            vertex_ai_location = (litellm.vertex_location 
+                                  or get_secret("VERTEXAI_LOCATION"))
 
-            vertex_project = (litellm.vertex_project or get_secret("VERTEXAI_PROJECT"))
-            vertex_location = (litellm.vertex_location or get_secret("VERTEXAI_LOCATION"))
-            vertexai.init(
-                project=vertex_project, location=vertex_location
+            # palm does not support streaming as yet :(
+            model_response = vertex_ai.completion(
+                model=model,
+                messages=messages,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                encoding=encoding,
+                vertex_location=vertex_ai_location,
+                vertex_project=vertex_ai_project,
+                logging_obj=logging
             )
-            # vertexai does not use an API key, it looks for credentials.json in the environment
-
-            prompt = " ".join([message["content"] for message in messages])
-            # contains any default values we need to pass to the provider
-            VertexAIConfig = { 
-                "top_k": 40 # override by setting kwarg in completion()  - e.g. completion(..., top_k=20)
-            }
-            if model in litellm.vertex_chat_models:
-                chat_model = ChatModel.from_pretrained(model)
-            else: # vertex_code_chat_models
-                chat_model = CodeChatModel.from_pretrained(model)
-
-            chat = chat_model.start_chat()
-
-            ## Load Config
-            for k, v in VertexAIConfig.items(): 
-                if k not in optional_params: 
-                    optional_params[k] = v
-
-            ## LOGGING
-            logging.pre_call(input=prompt, api_key=None, additional_args={"complete_input_dict": optional_params})
-
+            
             if "stream" in optional_params and optional_params["stream"] == True:
-                model_response = chat.send_message_streaming(prompt, **optional_params)
                 response = CustomStreamWrapper(
                     model_response, model, custom_llm_provider="vertex_ai", logging_obj=logging
-                )
+                    )
                 return response
-
-            completion_response = chat.send_message(prompt, **optional_params)
-
-            ## LOGGING
-            logging.post_call(
-                input=prompt, api_key=None, original_response=completion_response
-            )
-
-            ## RESPONSE OBJECT
-            if str(completion_response) != "":
-                model_response["choices"][0]["message"]["content"] = str(completion_response)
-            model_response["created"] = time.time()
-            model_response["model"] = model
-            ## CALCULATING USAGE
-            prompt_tokens = len(
-                encoding.encode(prompt)
-            ) 
-            completion_tokens = len(
-                encoding.encode(model_response["choices"][0]["message"]["content"])
-            )
-
-            model_response["usage"] = {
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "total_tokens": prompt_tokens + completion_tokens,
-            }
-            response = model_response
-        elif model in litellm.vertex_text_models or model in litellm.vertex_code_text_models:
-            try:
-                import vertexai
-            except:
-                raise Exception("vertexai import failed please run `pip install google-cloud-aiplatform`")
-            from vertexai.language_models import TextGenerationModel, CodeGenerationModel
-
-            vertexai.init(
-                project=litellm.vertex_project, location=litellm.vertex_location
-            )
-            # vertexai does not use an API key, it looks for credentials.json in the environment
-
-            # contains any default values we need to pass to the provider
-            VertexAIConfig = { 
-                "top_k": 40 # override by setting kwarg in completion()  - e.g. completion(..., top_k=20)
-            }
-
-            prompt = " ".join([message["content"] for message in messages])
-            
-            if model in litellm.vertex_text_models:
-                vertex_model = TextGenerationModel.from_pretrained(model)
-            else:
-                vertex_model = CodeGenerationModel.from_pretrained(model)
-            
-            ## Load Config
-            for k, v in VertexAIConfig.items(): 
-                if k not in optional_params: 
-                    optional_params[k] = v
-
-            ## LOGGING
-            logging.pre_call(input=prompt, api_key=None)
-
-            if "stream" in optional_params and optional_params["stream"] == True:
-                model_response = vertex_model.predict_streaming(prompt, **optional_params)
-                response = CustomStreamWrapper(
-                    model_response, model, custom_llm_provider="vertexai", logging_obj=logging
-                )
-                return response
-
-            completion_response = vertex_model.predict(prompt, **optional_params)
-
-            ## LOGGING
-            logging.post_call(
-                input=prompt, api_key=None, original_response=completion_response
-            )
-            ## RESPONSE OBJECT
-            if str(completion_response) != "":
-                model_response["choices"][0]["message"]["content"] = str(completion_response)
-            model_response["created"] = time.time()
-            model_response["model"] = model
-            ## CALCULATING USAGE
-            prompt_tokens = len(
-                encoding.encode(prompt)
-            ) 
-            completion_tokens = len(
-                encoding.encode(model_response["choices"][0]["message"]["content"])
-            )
-
-            model_response["usage"] = {
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "total_tokens": prompt_tokens + completion_tokens,
-            }
             response = model_response
         elif model in litellm.ai21_models:
             custom_llm_provider = "ai21"
@@ -1042,20 +946,33 @@ def completion(
             ## RESPONSE OBJECT
             response = model_response
         elif custom_llm_provider == "ollama":
-            endpoint = (
-                litellm.api_base if litellm.api_base is not None else api_base
+            api_base = (
+                litellm.api_base or
+                api_base or
+                "http://localhost:11434"
+                
             )
-            prompt = " ".join([message["content"] for message in messages])
+            if model in litellm.custom_prompt_dict:
+                # check if the model has a registered custom prompt
+                model_prompt_details = litellm.custom_prompt_dict[model]
+                prompt = custom_prompt(
+                    role_dict=model_prompt_details["roles"], 
+                    initial_prompt_value=model_prompt_details["initial_prompt_value"],  
+                    final_prompt_value=model_prompt_details["final_prompt_value"], 
+                    messages=messages
+                )
+            else:
+                prompt = prompt_factory(model=model, messages=messages)
 
             ## LOGGING
             logging.pre_call(
-                input=prompt, api_key=None, additional_args={"endpoint": endpoint}
+                input=prompt, api_key=None, additional_args={"api_base": api_base, "custom_prompt_dict": litellm.custom_prompt_dict}
             )
             if kwargs.get('acompletion', False) == True:
-                async_generator = ollama.async_get_ollama_response_stream(endpoint, model, prompt)
+                async_generator = ollama.async_get_ollama_response_stream(api_base, model, prompt)
                 return async_generator
 
-            generator = ollama.get_ollama_response_stream(endpoint, model, prompt)
+            generator = ollama.get_ollama_response_stream(api_base, model, prompt)
             if optional_params.get("stream", False) == True:
                 # assume all ollama responses are streamed
                 return generator
@@ -1108,10 +1025,16 @@ def completion(
             custom_llm_provider == "petals"
             or model in litellm.petals_models
         ):
+            api_base = (
+                litellm.api_base or
+                api_base 
+            )
+
             custom_llm_provider = "petals"
             model_response = petals.completion(
                 model=model,
                 messages=messages,
+                api_base=api_base,
                 model_response=model_response,
                 print_verbose=print_verbose,
                 optional_params=optional_params,
