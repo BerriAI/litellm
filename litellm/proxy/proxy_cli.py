@@ -61,7 +61,7 @@ def open_config():
 @click.option('--max_tokens', default=None, help='Set max tokens for the model') 
 @click.option('--telemetry', default=True, type=bool, help='Helps us know if people are using this feature. Turn this off by doing `--telemetry False`') 
 @click.option('--config', is_flag=True, help='Create and open .env file from .env.template')
-@click.option('--test', default=None, help='proxy chat completions url to make a test request to')
+@click.option('--test', flag_value=True, help='proxy chat completions url to make a test request to')
 @click.option('--local', is_flag=True, default=False, help='for local debugging')
 def run_server(port, api_base, model, deploy, debug, temperature, max_tokens, telemetry, config, test, local):
     if config:
@@ -82,10 +82,14 @@ def run_server(port, api_base, model, deploy, debug, temperature, max_tokens, te
 
         print(f"\033[32mLiteLLM: Test your URL using the following: \"litellm --test {url}\"\033[0m")
         return
-    if test != None:
+    if test != False:
         click.echo('LiteLLM: Making a test ChatCompletions request to your proxy')
         import openai
-        openai.api_base = test
+        if test == True: # flag value set
+            api_base = "http://0.0.0.0:8000"
+        else: 
+            api_base = test
+        openai.api_base = api_base
         openai.api_key = "temp-key"
         print(openai.api_base)
 
@@ -107,7 +111,7 @@ def run_server(port, api_base, model, deploy, debug, temperature, max_tokens, te
         except:
             raise ImportError("Uvicorn needs to be imported. Run - `pip install uvicorn`")
         print(f"\033[32mLiteLLM: Deployed Proxy Locally\033[0m\n")
-        print(f"\033[32mLiteLLM: Test your URL using the following: \"litellm --test http://0.0.0.0:{port}\" [In a new terminal tab]\033[0m\n")
+        print(f"\033[32mLiteLLM: Test your local endpoint with: \"litellm --test\" [In a new terminal tab]\033[0m\n")
         print(f"\033[32mLiteLLM: Deploy your proxy using the following: \"litellm --model claude-instant-1 --deploy\" Get an https://api.litellm.ai/chat/completions endpoint \033[0m\n")
         
         uvicorn.run(app, host='0.0.0.0', port=port)

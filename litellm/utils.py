@@ -456,6 +456,14 @@ class Logging:
                             end_time=end_time,
                             print_verbose=print_verbose,
                         )
+                    if callable(callback): # custom logger functions
+                        customLogger.log_event(
+                            kwargs=self.model_call_details,
+                            response_obj=result,
+                            start_time=start_time,
+                            end_time=end_time,
+                            print_verbose=print_verbose,
+                        )
 
                 except Exception as e:
                     print_verbose(
@@ -2020,14 +2028,6 @@ def handle_success(args, kwargs, result, start_time, end_time):
                         start_time=start_time,
                         end_time=end_time,
                         litellm_call_id=kwargs["litellm_call_id"],
-                        print_verbose=print_verbose,
-                    )
-                elif callable(callback): # custom logger functions
-                    customLogger.log_event(
-                        kwargs=kwargs,
-                        response_obj=result,
-                        start_time=start_time,
-                        end_time=end_time,
                         print_verbose=print_verbose,
                     )
             except Exception as e:

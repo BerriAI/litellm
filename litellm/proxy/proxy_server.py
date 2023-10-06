@@ -18,10 +18,12 @@ print()
 
 import litellm
 from fastapi import FastAPI, Request
+from fastapi.routing import APIRouter
 from fastapi.responses import StreamingResponse
 import json
 
 app = FastAPI()
+router = APIRouter()
 
 user_api_base = None
 user_model = None
@@ -109,14 +111,14 @@ def data_generator(response):
         yield f"data: {json.dumps(chunk)}\n\n"
 
 #### API ENDPOINTS ####
-@app.get("/models") # if project requires model list 
+@router.get("/models") # if project requires model list 
 def model_list(): 
     return dict(
         data=[{"id": user_model, "object": "model", "created": 1677610602, "owned_by": "openai"}],
         object="list",
     )
 
-@app.post("/{version}/completions")
+@router.post("/completions")
 async def completion(request: Request):
     data = await request.json()
     print_verbose(f"data passed in: {data}")
@@ -149,7 +151,7 @@ async def completion(request: Request):
         return StreamingResponse(data_generator(response), media_type='text/event-stream')
     return response
 
-@app.post("/chat/completions")
+@router.post("/chat/completions")
 async def chat_completion(request: Request):
     data = await request.json()
     print_verbose(f"data passed in: {data}")
@@ -187,3 +189,5 @@ async def chat_completion(request: Request):
         return StreamingResponse(data_generator(response), media_type='text/event-stream')
     print_verbose(f"response: {response}")
     return response
+
+app.include_router(router)

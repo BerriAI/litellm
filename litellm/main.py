@@ -961,7 +961,7 @@ def completion(
                     messages=messages
                 )
             else:
-                prompt = prompt_factory(model=model, messages=messages)
+                prompt = prompt_factory(model=model, messages=messages, custom_llm_provider=custom_llm_provider)
 
             ## LOGGING
             logging.pre_call(
@@ -1410,6 +1410,7 @@ def text_completion(*args, **kwargs):
         kwargs["messages"] = messages
         kwargs.pop("prompt")
         response = completion(*args, **kwargs) # assume the response is the openai response object 
+        print(f"response: {response}")
         formatted_response_obj = {
             "id": response["id"],
             "object": "text_completion",
