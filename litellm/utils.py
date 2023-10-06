@@ -947,6 +947,7 @@ def get_optional_params(  # use the openai defaults
     frequency_penalty=0,
     logit_bias={},
     user="",
+    request_timeout=None,
     deployment_id=None,
     model=None,
     custom_llm_provider="",
@@ -971,6 +972,7 @@ def get_optional_params(  # use the openai defaults
         "logit_bias":{},
         "user":"",
         "deployment_id":None,
+        "request_timeout":None,
         "model":None,
         "custom_llm_provider":"",
     }
@@ -990,6 +992,8 @@ def get_optional_params(  # use the openai defaults
         for k in non_default_params.keys():
             if k not in supported_params:
                 if k == "n" and n == 1: # langchain sends n=1 as a default value
+                    pass
+                if k == "request_timeout": # litellm handles request time outs
                     pass
                 else: 
                     unsupported_params.append(k)
@@ -1273,7 +1277,7 @@ def get_optional_params(  # use the openai defaults
         if stream:
             optional_params["stream"] = stream
     else:  # assume passing in params for openai/azure openai
-        supported_params = ["functions", "function_call", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "deployment_id"]
+        supported_params = ["functions", "function_call", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "deployment_id", "request_timeout"]
         _check_valid_arg(supported_params=supported_params)
         optional_params = non_default_params
     # if user passed in non-default kwargs for specific providers/models, pass them along 

@@ -168,6 +168,7 @@ def completion(
     logit_bias: dict = {},
     user: str = "",
     deployment_id = None,
+    request_timeout: Optional[int] = None,
     # Optional liteLLM function params
     **kwargs,
 ) -> ModelResponse:
@@ -220,7 +221,7 @@ def completion(
     metadata = kwargs.get('metadata', None)
     fallbacks = kwargs.get('fallbacks', [])
     ######## end of unpacking kwargs ###########
-    openai_params = ["functions", "function_call", "temperature", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user"]
+    openai_params = ["functions", "function_call", "temperature", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "request_timeout"]
     litellm_params = ["metadata", "acompletion", "caching", "return_async", "mock_response", "api_key", "api_version", "api_base", "force_timeout", "logger_fn", "verbose", "custom_llm_provider", "litellm_logging_obj", "litellm_call_id", "use_client", "id", "metadata", "fallbacks"]
     default_params = openai_params + litellm_params
     non_default_params = {k: v for k,v in kwargs.items() if k not in default_params} # model-specific params - pass them straight to the model/provider
@@ -260,6 +261,7 @@ def completion(
             frequency_penalty=frequency_penalty,
             logit_bias=logit_bias,
             user=user,
+            request_timeout=request_timeout,
             deployment_id=deployment_id,
             # params to identify the model
             model=model,

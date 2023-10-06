@@ -40,13 +40,15 @@ def test_completion_claude():
     try:
         # test without max tokens
         response = completion(
-            model="claude-instant-1", messages=messages
+            model="claude-instant-1", messages=messages, request_timeout=10,
         )
         # Add any assertions here to check the response
         print(response)
         print(response.response_ms)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+test_completion_claude()
 
 def test_completion_claude_max_tokens():
     try:
@@ -339,13 +341,13 @@ def test_completion_cohere(): # commenting for now as the cohere endpoint is bei
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_completion_cohere()
+# test_completion_cohere()
 
 
 def test_completion_openai():
     try:
         litellm.api_key = os.environ['OPENAI_API_KEY']
-        response = completion(model="gpt-3.5-turbo", messages=messages, max_tokens=10)
+        response = completion(model="gpt-3.5-turbo", messages=messages, max_tokens=10, request_timeout=10)
         print("This is the response object\n", response)
         print("\n\nThis is response ms:", response.response_ms)
 
@@ -362,7 +364,7 @@ def test_completion_openai():
         litellm.api_key = None
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_completion_openai()
+test_completion_openai()
 
 
 def test_completion_openai_prompt():
@@ -1018,7 +1020,7 @@ def test_completion_with_fallbacks():
 def test_completion_ai21():
     model_name = "j2-light"
     try:
-        response = completion(model=model_name, messages=messages, max_tokens=100, temperature=0.8, logger_fn=logger_fn)
+        response = completion(model=model_name, messages=messages, max_tokens=100, temperature=0.8)
         # Add any assertions here to check the response
         print(response)
         print(response.response_ms)
