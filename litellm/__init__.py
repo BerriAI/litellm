@@ -323,7 +323,7 @@ from .llms.aleph_alpha import AlephAlphaConfig
 from .llms.petals import PetalsConfig
 from .llms.vertex_ai import VertexAIConfig
 from .llms.sagemaker import SagemakerConfig
-from .llms.bedrock import AmazonConfig
+from .llms.bedrock import AmazonTitanConfig, AmazonAI21Config, AmazonAnthropicConfig, AmazonCohereConfig
 from .main import *  # type: ignore
 from .integrations import *
 from .exceptions import (

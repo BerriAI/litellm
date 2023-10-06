@@ -368,7 +368,7 @@ def sagemaker_test_completion():
 
 
 def bedrock_test_completion():
-    litellm.CohereConfig(max_tokens=10)
+    litellm.AmazonCohereConfig(max_tokens=10)
     # litellm.set_verbose=True
     try:
         # OVERRIDE WITH DYNAMIC MAX TOKENS
