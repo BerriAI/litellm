@@ -968,10 +968,10 @@ def completion(
                 input=prompt, api_key=None, additional_args={"api_base": api_base, "custom_prompt_dict": litellm.custom_prompt_dict}
             )
             if kwargs.get('acompletion', False) == True:
-                async_generator = ollama.async_get_ollama_response_stream(api_base, model, prompt)
+                async_generator = ollama.async_get_ollama_response_stream(api_base, model, prompt, optional_params)
                 return async_generator
 
-            generator = ollama.get_ollama_response_stream(api_base, model, prompt)
+            generator = ollama.get_ollama_response_stream(api_base, model, prompt, optional_params)
             if optional_params.get("stream", False) == True:
                 # assume all ollama responses are streamed
                 return generator

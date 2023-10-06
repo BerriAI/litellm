@@ -62,22 +62,23 @@ E.g. If Anthropic supports top_k, then `completion(model="claude-2", .., top_k=3
 
 This list is constantly being updated.
 
-| Provider | temperature | top_p | n | stream | stop | max_tokens | presence_penalty | frequency_penalty | functions | function_call |
+| Provider | temperature | max_tokens | top_p | stream | stop | n | presence_penalty | frequency_penalty | functions | function_call |
 |---|---|---|---|---|---|---|---|---|---|---|
-|Anthropic| ✅ | ✅ |  | ✅ | ✅ | ✅ |  |   |  |   |
+|Anthropic| ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |  |   |
 |OpenAI| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 |Replicate | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |   |  |   |
 |Cohere| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |   |   |
-|Huggingface| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |   
+|Huggingface| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |    |
 |Openrouter| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 |AI21| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |   |
-|VertexAI| ✅ | ✅ |  | ✅ |  | ✅ |  |  |  |   |
-|Bedrock| ✅ | ✅ |  | ✅ | ✅ | ✅ |  |   |  |   |
-|Sagemaker| ✅ |  |  | ✅ |  | ✅ |  |  |  |   |
-|TogetherAI| ✅ | ✅ |  | ✅ | ✅ | ✅ |  |   |  |   |
+|VertexAI| ✅ | ✅ |  | ✅ |  |  |  |  |  |   |
+|Bedrock| ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |  |   |
+|Sagemaker| ✅ | ✅ |  | ✅ |  |  |  |  |  |   |
+|TogetherAI| ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |  |   |
 |AlephAlpha| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |   |  |   |
 |Palm| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |  |   |
 |NLP Cloud| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |  |   |
-|Petals| ✅ | ✅ |  | ✅ | | ✅ |   |  |  |   |
+|Petals| ✅ | ✅ |  | ✅ | |  |   |  |  |   |
+|Ollama| ✅ | ✅ | ✅ | ✅ | ✅ |  |   | ✅ |  |   |n
 
 By default, LiteLLM raises an exception if the param being passed in isn't supported. However, if you want to just drop the param, instead of raising an exception, just set `litellm.drop_params = True`. 
