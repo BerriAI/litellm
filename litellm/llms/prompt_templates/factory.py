@@ -1,6 +1,7 @@
 import requests, traceback
 import json
 from jinja2 import Template, exceptions, Environment, meta
+from typing import Optional
 
 def default_pt(messages):
     return " ".join(message["content"] for message in messages)
@@ -25,6 +26,25 @@ def llama_2_chat_pt(messages):
         messages=messages
     )
     return prompt
+
+def ollama_pt(messages): # https://github.com/jmorganca/ollama/blob/af4cf55884ac54b9e637cd71dadfe9b7a5685877/docs/modelfile.md#template
+    prompt = custom_prompt(
+        role_dict={
+            "system": {
+                "pre_message": "### System:\n",
+                "post_message": "\n"
+            }, 
+            "user": {
+                "pre_message": "### User:\n",
+                "post_message": "\n",
+            }, 
+            "assistant": {
+                "pre_message": "### Response:\n",
+                "post_message": "\n",
+            }
+        },
+        final_prompt_value="### Response:"
+    )
 
 def mistral_instruct_pt(messages): 
     prompt = custom_prompt(
@@ -190,9 +210,13 @@ def custom_prompt(role_dict: dict, messages: list, initial_prompt_value: str="",
     prompt += final_prompt_value
     return prompt
 
-def prompt_factory(model: str, messages: list):
+def prompt_factory(model: str, messages: list, custom_llm_provider: Optional[str]=None):
     original_model_name = model
     model = model.lower()
+    
+    if custom_llm_provider == "ollama": 
+        return ollama_pt(messages=messages)
+    
     try:
         if "meta-llama/llama-2" in model:
             if "chat" in model:
