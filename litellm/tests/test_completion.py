@@ -365,7 +365,7 @@ def test_completion_openai():
         litellm.api_key = None
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_openai()
+# test_completion_openai()
 
 
 def test_completion_openai_prompt():
@@ -570,17 +570,25 @@ def test_completion_openai_with_more_optional_params():
 
 def test_completion_azure():
     try:
-        print("azure gpt-3.5 test\n\n")
+        litellm.set_verbose=True
+        ## Test azure call
         response = completion(
             model="azure/chatgpt-v-2",
             messages=messages,
+            azure=True
+        )
+        ## Test azure flag for backwards compatibility
+        response = completion(
+            model="chatgpt-v-2",
+            messages=messages,
+            azure=True
         )
         # Add any assertions here to check the response
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-# test_completion_azure()
+test_completion_azure()
 
 # new azure test for using litellm. vars, 
 # use the following vars in this test and make an azure_api_call

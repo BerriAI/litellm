@@ -26,7 +26,7 @@ class AnthropicConfig():
     to pass metadata to anthropic, it's {"user_id": "any-relevant-information"}
     """
     max_tokens_to_sample: Optional[int]=256 # anthropic requires a default 
-    stop_sequences: Optional[list[str]]=None
+    stop_sequences: Optional[list]=None
     temperature: Optional[int]=None
     top_p: Optional[int]=None
     top_k: Optional[int]=None
@@ -34,7 +34,7 @@ class AnthropicConfig():
 
     def __init__(self, 
                  max_tokens_to_sample: Optional[int]=256, # anthropic requires a default 
-                 stop_sequences: Optional[list[str]]=None,
+                 stop_sequences: Optional[list]=None,
                  temperature: Optional[int]=None,
                  top_p: Optional[int]=None,
                  top_k: Optional[int]=None,
