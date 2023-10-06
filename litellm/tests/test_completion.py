@@ -575,7 +575,6 @@ def test_completion_azure():
         response = completion(
             model="azure/chatgpt-v-2",
             messages=messages,
-            azure=True
         )
         ## Test azure flag for backwards compatibility
         response = completion(
