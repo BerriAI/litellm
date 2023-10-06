@@ -13,6 +13,12 @@ config_filename = ".env.litellm"
 config_dir = appdirs.user_config_dir("litellm")
 user_config_path = os.path.join(config_dir, config_filename)
 
+def run_ollama_serve():
+    command = ['ollama', 'serve']
+    
+    with open(os.devnull, 'w') as devnull:
+        process = subprocess.Popen(command, stdout=devnull, stderr=devnull)
+
 def load_config():
     try: 
         if not os.path.exists(user_config_path):
@@ -82,6 +88,8 @@ def run_server(port, api_base, model, deploy, debug, temperature, max_tokens, te
 
         print(f"\033[32mLiteLLM: Test your URL using the following: \"litellm --test {url}\"\033[0m")
         return
+    if "ollama" in model: 
+        run_ollama_serve()
     if test != False:
         click.echo('LiteLLM: Making a test ChatCompletions request to your proxy')
         import openai
