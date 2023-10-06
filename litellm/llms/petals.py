@@ -85,7 +85,8 @@ def completion(
         )
     ## RESPONSE OBJECT
     output_text = tokenizer.decode(outputs[0])
-    model_response["choices"][0]["message"]["content"] = output_text
+    if output_text != "":
+        model_response["choices"][0]["message"]["content"] = output_text
 
     prompt_tokens = len(
         encoding.encode(prompt)

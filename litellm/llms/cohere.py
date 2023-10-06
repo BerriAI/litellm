@@ -75,7 +75,9 @@ def completion(
             )
         else:
             try:
-                model_response["choices"][0]["message"]["content"] = completion_response["generations"][0]["text"]
+                completion_text = completion_response["generations"][0]["text"]
+                if completion_text != "":
+                    model_response["choices"][0]["message"]["content"] = completion_text
             except:
                 raise CohereError(message=json.dumps(completion_response), status_code=response.status_code)
 

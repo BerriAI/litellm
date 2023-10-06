@@ -100,7 +100,8 @@ def completion(
         )
     else:
         try:
-            model_response["choices"][0]["message"]["content"] = completion_response[0]["generation"]
+            if completion_response[0]["generation"] != "":
+                model_response["choices"][0]["message"]["content"] = completion_response[0]["generation"]
         except:
             raise SagemakerError(message=json.dumps(completion_response), status_code=response.status_code)
 

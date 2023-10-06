@@ -82,7 +82,8 @@ def completion(
         )
         print_verbose(f"raw model_response: {outputs}")
         ## RESPONSE OBJECT
-        model_response["choices"][0]["message"]["content"] = outputs[0].outputs[0].text
+        if outputs[0].outputs[0].text != "":
+            model_response["choices"][0]["message"]["content"] = outputs[0].outputs[0].text
 
         ## CALCULATING USAGE
         prompt_tokens = len(outputs[0].prompt_token_ids)  
@@ -164,7 +165,8 @@ def batch_completions(
     for output in outputs:
         model_response = ModelResponse()
         ## RESPONSE OBJECT
-        model_response["choices"][0]["message"]["content"] = output.outputs[0].text
+        if output.outputs[0].text != "":
+            model_response["choices"][0]["message"]["content"] = output.outputs[0].text
 
         ## CALCULATING USAGE
         prompt_tokens = len(output.prompt_token_ids)  

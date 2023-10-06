@@ -124,9 +124,9 @@ def completion(
                 status_code=response.status_code,
             )
         else:
-            model_response["choices"][0]["message"]["content"] = completion_response[
-                "completion"
-            ]
+            completion_text = completion_response["completion"]
+            if completion_text != "":
+                model_response["choices"][0]["message"]["content"] = completion_text
             model_response.choices[0].finish_reason = completion_response["stop_reason"]
 
         ## CALCULATING USAGE

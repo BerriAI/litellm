@@ -89,7 +89,9 @@ def completion(
             )
         else:
             try:
-                model_response["choices"][0]["message"]["content"] = completion_response["completions"][0]["data"]["text"]
+                completion_text = completion_response["choices"][0]["text"]
+                if completion_text != "":
+                    model_response["choices"][0]["message"]["content"] = completion_text
                 model_response.choices[0].finish_reason = completion_response["completions"][0]["finishReason"]["reason"]
             except Exception as e:
                 raise AI21Error(message=json.dumps(completion_response), status_code=response.status_code)

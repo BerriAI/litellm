@@ -165,7 +165,8 @@ def completion(
             result = " "
         
         ## Building RESPONSE OBJECT
-        model_response["choices"][0]["message"]["content"] = result
+        if result != "":
+            model_response["choices"][0]["message"]["content"] = result
 
         # Calculate usage
         prompt_tokens = len(encoding.encode(prompt))

@@ -111,7 +111,8 @@ def completion(
         completion_tokens = len(
             encoding.encode(completion_text)
         )
-        model_response["choices"][0]["message"]["content"] = completion_text
+        if completion_text != "":
+            model_response["choices"][0]["message"]["content"] = completion_text
         if "finish_reason" in completion_response["output"]["choices"][0]:
             model_response.choices[0].finish_reason = completion_response["output"]["choices"][0]["finish_reason"]
         model_response["created"] = time.time()

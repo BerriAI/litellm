@@ -74,7 +74,8 @@ def completion(
         )
     else:
         try:
-            model_response["choices"][0]["message"]["content"] = completion_response
+            if completion_response != "":
+                model_response["choices"][0]["message"]["content"] = completion_response
         except:
             raise PalmError(message=json.dumps(completion_response), status_code=response.status_code)
 

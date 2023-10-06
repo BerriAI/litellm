@@ -231,13 +231,15 @@ def completion(
             )
         else:
             if task == "conversational": 
-                model_response["choices"][0]["message"][
-                    "content"
-                ] = completion_response["generated_text"]
+                if completion_response["generated_text"] != "":
+                    model_response["choices"][0]["message"][
+                        "content"
+                    ] = completion_response["generated_text"]
             elif task == "text-generation-inference": 
-                model_response["choices"][0]["message"][
-                    "content"
-                ] = completion_response[0]["generated_text"]   
+                if completion_response[0]["generated_text"] != "":
+                    model_response["choices"][0]["message"][
+                        "content"
+                    ] = completion_response[0]["generated_text"]
                 ## GETTING LOGPROBS + FINISH REASON 
                 if "details" in completion_response[0] and "tokens" in completion_response[0]["details"]:
                     model_response.choices[0].finish_reason = completion_response[0]["details"]["finish_reason"]
@@ -257,7 +259,8 @@ def completion(
                             choices_list.append(choice_obj)
                         model_response["choices"].extend(choices_list)
             else:
-                model_response["choices"][0]["message"]["content"] = completion_response[0]["generated_text"]
+                if completion_response["generated_text"] != "":
+                    model_response["choices"][0]["message"]["content"] = completion_response[0]["generated_text"]
         ## CALCULATING USAGE
         prompt_tokens = len(
             encoding.encode(input_text)

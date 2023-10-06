@@ -97,7 +97,8 @@ def completion(
             )
         else:
             try:
-                model_response["choices"][0]["message"]["content"] = completion_response['results'][0]['text']
+                if completion_response["results"][0]["text"] != "":
+                    model_response["choices"][0]["message"]["content"] = completion_response["results"][0]["text"]
             except:
                 raise OobaboogaError(message=json.dumps(completion_response), status_code=response.status_code)
 
