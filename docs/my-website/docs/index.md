@@ -120,6 +120,21 @@ response = completion(
 )
 ```
 </TabItem>
+<TabItem value="or" label="Openrouter">
+
+```python
+from litellm import completion
+import os
+
+## set ENV variables
+os.environ["OPENROUTER_API_KEY"] = "openrouter_api_key" 
+
+response = completion(
+  model="openrouter/google/palm-2-chat-bison", 
+  messages = [{ "content": "Hello, how are you?","role": "user"}],
+)
+```
+</TabItem>
 
 </Tabs>
 
@@ -233,6 +248,22 @@ response = completion(
             messages = [{ "content": "Hello, how are you?","role": "user"}], 
             api_base="http://localhost:11434",
             stream=True,
+)
+```
+</TabItem>
+<TabItem value="or" label="Openrouter">
+
+```python
+from litellm import completion
+import os
+
+## set ENV variables
+os.environ["OPENROUTER_API_KEY"] = "openrouter_api_key" 
+
+response = completion(
+  model="openrouter/google/palm-2-chat-bison", 
+  messages = [{ "content": "Hello, how are you?","role": "user"}],
+  stream=True,
 )
 ```
 </TabItem>
