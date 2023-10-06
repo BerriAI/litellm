@@ -37,6 +37,8 @@ def test_completion_custom_provider_model_name():
 
 
 def test_completion_claude():
+    litellm.set_verbose = True
+    litellm.anthropic_config(max_tokens_to_sample=200, metadata={"user_id": "1224"})
     try:
         # test without max tokens
         response = completion(
@@ -48,7 +50,7 @@ def test_completion_claude():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_completion_claude()
+# test_completion_claude()
 
 def test_completion_claude_max_tokens():
     try:
@@ -198,6 +200,8 @@ def test_get_hf_task_for_model():
 # # TGI model
 # # this is a TGI model https://huggingface.co/glaiveai/glaive-coder-7b
 # def hf_test_completion_tgi():
+#     litellm.huggingface_config(return_full_text=True)
+#     litellm.set_verbose=True
 #     try:
 #         response = litellm.completion(
 #             model="huggingface/mistralai/Mistral-7B-Instruct-v0.1",
@@ -321,13 +325,10 @@ def test_get_hf_task_for_model():
 
 def test_completion_cohere(): # commenting for now as the cohere endpoint is being flaky
     try:
+        litellm.CohereConfig(max_tokens=1000, stop_sequences=["a"])
         response = completion(
             model="command-nightly",
             messages=messages,
-            max_tokens=100,
-            n=1,
-            logit_bias={40: 10},
-            stop=["a"],
             logger_fn=logger_fn
         )
         # Add any assertions here to check the response
@@ -665,13 +666,12 @@ def test_completion_azure_deployment_id():
 # Replicate API endpoints are unstable -> throw random CUDA errors -> this means our tests can fail even if our tests weren't incorrect.
 
 # def test_completion_replicate_llama_2():
-#     model_name = "replicate/llama-2-70b-chat:2796ee9483c3fd7aa2e171d38f4ca12251a30609463dcfd4cd76703f22e96cdf"
+#     model_name = "replicate/meta/llama-2-70b-chat:02e509c789964a7ea8736978a43525956ef40397be9033abf9fd2badfe68c9e3"
+#     litellm.replicate_config(max_new_tokens=200)
 #     try:
 #         response = completion(
 #             model=model_name, 
 #             messages=messages, 
-#             max_tokens=20,
-#             custom_llm_provider="replicate"
 #         )
 #         print(response)
 #         cost = completion_cost(completion_response=response)
@@ -1027,7 +1027,7 @@ def test_completion_ai21():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_completion_ai21()
+# test_completion_ai21()
 ## test deep infra 
 def test_completion_deep_infra():
     # litellm.set_verbose = True
