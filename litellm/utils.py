@@ -1273,6 +1273,22 @@ def get_optional_params(  # use the openai defaults
             optional_params["n"] = n
         if stop:
             optional_params["stop_sequences"] = stop
+    elif custom_llm_provider == "ollama":
+        supported_params = ["max_tokens", "stream", "top_p", "temperature", "frequency_penalty", "stop"]
+        _check_valid_arg(supported_params=supported_params)
+        
+        if max_tokens:
+            optional_params["num_predict"] = max_tokens
+        if stream:
+            optional_params["stream"] = stream
+        if temperature:
+            optional_params["temperature"] = temperature
+        if top_p:
+            optional_params["top_p"] = top_p
+        if frequency_penalty:
+            optional_params["repeat_penalty"] = frequency_penalty
+        if stop:
+            optional_params["stop_sequences"] = stop
     elif model in litellm.nlp_cloud_models or custom_llm_provider == "nlp_cloud":
         supported_params = ["max_tokens", "stream", "temperature", "top_p", "presence_penalty", "frequency_penalty", "n", "stop"]
         _check_valid_arg(supported_params=supported_params)

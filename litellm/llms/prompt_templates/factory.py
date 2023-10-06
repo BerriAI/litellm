@@ -43,8 +43,10 @@ def ollama_pt(messages): # https://github.com/jmorganca/ollama/blob/af4cf55884ac
                 "post_message": "\n",
             }
         },
-        final_prompt_value="### Response:"
+        final_prompt_value="### Response:",
+        messages=messages
     )
+    return prompt
 
 def mistral_instruct_pt(messages): 
     prompt = custom_prompt(
@@ -213,7 +215,7 @@ def custom_prompt(role_dict: dict, messages: list, initial_prompt_value: str="",
 def prompt_factory(model: str, messages: list, custom_llm_provider: Optional[str]=None):
     original_model_name = model
     model = model.lower()
-    
+
     if custom_llm_provider == "ollama": 
         return ollama_pt(messages=messages)
     
