@@ -29,6 +29,7 @@ const sidebars = {
       },
       items: [
         "completion/input", 
+        "completion/prompt_formatting",
         "completion/output", 
         "completion/stream", 
         "completion/message_trimming",
