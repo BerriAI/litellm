@@ -978,7 +978,7 @@ def get_optional_params(  # use the openai defaults
     }
     # filter out those parameters that were passed with non-default values
     non_default_params = {k: v for k, v in passed_params.items() if (k != "model" and k != "custom_llm_provider" and k in default_params and v != default_params[k])}
-    
+
     ## raise exception if function calling passed in for a provider that doesn't support it
     if "functions" in non_default_params or "function_call" in non_default_params:
         if custom_llm_provider != "openai" and custom_llm_provider != "text-completion-openai" and custom_llm_provider != "azure": 
@@ -993,7 +993,8 @@ def get_optional_params(  # use the openai defaults
             if k not in supported_params:
                 if k == "n" and n == 1: # langchain sends n=1 as a default value
                     pass
-                if k == "request_timeout": # litellm handles request time outs
+                # Always keeps this in elif code blocks
+                elif k == "request_timeout": # litellm handles request time outs
                     pass
                 else: 
                     unsupported_params.append(k)
@@ -1019,7 +1020,7 @@ def get_optional_params(  # use the openai defaults
             optional_params["max_tokens_to_sample"] = max_tokens
     elif custom_llm_provider == "cohere":
         ## check if unsupported param passed in 
-        supported_params = ["stream", "temperature", "max_tokens", "logit_bias", "top_p", "frequency_penalty", "presence_penalty", "stop"]
+        supported_params = ["stream", "temperature", "max_tokens", "logit_bias", "top_p", "frequency_penalty", "presence_penalty", "stop", "n"]
         _check_valid_arg(supported_params=supported_params)
         # handle cohere params
         if stream:
