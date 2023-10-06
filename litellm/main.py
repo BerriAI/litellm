@@ -239,7 +239,7 @@ def completion(
             ]  # update the model to the actual value if an alias has been passed in
         model_response = ModelResponse()
 
-        if kwargs['azure'] == True: # don't remove flag check, to remain backwards compatible for repos like Codium
+        if kwargs.get('azure', False) == True: # don't remove flag check, to remain backwards compatible for repos like Codium
             custom_llm_provider="azure"
         if deployment_id != None: # azure llms 
                 model=deployment_id
