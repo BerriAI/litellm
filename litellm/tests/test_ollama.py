@@ -3,7 +3,7 @@
 # import json
 # import asyncio
 # import requests
-
+# 
 # async def get_ollama_response_stream(api_base="http://localhost:11434", model="llama2", prompt="Why is the sky blue?"):
 #     session = aiohttp.ClientSession()
 #     url = f'{api_base}/api/generate'
