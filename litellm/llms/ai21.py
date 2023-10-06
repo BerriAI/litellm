@@ -1,10 +1,11 @@
-import os
+import os, types
 import json
 from enum import Enum
 import requests
 import time
-from typing import Callable
+from typing import Callable, Optional
 from litellm.utils import ModelResponse
+import litellm
 
 class AI21Error(Exception):
     def __init__(self, status_code, message):
@@ -13,6 +14,68 @@ class AI21Error(Exception):
         super().__init__(
             self.message
         )  # Call the base class constructor with the parameters it needs
+
+class AI21Config():
+    """
+    Reference: https://docs.ai21.com/reference/j2-complete-ref
+
+    The class `AI21Config` provides configuration for the AI21's API interface. Below are the parameters:
+
+    - `numResults` (int32): Number of completions to sample and return. Optional, default is 1. If the temperature is greater than 0 (non-greedy decoding), a value greater than 1 can be meaningful.
+        
+    - `maxTokens` (int32): The maximum number of tokens to generate per result. Optional, default is 16. If no `stopSequences` are given, generation stops after producing `maxTokens`.
+        
+    - `minTokens` (int32): The minimum number of tokens to generate per result. Optional, default is 0. If `stopSequences` are given, they are ignored until `minTokens` are generated.
+        
+    - `temperature` (float): Modifies the distribution from which tokens are sampled. Optional, default is 0.7. A value of 0 essentially disables sampling and results in greedy decoding.
+        
+    - `topP` (float): Used for sampling tokens from the corresponding top percentile of probability mass. Optional, default is 1. For instance, a value of 0.9 considers only tokens comprising the top 90% probability mass.
+        
+    - `stopSequences` (array of strings): Stops decoding if any of the input strings is generated. Optional.
+        
+    - `topKReturn` (int32): Range between 0 to 10, including both. Optional, default is 0. Specifies the top-K alternative tokens to return. A non-zero value includes the string representations and log-probabilities for each of the top-K alternatives at each position.
+        
+    - `frequencyPenalty` (object): Placeholder for frequency penalty object.
+        
+    - `presencePenalty` (object): Placeholder for presence penalty object.
+        
+    - `countPenalty` (object): Placeholder for count penalty object.
+    """
+    numResults: Optional[int]=None
+    maxTokens: Optional[int]=None
+    minTokens: Optional[int]=None
+    temperature: Optional[float]=None
+    topP: Optional[float]=None
+    stopSequences: Optional[list]=None
+    topKReturn: Optional[int]=None
+    frequencePenalty: Optional[dict]=None
+    presencePenalty: Optional[dict]=None
+    countPenalty: Optional[dict]=None
+
+    def __init__(self, 
+                 numResults: Optional[int]=None,
+                 maxTokens: Optional[int]=None,
+                 minTokens: Optional[int]=None,
+                 temperature: Optional[float]=None,
+                 topP: Optional[float]=None,
+                 stopSequences: Optional[list]=None,
+                 topKReturn: Optional[int]=None,
+                 frequencePenalty: Optional[dict]=None,
+                 presencePenalty: Optional[dict]=None,
+                 countPenalty: Optional[dict]=None) -> None:
+        locals_ = locals()
+        for key, value in locals_.items():
+            if key != 'self' and value is not None:
+                setattr(self.__class__, key, value)
+    
+    @classmethod
+    def get_config(cls):
+        return {k: v for k, v in cls.__dict__.items() 
+                if not k.startswith('__') 
+                and not isinstance(v, (types.FunctionType, types.BuiltinFunctionType, classmethod, staticmethod)) 
+                and v is not None}
+
+
 
 def validate_environment(api_key):
     if api_key is None:
@@ -53,6 +116,13 @@ def completion(
                 )
         else:
             prompt += f"{message['content']}"
+    
+    ## Load Config
+    config = litellm.AI21Config.get_config() 
+    for k, v in config.items(): 
+        if k not in optional_params: # completion(top_k=3) > ai21_config(top_k=3) <- allows for dynamic variables to be passed in
+            optional_params[k] = v
+
     data = {
         "prompt": prompt,
         # "instruction": prompt, # some baseten models require the prompt to be passed in via the 'instruction' kwarg

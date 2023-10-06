@@ -1,9 +1,10 @@
-import os
+import os, types
 import json
 from enum import Enum
 import requests
 import time
-from typing import Callable
+from typing import Callable, Optional
+import litellm
 from litellm.utils import ModelResponse
 from .prompt_templates.factory import prompt_factory, custom_prompt
 
@@ -14,6 +15,55 @@ class TogetherAIError(Exception):
         super().__init__(
             self.message
         )  # Call the base class constructor with the parameters it needs
+
+class TogetherAIConfig():
+    """
+    Reference: https://docs.together.ai/reference/inference
+
+    The class `TogetherAIConfig` provides configuration for the TogetherAI's API interface. Here are the parameters:
+
+    - `max_tokens` (int32, required): The maximum number of tokens to generate.
+
+    - `stop` (string, optional): A string sequence that will truncate (stop) the inference text output. For example, "\n\n" will stop generation as soon as the model generates two newlines.
+
+    - `temperature` (float, optional): A decimal number that determines the degree of randomness in the response. A value of 1 will always yield the same output. A temperature less than 1 favors more correctness and is appropriate for question answering or summarization. A value greater than 1 introduces more randomness in the output.
+
+    - `top_p` (float, optional): The `top_p` (nucleus) parameter is used to dynamically adjust the number of choices for each predicted token based on the cumulative probabilities. It specifies a probability threshold, below which all less likely tokens are filtered out. This technique helps to maintain diversity and generate more fluent and natural-sounding text.
+
+    - `top_k` (int32, optional): The `top_k` parameter is used to limit the number of choices for the next predicted word or token. It specifies the maximum number of tokens to consider at each step, based on their probability of occurrence. This technique helps to speed up the generation process and can improve the quality of the generated text by focusing on the most likely options.
+
+    - `repetition_penalty` (float, optional): A number that controls the diversity of generated text by reducing the likelihood of repeated sequences. Higher values decrease repetition.
+
+    - `logprobs` (int32, optional): This parameter is not described in the prompt. 
+    """
+    max_tokens: Optional[int]=None
+    stop: Optional[str]=None
+    temperature:Optional[int]=None
+    top_p: Optional[float]=None
+    top_k: Optional[int]=None
+    repetition_penalty: Optional[float]=None
+    logprobs: Optional[int]=None
+    
+    def __init__(self,
+                 max_tokens: Optional[int]=None,
+                 stop: Optional[str]=None,
+                 temperature:Optional[int]=None,
+                 top_p: Optional[float]=None,
+                 top_k: Optional[int]=None,
+                 repetition_penalty: Optional[float]=None,
+                 logprobs: Optional[int]=None) -> None:
+        locals_ = locals()
+        for key, value in locals_.items():
+            if key != 'self' and value is not None:
+                setattr(self.__class__, key, value)
+    
+    @classmethod
+    def get_config(cls):
+        return {k: v for k, v in cls.__dict__.items() 
+                if not k.startswith('__') 
+                and not isinstance(v, (types.FunctionType, types.BuiltinFunctionType, classmethod, staticmethod)) 
+                and v is not None}
+
 
 def validate_environment(api_key):
     if api_key is None:
@@ -41,6 +91,13 @@ def completion(
     logger_fn=None,
 ):
     headers = validate_environment(api_key)
+
+    ## Load Config
+    config = litellm.TogetherAIConfig.get_config() 
+    for k, v in config.items(): 
+        if k not in optional_params: # completion(top_k=3) > togetherai_config(top_k=3) <- allows for dynamic variables to be passed in
+            optional_params[k] = v
+
     if model in custom_prompt_dict:
         # check if the model has a registered custom prompt
         model_prompt_details = custom_prompt_dict[model]
@@ -52,6 +109,7 @@ def completion(
         )
     else:
         prompt = prompt_factory(model=model, messages=messages)
+
     data = {
         "model": model,
         "prompt": prompt,

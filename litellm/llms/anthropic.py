@@ -1,10 +1,11 @@
-import os
+import os, types
 import json
 from enum import Enum
 import requests
 import time
-from typing import Callable
+from typing import Callable, Optional
 from litellm.utils import ModelResponse
+import litellm 
 
 class AnthropicConstants(Enum):
     HUMAN_PROMPT = "\n\nHuman:"
@@ -18,11 +19,38 @@ class AnthropicError(Exception):
             self.message
         )  # Call the base class constructor with the parameters it needs
 
+class AnthropicConfig():
+    """
+    Reference: https://docs.anthropic.com/claude/reference/complete_post
 
-# contains any default values we need to pass to the provider
-AnthropicConfig = { 
-    "max_tokens_to_sample": 256 # override by setting - completion(..,max_tokens=300)
-}
+    to pass metadata to anthropic, it's {"user_id": "any-relevant-information"}
+    """
+    max_tokens_to_sample: Optional[int]=256 # anthropic requires a default 
+    stop_sequences: Optional[list[str]]=None
+    temperature: Optional[int]=None
+    top_p: Optional[int]=None
+    top_k: Optional[int]=None
+    metadata: Optional[dict]=None
+
+    def __init__(self, 
+                 max_tokens_to_sample: Optional[int]=256, # anthropic requires a default 
+                 stop_sequences: Optional[list[str]]=None,
+                 temperature: Optional[int]=None,
+                 top_p: Optional[int]=None,
+                 top_k: Optional[int]=None,
+                 metadata: Optional[dict]=None) -> None:
+        
+        locals_ = locals()
+        for key, value in locals_.items():
+            if key != 'self' and value is not None:
+                setattr(self.__class__, key, value)
+    
+    @classmethod
+    def get_config(cls):
+        return {k: v for k, v in cls.__dict__.items() 
+                if not k.startswith('__') 
+                and not isinstance(v, (types.FunctionType, types.BuiltinFunctionType, classmethod, staticmethod)) 
+                and v is not None}
 
 
 # makes headers for API call
@@ -72,11 +100,11 @@ def completion(
     prompt += f"{AnthropicConstants.AI_PROMPT.value}"
 
     ## Load Config
-    for k, v in AnthropicConfig.items(): 
-        if k not in optional_params: 
+    config = litellm.AnthropicConfig.get_config() 
+    for k, v in config.items(): 
+        if k not in optional_params: # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
             optional_params[k] = v
-    if optional_params["max_tokens_to_sample"] != 256: # not default - print for testing 
-        print_verbose(f"LiteLLM.Anthropic: Max Tokens Set")
+
     data = {
         "model": model,
         "prompt": prompt,

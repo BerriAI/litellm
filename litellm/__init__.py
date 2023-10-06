@@ -311,6 +311,19 @@ from .utils import (
     get_llm_provider,
     completion_with_config,
 )
+from .llms.huggingface_restapi import HuggingfaceConfig
+from .llms.anthropic import AnthropicConfig
+from .llms.replicate import ReplicateConfig
+from .llms.cohere import CohereConfig
+from .llms.ai21 import AI21Config
+from .llms.together_ai import TogetherAIConfig
+from .llms.palm import PalmConfig
+from .llms.nlp_cloud import NLPCloudConfig
+from .llms.aleph_alpha import AlephAlphaConfig
+from .llms.petals import PetalsConfig
+from .llms.vertex_ai import VertexAIConfig
+from .llms.sagemaker import SagemakerConfig
+from .llms.bedrock import AmazonConfig
 from .main import *  # type: ignore
 from .integrations import *
 from .exceptions import (
