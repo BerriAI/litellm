@@ -223,7 +223,7 @@ def completion(
     fallbacks = kwargs.get('fallbacks', [])
     ######## end of unpacking kwargs ###########
     openai_params = ["functions", "function_call", "temperature", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "request_timeout"]
-    litellm_params = ["metadata", "acompletion", "caching", "return_async", "mock_response", "api_key", "api_version", "api_base", "force_timeout", "logger_fn", "verbose", "custom_llm_provider", "litellm_logging_obj", "litellm_call_id", "use_client", "id", "metadata", "fallbacks"]
+    litellm_params = ["metadata", "acompletion", "caching", "return_async", "mock_response", "api_key", "api_version", "api_base", "force_timeout", "logger_fn", "verbose", "custom_llm_provider", "litellm_logging_obj", "litellm_call_id", "use_client", "id", "metadata", "fallbacks", "azure"]
     default_params = openai_params + litellm_params
     non_default_params = {k: v for k,v in kwargs.items() if k not in default_params} # model-specific params - pass them straight to the model/provider
     if mock_response:
@@ -239,7 +239,9 @@ def completion(
             ]  # update the model to the actual value if an alias has been passed in
         model_response = ModelResponse()
 
-        if deployment_id != None: # azure llms
+        if kwargs['azure'] == True: # don't remove flag check, to remain backwards compatible for repos like Codium
+            custom_llm_provider="azure"
+        if deployment_id != None: # azure llms 
                 model=deployment_id
                 custom_llm_provider="azure"
         model, custom_llm_provider = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
