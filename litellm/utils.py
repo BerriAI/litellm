@@ -1831,7 +1831,7 @@ def handle_failure(exception, traceback_exception, start_time, end_time, args, k
                     llmonitorLogger.log_event(
                         type=type,
                         event="error",
-                        user_id=litellm._thread_context.user,
+                        user_id=kwargs.get("user", "default"),
                         model=model,
                         input=input,
                         error=traceback_exception,
@@ -1951,7 +1951,7 @@ def handle_success(args, kwargs, result, start_time, end_time):
                         event="end",
                         model=model,
                         input=input,
-                        user_id=litellm._thread_context.user,
+                        user_id=kwargs.get("user", "default"),
                         response_obj=result,
                         start_time=start_time,
                         end_time=end_time,

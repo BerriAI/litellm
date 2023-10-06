@@ -109,7 +109,7 @@ class LLMonitorLogger:
                 },
             ]
 
-            # print_verbose(f"LLMonitor Logging - final data object: {data}")
+            print_verbose(f"LLMonitor Logging - final data object: {data}")
 
             response = requests.post(
                 self.api_url + "/api/report",
