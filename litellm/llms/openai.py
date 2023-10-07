@@ -162,16 +162,16 @@ class AzureOpenAIConfig(OpenAIConfig):
     """
 
     def __init__(self, 
-                 frequency_penalty: int | None = None, 
-                 function_call: str | dict | None = None, 
-                 functions: list | None = None, 
-                 logit_bias: dict | None = None, 
-                 max_tokens: int | None = None, 
-                 n: int | None = None, 
-                 presence_penalty: int | None = None, 
-                 stop: str | list | None = None, 
-                 temperature: int | None = None, 
-                 top_p: int | None = None) -> None:
+                 frequency_penalty: Optional[int] = None, 
+                 function_call: Optional[Union[str, dict]]= None, 
+                 functions: Optional[list]= None, 
+                 logit_bias: Optional[dict]= None, 
+                 max_tokens: Optional[int]= None, 
+                 n: Optional[int]= None, 
+                 presence_penalty: Optional[int]= None, 
+                 stop: Optional[Union[str,list]]=None, 
+                 temperature: Optional[int]= None, 
+                 top_p: Optional[int]= None) -> None:
         super().__init__(frequency_penalty, 
                          function_call, 
                          functions, 
