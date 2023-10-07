@@ -55,7 +55,7 @@ async def test_rate_limit_handler():
 
 
 
-def test_rate_limit_handler():
+def test_rate_limit_handler_batch():
     import asyncio
     ##### USAGE ################
 
@@ -82,4 +82,4 @@ def test_rate_limit_handler():
         print(e)
 
 
-test_rate_limit_handler()
+test_rate_limit_handler_batch()
