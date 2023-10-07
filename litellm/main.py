@@ -1478,7 +1478,6 @@ def config_completion(**kwargs):
         )
 
 def stream_chunk_builder(chunks: list):
-    print(f"chunk 0: {chunks[0]}")
     id = chunks[0]["id"]
     object = chunks[0]["object"]
     created = chunks[0]["created"]
