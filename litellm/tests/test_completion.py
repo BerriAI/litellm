@@ -598,7 +598,7 @@ def test_completion_azure2():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_completion_azure2()
+# test_completion_azure2()
 
 # new azure test for using litellm. vars, 
 # use the following vars in this test and make an azure_api_call
@@ -817,6 +817,42 @@ def test_completion_bedrock_claude():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 test_completion_bedrock_claude()
+
+
+def test_completion_bedrock_claude_completion_auth():
+    print("calling bedrock claude completion params auth")
+    import os
+
+    aws_access_key_id = os.environ["AWS_ACCESS_KEY_ID"]
+    aws_secret_access_key = os.environ["AWS_SECRET_ACCESS_KEY"]
+    aws_region_name = os.environ["AWS_REGION_NAME"]
+
+    os.environ["AWS_ACCESS_KEY_ID"] = ""
+    os.environ["AWS_SECRET_ACCESS_KEY"] = ""
+    os.environ["AWS_REGION_NAME"] = ""
+
+
+    try:
+        response = completion(
+            model="bedrock/anthropic.claude-instant-v1", 
+            messages=messages,
+            max_tokens=10,
+            temperature=0.1,
+            logger_fn=logger_fn,
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            aws_region_name=aws_region_name,
+        )
+        # Add any assertions here to check the response
+        print(response)
+
+        os.environ["AWS_ACCESS_KEY_ID"] = aws_secret_access_key
+        os.environ["AWS_SECRET_ACCESS_KEY"] = aws_secret_access_key
+        os.environ["AWS_REGION_NAME"] = aws_region_name
+    
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+# test_completion_bedrock_claude_completion_auth()
 
 def test_completion_bedrock_claude_stream():
     print("calling claude")
