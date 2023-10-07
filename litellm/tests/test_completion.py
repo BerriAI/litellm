@@ -50,7 +50,7 @@ def test_completion_claude():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_completion_claude()
+# test_completion_claude()
 
 # def test_completion_oobabooga():
 #     try:
@@ -544,7 +544,8 @@ def test_completion_openai_with_more_optional_params():
 
 def test_completion_azure():
     try:
-        litellm.set_verbose=True
+        print("azure gpt-3.5 test\n\n")
+        litellm.set_verbose=False
         ## Test azure call
         response = completion(
             model="azure/chatgpt-v-2",
@@ -554,7 +555,8 @@ def test_completion_azure():
         response = completion(
             model="chatgpt-v-2",
             messages=messages,
-            azure=True
+            azure=True,
+            max_tokens=10
         )
         # Add any assertions here to check the response
         print(response)
@@ -562,6 +564,41 @@ def test_completion_azure():
         pytest.fail(f"Error occurred: {e}")
 
 # test_completion_azure()
+def test_completion_azure2():
+    # test if we can pass api_base, api_version and api_key in compleition()
+    try:
+        print("azure gpt-3.5 test\n\n")
+        litellm.set_verbose=False
+        api_base = os.environ["AZURE_API_BASE"]
+        api_key = os.environ["AZURE_API_KEY"]
+        api_version = os.environ["AZURE_API_VERSION"]
+
+        os.environ["AZURE_API_BASE"] = ""
+        os.environ["AZURE_API_VERSION"] = ""
+        os.environ["AZURE_API_KEY"] = ""
+
+
+        ## Test azure call
+        response = completion(
+            model="azure/chatgpt-v-2",
+            messages=messages,
+            api_base = api_base,
+            api_key = api_key,
+            api_version = api_version,
+            max_tokens=10,
+        )
+
+        # Add any assertions here to check the response
+        print(response)
+
+        os.environ["AZURE_API_BASE"] = api_base
+        os.environ["AZURE_API_VERSION"] = api_version
+        os.environ["AZURE_API_KEY"] = api_key
+
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+test_completion_azure2()
 
 # new azure test for using litellm. vars, 
 # use the following vars in this test and make an azure_api_call
