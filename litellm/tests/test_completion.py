@@ -1122,17 +1122,23 @@ def test_completion_palm():
 #         pytest.fail(f"Error occurred: {e}")
 
 
-# import asyncio
-# def test_completion_together_ai_stream():
-#     user_message = "Write 1pg about YC & litellm"
-#     messages = [{ "content": user_message,"role": "user"}]
-#     try:
-#         response = completion(model="togethercomputer/llama-2-70b-chat", messages=messages, stream=True, max_tokens=800)
-#         print(response)
-#         asyncio.run(get_response(response))
-#         # print(string_response)
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
+
+def test_completion_together_ai_stream():
+    user_message = "Write 1pg about YC & litellm"
+    messages = [{ "content": user_message,"role": "user"}]
+    try:
+        response = completion(
+            model="together_ai/togethercomputer/llama-2-70b-chat", 
+            messages=messages, stream=True, 
+            max_tokens=5
+        )
+        print(response)
+        for chunk in response:
+            print(chunk)
+        # print(string_response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+# test_completion_together_ai_stream()
 
 
 # async def get_response(generator):
