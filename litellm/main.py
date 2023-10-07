@@ -1478,12 +1478,13 @@ def config_completion(**kwargs):
         )
 
 def stream_chunk_builder(chunks: list):
+    print(f"chunk 0: {chunks[0]}")
     id = chunks[0]["id"]
     object = chunks[0]["object"]
     created = chunks[0]["created"]
     model = chunks[0]["model"]
     role = chunks[0]["choices"][0]["delta"]["role"]
-    finnish_reason = chunks[-1]["choices"][0]["finish_reason"]
+    finish_reason = chunks[-1]["choices"][0]["finish_reason"]
     
     # Initialize the response dictionary
     response = {
@@ -1498,7 +1499,7 @@ def stream_chunk_builder(chunks: list):
                     "role": role,
                     "content": ""
                 },
-                "finish_reason": finnish_reason,
+                "finish_reason": finish_reason,
             }
         ],
         # "usage": {
