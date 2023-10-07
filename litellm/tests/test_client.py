@@ -1,6 +1,6 @@
 #### What this tests ####
 #    This tests error logging (with custom user functions) for the `completion` + `embedding` endpoints w/ callbacks
-
+# This only tests posthog, sentry, and helicone
 import sys, os
 import traceback
 import pytest
