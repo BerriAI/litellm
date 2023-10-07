@@ -228,6 +228,7 @@ class Logging:
         self.call_type = call_type
         self.litellm_call_id = litellm_call_id
         self.function_id = function_id
+        self.streaming_chunks = [] # for generating complete stream response
     
     def update_environment_variables(self, model, user, optional_params, litellm_params):
         self.optional_params = optional_params
@@ -394,7 +395,7 @@ class Logging:
             pass
 
     
-    def success_handler(self, result, start_time=None, end_time=None):
+    def success_handler(self, result=None, start_time=None, end_time=None, **kwargs):
         print_verbose(
                 f"Logging Details LiteLLM-Success Call"
             )
@@ -403,6 +404,20 @@ class Logging:
                 start_time = self.start_time
             if end_time is None:
                 end_time = datetime.datetime.now()
+            
+            complete_streaming_response = None
+            
+            ## BUILD COMPLETE STREAMED RESPONSE
+            if self.stream: 
+                if result.choices[0].finish_reason: # if it's the last chunk 
+                    self.streaming_chunks.append(result)
+                    complete_streaming_response = litellm.stream_chunk_builder(self.streaming_chunks)
+                else:
+                    self.streaming_chunks.append(result)
+            
+            if complete_streaming_response: 
+                self.model_call_details["complete_streaming_response"] = complete_streaming_response
+
             print_verbose(f"success callbacks: {litellm.success_callback}")
 
             if litellm.max_budget and self.stream:
@@ -3328,20 +3343,22 @@ class CustomStreamWrapper:
                     chunk = next(self.completion_stream)
                     model_response = chunk
                     # LOGGING
-                    threading.Thread(target=self.logging_obj.success_handler, args=(completion_obj,)).start()
+                    threading.Thread(target=self.logging_obj.success_handler, args=(model_response,)).start()
                     return model_response
                 
-                # LOGGING
-                threading.Thread(target=self.logging_obj.success_handler, args=(completion_obj,)).start()
                 model_response.model = self.model
                 if len(completion_obj["content"]) > 0: # cannot set content of an OpenAI Object to be an empty string
                     if self.sent_first_chunk == False:
                         completion_obj["role"] = "assistant"
                         self.sent_first_chunk = True
                     model_response.choices[0].delta = Delta(**completion_obj)
+                    # LOGGING
+                    threading.Thread(target=self.logging_obj.success_handler, args=(model_response,)).start()
                     return model_response
                 elif model_response.choices[0].finish_reason:
                     model_response.choices[0].finish_reason = map_finish_reason(model_response.choices[0].finish_reason) # ensure consistent output to openai
+                    # LOGGING
+                    threading.Thread(target=self.logging_obj.success_handler, args=(model_response,)).start()
                     return model_response
         except StopIteration:
             raise StopIteration

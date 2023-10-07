@@ -54,4 +54,5 @@ def test_stream_chunk_builder():
         finnish_reason = choices["finish_reason"]
     except:
         raise Exception("stream_chunk_builder failed to rebuild response")
-test_stream_chunk_builder()
+# test_stream_chunk_builder()
+

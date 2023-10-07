@@ -41,118 +41,163 @@ messages = [{"content": user_message, "role": "user"}]
 # 1. On Call Success
 # normal completion 
 ## test on openai completion call
-try:
-    # Redirect stdout
-    old_stdout = sys.stdout
-    sys.stdout = new_stdout = io.StringIO()
+def test_logging_success_completion():
+    global score
+    try:
+        # Redirect stdout
+        old_stdout = sys.stdout
+        sys.stdout = new_stdout = io.StringIO()
 
-    response = completion(model="gpt-3.5-turbo", messages=messages)
-    # Restore stdout
-    sys.stdout = old_stdout
-    output = new_stdout.getvalue().strip()
+        response = completion(model="gpt-3.5-turbo", messages=messages)
+        # Restore stdout
+        sys.stdout = old_stdout
+        output = new_stdout.getvalue().strip()
 
-    if "Logging Details Pre-API Call" not in output:
-        raise Exception("Required log message not found!")
-    elif "Logging Details Post-API Call" not in output:
-        raise Exception("Required log message not found!")
-    elif "Logging Details LiteLLM-Success Call" not in output:
-        raise Exception("Required log message not found!")
-    score += 1
-except Exception as e:
-    pytest.fail(f"Error occurred: {e}")
-    pass
+        if "Logging Details Pre-API Call" not in output:
+            raise Exception("Required log message not found!")
+        elif "Logging Details Post-API Call" not in output:
+            raise Exception("Required log message not found!")
+        elif "Logging Details LiteLLM-Success Call" not in output:
+            raise Exception("Required log message not found!")
+        score += 1
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+        pass
 
 ## test on non-openai completion call
-try:
-    # Redirect stdout
-    old_stdout = sys.stdout
-    sys.stdout = new_stdout = io.StringIO()
+def test_logging_success_completion_non_openai():
+    global score
+    try:
+        # Redirect stdout
+        old_stdout = sys.stdout
+        sys.stdout = new_stdout = io.StringIO()
 
-    response = completion(model="claude-instant-1", messages=messages)
-    
-    # Restore stdout
-    sys.stdout = old_stdout
-    output = new_stdout.getvalue().strip()
+        response = completion(model="claude-instant-1", messages=messages)
+        
+        # Restore stdout
+        sys.stdout = old_stdout
+        output = new_stdout.getvalue().strip()
 
-    if "Logging Details Pre-API Call" not in output:
-        raise Exception("Required log message not found!")
-    elif "Logging Details Post-API Call" not in output:
-        raise Exception("Required log message not found!")
-    elif "Logging Details LiteLLM-Success Call" not in output:
-        raise Exception("Required log message not found!")
-    score += 1
-except Exception as e:
-    pytest.fail(f"Error occurred: {e}")
-    pass
+        if "Logging Details Pre-API Call" not in output:
+            raise Exception("Required log message not found!")
+        elif "Logging Details Post-API Call" not in output:
+            raise Exception("Required log message not found!")
+        elif "Logging Details LiteLLM-Success Call" not in output:
+            raise Exception("Required log message not found!")
+        score += 1
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+        pass
 
 # streaming completion
 ## test on openai completion call
-try:
-    # Redirect stdout
-    old_stdout = sys.stdout
-    sys.stdout = new_stdout = io.StringIO()
+def test_logging_success_streaming_openai():
+    global score
+    try:
+        # litellm.set_verbose = False
+        def custom_callback(
+            kwargs,                 # kwargs to completion
+            completion_response,    # response from completion
+            start_time, end_time    # start/end time
+        ):
+            if "complete_streaming_response" in kwargs: 
+                print(f"Complete Streaming Response: {kwargs['complete_streaming_response']}")
+        
+        # Assign the custom callback function
+        litellm.success_callback = [custom_callback]
 
-    response = completion(model="gpt-3.5-turbo", messages=messages)
+        # Redirect stdout
+        old_stdout = sys.stdout
+        sys.stdout = new_stdout = io.StringIO()
 
-    # Restore stdout
-    sys.stdout = old_stdout
-    output = new_stdout.getvalue().strip()
+        response = completion(model="gpt-3.5-turbo", messages=messages, stream=True)
+        for chunk in response: 
+            pass
 
-    if "Logging Details Pre-API Call" not in output:
-        raise Exception("Required log message not found!")
-    elif "Logging Details Post-API Call" not in output:
-        raise Exception("Required log message not found!")
-    elif "Logging Details LiteLLM-Success Call" not in output:
-        raise Exception("Required log message not found!")
-    score += 1
-except Exception as e:
-    pytest.fail(f"Error occurred: {e}")
-    pass
+        # Restore stdout
+        sys.stdout = old_stdout
+        output = new_stdout.getvalue().strip()
+
+        if "Logging Details Pre-API Call" not in output:
+            raise Exception("Required log message not found!")
+        elif "Logging Details Post-API Call" not in output:
+            raise Exception("Required log message not found!")
+        elif "Logging Details LiteLLM-Success Call" not in output:
+            raise Exception("Required log message not found!")
+        elif "Complete Streaming Response:" not in output:
+            raise Exception("Required log message not found!")
+        score += 1
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+        pass
+
+# test_logging_success_streaming_openai() 
 
 ## test on non-openai completion call
-try:
-    # Redirect stdout
-    old_stdout = sys.stdout
-    sys.stdout = new_stdout = io.StringIO()
+def test_logging_success_streaming_non_openai():
+    global score
+    try:
+        # litellm.set_verbose = False
+        def custom_callback(
+            kwargs,                 # kwargs to completion
+            completion_response,    # response from completion
+            start_time, end_time    # start/end time
+        ):
+            # print(f"streaming response: {completion_response}")
+            if "complete_streaming_response" in kwargs: 
+                print(f"Complete Streaming Response: {kwargs['complete_streaming_response']}")
+        
+        # Assign the custom callback function
+        litellm.success_callback = [custom_callback]
 
-    response = completion(model="claude-instant-1", messages=messages)
-    
-    # Restore stdout
-    sys.stdout = old_stdout
-    output = new_stdout.getvalue().strip()
+        # Redirect stdout
+        old_stdout = sys.stdout
+        sys.stdout = new_stdout = io.StringIO()
 
-    if "Logging Details Pre-API Call" not in output:
-        raise Exception("Required log message not found!")
-    elif "Logging Details Post-API Call" not in output:
-        raise Exception("Required log message not found!")
-    elif "Logging Details LiteLLM-Success Call" not in output:
-        raise Exception("Required log message not found!")
-    score += 1
-except Exception as e:
-    pytest.fail(f"Error occurred: {e}")
-    pass
+        response = completion(model="claude-instant-1", messages=messages, stream=True)
+        for idx, chunk in enumerate(response): 
+            pass
+        
+        # Restore stdout
+        sys.stdout = old_stdout
+        output = new_stdout.getvalue().strip()
 
+        if "Logging Details Pre-API Call" not in output:
+            raise Exception("Required log message not found!")
+        elif "Logging Details Post-API Call" not in output:
+            raise Exception("Required log message not found!")
+        elif "Logging Details LiteLLM-Success Call" not in output:
+            raise Exception("Required log message not found!")
+        elif "Complete Streaming Response:" not in output:
+            raise Exception("Required log message not found!")
+        score += 1
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+        pass
+
+test_logging_success_streaming_non_openai() 
 # embedding
 
-try:
-     # Redirect stdout
-    old_stdout = sys.stdout
-    sys.stdout = new_stdout = io.StringIO()
+def test_logging_success_embedding_openai():
+    try:
+        # Redirect stdout
+        old_stdout = sys.stdout
+        sys.stdout = new_stdout = io.StringIO()
 
-    response = embedding(model="text-embedding-ada-002", input=["good morning from litellm"])
+        response = embedding(model="text-embedding-ada-002", input=["good morning from litellm"])
 
-    # Restore stdout
-    sys.stdout = old_stdout
-    output = new_stdout.getvalue().strip()
+        # Restore stdout
+        sys.stdout = old_stdout
+        output = new_stdout.getvalue().strip()
 
-    if "Logging Details Pre-API Call" not in output:
-        raise Exception("Required log message not found!")
-    elif "Logging Details Post-API Call" not in output:
-        raise Exception("Required log message not found!")
-    elif "Logging Details LiteLLM-Success Call" not in output:
-        raise Exception("Required log message not found!")
-except Exception as e:
-    pytest.fail(f"Error occurred: {e}")
+        if "Logging Details Pre-API Call" not in output:
+            raise Exception("Required log message not found!")
+        elif "Logging Details Post-API Call" not in output:
+            raise Exception("Required log message not found!")
+        elif "Logging Details LiteLLM-Success Call" not in output:
+            raise Exception("Required log message not found!")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 # ## 2. On LiteLLM Call failure
 # ## TEST BAD KEY
