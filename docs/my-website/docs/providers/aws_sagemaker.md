@@ -27,6 +27,21 @@ response = completion(
         )
 ```
 
+### Passing credentials as parameters - Completion()
+Pass AWS credentials as parameters to litellm.completion
+```python
+import os 
+from litellm import completion
+
+response = completion(
+            model="sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b",
+            messages=[{ "content": "Hello, how are you?","role": "user"}],
+            aws_access_key_id="",
+            aws_secret_access_key="",
+            aws_region_name="",
+)
+```
+
 ### Usage - Streaming
 Sagemaker currently does not support streaming - LiteLLM fakes streaming by returning chunks of the response string
 
