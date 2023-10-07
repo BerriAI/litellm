@@ -258,6 +258,35 @@ assert len(response_2_text) > len(response_1_text)
 
 </TabItem>
 
+<TabItem value="ollama" label="Ollama">
+
+```python
+import litellm, os 
+
+## SET MAX TOKENS - via completion()
+response_1 = litellm.completion(
+            model="ollama/llama2",
+            messages=[{ "content": "Hello, how are you?","role": "user"}],
+            max_tokens=10
+        )
+
+response_1_text = response_1.choices[0].message.content
+
+## SET MAX TOKENS - via config
+litellm.OllamConfig(num_predict=200)
+response_2 = litellm.completion(
+            model="ollama/llama2",
+            messages=[{ "content": "Hello, how are you?","role": "user"}],
+        )
+
+response_2_text = response_2.choices[0].message.content
+
+## TEST OUTPUT
+assert len(response_2_text) > len(response_1_text)
+```
+
+</TabItem>
+
 <TabItem value="replicate" label="Replicate">
 
 ```python
