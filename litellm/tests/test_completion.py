@@ -316,7 +316,7 @@ def test_completion_cohere(): # commenting for now as the cohere endpoint is bei
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-# test_completion_cohere()
+# test_completion_cohere() #
 
 
 def test_completion_openai():
