@@ -1,72 +1,317 @@
----
-displayed_sidebar: tutorialSidebar
----
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
 
-# litellm
-[![PyPI Version](https://img.shields.io/pypi/v/litellm.svg)](https://pypi.org/project/litellm/)
-[![PyPI Version](https://img.shields.io/badge/stable%20version-v0.1.345-blue?color=green&link=https://pypi.org/project/litellm/0.1.1/)](https://pypi.org/project/litellm/0.1.1/)
-[![CircleCI](https://dl.circleci.com/status-badge/img/gh/BerriAI/litellm/tree/main.svg?style=svg)](https://dl.circleci.com/status-badge/redirect/gh/BerriAI/litellm/tree/main)
-![Downloads](https://img.shields.io/pypi/dm/litellm)
-[![litellm](https://img.shields.io/badge/%20%F0%9F%9A%85%20liteLLM-OpenAI%7CAzure%7CAnthropic%7CPalm%7CCohere%7CReplicate%7CHugging%20Face-blue?color=green)](https://github.com/BerriAI/litellm)
+# LiteLLM - Getting Started
 
-[![](https://dcbadge.vercel.app/api/server/wuPM9dRgDw)](https://discord.gg/wuPM9dRgDw)
 
-a light package to simplify calling OpenAI, Azure, Cohere, Anthropic, Huggingface API Endpoints. It manages: 
-- translating inputs to the provider's completion and embedding endpoints
-- guarantees [consistent output](https://litellm.readthedocs.io/en/latest/output/), text responses will always be available at `['choices'][0]['message']['content']`
-- exception mapping - common exceptions across providers are mapped to the [OpenAI exception types](https://help.openai.com/en/articles/6897213-openai-library-error-types-guidance)
-# usage
-<a href='https://docs.litellm.ai/docs/providers' target="_blank"><img alt='None' src='https://img.shields.io/badge/Supported_LLMs-100000?style=for-the-badge&logo=None&logoColor=000000&labelColor=000000&color=8400EA'/></a>
+## **Call 100+ LLMs using the same Input/Output Format**
 
-Demo - https://litellm.ai/playground \
-Read the docs - https://docs.litellm.ai/docs/
+## Basic usage 
+<a target="_blank" href="https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/liteLLM_Getting_Started.ipynb">
+  <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
+</a>
 
-## quick start
-```
+```shell
 pip install litellm
 ```
+<Tabs>
+<TabItem value="openai" label="OpenAI">
+
+```python
+from litellm import completion
+import os
+
+## set ENV variables
+os.environ["OPENAI_API_KEY"] = "your-api-key"
+
+response = completion(
+  model="gpt-3.5-turbo", 
+  messages=[{ "content": "Hello, how are you?","role": "user"}]
+)
+```
+
+</TabItem>
+<TabItem value="anthropic" label="Anthropic">
+
+```python
+from litellm import completion
+import os
+
+## set ENV variables
+os.environ["ANTHROPIC_API_KEY"] = "your-api-key"
+
+response = completion(
+  model="claude-2", 
+  messages=[{ "content": "Hello, how are you?","role": "user"}]
+)
+```
+
+</TabItem>
+
+<TabItem value="vertex" label="VertexAI">
+
+```python
+from litellm import completion
+import os
+
+# auth: run 'gcloud auth application-default'
+os.environ["VERTEX_PROJECT"] = "hardy-device-386718"
+os.environ["VERTEX_LOCATION"] = "us-central1"
+
+response = completion(
+  model="chat-bison", 
+  messages=[{ "content": "Hello, how are you?","role": "user"}]
+)
+```
+
+</TabItem>
+
+<TabItem value="hugging" label="HuggingFace">
+
+```python
+from litellm import completion 
+import os
+
+os.environ["HUGGINGFACE_API_KEY"] = "huggingface_api_key" 
+
+# e.g. Call 'WizardLM/WizardCoder-Python-34B-V1.0' hosted on HF Inference endpoints
+response = completion(
+  model="huggingface/WizardLM/WizardCoder-Python-34B-V1.0",
+  messages=[{ "content": "Hello, how are you?","role": "user"}], 
+  api_base="https://my-endpoint.huggingface.cloud"
+)
+
+print(response)
+```
+
+</TabItem>
+
+<TabItem value="azure" label="Azure OpenAI">
+
+```python
+from litellm import completion
+import os
+
+## set ENV variables
+os.environ["AZURE_API_KEY"] = ""
+os.environ["AZURE_API_BASE"] = ""
+os.environ["AZURE_API_VERSION"] = ""
+
+# azure call
+response = completion(
+  "azure/<your_deployment_id>", 
+  messages = [{ "content": "Hello, how are you?","role": "user"}]
+)
+```
+
+</TabItem>
+
+
+<TabItem value="ollama" label="Ollama">
 
 ```python
 from litellm import completion
 
-## set ENV variables
-os.environ["OPENAI_API_KEY"] = "openai key"
-os.environ["COHERE_API_KEY"] = "cohere key"
-
-messages = [{ "content": "Hello, how are you?","role": "user"}]
-
-# openai call
-response = completion(model="gpt-3.5-turbo", messages=messages)
-
-# cohere call
-response = completion("command-nightly", messages)
+response = completion(
+            model="ollama/llama2", 
+            messages = [{ "content": "Hello, how are you?","role": "user"}], 
+            api_base="http://localhost:11434"
+)
 ```
-Code Sample: [Getting Started Notebook](https://colab.research.google.com/drive/1gR3pY-JzDZahzpVdbGBtrNGDBmzUNJaJ?usp=sharing)
+</TabItem>
+<TabItem value="or" label="Openrouter">
 
-Stable version
-```
-pip install litellm==0.1.345
-```
-
-## Streaming Queries
-liteLLM supports streaming the model response back, pass `stream=True` to get a streaming iterator in response.
-Streaming is supported for OpenAI, Azure, Anthropic, Huggingface models
 ```python
-response = completion(model="gpt-3.5-turbo", messages=messages, stream=True)
-for chunk in response:
-    print(chunk['choices'][0]['delta'])
+from litellm import completion
+import os
 
-# claude 2
-result = completion('claude-2', messages, stream=True)
-for chunk in result:
-  print(chunk['choices'][0]['delta'])
+## set ENV variables
+os.environ["OPENROUTER_API_KEY"] = "openrouter_api_key" 
+
+response = completion(
+  model="openrouter/google/palm-2-chat-bison", 
+  messages = [{ "content": "Hello, how are you?","role": "user"}],
+)
+```
+</TabItem>
+
+</Tabs>
+
+## Streaming
+Set `stream=True` in the `completion` args. 
+<Tabs>
+<TabItem value="openai" label="OpenAI">
+
+```python
+from litellm import completion
+import os
+
+## set ENV variables
+os.environ["OPENAI_API_KEY"] = "your-api-key"
+
+response = completion(
+  model="gpt-3.5-turbo", 
+  messages=[{ "content": "Hello, how are you?","role": "user"}],
+  stream=True,
+)
 ```
 
-# support / talk with founders
-- [Our calendar 👋](https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version)
-- [Community Discord 💭](https://discord.gg/wuPM9dRgDw)
-- Our numbers 📞 +1 (770) 8783-106 / ‭+1 (412) 618-6238‬
-- Our emails ✉️ ishaan@berri.ai / krrish@berri.ai
+</TabItem>
+<TabItem value="anthropic" label="Anthropic">
 
-# why did we build this 
-- **Need for simplicity**: Our code started to get extremely complicated managing & translating calls between Azure, OpenAI, Cohere
+```python
+from litellm import completion
+import os
+
+## set ENV variables
+os.environ["ANTHROPIC_API_KEY"] = "your-api-key"
+
+response = completion(
+  model="claude-2", 
+  messages=[{ "content": "Hello, how are you?","role": "user"}],
+  stream=True,
+)
+```
+
+</TabItem>
+
+<TabItem value="vertex" label="VertexAI">
+
+```python
+from litellm import completion
+import os
+
+# auth: run 'gcloud auth application-default'
+os.environ["VERTEX_PROJECT"] = "hardy-device-386718"
+os.environ["VERTEX_LOCATION"] = "us-central1"
+
+response = completion(
+  model="chat-bison", 
+  messages=[{ "content": "Hello, how are you?","role": "user"}],
+  stream=True,
+)
+```
+
+</TabItem>
+
+<TabItem value="hugging" label="HuggingFace">
+
+```python
+from litellm import completion 
+import os
+
+os.environ["HUGGINGFACE_API_KEY"] = "huggingface_api_key" 
+
+# e.g. Call 'WizardLM/WizardCoder-Python-34B-V1.0' hosted on HF Inference endpoints
+response = completion(
+  model="huggingface/WizardLM/WizardCoder-Python-34B-V1.0",
+  messages=[{ "content": "Hello, how are you?","role": "user"}], 
+  api_base="https://my-endpoint.huggingface.cloud",
+  stream=True,
+)
+
+print(response)
+```
+
+</TabItem>
+
+<TabItem value="azure" label="Azure OpenAI">
+
+```python
+from litellm import completion
+import os
+
+## set ENV variables
+os.environ["AZURE_API_KEY"] = ""
+os.environ["AZURE_API_BASE"] = ""
+os.environ["AZURE_API_VERSION"] = ""
+
+# azure call
+response = completion(
+  "azure/<your_deployment_id>", 
+  messages = [{ "content": "Hello, how are you?","role": "user"}],
+  stream=True,
+)
+```
+
+</TabItem>
+
+
+<TabItem value="ollama" label="Ollama">
+
+```python
+from litellm import completion
+
+response = completion(
+            model="ollama/llama2", 
+            messages = [{ "content": "Hello, how are you?","role": "user"}], 
+            api_base="http://localhost:11434",
+            stream=True,
+)
+```
+</TabItem>
+<TabItem value="or" label="Openrouter">
+
+```python
+from litellm import completion
+import os
+
+## set ENV variables
+os.environ["OPENROUTER_API_KEY"] = "openrouter_api_key" 
+
+response = completion(
+  model="openrouter/google/palm-2-chat-bison", 
+  messages = [{ "content": "Hello, how are you?","role": "user"}],
+  stream=True,
+)
+```
+</TabItem>
+
+</Tabs>
+
+## Exception handling 
+
+LiteLLM maps exceptions across all supported providers to the OpenAI exceptions. All our exceptions inherit from OpenAI's exception types, so any error-handling you have for that, should work out of the box with LiteLLM. 
+
+```python 
+from openai.errors import OpenAIError
+from litellm import completion
+
+os.environ["ANTHROPIC_API_KEY"] = "bad-key"
+try: 
+    # some code 
+    completion(model="claude-instant-1", messages=[{"role": "user", "content": "Hey, how's it going?"}])
+except OpenAIError as e:
+    print(e)
+```
+
+## Calculate Costs, Usage, Latency
+
+Pass the completion response to `litellm.completion_cost(completion_response=response)` and get the cost
+
+```python
+from litellm import completion, completion_cost
+import os
+os.environ["OPENAI_API_KEY"] = "your-api-key"
+
+response = completion(
+  model="gpt-3.5-turbo", 
+  messages=[{ "content": "Hello, how are you?","role": "user"}]
+)
+
+cost = completion_cost(completion_response=response)
+print("Cost for completion call with gpt-3.5-turbo: ", f"${float(cost):.10f}")
+```
+
+**Output**
+```shell
+Cost for completion call with gpt-3.5-turbo:  $0.0000775000
+```
+
+Need a dedicated key? Email us @ krrish@berri.ai
+
+
+## More details
+* [exception mapping](./exception_mapping.md)
+* [retries + model fallbacks for completion()](./completion/reliable_completions.md)
+* [tutorial for model fallbacks with completion()](./tutorials/fallbacks.md)
