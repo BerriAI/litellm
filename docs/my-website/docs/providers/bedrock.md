@@ -34,6 +34,21 @@ response = completion(
 )
 ```
 
+### Pass auth params in completion()
+If you don't want to set env variables, pass auth params to completion
+```python
+import os 
+from litellm import completion
+
+response = completion(
+            model="bedrock/anthropic.claude-instant-v1", 
+            messages=[{ "content": "Hello, how are you?","role": "user"}],
+            aws_access_key_id="",
+            aws_secret_access_key="",
+            aws_region_name="",
+)
+```
+
 ## Supported AWS Bedrock Models
 Here's an example of using a bedrock model with LiteLLM 
 
