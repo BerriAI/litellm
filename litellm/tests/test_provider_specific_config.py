@@ -50,7 +50,7 @@ def claude_test_completion():
     try:
         # OVERRIDE WITH DYNAMIC MAX TOKENS
         response_1 = litellm.completion(
-            model="claude-instant-1",
+            model="together_ai/togethercomputer/llama-2-70b-chat",
             messages=[{ "content": "Hello, how are you?","role": "user"}],
             max_tokens=10
         )
@@ -60,7 +60,7 @@ def claude_test_completion():
 
         # USE CONFIG TOKENS
         response_2 = litellm.completion(
-            model="claude-instant-1",
+            model="together_ai/togethercomputer/llama-2-70b-chat",
             messages=[{ "content": "Hello, how are you?","role": "user"}],
         )
         # Add any assertions here to check the response
@@ -393,3 +393,87 @@ def bedrock_test_completion():
         pytest.fail(f"Error occurred: {e}")
 
 # bedrock_test_completion()
+
+# OpenAI Chat Completion
+def openai_test_completion():
+    litellm.OpenAIConfig(max_tokens=10)
+    # litellm.set_verbose=True
+    try:
+        # OVERRIDE WITH DYNAMIC MAX TOKENS
+        response_1 = litellm.completion(
+            model="gpt-3.5-turbo",
+            messages=[{ "content": "Hello, how are you? Be as verbose as possible","role": "user"}],
+            max_tokens=100
+        )
+        response_1_text = response_1.choices[0].message.content
+        print(f"response_1_text: {response_1_text}")
+
+        # USE CONFIG TOKENS
+        response_2 = litellm.completion(
+            model="gpt-3.5-turbo",
+            messages=[{ "content": "Hello, how are you? Be as verbose as possible","role": "user"}],
+        )
+        response_2_text = response_2.choices[0].message.content
+        print(f"response_2_text: {response_2_text}")
+
+        assert len(response_2_text) < len(response_1_text)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+# openai_test_completion()
+
+# OpenAI Text Completion
+def openai_text_completion_test():
+    litellm.OpenAITextCompletionConfig(max_tokens=10)
+    # litellm.set_verbose=True
+    try:
+        # OVERRIDE WITH DYNAMIC MAX TOKENS
+        response_1 = litellm.completion(
+            model="text-davinci-003",
+            messages=[{ "content": "Hello, how are you? Be as verbose as possible","role": "user"}],
+            max_tokens=100
+        )
+        response_1_text = response_1.choices[0].message.content
+        print(f"response_1_text: {response_1_text}")
+
+        # USE CONFIG TOKENS
+        response_2 = litellm.completion(
+            model="text-davinci-003",
+            messages=[{ "content": "Hello, how are you? Be as verbose as possible","role": "user"}],
+        )
+        response_2_text = response_2.choices[0].message.content
+        print(f"response_2_text: {response_2_text}")
+
+        assert len(response_2_text) < len(response_1_text)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+# openai_text_completion_test()
+
+# Azure OpenAI 
+def azure_openai_test_completion():
+    litellm.AzureOpenAIConfig(max_tokens=10)
+    # litellm.set_verbose=True
+    try:
+        # OVERRIDE WITH DYNAMIC MAX TOKENS
+        response_1 = litellm.completion(
+            model="azure/chatgpt-v-2",
+            messages=[{ "content": "Hello, how are you? Be as verbose as possible","role": "user"}],
+            max_tokens=100
+        )
+        response_1_text = response_1.choices[0].message.content
+        print(f"response_1_text: {response_1_text}")
+
+        # USE CONFIG TOKENS
+        response_2 = litellm.completion(
+            model="azure/chatgpt-v-2",
+            messages=[{ "content": "Hello, how are you? Be as verbose as possible","role": "user"}],
+        )
+        response_2_text = response_2.choices[0].message.content
+        print(f"response_2_text: {response_2_text}")
+
+        assert len(response_2_text) < len(response_1_text)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+# azure_openai_test_completion()
