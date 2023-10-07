@@ -169,13 +169,13 @@ def test_logging_success_streaming_non_openai():
         elif "Logging Details LiteLLM-Success Call" not in output:
             raise Exception("Required log message not found!")
         elif "Complete Streaming Response:" not in output:
-            raise Exception("Required log message not found!")
+            raise Exception(f"Required log message not found! {output}")
         score += 1
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
         pass
 
-test_logging_success_streaming_non_openai() 
+# test_logging_success_streaming_non_openai() 
 # embedding
 
 def test_logging_success_embedding_openai():
