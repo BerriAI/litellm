@@ -4,7 +4,61 @@ import TabItem from '@theme/TabItem';
 # Rate Limit Manager
 `RateLimitManager` allows you to maximize throughput while staying under rate limits. You can use RateLimitManager to submit a batch of completion jobs to execute
 
-## Quick start 
+## Rate Limit Aware - acompletion()
+### Usage
+```python
+handler = RateLimitManager(
+    max_requests_per_minute = 60,
+    max_tokens_per_minute = 20000
+)
+
+response =  await handler.acompletion(
+    model="gpt-3.5-turbo", 
+    messages=[{
+        "content": "Please provide a summary of the latest scientific discoveries."*10, 
+        "role": "user"
+    }]
+)
+```
+
+### Using Rate Limit Aware Completion to make 5 async calls
+```python
+import asyncio
+from litellm import RateLimitManager
+
+## init RateLimitManager
+handler = RateLimitManager(
+    max_requests_per_minute = 60,
+    max_tokens_per_minute = 200
+)
+
+# helper 
+async def send_request():
+    response =  await handler.acompletion(
+        model="gpt-3.5-turbo", 
+        messages=[{
+            "content": "Please provide a summary of the latest scientific discoveries."*10, 
+            "role": "user"
+        }]
+    )
+    print("got a response", response)
+    return response
+
+# creating async tasks
+tasks = []
+
+for _ in range(4):
+    tasks.append(send_request())
+
+responses = await asyncio.gather(*tasks)
+
+for response in responses:
+    print(response)
+```
+
+## Batch Completions
+
+### Usage
 
 ```python 
 import asyncio
