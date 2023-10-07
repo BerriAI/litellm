@@ -12,12 +12,11 @@ import litellm
 from litellm import batch_completion, batch_completion_models, completion, batch_completion_models_all_responses
 # litellm.set_verbose=True
 
-
+@pytest.mark.asyncio
 async def test_rate_limit_handler():
     import asyncio
     ##### USAGE ################
 
-   
     from litellm import RateLimitManager
 
     handler = RateLimitManager(
@@ -54,9 +53,8 @@ async def test_rate_limit_handler():
 # )
 
 
-
-def test_rate_limit_handler_batch():
-    import asyncio
+@pytest.mark.asyncio
+async def test_rate_limit_handler_batch():
     ##### USAGE ################
 
     jobs = [
@@ -72,12 +70,10 @@ def test_rate_limit_handler_batch():
     )
 
     try:
-        asyncio.run(
         handler.batch_completion(
             jobs = jobs,
             api_key=os.environ['OPENAI_API_KEY'],
         )
-    )
     except Exception as e:
         print(e)
 
