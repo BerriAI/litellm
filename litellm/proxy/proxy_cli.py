@@ -64,7 +64,7 @@ def open_config():
 @click.option('--deploy', is_flag=True, type=bool, help='Get a deployed proxy endpoint - api.litellm.ai')
 @click.option('--debug', is_flag=True, help='To debug the input') 
 @click.option('--temperature', default=None, type=float, help='Set temperature for the model') 
-@click.option('--max_tokens', default=None, help='Set max tokens for the model') 
+@click.option('--max_tokens', default=None, type=int, help='Set max tokens for the model') 
 @click.option('--telemetry', default=True, type=bool, help='Helps us know if people are using this feature. Turn this off by doing `--telemetry False`') 
 @click.option('--config', is_flag=True, help='Create and open .env file from .env.template')
 @click.option('--test', flag_value=True, help='proxy chat completions url to make a test request to')
@@ -108,6 +108,18 @@ def run_server(port, api_base, model, deploy, debug, temperature, max_tokens, te
             }
         ])
         click.echo(f'LiteLLM: response from proxy {response}')
+
+        click.echo(f'LiteLLM: response from proxy with streaming {response}')
+        response = openai.ChatCompletion.create(model="gpt-3.5-turbo", messages = [
+            {
+                "role": "user",
+                "content": "this is a test request, acknowledge that you got it"
+            }
+        ],
+        stream=True,
+        )
+        for chunk in response:
+            click.echo(f'LiteLLM: streaming response from proxy {chunk}')
         return
     else:
         load_config()
