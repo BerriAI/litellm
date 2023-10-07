@@ -25,5 +25,5 @@ os.environ["AZURE_API_VERSION"] = ""
 messages = [{ "content": "Hello, how are you?","role": "user"}]
 
 # azure call
-response = completion("azure/<your_deployment_id>", messages)
+response = completion("azure/<your_deployment_name>", messages)
 ```
