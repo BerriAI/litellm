@@ -88,7 +88,7 @@ def run_server(port, api_base, model, deploy, debug, temperature, max_tokens, te
 
         print(f"\033[32mLiteLLM: Test your URL using the following: \"litellm --test {url}\"\033[0m")
         return
-    if "ollama" in model: 
+    if model and "ollama" in model: 
         run_ollama_serve()
     if test != False:
         click.echo('LiteLLM: Making a test ChatCompletions request to your proxy')
