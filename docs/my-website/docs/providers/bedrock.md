@@ -34,8 +34,8 @@ response = completion(
 )
 ```
 
-### Pass auth params in completion()
-If you don't want to set env variables, pass auth params to completion
+### Passing credentials as parameters - Completion()
+Pass AWS credentials as parameters to litellm.completion
 ```python
 import os 
 from litellm import completion
