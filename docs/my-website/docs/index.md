@@ -100,7 +100,7 @@ os.environ["AZURE_API_VERSION"] = ""
 
 # azure call
 response = completion(
-  "azure/<your_deployment_id>", 
+  "azure/<your_deployment_name>", 
   messages = [{ "content": "Hello, how are you?","role": "user"}]
 )
 ```
@@ -229,7 +229,7 @@ os.environ["AZURE_API_VERSION"] = ""
 
 # azure call
 response = completion(
-  "azure/<your_deployment_id>", 
+  "azure/<your_deployment_name>", 
   messages = [{ "content": "Hello, how are you?","role": "user"}],
   stream=True,
 )
