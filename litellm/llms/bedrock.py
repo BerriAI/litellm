@@ -168,14 +168,40 @@ class AnthropicConstants(Enum):
     AI_PROMPT = "\n\nAssistant:"
 
 
-def init_bedrock_client(region_name):
-    import boto3
+def init_bedrock_client(
+        region_name = None,
+        aws_access_key_id = None,
+        aws_secret_access_key = None,
+        aws_region_name=None,
+    ):
 
-    client = boto3.client(
-        service_name="bedrock-runtime",
-        region_name=region_name,
-        endpoint_url=f'https://bedrock-runtime.{region_name}.amazonaws.com'
-    )
+    import boto3
+    if aws_access_key_id != None:
+        # uses auth params passed to completion
+        # aws_access_key_id is not None, assume user is trying to auth using litellm.completion
+
+        client = boto3.client(
+            service_name="bedrock-runtime",
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            region_name=aws_region_name,
+            endpoint_url=f'https://bedrock-runtime.{aws_region_name}.amazonaws.com'
+        )
+    else:
+        # aws_access_key_id is None, assume user is trying to auth using env variables 
+        # boto3 automaticaly reads env variables
+
+        # we need to read region name from env
+        # I assume majority of users use .env for auth 
+        region_name = (
+            get_secret("AWS_REGION_NAME") or
+            "us-west-2"  # default to us-west-2 if user not specified
+        )
+        client = boto3.client(
+            service_name="bedrock-runtime",
+            region_name=region_name,
+            endpoint_url=f'https://bedrock-runtime.{region_name}.amazonaws.com'
+        )
 
     return client
 
@@ -238,12 +264,17 @@ def completion(
         litellm_params=None,
         logger_fn=None,
 ):
-    region_name = (
-            get_secret("AWS_REGION_NAME") or
-            "us-west-2"  # default to us-west-2 if user not specified
-    )
+    # pop aws_secret_access_key, aws_access_key_id, aws_region_name from kwargs, since completion calls fail with them
+    aws_secret_access_key = optional_params.pop("aws_secret_access_key", None)
+    aws_access_key_id = optional_params.pop("aws_access_key_id", None)
+    aws_region_name = optional_params.pop("aws_region_name", None)
 
-    client = init_bedrock_client(region_name)
+    # only pass variables that are not None
+    client = init_bedrock_client(
+        aws_access_key_id=aws_access_key_id,
+        aws_secret_access_key=aws_secret_access_key,
+        aws_region_name=aws_region_name,
+    )
 
     model = model
     provider = model.split(".")[0]
