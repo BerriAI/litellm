@@ -66,7 +66,6 @@ from litellm.utils import (
 ####### ENVIRONMENT VARIABLES ###################
 dotenv.load_dotenv()  # Loading env variables using dotenv
 
-
 ####### COMPLETION ENDPOINTS ################
 
 async def acompletion(*args, **kwargs):
@@ -310,6 +309,12 @@ def completion(
                 get_secret("AZURE_API_KEY")
             )
 
+            ## LOAD CONFIG - if set
+            config=litellm.AzureOpenAIConfig.get_config()
+            for k, v in config.items():
+                if k not in optional_params: # completion(top_k=3) > azure_config(top_k=3) <- allows for dynamic variables to be passed in
+                    optional_params[k] = v
+
             ## LOGGING
             logging.pre_call(
                 input=messages,
@@ -368,6 +373,13 @@ def completion(
                 litellm.openai_key or
                 get_secret("OPENAI_API_KEY")
             )
+
+            ## LOAD CONFIG - if set
+            config=litellm.OpenAIConfig.get_config()
+            for k, v in config.items():
+                if k not in optional_params: # completion(top_k=3) > openai_config(top_k=3) <- allows for dynamic variables to be passed in
+                    optional_params[k] = v
+
             ## LOGGING
             logging.pre_call(
                 input=messages,
@@ -435,6 +447,12 @@ def completion(
                 litellm.openai_key or
                 get_secret("OPENAI_API_KEY")
             )
+
+            ## LOAD CONFIG - if set
+            config=litellm.OpenAITextCompletionConfig.get_config()
+            for k, v in config.items():
+                if k not in optional_params: # completion(top_k=3) > openai_text_config(top_k=3) <- allows for dynamic variables to be passed in
+                    optional_params[k] = v
 
 
             if litellm.organization:
