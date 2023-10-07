@@ -3,6 +3,7 @@ import TabItem from '@theme/TabItem';
 
 # LiteLLM - Getting Started
 
+https://github.com/BerriAI/litellm
 
 ## **Call 100+ LLMs using the same Input/Output Format**
 

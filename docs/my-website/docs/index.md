@@ -3,6 +3,8 @@ import TabItem from '@theme/TabItem';
 
 # LiteLLM - Getting Started
 
+https://github.com/BerriAI/litellm
+
 import QuickStart from '../src/components/QuickStart.js'
 
 ## **Call 100+ LLMs using the same Input/Output Format**
