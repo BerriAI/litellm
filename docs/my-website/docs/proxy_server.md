@@ -6,46 +6,23 @@ import TabItem from '@theme/TabItem';
 CLI Tool to create a LLM Proxy Server to translate openai api calls to any non-openai model (e.g. Huggingface, TogetherAI, Ollama, etc.) 100+ models [Provider List](https://docs.litellm.ai/docs/providers).
 
 ## Quick start
-Call Huggingface models through your OpenAI proxy.
+Call Ollama models through your OpenAI proxy.
 
 ### Start Proxy
 ```shell
 $ pip install litellm
 ```
 ```shell 
-$ litellm --model huggingface/bigcode/starcoder
+$ litellm --model ollama/llama2
 
 #INFO:     Uvicorn running on http://0.0.0.0:8000
 ```
 
 This will host a local proxy api at: **http://0.0.0.0:8000**
 
-### Test Proxy
-Make a test ChatCompletion Request to your proxy
-<Tabs>
-<TabItem value="litellm" label="litellm cli">
-
-```shell
-litellm --test http://0.0.0.0:8000
-```
-
-</TabItem>
-<TabItem value="openai" label="OpenAI">
-
-```python
-import openai 
-
-openai.api_base = "http://0.0.0.0:8000"
-
-print(openai.ChatCompletion.create(model="test", messages=[{"role":"user", "content":"Hey!"}]))
-```
-
-</TabItem>
-
-<TabItem value="curl" label="curl">
-
-```curl 
-curl --location 'http://0.0.0.0:8000/chat/completions' \
+Let's see if it works
+```shell 
+$ curl --location 'http://0.0.0.0:8000/chat/completions' \
 --header 'Content-Type: application/json' \
 --data '{
   "messages": [
@@ -56,24 +33,44 @@ curl --location 'http://0.0.0.0:8000/chat/completions' \
   ], 
 }'
 ```
-</TabItem>
-</Tabs>
+
+### Replace OpenAI Base
+
+```python
+import openai 
+
+openai.api_base = "http://0.0.0.0:8000"
+
+print(openai.ChatCompletion.create(model="test", messages=[{"role":"user", "content":"Hey!"}]))
+```
 
 #### Other supported models:
 <Tabs>
-<TabItem value="anthropic" label="Anthropic">
+<TabItem value="vllm-local" label="VLLM">
+Assuming you're running vllm locally
 
 ```shell
-$ export ANTHROPIC_API_KEY=my-api-key
-$ litellm --model claude-instant-1
+$ litellm --model vllm/facebook/opt-125m
 ```
-
 </TabItem>
+<TabItem value="openai-proxy" label="OpenAI Compatible Server">
 
+```shell
+$ litellm --model openai/<model_name> --api_base <your-api-base>
+```
+</TabItem>
 <TabItem value="huggingface" label="Huggingface">
 
 ```shell
 $ export HUGGINGFACE_API_KEY=my-api-key #[OPTIONAL]
+$ litellm --model claude-instant-1
+```
+
+</TabItem>
+<TabItem value="anthropic" label="Anthropic">
+
+```shell
+$ export ANTHROPIC_API_KEY=my-api-key
 $ litellm --model claude-instant-1
 ```
 
@@ -120,9 +117,8 @@ $ litellm --model palm/chat-bison
 ```shell
 $ export AZURE_API_KEY=my-api-key
 $ export AZURE_API_BASE=my-api-base
-$ export AZURE_API_VERSION=my-api-version
 
-$ litellm --model azure/my-deployment-id
+$ litellm --model azure/my-deployment-name
 ```
 
 </TabItem>
@@ -149,8 +145,23 @@ $ litellm --model command-nightly
 
 [**Jump to Code**](https://github.com/BerriAI/litellm/blob/fef4146396d5d87006259e00095a62e3900d6bb4/litellm/proxy.py#L36)
 
+## Configure Model
 
-### Deploy Proxy
+To save api keys and/or customize model prompt, run: 
+```shell
+$ litellm --config
+```
+This will open a .env file that will store these values locally.
+
+To set api base, temperature, and max tokens, add it to your cli command
+```shell
+litellm --model ollama/llama2 \
+  --api_base http://localhost:11434 \
+  --max_tokens 250 \
+  --temperature 0.5
+```
+
+## Deploy Proxy
 
 <Tabs>
 <TabItem value="self-hosted" label="Self-Hosted">
@@ -193,141 +204,9 @@ $ litellm --model claude-instant-1 --deploy
 ```
 
 This will host a ChatCompletions API at: https://api.litellm.ai/44508ad4
-#### Other supported models:
-<Tabs>
-<TabItem value="anthropic" label="Anthropic">
-
-```shell
-$ export ANTHROPIC_API_KEY=my-api-key
-$ litellm --model claude-instant-1 --deploy
-```
-
-</TabItem>
-
-<TabItem value="together_ai" label="TogetherAI">
-
-```shell
-$ export TOGETHERAI_API_KEY=my-api-key
-$ litellm --model together_ai/lmsys/vicuna-13b-v1.5-16k --deploy
-```
-
-</TabItem>
-
-<TabItem value="replicate" label="Replicate">
-
-```shell
-$ export REPLICATE_API_KEY=my-api-key
-$ litellm \
-  --model replicate/meta/llama-2-70b-chat:02e509c789964a7ea8736978a43525956ef40397be9033abf9fd2badfe68c9e3
-  --deploy
-```
-
-</TabItem>
-
-<TabItem value="petals" label="Petals">
-
-```shell
-$ litellm --model petals/meta-llama/Llama-2-70b-chat-hf --deploy
-```
-
-</TabItem>
-
-<TabItem value="palm" label="Palm">
-
-```shell
-$ export PALM_API_KEY=my-palm-key
-$ litellm --model palm/chat-bison --deploy
-```
-
-</TabItem>
-
-<TabItem value="azure" label="Azure OpenAI">
-
-```shell
-$ export AZURE_API_KEY=my-api-key
-$ export AZURE_API_BASE=my-api-base
-$ export AZURE_API_VERSION=my-api-version
-
-$ litellm --model azure/my-deployment-id --deploy
-```
-
-</TabItem>
-
-<TabItem value="ai21" label="AI21">
-
-```shell
-$ export AI21_API_KEY=my-api-key
-$ litellm --model j2-light --deploy
-```
-
-</TabItem>
-
-<TabItem value="cohere" label="Cohere">
-
-```shell
-$ export COHERE_API_KEY=my-api-key
-$ litellm --model command-nightly --deploy
-```
-
-</TabItem>
-
-</Tabs>
-
-### Test Deployed Proxy
-Make a test ChatCompletion Request to your proxy
-<Tabs>
-<TabItem value="litellm" label="litellm cli">
-
-```shell
-litellm --test https://api.litellm.ai/44508ad4
-```
-
-</TabItem>
-<TabItem value="openai" label="OpenAI">
-
-```python
-import openai 
-
-openai.api_base = "https://api.litellm.ai/44508ad4"
-
-print(openai.ChatCompletion.create(model="test", messages=[{"role":"user", "content":"Hey!"}]))
-```
-
-</TabItem>
-
-<TabItem value="curl" label="curl">
-
-```curl 
-curl --location 'https://api.litellm.ai/44508ad4/chat/completions' \
---header 'Content-Type: application/json' \
---data '{
-  "messages": [
-    {
-      "role": "user", 
-      "content": "what do you know?"
-    }
-  ], 
-}'
-```
-</TabItem>
-</Tabs>
 </TabItem>
 </Tabs>
 
-## Setting api base, temperature, max tokens
-
-```shell
-litellm --model huggingface/bigcode/starcoder \
-  --api_base https://my-endpoint.huggingface.cloud \
-  --max_tokens 250 \
-  --temperature 0.5
-```
-
-**Ollama example**
-
-```shell
-$ litellm --model ollama/llama2 --api_base http://localhost:11434
-```
 
 ## Tutorial - using HuggingFace LLMs with aider 
 [Aider](https://github.com/paul-gauthier/aider) is an AI pair programming in your terminal.
