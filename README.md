@@ -2,7 +2,12 @@
         🚅 LiteLLM
     </h1>
     <p align="center">
-        <p align="center">Call all LLM APIs using the OpenAI format [Anthropic, Huggingface, Cohere, TogetherAI, Azure, OpenAI, etc.]</p>
+        <p align="center">Call all LLM APIs using the OpenAI format [Anthropic, Huggingface, Cohere, TogetherAI, Azure, OpenAI, etc.]
+        <br>
+        <br>
+        <a href="https://github.com/BerriAI/litellm/issues/new?assignees=&labels=bug&projects=&template=bug_report.yml&title=%5BBug%5D%3A+">Bug Report</a>
+        ·
+        <a href="https://github.com/BerriAI/litellm/issues/new?assignees=&labels=enhancement&projects=&template=feature_request.yml&title=%5BFeature%5D%3A+">Feature Request</a>
     </p>
 <h4 align="center">
     <a href="https://pypi.org/project/litellm/" target="_blank">
