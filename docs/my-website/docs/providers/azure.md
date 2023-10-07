@@ -43,3 +43,19 @@ response = litellm.completion(
     messages = [{"role": "user", "content": "good morning"}],
 )
 ```
+
+## Azure OpenAI Chat Completion Models
+
+| Model Name       | Function Call                          |
+|------------------|----------------------------------------|
+| gpt-4            | `completion('azure/<your deployment name>', messages)`         |
+| gpt-4-0314            | `completion('azure/<your deployment name>', messages)`         | 
+| gpt-4-0613            | `completion('azure/<your deployment name>', messages)`         |
+| gpt-4-32k            | `completion('azure/<your deployment name>', messages)`         | 
+| gpt-4-32k-0314            | `completion('azure/<your deployment name>', messages)`         |
+| gpt-4-32k-0613            | `completion('azure/<your deployment name>', messages)`         | 
+| gpt-3.5-turbo    | `completion('azure/<your deployment name>', messages)` |
+| gpt-3.5-turbo-0301    | `completion('azure/<your deployment name>', messages)` |
+| gpt-3.5-turbo-0613    | `completion('azure/<your deployment name>', messages)` |
+| gpt-3.5-turbo-16k    | `completion('azure/<your deployment name>', messages)` |
+| gpt-3.5-turbo-16k-0613    | `completion('azure/<your deployment name>', messages)`
