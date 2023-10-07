@@ -27,3 +27,16 @@ messages = [{ "content": "Hello, how are you?","role": "user"}]
 # azure call
 response = completion("azure/<your_deployment_name>", messages)
 ```
+
+### Set API Key, API Base, API Version in Completion()
+
+```python
+import litellm
+response = litellm.completion(
+    model = "azure/<your deployment name>",             # model = azure/<your deployment name> 
+    api_base = "",                                      # azure api base
+    api_version = "",                                   # azure api version
+    api_key = "",                                       # azure api key
+    messages = [{"role": "user", "content": "good morning"}],
+)
+```
