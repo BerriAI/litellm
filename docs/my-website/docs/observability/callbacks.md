@@ -2,7 +2,7 @@
 
 ## Use Callbacks to send Output Data to Posthog, Sentry etc
 
-liteLLM provides `success_callbacks` and `failure_callbacks`, making it easy for you to send data to a particular provider depending on the status of your responses.
+liteLLM provides `input_callbacks`, `success_callbacks` and `failure_callbacks`, making it easy for you to send data to a particular provider depending on the status of your responses.
 
 liteLLM supports:
 
@@ -20,6 +20,7 @@ liteLLM supports:
 from litellm import completion
 
 # set callbacks
+litellm.input_callback=["sentry"] # for sentry breadcrumbing - logs the input being sent to the api
 litellm.success_callback=["posthog", "helicone", "llmonitor"]
 litellm.failure_callback=["sentry", "llmonitor"]
 
