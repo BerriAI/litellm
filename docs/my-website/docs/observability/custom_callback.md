@@ -39,6 +39,28 @@ response = completion(
 print(response)
 
 ```
+## Get complete streaming response
+
+LiteLLM will pass you the complete streaming response in the final streaming chunk as part of the kwargs for your custom callback function.
+
+```python
+# litellm.set_verbose = False
+        def custom_callback(
+            kwargs,                 # kwargs to completion
+            completion_response,    # response from completion
+            start_time, end_time    # start/end time
+        ):
+            # print(f"streaming response: {completion_response}")
+            if "complete_streaming_response" in kwargs: 
+                print(f"Complete Streaming Response: {kwargs['complete_streaming_response']}")
+        
+        # Assign the custom callback function
+        litellm.success_callback = [custom_callback]
+
+        response = completion(model="claude-instant-1", messages=messages, stream=True)
+        for idx, chunk in enumerate(response): 
+            pass
+```
 
 ### Custom Callback to write to Mixpanel
 
