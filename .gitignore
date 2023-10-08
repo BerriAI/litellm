@@ -5,3 +5,4 @@ __pycache__/
 bun.lockb
 **/.DS_Store
 .aider*
+litellm_results.jsonl
