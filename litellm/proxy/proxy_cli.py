@@ -95,7 +95,7 @@ def run_server(host, port, api_base, model, deploy, debug, temperature, max_toke
         click.echo('LiteLLM: Making a test ChatCompletions request to your proxy')
         import openai
         if test == True: # flag value set
-            api_base = "http://0.0.0.0:8000"
+            api_base = f"http://{host}:{port}"
         else: 
             api_base = test
         openai.api_base = api_base
