@@ -108,6 +108,7 @@ const sidebars = {
       type: "category",
       label: "Logging & Observability",
       items: [
+        'debugging/local_debugging',
         "observability/callbacks",
         "observability/integrations",
         "observability/custom_callback",
@@ -118,6 +119,7 @@ const sidebars = {
         "observability/llmonitor_integration",
         "observability/helicone_integration",
         "observability/supabase_integration",
+        `observability/telemetry`,
       ],
     },
     {
@@ -141,8 +143,6 @@ const sidebars = {
       label: 'Extras',
       items: [
         'extras/contributing',
-        'debugging/hosted_debugging',
-        'debugging/local_debugging',
         {
           type: "category",
           label: "❤️ 🚅 Projects built on LiteLLM",
