@@ -149,3 +149,13 @@ assert(valid_models == expected_models)
 # reset replicate env key
 os.environ = old_environ
 ```
+
+### `validate_environment(model: str)`
+
+This helper tells you if you have all the required environment variables for a model, and if not - what's missing. 
+
+```python
+import litellm
+
+print(litellm.validate_environment("openai/gpt-3.5-turbo"))
+```
