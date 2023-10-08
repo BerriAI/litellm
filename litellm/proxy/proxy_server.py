@@ -112,11 +112,18 @@ def data_generator(response):
 
 #### API ENDPOINTS ####
 @router.get("/models") # if project requires model list 
-def model_list(): 
-    return dict(
-        data=[{"id": user_model, "object": "model", "created": 1677610602, "owned_by": "openai"}],
-        object="list",
-    )
+def model_list():
+    if user_model != None:
+        return dict(
+            data=[{"id": user_model, "object": "model", "created": 1677610602, "owned_by": "openai"}],
+            object="list",
+        )
+    else:
+        all_models = litellm.model_list
+        return dict(
+            data = [{"id": model, "object": "model", "created": 1677610602, "owned_by": "openai"} for model in all_models],
+            object="list",
+        )
 
 @router.post("/completions")
 async def completion(request: Request):
@@ -126,6 +133,12 @@ async def completion(request: Request):
         data["model"] = user_model
     if user_api_base:
         data["api_base"] = user_api_base
+    # override with user settings
+    if user_temperature: 
+        data["temperature"] = user_temperature
+    if user_max_tokens: 
+        data["max_tokens"] = user_max_tokens
+
     ## check for custom prompt template ## 
     litellm.register_prompt_template(
         model=user_model, 
