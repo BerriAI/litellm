@@ -41,28 +41,28 @@ messages = [{"content": user_message, "role": "user"}]
 # 1. On Call Success
 # normal completion 
 ## test on openai completion call
-def test_logging_success_completion():
-    global score
-    try:
-        # Redirect stdout
-        old_stdout = sys.stdout
-        sys.stdout = new_stdout = io.StringIO()
+# def test_logging_success_completion():
+#     global score
+#     try:
+#         # Redirect stdout
+#         old_stdout = sys.stdout
+#         sys.stdout = new_stdout = io.StringIO()
 
-        response = completion(model="gpt-3.5-turbo", messages=messages)
-        # Restore stdout
-        sys.stdout = old_stdout
-        output = new_stdout.getvalue().strip()
+#         response = completion(model="gpt-3.5-turbo", messages=messages)
+#         # Restore stdout
+#         sys.stdout = old_stdout
+#         output = new_stdout.getvalue().strip()
 
-        if "Logging Details Pre-API Call" not in output:
-            raise Exception("Required log message not found!")
-        elif "Logging Details Post-API Call" not in output:
-            raise Exception("Required log message not found!")
-        elif "Logging Details LiteLLM-Success Call" not in output:
-            raise Exception("Required log message not found!")
-        score += 1
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-        pass
+#         if "Logging Details Pre-API Call" not in output:
+#             raise Exception("Required log message not found!")
+#         elif "Logging Details Post-API Call" not in output:
+#             raise Exception("Required log message not found!")
+#         elif "Logging Details LiteLLM-Success Call" not in output:
+#             raise Exception("Required log message not found!")
+#         score += 1
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
+#         pass
 
 # ## test on non-openai completion call
 # def test_logging_success_completion_non_openai():

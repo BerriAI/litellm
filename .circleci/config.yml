@@ -55,6 +55,7 @@ jobs:
           name: Run tests
           command: |
             pwd
+            ls
             python -m pytest -vv tests/test_logging.py --junitxml=test-results/junit.xml
           no_output_timeout: 30m
 
