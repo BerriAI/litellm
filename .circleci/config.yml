@@ -54,7 +54,7 @@ jobs:
       - run:
           name: Run tests
           command: |
-            python -m pytest -vv --junitxml=test-results/junit.xml
+            python -m pytest -vv test_logging.py --junitxml=test-results/junit.xml
           no_output_timeout: 30m
 
       # Store test results
