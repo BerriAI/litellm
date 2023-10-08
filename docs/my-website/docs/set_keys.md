@@ -155,7 +155,7 @@ os.environ = old_environ
 This helper tells you if you have all the required environment variables for a model, and if not - what's missing. 
 
 ```python
-import litellm
+from litellm import validate_environment
 
-print(litellm.validate_environment("openai/gpt-3.5-turbo"))
+print(validate_environment("openai/gpt-3.5-turbo"))
 ```
