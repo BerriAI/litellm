@@ -1,4 +1,4 @@
-import sys, os
+import sys, os, platform
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
@@ -19,7 +19,7 @@ print()
 import litellm
 from fastapi import FastAPI, Request
 from fastapi.routing import APIRouter
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
 import json
 
 app = FastAPI()
@@ -202,5 +202,20 @@ async def chat_completion(request: Request):
         return StreamingResponse(data_generator(response), media_type='text/event-stream')
     print_verbose(f"response: {response}")
     return response
+
+
+@router.get("/ollama_logs")
+async def retrieve_server_log(request: Request):
+    filepath = os.path.expanduser('~/.ollama/logs/server.log')
+    return FileResponse(filepath)
+
+# @router.get("/ollama_logs")
+# async def chat_completion(request: Request):
+#     if platform.system() == "Darwin":
+#         print("This is a MacOS system.")
+#     elif platform.system() == "Linux":
+#         print("This is a Linux system.")
+#     else:
+#         print("This is an unknown operating system.")
 
 app.include_router(router)
