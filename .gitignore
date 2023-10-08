@@ -4,3 +4,4 @@ litellm_uuid.txt
 __pycache__/
 bun.lockb
 **/.DS_Store
+.aider*

@@ -3,38 +3,25 @@ import TabItem from '@theme/TabItem';
 
 # OpenAI Proxy Server
 
-CLI Tool to create a LLM Proxy Server to translate openai api calls to any non-openai model (e.g. Huggingface, TogetherAI, Ollama, etc.) 100+ models [Provider List](https://docs.litellm.ai/docs/providers).
+A local, fast, and lightweight OpenAI-compatible server to call 100+ LLM APIs. 
 
-## Quick start
-Call Ollama models through your OpenAI proxy.
-
-### Start Proxy
+## usage 
 ```shell
-$ pip install litellm
+pip install litellm
 ```
 ```shell 
-$ litellm --model ollama/llama2
+$ litellm --model ollama/codellama 
 
-#INFO:     Uvicorn running on http://0.0.0.0:8000
+#INFO: Ollama running on http://0.0.0.0:8000
 ```
 
-This will host a local proxy api at: **http://0.0.0.0:8000**
+### test
+In a new shell, run: 
+```shell
+$ litellm --test
+``` 
 
-Let's see if it works
-```shell 
-$ curl --location 'http://0.0.0.0:8000/chat/completions' \
---header 'Content-Type: application/json' \
---data '{
-  "messages": [
-    {
-      "role": "user", 
-      "content": "what do you know?"
-    }
-  ], 
-}'
-```
-
-### Replace OpenAI Base
+### replace openai base
 
 ```python
 import openai 
@@ -145,6 +132,81 @@ $ litellm --model command-nightly
 
 [**Jump to Code**](https://github.com/BerriAI/litellm/blob/fef4146396d5d87006259e00095a62e3900d6bb4/litellm/proxy.py#L36)
 
+## [tutorial]: Use with Aider/AutoGen/Continue-Dev
+
+Here's how to use the proxy to test codellama/mistral/etc. models for different github repos 
+
+```shell
+pip install litellm
+```
+
+```shell
+$ ollama pull codellama # OUR Local CodeLlama  
+
+$ litellm --model ollama/codellama --temperature 0.3 --max_tokens 2048
+```
+
+Implementation for different repos 
+<Tabs>
+<TabItem value="aider" label="Aider">
+
+```shell
+$ pip install aider 
+
+$ aider --openai-api-base http://0.0.0.0:8000 --openai-api-key fake-key
+```
+</TabItem>
+<TabItem value="continue-dev" label="ContinueDev">
+
+Continue-Dev brings ChatGPT to VSCode. See how to [install it here](https://continue.dev/docs/quickstart).
+
+In the [config.py](https://continue.dev/docs/reference/Models/openai) set this as your default model.
+```python
+  default=OpenAI(
+      api_key="IGNORED",
+      model="fake-model-name",
+      context_length=2048,
+      api_base="http://your_litellm_hostname:8000"
+  ),
+```
+
+Credits [@vividfog](https://github.com/jmorganca/ollama/issues/305#issuecomment-1751848077) for this tutorial. 
+</TabItem>
+<TabItem value="autogen" label="AutoGen">
+
+```python
+pip install pyautogen
+```
+
+```python
+from autogen import AssistantAgent, UserProxyAgent, oai
+config_list=[
+    {
+        "model": "my-fake-model",
+        "api_base": "http://localhost:8000/v1",  #litellm compatible endpoint
+        "api_type": "open_ai",
+        "api_key": "NULL", # just a placeholder
+    }
+]
+
+response = oai.Completion.create(config_list=config_list, prompt="Hi")
+print(response) # works fine
+
+assistant = AssistantAgent("assistant")
+user_proxy = UserProxyAgent("user_proxy")
+user_proxy.initiate_chat(assistant, message="Plot a chart of META and TESLA stock price change YTD.", config_list=config_list)
+# fails with the error: openai.error.AuthenticationError: No API key provided.
+```
+
+Credits [@victordibia](https://github.com/microsoft/autogen/issues/45#issuecomment-1749921972) for this tutorial.
+</TabItem>
+</Tabs>
+
+:::note
+**Contribute** Using this server with a project? Contribute your tutorial here!
+
+::: 
+
 ## Configure Model
 
 To save api keys and/or customize model prompt, run: 
@@ -207,44 +269,3 @@ This will host a ChatCompletions API at: https://api.litellm.ai/44508ad4
 </TabItem>
 </Tabs>
 
-
-## Tutorial - using HuggingFace LLMs with aider 
-[Aider](https://github.com/paul-gauthier/aider) is an AI pair programming in your terminal.
-
-But it only accepts OpenAI API Calls. 
-
-In this tutorial we'll use Aider with WizardCoder (hosted on HF Inference Endpoints).
-
-[NOTE]: To learn how to deploy a model on Huggingface 
-
-### Step 1: Install aider and litellm
-```shell 
-$ pip install aider-chat litellm
-```
-
-### Step 2: Spin up local proxy
-Save your huggingface api key in your local environment (can also do this via .env)
-
-```shell
-$ export HUGGINGFACE_API_KEY=my-huggingface-api-key
-```
-
-Point your local proxy to your model endpoint
-
-```shell 
-$ litellm \
-  --model huggingface/WizardLM/WizardCoder-Python-34B-V1.0 \
-  --api_base https://my-endpoint.huggingface.com
-```
-This will host a local proxy api at: **http://0.0.0.0:8000**
-
-### Step 3: Replace openai api base in Aider
-Aider lets you set the openai api base. So lets point it to our proxy instead. 
-
-```shell
-$ aider --openai-api-base http://0.0.0.0:8000
-```
-
-
-
-And that's it! 
