@@ -223,6 +223,17 @@ litellm --model ollama/llama2 \
   --temperature 0.5
 ```
 
+## Ollama Logs
+Ollama calls can sometimes fail (out-of-memory errors, etc.). 
+
+To see your logs just call 
+
+```shell
+$ curl 'http://0.0.0.0:8000/ollama_logs'
+```
+
+This will return your logs from `~/.ollama/logs/server.log`. 
+
 ## Deploy Proxy
 
 <Tabs>

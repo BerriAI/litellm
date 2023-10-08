@@ -209,13 +209,4 @@ async def retrieve_server_log(request: Request):
     filepath = os.path.expanduser('~/.ollama/logs/server.log')
     return FileResponse(filepath)
 
-# @router.get("/ollama_logs")
-# async def chat_completion(request: Request):
-#     if platform.system() == "Darwin":
-#         print("This is a MacOS system.")
-#     elif platform.system() == "Linux":
-#         print("This is a Linux system.")
-#     else:
-#         print("This is an unknown operating system.")
-
 app.include_router(router)
