@@ -56,7 +56,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv litellm/tests/test_logging.py --junitxml=test-results/junit.xml
+            python -m pytest -vv litellm/tests/ --junitxml=test-results/junit.xml
           no_output_timeout: 30m
 
       # Store test results
