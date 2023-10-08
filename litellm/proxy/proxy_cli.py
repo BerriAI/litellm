@@ -58,6 +58,7 @@ def open_config():
         subprocess.call(('open', '-t', user_config_path)) 
 
 @click.command()
+@click.option('--host', default='0.0.0.0', help='Host for the server to listen on.')
 @click.option('--port', default=8000, help='Port to bind the server to.')
 @click.option('--api_base', default=None, help='API base URL.')
 @click.option('--model', default=None, help='The model name to pass to litellm expects') 
@@ -69,7 +70,7 @@ def open_config():
 @click.option('--config', is_flag=True, help='Create and open .env file from .env.template')
 @click.option('--test', flag_value=True, help='proxy chat completions url to make a test request to')
 @click.option('--local', is_flag=True, default=False, help='for local debugging')
-def run_server(port, api_base, model, deploy, debug, temperature, max_tokens, telemetry, config, test, local):
+def run_server(host, port, api_base, model, deploy, debug, temperature, max_tokens, telemetry, config, test, local):
     if config:
         open_config()
     
@@ -134,7 +135,7 @@ def run_server(port, api_base, model, deploy, debug, temperature, max_tokens, te
         print(f"\033[32mLiteLLM: Test your local endpoint with: \"litellm --test\" [In a new terminal tab]\033[0m\n")
         print(f"\033[32mLiteLLM: Deploy your proxy using the following: \"litellm --model claude-instant-1 --deploy\" Get an https://api.litellm.ai/chat/completions endpoint \033[0m\n")
         
-        uvicorn.run(app, host='0.0.0.0', port=port)
+        uvicorn.run(app, host=host, port=port)
 
 
 if __name__ == "__main__":
