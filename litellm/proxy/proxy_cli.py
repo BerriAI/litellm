@@ -69,11 +69,12 @@ def open_config():
 @click.option('--drop_params', is_flag=True, help='Drop any unmapped params') 
 @click.option('--add_function_to_prompt', is_flag=True, help='If function passed but unsupported, pass it as prompt') 
 @click.option('--max_tokens', default=None, type=int, help='Set max tokens for the model') 
+@click.option('--max_budget', default=None, type=float, help='Set max budget for API calls - works for hosted models like OpenAI, TogetherAI, Anthropic, etc.`') 
 @click.option('--telemetry', default=True, type=bool, help='Helps us know if people are using this feature. Turn this off by doing `--telemetry False`') 
 @click.option('--config', is_flag=True, help='Create and open .env file from .env.template')
 @click.option('--test', flag_value=True, help='proxy chat completions url to make a test request to')
 @click.option('--local', is_flag=True, default=False, help='for local debugging')
-def run_server(host, port, api_base, model, deploy, debug, temperature, max_tokens, drop_params, add_function_to_prompt, telemetry, config, test, local):
+def run_server(host, port, api_base, model, deploy, debug, temperature, max_tokens, drop_params, add_function_to_prompt, max_budget, telemetry, config, test, local):
     if config:
         open_config()
     
@@ -127,7 +128,7 @@ def run_server(host, port, api_base, model, deploy, debug, temperature, max_toke
         return
     else:
         load_config()
-        initialize(model, api_base, debug, temperature, max_tokens, telemetry, drop_params, add_function_to_prompt)
+        initialize(model, api_base, debug, temperature, max_tokens, max_budget, telemetry, drop_params, add_function_to_prompt)
 
 
         try:
