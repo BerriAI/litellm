@@ -46,7 +46,7 @@ def usage_telemetry(): # helps us know if people are using this feature. Set `li
         }
         litellm.utils.litellm_telemetry(data=data)
 
-def initialize(model, api_base, debug, temperature, max_tokens, telemetry, drop_params, add_function_to_prompt):
+def initialize(model, api_base, debug, temperature, max_tokens, max_budget, telemetry, drop_params, add_function_to_prompt):
     global user_model, user_api_base, user_debug, user_max_tokens, user_temperature, user_telemetry
     user_model = model
     user_api_base = api_base
@@ -59,6 +59,8 @@ def initialize(model, api_base, debug, temperature, max_tokens, telemetry, drop_
         litellm.drop_params = True
     if add_function_to_prompt == True: 
         litellm.add_function_to_prompt = True
+    if max_budget: 
+        litellm.max_budget = max_budget
 
 def deploy_proxy(model, api_base, debug, temperature, max_tokens, telemetry, deploy):
     import requests
