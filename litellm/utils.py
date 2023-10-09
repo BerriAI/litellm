@@ -1008,7 +1008,7 @@ def get_optional_params(  # use the openai defaults
             if litellm.add_function_to_prompt: # if user opts to add it to prompt instead
                 optional_params["functions_unsupported_model"] = non_default_params.pop("functions")
             else: 
-                raise ValueError("LiteLLM.Exception: Function calling is not supported by this provider")
+                raise ValueError(f"LiteLLM.Exception: Function calling is not supported by {custom_llm_provider}. To add it to the prompt, set `litellm.add_function_to_prompt = True`.")
 
     def _check_valid_arg(supported_params): 
         print_verbose(f"checking params for {model}")
@@ -1025,7 +1025,7 @@ def get_optional_params(  # use the openai defaults
                 else: 
                     unsupported_params[k] = non_default_params[k]
         if unsupported_params and not litellm.drop_params:
-            raise ValueError("LiteLLM.Exception: Unsupported parameters passed: {}".format(', '.join(unsupported_params)))
+            raise ValueError(f"LiteLLM.Exception: {custom_llm_provider} does not support parameters: {unsupported_params}. To drop these, set `litellm.drop_params=True`.")
 
     ## raise exception if provider doesn't support passed in param 
     if custom_llm_provider == "anthropic":
