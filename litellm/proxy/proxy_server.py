@@ -14,7 +14,8 @@ except ImportError:
 print()
 print("\033[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new\033[0m")
 print()
-print()
+print("\033[1;34mDocs: https://docs.litellm.ai/docs/proxy_server\033[0m")
+print() 
 
 import litellm
 from fastapi import FastAPI, Request
