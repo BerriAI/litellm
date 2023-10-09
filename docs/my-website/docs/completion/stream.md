@@ -38,7 +38,9 @@ We've implemented an `__anext__()` function in the streaming object returned. Th
 Here's an example of using it with openai. But this 
 ```python
 from litellm import completion
-import asyncio
+import asyncio, os, traceback, time
+
+os.environ["OPENAI_API_KEY"] = "your-api-key"
 
 def logger_fn(model_call_object: dict):
     print(f"LOGGER FUNCTION: {model_call_object}")
@@ -60,7 +62,7 @@ async def completion_call():
             chunk_time = time.time()
             print(f"time since initial request: {chunk_time - start_time:.5f}")
             print(chunk["choices"][0]["delta"])
-            complete_response += chunk["choices"][0]["delta"]["content"]
+            complete_response += chunk["choices"][0]["delta"].get("content", "")
         if complete_response == "": 
             raise Exception("Empty response received")
     except:
