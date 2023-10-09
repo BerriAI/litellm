@@ -22,6 +22,7 @@ from fastapi import FastAPI, Request
 from fastapi.routing import APIRouter
 from fastapi.responses import StreamingResponse, FileResponse
 import json
+import logging
 
 app = FastAPI()
 router = APIRouter()
@@ -205,10 +206,31 @@ async def chat_completion(request: Request):
         final_prompt_value=os.getenv("MODEL_POST_PROMPT", "")
     )
     response = litellm.completion(**data)
+
+    # track cost of this response, using litellm.completion_cost
+    await track_cost(response)
     if 'stream' in data and data['stream'] == True: # use generate_responses to stream responses
         return StreamingResponse(data_generator(response), media_type='text/event-stream')
     print_verbose(f"response: {response}")
     return response
+
+async def track_cost(response):
+    try:
+        logging.basicConfig(
+            filename='cost.log',
+            level=logging.INFO,
+            format='%(asctime)s - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+        import datetime
+
+        response_cost = litellm.completion_cost(completion_response=response)
+
+        logging.info(f"Model {response.model} Cost: {response_cost:.8f}")
+
+    except:
+        pass
+
 
 
 @router.get("/ollama_logs")
