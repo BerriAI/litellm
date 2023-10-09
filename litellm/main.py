@@ -170,6 +170,12 @@ def completion(
     user: str = "",
     deployment_id = None,
     request_timeout: Optional[int] = None,
+
+    # set api_base, api_version, api_key
+    api_base: Optional[str] = None,
+    api_version: Optional[str] = None,
+    api_key: Optional[str] = None,
+
     # Optional liteLLM function params
     **kwargs,
 ) -> ModelResponse:
@@ -193,6 +199,9 @@ def completion(
         logit_bias (dict, optional): Used to modify the probability of specific tokens appearing in the completion.
         user (str, optional):  A unique identifier representing your end-user. This can help the LLM provider to monitor and detect abuse.
         metadata (dict, optional): Pass in additional metadata to tag your completion calls - eg. prompt version, details, etc. 
+        api_base (str, optional): Base URL for the API (default is None).
+        api_version (str, optional): API version (default is None).
+        api_key (str, optional): API key (default is None).
 
         LITELLM Specific Params
         mock_response (str, optional): If provided, return a mock completion response for testing or debugging purposes (default is None).
@@ -222,7 +231,7 @@ def completion(
     metadata = kwargs.get('metadata', None)
     fallbacks = kwargs.get('fallbacks', [])
     ######## end of unpacking kwargs ###########
-    openai_params = ["functions", "function_call", "temperature", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "request_timeout"]
+    openai_params = ["functions", "function_call", "temperature", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "request_timeout", "api_base", "api_version", "api_key"]
     litellm_params = ["metadata", "acompletion", "caching", "return_async", "mock_response", "api_key", "api_version", "api_base", "force_timeout", "logger_fn", "verbose", "custom_llm_provider", "litellm_logging_obj", "litellm_call_id", "use_client", "id", "metadata", "fallbacks", "azure"]
     default_params = openai_params + litellm_params
     non_default_params = {k: v for k,v in kwargs.items() if k not in default_params} # model-specific params - pass them straight to the model/provider
