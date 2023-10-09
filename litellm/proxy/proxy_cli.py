@@ -73,7 +73,7 @@ def open_config():
 @click.option('--config', is_flag=True, help='Create and open .env file from .env.template')
 @click.option('--test', flag_value=True, help='proxy chat completions url to make a test request to')
 @click.option('--local', is_flag=True, default=False, help='for local debugging')
-def run_server(host, port, api_base, model, deploy, debug, temperature, max_tokens, telemetry, config, test, local):
+def run_server(host, port, api_base, model, deploy, debug, temperature, max_tokens, drop_params, add_function_to_prompt, telemetry, config, test, local):
     if config:
         open_config()
     
@@ -127,7 +127,7 @@ def run_server(host, port, api_base, model, deploy, debug, temperature, max_toke
         return
     else:
         load_config()
-        initialize(model, api_base, debug, temperature, max_tokens, telemetry, )
+        initialize(model, api_base, debug, temperature, max_tokens, telemetry, drop_params, add_function_to_prompt)
 
 
         try:
