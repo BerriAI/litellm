@@ -66,6 +66,9 @@ def open_config():
 @click.option('--debug', is_flag=True, help='To debug the input') 
 @click.option('--temperature', default=None, type=float, help='Set temperature for the model') 
 @click.option('--max_tokens', default=None, type=int, help='Set max tokens for the model') 
+@click.option('--drop_params', is_flag=True, help='Drop any unmapped params') 
+@click.option('--add_function_to_prompt', is_flag=True, help='If function passed but unsupported, pass it as prompt') 
+@click.option('--max_tokens', default=None, type=int, help='Set max tokens for the model') 
 @click.option('--telemetry', default=True, type=bool, help='Helps us know if people are using this feature. Turn this off by doing `--telemetry False`') 
 @click.option('--config', is_flag=True, help='Create and open .env file from .env.template')
 @click.option('--test', flag_value=True, help='proxy chat completions url to make a test request to')
@@ -124,7 +127,7 @@ def run_server(host, port, api_base, model, deploy, debug, temperature, max_toke
         return
     else:
         load_config()
-        initialize(model, api_base, debug, temperature, max_tokens, telemetry)
+        initialize(model, api_base, debug, temperature, max_tokens, telemetry, )
 
 
         try:
