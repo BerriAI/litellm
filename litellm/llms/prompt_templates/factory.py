@@ -200,6 +200,24 @@ def hf_chat_template(model: str, messages: list):
     except: 
         raise Exception("Error rendering template")
 
+# Function call template 
+def function_call_prompt(messages: list, functions: list):
+    function_prompt = "The following functions are available to you:"
+    for function in functions: 
+        function_prompt += f"""\n{function}\n"""
+    
+    function_added_to_prompt = False
+    for message in messages: 
+        if "system" in message["role"]: 
+            message['content'] += f"""{function_prompt}"""
+            function_added_to_prompt = True
+    
+    if function_added_to_prompt == False: 
+        messages.append({'role': 'system', 'content': f"""{function_prompt}"""})
+
+    return messages
+
+
 # Custom prompt template
 def custom_prompt(role_dict: dict, messages: list, initial_prompt_value: str="", final_prompt_value: str=""):
     prompt = initial_prompt_value
@@ -244,3 +262,4 @@ def prompt_factory(model: str, messages: list, custom_llm_provider: Optional[str
             return hf_chat_template(original_model_name, messages)
     except:
         return default_pt(messages=messages) # default that covers Bloom, T-5, any non-chat tuned model (e.g. base Llama2)
+    

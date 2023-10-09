@@ -41,6 +41,7 @@ model_alias_map: Dict[str, str] = {}
 max_budget: float = 0.0 # set the max budget across all providers
 _current_cost = 0 # private variable, used if max budget is set 
 error_logs: Dict = {}
+add_function_to_prompt: bool = False # if function calling not supported by api, append function call details to system prompt
 #############################################
 
 def get_model_cost_map():
