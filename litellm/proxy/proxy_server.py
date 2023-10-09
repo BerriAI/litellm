@@ -215,16 +215,18 @@ async def track_cost(response):
             format='%(asctime)s - %(message)s',
             datefmt='%Y-%m-%d %H:%M:%S'
         )
-        import datetime
-
         response_cost = litellm.completion_cost(completion_response=response)
-
-        logging.info(f"Model {response.model} Cost: {response_cost:.8f}")
-
+        logging.info(f"Model {response.model} Cost: ${response_cost:.8f}")
     except:
         pass
 
-
+def print_cost_logs():
+    with open('cost.log', 'r') as f:
+        # print this in green
+        print("\033[1;32m")
+        print(f.read())
+        print("\033[0m")
+    return
 
 @router.get("/ollama_logs")
 async def retrieve_server_log(request: Request):
