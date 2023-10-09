@@ -32,7 +32,7 @@ This list is constantly being updated.
 |---|---|---|---|---|---|---|---|---|---|---|
 |Anthropic| ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |  |   |
 |OpenAI| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-|Replicate | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |   |  |   |
+|Replicate | ✅ | ✅ | ✅ | ✅ | ✅ | |  |   |  |   |
 |Cohere| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |   |   |
 |Huggingface| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |    |
 |Openrouter| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -43,7 +43,7 @@ This list is constantly being updated.
 |TogetherAI| ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |  |   |
 |AlephAlpha| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |   |  |   |
 |Palm| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |  |   |
-|NLP Cloud| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |  |   |
+|NLP Cloud| ✅ | ✅ | ✅ | ✅ | ✅ | |  |  |  |   |
 |Petals| ✅ | ✅ |  | ✅ | |  |   |  |  |   |
 |Ollama| ✅ | ✅ | ✅ | ✅ | ✅ |  |   | ✅ |  |   |n
 
