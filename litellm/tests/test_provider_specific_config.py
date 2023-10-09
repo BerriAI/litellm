@@ -50,7 +50,7 @@ def claude_test_completion():
     try:
         # OVERRIDE WITH DYNAMIC MAX TOKENS
         response_1 = litellm.completion(
-            model="together_ai/togethercomputer/llama-2-70b-chat",
+            model="claude-instant-1",
             messages=[{ "content": "Hello, how are you?","role": "user"}],
             max_tokens=10
         )
@@ -60,7 +60,7 @@ def claude_test_completion():
 
         # USE CONFIG TOKENS
         response_2 = litellm.completion(
-            model="together_ai/togethercomputer/llama-2-70b-chat",
+            model="claude-instant-1",
             messages=[{ "content": "Hello, how are you?","role": "user"}],
         )
         # Add any assertions here to check the response
@@ -68,6 +68,14 @@ def claude_test_completion():
         response_2_text = response_2.choices[0].message.content
 
         assert len(response_2_text) > len(response_1_text)
+
+        try: 
+            response_3 = litellm.completion(model="claude-instant-1", 
+                                            messages=[{ "content": "Hello, how are you?","role": "user"}],
+                                            n=2)
+        
+        except Exception as e: 
+            print(e)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -99,6 +107,12 @@ def replicate_test_completion():
         response_2_text = response_2.choices[0].message.content
 
         assert len(response_2_text) > len(response_1_text)
+        try: 
+            response_3 = litellm.completion(model="meta/llama-2-70b-chat:02e509c789964a7ea8736978a43525956ef40397be9033abf9fd2badfe68c9e3", 
+                                                messages=[{ "content": "Hello, how are you?","role": "user"}],
+                                                n=2)
+        except: 
+            pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -107,8 +121,8 @@ def replicate_test_completion():
 #  Cohere
 
 def cohere_test_completion():
-    litellm.CohereConfig(max_tokens=200)
-    # litellm.set_verbose=True
+    # litellm.CohereConfig(max_tokens=200)
+    litellm.set_verbose=True
     try:
         # OVERRIDE WITH DYNAMIC MAX TOKENS
         response_1 = litellm.completion(
@@ -126,6 +140,11 @@ def cohere_test_completion():
         response_2_text = response_2.choices[0].message.content
 
         assert len(response_2_text) > len(response_1_text)
+
+        response_3 = litellm.completion(model="command-nightly", 
+                                            messages=[{ "content": "Hello, how are you?","role": "user"}],
+                                            n=2)
+        assert len(response_3.choices) > 1
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -135,7 +154,7 @@ def cohere_test_completion():
 
 def ai21_test_completion():
     litellm.AI21Config(maxTokens=10)
-    # litellm.set_verbose=True
+    litellm.set_verbose=True
     try:
         # OVERRIDE WITH DYNAMIC MAX TOKENS
         response_1 = litellm.completion(
@@ -155,6 +174,11 @@ def ai21_test_completion():
         print(f"response_2_text: {response_2_text}")
 
         assert len(response_2_text) < len(response_1_text)
+
+        response_3 = litellm.completion(model="j2-light", 
+                                            messages=[{ "content": "Hello, how are you?","role": "user"}],
+                                            n=2)
+        assert len(response_3.choices) > 1
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -164,7 +188,7 @@ def ai21_test_completion():
 
 def togetherai_test_completion():
     litellm.TogetherAIConfig(max_tokens=10)
-    # litellm.set_verbose=True
+    litellm.set_verbose=True
     try:
         # OVERRIDE WITH DYNAMIC MAX TOKENS
         response_1 = litellm.completion(
@@ -184,6 +208,14 @@ def togetherai_test_completion():
         print(f"response_2_text: {response_2_text}")
 
         assert len(response_2_text) < len(response_1_text)
+
+        try: 
+            response_3 = litellm.completion(model="together_ai/togethercomputer/llama-2-70b-chat", 
+                                                messages=[{ "content": "Hello, how are you?","role": "user"}],
+                                                n=2)
+            pytest.fail(f"Error not raised when n=2 passed to provider")
+        except: 
+            pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -192,7 +224,7 @@ def togetherai_test_completion():
 #  Palm
 
 def palm_test_completion():
-    litellm.PalmConfig(maxOutputTokens=10)
+    litellm.PalmConfig(max_output_tokens=10, temperature=0.9)
     # litellm.set_verbose=True
     try:
         # OVERRIDE WITH DYNAMIC MAX TOKENS
@@ -213,6 +245,11 @@ def palm_test_completion():
         print(f"response_2_text: {response_2_text}")
 
         assert len(response_2_text) < len(response_1_text)
+
+        response_3 = litellm.completion(model="palm/chat-bison", 
+                                                messages=[{ "content": "Hello, how are you?","role": "user"}],
+                                                n=2)
+        assert len(response_3.choices) > 1
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -242,6 +279,14 @@ def nlp_cloud_test_completion():
         print(f"response_2_text: {response_2_text}")
 
         assert len(response_2_text) < len(response_1_text)
+
+        try: 
+            response_3 = litellm.completion(model="dolphin", 
+                                                messages=[{ "content": "Hello, how are you?","role": "user"}],
+                                                n=2)
+            pytest.fail(f"Error not raised when n=2 passed to provider")
+        except: 
+            pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -271,6 +316,14 @@ def aleph_alpha_test_completion():
         print(f"response_2_text: {response_2_text}")
 
         assert len(response_2_text) < len(response_1_text)
+
+        try: 
+            response_3 = litellm.completion(model="luminous-base", 
+                                                messages=[{ "content": "Hello, how are you?","role": "user"}],
+                                                n=2)
+            pytest.fail(f"Error not raised when n=2 passed to provider")
+        except: 
+            pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 

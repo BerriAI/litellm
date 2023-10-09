@@ -1,9 +1,9 @@
-import os, types
+import os, types, traceback
 import json
 from enum import Enum
 import time
 from typing import Callable, Optional
-from litellm.utils import ModelResponse, get_secret
+from litellm.utils import ModelResponse, get_secret, Choices, Message
 import litellm
 import sys
 
@@ -33,7 +33,7 @@ class PalmConfig():
 
     - `top_p` (float): The API uses combined nucleus and top-k sampling. `top_p` configures the nucleus sampling. It sets the maximum cumulative probability of tokens to sample from.
 
-    - `maxOutputTokens` (int): Sets the maximum number of tokens to be returned in the output
+    - `max_output_tokens` (int): Sets the maximum number of tokens to be returned in the output
     """
     context: Optional[str]=None
     examples: Optional[list]=None
@@ -41,7 +41,7 @@ class PalmConfig():
     candidate_count: Optional[int]=None
     top_k: Optional[int]=None
     top_p: Optional[float]=None
-    maxOutputTokens: Optional[int]=None
+    max_output_tokens: Optional[int]=None
 
     def __init__(self,
                  context: Optional[str]=None,
@@ -50,7 +50,7 @@ class PalmConfig():
                  candidate_count: Optional[int]=None,
                  top_k: Optional[int]=None,
                  top_p: Optional[float]=None,
-                 maxOutputTokens: Optional[int]=None) -> None:
+                 max_output_tokens: Optional[int]=None) -> None:
         
         locals_ = locals()
         for key, value in locals_.items():
@@ -110,10 +110,16 @@ def completion(
     logging_obj.pre_call(
             input=prompt,
             api_key="",
-            additional_args={"complete_input_dict": {}},
+            additional_args={"complete_input_dict": {"optional_params": optional_params}},
         )
     ## COMPLETION CALL
-    response = palm.chat(messages=prompt)
+    try: 
+        response = palm.generate_text(prompt=prompt, **optional_params)
+    except Exception as e:
+        raise PalmError(
+            message=str(e),
+            status_code=500,
+        )
 
     ## LOGGING
     logging_obj.post_call(
@@ -124,18 +130,17 @@ def completion(
         )
     print_verbose(f"raw model_response: {response}")
     ## RESPONSE OBJECT
-    completion_response = response.last
-
-    if "error" in completion_response:
-        raise PalmError(
-            message=completion_response["error"],
-            status_code=response.status_code,
-        )
-    else:
-        try:
-            model_response["choices"][0]["message"]["content"] = completion_response
-        except:
-            raise PalmError(message=json.dumps(completion_response), status_code=response.status_code)
+    completion_response = response
+    try:
+        choices_list = []
+        for idx, item in enumerate(completion_response.candidates):
+            message_obj = Message(content=item["output"])
+            choice_obj = Choices(index=idx+1, message=message_obj)
+            choices_list.append(choice_obj)
+        model_response["choices"] = choices_list
+    except Exception as e:
+        traceback.print_exc()
+        raise PalmError(message=traceback.format_exc(), status_code=response.status_code)
 
     ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here. 
     prompt_tokens = len(
