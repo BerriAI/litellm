@@ -269,7 +269,7 @@ def completion(
     aws_access_key_id = optional_params.pop("aws_access_key_id", None)
     aws_region_name = optional_params.pop("aws_region_name", None)
 
-    # use passed in BedrockClient if provided, otherwise init a new one
+    # use passed in BedrockRuntime.Client if provided, otherwise create a new one
     client = optional_params.pop(
         "aws_bedrock_client",
         # only pass variables that are not None
