@@ -88,7 +88,7 @@ jobs:
             PACKAGE_NAME=$(python -c "import toml; print(toml.load('pyproject.toml')['tool']['poetry']['name'])")
             if ! pip show -v $PACKAGE_NAME | grep -q "Version: ${VERSION}"; then
                 echo "pyproject.toml modified"
-                echo -e "[pypi]\nusername = ishaan-jaff\npassword = madeBerri@992" > ~/.pypirc
+                echo -e "[pypi]\nusername = $PYPI_PUBLISH_USERNAME\npassword = $PYPI_PUBLISH_PASSWORD" > ~/.pypirc
                 python -m pip install --upgrade pip
                 pip install build
                 pip install wheel
