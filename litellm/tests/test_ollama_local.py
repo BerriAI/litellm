@@ -135,6 +135,13 @@
 #     response = await ask_question()
 #     async for chunk in response:
 #         print(chunk)
+    
+#     print("test async completion without streaming")
+#     response = await litellm.acompletion(
+#         model="ollama/llama2",
+#         messages=prepare_messages_for_chat("What is litellm? respond in 2 words"),
+#     )
+#     print("response", response)
 
 # if __name__ == "__main__":
 #     import asyncio
