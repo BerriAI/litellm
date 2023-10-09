@@ -5,7 +5,7 @@ import TabItem from '@theme/TabItem';
 
 A local, fast, and lightweight OpenAI-compatible server to call 100+ LLM APIs. 
 
-## usage 
+## Usage 
 ```shell
 pip install litellm
 ```
@@ -15,13 +15,13 @@ $ litellm --model ollama/codellama
 #INFO: Ollama running on http://0.0.0.0:8000
 ```
 
-### test
+### Test
 In a new shell, run: 
 ```shell
 $ litellm --test
 ``` 
 
-### replace openai base
+### Replace openai base
 
 ```python
 import openai 
@@ -132,7 +132,7 @@ $ litellm --model command-nightly
 
 [**Jump to Code**](https://github.com/BerriAI/litellm/blob/fef4146396d5d87006259e00095a62e3900d6bb4/litellm/proxy.py#L36)
 
-## [tutorial]: Use with Aider/AutoGen/Continue-Dev
+## [Tutorial]: Use with Aider/AutoGen/Continue-Dev
 
 Here's how to use the proxy to test codellama/mistral/etc. models for different github repos 
 
@@ -207,7 +207,8 @@ Credits [@victordibia](https://github.com/microsoft/autogen/issues/45#issuecomme
 
 ::: 
 
-## Configure Model
+## Advanced
+### Configure Model
 
 To save api keys and/or customize model prompt, run: 
 ```shell
@@ -223,7 +224,33 @@ litellm --model ollama/llama2 \
   --temperature 0.5
 ```
 
-## Ollama Logs
+### Create a proxy for multiple LLMs
+```shell 
+$ litellm
+
+#INFO: litellm proxy running on http://0.0.0.0:8000
+```
+
+#### Send a request to your proxy
+```python
+import openai 
+
+openai.api_key = "any-string-here"
+openai.api_base = "http://0.0.0.0:8080" # your proxy url
+
+# call gpt-3.5-turbo
+response = openai.ChatCompletion.create(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hey"}])
+
+print(response)
+
+# call ollama/llama2
+response = openai.ChatCompletion.create(model="ollama/llama2", messages=[{"role": "user", "content": "Hey"}])
+
+print(response)
+```
+    
+
+### Ollama Logs
 Ollama calls can sometimes fail (out-of-memory errors, etc.). 
 
 To see your logs just call 
@@ -234,7 +261,7 @@ $ curl 'http://0.0.0.0:8000/ollama_logs'
 
 This will return your logs from `~/.ollama/logs/server.log`. 
 
-## Deploy Proxy
+### Deploy Proxy
 
 <Tabs>
 <TabItem value="self-hosted" label="Self-Hosted">
