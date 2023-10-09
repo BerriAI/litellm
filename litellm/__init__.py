@@ -224,6 +224,7 @@ model_list = (
 
 provider_list: List = [
     "openai",
+    "custom_openai",
     "cohere",
     "anthropic",
     "replicate",
