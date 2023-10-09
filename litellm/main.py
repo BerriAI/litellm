@@ -376,8 +376,11 @@ def completion(
                 or get_secret("OPENAI_API_BASE")
                 or "https://api.openai.com/v1"
             )
-            if litellm.organization:
-                openai.organization = litellm.organization
+            openai.organization = (
+                litellm.organization
+                or get_secret("OPENAI_ORGANIZATION")
+                or None # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
+            )
             # set API KEY
             api_key = (
                 api_key or
