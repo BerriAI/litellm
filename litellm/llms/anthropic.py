@@ -8,8 +8,8 @@ from litellm.utils import ModelResponse
 import litellm 
 
 class AnthropicConstants(Enum):
-    HUMAN_PROMPT = "\n\nHuman:"
-    AI_PROMPT = "\n\nAssistant:"
+    HUMAN_PROMPT = "\n\nHuman: "
+    AI_PROMPT = "\n\nAssistant: "
 
 class AnthropicError(Exception):
     def __init__(self, status_code, message):

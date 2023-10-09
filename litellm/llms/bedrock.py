@@ -164,8 +164,8 @@ class AmazonAI21Config():
                 and v is not None}
 
 class AnthropicConstants(Enum):
-    HUMAN_PROMPT = "\n\nHuman:"
-    AI_PROMPT = "\n\nAssistant:"
+    HUMAN_PROMPT = "\n\nHuman: "
+    AI_PROMPT = "\n\nAssistant: "
 
 
 def init_bedrock_client(
