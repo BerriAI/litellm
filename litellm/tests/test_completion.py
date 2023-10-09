@@ -860,7 +860,6 @@ def test_completion_bedrock_claude_external_client_auth():
 
     aws_access_key_id = os.environ["AWS_ACCESS_KEY_ID"]
     aws_secret_access_key = os.environ["AWS_SECRET_ACCESS_KEY"]
-    aws_session_token = os.environ["AWS_SESSION_TOKEN"]
     aws_region_name = os.environ["AWS_REGION_NAME"]
 
     os.environ["AWS_ACCESS_KEY_ID"] = ""
@@ -874,7 +873,6 @@ def test_completion_bedrock_claude_external_client_auth():
             region_name=aws_region_name,
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
-            aws_session_token=aws_session_token,
             endpoint_url=f"https://bedrock-runtime.{aws_region_name}.amazonaws.com"
         )
 
