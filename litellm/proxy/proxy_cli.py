@@ -74,15 +74,16 @@ def open_config():
 @click.option('--config', is_flag=True, help='Create and open .env file from .env.template')
 @click.option('--test', flag_value=True, help='proxy chat completions url to make a test request to')
 @click.option('--local', is_flag=True, default=False, help='for local debugging')
-def run_server(host, port, api_base, model, deploy, debug, temperature, max_tokens, drop_params, add_function_to_prompt, max_budget, telemetry, config, test, local):
+@click.option('--cost', is_flag=True, default=False, help='for viewing cost logs')
+def run_server(host, port, api_base, model, deploy, debug, temperature, max_tokens, drop_params, add_function_to_prompt, max_budget, telemetry, config, test, local, cost):
     if config:
         open_config()
     
     if local:
-        from proxy_server import app, initialize, deploy_proxy
+        from proxy_server import app, initialize, deploy_proxy, print_cost_logs
         debug = True
     else:
-        from .proxy_server import app, initialize, deploy_proxy
+        from .proxy_server import app, initialize, deploy_proxy, print_cost_logs
 
     if deploy == True:
         print(f"\033[32mLiteLLM: Deploying your proxy to api.litellm.ai\033[0m\n")
@@ -95,6 +96,9 @@ def run_server(host, port, api_base, model, deploy, debug, temperature, max_toke
         return
     if model and "ollama" in model: 
         run_ollama_serve()
+    if cost == True:
+        print_cost_logs()
+        return
     if test != False:
         click.echo('LiteLLM: Making a test ChatCompletions request to your proxy')
         import openai
