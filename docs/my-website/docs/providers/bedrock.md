@@ -49,6 +49,27 @@ response = completion(
 )
 ```
 
+### Passing a BedrockClient as a parameter - Completion()
+Pass an existing BedrockClient object to litellm.completion. Useful when using AWS SSO sessions or assumed role sessions.
+```python
+import boto3
+from litellm import completion
+
+bedrock = boto3.client(
+            service_name="bedrock-runtime",
+            region_name="us-east-1",
+            aws_access_key_id="",
+            aws_secret_access_key_id="",
+            aws_session_token="",
+          )
+
+response = completion(
+            model="bedrock/anthropic.claude-instant-v1",
+            messages=[{ "content": "Hello, how are you?","role": "user"}],
+            aws_bedrock_client=bedrock
+)
+```
+
 ## Supported AWS Bedrock Models
 Here's an example of using a bedrock model with LiteLLM 
 
