@@ -269,11 +269,15 @@ def completion(
     aws_access_key_id = optional_params.pop("aws_access_key_id", None)
     aws_region_name = optional_params.pop("aws_region_name", None)
 
-    # only pass variables that are not None
-    client = init_bedrock_client(
-        aws_access_key_id=aws_access_key_id,
-        aws_secret_access_key=aws_secret_access_key,
-        aws_region_name=aws_region_name,
+    # use passed in BedrockClient if provided, otherwise init a new one
+    client = optional_params.pop(
+        "aws_bedrock_client",
+        # only pass variables that are not None
+        init_bedrock_client(
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            aws_region_name=aws_region_name
+        )
     )
 
     model = model
