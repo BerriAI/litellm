@@ -298,7 +298,7 @@ class Logging:
                         supabaseClient.input_log_event(
                             model=model,
                             messages=messages,
-                            end_user=litellm._thread_context.user,
+                            end_user=self.model_call_details.get("user", "default"),
                             litellm_call_id=self.litellm_params["litellm_call_id"],
                             print_verbose=print_verbose,
                         )
@@ -311,7 +311,7 @@ class Logging:
                         liteDebuggerClient.input_log_event(
                             model=model,
                             messages=messages,
-                            end_user=litellm._thread_context.user,
+                            end_user=self.model_call_details.get("user", "default"),
                             litellm_call_id=self.litellm_params["litellm_call_id"],
                             litellm_params=self.model_call_details["litellm_params"],
                             optional_params=self.model_call_details["optional_params"],
@@ -441,7 +441,7 @@ class Logging:
                         print_verbose(f"liteDebuggerClient: {liteDebuggerClient}")
                         print_verbose(f"liteDebuggerClient details function {self.call_type} and stream set to {self.stream}")
                         liteDebuggerClient.log_event(
-                            end_user=litellm._thread_context.user,
+                            end_user=kwargs.get("user", "default"),
                             response_obj=result,
                             start_time=start_time,
                             end_time=end_time,
@@ -533,7 +533,7 @@ class Logging:
                             liteDebuggerClient.log_event(
                                 model=self.model,
                                 messages=self.messages,
-                                end_user=litellm._thread_context.user,
+                                end_user=kwargs.get("user", "default"),
                                 response_obj=result,
                                 start_time=start_time,
                                 end_time=end_time,
@@ -1942,7 +1942,7 @@ def handle_failure(exception, traceback_exception, start_time, end_time, args, k
                     supabaseClient.log_event(
                         model=model,
                         messages=messages,
-                        end_user=litellm._thread_context.user,
+                        end_user=kwargs.get("user", "default"),
                         response_obj=result,
                         start_time=start_time,
                         end_time=end_time,
@@ -2073,7 +2073,7 @@ def handle_success(args, kwargs, result, start_time, end_time):
                     supabaseClient.log_event(
                         model=model,
                         messages=messages,
-                        end_user=litellm._thread_context.user,
+                        end_user=kwargs.get("user", "default"),
                         response_obj=result,
                         start_time=start_time,
                         end_time=end_time,
