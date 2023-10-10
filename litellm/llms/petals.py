@@ -163,13 +163,15 @@ def completion(
             )
         ## RESPONSE OBJECT
         output_text = tokenizer.decode(outputs[0])
-    model_response["choices"][0]["message"]["content"] = output_text
+    
+    if len(output_text) > 0:
+        model_response["choices"][0]["message"]["content"] = output_text
 
     prompt_tokens = len(
         encoding.encode(prompt)
     ) 
     completion_tokens = len(
-        encoding.encode(model_response["choices"][0]["message"]["content"])
+        encoding.encode(model_response["choices"][0]["message"].get("content"))
     )
 
     model_response["created"] = time.time()

@@ -161,7 +161,10 @@ def completion(
             try:
                 choices_list = []
                 for idx, item in enumerate(completion_response["completions"]):
-                    message_obj = Message(content=item["data"]["text"])
+                    if len(item["data"]["text"]) > 0:
+                        message_obj = Message(content=item["data"]["text"])
+                    else: 
+                        message_obj = Message(content=None)
                     choice_obj = Choices(finish_reason=item["finishReason"]["reason"], index=idx+1, message=message_obj)
                     choices_list.append(choice_obj)
                 model_response["choices"] = choices_list
@@ -173,7 +176,7 @@ def completion(
             encoding.encode(prompt)
         ) 
         completion_tokens = len(
-            encoding.encode(model_response["choices"][0]["message"]["content"])
+            encoding.encode(model_response["choices"][0]["message"].get("content"))
         )
 
         model_response["created"] = time.time()

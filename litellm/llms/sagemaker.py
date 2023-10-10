@@ -154,7 +154,8 @@ def completion(
         )
     else:
         try:
-            model_response["choices"][0]["message"]["content"] = completion_response[0]["generation"]
+            if len(completion_response[0]["generation"]) > 0: 
+                model_response["choices"][0]["message"]["content"] = completion_response[0]["generation"]
         except:
             raise SagemakerError(message=json.dumps(completion_response), status_code=response.status_code)
 
@@ -163,7 +164,7 @@ def completion(
         encoding.encode(prompt)
     ) 
     completion_tokens = len(
-        encoding.encode(model_response["choices"][0]["message"]["content"])
+        encoding.encode(model_response["choices"][0]["message"].get("content", ""))
     )
 
     model_response["created"] = time.time()

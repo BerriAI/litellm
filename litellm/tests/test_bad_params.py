@@ -10,6 +10,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import litellm
 from litellm import embedding, completion
+from litellm.utils import Message
 
 
 # litellm.set_verbose = True
@@ -116,4 +117,3 @@ def test_completion_with_no_provider():
 #     print(f"error occurred: {traceback.format_exc()}")
 #     pass
 # os.environ["OPENAI_API_KEY"] = str(temp_key)  # this passes linting#5
-

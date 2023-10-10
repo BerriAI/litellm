@@ -129,6 +129,10 @@ def completion(
     )
 
     ## RESPONSE OBJECT
+    if len(str(completion_response)) > 0: 
+        model_response["choices"][0]["message"][
+            "content"
+        ] = str(completion_response)
     model_response["choices"][0]["message"]["content"] = str(completion_response)
     model_response["created"] = time.time()
     model_response["model"] = model
@@ -137,7 +141,7 @@ def completion(
         encoding.encode(prompt)
     ) 
     completion_tokens = len(
-        encoding.encode(model_response["choices"][0]["message"]["content"])
+        encoding.encode(model_response["choices"][0]["message"].get("content", ""))
     )
 
     model_response["usage"] = {

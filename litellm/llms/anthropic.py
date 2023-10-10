@@ -152,9 +152,10 @@ def completion(
                 status_code=response.status_code,
             )
         else:
-            model_response["choices"][0]["message"]["content"] = completion_response[
-                "completion"
-            ]
+            if len(completion_response["completion"]) > 0:
+                model_response["choices"][0]["message"]["content"] = completion_response[
+                    "completion"
+                ]
             model_response.choices[0].finish_reason = completion_response["stop_reason"]
 
         ## CALCULATING USAGE
@@ -162,7 +163,7 @@ def completion(
             encoding.encode(prompt)
         )  ##[TODO] use the anthropic tokenizer here
         completion_tokens = len(
-            encoding.encode(model_response["choices"][0]["message"]["content"])
+            encoding.encode(model_response["choices"][0]["message"].get("content", ""))
         )  ##[TODO] use the anthropic tokenizer here
 
         model_response["created"] = time.time()
