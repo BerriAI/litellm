@@ -56,14 +56,34 @@ os.environ["OPENAI_API_KEY"] = ""
 litellm.success_callback=["supabase"]
 litellm.failure_callback=["supabase"]
 
-#openai call
-response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}]) 
+# openai call
+response = completion(
+  model="gpt-3.5-turbo", 
+  messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}],
+  user="ishaan22" # identify users
+) 
 
-#bad call
-response = completion(model="chatgpt-test", messages=[{"role": "user", "content": "Hi 👋 - i'm a bad call to test error logging"}]) 
+# bad call, expect this call to fail and get logged
+response = completion(
+  model="chatgpt-test", 
+  messages=[{"role": "user", "content": "Hi 👋 - i'm a bad call to test error logging"}]
+)
+ 
 ```
 
 ### Additional Controls 
+
+**Identify end-user**
+
+Pass `user` to `litellm.completion` to map your llm call to an end-user 
+
+```python
+response = completion(
+  model="gpt-3.5-turbo", 
+  messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}],
+  user="ishaan22" # identify users
+) 
+```
 
 **Different Table name**
 
@@ -71,12 +91,4 @@ If you modified your table name, here's how to pass the new name.
 
 ```python 
 litellm.modify_integration("supabase",{"table_name": "litellm_logs"})
-```
-
-**Identify end-user**
-
-Here's how to map your llm call to an end-user 
-
-```python
-litellm.identify({"end_user": "krrish@berri.ai"})
 ```
