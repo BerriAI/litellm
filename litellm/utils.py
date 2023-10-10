@@ -294,7 +294,7 @@ class Logging:
                         print_verbose("reaches supabase for logging!")
                         model = self.model_call_details["model"]
                         messages = self.model_call_details["input"]
-                        print(f"supabaseClient: {supabaseClient}")
+                        print_verbose(f"supabaseClient: {supabaseClient}")
                         supabaseClient.input_log_event(
                             model=model,
                             messages=messages,
@@ -2069,7 +2069,7 @@ def handle_success(args, kwargs, result, start_time, end_time):
                         if len(args) > 1
                         else kwargs.get("messages", {"role": "user", "content": ""})
                     )
-                    print(f"supabaseClient: {supabaseClient}")
+                    print_verbose(f"supabaseClient: {supabaseClient}")
                     supabaseClient.log_event(
                         model=model,
                         messages=messages,

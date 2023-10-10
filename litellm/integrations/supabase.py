@@ -45,7 +45,7 @@ class Supabase:
                 .insert(supabase_data_obj)
                 .execute()
             )
-            print(f"data: {data}")
+            print_verbose(f"data: {data}")
         except:
             print_verbose(f"Supabase Logging Error - {traceback.format_exc()}")
             pass
@@ -67,7 +67,7 @@ class Supabase:
             )
 
             total_cost = litellm.completion_cost(completion_response=response_obj)
-            
+
             response_time = (end_time - start_time).total_seconds()
             if "choices" in response_obj:
                 supabase_data_obj = {
