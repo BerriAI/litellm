@@ -29,7 +29,7 @@ os.environ["AWS_SECRET_ACCESS_KEY"] = ""
 os.environ["AWS_REGION_NAME"] = ""
 
 response = completion(
-            model="bedrock/anthropic.claude-instant-v1", 
+            model="anthropic.claude-instant-v1", 
             messages=[{ "content": "Hello, how are you?","role": "user"}]
 )
 ```
@@ -41,7 +41,7 @@ import os
 from litellm import completion
 
 response = completion(
-            model="bedrock/anthropic.claude-instant-v1", 
+            model="anthropic.claude-instant-v1", 
             messages=[{ "content": "Hello, how are you?","role": "user"}],
             aws_access_key_id="",
             aws_secret_access_key="",
@@ -66,7 +66,7 @@ bedrock = boto3.client(
 )
 
 response = completion(
-            model="bedrock/anthropic.claude-instant-v1",
+            model="anthropic.claude-instant-v1",
             messages=[{ "content": "Hello, how are you?","role": "user"}],
             aws_bedrock_client=bedrock,
 )
@@ -84,7 +84,7 @@ bedrock = dev_session.client(
 )
 
 response = completion(
-            model="bedrock/anthropic.claude-instant-v1",
+            model="anthropic.claude-instant-v1",
             messages=[{ "content": "Hello, how are you?","role": "user"}],
             aws_bedrock_client=bedrock,
 )
@@ -95,11 +95,14 @@ Here's an example of using a bedrock model with LiteLLM
 
 | Model Name               | Command                                                          | Environment Variables                                              |
 |--------------------------|------------------------------------------------------------------|---------------------------------------------------------------------|
-| Anthropic Claude-V2      | `completion(model='bedrock/anthropic.claude-v2', messages=messages)`   | `os.environ['ANTHROPIC_ACCESS_KEY_ID']`, `os.environ['ANTHROPIC_SECRET_ACCESS_KEY']`           |
-| Anthropic Claude-Instant V1 | `completion(model='bedrock/anthropic.claude-instant-v1', messages=messages)` | `os.environ['ANTHROPIC_ACCESS_KEY_ID']`, `os.environ['ANTHROPIC_SECRET_ACCESS_KEY']`           |
-| Anthropic Claude-V1      | `completion(model='bedrock/anthropic.claude-v1', messages=messages)`   | `os.environ['ANTHROPIC_ACCESS_KEY_ID']`, `os.environ['ANTHROPIC_SECRET_ACCESS_KEY']`           |
-| AI21 J2-Ultra            | `completion(model='bedrock/ai21.j2-ultra', messages=messages)` | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']` |
-| AI21 J2-Mid              | `completion(model='bedrock/ai21.j2-mid', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']` |
+| Anthropic Claude-V2      | `completion(model='anthropic.claude-v2', messages=messages)`   | `os.environ['ANTHROPIC_ACCESS_KEY_ID']`, `os.environ['ANTHROPIC_SECRET_ACCESS_KEY']`           |
+| Anthropic Claude-Instant V1 | `completion(model='anthropic.claude-instant-v1', messages=messages)` | `os.environ['ANTHROPIC_ACCESS_KEY_ID']`, `os.environ['ANTHROPIC_SECRET_ACCESS_KEY']`           |
+| Anthropic Claude-V1      | `completion(model='anthropic.claude-v1', messages=messages)`   | `os.environ['ANTHROPIC_ACCESS_KEY_ID']`, `os.environ['ANTHROPIC_SECRET_ACCESS_KEY']`           |
+| Amazon Titan Lite            | `completion(model='amazon.titan-text-lite-v1', messages=messages)` | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']` |
+| Amazon Titan Express              | `completion(model='amazon.titan-text-express-v1', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']` |
+| Cohere Command              | `completion(model='cohere.command-text-v14', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']` |
+| AI21 J2-Mid             | `completion(model='ai21.j2-mid-v1', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']` |
+| AI21 J2-Ultra              | `completion(model='ai21.j2-ultra-v1', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']` |
 
 
 ## Streaming

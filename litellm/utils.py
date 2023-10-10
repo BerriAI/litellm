@@ -1409,8 +1409,13 @@ def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None):
         ## petals
         elif model in litellm.petals_models:
             custom_llm_provider = "petals"
+        ## bedrock
+        elif model in litellm.bedrock_models:
+            custom_llm_provider = "bedrock"
+        # openai embeddings
         elif model in litellm.open_ai_embedding_models:
             custom_llm_provider = "openai"
+        # cohere embeddings
         elif model in litellm.cohere_embedding_models:
             custom_llm_provider = "cohere"
 
