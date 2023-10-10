@@ -11,6 +11,8 @@ except ImportError:
     import sys
 
     subprocess.check_call([sys.executable, "-m", "pip", "install", "uvicorn", "fastapi"])
+
+
 print()
 print("\033[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new\033[0m")
 print()

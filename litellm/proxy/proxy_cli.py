@@ -5,7 +5,38 @@ from dotenv import load_dotenv
 
 load_dotenv()
 from importlib import resources
-import shutil
+import shutil, random
+list_of_messages = [
+    "The thing I wish you improved is:",
+    "A feature I really want is:",
+    "The worst thing about this product is:",
+    "This product would be better if:",
+    "I don't like how this works:",
+    "It would help me if you could add:",
+    "This feature doesn't meet my needs because:",
+    "I get frustrated when the product:",  
+]
+
+def generate_feedback_box():
+  box_width = 60
+
+  # Select a random message
+  message = random.choice(list_of_messages)
+
+  print()
+  print('\033[1;37m' + '#' + '-'*box_width + '#\033[0m')
+  print('\033[1;37m' + '#' + ' '*box_width + '#\033[0m')
+  print('\033[1;37m' + '# {:^59} #\033[0m'.format(message))
+  print('\033[1;37m' + '# {:^59} #\033[0m'.format('https://github.com/BerriAI/litellm/issues/new'))
+  print('\033[1;37m' + '#' + ' '*box_width + '#\033[0m') 
+  print('\033[1;37m' + '#' + '-'*box_width + '#\033[0m')
+  print()
+  print(' Thank you for using LiteLLM! - Krrish & Ishaan')
+  print()
+  print()
+
+generate_feedback_box()
+
 
 config_filename = ".env.litellm"
 
