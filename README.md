@@ -80,35 +80,6 @@ for chunk in result:
   print(chunk['choices'][0]['delta'])
 ```
 
-
-## Caching ([Docs](https://docs.litellm.ai/docs/caching/))
-
-LiteLLM supports caching `completion()` and `embedding()` calls for all LLMs. [Hosted Cache LiteLLM API](https://docs.litellm.ai/docs/caching/caching_api)
-```python
-import litellm
-from litellm.caching import Cache
-import os
-
-litellm.cache = Cache()
-os.environ['OPENAI_API_KEY'] = ""
-# add to cache
-response1 = litellm.completion(
-    model="gpt-3.5-turbo",
-    messages=[{"role": "user", "content": "why is LiteLLM amazing?"}], 
-    caching=True
-)
-# returns cached response
-response2 = litellm.completion(
-    model="gpt-3.5-turbo", 
-    messages=[{"role": "user", "content": "why is LiteLLM amazing?"}], 
-    caching=True
-)
-
-print(f"response1: {response1}")
-print(f"response2: {response2}")
-
-```
-
 ## OpenAI Proxy Server ([Docs](https://docs.litellm.ai/docs/proxy_server))
 Spin up a local server to translate openai api calls to any non-openai model (e.g. Huggingface, TogetherAI, Ollama, etc.)
 
