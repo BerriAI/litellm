@@ -533,7 +533,7 @@ class Logging:
                             liteDebuggerClient.log_event(
                                 model=self.model,
                                 messages=self.messages,
-                                end_user=kwargs.get("user", "default"),
+                                end_user=self.model_call_details.get("user", "default"),
                                 response_obj=result,
                                 start_time=start_time,
                                 end_time=end_time,
