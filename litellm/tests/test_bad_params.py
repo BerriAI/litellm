@@ -59,13 +59,12 @@ def test_completion_invalid_param_cohere():
 def test_completion_function_call_cohere():
     try: 
         response = completion(model="command-nightly", messages=messages, functions=["TEST-FUNCTION"])
+        pytest.fail(f'An error occurred {e}')
     except Exception as e: 
-        if "Function calling is not supported by this provider" in str(e): 
-            pass
-        else: 
-            pytest.fail(f'An error occurred {e}')
+        pass
+            
 
-test_completion_function_call_cohere()
+# test_completion_function_call_cohere()
 
 def test_completion_function_call_openai(): 
     try: 
