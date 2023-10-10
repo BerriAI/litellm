@@ -542,5 +542,33 @@
     "together-ai-40.1b-70b": {
         "input_cost_per_token": 0.000003,
         "output_cost_per_token": 0.000003
+    },
+    "ollama/llama2": {
+        "max_tokens": 4096,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "ollama",
+        "mode": "completion"
+    },
+    "ollama/llama2:13b": {
+        "max_tokens": 4096,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "ollama",
+        "mode": "completion"
+    },
+    "ollama/llama2:70b": {
+        "max_tokens": 4096,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "ollama",
+        "mode": "completion"
+    },
+    "ollama/llama2-uncensored": {
+        "max_tokens": 4096,
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "ollama",
+        "mode": "completion"
     }
 }
