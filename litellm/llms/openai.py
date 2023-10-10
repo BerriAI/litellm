@@ -1,8 +1,20 @@
 from typing import Optional, Union
-import types
+import types, requests
+from .base import BaseLLM
+from litellm.utils import ModelResponse, Choices, Message
+from typing import Callable, Optional
 
 # This file just has the openai config classes. 
 # For implementation check out completion() in main.py
+
+class CustomOpenAIError(Exception):
+    def __init__(self, status_code, message):
+        self.status_code = status_code
+        self.message = message
+        super().__init__(
+            self.message
+        )  # Call the base class constructor with the parameters it needs
+
 
 class OpenAIConfig():
     """
@@ -182,3 +194,80 @@ class AzureOpenAIConfig(OpenAIConfig):
                          stop, 
                          temperature, 
                          top_p)
+
+class OpenAIChatCompletion(BaseLLM):
+    _client_session: requests.Session
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._client_session = self.create_client_session()
+    
+    def validate_environment(self, api_key):
+        headers = {
+            "content-type": "application/json",
+        }
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        return headers
+    
+    def convert_to_model_response_object(self, response_object: dict, model_response_object: ModelResponse):
+        try: 
+            choice_list=[]
+            for idx, choice in enumerate(response_object["choices"]): 
+                message = Message(content=choice["message"]["content"], role=choice["message"]["role"])
+                choice = Choices(finish_reason=choice["finish_reason"], index=idx, message=message)
+                choice_list.append(choice)
+            model_response_object.choices = choice_list
+
+            if "usage" in response_object: 
+                model_response_object.usage = response_object["usage"]
+            
+            if "id" in response_object: 
+                model_response_object.id = response_object["id"]
+            
+            if "model" in response_object: 
+                model_response_object.model = response_object["model"]
+            return model_response_object
+        except: 
+            CustomOpenAIError(status_code=500, message="Invalid response object.")
+
+    def completion(self, 
+               model: str,
+               messages: list,
+               model_response: ModelResponse,
+               print_verbose: Callable,
+               api_key: Optional[str],
+               api_base: str,
+               logging_obj,
+               optional_params=None,
+               litellm_params=None,
+               logger_fn=None):
+        super().completion()
+        headers = self.validate_environment(api_key=api_key)
+        data = {
+            "messages": messages, 
+            **optional_params
+        }
+        if "stream" in optional_params and optional_params["stream"] == True:
+            response = self._client_session.post(
+                url=f"{api_base}/chat/completions",
+                json=data,
+                headers=headers,
+                stream=optional_params["stream"]
+            )
+            if response.status_code != 200:
+                raise CustomOpenAIError(status_code=response.status_code, message=response.text)
+                
+            ## RESPONSE OBJECT
+            return response.iter_lines()
+        else:
+            response = self._client_session.post(
+                url=f"{api_base}/chat/completions",
+                json=data,
+                headers=headers,
+            )
+            if response.status_code != 200:
+                raise CustomOpenAIError(status_code=response.status_code, message=response.text)
+                
+            ## RESPONSE OBJECT
+            return self.convert_to_model_response_object(response_object=response.json(), model_response_object=model_response)

@@ -666,20 +666,20 @@ def test_completion_azure_deployment_id():
         pytest.fail(f"Error occurred: {e}")
 # test_completion_azure_deployment_id()
 
-
-# def test_completion_anthropic_litellm_proxy():
+# Only works for local endpoint
+# def test_completion_anthropic_openai_proxy():
 #     try:
 #         response = completion(
-#             model="claude-2",
+#             model="custom_openai/claude-2",
 #             messages=messages,
-#             api_key="sk-litellm-1234"
+#             api_base="http://0.0.0.0:8000"
 #         )
 #         # Add any assertions here to check the response
 #         print(response)
 #     except Exception as e:
 #         pytest.fail(f"Error occurred: {e}")
 
-# test_completion_anthropic_litellm_proxy()
+# test_completion_anthropic_openai_proxy()
 
 # Replicate API endpoints are unstable -> throw random CUDA errors -> this means our tests can fail even if our tests weren't incorrect.
 
@@ -816,7 +816,7 @@ def test_completion_bedrock_claude():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_bedrock_claude()
+# test_completion_bedrock_claude()
 
 
 def test_completion_bedrock_claude_completion_auth():
