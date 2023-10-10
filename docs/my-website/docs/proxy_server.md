@@ -188,7 +188,7 @@ from autogen import AssistantAgent, UserProxyAgent, oai
 config_list=[
     {
         "model": "my-fake-model",
-        "api_base": "http://localhost:8000/v1",  #litellm compatible endpoint
+        "api_base": "http://localhost:8000",  #litellm compatible endpoint
         "api_type": "open_ai",
         "api_key": "NULL", # just a placeholder
     }
@@ -197,10 +197,13 @@ config_list=[
 response = oai.Completion.create(config_list=config_list, prompt="Hi")
 print(response) # works fine
 
-assistant = AssistantAgent("assistant")
+llm_config={
+    "config_list": config_list,
+}
+
+assistant = AssistantAgent("assistant", llm_config=llm_config)
 user_proxy = UserProxyAgent("user_proxy")
 user_proxy.initiate_chat(assistant, message="Plot a chart of META and TESLA stock price change YTD.", config_list=config_list)
-# fails with the error: openai.error.AuthenticationError: No API key provided.
 ```
 
 Credits [@victordibia](https://github.com/microsoft/autogen/issues/45#issuecomment-1749921972) for this tutorial.
