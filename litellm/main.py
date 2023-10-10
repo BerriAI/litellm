@@ -513,7 +513,10 @@ def completion(
             ## RESPONSE OBJECT
             choices_list = []
             for idx, item in enumerate(response["choices"]):
-                message_obj = Message(content=item["text"])
+                if len(item["text"]) > 0: 
+                    message_obj = Message(content=item["text"])
+                else: 
+                    message_obj = Message(content=None)
                 choice_obj = Choices(finish_reason=item["finish_reason"], index=idx+1, message=message_obj)
                 choices_list.append(choice_obj)
             model_response["choices"] = choices_list

@@ -111,11 +111,9 @@ def _generate_id(): # private helper function
 
 def map_finish_reason(finish_reason: str): # openai supports 5 stop sequences - 'stop', 'length', 'function_call', 'content_filter', 'null'
     # anthropic mapping
-    print(f"receives finish reason: {finish_reason}")
     if finish_reason == "stop_sequence":
         return "stop"
     return finish_reason
-
 
 class Message(OpenAIObject):
     def __init__(self, content="default", role="assistant", logprobs=None, **params):

@@ -88,7 +88,7 @@ def completion(
     
     ## Load Config
     inference_params = copy.deepcopy(optional_params)
-    inference_params.pop("stream") # palm does not support streaming, so we handle this by fake streaming in main.py
+    inference_params.pop("stream", None) # palm does not support streaming, so we handle this by fake streaming in main.py
     config = litellm.PalmConfig.get_config() 
     for k, v in config.items(): 
         if k not in inference_params: # completion(top_k=3) > palm_config(top_k=3) <- allows for dynamic variables to be passed in
@@ -136,7 +136,10 @@ def completion(
     try:
         choices_list = []
         for idx, item in enumerate(completion_response.candidates):
-            message_obj = Message(content=item["output"])
+            if len(item["output"]) > 0:
+                message_obj = Message(content=item["output"])
+            else:
+                message_obj = Message(content=None)
             choice_obj = Choices(index=idx+1, message=message_obj)
             choices_list.append(choice_obj)
         model_response["choices"] = choices_list
@@ -149,7 +152,7 @@ def completion(
         encoding.encode(prompt)
     ) 
     completion_tokens = len(
-        encoding.encode(model_response["choices"][0]["message"]["content"])
+        encoding.encode(model_response["choices"][0]["message"].get("content", ""))
     )
 
     model_response["created"] = time.time()

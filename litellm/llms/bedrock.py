@@ -285,8 +285,6 @@ def completion(
     prompt = convert_messages_to_prompt(messages, provider)
     inference_params = copy.deepcopy(optional_params)
     stream = inference_params.pop("stream", False)
-
-    print(f"bedrock provider: {provider}")
     if provider == "anthropic":
         ## LOAD CONFIG
         config = litellm.AmazonAnthropicConfig.get_config() 
@@ -384,7 +382,8 @@ def completion(
         )
     else:
         try:
-            model_response["choices"][0]["message"]["content"] = outputText
+            if len(outputText) > 0:
+                model_response["choices"][0]["message"]["content"] = outputText
         except:
             raise BedrockError(message=json.dumps(outputText), status_code=response.status_code)
 
@@ -393,7 +392,7 @@ def completion(
         encoding.encode(prompt)
     )
     completion_tokens = len(
-        encoding.encode(model_response["choices"][0]["message"]["content"])
+        encoding.encode(model_response["choices"][0]["message"].get("content", ""))
     )
 
     model_response["created"] = time.time()

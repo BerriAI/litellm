@@ -158,7 +158,8 @@ def completion(
             )
         else:
             try:
-                model_response["choices"][0]["message"]["content"] = completion_response["generated_text"]
+                if len(completion_response["generated_text"]) > 0:
+                    model_response["choices"][0]["message"]["content"] = completion_response["generated_text"]
             except:
                 raise NLPCloudError(message=json.dumps(completion_response), status_code=response.status_code)
 

@@ -232,11 +232,12 @@ def completion(
             result = " "
         
         ## Building RESPONSE OBJECT
-        model_response["choices"][0]["message"]["content"] = result
+        if len(result) > 1:
+            model_response["choices"][0]["message"]["content"] = result
 
         # Calculate usage
         prompt_tokens = len(encoding.encode(prompt))
-        completion_tokens = len(encoding.encode(model_response["choices"][0]["message"]["content"]))
+        completion_tokens = len(encoding.encode(model_response["choices"][0]["message"].get("content", "")))
         model_response["model"] = "replicate/" + model
         model_response["usage"] = {
             "prompt_tokens": prompt_tokens,

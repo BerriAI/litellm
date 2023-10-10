@@ -5,7 +5,7 @@ import requests
 import time
 from typing import Callable, Optional
 import litellm
-from litellm.utils import ModelResponse
+from litellm.utils import ModelResponse, Choices, Message
 
 class AlephAlphaError(Exception):
     def __init__(self, status_code, message):
@@ -239,8 +239,15 @@ def completion(
             )
         else:
             try:
-                model_response["choices"][0]["message"]["content"] = completion_response["completions"][0]["completion"]
-                model_response.choices[0].finish_reason = completion_response["completions"][0]["finish_reason"]
+                choices_list = []
+                for idx, item in enumerate(completion_response["completions"]):
+                    if len(item["completion"]) > 0:
+                        message_obj = Message(content=item["completion"])
+                    else: 
+                        message_obj = Message(content=None)
+                    choice_obj = Choices(finish_reason=item["finish_reason"], index=idx+1, message=message_obj)
+                    choices_list.append(choice_obj)
+                model_response["choices"] = choices_list
             except:
                 raise AlephAlphaError(message=json.dumps(completion_response), status_code=response.status_code)
 

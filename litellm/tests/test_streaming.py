@@ -219,7 +219,7 @@ def test_completion_cohere_stream():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-# test_completion_cohere_stream()
+test_completion_cohere_stream()
 
 def test_completion_cohere_stream_bad_key():
     try:

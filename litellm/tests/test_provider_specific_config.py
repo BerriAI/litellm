@@ -317,13 +317,11 @@ def aleph_alpha_test_completion():
 
         assert len(response_2_text) < len(response_1_text)
 
-        try: 
-            response_3 = litellm.completion(model="luminous-base", 
+        response_3 = litellm.completion(model="luminous-base", 
                                                 messages=[{ "content": "Hello, how are you?","role": "user"}],
                                                 n=2)
-            pytest.fail(f"Error not raised when n=2 passed to provider")
-        except: 
-            pass
+        
+        assert len(response_3.choices) > 1
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
