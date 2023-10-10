@@ -60,7 +60,9 @@ from litellm.utils import (
     ModelResponse,
     EmbeddingResponse,
     read_config_args,
-    RateLimitManager
+    RateLimitManager,
+    Choices, 
+    Message
 )
 
 ####### ENVIRONMENT VARIABLES ###################
@@ -509,8 +511,12 @@ def completion(
                 },
             )
             ## RESPONSE OBJECT
-            completion_response = response["choices"][0]["text"]
-            model_response["choices"][0]["message"]["content"] = completion_response
+            choices_list = []
+            for idx, item in enumerate(response["choices"]):
+                message_obj = Message(content=item["text"])
+                choice_obj = Choices(finish_reason=item["finish_reason"], index=idx+1, message=message_obj)
+                choices_list.append(choice_obj)
+            model_response["choices"] = choices_list
             model_response["created"] = response.get("created", time.time())
             model_response["model"] = model
             model_response["usage"] = response.get("usage", 0)

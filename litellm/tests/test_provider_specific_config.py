@@ -498,6 +498,11 @@ def openai_text_completion_test():
         print(f"response_2_text: {response_2_text}")
 
         assert len(response_2_text) < len(response_1_text)
+
+        response_3 = litellm.completion(model="text-davinci-003", 
+                                                messages=[{ "content": "Hello, how are you?","role": "user"}],
+                                                n=2)
+        assert len(response_3.choices) > 1
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
