@@ -85,7 +85,7 @@ class Supabase:
                 )
                 data, count = (
                     self.supabase_client.table(self.supabase_table_name)
-                    .upsert(supabase_data_obj)
+                    .upsert(supabase_data_obj, on_conflict="litellm_call_id")
                     .execute()
                 )
             elif "error" in response_obj:
@@ -106,7 +106,7 @@ class Supabase:
                 )
                 data, count = (
                     self.supabase_client.table(self.supabase_table_name)
-                    .upsert(supabase_data_obj)
+                    .upsert(supabase_data_obj, on_conflict="litellm_call_id")
                     .execute()
                 )
 
