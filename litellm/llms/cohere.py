@@ -163,7 +163,7 @@ def completion(
                     choices_list.append(choice_obj)
                 model_response["choices"] = choices_list
             except Exception as e:
-                raise CohereError(message=traceback.format_exc(), status_code=response.status_code)
+                raise CohereError(message=response.text, status_code=response.status_code)
 
         ## CALCULATING USAGE
         prompt_tokens = len(
