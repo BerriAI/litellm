@@ -13,17 +13,17 @@
 # litellm.success_callback = ["supabase"]
 # litellm.failure_callback = ["supabase"]
 
-# # litellm.modify_integration("supabase",{"table_name": "test_table"})
 
-# litellm.set_verbose = True
+# litellm.set_verbose = False
 
 # user_message = "Hello, how are you?"
 # messages = [{ "content": user_message,"role": "user"}]
 
 
 # #openai call
-# response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])
+# response = completion(
+#     model="gpt-3.5-turbo",
+#     messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}],
+#     user="ishaan22"
+# )
 
-# fix
-# #bad request call
-# response = completion(model="chatgpt-test", messages=[{"role": "user", "content": "Hi 👋 - i'm a bad request"}])
