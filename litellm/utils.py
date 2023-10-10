@@ -869,6 +869,7 @@ def completion_cost(
         completion_response=None,
         model="gpt-3.5-turbo", 
         prompt="", 
+        messages: List = [],
         completion="",
         total_time=0.0, # used for replicate
     ):
@@ -898,6 +899,8 @@ def completion_cost(
         - If an error occurs during execution, the function returns 0.0 without blocking the user's execution path.
     """
     try:
+        if messages != []:
+            prompt = " ".join([message["content"] for message in messages])
         # Handle Inputs to completion_cost
         prompt_tokens = 0
         completion_tokens = 0
