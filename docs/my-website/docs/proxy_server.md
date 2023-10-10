@@ -251,6 +251,8 @@ print(response)
 
 ### Tracking costs
 By default litellm proxy writes cost logs to litellm/proxy/cost.log
+
+How can the proxy be better? Let us know [here](https://github.com/BerriAI/litellm/issues)
 ```shell
 2023-10-09 14:48:18 - Model gpt-3.5-turbo-0613 Cost: 0.000047000
 2023-10-09 14:48:18 - Model gpt-3.5-turbo-0613 Cost: 0.000128700
@@ -261,7 +263,7 @@ By default litellm proxy writes cost logs to litellm/proxy/cost.log
 ```
 
 You can view costs on the cli using 
-``shell
+```shell
 litellm --cost
 ```
 
@@ -321,4 +323,11 @@ $ litellm --model claude-instant-1 --deploy
 This will host a ChatCompletions API at: https://api.litellm.ai/44508ad4
 </TabItem>
 </Tabs>
+
+## Support/ talk with founders
+
+- [Schedule Demo 👋](https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version)
+- [Community Discord 💭](https://discord.gg/wuPM9dRgDw)
+- Our numbers 📞 +1 (770) 8783-106 / ‭+1 (412) 618-6238‬
+- Our emails ✉️ ishaan@berri.ai / krrish@berri.ai
 
