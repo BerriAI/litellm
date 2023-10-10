@@ -118,36 +118,45 @@ def data_generator(response):
         print_verbose(f"returned chunk: {chunk}")
         yield f"data: {json.dumps(chunk)}\n\n"
 
-def custom_callback(
+def track_cost_callback(
     kwargs,                 # kwargs to completion
     completion_response,    # response from completion
     start_time, end_time    # start/end time
 ):
-    # Your custom code here
-    print("LITELLM: in custom callback function")
-    # print("kwargs", kwargs)
-    # print("start_time", start_time)
-    # print("end_time", end_time)
-    if "complete_streaming_response" in kwargs:
-        print("GOT COMPLETE STREAMING RESPINSE", kwargs["complete_streaming_response"])
-        response_cost = litellm.completion_cost(
-            completion_response=kwargs["complete_streaming_response"]
+    try:
+        # init logging config
+        logging.basicConfig(
+                filename='cost.log',
+                level=logging.INFO,
+                format='%(asctime)s - %(message)s',
+                datefmt='%Y-%m-%d %H:%M:%S'
         )
-        print("response_cost", response_cost)
-    else:
-        print("completion_response", completion_response)
-        response_cost = litellm.completion_cost(completion_response=completion_response)
 
-    logging.basicConfig(
-            filename='cost.log',
-            level=logging.INFO,
-            format='%(asctime)s - %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S'
-    )
-    logging.info(f"Model {completion_response.model} Cost: ${response_cost:.8f}")
+        # check if it has collected an entire stream response
+        if "complete_streaming_response" in kwargs:
+            # for tracking streaming cost we pass the "messages" and the output_text to litellm.completion_cost 
+            completion_response=kwargs["complete_streaming_response"]
+            input_text = kwargs["messages"]
+            output_text = completion_response["choices"][0]["message"]["content"]
+            response_cost = litellm.completion_cost(
+                model = kwargs["model"],
+                messages = input_text,
+                completion=output_text
+            )
+            print("streaming response_cost", response_cost)
+            logging.info(f"Model {kwargs['model']} Cost: ${response_cost:.8f}")
 
+        # for non streaming responses
+        else:
+            # we pass the completion_response obj
+            if kwargs["stream"] != True:
+                response_cost = litellm.completion_cost(completion_response=completion_response)
+                print("regular response_cost", response_cost)
+                logging.info(f"Model {completion_response.model} Cost: ${response_cost:.8f}")
+    except:
+        pass
 
-litellm.success_callback = [custom_callback]
+litellm.success_callback = [track_cost_callback]
 
 def litellm_completion(data, type): 
     try: 
