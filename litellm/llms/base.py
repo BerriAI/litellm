@@ -4,13 +4,10 @@ import requests, certifi, ssl
 
 class BaseLLM:
     def create_client_session(self):
-        if litellm.verify_ssl is False:
+        if litellm.client_session: 
+            session = litellm.client_session
+        else: 
             session = requests.Session()
-            session.verify = False
-        else:
-            ca_bundle_path = certifi.where() if litellm.ca_bundle_path is None else litellm.ca_bundle_path
-            session = requests.Session()
-            session.verify = ca_bundle_path
         
         return session
         
