@@ -466,6 +466,62 @@
         "litellm_provider": "aleph_alpha",
         "mode": "chat"
     },
+    "ai21.j2-mid-v1": {
+        "max_tokens": 8191, 
+        "input_cost_per_token": 0.0000125,
+        "output_cost_per_token": 0.0000125,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "ai21.j2-ultra-v1": {
+        "max_tokens": 8191, 
+        "input_cost_per_token": 0.0000188,
+        "output_cost_per_token": 0.0000188,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "amazon.titan-text-lite-v1": {
+        "max_tokens": 8000, 
+        "input_cost_per_token": 0.0000003,
+        "output_cost_per_token": 0.0000004,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "amazon.titan-text-express-v1": {
+        "max_tokens": 8000, 
+        "input_cost_per_token": 0.0000013,
+        "output_cost_per_token": 0.0000017,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "anthropic.claude-v1": {
+        "max_tokens": 100000, 
+        "input_cost_per_token": 0.00001102,
+        "output_cost_per_token": 0.00003268,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "anthropic.claude-v2": {
+        "max_tokens": 100000, 
+        "input_cost_per_token": 0.00001102,
+        "output_cost_per_token": 0.00003268,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "anthropic.claude-instant-v1": {
+        "max_tokens": 100000, 
+        "input_cost_per_token": 0.00000163,
+        "output_cost_per_token": 0.00000551,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "cohere.command-text-v14": {
+        "max_tokens": 4096, 
+        "input_cost_per_token": 0.0000015,
+        "output_cost_per_token": 0.0000020,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
     "together-ai-up-to-3b": {
         "input_cost_per_token": 0.0000001,
         "output_cost_per_token": 0.0000001
