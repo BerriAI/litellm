@@ -48,6 +48,7 @@ from .llms import (
     oobabooga,
     palm,
     vertex_ai)
+from .llms.openai import OpenAIChatCompletion
 from .llms.prompt_templates.factory import prompt_factory, custom_prompt, function_call_prompt
 import tiktoken
 from concurrent.futures import ThreadPoolExecutor
@@ -67,7 +68,7 @@ from litellm.utils import (
 
 ####### ENVIRONMENT VARIABLES ###################
 dotenv.load_dotenv()  # Loading env variables using dotenv
-
+openai_proxy_chat_completions = OpenAIChatCompletion()
 ####### COMPLETION ENDPOINTS ################
 
 async def acompletion(*args, **kwargs):
@@ -405,16 +406,30 @@ def completion(
             )
             ## COMPLETION CALL
             try:
-                response = openai.ChatCompletion.create(
-                    model=model,
-                    messages=messages,
-                    headers=litellm.headers, # None by default
-                    api_base=api_base, # thread safe setting base, key, api_version
-                    api_key=api_key,
-                    api_type="openai",
-                    api_version=api_version, # default None
-                    **optional_params,
-                )
+                if custom_llm_provider == "custom_openai": 
+                    response = openai_proxy_chat_completions.completion(
+                        model=model,
+                        messages=messages,
+                        model_response=model_response,
+                        print_verbose=print_verbose,
+                        api_key=api_key,
+                        api_base=api_base,
+                        logging_obj=logging,
+                        optional_params=optional_params,
+                        litellm_params=litellm_params,
+                        logger_fn=logger_fn
+                    )
+                else:
+                    response = openai.ChatCompletion.create(
+                        model=model,
+                        messages=messages,
+                        headers=litellm.headers, # None by default
+                        api_base=api_base, # thread safe setting base, key, api_version
+                        api_key=api_key,
+                        api_type="openai",
+                        api_version=api_version, # default None
+                        **optional_params,
+                    )
             except Exception as e:
                 ## LOGGING - log the original exception returned
                 logging.post_call(
