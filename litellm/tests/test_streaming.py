@@ -453,7 +453,7 @@ def test_completion_palm_stream():
         print(f"completion_response: {complete_response}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_completion_palm_stream()
+test_completion_palm_stream()
 
 # def test_completion_deep_infra_stream():
 #     # deep infra currently includes role in the 2nd chunk 

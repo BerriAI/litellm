@@ -1,4 +1,4 @@
-import os, types, traceback
+import os, types, traceback, copy
 import json
 from enum import Enum
 import time
@@ -87,10 +87,12 @@ def completion(
     model = model
     
     ## Load Config
+    inference_params = copy.deepcopy(optional_params)
+    inference_params.pop("stream") # palm does not support streaming, so we handle this by fake streaming in main.py
     config = litellm.PalmConfig.get_config() 
     for k, v in config.items(): 
-        if k not in optional_params: # completion(top_k=3) > palm_config(top_k=3) <- allows for dynamic variables to be passed in
-            optional_params[k] = v
+        if k not in inference_params: # completion(top_k=3) > palm_config(top_k=3) <- allows for dynamic variables to be passed in
+            inference_params[k] = v
 
     prompt = ""
     for message in messages:
@@ -110,11 +112,11 @@ def completion(
     logging_obj.pre_call(
             input=prompt,
             api_key="",
-            additional_args={"complete_input_dict": {"optional_params": optional_params}},
+            additional_args={"complete_input_dict": {"inference_params": inference_params}},
         )
     ## COMPLETION CALL
     try: 
-        response = palm.generate_text(prompt=prompt, **optional_params)
+        response = palm.generate_text(prompt=prompt, **inference_params)
     except Exception as e:
         raise PalmError(
             message=str(e),
