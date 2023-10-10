@@ -94,6 +94,7 @@ vertex_code_text_models: List = []
 ai21_models: List = []
 nlp_cloud_models: List = []
 aleph_alpha_models: List = []
+bedrock_models: List = []
 for key, value in model_cost.items():
     if value.get('litellm_provider') == 'openai':
         open_ai_chat_completion_models.append(key)
@@ -120,6 +121,8 @@ for key, value in model_cost.items():
         nlp_cloud_models.append(key)
     elif value.get('litellm_provider') == 'aleph_alpha':
         aleph_alpha_models.append(key)
+    elif value.get('litellm_provider') == 'bedrock': 
+        bedrock_models.append(key)
 
 # well supported replicate llms
 replicate_models: List = [
@@ -194,11 +197,6 @@ baseten_models: List = ["qvv0xeq", "q841o8w", "31dxrj3"]  # FALCON 7B  # WizardL
 
 petals_models = [
     "petals-team/StableBeluga2",
-]
-
-bedrock_models: List = [
-    "amazon.titan-tg1-large",
-    "ai21.j2-grande-instruct"
 ]
 
 ollama_models = [

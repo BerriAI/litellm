@@ -806,7 +806,7 @@ def test_completion_bedrock_claude():
     print("calling claude")
     try:
         response = completion(
-            model="bedrock/anthropic.claude-instant-v1", 
+            model="anthropic.claude-instant-v1", 
             messages=messages,
             max_tokens=10,
             temperature=0.1,
