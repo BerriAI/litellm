@@ -354,4 +354,8 @@ async def retrieve_server_log(request: Request):
     filepath = os.path.expanduser('~/.ollama/logs/server.log')
     return FileResponse(filepath)
 
+@router.get("/")
+async def home(request: Request):
+    return "LiteLLM: RUNNING"
+
 app.include_router(router)
