@@ -248,7 +248,22 @@ response = openai.ChatCompletion.create(model="ollama/llama2", messages=[{"role"
 
 print(response)
 ```
-    
+
+### Tracking costs
+By default litellm proxy writes cost logs to litellm/proxy/cost.log
+```shell
+2023-10-09 14:48:18 - Model gpt-3.5-turbo-0613 Cost: 0.000047000
+2023-10-09 14:48:18 - Model gpt-3.5-turbo-0613 Cost: 0.000128700
+2023-10-09 14:48:20 - Model gpt-3.5-turbo-0613 Cost: 0.000523011
+2023-10-09 14:48:28 - Model ollama/llama2 Cost: 0.00004700
+2023-10-09 14:48:35 - Model ollama/code-llama Cost: 0.00004700
+2023-10-09 14:48:49 - Model azure/chatgpt-2 Cost: 0.000223011
+```
+
+You can view costs on the cli using 
+``shell
+litellm --cost
+```
 
 ### Ollama Logs
 Ollama calls can sometimes fail (out-of-memory errors, etc.). 
