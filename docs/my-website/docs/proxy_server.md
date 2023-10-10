@@ -5,6 +5,11 @@ import TabItem from '@theme/TabItem';
 
 A local, fast, and lightweight OpenAI-compatible server to call 100+ LLM APIs. 
 
+:::info
+We want to learn how we can make the proxy better! Meet the [founders](https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version) or
+join our [discord](https://discord.gg/wuPM9dRgDw)
+::: 
+
 ## Usage 
 ```shell
 pip install litellm
@@ -203,7 +208,7 @@ Credits [@victordibia](https://github.com/microsoft/autogen/issues/45#issuecomme
 </Tabs>
 
 :::note
-**Contribute** Using this server with a project? Contribute your tutorial here!
+**Contribute** Using this server with a project? Contribute your tutorial [here!](https://github.com/BerriAI/litellm)
 
 ::: 
 
