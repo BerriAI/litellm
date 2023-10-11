@@ -80,10 +80,10 @@ const sidebars = {
         "providers/petals",
       ]
     },
-    "set_keys",
     "proxy_server",
     "budget_manager",
     "rate_limit_manager",
+    "set_keys",
     "completion/token_usage",
     {
       type: 'category',
