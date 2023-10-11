@@ -1033,7 +1033,10 @@ def completion(
             generator = ollama.get_ollama_response_stream(api_base, model, prompt, optional_params)
             if optional_params.get("stream", False) == True:
                 # assume all ollama responses are streamed
-                return generator
+                response = CustomStreamWrapper(
+                        generator, model, custom_llm_provider="ollama", logging_obj=logging
+                )
+                return response
             else:
                 response_string = ""
                 for chunk in generator:
