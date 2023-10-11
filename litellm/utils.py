@@ -2311,31 +2311,6 @@ def exception_type(
     print("\033[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new\033[0m")
     print("LiteLLM.Info: If you need to debug this error, use `litellm.set_verbose=True'.")
     print()
-    if litellm.set_verbose == True:
-        litellm.error_logs['EXCEPTION'] = original_exception
-        litellm.error_logs['KWARGS'] = completion_kwargs
-        try:
-            # code to show users their litellm error dashboard
-            import urllib.parse
-            import json
-            for log_key in litellm.error_logs:
-                current_logs = litellm.error_logs[log_key]
-                if type(current_logs) == dict:
-                    filtered_error_logs = {key: str(value) for key, value in current_logs.items()}
-                    litellm.error_logs[log_key] = filtered_error_logs
-                else:
-                    litellm.error_logs[log_key] = str(current_logs)
-
-            # Convert the filtered_error_logs dictionary to a JSON string
-            error_logs_json = json.dumps(litellm.error_logs)
-            # URL-encode the JSON data
-            encoded_data = urllib.parse.quote(error_logs_json)
-
-            print("👉 view error logs:")
-            print("\033[91m" + '\033[4m' + 'https://logs.litellm.ai/?data=' + str(encoded_data) + "\033[0m")
-
-        except:
-            pass
     try:
         if isinstance(original_exception, OriginalError):
             # Handle the OpenAIError
