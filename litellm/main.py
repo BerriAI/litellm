@@ -783,7 +783,7 @@ def completion(
                 api_key=huggingface_key, 
                 logging_obj=logging,
                 custom_prompt_dict=litellm.custom_prompt_dict,
-                headers=headers
+                headers=kwargs.get("headers", {})
             )
             if "stream" in optional_params and optional_params["stream"] == True:
                 # don't try to access stream object,
@@ -1440,7 +1440,7 @@ def embedding(
                 api_base=api_base,
                 logging_obj=logging,
                 model_response= EmbeddingResponse(),
-                headers=headers,
+                headers=kwargs.get("headers", {}),
             )
         else:
             args = locals()
