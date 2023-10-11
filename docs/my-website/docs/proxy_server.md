@@ -137,7 +137,7 @@ $ litellm --model command-nightly
 
 [**Jump to Code**](https://github.com/BerriAI/litellm/blob/fef4146396d5d87006259e00095a62e3900d6bb4/litellm/proxy.py#L36)
 
-## [Tutorial]: Use with Aider/AutoGen/Continue-Dev/Langroid
+## [Tutorial]: Use with Aider/AutoGen/Continue-Dev/Langroid/etc.
 
 Here's how to use the proxy to test codellama/mistral/etc. models for different github repos 
 
@@ -241,6 +241,16 @@ task.run()
 ```
 
 Credits [@pchalasani](https://github.com/pchalasani) and [Langroid](https://github.com/langroid/langroid) for this tutorial.
+</TabItem>
+<TabItem value="gpt-pilot" label="GPT-Pilot">
+GPT-Pilot helps you build apps with AI Agents. [For more](https://github.com/Pythagora-io/gpt-pilot)
+
+In your .env set the openai endpoint to your local server. 
+
+```
+OPENAI_ENDPOINT=http://0.0.0.0:8000
+OPENAI_API_KEY=my-fake-key
+```
 </TabItem>
 </Tabs>
 
