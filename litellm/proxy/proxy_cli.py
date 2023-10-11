@@ -62,6 +62,7 @@ def load_config():
             # Copying the file using shutil.copy
             shutil.copy(default_config_path, user_config_path)
         print(f"user_config_path: {user_config_path}")
+        print(f"os path is file: {os.path.isfile(user_config_path)}")
         # As the .env file is typically much simpler in structure, we use load_dotenv here directly
         load_dotenv(dotenv_path=user_config_path)
         print(f"together ai api key: {os.getenv('TOGETHERAI_API_KEY')}")
