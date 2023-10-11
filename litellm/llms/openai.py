@@ -232,13 +232,13 @@ class OpenAIChatCompletion(BaseLLM):
             CustomOpenAIError(status_code=500, message="Invalid response object.")
 
     def completion(self, 
-               model: str,
-               messages: list,
-               model_response: ModelResponse,
-               print_verbose: Callable,
-               api_key: Optional[str],
-               api_base: str,
-               logging_obj,
+               model: str=None,
+               messages: list=None,
+               model_response: ModelResponse=None,
+               print_verbose: Callable=None,
+               api_key: Optional[str]=None,
+               api_base: str=None,
+               logging_obj=None,
                optional_params=None,
                litellm_params=None,
                logger_fn=None):
