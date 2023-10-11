@@ -240,7 +240,7 @@ task = Task(agent, name="my-llm-task")
 task.run() 
 ```
 
-Credits [@pchalasani](https://github.com/pchalasani) for this tutorial.
+Credits [@pchalasani](https://github.com/pchalasani) and [Langroid](https://github.com/langroid/langroid) for this tutorial.
 </TabItem>
 </Tabs>
 
@@ -323,6 +323,18 @@ This will return your logs from `~/.ollama/logs/server.log`.
 ### Deploy Proxy
 
 <Tabs>
+<TabItem value="docker" label="Ollama/OpenAI Docker">
+Use this to deploy local models with Ollama that's OpenAI-compatible. 
+
+It works for models like Mistral, Llama2, CodeLlama, etc. (any model supported by [Ollama](https://ollama.ai/library))
+
+**usage**
+```shell
+docker run --name ollama litellm/ollama
+```
+
+More details 👉 https://hub.docker.com/r/litellm/ollama
+</TabItem>
 <TabItem value="self-hosted" label="Self-Hosted">
 
 **Step 1: Clone the repo**
