@@ -7,14 +7,14 @@ load_dotenv()
 from importlib import resources
 import shutil, random
 list_of_messages = [
-    "The thing I wish you improved is...:",
-    "A feature I really want is...:",
-    "The worst thing about this product is...:",
-    "This product would be better if...:",
-    "I don't like how this works...:",
-    "It would help me if you could add...:",
-    "This feature doesn't meet my needs because...:",
-    "I get frustrated when the product...:",  
+    "'The thing I wish you improved is...'",
+    "'A feature I really want is...'",
+    "'The worst thing about this product is...'",
+    "'This product would be better if...'",
+    "'I don't like how this works...'",
+    "'It would help me if you could add...'",
+    "'This feature doesn't meet my needs because...'",
+    "'I get frustrated when the product...'",  
 ]
 
 def generate_feedback_box():
