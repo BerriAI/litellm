@@ -379,6 +379,19 @@ async def chat_completion(request: Request):
     return response
 
 
+# V1 Endpoints - some apps expect a v1 endpoint - these call the regular function
+@router.post("/v1/completions")
+async def completion(request: Request):
+    data = await request.json()
+    return litellm_completion(data=data, type="completion")
+
+@router.post("/v1/chat/completions")
+async def chat_completion(request: Request):
+    data = await request.json()
+    print_verbose(f"data passed in: {data}")
+    response = litellm_completion(data, type="chat_completion")
+    return response
+
 def print_cost_logs():
     with open('cost.log', 'r') as f:
         # print this in green
