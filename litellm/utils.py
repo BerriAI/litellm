@@ -478,6 +478,33 @@ class Logging:
                             end_time=end_time,
                             print_verbose=print_verbose,
                         )
+                    if callback == "supabase":
+                        print_verbose("reaches supabase for logging!")
+                        kwargs=self.model_call_details
+                        
+                        # this only logs streaming once, complete_streaming_response exists i.e when stream ends
+                        if self.stream:
+                            if "complete_streaming_response" not in kwargs:
+                                return
+                            else:
+                                print_verbose("reaches supabase for streaming logging!")
+                                result = kwargs["complete_streaming_response"]
+      
+                        # print(kwargs)
+                        model = kwargs["model"]
+                        messages = kwargs["messages"]
+                        optional_params = kwargs.get("optional_params", {})
+                        litellm_params = kwargs.get("litellm_params", {})
+                        supabaseClient.log_event(
+                            model=model,
+                            messages=messages,
+                            end_user=optional_params.get("user", "default"),
+                            response_obj=result,
+                            start_time=start_time,
+                            end_time=end_time,
+                            litellm_call_id=litellm_params.get("litellm_call_id", str(uuid.uuid4())),
+                            print_verbose=print_verbose,
+                        )
                     if callable(callback): # custom logger functions
                         customLogger.log_event(
                             kwargs=self.model_call_details,
@@ -1975,6 +2002,7 @@ def handle_failure(exception, traceback_exception, start_time, end_time, args, k
         pass
 
 
+# NOTE: DEPRECATING this in favor of using success_handler() in 
 def handle_success(args, kwargs, result, start_time, end_time):
     global heliconeLogger, aispendLogger, supabaseClient, liteDebuggerClient, llmonitorLogger
     try:
@@ -2066,25 +2094,6 @@ def handle_success(args, kwargs, result, start_time, end_time):
                         response_obj=result,
                         start_time=start_time,
                         end_time=end_time,
-                        print_verbose=print_verbose,
-                    )
-                elif callback == "supabase":
-                    print_verbose("reaches supabase for logging!")
-                    model = args[0] if len(args) > 0 else kwargs["model"]
-                    messages = (
-                        args[1]
-                        if len(args) > 1
-                        else kwargs.get("messages", {"role": "user", "content": ""})
-                    )
-                    print_verbose(f"supabaseClient: {supabaseClient}")
-                    supabaseClient.log_event(
-                        model=model,
-                        messages=messages,
-                        end_user=kwargs.get("user", "default"),
-                        response_obj=result,
-                        start_time=start_time,
-                        end_time=end_time,
-                        litellm_call_id=kwargs["litellm_call_id"],
                         print_verbose=print_verbose,
                     )
             except Exception as e:
