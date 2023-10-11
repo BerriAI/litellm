@@ -12,7 +12,6 @@ from litellm import (
     embedding,
     completion,
 #     AuthenticationError,
-    InvalidRequestError,
     ContextWindowExceededError,
 #     RateLimitError,
 #     ServiceUnavailableError,

@@ -210,8 +210,10 @@ class OpenAIChatCompletion(BaseLLM):
             headers["Authorization"] = f"Bearer {api_key}"
         return headers
     
-    def convert_to_model_response_object(self, response_object: dict, model_response_object: ModelResponse):
+    def convert_to_model_response_object(self, response_object: Optional[dict]=None, model_response_object: Optional[ModelResponse]=None):
         try: 
+            if response_object is None or model_response_object is None:
+                raise CustomOpenAIError(status_code=500, message="Error in response object format")
             choice_list=[]
             for idx, choice in enumerate(response_object["choices"]): 
                 message = Message(content=choice["message"]["content"], role=choice["message"]["role"])
