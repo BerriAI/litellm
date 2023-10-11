@@ -2951,7 +2951,7 @@ def safe_crash_reporting(model=None, exception=None, custom_llm_provider=None):
         "exception": str(exception),
         "custom_llm_provider": custom_llm_provider,
     }
-    threading.Thread(target=litellm_telemetry, args=(data,)).start()
+    threading.Thread(target=litellm_telemetry, args=(data,), daemon=True).start()
 
 def get_or_generate_uuid():
     temp_dir = os.path.join(os.path.abspath(os.sep), "tmp")
