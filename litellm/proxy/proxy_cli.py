@@ -35,7 +35,7 @@ def generate_feedback_box():
   print()
   print()
 
-generate_feedback_box()
+# generate_feedback_box()
 
 
 config_filename = "litellm.secrets.toml"
