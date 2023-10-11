@@ -7,14 +7,14 @@ load_dotenv()
 from importlib import resources
 import shutil, random
 list_of_messages = [
-    "The thing I wish you improved is:",
-    "A feature I really want is:",
-    "The worst thing about this product is:",
-    "This product would be better if:",
-    "I don't like how this works:",
-    "It would help me if you could add:",
-    "This feature doesn't meet my needs because:",
-    "I get frustrated when the product:",  
+    "The thing I wish you improved is...:",
+    "A feature I really want is...:",
+    "The worst thing about this product is...:",
+    "This product would be better if...:",
+    "I don't like how this works...:",
+    "It would help me if you could add...:",
+    "This feature doesn't meet my needs because...:",
+    "I get frustrated when the product...:",  
 ]
 
 def generate_feedback_box():
@@ -61,9 +61,10 @@ def load_config():
             os.makedirs(config_dir, exist_ok=True)
             # Copying the file using shutil.copy
             shutil.copy(default_config_path, user_config_path)
-
+        print(f"user_config_path: {user_config_path}")
         # As the .env file is typically much simpler in structure, we use load_dotenv here directly
         load_dotenv(dotenv_path=user_config_path)
+        print(f"together ai api key: {os.getenv('TOGETHERAI_API_KEY')}")
     except:
         pass
 
