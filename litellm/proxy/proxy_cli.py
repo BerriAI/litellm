@@ -1,6 +1,7 @@
 import click
 import subprocess, traceback
 import os, appdirs
+import random
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -40,13 +41,18 @@ def open_config():
     elif os.name == 'posix': # For MacOS, Linux, and anything using Bash
         subprocess.call(('open', '-t', user_config_path)) 
 
+def is_port_in_use(port):
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        return s.connect_ex(('localhost', port)) == 0
+
 @click.command()
 @click.option('--host', default='0.0.0.0', help='Host for the server to listen on.')
 @click.option('--port', default=8000, help='Port to bind the server to.')
 @click.option('--api_base', default=None, help='API base URL.')
 @click.option('--model', default=None, help='The model name to pass to litellm expects') 
 @click.option('--deploy', is_flag=True, type=bool, help='Get a deployed proxy endpoint - api.litellm.ai')
-@click.option('--debug', is_flag=True, help='To debug the input') 
+@click.option('--debug', default=False, is_flag=True, type=bool, help='To debug the input') 
 @click.option('--temperature', default=None, type=float, help='Set temperature for the model') 
 @click.option('--max_tokens', default=None, type=int, help='Set max tokens for the model') 
 @click.option('--drop_params', is_flag=True, help='Drop any unmapped params') 
@@ -122,6 +128,8 @@ def run_server(host, port, api_base, model, deploy, debug, temperature, max_toke
         print(f"\033[32mLiteLLM: Test your local endpoint with: \"litellm --test\" [In a new terminal tab]\033[0m\n")
         print(f"\033[32mLiteLLM: Deploy your proxy using the following: \"litellm --model claude-instant-1 --deploy\" Get an https://api.litellm.ai/chat/completions endpoint \033[0m\n")
         
+        if port == 8000 and is_port_in_use(port):
+            port = random.randint(1024, 49152)
         uvicorn.run(app, host=host, port=port)
 
 
