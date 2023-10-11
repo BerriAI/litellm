@@ -1,4 +1,5 @@
-import sys, os, platform, appdirs
+import sys, os, platform 
+import threading
 import shutil, random, traceback
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -8,14 +9,48 @@ try:
     import uvicorn
     import fastapi
     import tomli as tomllib
+    import appdirs
 except ImportError:
     import subprocess
     import sys
 
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "uvicorn", "fastapi", "tomli"])
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "uvicorn", "fastapi", "tomli", "appdirs"])
     import uvicorn
     import fastapi
     import tomli as tomllib
+    import appdirs
+
+import random
+list_of_messages = [
+    "'The thing I wish you improved is...'",
+    "'A feature I really want is...'",
+    "'The worst thing about this product is...'",
+    "'This product would be better if...'",
+    "'I don't like how this works...'",
+    "'It would help me if you could add...'",
+    "'This feature doesn't meet my needs because...'",
+    "'I get frustrated when the product...'",  
+]
+
+def generate_feedback_box():
+  box_width = 60
+
+  # Select a random message
+  message = random.choice(list_of_messages)
+
+  print()
+  print('\033[1;37m' + '#' + '-'*box_width + '#\033[0m')
+  print('\033[1;37m' + '#' + ' '*box_width + '#\033[0m')
+  print('\033[1;37m' + '# {:^59} #\033[0m'.format(message))
+  print('\033[1;37m' + '# {:^59} #\033[0m'.format('https://github.com/BerriAI/litellm/issues/new'))
+  print('\033[1;37m' + '#' + ' '*box_width + '#\033[0m') 
+  print('\033[1;37m' + '#' + '-'*box_width + '#\033[0m')
+  print()
+  print(' Thank you for using LiteLLM! - Krrish & Ishaan')
+  print()
+  print()
+
+generate_feedback_box()
 
 
 print()
@@ -58,7 +93,7 @@ def usage_telemetry(): # helps us know if people are using this feature. Set `li
         data = {
             "feature": "local_proxy_server"
         }
-        litellm.utils.litellm_telemetry(data=data)
+        threading.Thread(target=litellm.utils.litellm_telemetry, args=(data,)).start()
 
 def load_config():
     try: 
@@ -105,9 +140,9 @@ def load_config():
             litellm.max_budget = model_config.get("max_budget", None) # check if user set a budget for hosted model - e.g. gpt-4
         
         print_verbose(f"user_config: {user_config}")
+        print_verbose(f"model_config: {model_config}")
         if model_config is None:
             return
-
         user_model = model_config["model_name"] # raise an error if this isn't set when user runs either `litellm --model local_model` or  `litellm --model hosted_model`
         print_verbose(f"user_model: {user_model}")
 
