@@ -2883,6 +2883,15 @@ def exception_type(
                         )
                     raise original_exception
                 raise original_exception
+            elif custom_llm_provider == "ollama":
+                error_str = original_exception.get("error", "")
+                if "no such file or directory" in error_str:
+                    exception_mapping_worked = True
+                    raise InvalidRequestError(
+                            message=f"Ollama Exception Invalid Model/Model not loaded - {original_exception}",
+                            model=model,
+                            llm_provider="ollama"
+                        )
             elif custom_llm_provider == "vllm":
                 if hasattr(original_exception, "status_code"):
                     if original_exception.status_code == 0:
@@ -3350,6 +3359,11 @@ class CustomStreamWrapper:
                     completion_obj["content"] = new_chunk
                     self.completion_stream = self.completion_stream[chunk_size:]
                     time.sleep(0.05)
+                elif self.custom_llm_provider == "ollama":
+                    chunk = next(self.completion_stream)
+                    if "error" in chunk:
+                        exception_type(model=self.model, custom_llm_provider=self.custom_llm_provider, original_exception=chunk["error"])
+                    completion_obj = chunk
                 else: # openai chat/azure models
                     chunk = next(self.completion_stream)
                     model_response = chunk
