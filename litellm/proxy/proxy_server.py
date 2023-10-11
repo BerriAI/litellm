@@ -1,5 +1,4 @@
 import sys, os, platform, appdirs
-import tomllib
 import shutil, random, traceback
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -8,11 +7,15 @@ sys.path.insert(
 try:
     import uvicorn
     import fastapi
+    import tomli as tomllib
 except ImportError:
     import subprocess
     import sys
 
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "uvicorn", "fastapi"])
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "uvicorn", "fastapi", "tomli"])
+    import uvicorn
+    import fastapi
+    import tomli as tomllib
 
 
 print()
