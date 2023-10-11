@@ -131,13 +131,20 @@ def get_ollama_response_stream(
                     for chunk in chunks:
                         if chunk.strip() != "":
                             j = json.loads(chunk)
+                            if "error" in j:
+                                completion_obj = {
+                                    "role": "assistant",
+                                    "content": "",
+                                    "error": j
+                                }
+                                yield completion_obj
                             if "response" in j:
                                 completion_obj = {
                                     "role": "assistant",
                                     "content": "",
                                 }
                                 completion_obj["content"] = j["response"]
-                                yield {"choices": [{"delta": completion_obj}]}
+                                yield completion_obj
                 except Exception as e:
                     traceback.print_exc()
                     print(f"Error decoding JSON: {e}")
@@ -176,6 +183,13 @@ if async_generator_imported:
                         for chunk in chunks:
                             if chunk.strip() != "":
                                 j = json.loads(chunk)
+                                if "error" in j:
+                                    completion_obj = {
+                                        "role": "assistant",
+                                        "content": "",
+                                        "error": j
+                                    }
+                                    await yield_({"choices": [{"delta": completion_obj}]})
                                 if "response" in j:
                                     completion_obj = {
                                         "role": "assistant",
