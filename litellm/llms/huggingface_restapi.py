@@ -134,8 +134,9 @@ def completion(
     optional_params=None,
     litellm_params=None,
     logger_fn=None,
+    headers={},
 ):
-    headers = validate_environment(api_key)
+    # headers = validate_environment(api_key)
     task = get_hf_task_for_model(model)
     print_verbose(f"{model}, {task}")
     completion_url = ""
@@ -149,7 +150,7 @@ def completion(
     elif "HUGGINGFACE_API_BASE" in os.environ:
         completion_url = os.getenv("HUGGINGFACE_API_BASE", "")
     else:
-        completion_url = f"https://api-inference.huggingface.co/models/{model}"
+        completion_url = f"http://api-inference.huggingface.co/models/{model}"
 
     ## Load Config
     config=litellm.HuggingfaceConfig.get_config()
