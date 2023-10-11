@@ -125,6 +125,12 @@ for key, value in model_cost.items():
     elif value.get('litellm_provider') == 'bedrock': 
         bedrock_models.append(key)
 
+# known openai compatible endpoints - we'll eventually move this list to the model_prices_and_context_window.json dictionary
+openai_compatible_endpoints: List = [
+    "api.perplexity.ai"
+]
+
+
 # well supported replicate llms
 replicate_models: List = [
     # llama replicate supported LLMs

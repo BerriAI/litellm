@@ -38,8 +38,8 @@ def generate_feedback_box():
 generate_feedback_box()
 
 
-config_filename = ".env.litellm"
-
+config_filename = "litellm.secrets.toml"
+pkg_config_filename = "template.secrets.toml"
 # Using appdirs to determine user-specific config path
 config_dir = appdirs.user_config_dir("litellm")
 user_config_path = os.path.join(config_dir, config_filename)
@@ -50,37 +50,20 @@ def run_ollama_serve():
     with open(os.devnull, 'w') as devnull:
         process = subprocess.Popen(command, stdout=devnull, stderr=devnull)
 
-def load_config():
-    try: 
-        if not os.path.exists(user_config_path):
-            # If user's config doesn't exist, copy the default config from the package
-            here = os.path.abspath(os.path.dirname(__file__))
-            parent_dir = os.path.dirname(here)
-            default_config_path = os.path.join(parent_dir, '.env.template')
-            # Ensure the user-specific directory exists
-            os.makedirs(config_dir, exist_ok=True)
-            # Copying the file using shutil.copy
-            shutil.copy(default_config_path, user_config_path)
-        # As the .env file is typically much simpler in structure, we use load_dotenv here directly
-        load_dotenv(dotenv_path=user_config_path)
-    except Exception as e:
-        traceback.print_exc()
-        pass
-
 def open_config():
     # Create the .env file if it doesn't exist
     if not os.path.exists(user_config_path):
         # If user's env doesn't exist, copy the default env from the package
         here = os.path.abspath(os.path.dirname(__file__))
         parent_dir = os.path.dirname(here)
-        default_env_path = os.path.join(parent_dir, '.env.template')
+        default_env_path = os.path.join(parent_dir, pkg_config_filename)
         # Ensure the user-specific directory exists
         os.makedirs(config_dir, exist_ok=True)
         # Copying the file using shutil.copy
         try:
             shutil.copy(default_env_path, user_config_path)
         except Exception as e:
-            print(f"Failed to copy .env.template: {e}")
+            print(f"Failed to copy .template.secrets.toml: {e}")
 
     # Open the .env file in the default editor 
     if os.name == 'nt': # For Windows
@@ -99,7 +82,6 @@ def open_config():
 @click.option('--max_tokens', default=None, type=int, help='Set max tokens for the model') 
 @click.option('--drop_params', is_flag=True, help='Drop any unmapped params') 
 @click.option('--add_function_to_prompt', is_flag=True, help='If function passed but unsupported, pass it as prompt') 
-@click.option('--max_tokens', default=None, type=int, help='Set max tokens for the model') 
 @click.option('--max_budget', default=None, type=float, help='Set max budget for API calls - works for hosted models like OpenAI, TogetherAI, Anthropic, etc.`') 
 @click.option('--telemetry', default=True, type=bool, help='Helps us know if people are using this feature. Turn this off by doing `--telemetry False`') 
 @click.option('--config', is_flag=True, help='Create and open .env file from .env.template')
@@ -109,7 +91,7 @@ def open_config():
 def run_server(host, port, api_base, model, deploy, debug, temperature, max_tokens, drop_params, add_function_to_prompt, max_budget, telemetry, config, test, local, cost):
     if config:
         open_config()
-    
+        return
     if local:
         from proxy_server import app, initialize, deploy_proxy, print_cost_logs
         debug = True
@@ -162,9 +144,7 @@ def run_server(host, port, api_base, model, deploy, debug, temperature, max_toke
             click.echo(f'LiteLLM: streaming response from proxy {chunk}')
         return
     else:
-        load_config()
         initialize(model, api_base, debug, temperature, max_tokens, max_budget, telemetry, drop_params, add_function_to_prompt)
-
 
         try:
             import uvicorn
