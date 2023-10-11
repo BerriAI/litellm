@@ -330,8 +330,9 @@ def embedding(
     logging_obj=None,
     model_response=None,
     encoding=None,
+    headers={},
 ):
-    headers = validate_environment(api_key)
+    # headers = validate_environment(api_key)
     # print_verbose(f"{model}, {task}")
     embed_url = ""
     if "https" in model:
