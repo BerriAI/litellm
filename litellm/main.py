@@ -1040,7 +1040,7 @@ def completion(
             else:
                 response_string = ""
                 for chunk in generator:
-                    response_string+=chunk['choices'][0]['delta']['content']
+                    response_string+=chunk['content']
             
             ## RESPONSE OBJECT
             model_response["choices"][0]["message"]["content"] = response_string
