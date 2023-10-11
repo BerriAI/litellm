@@ -59,14 +59,17 @@ import asyncio
 asyncio.run(async_ollama())
 
 ```
-### Ollama Models
+## Ollama Models
 Ollama supported models: https://github.com/jmorganca/ollama
 
 | Model Name           | Function Call                                                                     |
 |----------------------|-----------------------------------------------------------------------------------
+| Mistral    | `completion(model='ollama/mistral', messages, api_base="http://localhost:11434", stream=True)` | 
 | Llama2 7B            | `completion(model='ollama/llama2', messages, api_base="http://localhost:11434", stream=True)` | 
 | Llama2 13B           | `completion(model='ollama/llama2:13b', messages, api_base="http://localhost:11434", stream=True)` | 
 | Llama2 70B           | `completion(model='ollama/llama2:70b', messages, api_base="http://localhost:11434", stream=True)` | 
+| Llama2 Uncensored    | `completion(model='ollama/llama2-uncensored', messages, api_base="http://localhost:11434", stream=True)` | 
+| Code Llama    | `completion(model='ollama/codellama', messages, api_base="http://localhost:11434", stream=True)` | 
 | Llama2 Uncensored    | `completion(model='ollama/llama2-uncensored', messages, api_base="http://localhost:11434", stream=True)` | 
 | Orca Mini            | `completion(model='ollama/orca-mini', messages, api_base="http://localhost:11434", stream=True)` |
 | Vicuna               | `completion(model='ollama/vicuna', messages, api_base="http://localhost:11434", stream=True)` |
