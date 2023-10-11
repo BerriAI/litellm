@@ -1,5 +1,5 @@
 import click
-import subprocess
+import subprocess, traceback
 import os, appdirs
 from dotenv import load_dotenv
 
@@ -65,7 +65,8 @@ def load_config():
         # As the .env file is typically much simpler in structure, we use load_dotenv here directly
         load_dotenv(dotenv_path=user_config_path)
         print(f"together ai api key: {os.getenv('TOGETHERAI_API_KEY')}")
-    except:
+    except Exception as e:
+        traceback.print_exc()
         pass
 
 def open_config():
