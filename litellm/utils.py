@@ -3236,9 +3236,14 @@ class CustomStreamWrapper:
             finish_reason = ""
             if "outputText" in chunk_data: 
                 text = chunk_data['outputText']
-            if "completion" in  chunk_data:
+            # anthropic mapping
+            elif "completion" in  chunk_data:
                 text = chunk_data['completion'] # bedrock.anthropic
-            if chunk_data.get("completionReason", None): 
+                stop_reason = chunk_data.get("stop_reason", None)
+                if stop_reason != None:
+                    is_finished = True
+                    finish_reason = stop_reason
+            elif chunk_data.get("completionReason", None): 
                 is_finished = True
                 finish_reason = chunk_data["completionReason"]
             elif chunk.get("error", None): 
