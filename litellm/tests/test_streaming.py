@@ -219,7 +219,7 @@ def test_completion_cohere_stream():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_completion_cohere_stream()
+# test_completion_cohere_stream()
 
 def test_completion_cohere_stream_bad_key():
     try:
@@ -453,7 +453,7 @@ def test_completion_palm_stream():
         print(f"completion_response: {complete_response}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_palm_stream()
+# test_completion_palm_stream()
 
 # def test_completion_deep_infra_stream():
 #     # deep infra currently includes role in the 2nd chunk 
@@ -842,7 +842,7 @@ def ai21_completion_call_bad_key():
 def test_openai_chat_completion_call():
     try:
         response = completion(
-            model="gpt-3.5-turbo", messages=messages, stream=True, logger_fn=logger_fn
+            model="gpt-3.5-turbo", messages=messages, stream=True, logger_fn=logger_fn, max_tokens=10
         )
         complete_response = ""
         start_time = time.time()
@@ -943,7 +943,7 @@ def test_completion_openai_with_functions():
     ]
     try:
         response = completion(
-            model="gpt-3.5-turbo", messages=messages, functions=function1, stream=True
+            model="gpt-3.5-turbo", messages=messages, functions=function1, stream=True,
         )
         # Add any assertions here to check the response
         print(response)
@@ -987,7 +987,7 @@ async def ai21_async_completion_call():
 async def completion_call():
     try:
         response = completion(
-            model="gpt-3.5-turbo", messages=messages, stream=True, logger_fn=logger_fn
+            model="gpt-3.5-turbo", messages=messages, stream=True, logger_fn=logger_fn, max_tokens=10
         )
         print(f"response: {response}")
         complete_response = ""
@@ -1260,7 +1260,7 @@ def test_openai_streaming_and_function_calling():
     messages=[{"role": "user", "content": "What is the weather like in Boston?"}]
     try:
         response = completion(
-            model="gpt-3.5-turbo", functions=function1, messages=messages, stream=True
+            model="gpt-3.5-turbo", functions=function1, messages=messages, stream=True,
         )
         # Add any assertions here to check the response
         for idx, chunk in enumerate(response):
@@ -1270,8 +1270,6 @@ def test_openai_streaming_and_function_calling():
         raise e 
 
 # test_openai_streaming_and_function_calling()
-import litellm
-
 
 def test_success_callback_streaming():
     def success_callback(kwargs, completion_response, start_time, end_time):
@@ -1289,12 +1287,16 @@ def test_success_callback_streaming():
     litellm.success_callback = [success_callback]
 
     messages = [{"role": "user", "content": "hello"}]
-
-    response = litellm.completion(model="gpt-3.5-turbo", messages=messages, stream=True)
+    print("TESTING LITELLM COMPLETION CALL")
+    response = litellm.completion(
+        model="j2-light", 
+        messages=messages, stream=True,
+        max_tokens=5,
+    )
     print(response)
 
 
     for chunk in response:
         print(chunk["choices"][0])
 
-test_success_callback_streaming()
+# test_success_callback_streaming()
