@@ -353,7 +353,7 @@ async def completion(request: Request):
 @router.post("/chat/completions")
 async def chat_completion(request: Request):
     data = await request.json()
-    print_verbose(f"data passed in: {data}")
+    print(f"data passed in: {data}")
     response = litellm_completion(data, type="chat_completion")
     return response
 
