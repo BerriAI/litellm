@@ -2495,10 +2495,17 @@ def exception_type(
                         model=model, 
                         llm_provider="bedrock"
                     )
-                if "The security token included in the request is invalid":
+                if "The security token included in the request is invalid" in error_str:
                     exception_mapping_worked = True
                     raise AuthenticationError(
                             message=f"BedrockException Invalid Authentication - {error_str}",
+                            model=model, 
+                            llm_provider="bedrock"
+                    )
+                if "throttlingException" in error_str:
+                    exception_mapping_worked = True
+                    raise RateLimitError(
+                            message=f"BedrockException: Rate Limit Error - {error_str}",
                             model=model, 
                             llm_provider="bedrock"
                     )
