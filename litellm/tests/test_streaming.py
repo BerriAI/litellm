@@ -591,6 +591,7 @@ def test_completion_claude_stream_bad_key():
 
 def test_completion_replicate_stream():
     try:
+        litellm.set_verbose = True
         messages = [
             {"role": "system", "content": "You are a helpful assistant."},
             {
