@@ -255,16 +255,20 @@ def track_cost_callback(
     completion_response,    # response from completion
     start_time, end_time    # start/end time
 ):
+    # track cost like this 
+    # {
+    #     "Oct12": {
+    #         "gpt-4": 10,
+    #         "claude-2": 12.01, 
+    #     },
+    #     "Oct 15": {
+    #         "ollama/llama2": 0.0,
+    #         "gpt2": 1.2
+    #     }
+    # }
     try:
-        # init logging config
-        logging.basicConfig(
-                filename='cost.log',
-                level=logging.INFO,
-                format='%(asctime)s - %(message)s',
-                datefmt='%Y-%m-%d %H:%M:%S'
-        )
 
-        # check if it has collected an entire stream response
+        # for streaming responses
         if "complete_streaming_response" in kwargs:
             # for tracking streaming cost we pass the "messages" and the output_text to litellm.completion_cost 
             completion_response=kwargs["complete_streaming_response"]
@@ -275,8 +279,8 @@ def track_cost_callback(
                 messages = input_text,
                 completion=output_text
             )
+            model = kwargs['model']
             print("streaming response_cost", response_cost)
-            logging.info(f"Model {kwargs['model']} Cost: ${response_cost:.8f}")
 
         # for non streaming responses
         else:
@@ -284,7 +288,32 @@ def track_cost_callback(
             if kwargs["stream"] != True:
                 response_cost = litellm.completion_cost(completion_response=completion_response)
                 print("regular response_cost", response_cost)
-                logging.info(f"Model {completion_response.model} Cost: ${response_cost:.8f}")
+                model = completion_response["model"]
+
+        # read/write from json for storing daily model costs 
+        cost_data = {}
+        try:
+            with open("costs.json") as f:
+                cost_data = json.load(f)
+        except FileNotFoundError:
+            cost_data = {} 
+        import datetime
+        date = datetime.datetime.now().strftime("%b-%d-%Y")
+        if date not in cost_data:
+            cost_data[date] = {}
+
+        if kwargs["model"] in cost_data[date]:
+            cost_data[date][kwargs["model"]]["cost"] += response_cost
+            cost_data[date][kwargs["model"]]["num_requests"] += 1
+        else:
+            cost_data[date][kwargs["model"]] = {
+                "cost": response_cost,
+                "num_requests": 1
+            }
+
+        with open("costs.json", "w") as f:
+            json.dump(cost_data, f, indent=2)
+
     except:
         pass
 
