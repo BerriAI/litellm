@@ -8,6 +8,8 @@ import time, pytest
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
+from dotenv import load_dotenv
+load_dotenv()
 import litellm
 from litellm import completion, acompletion, AuthenticationError, InvalidRequestError, RateLimitError
 
