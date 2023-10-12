@@ -36,10 +36,14 @@ def open_config():
             print(f"Failed to copy .template.secrets.toml: {e}")
 
     # Open the .env file in the default editor 
-    if os.name == 'nt': # For Windows
-        os.startfile(user_config_path)
-    elif os.name == 'posix': # For MacOS, Linux, and anything using Bash
-        subprocess.call(('open', '-t', user_config_path)) 
+    try: 
+        if os.name == 'nt': # For Windows
+            os.startfile(user_config_path)
+        elif os.name == 'posix': # For MacOS, Linux, and anything using Bash
+            subprocess.call(('open', '-t', user_config_path)) 
+    except: 
+        pass
+    print(f"LiteLLM: Proxy Server Config - {user_config_path}")
 
 def is_port_in_use(port):
     import socket
