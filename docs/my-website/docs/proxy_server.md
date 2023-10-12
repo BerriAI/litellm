@@ -305,13 +305,15 @@ print(response)
 By default litellm proxy writes cost logs to litellm/proxy/cost.log
 
 How can the proxy be better? Let us know [here](https://github.com/BerriAI/litellm/issues)
-```shell
-2023-10-09 14:48:18 - Model gpt-3.5-turbo-0613 Cost: 0.000047000
-2023-10-09 14:48:18 - Model gpt-3.5-turbo-0613 Cost: 0.000128700
-2023-10-09 14:48:20 - Model gpt-3.5-turbo-0613 Cost: 0.000523011
-2023-10-09 14:48:28 - Model ollama/llama2 Cost: 0.00004700
-2023-10-09 14:48:35 - Model ollama/code-llama Cost: 0.00004700
-2023-10-09 14:48:49 - Model azure/chatgpt-2 Cost: 0.000223011
+```json
+{
+  "Oct-12-2023": {
+    "claude-2": {
+      "cost": 0.02365918,
+      "num_requests": 1
+    }
+  }
+}
 ```
 
 You can view costs on the cli using 
