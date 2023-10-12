@@ -656,14 +656,14 @@ def test_completion_replicate_stream_bad_key():
 
 # test_completion_replicate_stream_bad_key()
 
-def test_completion_bedrock_ai21_stream():
+def test_completion_bedrock_claude_stream():
     try:
-        litellm.set_verbose=True
+        litellm.set_verbose=False
         response = completion(
             model="bedrock/anthropic.claude-instant-v1", 
             messages=[{"role": "user", "content": "Be as verbose as possible and give as many details as possible, how does a court case get to the Supreme Court?"}],
             temperature=1,
-            max_tokens=4096,
+            max_tokens=20,
             stream=True,
         )
         print(response)
@@ -687,7 +687,7 @@ def test_completion_bedrock_ai21_stream():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_completion_bedrock_ai21_stream() 
+# test_completion_bedrock_claude_stream() 
 
 
 def test_completion_sagemaker_stream():
