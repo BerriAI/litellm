@@ -138,7 +138,7 @@ Keys in the cache are `model`, the following example will lead to a cache hit
 ```python
 import time
 import litellm
-from litellm import completion
+from litellm import embedding
 from litellm.caching import Cache
 litellm.cache = Cache()
 
