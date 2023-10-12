@@ -724,26 +724,6 @@ def test_completion_replicate_vicuna():
         pytest.fail(f"Error occurred: {e}")
 # test_completion_replicate_vicuna()
 
-# def test_completion_replicate_stability_stream():
-#     model_name = "stability-ai/stablelm-tuned-alpha-7b:c49dae362cbaecd2ceabb5bd34fdb68413c4ff775111fea065d259d577757beb"
-#     try:
-#         response = completion(
-#             model=model_name,
-#             messages=messages,
-#             # stream=True,
-#             custom_llm_provider="replicate",
-#         )
-#         # print(response)
-#         # Add any assertions here to check the response
-#         # for chunk in response:
-#         #     print(chunk["choices"][0]["delta"])
-#         print(response)
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
-# test_completion_replicate_stability_stream()
-
-
-
 
 
 ######## Test TogetherAI ########
