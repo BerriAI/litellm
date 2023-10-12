@@ -30,7 +30,7 @@ response2 = completion(
 ```python
 import time
 import litellm
-from litellm import completion
+from litellm import completion, embedding
 from litellm.caching import Cache
 litellm.cache = Cache(type="hosted")
 
