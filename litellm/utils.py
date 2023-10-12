@@ -2495,6 +2495,13 @@ def exception_type(
                         model=model, 
                         llm_provider="bedrock"
                     )
+                if "The security token included in the request is invalid":
+                    exception_mapping_worked = True
+                    raise AuthenticationError(
+                            message=f"BedrockException Invalid Authentication - {error_str}",
+                            model=model, 
+                            llm_provider="bedrock"
+                    )
             elif custom_llm_provider == "sagemaker": 
                 if "Unable to locate credentials" in error_str:
                     exception_mapping_worked = True
