@@ -11,6 +11,7 @@ sys.path.insert(
 import pytest
 import litellm
 from litellm import embedding, completion, text_completion, completion_cost
+from litellm import RateLimitError
 
 user_message = "Write a short poem about the sky"
 messages = [{"content": user_message, "role": "user"}]
@@ -780,6 +781,8 @@ def test_completion_bedrock_titan():
         )
         # Add any assertions here to check the response
         print(response)
+    except RateLimitError:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 # test_completion_bedrock_titan()
@@ -796,6 +799,8 @@ def test_completion_bedrock_claude():
         )
         # Add any assertions here to check the response
         print(response)
+    except RateLimitError:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 # test_completion_bedrock_claude()
@@ -831,7 +836,8 @@ def test_completion_bedrock_claude_completion_auth():
         os.environ["AWS_ACCESS_KEY_ID"] = aws_access_key_id
         os.environ["AWS_SECRET_ACCESS_KEY"] = aws_secret_access_key
         os.environ["AWS_REGION_NAME"] = aws_region_name
-    
+    except RateLimitError:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 # test_completion_bedrock_claude_completion_auth()
@@ -872,7 +878,8 @@ def test_completion_bedrock_claude_external_client_auth():
         os.environ["AWS_ACCESS_KEY_ID"] = aws_access_key_id
         os.environ["AWS_SECRET_ACCESS_KEY"] = aws_secret_access_key
         os.environ["AWS_REGION_NAME"] = aws_region_name
-
+    except RateLimitError:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 # test_completion_bedrock_claude_external_client_auth()
@@ -890,6 +897,8 @@ def test_completion_bedrock_claude_stream():
         print(response)
         for chunk in response:
             print(chunk)
+    except RateLimitError:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 # test_completion_bedrock_claude_stream()
@@ -906,6 +915,8 @@ def test_completion_bedrock_ai21():
         )
         # Add any assertions here to check the response 
         print(response)
+    except RateLimitError:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
