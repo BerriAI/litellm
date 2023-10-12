@@ -302,7 +302,7 @@ print(response)
 ```
 
 ### Tracking costs
-By default litellm proxy writes cost logs to litellm/proxy/cost.log
+By default litellm proxy writes cost logs to litellm/proxy/costs.json
 
 How can the proxy be better? Let us know [here](https://github.com/BerriAI/litellm/issues)
 ```json
