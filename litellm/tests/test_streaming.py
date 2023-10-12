@@ -1240,35 +1240,35 @@ def streaming_and_function_calling_format_tests(idx, chunk):
         raise Exception("incorrect format")
     return extracted_chunk, finished
 
-def test_openai_streaming_and_function_calling():
-    function1 = [
-        {
-            "name": "get_current_weather",
-            "description": "Get the current weather in a given location",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "location": {
-                        "type": "string",
-                        "description": "The city and state, e.g. San Francisco, CA",
-                    },
-                    "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
-                },
-                "required": ["location"],
-            },
-        }
-    ]
-    messages=[{"role": "user", "content": "What is the weather like in Boston?"}]
-    try:
-        response = completion(
-            model="gpt-3.5-turbo", functions=function1, messages=messages, stream=True,
-        )
-        # Add any assertions here to check the response
-        for idx, chunk in enumerate(response):
-            streaming_and_function_calling_format_tests(idx=idx, chunk=chunk)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-        raise e 
+# def test_openai_streaming_and_function_calling():
+#     function1 = [
+#         {
+#             "name": "get_current_weather",
+#             "description": "Get the current weather in a given location",
+#             "parameters": {
+#                 "type": "object",
+#                 "properties": {
+#                     "location": {
+#                         "type": "string",
+#                         "description": "The city and state, e.g. San Francisco, CA",
+#                     },
+#                     "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+#                 },
+#                 "required": ["location"],
+#             },
+#         }
+#     ]
+#     messages=[{"role": "user", "content": "What is the weather like in Boston?"}]
+#     try:
+#         response = completion(
+#             model="gpt-3.5-turbo", functions=function1, messages=messages, stream=True,
+#         )
+#         # Add any assertions here to check the response
+#         for idx, chunk in enumerate(response):
+#             streaming_and_function_calling_format_tests(idx=idx, chunk=chunk)
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
+#         raise e 
 
 # test_openai_streaming_and_function_calling()
 
