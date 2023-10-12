@@ -10,6 +10,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import litellm
 from litellm import completion
+from litellm import RateLimitError
 
 #  Huggingface - Expensive to deploy models and keep them running. Maybe we can try doing this via baseten?? 
 # def hf_test_completion_tgi():
@@ -440,6 +441,8 @@ def bedrock_test_completion():
         print(f"response_2_text: {response_2_text}")
 
         assert len(response_2_text) < len(response_1_text)
+    except RateLimitError:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
