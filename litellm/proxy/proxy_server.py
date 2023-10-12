@@ -401,7 +401,7 @@ async def v1_chat_completion(request: Request):
     return response
 
 def print_cost_logs():
-    with open('cost.log', 'r') as f:
+    with open('costs.json', 'r') as f:
         # print this in green
         print("\033[1;32m")
         print(f.read())
