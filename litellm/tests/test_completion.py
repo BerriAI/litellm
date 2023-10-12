@@ -704,6 +704,7 @@ def test_completion_azure_deployment_id():
 # test_completion_replicate_llama_2()
 
 def test_completion_replicate_vicuna():
+    print("TESTING REPLICATE")
     model_name = "replicate/vicuna-13b:6282abe6a492de4145d7bb601023762212f9ddbbe78278bd6771c8b3b2f2a13b"
     try:
         response = completion(
@@ -716,11 +717,12 @@ def test_completion_replicate_vicuna():
         print(response)
         # Add any assertions here to check the response
         response_str = response["choices"][0]["message"]["content"]
-        print(response_str)
+        print("RESPONSE STRING\n", response_str)
         if type(response_str) != str:
             pytest.fail(f"Error occurred: {e}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+# test_completion_replicate_vicuna()
 
 # def test_completion_replicate_stability_stream():
 #     model_name = "stability-ai/stablelm-tuned-alpha-7b:c49dae362cbaecd2ceabb5bd34fdb68413c4ff775111fea065d259d577757beb"
