@@ -631,7 +631,11 @@ def test_completion_replicate_stream_bad_key():
             },
         ]
         response = completion(
-            model="replicate/meta/llama-2-70b-chat:02e509c789964a7ea8736978a43525956ef40397be9033abf9fd2badfe68c9e3", messages=messages, stream=True, max_tokens=50, api_key=api_key
+            model="replicate/meta/llama-2-70b-chat:02e509c789964a7ea8736978a43525956ef40397be9033abf9fd2badfe68c9e3", 
+            messages=messages, 
+            stream=True, 
+            max_tokens=50, 
+            api_key=api_key
         )
         complete_response = ""
         # Add any assertions here to check the response
@@ -643,7 +647,8 @@ def test_completion_replicate_stream_bad_key():
         if complete_response.strip() == "": 
             raise Exception("Empty response received")
         print(f"completion_response: {complete_response}")
-    except InvalidRequestError as e:
+    except AuthenticationError as e:
+        # this is an auth error with a bad key
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
