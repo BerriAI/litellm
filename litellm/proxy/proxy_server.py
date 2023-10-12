@@ -245,9 +245,8 @@ def deploy_proxy(model, api_base, debug, temperature, max_tokens, telemetry, dep
 
 # for streaming
 def data_generator(response):
-    print("inside generator")
+    print_verbose("inside generator")
     for chunk in response:
-        print(f"chunk: {chunk}")
         print_verbose(f"returned chunk: {chunk}")
         yield f"data: {json.dumps(chunk)}\n\n"
 
@@ -302,26 +301,6 @@ def litellm_completion(data, type):
             data["max_tokens"] = user_max_tokens
         if user_api_base: 
             data["api_base"] = user_api_base
-        ## CUSTOM PROMPT TEMPLATE ##  - run `litellm --config` to set this
-        litellm.register_prompt_template(
-            model=user_model, 
-            roles={
-                "system": {
-                    "pre_message": os.getenv("MODEL_SYSTEM_MESSAGE_START_TOKEN", ""),
-                    "post_message": os.getenv("MODEL_SYSTEM_MESSAGE_END_TOKEN", ""),    
-                }, 
-                "assistant": {
-                    "pre_message": os.getenv("MODEL_ASSISTANT_MESSAGE_START_TOKEN", ""), 
-                    "post_message": os.getenv("MODEL_ASSISTANT_MESSAGE_END_TOKEN", "")
-                }, 
-                "user": {
-                    "pre_message": os.getenv("MODEL_USER_MESSAGE_START_TOKEN", ""), 
-                    "post_message": os.getenv("MODEL_USER_MESSAGE_END_TOKEN", "")
-                }
-            },
-            initial_prompt_value=os.getenv("MODEL_PRE_PROMPT", ""), 
-            final_prompt_value=os.getenv("MODEL_POST_PROMPT", "")
-        )
         if type == "completion": 
             response = litellm.text_completion(**data)
         elif type == "chat_completion": 
