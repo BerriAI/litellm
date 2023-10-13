@@ -75,7 +75,7 @@ user_model = None
 user_debug = False
 user_max_tokens = None
 user_temperature = None
-user_telemetry = False
+user_telemetry = True
 user_config = None
 config_filename = "secrets.toml"
 config_dir = os.getcwd()
@@ -87,12 +87,14 @@ def print_verbose(print_statement):
     if user_debug: 
          print(print_statement)
 
-def usage_telemetry(): # helps us know if people are using this feature. Set `litellm --telemetry False` to your cli call to turn this off
+def usage_telemetry(feature: str): # helps us know if people are using this feature. Set `litellm --telemetry False` to your cli call to turn this off
+    print(f"user_telemtry: {user_telemetry}")
     if user_telemetry: 
+        print(f"feature telemetry: {feature}")
         data = {
-            "feature": "local_proxy_server"
+            "feature": feature # "local_proxy_server"
         }
-        threading.Thread(target=litellm.utils.litellm_telemetry, args=(data,)).start()
+        threading.Thread(target=litellm.utils.litellm_telemetry, args=(data,), daemon=True).start()
 
 def load_config():
     try: 
@@ -174,7 +176,7 @@ def initialize(model, api_base, debug, temperature, max_tokens, max_budget, tele
     user_max_tokens = max_tokens
     user_temperature = temperature
     user_telemetry = telemetry
-    usage_telemetry()
+    usage_telemetry(feature="local_proxy_server")
     if drop_params == True: 
         litellm.drop_params = True
     if add_function_to_prompt == True: 

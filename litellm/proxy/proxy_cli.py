@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 load_dotenv()
 from importlib import resources
 import shutil
+telemetry = None
 
 def run_ollama_serve():
     command = ['ollama', 'serve']
@@ -15,7 +16,6 @@ def run_ollama_serve():
         process = subprocess.Popen(command, stdout=devnull, stderr=devnull)
 
 def clone_subfolder(repo_url, subfolder, destination):
-
   # Clone the full repo
   repo_name = repo_url.split('/')[-1]  
   repo_master = os.path.join(destination, "repo_master")
@@ -35,6 +35,7 @@ def clone_subfolder(repo_url, subfolder, destination):
 
   # Remove cloned repo folder
   subprocess.run(['rm', '-rf', os.path.join(destination, "repo_master")])
+  feature_telemetry(feature="create-proxy")
 
 def is_port_in_use(port):
     import socket
@@ -59,15 +60,16 @@ def is_port_in_use(port):
 @click.option('--local', is_flag=True, default=False, help='for local debugging')
 @click.option('--cost', is_flag=True, default=False, help='for viewing cost logs')
 def run_server(host, port, api_base, model, deploy, debug, temperature, max_tokens, drop_params, create_proxy, add_function_to_prompt, max_budget, telemetry, test, local, cost):
+    global feature_telemetry
     if local:
-        from proxy_server import app, initialize, deploy_proxy, print_cost_logs
+        from proxy_server import app, initialize, deploy_proxy, print_cost_logs, usage_telemetry
         debug = True
     else:
         try:
-            from .proxy_server import app, initialize, deploy_proxy, print_cost_logs
+            from .proxy_server import app, initialize, deploy_proxy, print_cost_logs, usage_telemetry
         except ImportError as e: 
-            from proxy_server import app, initialize, deploy_proxy, print_cost_logs
-
+            from proxy_server import app, initialize, deploy_proxy, print_cost_logs, usage_telemetry
+    feature_telemetry = usage_telemetry
     if create_proxy == True: 
         repo_url = 'https://github.com/BerriAI/litellm'
         subfolder = 'litellm/proxy' 
