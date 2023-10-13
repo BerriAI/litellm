@@ -427,11 +427,13 @@ def test_completion_openrouter1():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+# test_completion_openrouter1()
 
 def test_completion_openrouter2():
     try:
+        print("testing openrouter/gpt-3.5-turbo")
         response = completion(
-            model="openrouter/openai/gpt-4-32k",
+            model="openrouter/gpt-3.5-turbo",
             messages=messages,
             max_tokens=5,
         )
@@ -439,6 +441,7 @@ def test_completion_openrouter2():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+# test_completion_openrouter2()
 
 def test_completion_openrouter3():
     try:
@@ -451,8 +454,7 @@ def test_completion_openrouter3():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-
-# test_completion_openrouter()
+# test_completion_openrouter3()
 
 def test_completion_hf_model_no_provider():
     try:
