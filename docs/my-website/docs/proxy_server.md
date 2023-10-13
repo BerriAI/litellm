@@ -302,11 +302,25 @@ print(result)
 ## Advanced
 ### Configure Model
 
-To save api keys and/or customize model prompt, run: 
+To save API Keys, change model prompt, etc. you'll need to create a local instance of it:
 ```shell
-$ litellm --config
+$ litellm --create-proxy
 ```
-This will open a .env file that will store these values locally.
+This will create a local project called `litellm-proxy` in your current directory, that has: 
+* **proxy_cli.py**: Runs the proxy
+* **proxy_server.py**: Contains the API calling logic
+    - `/chat/completions`: receives `openai.ChatCompletion.create` call.
+    - `/completions`: receives `openai.Completion.create` call.
+    - `/models`: receives `openai.Model.list()` call
+* **secrets.toml**: Stores your api keys, model configs, etc.
+
+Run it by doing:
+```shell
+$ cd litellm-proxy
+```
+```shell
+$ python proxy_cli.py --model ollama/llama # replace with your model name
+```
 
 To set api base, temperature, and max tokens, add it to your cli command
 ```shell

@@ -3,9 +3,9 @@ import threading, requests
 from typing import Callable, List, Optional, Dict, Union
 from litellm.caching import Cache
 
-input_callback: List[str] = []
+input_callback: List[Union[str, Callable]] = []
 success_callback: List[Union[str, Callable]] = []
-failure_callback: List[str] = []
+failure_callback: List[Union[str, Callable]] = []
 set_verbose = False
 email: Optional[
     str
