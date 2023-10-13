@@ -13,6 +13,24 @@ class CustomLogger:
     def __init__(self, callback_func):
         # Instance variables
         self.callback_func = callback_func
+    
+    def log_input_event(self, model, messages, kwargs, print_verbose):
+        try: 
+            print_verbose(
+                    f"Custom Logger - Enters logging function for model {kwargs}"
+                )
+            kwargs["model"] = model
+            kwargs["messages"] = messages
+            kwargs["log_event_type"] = "pre_api_call"
+            self.callback_func(
+                kwargs,
+            )
+            print_verbose(
+                f"Custom Logger - model call details: {kwargs}"
+            )
+        except: 
+            traceback.print_exc()
+            print_verbose(f"Custom Logger Error - {traceback.format_exc()}")
 
     def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
         # Method definition
@@ -20,6 +38,7 @@ class CustomLogger:
             print_verbose(
                 f"Custom Logger - Enters logging function for model {kwargs}"
             )
+            kwargs["log_event_type"] = "post_api_call"
             self.callback_func(
                 kwargs, # kwargs to func
                 response_obj,

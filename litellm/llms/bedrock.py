@@ -209,7 +209,7 @@ def init_bedrock_client(
 def convert_messages_to_prompt(messages, provider):
     # handle anthropic prompts using anthropic constants
     if provider == "anthropic":
-        prompt = ""
+        prompt = f"{AnthropicConstants.HUMAN_PROMPT.value}"
         for message in messages:
             if "role" in message:
                 if message["role"] == "user":

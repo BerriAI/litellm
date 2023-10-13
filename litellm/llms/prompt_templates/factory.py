@@ -7,7 +7,6 @@ def default_pt(messages):
     return " ".join(message["content"] for message in messages)
 
 # Llama2 prompt template
-llama_2_special_tokens = ["<s>", "</s>"]
 def llama_2_chat_pt(messages):
     prompt = custom_prompt(
         role_dict={
