@@ -1,8 +1,16 @@
 import click
-import subprocess, traceback
+import subprocess, traceback, json
 import os, sys
-import random
+import random, appdirs
+from datetime import datetime
 from dotenv import load_dotenv
+import operator
+
+config_filename = "litellm.secrets.toml"
+pkg_config_filename = "template.secrets.toml"
+# Using appdirs to determine user-specific config path
+config_dir = appdirs.user_config_dir("litellm")
+user_config_path = os.path.join(config_dir, config_filename)
 
 load_dotenv()
 from importlib import resources
@@ -14,6 +22,37 @@ def run_ollama_serve():
     
     with open(os.devnull, 'w') as devnull:
         process = subprocess.Popen(command, stdout=devnull, stderr=devnull)
+
+def open_config(file_path=None):
+    # Create the .env file if it doesn't exist
+    if file_path: 
+        # Ensure the user-specific directory exists
+        os.makedirs(config_dir, exist_ok=True)
+        # Copying the file using shutil.copy
+        try:
+            shutil.copy(file_path, user_config_path)
+            with open(file_path) as f:
+                print(f"Source file: {file_path}")
+                print(f.read())
+
+            with open(user_config_path) as f:
+                print(f"Dest file: {user_config_path}")
+                print(f.read())
+        except Exception as e:
+            print(f"Failed to copy {file_path}: {e}")
+    else: 
+        if os.path.exists(user_config_path):
+            if os.path.getsize(user_config_path) == 0:
+                print(f"{user_config_path} exists but is empty")
+                print(f"To create a config (save keys, modify model prompt), copy the template located here: https://docs.litellm.ai/docs/proxy_server")
+            else: 
+                with open(user_config_path) as f:
+                    print(f"Saved Config file: {user_config_path}")
+                    print(f.read())
+        else:
+            print(f"{user_config_path} hasn't been created yet.")
+            print(f"To create a config (save keys, modify model prompt), copy the template located here: https://docs.litellm.ai/docs/proxy_server")
+    print(f"LiteLLM: config location - {user_config_path}")
 
 def clone_subfolder(repo_url, subfolder, destination):
   # Clone the full repo
@@ -54,13 +93,19 @@ def is_port_in_use(port):
 @click.option('--drop_params', is_flag=True, help='Drop any unmapped params') 
 @click.option('--create_proxy', is_flag=True, help='Creates a local OpenAI-compatible server template') 
 @click.option('--add_function_to_prompt', is_flag=True, help='If function passed but unsupported, pass it as prompt') 
+@click.option('--config', '-c', is_flag=True, help='Configure Litellm')  
+@click.option('--file', '-f', help='Path to config file')
 @click.option('--max_budget', default=None, type=float, help='Set max budget for API calls - works for hosted models like OpenAI, TogetherAI, Anthropic, etc.`') 
 @click.option('--telemetry', default=True, type=bool, help='Helps us know if people are using this feature. Turn this off by doing `--telemetry False`') 
+@click.option('--logs', flag_value=False, type=int, help='Gets the "n" most recent logs. By default gets most recent log.') 
 @click.option('--test', flag_value=True, help='proxy chat completions url to make a test request to')
 @click.option('--local', is_flag=True, default=False, help='for local debugging')
 @click.option('--cost', is_flag=True, default=False, help='for viewing cost logs')
-def run_server(host, port, api_base, model, deploy, debug, temperature, max_tokens, drop_params, create_proxy, add_function_to_prompt, max_budget, telemetry, test, local, cost):
+def run_server(host, port, api_base, model, deploy, debug, temperature, max_tokens, drop_params, create_proxy, add_function_to_prompt, config, file, max_budget, telemetry, logs, test, local, cost):
     global feature_telemetry
+    args = locals()
+    print(f"args: {args}")
+    print(f"logs: {logs}")
     if local:
         from proxy_server import app, initialize, deploy_proxy, print_cost_logs, usage_telemetry
         debug = True
@@ -76,8 +121,29 @@ def run_server(host, port, api_base, model, deploy, debug, temperature, max_toke
         destination = os.path.join(os.getcwd(), 'litellm-proxy')
 
         clone_subfolder(repo_url, subfolder, destination)
-
         return
+    if config:
+        if file: 
+            open_config(file_path=file)
+        else: 
+            open_config()
+        return
+    if logs is not None:
+        if logs == 0: # default to 1
+            logs = 1
+        with open('api_log.json') as f:
+            data = json.load(f)
+
+        # convert keys to datetime objects    
+        log_times = {datetime.strptime(k, "%Y%m%d%H%M%S%f"): v for k, v in data.items()}
+
+        # sort by timestamp    
+        sorted_times = sorted(log_times.items(), key=operator.itemgetter(0), reverse=True)
+
+        # get n recent logs
+        recent_logs = {k.strftime("%Y%m%d%H%M%S%f"): v for k, v in sorted_times[:logs]}
+
+        print(json.dumps(recent_logs, indent=4))
     if deploy == True:
         print(f"\033[32mLiteLLM: Deploying your proxy to api.litellm.ai\033[0m\n")
         print(f"\033[32mLiteLLM: Deploying proxy for model: {model}\033[0m\n")
