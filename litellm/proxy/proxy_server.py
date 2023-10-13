@@ -20,6 +20,7 @@ except ImportError:
     import fastapi
     import tomli as tomllib
     import appdirs
+    
 
 import random
 list_of_messages = [
@@ -64,11 +65,21 @@ import litellm
 from fastapi import FastAPI, Request
 from fastapi.routing import APIRouter
 from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.middleware.cors import CORSMiddleware
 import json
 import logging
 
 app = FastAPI()
 router = APIRouter()
+origins = ["*"]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 user_api_base = None
 user_model = None

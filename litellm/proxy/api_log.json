@@ -81,5 +81,776 @@
         ]
       }
     }
+  },
+  "20231013154412334882": {
+    "pre_api_call": {
+      "model": "anthropic.claude-v2",
+      "messages": [
+        {
+          "role": "user",
+          "content": "app = FastAPI()\n\nmake my fastapi cors compatible"
+        },
+        {
+          "role": "user",
+          "content": "app = FastAPI()\n\nmake my fastapi cors compatible"
+        },
+        {
+          "role": "user",
+          "content": "app = FastAPI()\n\nmake my fastapi cors compatible"
+        }
+      ],
+      "optional_params": {
+        "max_tokens_to_sample": 1024,
+        "temperature": 0.5,
+        "stream": true
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "bedrock",
+        "api_base": null,
+        "litellm_call_id": "44d967c2-456e-4ffa-b7c4-4551e178b0d7",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": "\n\nHuman: \n\nHuman: app = FastAPI()\n\nmake my fastapi cors compatible\n\nHuman: app = FastAPI()\n\nmake my fastapi cors compatible\n\nHuman: app = FastAPI()\n\nmake my fastapi cors compatible\n\nAssistant: ",
+      "api_key": "",
+      "additional_args": {
+        "complete_input_dict": "{\"prompt\": \"\\n\\nHuman: \\n\\nHuman: app = FastAPI()\\n\\nmake my fastapi cors compatible\\n\\nHuman: app = FastAPI()\\n\\nmake my fastapi cors compatible\\n\\nHuman: app = FastAPI()\\n\\nmake my fastapi cors compatible\\n\\nAssistant: \", \"max_tokens_to_sample\": 1024, \"temperature\": 0.5}"
+      },
+      "log_event_type": "pre_api_call"
+    },
+    "post_api_call": {
+      "model": "anthropic.claude-v2",
+      "messages": [
+        {
+          "role": "user",
+          "content": "app = FastAPI()\n\nmake my fastapi cors compatible"
+        },
+        {
+          "role": "user",
+          "content": "app = FastAPI()\n\nmake my fastapi cors compatible"
+        },
+        {
+          "role": "user",
+          "content": "app = FastAPI()\n\nmake my fastapi cors compatible"
+        }
+      ],
+      "optional_params": {
+        "max_tokens_to_sample": 1024,
+        "temperature": 0.5,
+        "stream": true
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "bedrock",
+        "api_base": null,
+        "litellm_call_id": "44d967c2-456e-4ffa-b7c4-4551e178b0d7",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": null,
+      "api_key": null,
+      "additional_args": {},
+      "log_event_type": "post_api_call",
+      "original_response": "<class 'generator'>",
+      "complete_streaming_response": {
+        "id": "chatcmpl-a569121f-86e3-432a-9e7f-189207791ad2",
+        "object": "chat.completion.chunk",
+        "created": 1697237052,
+        "model": "anthropic.claude-v2",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": " Here is how you can make a FastAPI app CORS compatible:\n\n```python\nfrom fastapi import FastAPI, CORSMiddleware\n\napp = FastAPI()\n\norigins = [\n    \"http://localhost.tiangolo.com\",\n    \"https://localhost.tiangolo.com\",\n    \"http://localhost\",\n    \"http://localhost:8080\",\n]\n\napp.add_middleware(\n    CORSMiddleware,\n    allow_origins=origins,\n    allow_credentials=True,\n    allow_methods=[\"*\"],\n    allow_headers=[\"*\"],\n)\n```\n\nThis enables CORS for the specified origins. The allow_credentials=True allows sending cookies from the frontend. The allow_methods and allow_headers set to \"*\" allows all methods and headers.\n\nYou can also set more restrictive CORS settings by specifying only the required origins, methods, headers etc.\n\nSome key points:\n\n- The CORSMiddleware should be added before any routers.\n- The allowed origins can be restricted to your frontend URLs only.\n- Allow credentials only if needed.\n- Restrict methods and headers to only required ones if possible.\n\nSo this sets up a basic permissive CORS config for a FastAPI app."
+            },
+            "finish_reason": "stop_sequence"
+          }
+        ]
+      }
+    }
+  },
+  "20231013154448360412": {
+    "pre_api_call": {
+      "model": "anthropic.claude-v2",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\" Here is how you can make a FastAPI app CORS compatible:\n\n```python\nfrom fastapi import FastAPI, CORSMiddleware\n\napp = FastAPI()\n\norigins = [\n    \"http://localhost.tiangolo.com\",\n    \"https://localhost.tiangolo.com\",\n    \"http://localhost\",\n    \"http://localhost:8080\",\n]\n\napp.add_middleware(\n    CORSMiddleware,\n    allow_origins=origins,\n    allow_credentials=True,\n    allow_methods=[\"*\"],\n    allow_headers=[\"*\"],\n)\n```\n\nThis enables CORS for the specified origins. The allow_credentials=True allows sending cookies from the frontend. The allow_methods and allow_headers set to \"*\" allows all methods and headers.\n\nYou can also set more restrictive CORS settings by specifying only the required origins, methods, headers etc.\n\nSome key points:\n\n- The CORSMiddleware should be added before any routers.\n- The allowed origins can be restricted to your frontend URLs only.\n- Allow credentials only if needed.\n- Restrict methods and headers to only required ones if possible.\n\nSo this sets up a basic permissive CORS config for a FastAPI app.\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "optional_params": {
+        "max_tokens_to_sample": 20,
+        "temperature": 0.5
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "bedrock",
+        "api_base": null,
+        "litellm_call_id": "b70e6392-90dc-40b0-87bf-9b48c843c847",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": "\n\nHuman: \n\nHuman: <admin>\" Here is how you can make a FastAPI app CORS compatible:\n\n```python\nfrom fastapi import FastAPI, CORSMiddleware\n\napp = FastAPI()\n\norigins = [\n    \"http://localhost.tiangolo.com\",\n    \"https://localhost.tiangolo.com\",\n    \"http://localhost\",\n    \"http://localhost:8080\",\n]\n\napp.add_middleware(\n    CORSMiddleware,\n    allow_origins=origins,\n    allow_credentials=True,\n    allow_methods=[\"*\"],\n    allow_headers=[\"*\"],\n)\n```\n\nThis enables CORS for the specified origins. The allow_credentials=True allows sending cookies from the frontend. The allow_methods and allow_headers set to \"*\" allows all methods and headers.\n\nYou can also set more restrictive CORS settings by specifying only the required origins, methods, headers etc.\n\nSome key points:\n\n- The CORSMiddleware should be added before any routers.\n- The allowed origins can be restricted to your frontend URLs only.\n- Allow credentials only if needed.\n- Restrict methods and headers to only required ones if possible.\n\nSo this sets up a basic permissive CORS config for a FastAPI app.\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:</admin>\n\nAssistant: ",
+      "api_key": "",
+      "additional_args": {
+        "complete_input_dict": "{\"prompt\": \"\\n\\nHuman: \\n\\nHuman: <admin>\\\" Here is how you can make a FastAPI app CORS compatible:\\n\\n```python\\nfrom fastapi import FastAPI, CORSMiddleware\\n\\napp = FastAPI()\\n\\norigins = [\\n    \\\"http://localhost.tiangolo.com\\\",\\n    \\\"https://localhost.tiangolo.com\\\",\\n    \\\"http://localhost\\\",\\n    \\\"http://localhost:8080\\\",\\n]\\n\\napp.add_middleware(\\n    CORSMiddleware,\\n    allow_origins=origins,\\n    allow_credentials=True,\\n    allow_methods=[\\\"*\\\"],\\n    allow_headers=[\\\"*\\\"],\\n)\\n```\\n\\nThis enables CORS for the specified origins. The allow_credentials=True allows sending cookies from the frontend. The allow_methods and allow_headers set to \\\"*\\\" allows all methods and headers.\\n\\nYou can also set more restrictive CORS settings by specifying only the required origins, methods, headers etc.\\n\\nSome key points:\\n\\n- The CORSMiddleware should be added before any routers.\\n- The allowed origins can be restricted to your frontend URLs only.\\n- Allow credentials only if needed.\\n- Restrict methods and headers to only required ones if possible.\\n\\nSo this sets up a basic permissive CORS config for a FastAPI app.\\\"\\n\\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:</admin>\\n\\nAssistant: \", \"max_tokens_to_sample\": 20, \"temperature\": 0.5}"
+      },
+      "log_event_type": "pre_api_call"
+    },
+    "post_api_call": {
+      "model": "anthropic.claude-v2",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\" Here is how you can make a FastAPI app CORS compatible:\n\n```python\nfrom fastapi import FastAPI, CORSMiddleware\n\napp = FastAPI()\n\norigins = [\n    \"http://localhost.tiangolo.com\",\n    \"https://localhost.tiangolo.com\",\n    \"http://localhost\",\n    \"http://localhost:8080\",\n]\n\napp.add_middleware(\n    CORSMiddleware,\n    allow_origins=origins,\n    allow_credentials=True,\n    allow_methods=[\"*\"],\n    allow_headers=[\"*\"],\n)\n```\n\nThis enables CORS for the specified origins. The allow_credentials=True allows sending cookies from the frontend. The allow_methods and allow_headers set to \"*\" allows all methods and headers.\n\nYou can also set more restrictive CORS settings by specifying only the required origins, methods, headers etc.\n\nSome key points:\n\n- The CORSMiddleware should be added before any routers.\n- The allowed origins can be restricted to your frontend URLs only.\n- Allow credentials only if needed.\n- Restrict methods and headers to only required ones if possible.\n\nSo this sets up a basic permissive CORS config for a FastAPI app.\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "optional_params": {
+        "max_tokens_to_sample": 20,
+        "temperature": 0.5
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "bedrock",
+        "api_base": null,
+        "litellm_call_id": "b70e6392-90dc-40b0-87bf-9b48c843c847",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": "\n\nHuman: \n\nHuman: <admin>\" Here is how you can make a FastAPI app CORS compatible:\n\n```python\nfrom fastapi import FastAPI, CORSMiddleware\n\napp = FastAPI()\n\norigins = [\n    \"http://localhost.tiangolo.com\",\n    \"https://localhost.tiangolo.com\",\n    \"http://localhost\",\n    \"http://localhost:8080\",\n]\n\napp.add_middleware(\n    CORSMiddleware,\n    allow_origins=origins,\n    allow_credentials=True,\n    allow_methods=[\"*\"],\n    allow_headers=[\"*\"],\n)\n```\n\nThis enables CORS for the specified origins. The allow_credentials=True allows sending cookies from the frontend. The allow_methods and allow_headers set to \"*\" allows all methods and headers.\n\nYou can also set more restrictive CORS settings by specifying only the required origins, methods, headers etc.\n\nSome key points:\n\n- The CORSMiddleware should be added before any routers.\n- The allowed origins can be restricted to your frontend URLs only.\n- Allow credentials only if needed.\n- Restrict methods and headers to only required ones if possible.\n\nSo this sets up a basic permissive CORS config for a FastAPI app.\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:</admin>\n\nAssistant: ",
+      "api_key": "",
+      "additional_args": {
+        "complete_input_dict": "{\"prompt\": \"\\n\\nHuman: \\n\\nHuman: <admin>\\\" Here is how you can make a FastAPI app CORS compatible:\\n\\n```python\\nfrom fastapi import FastAPI, CORSMiddleware\\n\\napp = FastAPI()\\n\\norigins = [\\n    \\\"http://localhost.tiangolo.com\\\",\\n    \\\"https://localhost.tiangolo.com\\\",\\n    \\\"http://localhost\\\",\\n    \\\"http://localhost:8080\\\",\\n]\\n\\napp.add_middleware(\\n    CORSMiddleware,\\n    allow_origins=origins,\\n    allow_credentials=True,\\n    allow_methods=[\\\"*\\\"],\\n    allow_headers=[\\\"*\\\"],\\n)\\n```\\n\\nThis enables CORS for the specified origins. The allow_credentials=True allows sending cookies from the frontend. The allow_methods and allow_headers set to \\\"*\\\" allows all methods and headers.\\n\\nYou can also set more restrictive CORS settings by specifying only the required origins, methods, headers etc.\\n\\nSome key points:\\n\\n- The CORSMiddleware should be added before any routers.\\n- The allowed origins can be restricted to your frontend URLs only.\\n- Allow credentials only if needed.\\n- Restrict methods and headers to only required ones if possible.\\n\\nSo this sets up a basic permissive CORS config for a FastAPI app.\\\"\\n\\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:</admin>\\n\\nAssistant: \", \"max_tokens_to_sample\": 20, \"temperature\": 0.5}"
+      },
+      "log_event_type": "post_api_call",
+      "original_response": {
+        "completion": " Enable CORS in FastAPI",
+        "stop_reason": "stop_sequence"
+      }
+    }
+  },
+  "20231013154450195512": {
+    "pre_api_call": {
+      "model": "anthropic.claude-v2",
+      "messages": [
+        {
+          "role": "system",
+          "content": "### Instruction:\napp = FastAPI()\n\nmake my fastapi cors compatible\n### Instruction:\napp = FastAPI()\n\nmake my fastapi cors compatible\n### Instruction:\napp = FastAPI()\n\nmake my fastapi cors compatible\n### Response:\n Here is how you can make a FastAPI app CORS compatible:\n\n```python\nfrom fastapi import FastAPI, CORSMiddleware\n\napp = FastAPI()\n\norigins = [\n    \"http://localhost.tiangolo.com\",\n    \"https://localhost.tiangolo.com\",\n    \"http://localhost\",\n    \"http://localhost:8080\",\n]\n\napp.add_middleware(\n    CORSMiddleware,\n    allow_origins=origins,\n    allow_credentials=True,\n    allow_methods=[\"*\"],\n    allow_headers=[\"*\"],\n)\n```\n\nThis enables CORS for the specified origins. The allow_credentials=True allows sending cookies from the frontend. The allow_methods and allow_headers set to \"*\" allows all methods and headers.\n\nYou can also set more restrictive CORS settings by specifying only the required origins, methods, headers etc.\n\nSome key points:\n\n- The CORSMiddleware should be added before any routers.\n- The allowed origins can be restricted to your frontend URLs only.\n- Allow credentials only if needed.\n- Restrict methods and headers to only required ones if possible.\n\nSo this sets up a basic permissive CORS config for a FastAPI app.\n### Response:\n\n\nGive a short title to describe the above chat session. Do not put quotes around the title. Do not use more than 6 words. The title is: "
+        }
+      ],
+      "optional_params": {
+        "max_tokens_to_sample": 20,
+        "temperature": 0.5
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "bedrock",
+        "api_base": null,
+        "litellm_call_id": "fd366c97-9868-4c16-995c-a65ef0fd844f",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": "\n\nHuman: \n\nHuman: <admin>### Instruction:\napp = FastAPI()\n\nmake my fastapi cors compatible\n### Instruction:\napp = FastAPI()\n\nmake my fastapi cors compatible\n### Instruction:\napp = FastAPI()\n\nmake my fastapi cors compatible\n### Response:\n Here is how you can make a FastAPI app CORS compatible:\n\n```python\nfrom fastapi import FastAPI, CORSMiddleware\n\napp = FastAPI()\n\norigins = [\n    \"http://localhost.tiangolo.com\",\n    \"https://localhost.tiangolo.com\",\n    \"http://localhost\",\n    \"http://localhost:8080\",\n]\n\napp.add_middleware(\n    CORSMiddleware,\n    allow_origins=origins,\n    allow_credentials=True,\n    allow_methods=[\"*\"],\n    allow_headers=[\"*\"],\n)\n```\n\nThis enables CORS for the specified origins. The allow_credentials=True allows sending cookies from the frontend. The allow_methods and allow_headers set to \"*\" allows all methods and headers.\n\nYou can also set more restrictive CORS settings by specifying only the required origins, methods, headers etc.\n\nSome key points:\n\n- The CORSMiddleware should be added before any routers.\n- The allowed origins can be restricted to your frontend URLs only.\n- Allow credentials only if needed.\n- Restrict methods and headers to only required ones if possible.\n\nSo this sets up a basic permissive CORS config for a FastAPI app.\n### Response:\n\n\nGive a short title to describe the above chat session. Do not put quotes around the title. Do not use more than 6 words. The title is: </admin>\n\nAssistant: ",
+      "api_key": "",
+      "additional_args": {
+        "complete_input_dict": "{\"prompt\": \"\\n\\nHuman: \\n\\nHuman: <admin>### Instruction:\\napp = FastAPI()\\n\\nmake my fastapi cors compatible\\n### Instruction:\\napp = FastAPI()\\n\\nmake my fastapi cors compatible\\n### Instruction:\\napp = FastAPI()\\n\\nmake my fastapi cors compatible\\n### Response:\\n Here is how you can make a FastAPI app CORS compatible:\\n\\n```python\\nfrom fastapi import FastAPI, CORSMiddleware\\n\\napp = FastAPI()\\n\\norigins = [\\n    \\\"http://localhost.tiangolo.com\\\",\\n    \\\"https://localhost.tiangolo.com\\\",\\n    \\\"http://localhost\\\",\\n    \\\"http://localhost:8080\\\",\\n]\\n\\napp.add_middleware(\\n    CORSMiddleware,\\n    allow_origins=origins,\\n    allow_credentials=True,\\n    allow_methods=[\\\"*\\\"],\\n    allow_headers=[\\\"*\\\"],\\n)\\n```\\n\\nThis enables CORS for the specified origins. The allow_credentials=True allows sending cookies from the frontend. The allow_methods and allow_headers set to \\\"*\\\" allows all methods and headers.\\n\\nYou can also set more restrictive CORS settings by specifying only the required origins, methods, headers etc.\\n\\nSome key points:\\n\\n- The CORSMiddleware should be added before any routers.\\n- The allowed origins can be restricted to your frontend URLs only.\\n- Allow credentials only if needed.\\n- Restrict methods and headers to only required ones if possible.\\n\\nSo this sets up a basic permissive CORS config for a FastAPI app.\\n### Response:\\n\\n\\nGive a short title to describe the above chat session. Do not put quotes around the title. Do not use more than 6 words. The title is: </admin>\\n\\nAssistant: \", \"max_tokens_to_sample\": 20, \"temperature\": 0.5}"
+      },
+      "log_event_type": "pre_api_call"
+    },
+    "post_api_call": {
+      "model": "anthropic.claude-v2",
+      "messages": [
+        {
+          "role": "system",
+          "content": "### Instruction:\napp = FastAPI()\n\nmake my fastapi cors compatible\n### Instruction:\napp = FastAPI()\n\nmake my fastapi cors compatible\n### Instruction:\napp = FastAPI()\n\nmake my fastapi cors compatible\n### Response:\n Here is how you can make a FastAPI app CORS compatible:\n\n```python\nfrom fastapi import FastAPI, CORSMiddleware\n\napp = FastAPI()\n\norigins = [\n    \"http://localhost.tiangolo.com\",\n    \"https://localhost.tiangolo.com\",\n    \"http://localhost\",\n    \"http://localhost:8080\",\n]\n\napp.add_middleware(\n    CORSMiddleware,\n    allow_origins=origins,\n    allow_credentials=True,\n    allow_methods=[\"*\"],\n    allow_headers=[\"*\"],\n)\n```\n\nThis enables CORS for the specified origins. The allow_credentials=True allows sending cookies from the frontend. The allow_methods and allow_headers set to \"*\" allows all methods and headers.\n\nYou can also set more restrictive CORS settings by specifying only the required origins, methods, headers etc.\n\nSome key points:\n\n- The CORSMiddleware should be added before any routers.\n- The allowed origins can be restricted to your frontend URLs only.\n- Allow credentials only if needed.\n- Restrict methods and headers to only required ones if possible.\n\nSo this sets up a basic permissive CORS config for a FastAPI app.\n### Response:\n\n\nGive a short title to describe the above chat session. Do not put quotes around the title. Do not use more than 6 words. The title is: "
+        }
+      ],
+      "optional_params": {
+        "max_tokens_to_sample": 20,
+        "temperature": 0.5
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "bedrock",
+        "api_base": null,
+        "litellm_call_id": "fd366c97-9868-4c16-995c-a65ef0fd844f",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": "\n\nHuman: \n\nHuman: <admin>### Instruction:\napp = FastAPI()\n\nmake my fastapi cors compatible\n### Instruction:\napp = FastAPI()\n\nmake my fastapi cors compatible\n### Instruction:\napp = FastAPI()\n\nmake my fastapi cors compatible\n### Response:\n Here is how you can make a FastAPI app CORS compatible:\n\n```python\nfrom fastapi import FastAPI, CORSMiddleware\n\napp = FastAPI()\n\norigins = [\n    \"http://localhost.tiangolo.com\",\n    \"https://localhost.tiangolo.com\",\n    \"http://localhost\",\n    \"http://localhost:8080\",\n]\n\napp.add_middleware(\n    CORSMiddleware,\n    allow_origins=origins,\n    allow_credentials=True,\n    allow_methods=[\"*\"],\n    allow_headers=[\"*\"],\n)\n```\n\nThis enables CORS for the specified origins. The allow_credentials=True allows sending cookies from the frontend. The allow_methods and allow_headers set to \"*\" allows all methods and headers.\n\nYou can also set more restrictive CORS settings by specifying only the required origins, methods, headers etc.\n\nSome key points:\n\n- The CORSMiddleware should be added before any routers.\n- The allowed origins can be restricted to your frontend URLs only.\n- Allow credentials only if needed.\n- Restrict methods and headers to only required ones if possible.\n\nSo this sets up a basic permissive CORS config for a FastAPI app.\n### Response:\n\n\nGive a short title to describe the above chat session. Do not put quotes around the title. Do not use more than 6 words. The title is: </admin>\n\nAssistant: ",
+      "api_key": "",
+      "additional_args": {
+        "complete_input_dict": "{\"prompt\": \"\\n\\nHuman: \\n\\nHuman: <admin>### Instruction:\\napp = FastAPI()\\n\\nmake my fastapi cors compatible\\n### Instruction:\\napp = FastAPI()\\n\\nmake my fastapi cors compatible\\n### Instruction:\\napp = FastAPI()\\n\\nmake my fastapi cors compatible\\n### Response:\\n Here is how you can make a FastAPI app CORS compatible:\\n\\n```python\\nfrom fastapi import FastAPI, CORSMiddleware\\n\\napp = FastAPI()\\n\\norigins = [\\n    \\\"http://localhost.tiangolo.com\\\",\\n    \\\"https://localhost.tiangolo.com\\\",\\n    \\\"http://localhost\\\",\\n    \\\"http://localhost:8080\\\",\\n]\\n\\napp.add_middleware(\\n    CORSMiddleware,\\n    allow_origins=origins,\\n    allow_credentials=True,\\n    allow_methods=[\\\"*\\\"],\\n    allow_headers=[\\\"*\\\"],\\n)\\n```\\n\\nThis enables CORS for the specified origins. The allow_credentials=True allows sending cookies from the frontend. The allow_methods and allow_headers set to \\\"*\\\" allows all methods and headers.\\n\\nYou can also set more restrictive CORS settings by specifying only the required origins, methods, headers etc.\\n\\nSome key points:\\n\\n- The CORSMiddleware should be added before any routers.\\n- The allowed origins can be restricted to your frontend URLs only.\\n- Allow credentials only if needed.\\n- Restrict methods and headers to only required ones if possible.\\n\\nSo this sets up a basic permissive CORS config for a FastAPI app.\\n### Response:\\n\\n\\nGive a short title to describe the above chat session. Do not put quotes around the title. Do not use more than 6 words. The title is: </admin>\\n\\nAssistant: \", \"max_tokens_to_sample\": 20, \"temperature\": 0.5}"
+      },
+      "log_event_type": "post_api_call",
+      "original_response": {
+        "completion": " Making FastAPI CORS Compatible",
+        "stop_reason": "stop_sequence"
+      }
+    }
+  },
+  "20231013154547274601": {
+    "pre_api_call": {
+      "model": "anthropic.claude-v2",
+      "messages": [
+        {
+          "role": "user",
+          "content": "app = FastAPI()\n\nmake my fastapi cors compatible"
+        },
+        {
+          "role": "user",
+          "content": "app = FastAPI()\n\nmake my fastapi cors compatible"
+        },
+        {
+          "role": "user",
+          "content": "app = FastAPI()\n\nmake my fastapi cors compatible"
+        },
+        {
+          "role": "assistant",
+          "content": " Here is how you can make a FastAPI app CORS compatible:\n\n```python\nfrom fastapi import FastAPI, CORSMiddleware\n\napp = FastAPI()\n\norigins = [\n    \"http://localhost.tiangolo.com\",\n    \"https://localhost.tiangolo.com\",\n    \"http://localhost\",\n    \"http://localhost:8080\",\n]\n\napp.add_middleware(\n    CORSMiddleware,\n    allow_origins=origins,\n    allow_credentials=True,\n    allow_methods=[\"*\"],\n    allow_headers=[\"*\"],\n)\n```\n\nThis enables CORS for the specified origins. The allow_credentials=True allows sending cookies from the frontend. The allow_methods and allow_headers set to \"*\" allows all methods and headers.\n\nYou can also set more restrictive CORS settings by specifying only the required origins, methods, headers etc.\n\nSome key points:\n\n- The CORSMiddleware should be added before any routers.\n- The allowed origins can be restricted to your frontend URLs only.\n- Allow credentials only if needed.\n- Restrict methods and headers to only required ones if possible.\n\nSo this sets up a basic permissive CORS config for a FastAPI app."
+        },
+        {
+          "role": "user",
+          "content": "just do something like this: \nfrom flask import Flask\nfrom flask_cors import CORS\n\napp = Flask(__name__)\nCORS(app)\n\nbut for flask"
+        }
+      ],
+      "optional_params": {
+        "max_tokens_to_sample": 1024,
+        "temperature": 0.5,
+        "stream": true
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "bedrock",
+        "api_base": null,
+        "litellm_call_id": "4f2c1100-7441-45a9-affa-9687de013bc9",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": "\n\nHuman: \n\nHuman: app = FastAPI()\n\nmake my fastapi cors compatible\n\nHuman: app = FastAPI()\n\nmake my fastapi cors compatible\n\nHuman: app = FastAPI()\n\nmake my fastapi cors compatible\n\nAssistant:  Here is how you can make a FastAPI app CORS compatible:\n\n```python\nfrom fastapi import FastAPI, CORSMiddleware\n\napp = FastAPI()\n\norigins = [\n    \"http://localhost.tiangolo.com\",\n    \"https://localhost.tiangolo.com\",\n    \"http://localhost\",\n    \"http://localhost:8080\",\n]\n\napp.add_middleware(\n    CORSMiddleware,\n    allow_origins=origins,\n    allow_credentials=True,\n    allow_methods=[\"*\"],\n    allow_headers=[\"*\"],\n)\n```\n\nThis enables CORS for the specified origins. The allow_credentials=True allows sending cookies from the frontend. The allow_methods and allow_headers set to \"*\" allows all methods and headers.\n\nYou can also set more restrictive CORS settings by specifying only the required origins, methods, headers etc.\n\nSome key points:\n\n- The CORSMiddleware should be added before any routers.\n- The allowed origins can be restricted to your frontend URLs only.\n- Allow credentials only if needed.\n- Restrict methods and headers to only required ones if possible.\n\nSo this sets up a basic permissive CORS config for a FastAPI app.\n\nHuman: just do something like this: \nfrom flask import Flask\nfrom flask_cors import CORS\n\napp = Flask(__name__)\nCORS(app)\n\nbut for flask\n\nAssistant: ",
+      "api_key": "",
+      "additional_args": {
+        "complete_input_dict": "{\"prompt\": \"\\n\\nHuman: \\n\\nHuman: app = FastAPI()\\n\\nmake my fastapi cors compatible\\n\\nHuman: app = FastAPI()\\n\\nmake my fastapi cors compatible\\n\\nHuman: app = FastAPI()\\n\\nmake my fastapi cors compatible\\n\\nAssistant:  Here is how you can make a FastAPI app CORS compatible:\\n\\n```python\\nfrom fastapi import FastAPI, CORSMiddleware\\n\\napp = FastAPI()\\n\\norigins = [\\n    \\\"http://localhost.tiangolo.com\\\",\\n    \\\"https://localhost.tiangolo.com\\\",\\n    \\\"http://localhost\\\",\\n    \\\"http://localhost:8080\\\",\\n]\\n\\napp.add_middleware(\\n    CORSMiddleware,\\n    allow_origins=origins,\\n    allow_credentials=True,\\n    allow_methods=[\\\"*\\\"],\\n    allow_headers=[\\\"*\\\"],\\n)\\n```\\n\\nThis enables CORS for the specified origins. The allow_credentials=True allows sending cookies from the frontend. The allow_methods and allow_headers set to \\\"*\\\" allows all methods and headers.\\n\\nYou can also set more restrictive CORS settings by specifying only the required origins, methods, headers etc.\\n\\nSome key points:\\n\\n- The CORSMiddleware should be added before any routers.\\n- The allowed origins can be restricted to your frontend URLs only.\\n- Allow credentials only if needed.\\n- Restrict methods and headers to only required ones if possible.\\n\\nSo this sets up a basic permissive CORS config for a FastAPI app.\\n\\nHuman: just do something like this: \\nfrom flask import Flask\\nfrom flask_cors import CORS\\n\\napp = Flask(__name__)\\nCORS(app)\\n\\nbut for flask\\n\\nAssistant: \", \"max_tokens_to_sample\": 1024, \"temperature\": 0.5}"
+      },
+      "log_event_type": "pre_api_call"
+    }
+  },
+  "20231013154549261702": {
+    "pre_api_call": {
+      "model": "anthropic.claude-v2",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\" To enable CORS in Flask, you can use the Flask-CORS extension.\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "optional_params": {
+        "max_tokens_to_sample": 20,
+        "temperature": 0.5
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "bedrock",
+        "api_base": null,
+        "litellm_call_id": "3987d37c-194b-462c-9803-53f2001a6712",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": "\n\nHuman: \n\nHuman: <admin>\" To enable CORS in Flask, you can use the Flask-CORS extension.\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:</admin>\n\nAssistant: ",
+      "api_key": "",
+      "additional_args": {
+        "complete_input_dict": "{\"prompt\": \"\\n\\nHuman: \\n\\nHuman: <admin>\\\" To enable CORS in Flask, you can use the Flask-CORS extension.\\\"\\n\\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:</admin>\\n\\nAssistant: \", \"max_tokens_to_sample\": 20, \"temperature\": 0.5}"
+      },
+      "log_event_type": "pre_api_call"
+    },
+    "post_api_call": {
+      "model": "anthropic.claude-v2",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\" To enable CORS in Flask, you can use the Flask-CORS extension.\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "optional_params": {
+        "max_tokens_to_sample": 20,
+        "temperature": 0.5
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "bedrock",
+        "api_base": null,
+        "litellm_call_id": "3987d37c-194b-462c-9803-53f2001a6712",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": "\n\nHuman: \n\nHuman: <admin>\" To enable CORS in Flask, you can use the Flask-CORS extension.\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:</admin>\n\nAssistant: ",
+      "api_key": "",
+      "additional_args": {
+        "complete_input_dict": "{\"prompt\": \"\\n\\nHuman: \\n\\nHuman: <admin>\\\" To enable CORS in Flask, you can use the Flask-CORS extension.\\\"\\n\\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:</admin>\\n\\nAssistant: \", \"max_tokens_to_sample\": 20, \"temperature\": 0.5}"
+      },
+      "log_event_type": "post_api_call",
+      "original_response": {
+        "completion": " Enable CORS in Flask with Flask-CORS",
+        "stop_reason": "stop_sequence"
+      }
+    }
+  },
+  "20231013154552224346": {
+    "pre_api_call": {
+      "model": "anthropic.claude-v2",
+      "messages": [
+        {
+          "role": "user",
+          "content": "app = FastAPI()\n\nmake my fastapi cors compatible"
+        },
+        {
+          "role": "user",
+          "content": "app = FastAPI()\n\nmake my fastapi cors compatible"
+        },
+        {
+          "role": "user",
+          "content": "app = FastAPI()\n\nmake my fastapi cors compatible"
+        },
+        {
+          "role": "assistant",
+          "content": " Here is how you can make a FastAPI app CORS compatible:\n\n```python\nfrom fastapi import FastAPI, CORSMiddleware\n\napp = FastAPI()\n\norigins = [\n    \"http://localhost.tiangolo.com\",\n    \"https://localhost.tiangolo.com\",\n    \"http://localhost\",\n    \"http://localhost:8080\",\n]\n\napp.add_middleware(\n    CORSMiddleware,\n    allow_origins=origins,\n    allow_credentials=True,\n    allow_methods=[\"*\"],\n    allow_headers=[\"*\"],\n)\n```\n\nThis enables CORS for the specified origins. The allow_credentials=True allows sending cookies from the frontend. The allow_methods and allow_headers set to \"*\" allows all methods and headers.\n\nYou can also set more restrictive CORS settings by specifying only the required origins, methods, headers etc.\n\nSome key points:\n\n- The CORSMiddleware should be added before any routers.\n- The allowed origins can be restricted to your frontend URLs only.\n- Allow credentials only if needed.\n- Restrict methods and headers to only required ones if possible.\n\nSo this sets up a basic permissive CORS config for a FastAPI app."
+        },
+        {
+          "role": "user",
+          "content": "just do something like this: \nfrom flask import Flask\nfrom flask_cors import CORS\n\napp = Flask(__name__)\nCORS(app)\n\nbut for flask"
+        },
+        {
+          "role": "user",
+          "content": "just do something like this: \nfrom flask import Flask\nfrom flask_cors import CORS\n\napp = Flask(__name__)\nCORS(app)\n\nbut for fastapi"
+        }
+      ],
+      "optional_params": {
+        "max_tokens_to_sample": 1024,
+        "temperature": 0.5,
+        "stream": true
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "bedrock",
+        "api_base": null,
+        "litellm_call_id": "14690436-4133-4ccf-a70f-aa289a967f8a",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": "\n\nHuman: \n\nHuman: app = FastAPI()\n\nmake my fastapi cors compatible\n\nHuman: app = FastAPI()\n\nmake my fastapi cors compatible\n\nHuman: app = FastAPI()\n\nmake my fastapi cors compatible\n\nAssistant:  Here is how you can make a FastAPI app CORS compatible:\n\n```python\nfrom fastapi import FastAPI, CORSMiddleware\n\napp = FastAPI()\n\norigins = [\n    \"http://localhost.tiangolo.com\",\n    \"https://localhost.tiangolo.com\",\n    \"http://localhost\",\n    \"http://localhost:8080\",\n]\n\napp.add_middleware(\n    CORSMiddleware,\n    allow_origins=origins,\n    allow_credentials=True,\n    allow_methods=[\"*\"],\n    allow_headers=[\"*\"],\n)\n```\n\nThis enables CORS for the specified origins. The allow_credentials=True allows sending cookies from the frontend. The allow_methods and allow_headers set to \"*\" allows all methods and headers.\n\nYou can also set more restrictive CORS settings by specifying only the required origins, methods, headers etc.\n\nSome key points:\n\n- The CORSMiddleware should be added before any routers.\n- The allowed origins can be restricted to your frontend URLs only.\n- Allow credentials only if needed.\n- Restrict methods and headers to only required ones if possible.\n\nSo this sets up a basic permissive CORS config for a FastAPI app.\n\nHuman: just do something like this: \nfrom flask import Flask\nfrom flask_cors import CORS\n\napp = Flask(__name__)\nCORS(app)\n\nbut for flask\n\nHuman: just do something like this: \nfrom flask import Flask\nfrom flask_cors import CORS\n\napp = Flask(__name__)\nCORS(app)\n\nbut for fastapi\n\nAssistant: ",
+      "api_key": "",
+      "additional_args": {
+        "complete_input_dict": "{\"prompt\": \"\\n\\nHuman: \\n\\nHuman: app = FastAPI()\\n\\nmake my fastapi cors compatible\\n\\nHuman: app = FastAPI()\\n\\nmake my fastapi cors compatible\\n\\nHuman: app = FastAPI()\\n\\nmake my fastapi cors compatible\\n\\nAssistant:  Here is how you can make a FastAPI app CORS compatible:\\n\\n```python\\nfrom fastapi import FastAPI, CORSMiddleware\\n\\napp = FastAPI()\\n\\norigins = [\\n    \\\"http://localhost.tiangolo.com\\\",\\n    \\\"https://localhost.tiangolo.com\\\",\\n    \\\"http://localhost\\\",\\n    \\\"http://localhost:8080\\\",\\n]\\n\\napp.add_middleware(\\n    CORSMiddleware,\\n    allow_origins=origins,\\n    allow_credentials=True,\\n    allow_methods=[\\\"*\\\"],\\n    allow_headers=[\\\"*\\\"],\\n)\\n```\\n\\nThis enables CORS for the specified origins. The allow_credentials=True allows sending cookies from the frontend. The allow_methods and allow_headers set to \\\"*\\\" allows all methods and headers.\\n\\nYou can also set more restrictive CORS settings by specifying only the required origins, methods, headers etc.\\n\\nSome key points:\\n\\n- The CORSMiddleware should be added before any routers.\\n- The allowed origins can be restricted to your frontend URLs only.\\n- Allow credentials only if needed.\\n- Restrict methods and headers to only required ones if possible.\\n\\nSo this sets up a basic permissive CORS config for a FastAPI app.\\n\\nHuman: just do something like this: \\nfrom flask import Flask\\nfrom flask_cors import CORS\\n\\napp = Flask(__name__)\\nCORS(app)\\n\\nbut for flask\\n\\nHuman: just do something like this: \\nfrom flask import Flask\\nfrom flask_cors import CORS\\n\\napp = Flask(__name__)\\nCORS(app)\\n\\nbut for fastapi\\n\\nAssistant: \", \"max_tokens_to_sample\": 1024, \"temperature\": 0.5}"
+      },
+      "log_event_type": "pre_api_call"
+    },
+    "post_api_call": {
+      "model": "anthropic.claude-v2",
+      "messages": [
+        {
+          "role": "user",
+          "content": "app = FastAPI()\n\nmake my fastapi cors compatible"
+        },
+        {
+          "role": "user",
+          "content": "app = FastAPI()\n\nmake my fastapi cors compatible"
+        },
+        {
+          "role": "user",
+          "content": "app = FastAPI()\n\nmake my fastapi cors compatible"
+        },
+        {
+          "role": "assistant",
+          "content": " Here is how you can make a FastAPI app CORS compatible:\n\n```python\nfrom fastapi import FastAPI, CORSMiddleware\n\napp = FastAPI()\n\norigins = [\n    \"http://localhost.tiangolo.com\",\n    \"https://localhost.tiangolo.com\",\n    \"http://localhost\",\n    \"http://localhost:8080\",\n]\n\napp.add_middleware(\n    CORSMiddleware,\n    allow_origins=origins,\n    allow_credentials=True,\n    allow_methods=[\"*\"],\n    allow_headers=[\"*\"],\n)\n```\n\nThis enables CORS for the specified origins. The allow_credentials=True allows sending cookies from the frontend. The allow_methods and allow_headers set to \"*\" allows all methods and headers.\n\nYou can also set more restrictive CORS settings by specifying only the required origins, methods, headers etc.\n\nSome key points:\n\n- The CORSMiddleware should be added before any routers.\n- The allowed origins can be restricted to your frontend URLs only.\n- Allow credentials only if needed.\n- Restrict methods and headers to only required ones if possible.\n\nSo this sets up a basic permissive CORS config for a FastAPI app."
+        },
+        {
+          "role": "user",
+          "content": "just do something like this: \nfrom flask import Flask\nfrom flask_cors import CORS\n\napp = Flask(__name__)\nCORS(app)\n\nbut for flask"
+        },
+        {
+          "role": "user",
+          "content": "just do something like this: \nfrom flask import Flask\nfrom flask_cors import CORS\n\napp = Flask(__name__)\nCORS(app)\n\nbut for fastapi"
+        }
+      ],
+      "optional_params": {
+        "max_tokens_to_sample": 1024,
+        "temperature": 0.5,
+        "stream": true
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "bedrock",
+        "api_base": null,
+        "litellm_call_id": "14690436-4133-4ccf-a70f-aa289a967f8a",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": null,
+      "api_key": null,
+      "additional_args": {},
+      "log_event_type": "post_api_call",
+      "original_response": "<class 'generator'>",
+      "complete_streaming_response": {
+        "id": "chatcmpl-32a68738-46c4-45ff-94c2-25d8fc0ea3f0",
+        "object": "chat.completion.chunk",
+        "created": 1697237152,
+        "model": "anthropic.claude-v2",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": " To enable CORS in FastAPI, you can use the CORSMiddleware similar to how it is done in Flask:\n\n```python\nfrom fastapi import FastAPI\nfrom fastapi.middleware.cors import CORSMiddleware\n\napp = FastAPI()\n\norigins = [\n    \"http://localhost.tiangolo.com\", \n    \"https://localhost.tiangolo.com\",\n    \"http://localhost\",\n    \"http://localhost:8080\",\n]\n\napp.add_middleware(\n    CORSMiddleware, \n    allow_origins=origins,\n    allow_credentials=True,\n    allow_methods=[\"*\"],\n    allow_headers=[\"*\"],\n)\n```\n\nThe main differences compared to Flask:\n\n- Import CORSMiddleware from fastapi.middleware.cors\n- Use app.add_middleware() instead of CORS()\n- Specify the middleware before routes just like in Flask\n\nOtherwise the usage is similar - define allowed origins, set allow_credentials, allow_methods, allow_headers etc.\n\nSo this will enable CORS in your FastAPI app for the specified origins and allowed options."
+            },
+            "finish_reason": "stop_sequence"
+          }
+        ]
+      }
+    }
+  },
+  "20231013154602476284": {
+    "pre_api_call": {
+      "model": "anthropic.claude-v2",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\" To enable CORS in FastAPI, you can use the CORSMiddleware similar to how it is done in Flask:\n\n```python\nfrom fastapi import FastAPI\nfrom fastapi.middleware.cors import CORSMiddleware\n\napp = FastAPI()\n\norigins = [\n    \"http://localhost.tiangolo.com\", \n    \"https://localhost.tiangolo.com\",\n    \"http://localhost\",\n    \"http://localhost:8080\",\n]\n\napp.add_middleware(\n    CORSMiddleware, \n    allow_origins=origins,\n    allow_credentials=True,\n    allow_methods=[\"*\"],\n    allow_headers=[\"*\"],\n)\n```\n\nThe main differences compared to Flask:\n\n- Import CORSMiddleware from fastapi.middleware.cors\n- Use app.add_middleware() instead of CORS()\n- Specify the middleware before routes just like in Flask\n\nOtherwise the usage is similar - define allowed origins, set allow_credentials, allow_methods, allow_headers etc.\n\nSo this will enable CORS in your FastAPI app for the specified origins and allowed options.\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "optional_params": {
+        "max_tokens_to_sample": 20,
+        "temperature": 0.5
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "bedrock",
+        "api_base": null,
+        "litellm_call_id": "6b158a57-2c7f-4eb7-87a4-a6fe4fc546ae",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": "\n\nHuman: \n\nHuman: <admin>\" To enable CORS in FastAPI, you can use the CORSMiddleware similar to how it is done in Flask:\n\n```python\nfrom fastapi import FastAPI\nfrom fastapi.middleware.cors import CORSMiddleware\n\napp = FastAPI()\n\norigins = [\n    \"http://localhost.tiangolo.com\", \n    \"https://localhost.tiangolo.com\",\n    \"http://localhost\",\n    \"http://localhost:8080\",\n]\n\napp.add_middleware(\n    CORSMiddleware, \n    allow_origins=origins,\n    allow_credentials=True,\n    allow_methods=[\"*\"],\n    allow_headers=[\"*\"],\n)\n```\n\nThe main differences compared to Flask:\n\n- Import CORSMiddleware from fastapi.middleware.cors\n- Use app.add_middleware() instead of CORS()\n- Specify the middleware before routes just like in Flask\n\nOtherwise the usage is similar - define allowed origins, set allow_credentials, allow_methods, allow_headers etc.\n\nSo this will enable CORS in your FastAPI app for the specified origins and allowed options.\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:</admin>\n\nAssistant: ",
+      "api_key": "",
+      "additional_args": {
+        "complete_input_dict": "{\"prompt\": \"\\n\\nHuman: \\n\\nHuman: <admin>\\\" To enable CORS in FastAPI, you can use the CORSMiddleware similar to how it is done in Flask:\\n\\n```python\\nfrom fastapi import FastAPI\\nfrom fastapi.middleware.cors import CORSMiddleware\\n\\napp = FastAPI()\\n\\norigins = [\\n    \\\"http://localhost.tiangolo.com\\\", \\n    \\\"https://localhost.tiangolo.com\\\",\\n    \\\"http://localhost\\\",\\n    \\\"http://localhost:8080\\\",\\n]\\n\\napp.add_middleware(\\n    CORSMiddleware, \\n    allow_origins=origins,\\n    allow_credentials=True,\\n    allow_methods=[\\\"*\\\"],\\n    allow_headers=[\\\"*\\\"],\\n)\\n```\\n\\nThe main differences compared to Flask:\\n\\n- Import CORSMiddleware from fastapi.middleware.cors\\n- Use app.add_middleware() instead of CORS()\\n- Specify the middleware before routes just like in Flask\\n\\nOtherwise the usage is similar - define allowed origins, set allow_credentials, allow_methods, allow_headers etc.\\n\\nSo this will enable CORS in your FastAPI app for the specified origins and allowed options.\\\"\\n\\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:</admin>\\n\\nAssistant: \", \"max_tokens_to_sample\": 20, \"temperature\": 0.5}"
+      },
+      "log_event_type": "pre_api_call"
+    },
+    "post_api_call": {
+      "model": "anthropic.claude-v2",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\" To enable CORS in FastAPI, you can use the CORSMiddleware similar to how it is done in Flask:\n\n```python\nfrom fastapi import FastAPI\nfrom fastapi.middleware.cors import CORSMiddleware\n\napp = FastAPI()\n\norigins = [\n    \"http://localhost.tiangolo.com\", \n    \"https://localhost.tiangolo.com\",\n    \"http://localhost\",\n    \"http://localhost:8080\",\n]\n\napp.add_middleware(\n    CORSMiddleware, \n    allow_origins=origins,\n    allow_credentials=True,\n    allow_methods=[\"*\"],\n    allow_headers=[\"*\"],\n)\n```\n\nThe main differences compared to Flask:\n\n- Import CORSMiddleware from fastapi.middleware.cors\n- Use app.add_middleware() instead of CORS()\n- Specify the middleware before routes just like in Flask\n\nOtherwise the usage is similar - define allowed origins, set allow_credentials, allow_methods, allow_headers etc.\n\nSo this will enable CORS in your FastAPI app for the specified origins and allowed options.\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "optional_params": {
+        "max_tokens_to_sample": 20,
+        "temperature": 0.5
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "bedrock",
+        "api_base": null,
+        "litellm_call_id": "6b158a57-2c7f-4eb7-87a4-a6fe4fc546ae",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": "\n\nHuman: \n\nHuman: <admin>\" To enable CORS in FastAPI, you can use the CORSMiddleware similar to how it is done in Flask:\n\n```python\nfrom fastapi import FastAPI\nfrom fastapi.middleware.cors import CORSMiddleware\n\napp = FastAPI()\n\norigins = [\n    \"http://localhost.tiangolo.com\", \n    \"https://localhost.tiangolo.com\",\n    \"http://localhost\",\n    \"http://localhost:8080\",\n]\n\napp.add_middleware(\n    CORSMiddleware, \n    allow_origins=origins,\n    allow_credentials=True,\n    allow_methods=[\"*\"],\n    allow_headers=[\"*\"],\n)\n```\n\nThe main differences compared to Flask:\n\n- Import CORSMiddleware from fastapi.middleware.cors\n- Use app.add_middleware() instead of CORS()\n- Specify the middleware before routes just like in Flask\n\nOtherwise the usage is similar - define allowed origins, set allow_credentials, allow_methods, allow_headers etc.\n\nSo this will enable CORS in your FastAPI app for the specified origins and allowed options.\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:</admin>\n\nAssistant: ",
+      "api_key": "",
+      "additional_args": {
+        "complete_input_dict": "{\"prompt\": \"\\n\\nHuman: \\n\\nHuman: <admin>\\\" To enable CORS in FastAPI, you can use the CORSMiddleware similar to how it is done in Flask:\\n\\n```python\\nfrom fastapi import FastAPI\\nfrom fastapi.middleware.cors import CORSMiddleware\\n\\napp = FastAPI()\\n\\norigins = [\\n    \\\"http://localhost.tiangolo.com\\\", \\n    \\\"https://localhost.tiangolo.com\\\",\\n    \\\"http://localhost\\\",\\n    \\\"http://localhost:8080\\\",\\n]\\n\\napp.add_middleware(\\n    CORSMiddleware, \\n    allow_origins=origins,\\n    allow_credentials=True,\\n    allow_methods=[\\\"*\\\"],\\n    allow_headers=[\\\"*\\\"],\\n)\\n```\\n\\nThe main differences compared to Flask:\\n\\n- Import CORSMiddleware from fastapi.middleware.cors\\n- Use app.add_middleware() instead of CORS()\\n- Specify the middleware before routes just like in Flask\\n\\nOtherwise the usage is similar - define allowed origins, set allow_credentials, allow_methods, allow_headers etc.\\n\\nSo this will enable CORS in your FastAPI app for the specified origins and allowed options.\\\"\\n\\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:</admin>\\n\\nAssistant: \", \"max_tokens_to_sample\": 20, \"temperature\": 0.5}"
+      },
+      "log_event_type": "post_api_call",
+      "original_response": {
+        "completion": " Enabling CORS in FastAPI",
+        "stop_reason": "stop_sequence"
+      }
+    }
+  },
+  "20231013154610735962": {
+    "pre_api_call": {
+      "model": "anthropic.claude-v2",
+      "messages": [
+        {
+          "role": "user",
+          "content": "app = FastAPI()\n\nmake my fastapi cors compatible"
+        },
+        {
+          "role": "user",
+          "content": "app = FastAPI()\n\nmake my fastapi cors compatible"
+        },
+        {
+          "role": "user",
+          "content": "app = FastAPI()\n\nmake my fastapi cors compatible"
+        },
+        {
+          "role": "assistant",
+          "content": " Here is how you can make a FastAPI app CORS compatible:\n\n```python\nfrom fastapi import FastAPI, CORSMiddleware\n\napp = FastAPI()\n\norigins = [\n    \"http://localhost.tiangolo.com\",\n    \"https://localhost.tiangolo.com\",\n    \"http://localhost\",\n    \"http://localhost:8080\",\n]\n\napp.add_middleware(\n    CORSMiddleware,\n    allow_origins=origins,\n    allow_credentials=True,\n    allow_methods=[\"*\"],\n    allow_headers=[\"*\"],\n)\n```\n\nThis enables CORS for the specified origins. The allow_credentials=True allows sending cookies from the frontend. The allow_methods and allow_headers set to \"*\" allows all methods and headers.\n\nYou can also set more restrictive CORS settings by specifying only the required origins, methods, headers etc.\n\nSome key points:\n\n- The CORSMiddleware should be added before any routers.\n- The allowed origins can be restricted to your frontend URLs only.\n- Allow credentials only if needed.\n- Restrict methods and headers to only required ones if possible.\n\nSo this sets up a basic permissive CORS config for a FastAPI app."
+        },
+        {
+          "role": "user",
+          "content": "just do something like this: \nfrom flask import Flask\nfrom flask_cors import CORS\n\napp = Flask(__name__)\nCORS(app)\n\nbut for flask"
+        },
+        {
+          "role": "user",
+          "content": "just do something like this: \nfrom flask import Flask\nfrom flask_cors import CORS\n\napp = Flask(__name__)\nCORS(app)\n\nbut for fastapi"
+        },
+        {
+          "role": "user",
+          "content": "just allow all origins "
+        }
+      ],
+      "optional_params": {
+        "max_tokens_to_sample": 1024,
+        "temperature": 0.5,
+        "stream": true
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "bedrock",
+        "api_base": null,
+        "litellm_call_id": "1cc72768-9cfc-424d-98be-062a2871b6f8",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": "\n\nHuman: \n\nHuman: app = FastAPI()\n\nmake my fastapi cors compatible\n\nHuman: app = FastAPI()\n\nmake my fastapi cors compatible\n\nHuman: app = FastAPI()\n\nmake my fastapi cors compatible\n\nAssistant:  Here is how you can make a FastAPI app CORS compatible:\n\n```python\nfrom fastapi import FastAPI, CORSMiddleware\n\napp = FastAPI()\n\norigins = [\n    \"http://localhost.tiangolo.com\",\n    \"https://localhost.tiangolo.com\",\n    \"http://localhost\",\n    \"http://localhost:8080\",\n]\n\napp.add_middleware(\n    CORSMiddleware,\n    allow_origins=origins,\n    allow_credentials=True,\n    allow_methods=[\"*\"],\n    allow_headers=[\"*\"],\n)\n```\n\nThis enables CORS for the specified origins. The allow_credentials=True allows sending cookies from the frontend. The allow_methods and allow_headers set to \"*\" allows all methods and headers.\n\nYou can also set more restrictive CORS settings by specifying only the required origins, methods, headers etc.\n\nSome key points:\n\n- The CORSMiddleware should be added before any routers.\n- The allowed origins can be restricted to your frontend URLs only.\n- Allow credentials only if needed.\n- Restrict methods and headers to only required ones if possible.\n\nSo this sets up a basic permissive CORS config for a FastAPI app.\n\nHuman: just do something like this: \nfrom flask import Flask\nfrom flask_cors import CORS\n\napp = Flask(__name__)\nCORS(app)\n\nbut for flask\n\nHuman: just do something like this: \nfrom flask import Flask\nfrom flask_cors import CORS\n\napp = Flask(__name__)\nCORS(app)\n\nbut for fastapi\n\nHuman: just allow all origins \n\nAssistant: ",
+      "api_key": "",
+      "additional_args": {
+        "complete_input_dict": "{\"prompt\": \"\\n\\nHuman: \\n\\nHuman: app = FastAPI()\\n\\nmake my fastapi cors compatible\\n\\nHuman: app = FastAPI()\\n\\nmake my fastapi cors compatible\\n\\nHuman: app = FastAPI()\\n\\nmake my fastapi cors compatible\\n\\nAssistant:  Here is how you can make a FastAPI app CORS compatible:\\n\\n```python\\nfrom fastapi import FastAPI, CORSMiddleware\\n\\napp = FastAPI()\\n\\norigins = [\\n    \\\"http://localhost.tiangolo.com\\\",\\n    \\\"https://localhost.tiangolo.com\\\",\\n    \\\"http://localhost\\\",\\n    \\\"http://localhost:8080\\\",\\n]\\n\\napp.add_middleware(\\n    CORSMiddleware,\\n    allow_origins=origins,\\n    allow_credentials=True,\\n    allow_methods=[\\\"*\\\"],\\n    allow_headers=[\\\"*\\\"],\\n)\\n```\\n\\nThis enables CORS for the specified origins. The allow_credentials=True allows sending cookies from the frontend. The allow_methods and allow_headers set to \\\"*\\\" allows all methods and headers.\\n\\nYou can also set more restrictive CORS settings by specifying only the required origins, methods, headers etc.\\n\\nSome key points:\\n\\n- The CORSMiddleware should be added before any routers.\\n- The allowed origins can be restricted to your frontend URLs only.\\n- Allow credentials only if needed.\\n- Restrict methods and headers to only required ones if possible.\\n\\nSo this sets up a basic permissive CORS config for a FastAPI app.\\n\\nHuman: just do something like this: \\nfrom flask import Flask\\nfrom flask_cors import CORS\\n\\napp = Flask(__name__)\\nCORS(app)\\n\\nbut for flask\\n\\nHuman: just do something like this: \\nfrom flask import Flask\\nfrom flask_cors import CORS\\n\\napp = Flask(__name__)\\nCORS(app)\\n\\nbut for fastapi\\n\\nHuman: just allow all origins \\n\\nAssistant: \", \"max_tokens_to_sample\": 1024, \"temperature\": 0.5}"
+      },
+      "log_event_type": "pre_api_call"
+    },
+    "post_api_call": {
+      "model": "anthropic.claude-v2",
+      "messages": [
+        {
+          "role": "user",
+          "content": "app = FastAPI()\n\nmake my fastapi cors compatible"
+        },
+        {
+          "role": "user",
+          "content": "app = FastAPI()\n\nmake my fastapi cors compatible"
+        },
+        {
+          "role": "user",
+          "content": "app = FastAPI()\n\nmake my fastapi cors compatible"
+        },
+        {
+          "role": "assistant",
+          "content": " Here is how you can make a FastAPI app CORS compatible:\n\n```python\nfrom fastapi import FastAPI, CORSMiddleware\n\napp = FastAPI()\n\norigins = [\n    \"http://localhost.tiangolo.com\",\n    \"https://localhost.tiangolo.com\",\n    \"http://localhost\",\n    \"http://localhost:8080\",\n]\n\napp.add_middleware(\n    CORSMiddleware,\n    allow_origins=origins,\n    allow_credentials=True,\n    allow_methods=[\"*\"],\n    allow_headers=[\"*\"],\n)\n```\n\nThis enables CORS for the specified origins. The allow_credentials=True allows sending cookies from the frontend. The allow_methods and allow_headers set to \"*\" allows all methods and headers.\n\nYou can also set more restrictive CORS settings by specifying only the required origins, methods, headers etc.\n\nSome key points:\n\n- The CORSMiddleware should be added before any routers.\n- The allowed origins can be restricted to your frontend URLs only.\n- Allow credentials only if needed.\n- Restrict methods and headers to only required ones if possible.\n\nSo this sets up a basic permissive CORS config for a FastAPI app."
+        },
+        {
+          "role": "user",
+          "content": "just do something like this: \nfrom flask import Flask\nfrom flask_cors import CORS\n\napp = Flask(__name__)\nCORS(app)\n\nbut for flask"
+        },
+        {
+          "role": "user",
+          "content": "just do something like this: \nfrom flask import Flask\nfrom flask_cors import CORS\n\napp = Flask(__name__)\nCORS(app)\n\nbut for fastapi"
+        },
+        {
+          "role": "user",
+          "content": "just allow all origins "
+        }
+      ],
+      "optional_params": {
+        "max_tokens_to_sample": 1024,
+        "temperature": 0.5,
+        "stream": true
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "bedrock",
+        "api_base": null,
+        "litellm_call_id": "1cc72768-9cfc-424d-98be-062a2871b6f8",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": null,
+      "api_key": null,
+      "additional_args": {},
+      "log_event_type": "post_api_call",
+      "original_response": "<class 'generator'>",
+      "complete_streaming_response": {
+        "id": "chatcmpl-e074b9c9-b64d-458c-a20c-5db299ebd44c",
+        "object": "chat.completion.chunk",
+        "created": 1697237170,
+        "model": "anthropic.claude-v2",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": " Here is how to enable CORS for all origins in FastAPI:\n\n```python\nfrom fastapi import FastAPI\nfrom fastapi.middleware.cors import CORSMiddleware\n\napp = FastAPI()\n\norigins = [\"*\"]\n\napp.add_middleware(\n    CORSMiddleware,\n    allow_origins=origins,\n    allow_credentials=True,\n    allow_methods=[\"*\"],\n    allow_headers=[\"*\"],\n)\n```\n\nThe key points:\n\n- Set origins to [\"*\"] to allow all origins\n- Enable allow_credentials if you want to allow sending cookies\n- Allow all methods and headers with [\"*\"]\n\nThis enables CORS access from any origin to the FastAPI app.\n\nDo note that allowing all origins is not suitable for production applications. It's better to restrict origins to your specific frontend URLs for security.\n\nBut for development, allowing all origins is a quick way to enable CORS in FastAPI."
+            },
+            "finish_reason": "stop_sequence"
+          }
+        ]
+      }
+    }
+  },
+  "20231013154630846250": {
+    "pre_api_call": {
+      "model": "anthropic.claude-v2",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\" Here is how to enable CORS for all origins in FastAPI:\n\n```python\nfrom fastapi import FastAPI\nfrom fastapi.middleware.cors import CORSMiddleware\n\napp = FastAPI()\n\norigins = [\"*\"]\n\napp.add_middleware(\n    CORSMiddleware,\n    allow_origins=origins,\n    allow_credentials=True,\n    allow_methods=[\"*\"],\n    allow_headers=[\"*\"],\n)\n```\n\nThe key points:\n\n- Set origins to [\"*\"] to allow all origins\n- Enable allow_credentials if you want to allow sending cookies\n- Allow all methods and headers with [\"*\"]\n\nThis enables CORS access from any origin to the FastAPI app.\n\nDo note that allowing all origins is not suitable for production applications. It's better to restrict origins to your specific frontend URLs for security.\n\nBut for development, allowing all origins is a quick way to enable CORS in FastAPI.\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "optional_params": {
+        "max_tokens_to_sample": 20,
+        "temperature": 0.5
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "bedrock",
+        "api_base": null,
+        "litellm_call_id": "658cf642-541f-4461-be7b-e3e48d591bdf",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": "\n\nHuman: \n\nHuman: <admin>\" Here is how to enable CORS for all origins in FastAPI:\n\n```python\nfrom fastapi import FastAPI\nfrom fastapi.middleware.cors import CORSMiddleware\n\napp = FastAPI()\n\norigins = [\"*\"]\n\napp.add_middleware(\n    CORSMiddleware,\n    allow_origins=origins,\n    allow_credentials=True,\n    allow_methods=[\"*\"],\n    allow_headers=[\"*\"],\n)\n```\n\nThe key points:\n\n- Set origins to [\"*\"] to allow all origins\n- Enable allow_credentials if you want to allow sending cookies\n- Allow all methods and headers with [\"*\"]\n\nThis enables CORS access from any origin to the FastAPI app.\n\nDo note that allowing all origins is not suitable for production applications. It's better to restrict origins to your specific frontend URLs for security.\n\nBut for development, allowing all origins is a quick way to enable CORS in FastAPI.\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:</admin>\n\nAssistant: ",
+      "api_key": "",
+      "additional_args": {
+        "complete_input_dict": "{\"prompt\": \"\\n\\nHuman: \\n\\nHuman: <admin>\\\" Here is how to enable CORS for all origins in FastAPI:\\n\\n```python\\nfrom fastapi import FastAPI\\nfrom fastapi.middleware.cors import CORSMiddleware\\n\\napp = FastAPI()\\n\\norigins = [\\\"*\\\"]\\n\\napp.add_middleware(\\n    CORSMiddleware,\\n    allow_origins=origins,\\n    allow_credentials=True,\\n    allow_methods=[\\\"*\\\"],\\n    allow_headers=[\\\"*\\\"],\\n)\\n```\\n\\nThe key points:\\n\\n- Set origins to [\\\"*\\\"] to allow all origins\\n- Enable allow_credentials if you want to allow sending cookies\\n- Allow all methods and headers with [\\\"*\\\"]\\n\\nThis enables CORS access from any origin to the FastAPI app.\\n\\nDo note that allowing all origins is not suitable for production applications. It's better to restrict origins to your specific frontend URLs for security.\\n\\nBut for development, allowing all origins is a quick way to enable CORS in FastAPI.\\\"\\n\\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:</admin>\\n\\nAssistant: \", \"max_tokens_to_sample\": 20, \"temperature\": 0.5}"
+      },
+      "log_event_type": "pre_api_call"
+    },
+    "post_api_call": {
+      "model": "anthropic.claude-v2",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\" Here is how to enable CORS for all origins in FastAPI:\n\n```python\nfrom fastapi import FastAPI\nfrom fastapi.middleware.cors import CORSMiddleware\n\napp = FastAPI()\n\norigins = [\"*\"]\n\napp.add_middleware(\n    CORSMiddleware,\n    allow_origins=origins,\n    allow_credentials=True,\n    allow_methods=[\"*\"],\n    allow_headers=[\"*\"],\n)\n```\n\nThe key points:\n\n- Set origins to [\"*\"] to allow all origins\n- Enable allow_credentials if you want to allow sending cookies\n- Allow all methods and headers with [\"*\"]\n\nThis enables CORS access from any origin to the FastAPI app.\n\nDo note that allowing all origins is not suitable for production applications. It's better to restrict origins to your specific frontend URLs for security.\n\nBut for development, allowing all origins is a quick way to enable CORS in FastAPI.\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "optional_params": {
+        "max_tokens_to_sample": 20,
+        "temperature": 0.5
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "bedrock",
+        "api_base": null,
+        "litellm_call_id": "658cf642-541f-4461-be7b-e3e48d591bdf",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": "\n\nHuman: \n\nHuman: <admin>\" Here is how to enable CORS for all origins in FastAPI:\n\n```python\nfrom fastapi import FastAPI\nfrom fastapi.middleware.cors import CORSMiddleware\n\napp = FastAPI()\n\norigins = [\"*\"]\n\napp.add_middleware(\n    CORSMiddleware,\n    allow_origins=origins,\n    allow_credentials=True,\n    allow_methods=[\"*\"],\n    allow_headers=[\"*\"],\n)\n```\n\nThe key points:\n\n- Set origins to [\"*\"] to allow all origins\n- Enable allow_credentials if you want to allow sending cookies\n- Allow all methods and headers with [\"*\"]\n\nThis enables CORS access from any origin to the FastAPI app.\n\nDo note that allowing all origins is not suitable for production applications. It's better to restrict origins to your specific frontend URLs for security.\n\nBut for development, allowing all origins is a quick way to enable CORS in FastAPI.\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:</admin>\n\nAssistant: ",
+      "api_key": "",
+      "additional_args": {
+        "complete_input_dict": "{\"prompt\": \"\\n\\nHuman: \\n\\nHuman: <admin>\\\" Here is how to enable CORS for all origins in FastAPI:\\n\\n```python\\nfrom fastapi import FastAPI\\nfrom fastapi.middleware.cors import CORSMiddleware\\n\\napp = FastAPI()\\n\\norigins = [\\\"*\\\"]\\n\\napp.add_middleware(\\n    CORSMiddleware,\\n    allow_origins=origins,\\n    allow_credentials=True,\\n    allow_methods=[\\\"*\\\"],\\n    allow_headers=[\\\"*\\\"],\\n)\\n```\\n\\nThe key points:\\n\\n- Set origins to [\\\"*\\\"] to allow all origins\\n- Enable allow_credentials if you want to allow sending cookies\\n- Allow all methods and headers with [\\\"*\\\"]\\n\\nThis enables CORS access from any origin to the FastAPI app.\\n\\nDo note that allowing all origins is not suitable for production applications. It's better to restrict origins to your specific frontend URLs for security.\\n\\nBut for development, allowing all origins is a quick way to enable CORS in FastAPI.\\\"\\n\\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:</admin>\\n\\nAssistant: \", \"max_tokens_to_sample\": 20, \"temperature\": 0.5}"
+      },
+      "log_event_type": "post_api_call",
+      "original_response": {
+        "completion": " Enable CORS in FastAPI for all origins",
+        "stop_reason": "stop_sequence"
+      }
+    }
   }
 }
