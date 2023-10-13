@@ -137,7 +137,7 @@ $ litellm --model command-nightly
 
 [**Jump to Code**](https://github.com/BerriAI/litellm/blob/fef4146396d5d87006259e00095a62e3900d6bb4/litellm/proxy.py#L36)
 
-## [Tutorial]: Use with Aider/AutoGen/Continue-Dev/Langroid/etc.
+## [Tutorial]: Use with Continue-Dev/Aider/AutoGen/Langroid/etc.
 
 Here's how to use the proxy to test codellama/mistral/etc. models for different github repos 
 
@@ -153,14 +153,6 @@ $ litellm --model ollama/codellama --temperature 0.3 --max_tokens 2048
 
 Implementation for different repos 
 <Tabs>
-<TabItem value="aider" label="Aider">
-
-```shell
-$ pip install aider 
-
-$ aider --openai-api-base http://0.0.0.0:8000 --openai-api-key fake-key
-```
-</TabItem>
 <TabItem value="continue-dev" label="ContinueDev">
 
 Continue-Dev brings ChatGPT to VSCode. See how to [install it here](https://continue.dev/docs/quickstart).
@@ -176,6 +168,14 @@ In the [config.py](https://continue.dev/docs/reference/Models/openai) set this a
 ```
 
 Credits [@vividfog](https://github.com/jmorganca/ollama/issues/305#issuecomment-1751848077) for this tutorial. 
+</TabItem>
+<TabItem value="aider" label="Aider">
+
+```shell
+$ pip install aider 
+
+$ aider --openai-api-base http://0.0.0.0:8000 --openai-api-key fake-key
+```
 </TabItem>
 <TabItem value="autogen" label="AutoGen">
 
