@@ -125,6 +125,11 @@ def load_config():
         ## settings 
         litellm.add_function_to_prompt = user_config["general"].get("add_function_to_prompt", True) # by default add function to prompt if unsupported by provider
         litellm.drop_params = user_config["general"].get("drop_params", True) # by default drop params if unsupported by provider
+        litellm.model_fallbacks = user_config["general"].get("fallbacks", None) # fallback models in case initial completion call fails 
+        default_model = user_config["general"].get("default_model", None) # route all requests to this model. 
+
+        if user_model is None: # `litellm --model <model-name>`` > default_model.
+            user_model = default_model
 
         ## load model config - to set this run `litellm --config`
         model_config = None

@@ -229,7 +229,7 @@ def completion(
     litellm_logging_obj = kwargs.get('litellm_logging_obj', None)
     id = kwargs.get('id', None)
     metadata = kwargs.get('metadata', None)
-    fallbacks = kwargs.get('fallbacks', [])
+    fallbacks = kwargs.get('fallbacks', None)
     ######## end of unpacking kwargs ###########
     openai_params = ["functions", "function_call", "temperature", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "request_timeout", "api_base", "api_version", "api_key"]
     litellm_params = ["metadata", "acompletion", "caching", "return_async", "mock_response", "api_key", "api_version", "api_base", "force_timeout", "logger_fn", "verbose", "custom_llm_provider", "litellm_logging_obj", "litellm_call_id", "use_client", "id", "metadata", "fallbacks", "azure"]
@@ -239,7 +239,11 @@ def completion(
         return mock_completion(model, messages, stream=stream, mock_response=mock_response)
     try:
         logging = litellm_logging_obj
-        if fallbacks != []:
+        fallbacks = (
+            fallbacks
+            or litellm.model_fallbacks
+        )
+        if fallbacks is not None:
             return completion_with_fallbacks(**args)
         if litellm.model_alias_map and model in litellm.model_alias_map:
             args["model_alias_map"] = litellm.model_alias_map

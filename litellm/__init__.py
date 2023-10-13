@@ -43,6 +43,7 @@ _current_cost = 0 # private variable, used if max budget is set
 error_logs: Dict = {}
 add_function_to_prompt: bool = False # if function calling not supported by api, append function call details to system prompt
 client_session: Optional[requests.Session] = None
+model_fallbacks: Optional[List] = None
 #############################################
 
 def get_model_cost_map():
