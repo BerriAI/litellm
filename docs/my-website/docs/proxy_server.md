@@ -252,6 +252,46 @@ OPENAI_ENDPOINT=http://0.0.0.0:8000
 OPENAI_API_KEY=my-fake-key
 ```
 </TabItem>
+<TabItem value="guidance" label="guidance">
+A guidance language for controlling large language models.
+https://github.com/guidance-ai/guidance
+
+**NOTE:** Guidance sends additional params like `stop_sequences` which can cause some models to fail if they don't support it. 
+
+**Fix**: Start your proxy using the `--drop_params` flag
+
+```shell
+litellm --model ollama/codellama --temperature 0.3 --max_tokens 2048 --drop_params
+```
+
+```python
+import guidance
+
+# set api_base to your proxy
+# set api_key to anything
+gpt4 = guidance.llms.OpenAI("gpt-4", api_base="http://0.0.0.0:8000", api_key="anything")
+
+experts = guidance('''
+{{#system~}}
+You are a helpful and terse assistant.
+{{~/system}}
+
+{{#user~}}
+I want a response to the following question:
+{{query}}
+Name 3 world-class experts (past or present) who would be great at answering this?
+Don't answer the question yet.
+{{~/user}}
+
+{{#assistant~}}
+{{gen 'expert_names' temperature=0 max_tokens=300}}
+{{~/assistant}}
+''', llm=gpt4)
+
+result = experts(query='How can I be more productive?')
+print(result)
+```
+</TabItem>
 </Tabs>
 
 :::note
