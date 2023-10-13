@@ -109,4 +109,27 @@ chat(messages)
 ```
 
 </TabItem>
+<TabItem value="palm" label="PaLM - Goole">
+
+```python
+import os
+from langchain.chat_models import ChatLiteLLM
+from langchain.prompts.chat import (
+    ChatPromptTemplate,
+    SystemMessagePromptTemplate,
+    AIMessagePromptTemplate,
+    HumanMessagePromptTemplate,
+)
+from langchain.schema import AIMessage, HumanMessage, SystemMessage
+
+os.environ['PALM_API_KEY'] = ""
+chat = ChatLiteLLM(model="palm/chat-bison")
+messages = [
+    HumanMessage(
+        content="what model are you?"
+    )
+]
+chat(messages)
+```
+</TabItem>
 </Tabs>
