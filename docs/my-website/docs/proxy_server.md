@@ -304,7 +304,7 @@ print(result)
 
 To save API Keys, change model prompt, etc. you'll need to create a local instance of it:
 ```shell
-$ litellm --create-proxy
+$ litellm --create_proxy
 ```
 This will create a local project called `litellm-proxy` in your current directory, that has: 
 * **proxy_cli.py**: Runs the proxy
