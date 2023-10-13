@@ -109,7 +109,7 @@ chat(messages)
 ```
 
 </TabItem>
-<TabItem value="palm" label="PaLM - Goole">
+<TabItem value="palm" label="PaLM - Google">
 
 ```python
 import os
