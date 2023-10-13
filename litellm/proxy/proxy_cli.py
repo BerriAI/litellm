@@ -1,6 +1,6 @@
 import click
 import subprocess, traceback
-import os, appdirs
+import os, sys
 import random
 from dotenv import load_dotenv
 
@@ -8,42 +8,33 @@ load_dotenv()
 from importlib import resources
 import shutil
 
-config_filename = "litellm.secrets.toml"
-pkg_config_filename = "template.secrets.toml"
-# Using appdirs to determine user-specific config path
-config_dir = appdirs.user_config_dir("litellm")
-user_config_path = os.path.join(config_dir, config_filename)
-
 def run_ollama_serve():
     command = ['ollama', 'serve']
     
     with open(os.devnull, 'w') as devnull:
         process = subprocess.Popen(command, stdout=devnull, stderr=devnull)
 
-def open_config():
-    # Create the .env file if it doesn't exist
-    if not os.path.exists(user_config_path):
-        # If user's env doesn't exist, copy the default env from the package
-        here = os.path.abspath(os.path.dirname(__file__))
-        parent_dir = os.path.dirname(here)
-        default_env_path = os.path.join(parent_dir, pkg_config_filename)
-        # Ensure the user-specific directory exists
-        os.makedirs(config_dir, exist_ok=True)
-        # Copying the file using shutil.copy
-        try:
-            shutil.copy(default_env_path, user_config_path)
-        except Exception as e:
-            print(f"Failed to copy .template.secrets.toml: {e}")
+def clone_subfolder(repo_url, subfolder, destination):
 
-    # Open the .env file in the default editor 
-    try: 
-        if os.name == 'nt': # For Windows
-            os.startfile(user_config_path)
-        elif os.name == 'posix': # For MacOS, Linux, and anything using Bash
-            subprocess.call(('open', '-t', user_config_path)) 
-    except: 
-        pass
-    print(f"LiteLLM: Proxy Server Config - {user_config_path}")
+  # Clone the full repo
+  repo_name = repo_url.split('/')[-1]  
+  repo_master = os.path.join(destination, "repo_master")
+  subprocess.run(['git', 'clone', repo_url, repo_master])
+
+  # Move into the subfolder 
+  subfolder_path = os.path.join(repo_master, subfolder)
+
+  # Copy subfolder to destination
+  for file_name in os.listdir(subfolder_path):
+    source = os.path.join(subfolder_path, file_name)
+    if os.path.isfile(source):
+        shutil.copy(source, destination)
+    else:
+        dest_path = os.path.join(destination, file_name)
+        shutil.copytree(source, dest_path)
+
+  # Remove cloned repo folder
+  subprocess.run(['rm', '-rf', os.path.join(destination, "repo_master")])
 
 def is_port_in_use(port):
     import socket
@@ -60,23 +51,31 @@ def is_port_in_use(port):
 @click.option('--temperature', default=None, type=float, help='Set temperature for the model') 
 @click.option('--max_tokens', default=None, type=int, help='Set max tokens for the model') 
 @click.option('--drop_params', is_flag=True, help='Drop any unmapped params') 
+@click.option('--create_proxy', is_flag=True, help='Creates a local OpenAI-compatible server template') 
 @click.option('--add_function_to_prompt', is_flag=True, help='If function passed but unsupported, pass it as prompt') 
 @click.option('--max_budget', default=None, type=float, help='Set max budget for API calls - works for hosted models like OpenAI, TogetherAI, Anthropic, etc.`') 
 @click.option('--telemetry', default=True, type=bool, help='Helps us know if people are using this feature. Turn this off by doing `--telemetry False`') 
-@click.option('--config', is_flag=True, help='Create and open .env file from .env.template')
 @click.option('--test', flag_value=True, help='proxy chat completions url to make a test request to')
 @click.option('--local', is_flag=True, default=False, help='for local debugging')
 @click.option('--cost', is_flag=True, default=False, help='for viewing cost logs')
-def run_server(host, port, api_base, model, deploy, debug, temperature, max_tokens, drop_params, add_function_to_prompt, max_budget, telemetry, config, test, local, cost):
-    if config:
-        open_config()
-        return
+def run_server(host, port, api_base, model, deploy, debug, temperature, max_tokens, drop_params, create_proxy, add_function_to_prompt, max_budget, telemetry, test, local, cost):
     if local:
         from proxy_server import app, initialize, deploy_proxy, print_cost_logs
         debug = True
     else:
-        from .proxy_server import app, initialize, deploy_proxy, print_cost_logs
+        try:
+            from .proxy_server import app, initialize, deploy_proxy, print_cost_logs
+        except ImportError as e: 
+            from proxy_server import app, initialize, deploy_proxy, print_cost_logs
 
+    if create_proxy == True: 
+        repo_url = 'https://github.com/BerriAI/litellm'
+        subfolder = 'litellm/proxy' 
+        destination = os.path.join(os.getcwd(), 'litellm-proxy')
+
+        clone_subfolder(repo_url, subfolder, destination)
+
+        return
     if deploy == True:
         print(f"\033[32mLiteLLM: Deploying your proxy to api.litellm.ai\033[0m\n")
         print(f"\033[32mLiteLLM: Deploying proxy for model: {model}\033[0m\n")

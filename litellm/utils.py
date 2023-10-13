@@ -53,7 +53,6 @@ from .exceptions import (
 )
 from typing import cast, List, Dict, Union, Optional
 from .caching import Cache
-from .llms.prompt_templates.factory import llama_2_special_tokens
 
 ####### ENVIRONMENT VARIABLES ####################
 dotenv.load_dotenv()  # Loading env variables using dotenv
@@ -249,6 +248,7 @@ class Logging:
             "messages": self.messages,
             "optional_params": self.optional_params,
             "litellm_params": self.litellm_params,
+            "start_time": self.start_time
         }
 
     def pre_call(self, input, api_key, model=None, additional_args={}):
@@ -323,7 +323,15 @@ class Logging:
                             message=f"Model Call Details pre-call: {self.model_call_details}",
                             level="info",
                         )
+                    elif callable(callback): # custom logger functions
+                        customLogger.log_input_event(
+                            model=self.model,
+                            messages=self.messages,
+                            kwargs=self.model_call_details,
+                            print_verbose=print_verbose,
+                        )
                 except Exception as e:
+                    traceback.print_exc()
                     print_verbose(
                         f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while input logging with integrations {traceback.format_exc()}"
                     )
@@ -416,6 +424,7 @@ class Logging:
             
             ## BUILD COMPLETE STREAMED RESPONSE
             if self.stream: 
+                print(f"stream result: {result}")
                 if result.choices[0].finish_reason: # if it's the last chunk 
                     self.streaming_chunks.append(result)
                     complete_streaming_response = litellm.stream_chunk_builder(self.streaming_chunks)
@@ -573,6 +582,14 @@ class Logging:
                             capture_exception(exception)
                         else:
                             print_verbose(f"capture exception not initialized: {capture_exception}")
+                    elif callable(callback): # custom logger functions
+                        customLogger.log_event(
+                            kwargs=self.model_call_details,
+                            response_obj=result,
+                            start_time=start_time,
+                            end_time=end_time,
+                            print_verbose=print_verbose,
+                        )
                 except Exception as e:
                     print_verbose(
                         f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while failure logging with integrations {traceback.format_exc()}"

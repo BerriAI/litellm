@@ -1,0 +1,85 @@
+{
+  "20231012182157625128": {
+    "pre_api_call": {
+      "model": "anthropic.claude-v2",
+      "messages": [
+        {
+          "role": "user",
+          "content": "what do you know?"
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.1,
+        "stream": true
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "bedrock",
+        "api_base": null,
+        "litellm_call_id": "902640b5-4a26-4629-932d-35d6cf4e1635",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": "\n\nHuman: \n\nHuman: what do you know?\n\nAssistant: ",
+      "api_key": "",
+      "additional_args": {
+        "complete_input_dict": "{\"prompt\": \"\\n\\nHuman: \\n\\nHuman: what do you know?\\n\\nAssistant: \", \"temperature\": 0.1, \"max_tokens_to_sample\": 256}"
+      },
+      "log_event_type": "pre_api_call"
+    },
+    "post_api_call": {
+      "model": "anthropic.claude-v2",
+      "messages": [
+        {
+          "role": "user",
+          "content": "what do you know?"
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.1,
+        "stream": true
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "bedrock",
+        "api_base": null,
+        "litellm_call_id": "902640b5-4a26-4629-932d-35d6cf4e1635",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": null,
+      "api_key": null,
+      "additional_args": {},
+      "log_event_type": "post_api_call",
+      "original_response": "<class 'generator'>",
+      "complete_streaming_response": {
+        "id": "chatcmpl-1757e5ea-71f2-44a2-9d8d-1ba8238a7c99",
+        "object": "chat.completion.chunk",
+        "created": 1697160117,
+        "model": "anthropic.claude-v2",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": " I'm Claude, an AI assistant created by Anthropic. I don't actually have general knowledge about the world. I'm an AI conversational model trained by Anthropic to be helpful, harmless, and honest."
+            },
+            "finish_reason": "stop_sequence"
+          }
+        ]
+      }
+    }
+  }
+}
