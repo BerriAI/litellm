@@ -1,9 +1,9 @@
 import sys, os, platform, time, copy
 import threading
 import shutil, random, traceback
-# sys.path.insert(
-#     0, os.path.abspath("../..")
-# )  # Adds the parent directory to the system path - for litellm local dev
+sys.path.insert(
+    0, os.path.abspath("../..")
+)  # Adds the parent directory to the system path - for litellm local dev
 
 
 try:
@@ -77,8 +77,9 @@ user_max_tokens = None
 user_temperature = None
 user_telemetry = True
 user_config = None
-config_filename = "secrets.toml"
+config_filename = "litellm.secrets.toml"
 config_dir = os.getcwd()
+config_dir = appdirs.user_config_dir("litellm")
 user_config_path = os.path.join(config_dir, config_filename)
 log_file = 'api_log.json'
 #### HELPER FUNCTIONS ####

@@ -8,3 +8,5 @@ bun.lockb
 litellm_results.jsonl
 secrets.toml
 .gitignore
+litellm/proxy/litellm_secrets.toml
+litellm/proxy/api_log.json
