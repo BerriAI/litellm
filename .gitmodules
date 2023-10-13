@@ -3,4 +3,4 @@
 	url = https://github.com/BerriAI/litellm
 [submodule "proxy-server"]
 	path = proxy-server
-	url = https://github.com/BerriAI/liteLLM-proxy.git
+	url = https://github.com/BerriAI/litellm/tree/main/litellm/proxy

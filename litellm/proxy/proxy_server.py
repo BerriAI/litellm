@@ -118,6 +118,10 @@ def load_config():
                     litellm.anthropic_key = user_config["keys"][key]
                 elif key == "REPLICATE_API_KEY":
                     litellm.replicate_key = user_config["keys"][key]
+                elif key == "AWS_ACCESS_KEY_ID":
+                    os.environ["AWS_ACCESS_KEY_ID"] = user_config["keys"][key]
+                elif key == "AWS_SECRET_ACCESS_KEY":
+                    os.environ["AWS_SECRET_ACCESS_KEY"] = user_config["keys"][key]
 
         ## settings 
         litellm.add_function_to_prompt = user_config["general"].get("add_function_to_prompt", True) # by default add function to prompt if unsupported by provider

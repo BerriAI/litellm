@@ -6,3 +6,5 @@ bun.lockb
 **/.DS_Store
 .aider*
 litellm_results.jsonl
+secrets.toml
+.gitignore
