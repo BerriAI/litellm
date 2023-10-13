@@ -32,18 +32,36 @@ def test_completion_with_empty_model():
         print(f"error occurred: {e}")
         pass
 
-def test_completion_return_full_text_hf():
+def test_completion_catch_nlp_exception():
     try: 
-        response = completion(model="dolphin", messages=messages, remove_input=True)
-        # check if input in response 
-        assert "Hello, how are you?" not in response["choices"][0]["message"]["content"]
+        response = completion(model="dolphin", messages=messages, functions=[
+            {
+            "name": "get_current_weather",
+            "description": "Get the current weather in a given location",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                "location": {
+                    "type": "string",
+                    "description": "The city and state, e.g. San Francisco, CA"
+                },
+                "unit": {
+                    "type": "string",
+                    "enum": ["celsius", "fahrenheit"]
+                }
+                },
+                "required": ["location"]
+            }
+            }
+        ])
+
     except Exception as e: 
-        if "Function calling is not supported by this provider" in str(e): 
+        if "Function calling is not supported by nlp_cloud" in str(e): 
             pass
-        else: 
+        else:
             pytest.fail(f'An error occurred {e}')
 
-# test_completion_return_full_text_hf() 
+test_completion_catch_nlp_exception() 
 
 def test_completion_invalid_param_cohere():
     try: 
@@ -55,13 +73,14 @@ def test_completion_invalid_param_cohere():
         else: 
             pytest.fail(f'An error occurred {e}')
 
-# test_completion_invalid_param_cohere()s
+# test_completion_invalid_param_cohere()
 
 def test_completion_function_call_cohere():
     try: 
         response = completion(model="command-nightly", messages=messages, functions=["TEST-FUNCTION"])
         pytest.fail(f'An error occurred {e}')
     except Exception as e: 
+        print(e)
         pass
             
 
