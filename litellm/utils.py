@@ -424,7 +424,6 @@ class Logging:
             
             ## BUILD COMPLETE STREAMED RESPONSE
             if self.stream: 
-                print(f"stream result: {result}")
                 if result.choices[0].finish_reason: # if it's the last chunk 
                     self.streaming_chunks.append(result)
                     complete_streaming_response = litellm.stream_chunk_builder(self.streaming_chunks)
