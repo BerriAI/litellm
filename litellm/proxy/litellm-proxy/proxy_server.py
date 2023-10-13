@@ -88,7 +88,9 @@ def print_verbose(print_statement):
          print(print_statement)
 
 def usage_telemetry(feature: str): # helps us know if people are using this feature. Set `litellm --telemetry False` to your cli call to turn this off
+    print(f"user_telemtry: {user_telemetry}")
     if user_telemetry: 
+        print(f"feature telemetry: {feature}")
         data = {
             "feature": feature # "local_proxy_server"
         }
