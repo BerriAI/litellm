@@ -162,8 +162,8 @@ In the [config.py](https://continue.dev/docs/reference/Models/openai) set this a
   default=OpenAI(
       api_key="IGNORED",
       model="fake-model-name",
-      context_length=2048,
-      api_base="http://your_litellm_hostname:8000"
+      context_length=2048, # customize if needed for your model
+      api_base="http://localhost:8000" # your proxy server url
   ),
 ```
 
