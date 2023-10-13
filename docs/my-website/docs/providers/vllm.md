@@ -30,10 +30,9 @@ In order to use litellm to call a hosted vllm server add the following to your c
 import litellm 
 
 response = completion(
-            model="facebook/opt-125m", # pass the vllm model name
+            model="openai/facebook/opt-125m", # pass the vllm model name
             messages=messages,
             api_base="https://hosted-vllm-api.co",
-            custom_llm_provider="openai",
             temperature=0.2,
             max_tokens=80)
 

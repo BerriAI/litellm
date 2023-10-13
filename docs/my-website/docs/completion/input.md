@@ -53,6 +53,9 @@ By default, LiteLLM raises an exception if the openai param being passed in isn'
 
 To drop the param instead, set `litellm.drop_params = True`.
 
+**For function calling:**
+
+Add to prompt for non-openai models, set: `litellm.add_function_to_prompt = True`. 
 ::: 
 
 ## Provider-specific Params
