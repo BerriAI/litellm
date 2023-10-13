@@ -81,3 +81,9 @@ response = completion(
 print(response)
 
 ```
+
+### Example - FastAPI Server with LiteLLM + Langfuse
+https://replit.com/@BerriAI/LiteLLMFastAPILangfuse
+
+<iframe src="https://replit.com/@BerriAI/LiteLLMFastAPILangfuse?embed=1" width="800" height="600"></iframe>
+
