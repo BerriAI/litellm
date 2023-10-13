@@ -1090,6 +1090,8 @@ def get_optional_params(  # use the openai defaults
         if stream:
             optional_params["stream"] = stream
         if stop:
+            if type(stop) == str:
+                stop = [stop] # openai can accept str/list for stop
             optional_params["stop_sequences"] = stop
         if temperature:
             optional_params["temperature"] = temperature
