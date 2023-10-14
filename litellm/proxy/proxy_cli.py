@@ -94,6 +94,7 @@ def is_port_in_use(port):
 @click.option('--temperature', default=None, type=float, help='Set temperature for the model') 
 @click.option('--max_tokens', default=None, type=int, help='Set max tokens for the model') 
 @click.option('--drop_params', is_flag=True, help='Drop any unmapped params') 
+@click.option('--save', is_flag=True, help='Save params to config, to persist across restarts') 
 @click.option('--create_proxy', is_flag=True, help='Creates a local OpenAI-compatible server template') 
 @click.option('--add_function_to_prompt', is_flag=True, help='If function passed but unsupported, pass it as prompt') 
 @click.option('--config', '-c', is_flag=True, help='Configure Litellm')  

@@ -260,7 +260,7 @@ class Logging:
             self.model_call_details["input"] = input
             self.model_call_details["api_key"] = api_key
             self.model_call_details["additional_args"] = additional_args
-
+            self.model_call_details["log_event_type"] = "pre_api_call"
             if (
                 model
             ):  # if model name was changes pre-call, overwrite the initial model call name with the new one
@@ -358,6 +358,7 @@ class Logging:
             self.model_call_details["api_key"] = api_key
             self.model_call_details["original_response"] = original_response
             self.model_call_details["additional_args"] = additional_args
+            self.model_call_details["log_event_type"] = "post_api_call"
 
             # User Logging -> if you pass in a custom logging function
             print_verbose(f"model call details: {self.model_call_details}")
@@ -419,7 +420,8 @@ class Logging:
                 start_time = self.start_time
             if end_time is None:
                 end_time = datetime.datetime.now()
-            
+            self.model_call_details["log_event_type"] = "successful_api_call"
+            self.model_call_details["end_time"] = end_time
             complete_streaming_response = None
             
             ## BUILD COMPLETE STREAMED RESPONSE
@@ -546,6 +548,11 @@ class Logging:
                 start_time = self.start_time
             if end_time is None:
                 end_time = datetime.datetime.now()
+
+            self.model_call_details["log_event_type"] = "failed_api_call"
+            self.model_call_details["exception"] = exception
+            self.model_call_details["traceback_exception"] = traceback_exception
+            self.model_call_details["end_time"] = end_time
 
             for callback in litellm.failure_callback:
                 try:
