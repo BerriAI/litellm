@@ -1372,6 +1372,30 @@ def embedding(
     caching=False,
     custom_llm_provider=None,
 ):
+    """
+    Embedding function that calls an API to generate embeddings for the given input.
+
+    Parameters:
+    - model: The embedding model to use.
+    - input: The input for which embeddings are to be generated.
+    - azure: A boolean indicating whether to use the Azure API for embedding.
+    - force_timeout: The timeout value for the API call.
+    - litellm_call_id: The call ID for litellm logging.
+    - litellm_logging_obj: The litellm logging object.
+    - logger_fn: The logger function.
+    - api_base: Optional. The base URL for the API.
+    - api_version: Optional. The version of the API.
+    - api_key: Optional. The API key to use.
+    - api_type: Optional. The type of the API.
+    - caching: A boolean indicating whether to enable caching.
+    - custom_llm_provider: The custom llm provider.
+
+    Returns:
+    - response: The response received from the API call.
+
+    Raises:
+    - exception_type: If an exception occurs during the API call.
+    """
     model, custom_llm_provider, dynamic_api_key = get_llm_provider(model, custom_llm_provider)
     try:
         response = None
