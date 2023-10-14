@@ -134,26 +134,26 @@ def load_config():
                     os.environ["AWS_SECRET_ACCESS_KEY"] = user_config["keys"][key]
 
         ## settings 
-        litellm.add_function_to_prompt = user_config["general"].get("add_function_to_prompt", True) # by default add function to prompt if unsupported by provider
-        litellm.drop_params = user_config["general"].get("drop_params", True) # by default drop params if unsupported by provider
-        litellm.model_fallbacks = user_config["general"].get("fallbacks", None) # fallback models in case initial completion call fails 
-        default_model = user_config["general"].get("default_model", None) # route all requests to this model. 
+        if "general" in user_config:
+            litellm.add_function_to_prompt = user_config["general"].get("add_function_to_prompt", True) # by default add function to prompt if unsupported by provider
+            litellm.drop_params = user_config["general"].get("drop_params", True) # by default drop params if unsupported by provider
+            litellm.model_fallbacks = user_config["general"].get("fallbacks", None) # fallback models in case initial completion call fails 
+            default_model = user_config["general"].get("default_model", None) # route all requests to this model. 
 
-        if user_model is None: # `litellm --model <model-name>`` > default_model.
-            user_model = default_model
+            if user_model is None: # `litellm --model <model-name>`` > default_model.
+                user_model = default_model
 
         ## load model config - to set this run `litellm --config`
         model_config = None
-        if user_model in user_config["model"]: 
-            model_config = user_config["model"][user_model]
+        if "model" in user_config:
+            if user_model in user_config["model"]: 
+                model_config = user_config["model"][user_model]
         
         print_verbose(f"user_config: {user_config}")
         print_verbose(f"model_config: {model_config}")
+        print_verbose(f"user_model: {user_model}")
         if model_config is None:
             return
-        user_model = model_config["model_name"] # raise an error if this isn't set when user runs either `litellm --model local_model` or  `litellm --model hosted_model`
-        print_verbose(f"user_model: {user_model}")
-
 
         user_max_tokens = model_config.get("max_tokens", None)
         user_temperature = model_config.get("temperature", None)
@@ -183,7 +183,7 @@ def load_config():
                     final_prompt_value=model_prompt_template.get("MODEL_POST_PROMPT", ""),
                 )
     except Exception as e:
-        traceback.print_exc()
+        pass
 
 def initialize(model, api_base, debug, temperature, max_tokens, max_budget, telemetry, drop_params, add_function_to_prompt):
     global user_model, user_api_base, user_debug, user_max_tokens, user_temperature, user_telemetry
