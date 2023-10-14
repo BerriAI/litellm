@@ -22,6 +22,51 @@ def test_openai_embedding():
         pytest.fail(f"Error occurred: {e}")
 # test_openai_embedding()
 
+def test_openai_azure_embedding_simple():
+    try:
+
+        response = embedding(
+            model="azure/azure-embedding-model",
+            input=["good morning from litellm"],
+        )
+        print(response)
+
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+# test_openai_azure_embedding_simple()
+
+def test_openai_azure_embedding():
+    try:
+        api_key = os.environ['AZURE_API_KEY']
+        api_base = os.environ['AZURE_API_BASE']
+        api_version = os.environ['AZURE_API_VERSION']
+
+        os.environ['AZURE_API_VERSION'] = ""
+        os.environ['AZURE_API_BASE'] = ""
+        os.environ['AZURE_API_KEY'] = ""
+
+        response = embedding(
+            model="azure/azure-embedding-model",
+            input=["good morning from litellm", "this is another item"],
+            api_key=api_key,
+            api_base=api_base,
+            api_version=api_version,
+        )
+        print(response)
+
+
+        os.environ['AZURE_API_VERSION'] = api_key
+        os.environ['AZURE_API_BASE'] = api_base
+        os.environ['AZURE_API_KEY'] = api_base
+
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+# test_openai_azure_embedding()
+
+# test_openai_embedding()
+
 def test_cohere_embedding():
     try:
         response = embedding(
