@@ -88,7 +88,7 @@ Here's exactly what you can expect in the kwargs dictionary:
 "end_time" = end_time # datetime object of when call was completed
 ```
 
-## Get complete streaming response
+### Get complete streaming response
 
 LiteLLM will pass you the complete streaming response in the final streaming chunk as part of the kwargs for your custom callback function.
 
@@ -109,6 +109,29 @@ LiteLLM will pass you the complete streaming response in the final streaming chu
         response = completion(model="claude-instant-1", messages=messages, stream=True)
         for idx, chunk in enumerate(response): 
             pass
+```
+
+
+### Log additional metadata
+
+LiteLLM accepts a metadata dictionary in the completion call. You can pass additional metadata into your completion call via `completion(..., metadata={"key": "value"})`. 
+
+Since this is a [litellm-specific param](https://github.com/BerriAI/litellm/blob/b6a015404eed8a0fa701e98f4581604629300ee3/litellm/main.py#L235), it's accessible via kwargs["litellm_params"]
+
+```python
+# litellm.set_verbose = False
+def custom_callback(
+    kwargs,                 # kwargs to completion
+    completion_response,    # response from completion
+    start_time, end_time    # start/end time
+):
+    print(kwargs["litellm_params"]["metadata"])
+    
+
+# Assign the custom callback function
+litellm.success_callback = [custom_callback]
+
+response = completion(model="claude-instant-1", messages=messages, metadata={"hello": "world"})
 ```
 
 ## Examples
