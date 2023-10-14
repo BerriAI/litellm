@@ -205,7 +205,6 @@ def run_server(host, port, api_base, model, add_key, deploy, debug, temperature,
             import uvicorn
         except:
             raise ImportError("Uvicorn needs to be imported. Run - `pip install uvicorn`")
-        print(f"\033[32mLiteLLM: Deployed Proxy Locally\033[0m\n")
         print(f"\033[32mLiteLLM: Test your local endpoint with: \"litellm --test\" [In a new terminal tab]\033[0m\n")
         print(f"\033[32mLiteLLM: Deploy your proxy using the following: \"litellm --model claude-instant-1 --deploy\" Get an https://api.litellm.ai/chat/completions endpoint \033[0m\n")
         
