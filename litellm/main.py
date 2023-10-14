@@ -306,6 +306,7 @@ def completion(
             metadata=metadata
         )
         logging.update_environment_variables(model=model, user=user, optional_params=optional_params, litellm_params=litellm_params)
+        print("CUSTOM PROVIDER", custom_llm_provider)
         if custom_llm_provider == "azure":
             # azure configs
             api_type = get_secret("AZURE_API_TYPE") or "azure"
@@ -646,57 +647,6 @@ def completion(
                 response = CustomStreamWrapper(model_response, model, custom_llm_provider="aleph_alpha", logging_obj=logging)
                 return response
             response = model_response
-        elif model in litellm.openrouter_models or custom_llm_provider == "openrouter":
-            openai.api_type = "openai"
-            # not sure if this will work after someone first uses another API
-            openai.api_base = (
-                litellm.api_base
-                if litellm.api_base is not None
-                else "https://openrouter.ai/api/v1"
-            )
-            openai.api_version = None
-            if litellm.organization:
-                openai.organization = litellm.organization
-            if api_key:
-                openai.api_key = api_key
-            elif litellm.openrouter_key:
-                openai.api_key = litellm.openrouter_key
-            else:
-                openai.api_key = get_secret("OPENROUTER_API_KEY") or get_secret(
-                    "OR_API_KEY"
-                ) or litellm.api_key
-            ## LOGGING
-            logging.pre_call(input=messages, api_key=openai.api_key)
-            ## COMPLETION CALL
-            if litellm.headers:
-                response = openai.ChatCompletion.create(
-                    model=model,
-                    messages=messages,
-                    headers=litellm.headers,
-                    **optional_params,
-                )
-            else:
-                openrouter_site_url = get_secret("OR_SITE_URL")
-                openrouter_app_name = get_secret("OR_APP_NAME")
-                # if openrouter_site_url is None, set it to https://litellm.ai
-                if openrouter_site_url is None:
-                    openrouter_site_url = "https://litellm.ai"
-                # if openrouter_app_name is None, set it to liteLLM
-                if openrouter_app_name is None:
-                    openrouter_app_name = "liteLLM"
-                response = openai.ChatCompletion.create(
-                    model=model,
-                    messages=messages,
-                    headers={
-                        "HTTP-Referer": openrouter_site_url,  # To identify your site
-                        "X-Title": openrouter_app_name,  # To identify your app
-                    },
-                    **optional_params,
-                )
-            ## LOGGING
-            logging.post_call(
-                input=messages, api_key=openai.api_key, original_response=response
-            )
         elif model in litellm.cohere_models:
             cohere_key = (
                 api_key
@@ -723,7 +673,7 @@ def completion(
                 response = CustomStreamWrapper(model_response, model, custom_llm_provider="cohere", logging_obj=logging)
                 return response
             response = model_response
-        elif custom_llm_provider == "deepinfra": # for know this NEEDS to be above Hugging Face otherwise all calls to meta-llama/Llama-2-70b-chat-hf go to hf, we need this to go to deep infra if user sets provider to deep infra 
+        elif custom_llm_provider == "deepinfra": # for now this NEEDS to be above Hugging Face otherwise all calls to meta-llama/Llama-2-70b-chat-hf go to hf, we need this to go to deep infra if user sets provider to deep infra 
             # this can be called with the openai python package
             api_key = (
                 api_key or
@@ -825,6 +775,57 @@ def completion(
                 )
                 return response
             response = model_response
+        elif model in litellm.openrouter_models or custom_llm_provider == "openrouter":
+            openai.api_type = "openai"
+            # not sure if this will work after someone first uses another API
+            openai.api_base = (
+                litellm.api_base
+                if litellm.api_base is not None
+                else "https://openrouter.ai/api/v1"
+            )
+            openai.api_version = None
+            if litellm.organization:
+                openai.organization = litellm.organization
+            if api_key:
+                openai.api_key = api_key
+            elif litellm.openrouter_key:
+                openai.api_key = litellm.openrouter_key
+            else:
+                openai.api_key = get_secret("OPENROUTER_API_KEY") or get_secret(
+                    "OR_API_KEY"
+                ) or litellm.api_key
+            ## LOGGING
+            logging.pre_call(input=messages, api_key=openai.api_key)
+            ## COMPLETION CALL
+            if litellm.headers:
+                response = openai.ChatCompletion.create(
+                    model=model,
+                    messages=messages,
+                    headers=litellm.headers,
+                    **optional_params,
+                )
+            else:
+                openrouter_site_url = get_secret("OR_SITE_URL")
+                openrouter_app_name = get_secret("OR_APP_NAME")
+                # if openrouter_site_url is None, set it to https://litellm.ai
+                if openrouter_site_url is None:
+                    openrouter_site_url = "https://litellm.ai"
+                # if openrouter_app_name is None, set it to liteLLM
+                if openrouter_app_name is None:
+                    openrouter_app_name = "liteLLM"
+                response = openai.ChatCompletion.create(
+                    model=model,
+                    messages=messages,
+                    headers={
+                        "HTTP-Referer": openrouter_site_url,  # To identify your site
+                        "X-Title": openrouter_app_name,  # To identify your app
+                    },
+                    **optional_params,
+                )
+            ## LOGGING
+            logging.post_call(
+                input=messages, api_key=openai.api_key, original_response=response
+            )
         elif custom_llm_provider == "together_ai" or ("togethercomputer" in model) or (model  in litellm.together_ai_models):
             custom_llm_provider = "together_ai"
             together_ai_key = (
