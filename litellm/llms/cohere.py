@@ -188,7 +188,7 @@ def completion(
 def embedding(
     model: str,
     input: list,
-    api_key: str,
+    api_key: Optional[str] = None,
     logging_obj=None,
     model_response=None,
     encoding=None,
