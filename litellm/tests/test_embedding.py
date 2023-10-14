@@ -56,9 +56,9 @@ def test_openai_azure_embedding():
         print(response)
 
 
-        os.environ['AZURE_API_VERSION'] = api_key
+        os.environ['AZURE_API_VERSION'] = api_version
         os.environ['AZURE_API_BASE'] = api_base
-        os.environ['AZURE_API_KEY'] = api_base
+        os.environ['AZURE_API_KEY'] = api_key
 
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
