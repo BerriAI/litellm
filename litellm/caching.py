@@ -90,6 +90,21 @@ class Cache():
             port = None,
             password = None
         ):
+        """
+        Initializes the cache based on the given type.
+
+        Args:
+            type (str, optional): The type of cache to initialize. Defaults to "local".
+            host (str, optional): The host address for the Redis cache. Required if type is "redis".
+            port (int, optional): The port number for the Redis cache. Required if type is "redis".
+            password (str, optional): The password for the Redis cache. Required if type is "redis".
+
+        Raises:
+            ValueError: If an invalid cache type is provided.
+
+        Returns:
+            None
+        """
         if type == "redis":
             self.cache = RedisCache(host, port, password)
         if type == "local":
@@ -102,6 +117,16 @@ class Cache():
             litellm.success_callback.append("cache")
 
     def get_cache_key(self, *args, **kwargs):
+        """
+        Get the cache key for the given arguments.
+
+        Args:
+            *args: args to litellm.completion() or embedding()
+            **kwargs: kwargs to litellm.completion() or embedding()
+
+        Returns:
+            str: The cache key generated from the arguments, or None if no cache key could be generated.
+        """
         prompt = get_prompt(*args, **kwargs)
         if prompt is not None:
             cache_key = prompt
@@ -122,6 +147,16 @@ class Cache():
             time.sleep(0.02)
     
     def get_cache(self, *args, **kwargs):
+        """
+        Retrieves the cached result for the given arguments.
+
+        Args:
+            *args: args to litellm.completion() or embedding()
+            **kwargs: kwargs to litellm.completion() or embedding()
+
+        Returns:
+            The cached result if it exists, otherwise None.
+        """
         try:  # never block execution
             cache_key = self.get_cache_key(*args, **kwargs)
             if cache_key is not None:
@@ -136,6 +171,16 @@ class Cache():
             return None
 
     def add_cache(self, result, *args, **kwargs):
+        """
+        Adds a result to the cache.
+
+        Args:
+            *args: args to litellm.completion() or embedding()
+            **kwargs: kwargs to litellm.completion() or embedding()
+
+        Returns:
+            None
+        """
         try:
             cache_key = self.get_cache_key(*args, **kwargs)
             # print("adding to cache", cache_key, result)
