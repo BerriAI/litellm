@@ -39,6 +39,55 @@ response = completion(
 print(response)
 
 ```
+
+## What's in kwargs? 
+
+Notice we pass in a kwargs argument to custom callback. 
+```python
+def custom_callback(
+    kwargs,                 # kwargs to completion
+    completion_response,    # response from completion
+    start_time, end_time    # start/end time
+):
+    # Your custom code here
+    print("LITELLM: in custom callback function")
+    print("kwargs", kwargs)
+    print("completion_response", completion_response)
+    print("start_time", start_time)
+    print("end_time", end_time)
+```
+
+This is a dictionary containing all the model-call details (the params we receive, the values we send to the http endpoint, the response we receive, stacktrace in case of errors, etc.). 
+
+This is all logged in the [model_call_details via our Logger](https://github.com/BerriAI/litellm/blob/fc757dc1b47d2eb9d0ea47d6ad224955b705059d/litellm/utils.py#L246).
+
+Here's exactly what you can expect in the kwargs dictionary:
+```shell
+### DEFAULT PARAMS ### 
+"model": self.model,
+"messages": self.messages,
+"optional_params": self.optional_params, # model-specific params passed in
+"litellm_params": self.litellm_params, # litellm-specific params passed in (e.g. metadata passed to completion call)
+"start_time": self.start_time, # datetime object of when call was started
+
+### PRE-API CALL PARAMS ### (check via kwargs["log_event_type"]="pre_api_call")
+"input" = input # the exact prompt sent to the LLM API
+"api_key" = api_key # the api key used for that LLM API 
+"additional_args" = additional_args # any additional details for that API call (e.g. contains optional params sent)
+
+### POST-API CALL PARAMS ### (check via kwargs["log_event_type"]="post_api_call")
+"original_response" = original_response # the original http response received (saved via response.text)
+
+### ON-SUCCESS PARAMS ### (check via kwargs["log_event_type"]="successful_api_call")
+"complete_streaming_response" = complete_streaming_response # the complete streamed response (only set if `completion(..stream=True)`)
+"end_time" = end_time # datetime object of when call was completed
+
+### ON-FAILURE PARAMS ### (check via kwargs["log_event_type"]="failed_api_call")
+"exception" = exception # the Exception raised
+"traceback_exception" = traceback_exception # the traceback generated via `traceback.format_exc()`
+"end_time" = end_time # datetime object of when call was completed
+```
+
 ## Get complete streaming response
 
 LiteLLM will pass you the complete streaming response in the final streaming chunk as part of the kwargs for your custom callback function.
