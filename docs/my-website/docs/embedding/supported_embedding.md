@@ -16,9 +16,24 @@ response = embedding('text-embedding-ada-002', input=["good morning from litellm
 
 ## Azure OpenAI Embedding Models
 
+### Usage
+```python
+from litellm import embedding
+response = embedding(
+    model="azure/<your deployment name>",
+    input=["good morning from litellm"],
+    api_key=api_key,
+    api_base=api_base,
+    api_version=api_version,
+)
+print(response)
+```
+
 | Model Name           | Function Call                               | Required OS Variables                |
 |----------------------|---------------------------------------------|--------------------------------------|
 | text-embedding-ada-002 | `embedding('embedding-model-deployment', input=input, custom_llm_provider="azure")` | `os.environ['AZURE_API_KEY']`,`os.environ['AZURE_API_BASE']`,`os.environ['AZURE_API_VERSION']` |
+
+h/t to [Mikko](https://www.linkedin.com/in/mikkolehtimaki/) for this integration
 
 ## Cohere Embedding Models
 https://docs.cohere.com/reference/embed
