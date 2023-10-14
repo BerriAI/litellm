@@ -38,6 +38,7 @@ def open_config(file_path=None):
             with open(user_config_path) as f:
                 print(f"Dest file: {user_config_path}")
                 print(f.read())
+            print("\033[1;32mDone successfully\033[0m")
         except Exception as e:
             print(f"Failed to copy {file_path}: {e}")
     else: 
@@ -53,6 +54,7 @@ def open_config(file_path=None):
             print(f"{user_config_path} hasn't been created yet.")
             print(f"To create a config (save keys, modify model prompt), copy the template located here: https://docs.litellm.ai/docs/proxy_server")
     print(f"LiteLLM: config location - {user_config_path}")
+
 
 def clone_subfolder(repo_url, subfolder, destination):
   # Clone the full repo
@@ -144,6 +146,7 @@ def run_server(host, port, api_base, model, deploy, debug, temperature, max_toke
         recent_logs = {k.strftime("%Y%m%d%H%M%S%f"): v for k, v in sorted_times[:logs]}
 
         print(json.dumps(recent_logs, indent=4))
+        return
     if deploy == True:
         print(f"\033[32mLiteLLM: Deploying your proxy to api.litellm.ai\033[0m\n")
         print(f"\033[32mLiteLLM: Deploying proxy for model: {model}\033[0m\n")
