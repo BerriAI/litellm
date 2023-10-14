@@ -12,7 +12,7 @@ import pytest
 import litellm
 from litellm import embedding, completion
 from litellm.caching import Cache
-# litellm.set_verbose=True
+litellm.set_verbose=True
 
 messages = [{"role": "user", "content": "who is ishaan Github?  "}]
 # comment
@@ -58,7 +58,7 @@ def test_gpt_cache():
         pytest.fail(f"Error occurred:")
 
 
-# test_gpt_cache()
+test_gpt_cache()
 
 
 ####### Updated Caching as of Aug 28, 2023 ###################
@@ -79,7 +79,7 @@ def test_caching_v2():
         print(f"error occurred: {traceback.format_exc()}")
         pytest.fail(f"Error occurred: {e}")
 
-# test_caching_v2()
+test_caching_v2()
 
 
 
@@ -103,7 +103,7 @@ def test_caching_with_models_v2():
         print(f"response1: {response1}")
         print(f"response2: {response2}")
         pytest.fail(f"Error occurred:")
-# test_caching_with_models_v2()
+test_caching_with_models_v2()
 
 embedding_large_text = """
 small text
@@ -132,7 +132,7 @@ def test_embedding_caching():
         print(f"embedding2: {embedding2}")
         pytest.fail("Error occurred: Embedding caching failed")
 
-# test_embedding_caching()
+test_embedding_caching()
 
 
 def test_embedding_caching_azure():
@@ -151,6 +151,10 @@ def test_embedding_caching_azure():
 
 
     start_time = time.time()
+    print("AZURE CONFIGS")
+    print(api_version)
+    print(api_key)
+    print(api_base)
     embedding1 = embedding(
         model="azure/azure-embedding-model",
         input=["good morning from litellm", "this is another item"],
@@ -182,9 +186,9 @@ def test_embedding_caching_azure():
         print(f"embedding2: {embedding2}")
         pytest.fail("Error occurred: Embedding caching failed")
     
-    os.environ['AZURE_API_VERSION'] = api_key
+    os.environ['AZURE_API_VERSION'] = api_version
     os.environ['AZURE_API_BASE'] = api_base
-    os.environ['AZURE_API_KEY'] = api_base
+    os.environ['AZURE_API_KEY'] = api_key
 
 test_embedding_caching_azure()
 
