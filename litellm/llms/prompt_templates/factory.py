@@ -22,7 +22,9 @@ def llama_2_chat_pt(messages):
                 "post_message": "\n" # follows this - https://replicate.com/blog/how-to-prompt-llama
             }
         },
-        messages=messages
+        messages=messages,
+        bos_token="<s>",
+        eos_token="</s>"
     )
     return prompt
 
@@ -218,14 +220,26 @@ def function_call_prompt(messages: list, functions: list):
 
 
 # Custom prompt template
-def custom_prompt(role_dict: dict, messages: list, initial_prompt_value: str="", final_prompt_value: str=""):
-    prompt = initial_prompt_value
+def custom_prompt(role_dict: dict, messages: list, initial_prompt_value: str="", final_prompt_value: str="", bos_token: str="", eos_token: str=""):
+    prompt = bos_token + initial_prompt_value
+    bos_open = True
+    ## a bos token is at the start of a system / human message
+    ## an eos token is at the end of the assistant response to the message
     for message in messages:
         role = message["role"]
+        
+        if role in ["system", "human"] and not bos_open:
+            prompt += bos_token
+            bos_open = True
+        
         pre_message_str = role_dict[role]["pre_message"] if role in role_dict and "pre_message" in role_dict[role] else "" 
         post_message_str = role_dict[role]["post_message"] if role in role_dict and "post_message" in role_dict[role] else "" 
         prompt += pre_message_str + message["content"] + post_message_str
-    
+        
+        if role == "assistant":
+            prompt += eos_token
+            bos_open = False
+
     prompt += final_prompt_value
     return prompt
 

@@ -230,9 +230,10 @@ def completion(
     id = kwargs.get('id', None)
     metadata = kwargs.get('metadata', None)
     fallbacks = kwargs.get('fallbacks', None)
+    headers = kwargs.get("headers", None)
     ######## end of unpacking kwargs ###########
     openai_params = ["functions", "function_call", "temperature", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "request_timeout", "api_base", "api_version", "api_key"]
-    litellm_params = ["metadata", "acompletion", "caching", "return_async", "mock_response", "api_key", "api_version", "api_base", "force_timeout", "logger_fn", "verbose", "custom_llm_provider", "litellm_logging_obj", "litellm_call_id", "use_client", "id", "metadata", "fallbacks", "azure"]
+    litellm_params = ["metadata", "acompletion", "caching", "return_async", "mock_response", "api_key", "api_version", "api_base", "force_timeout", "logger_fn", "verbose", "custom_llm_provider", "litellm_logging_obj", "litellm_call_id", "use_client", "id", "fallbacks", "azure", "headers"]
     default_params = openai_params + litellm_params
     non_default_params = {k: v for k,v in kwargs.items() if k not in default_params} # model-specific params - pass them straight to the model/provider
     if mock_response:
@@ -775,10 +776,16 @@ def completion(
                 or os.environ.get("HUGGINGFACE_API_KEY")
                 or litellm.api_key
             )
+            hf_headers = (
+                headers
+                or litellm.headers
+            )
+            print(f'headers before hf rest api: {hf_headers}')
             model_response = huggingface_restapi.completion(
                 model=model,
                 messages=messages,
                 api_base=api_base, # type: ignore
+                headers=hf_headers,
                 model_response=model_response,
                 print_verbose=print_verbose,
                 optional_params=optional_params,

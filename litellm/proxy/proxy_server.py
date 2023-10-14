@@ -11,15 +11,17 @@ try:
     import fastapi
     import tomli as tomllib
     import appdirs
+    import tomli_w
 except ImportError:
     import subprocess
     import sys
 
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "uvicorn", "fastapi", "tomli", "appdirs"])
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "uvicorn", "fastapi", "tomli", "appdirs", "tomli-w"])
     import uvicorn
     import fastapi
     import tomli as tomllib
     import appdirs
+    import tomli_w
     
 
 import random
@@ -88,6 +90,7 @@ user_max_tokens = None
 user_temperature = None
 user_telemetry = True
 user_config = None
+user_headers = None
 config_filename = "litellm.secrets.toml"
 config_dir = os.getcwd()
 config_dir = appdirs.user_config_dir("litellm")
@@ -120,12 +123,41 @@ def add_keys_to_config(key, value):
     config.setdefault('keys', {})[key] = value
 
     # Write config to file 
-    with open(user_config_path, 'w') as f:
-        for section, data in config.items():
-            f.write('[%s]\n' % section)
-            for k, v in data.items():
-                f.write('%s = "%s"\n' % (k, v))
+    with open(user_config_path, 'wb') as f:
+        tomli_w.dump(config, f)
 
+def save_params_to_config(data: dict): 
+    # Check if file exists
+    if os.path.exists(user_config_path):
+        # Load existing file
+         with open(user_config_path, "rb") as f:
+            config = tomllib.load(f)
+    else:
+        # File doesn't exist, create empty config
+        config = {}
+    
+    config.setdefault('general', {})
+
+    ## general config 
+    general_settings = data["general"]
+    
+    for key, value in general_settings.items():
+        config["general"][key] = value
+
+    ## model-specific config 
+    config.setdefault("model", {})
+    config["model"].setdefault(user_model, {})
+
+    user_model_config = data[user_model]
+    model_key = model_key = user_model_config.pop("alias", user_model)
+    config["model"].setdefault(model_key, {})
+    for key, value in user_model_config.items():
+        config["model"][model_key][key] = value
+
+    # Write config to file 
+    with open(user_config_path, 'wb') as f:
+        tomli_w.dump(config, f)
+        
 
 def load_config():
     try: 
@@ -138,7 +170,6 @@ def load_config():
         if "keys" in user_config:
             for key in user_config["keys"]:
                 os.environ[key] = user_config["keys"][key] # litellm can read keys from the environment
-
         ## settings 
         if "general" in user_config:
             litellm.add_function_to_prompt = user_config["general"].get("add_function_to_prompt", True) # by default add function to prompt if unsupported by provider
@@ -191,24 +222,42 @@ def load_config():
     except Exception as e:
         pass
 
-def initialize(model, api_base, debug, temperature, max_tokens, max_budget, telemetry, drop_params, add_function_to_prompt):
-    global user_model, user_api_base, user_debug, user_max_tokens, user_temperature, user_telemetry
+def initialize(model, alias, api_base, debug, temperature, max_tokens, max_budget, telemetry, drop_params, add_function_to_prompt, headers, save):
+    global user_model, user_api_base, user_debug, user_max_tokens, user_temperature, user_telemetry, user_headers
     user_model = model
     user_debug = debug
-    
     load_config()
-    user_api_base = api_base
-    user_max_tokens = max_tokens
-    user_temperature = temperature
+    dynamic_config = {"general": {}, user_model: {}} 
+    if headers: # model-specific param
+        user_headers = headers
+        dynamic_config[user_model]["headers"] = headers
+    if api_base: # model-specific param
+        user_api_base = api_base
+        dynamic_config[user_model]["api_base"] = api_base
+    if max_tokens: # model-specific param
+        user_max_tokens = max_tokens
+        dynamic_config[user_model]["max_tokens"] = max_tokens
+    if temperature: # model-specific param
+        user_temperature = temperature
+        dynamic_config[user_model]["temperature"] = temperature
+    if alias: # model-specific param
+        dynamic_config[user_model]["alias"] = alias
+    if drop_params == True: # litellm-specific param
+        litellm.drop_params = True
+        dynamic_config["general"]["drop_params"] = True
+    if add_function_to_prompt == True: # litellm-specific param
+        litellm.add_function_to_prompt = True
+        dynamic_config["general"]["add_function_to_prompt"] = True
+    if max_budget: # litellm-specific param
+        litellm.max_budget = max_budget
+        dynamic_config["general"]["max_budget"] = max_budget
+    if save: 
+        save_params_to_config(dynamic_config)
+        with open(user_config_path) as f:
+            print(f.read())
+        print("\033[1;32mDone successfully\033[0m")
     user_telemetry = telemetry
     usage_telemetry(feature="local_proxy_server")
-    if drop_params == True: 
-        litellm.drop_params = True
-    if add_function_to_prompt == True: 
-        litellm.add_function_to_prompt = True
-    if max_budget: 
-        litellm.max_budget = max_budget
-
 
 def deploy_proxy(model, api_base, debug, temperature, max_tokens, telemetry, deploy):
     import requests
@@ -354,9 +403,12 @@ def logger(
             existing_data = {}
             
         existing_data.update(log_data)
-        
-        with open(log_file, 'w') as f:
-            json.dump(existing_data, f, indent=2)
+        def write_to_log():
+            with open(log_file, 'w') as f:
+                json.dump(existing_data, f, indent=2)
+
+        thread = threading.Thread(target=write_to_log, daemon=True)
+        thread.start()
     elif log_event_type == 'post_api_call':
         if "stream" not in kwargs["optional_params"] or kwargs["optional_params"]["stream"] is False or kwargs.get("complete_streaming_response", False):
             inference_params = copy.deepcopy(kwargs)
@@ -367,9 +419,13 @@ def logger(
                 existing_data = json.load(f)
             
             existing_data[dt_key]['post_api_call'] = inference_params
-            
-            with open(log_file, 'w') as f:
-                json.dump(existing_data, f, indent=2)
+
+            def write_to_log():
+                with open(log_file, 'w') as f:
+                    json.dump(existing_data, f, indent=2)
+
+            thread = threading.Thread(target=write_to_log, daemon=True)
+            thread.start()
   except: 
       traceback.print_exc()
 
@@ -388,6 +444,8 @@ def litellm_completion(data, type):
             data["max_tokens"] = user_max_tokens
         if user_api_base: 
             data["api_base"] = user_api_base
+        if user_headers: 
+            data["headers"] = user_headers
         if type == "completion": 
             response = litellm.text_completion(**data)
         elif type == "chat_completion": 
@@ -397,6 +455,7 @@ def litellm_completion(data, type):
         print_verbose(f"response: {response}")
         return response
     except Exception as e: 
+        traceback.print_exc()
         if "Invalid response object from API" in str(e): 
             completion_call_details = {}
             if user_model: 
