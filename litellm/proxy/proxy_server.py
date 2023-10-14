@@ -106,6 +106,27 @@ def usage_telemetry(feature: str): # helps us know if people are using this feat
         }
         threading.Thread(target=litellm.utils.litellm_telemetry, args=(data,), daemon=True).start()
 
+def add_keys_to_config(key, value):
+    # Check if file exists
+    if os.path.exists(user_config_path):
+        # Load existing file
+         with open(user_config_path, "rb") as f:
+            config = tomllib.load(f)
+    else:
+        # File doesn't exist, create empty config
+        config = {}
+
+    # Add new key 
+    config.setdefault('keys', {})[key] = value
+
+    # Write config to file 
+    with open(user_config_path, 'w') as f:
+        for section, data in config.items():
+            f.write('[%s]\n' % section)
+            for k, v in data.items():
+                f.write('%s = "%s"\n' % (k, v))
+
+
 def load_config():
     try: 
         global user_config, user_api_base, user_max_tokens, user_temperature, user_model
