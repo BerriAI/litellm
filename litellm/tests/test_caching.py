@@ -132,7 +132,61 @@ def test_embedding_caching():
         print(f"embedding2: {embedding2}")
         pytest.fail("Error occurred: Embedding caching failed")
 
-test_embedding_caching()
+# test_embedding_caching()
+
+
+def test_embedding_caching_azure():
+    print("Testing azure embedding caching")
+    import time
+    litellm.cache = Cache()
+    text_to_embed = [embedding_large_text]
+
+    api_key = os.environ['AZURE_API_KEY']
+    api_base = os.environ['AZURE_API_BASE']
+    api_version = os.environ['AZURE_API_VERSION']
+
+    os.environ['AZURE_API_VERSION'] = ""
+    os.environ['AZURE_API_BASE'] = ""
+    os.environ['AZURE_API_KEY'] = ""
+
+
+    start_time = time.time()
+    embedding1 = embedding(
+        model="azure/azure-embedding-model",
+        input=["good morning from litellm", "this is another item"],
+        api_key=api_key,
+        api_base=api_base,
+        api_version=api_version,
+        caching=True
+    )
+    end_time = time.time()
+    print(f"Embedding 1 response time: {end_time - start_time} seconds")
+
+    time.sleep(1)
+    start_time = time.time()
+    embedding2 = embedding(
+        model="azure/azure-embedding-model",
+        input=["good morning from litellm", "this is another item"],
+        api_key=api_key,
+        api_base=api_base,
+        api_version=api_version,
+        caching=True
+    )
+    end_time = time.time()
+    print(f"Embedding 2 response time: {end_time - start_time} seconds")
+    
+    litellm.cache = None
+    assert end_time - start_time <= 0.1 # ensure 2nd response comes in in under 0.1 s 
+    if embedding2['data'][0]['embedding'] != embedding1['data'][0]['embedding']:
+        print(f"embedding1: {embedding1}")
+        print(f"embedding2: {embedding2}")
+        pytest.fail("Error occurred: Embedding caching failed")
+    
+    os.environ['AZURE_API_VERSION'] = api_key
+    os.environ['AZURE_API_BASE'] = api_base
+    os.environ['AZURE_API_KEY'] = api_base
+
+test_embedding_caching_azure()
 
 
 # test caching with streaming
