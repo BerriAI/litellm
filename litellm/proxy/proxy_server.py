@@ -69,7 +69,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import json
 import logging
 
-app = FastAPI()
+app = FastAPI(docs_url="/", title="LiteLLM API")
 router = APIRouter()
 origins = ["*"]
 
