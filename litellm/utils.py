@@ -841,9 +841,17 @@ def get_replicate_completion_pricing(completion_response=None, total_time=0.0):
 
 
 def token_counter(model="", text=None,  messages: Optional[List] = None):
-    # Args:
-    # text: raw text string passed to model
-    # messages: Optional, alternative to passing in text. List of Dicts passed to completion, messages = [{"role": "user", "content": "hello"}]
+    """
+    Count the number of tokens in a given text using a specified model.
+
+    Args:
+    model (str): The name of the model to use for tokenization. Default is an empty string.
+    text (str): The raw text string to be passed to the model. Default is None.
+    messages (Optional[List[Dict[str, str]]]): Alternative to passing in text. A list of dictionaries representing messages with "role" and "content" keys. Default is None.
+
+    Returns:
+    int: The number of tokens in the text.
+    """
     # use tiktoken or anthropic's tokenizer depending on the model
     if text == None:
         if messages is not None:
@@ -886,6 +894,17 @@ def token_counter(model="", text=None,  messages: Optional[List] = None):
 
 
 def cost_per_token(model="gpt-3.5-turbo", prompt_tokens=0, completion_tokens=0):
+    """
+    Calculates the cost per token for a given model, prompt tokens, and completion tokens.
+
+    Parameters:
+        model (str): The name of the model to use. Default is "gpt-3.5-turbo".
+        prompt_tokens (int): The number of tokens in the prompt.
+        completion_tokens (int): The number of tokens in the completion.
+    
+    Returns:
+        tuple: A tuple containing the cost in USD dollars for prompt tokens and completion tokens, respectively.
+    """
     # given
     prompt_tokens_cost_usd_dollar = 0
     completion_tokens_cost_usd_dollar = 0
@@ -1568,10 +1587,26 @@ def get_api_key(llm_provider: str, dynamic_api_key: Optional[str]):
     return api_key
 
 def get_max_tokens(model: str):
+    """
+    Get the maximum tokens (context window) for a given model.
+
+    Parameters:
+        model (str): The name of the model.
+
+    Returns:
+        int: The maximum tokens for the given model.
+
+    Raises:
+        Exception: If the model is not mapped yet.
+
+    Example:
+        >>> get_max_tokens("gpt-3.5-turbo")
+        4096
+    """
     try:
         return litellm.model_cost[model]
     except:
-        raise Exception("This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/cookbook/community-resources/max_tokens.json")
+        raise Exception("This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json")
     
 
 def load_test_model(
@@ -2204,7 +2239,16 @@ def modify_integration(integration_name, integration_params):
 # custom prompt helper function
 def register_prompt_template(model: str, roles: dict, initial_prompt_value: str = "", final_prompt_value: str = ""):
     """
-    Format the openai prompt, to follow your custom format. 
+    Register a prompt template to follow your custom format for a given model
+
+    Args:
+        model (str): The name of the model.
+        roles (dict): A dictionary mapping roles to their respective prompt values.
+        initial_prompt_value (str, optional): The initial prompt value. Defaults to "".
+        final_prompt_value (str, optional): The final prompt value. Defaults to "".
+
+    Returns:
+        dict: The updated custom prompt dictionary.
     Example usage:
     ```
     import litellm 
