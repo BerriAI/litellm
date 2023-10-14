@@ -1405,15 +1405,16 @@ def get_optional_params(  # use the openai defaults
 
 def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None, api_base: Optional[str] = None):
     try:
+        dynamic_api_key = None
         # check if llm provider provided
         if custom_llm_provider:
-            return model, custom_llm_provider
+            return model, custom_llm_provider, dynamic_api_key
 
         # check if llm provider part of model name
         if model.split("/",1)[0] in litellm.provider_list:
             custom_llm_provider = model.split("/", 1)[0]
             model = model.split("/", 1)[1]
-            return model, custom_llm_provider
+            return model, custom_llm_provider, dynamic_api_key
 
         # check if api base is a known openai compatible endpoint
         if api_base: 
@@ -1421,8 +1422,8 @@ def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None, api_
                 if endpoint in api_base:
                     custom_llm_provider = "custom_openai"
                     if endpoint == "api.perplexity.ai": 
-                        litellm.api_key = os.getenv("PERPLEXITYAI_API_KEY")
-                    return model, custom_llm_provider
+                        dynamic_api_key = os.getenv("PERPLEXITYAI_API_KEY")
+                    return model, custom_llm_provider, dynamic_api_key
 
         # check if model in known model provider list  -> for huggingface models, raise exception as they don't have a fixed provider (can be togetherai, anyscale, baseten, runpod, et.)
         ## openai - chatcompletion + text completion
@@ -1479,7 +1480,7 @@ def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None, api_
             print("\033[1;31mProvider List: https://docs.litellm.ai/docs/providers\033[0m")
             print()
             raise ValueError(f"LLM Provider NOT provided. Pass in the LLM provider you are trying to call. E.g. For 'Huggingface' inference endpoints pass in `completion(model='huggingface/{model}',..)` Learn more: https://docs.litellm.ai/docs/providers")
-        return model, custom_llm_provider
+        return model, custom_llm_provider, dynamic_api_key
     except Exception as e: 
         raise e
 

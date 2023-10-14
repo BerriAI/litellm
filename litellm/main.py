@@ -257,7 +257,7 @@ def completion(
         if deployment_id != None: # azure llms 
                 model=deployment_id
                 custom_llm_provider="azure"
-        model, custom_llm_provider = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base)
+        model, custom_llm_provider, dynamic_api_key = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base)
         model_api_key = get_api_key(llm_provider=custom_llm_provider, dynamic_api_key=api_key) # get the api key from the environment if required for the model
         if model_api_key and "sk-litellm" in model_api_key:
             api_base = "https://proxy.litellm.ai"
@@ -391,6 +391,7 @@ def completion(
             # set API KEY
             api_key = (
                 api_key or
+                dynamic_api_key or # allows us to read env variables for compatible openai api's like perplexity 
                 litellm.api_key or
                 litellm.openai_key or
                 get_secret("OPENAI_API_KEY")
@@ -1371,7 +1372,7 @@ def embedding(
     caching=False,
     custom_llm_provider=None,
 ):
-    model, custom_llm_provider = get_llm_provider(model, custom_llm_provider)
+    model, custom_llm_provider, dynamic_api_key = get_llm_provider(model, custom_llm_provider)
     try:
         response = None
         logging = litellm_logging_obj
