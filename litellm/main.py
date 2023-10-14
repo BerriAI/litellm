@@ -445,7 +445,7 @@ def completion(
                 raise e
             
             if "stream" in optional_params and optional_params["stream"] == True:
-                response = CustomStreamWrapper(response, model, custom_llm_provider="openai", logging_obj=logging)
+                response = CustomStreamWrapper(response, model, custom_llm_provider=custom_llm_provider, logging_obj=logging)
                 return response
             ## LOGGING
             logging.post_call(

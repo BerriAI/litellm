@@ -1419,7 +1419,9 @@ def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None, api_
         if api_base: 
             for endpoint in litellm.openai_compatible_endpoints:
                 if endpoint in api_base:
-                    custom_llm_provider = "openai"
+                    custom_llm_provider = "custom_openai"
+                    if endpoint == "api.perplexity.ai": 
+                        litellm.api_key = os.getenv("PERPLEXITYAI_API_KEY")
                     return model, custom_llm_provider
 
         # check if model in known model provider list  -> for huggingface models, raise exception as they don't have a fixed provider (can be togetherai, anyscale, baseten, runpod, et.)
@@ -2936,6 +2938,45 @@ def exception_type(
             elif custom_llm_provider == "ollama":
                 if "no attribute 'async_get_ollama_response_stream" in error_str:
                     raise ImportError("Import error - trying to use async for ollama. import async_generator failed. Try 'pip install async_generator'")
+            elif custom_llm_provider == "custom_openai":
+                if hasattr(original_exception, "status_code"):
+                    exception_mapping_worked = True
+                    if original_exception.status_code == 401:
+                        exception_mapping_worked = True
+                        raise AuthenticationError(
+                            message=f"CustomOpenAIException - {original_exception.message}",
+                            llm_provider="custom_openai",
+                            model=model
+                        )
+                    elif original_exception.status_code == 408:
+                        exception_mapping_worked = True
+                        raise Timeout(
+                            message=f"CustomOpenAIException - {original_exception.message}",
+                            model=model,
+                            llm_provider="custom_openai"
+                        )
+                    if original_exception.status_code == 422:
+                        exception_mapping_worked = True
+                        raise InvalidRequestError(
+                            message=f"CustomOpenAIException - {original_exception.message}",
+                            model=model,
+                            llm_provider="custom_openai",
+                        )
+                    elif original_exception.status_code == 429:
+                        exception_mapping_worked = True
+                        raise RateLimitError(
+                            message=f"CustomOpenAIException - {original_exception.message}",
+                            model=model,
+                            llm_provider="custom_openai",
+                        )
+                    else:
+                        exception_mapping_worked = True
+                        raise APIError(
+                            status_code=original_exception.status_code, 
+                            message=f"CustomOpenAIException - {original_exception.message}",
+                            llm_provider="custom_openai",
+                            model=model
+                        )
         exception_mapping_worked = True
         raise APIError(status_code=500, message=str(original_exception), llm_provider=custom_llm_provider, model=model)
     except Exception as e:
@@ -3205,6 +3246,30 @@ class CustomStreamWrapper:
         except:
             raise ValueError(f"Unable to parse response. Original response: {chunk}")
     
+    def handle_custom_openai_chat_completion_chunk(self, chunk): 
+        try: 
+            str_line = chunk.decode("utf-8")  # Convert bytes to string
+            text = "" 
+            is_finished = False
+            finish_reason = None
+            if str_line.startswith("data:"):
+                data_json = json.loads(str_line[5:])
+                print(f"delta content: {data_json['choices'][0]['delta']}")
+                text = data_json["choices"][0]["delta"].get("content", "") 
+                if data_json["choices"][0].get("finish_reason", None): 
+                    is_finished = True
+                    finish_reason = data_json["choices"][0]["finish_reason"]
+                return {"text": text, "is_finished": is_finished, "finish_reason": finish_reason}
+            elif "error" in str_line:
+                raise ValueError(f"Unable to parse response. Original response: {str_line}")
+            else:
+                return {"text": text, "is_finished": is_finished, "finish_reason": finish_reason}
+
+        except:
+            traceback.print_exc()
+            pass
+
+
     def handle_openai_text_completion_chunk(self, chunk):
         try:
             return chunk["choices"][0]["text"]
@@ -3401,6 +3466,13 @@ class CustomStreamWrapper:
                     if "error" in chunk:
                         exception_type(model=self.model, custom_llm_provider=self.custom_llm_provider, original_exception=chunk["error"])
                     completion_obj = chunk
+                elif self.custom_llm_provider == "custom_openai":
+                    chunk = next(self.completion_stream)
+                    response_obj = self.handle_custom_openai_chat_completion_chunk(chunk)
+                    completion_obj["content"] = response_obj["text"]
+                    print(f"completion obj content: {completion_obj['content']}")
+                    if response_obj["is_finished"]: 
+                        model_response.choices[0].finish_reason = response_obj["finish_reason"]
                 else: # openai chat/azure models
                     chunk = next(self.completion_stream)
                     model_response = chunk

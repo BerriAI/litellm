@@ -332,7 +332,6 @@ def logger(
     end_time=None    # start/end time
 ):
   log_event_type = kwargs['log_event_type']
-  print(f"REACHES LOGGER: {log_event_type}")
   try: 
     if log_event_type == 'pre_api_call':
         inference_params = copy.deepcopy(kwargs)
@@ -355,7 +354,6 @@ def logger(
         with open(log_file, 'w') as f:
             json.dump(existing_data, f, indent=2)
     elif log_event_type == 'post_api_call':
-        print(f"post api call kwargs: {kwargs}")
         if "stream" not in kwargs["optional_params"] or kwargs["optional_params"]["stream"] is False or kwargs.get("complete_streaming_response", False):
             inference_params = copy.deepcopy(kwargs)
             timestamp = inference_params.pop('start_time')
@@ -438,7 +436,6 @@ async def completion(request: Request):
 @router.post("/chat/completions")
 async def chat_completion(request: Request):
     data = await request.json()
-    print(f"data passed in: {data}")
     response = litellm_completion(data, type="chat_completion")
     return response
 

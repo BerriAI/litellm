@@ -1449,5 +1449,4802 @@
         "stop_reason": "stop_sequence"
       }
     }
+  },
+  "20231013211247627627": {
+    "pre_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "user",
+          "content": "this is a test request, acknowledge that you got it"
+        }
+      ],
+      "optional_params": {},
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "6e64f6cb-70b5-4e05-a192-6d4c80ff7614",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "user",
+          "content": "this is a test request, acknowledge that you got it"
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null,
+        "api_base": "https://api.perplexity.ai"
+      },
+      "log_event_type": "pre_api_call"
+    },
+    "post_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "user",
+          "content": "this is a test request, acknowledge that you got it"
+        }
+      ],
+      "optional_params": {},
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "6e64f6cb-70b5-4e05-a192-6d4c80ff7614",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "user",
+          "content": "this is a test request, acknowledge that you got it"
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null
+      },
+      "log_event_type": "post_api_call",
+      "original_response": {
+        "id": "1644e83e-38ac-4f2f-88eb-bd7fbebf6be1",
+        "object": "chat.completion",
+        "choices": [
+          {
+            "finish_reason": "stop",
+            "index": 0,
+            "message": {
+              "content": "Acknowledged! I have received the test request.",
+              "role": "assistant",
+              "logprobs": null
+            }
+          }
+        ],
+        "created": 1697256767,
+        "model": "mistral-7b-instruct",
+        "usage": {
+          "prompt_tokens": 19,
+          "completion_tokens": 13,
+          "total_tokens": 32
+        }
+      }
+    }
+  },
+  "20231013211248238166": {
+    "pre_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "user",
+          "content": "this is a test request, acknowledge that you got it"
+        }
+      ],
+      "optional_params": {
+        "stream": true
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "91531fff-101f-4b61-9c50-f61b36e68455",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "user",
+          "content": "this is a test request, acknowledge that you got it"
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null,
+        "api_base": "https://api.perplexity.ai"
+      },
+      "log_event_type": "pre_api_call"
+    }
+  },
+  "20231013211426403031": {
+    "pre_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "stream": true,
+        "max_tokens": 1024
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "735637ff-cbe4-4a14-81c1-738d35370072",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null,
+        "api_base": "https://api.perplexity.ai"
+      },
+      "log_event_type": "pre_api_call"
+    }
+  },
+  "20231013211444781151": {
+    "pre_api_call": {
+      "model": "anthropic.claude-v2",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        }
+      ],
+      "optional_params": {
+        "max_tokens_to_sample": 1024,
+        "temperature": 0.5,
+        "stream": true
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "bedrock",
+        "api_base": null,
+        "litellm_call_id": "8b2c9e5e-535c-4d37-b556-98c71d83f86d",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": "\n\nHuman: \n\nHuman: Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?\n\nHuman: Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?\n\nAssistant: ",
+      "api_key": "",
+      "additional_args": {
+        "complete_input_dict": "{\"prompt\": \"\\n\\nHuman: \\n\\nHuman: Traceback (most recent call last):\\n  File \\\"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\\\", line 761, in _update_chunk_length\\n    self.chunk_left = int(line, 16)\\n                      ^^^^^^^^^^^^^\\nValueError: invalid literal for int() with base 16: b''\\n\\n---\\n\\nwhat is happening?\\n\\nHuman: Traceback (most recent call last):\\n  File \\\"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\\\", line 761, in _update_chunk_length\\n    self.chunk_left = int(line, 16)\\n                      ^^^^^^^^^^^^^\\nValueError: invalid literal for int() with base 16: b''\\n\\n---\\n\\nwhat is happening?\\n\\nAssistant: \", \"max_tokens_to_sample\": 1024, \"temperature\": 0.5}"
+      },
+      "log_event_type": "pre_api_call"
+    },
+    "post_api_call": {
+      "model": "anthropic.claude-v2",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        }
+      ],
+      "optional_params": {
+        "max_tokens_to_sample": 1024,
+        "temperature": 0.5,
+        "stream": true
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "bedrock",
+        "api_base": null,
+        "litellm_call_id": "8b2c9e5e-535c-4d37-b556-98c71d83f86d",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": null,
+      "api_key": null,
+      "additional_args": {},
+      "log_event_type": "post_api_call",
+      "original_response": "<class 'generator'>",
+      "complete_streaming_response": {
+        "id": "chatcmpl-e4c0a2d9-ed36-4f97-9a0a-f4380785d2d1",
+        "object": "chat.completion.chunk",
+        "created": 1697256885,
+        "model": "anthropic.claude-v2",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": " This traceback indicates an error occurred while urllib3 was trying to parse the chunked response from a server. Specifically:\n\n- In urllib3's response.py module, the _update_chunk_length method is trying to parse the length of the next chunk from the response. \n\n- It is calling int(line, 16) to parse the chunk length, which is represented in hex. \n\n- But the line variable is empty (b''), so it cannot be parsed as a hex integer, resulting in a ValueError.\n\nSo most likely the server returned an invalid chunked response, with an empty chunk size rather than a valid hex value. This is causing urllib3 to error while trying to parse the response.\n\nThe root cause could be a server-side issue returning invalid chunked responses, or possibly a network issue resulting in corrupted response data. Some things to try:\n\n- Check the server logs for errors\n- Try reproducing against a different endpoint or server\n- Capture the raw response with a tool like Wireshark to inspect it\n- Check for network issues like packet loss\n- Consider setting retries, backoff, or other retry handling in urllib3\n\nBut the key point is an invalid chunked response caused urllib3 to throw this error while trying to parse it."
+            },
+            "finish_reason": "stop_sequence"
+          }
+        ]
+      }
+    }
+  },
+  "20231013211456208210": {
+    "pre_api_call": {
+      "model": "anthropic.claude-v2",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\" This traceback indicates an error occurred while urllib3 was trying to parse the chunked response from a server. Specifically:\n\n- In urllib3's response.py module, the _update_chunk_length method is trying to parse the length of the next chunk from the response. \n\n- It is calling int(line, 16) to parse the chunk length, which is represented in hex. \n\n- But the line variable is empty (b''), so it cannot be parsed as a hex integer, resulting in a ValueError.\n\nSo most likely the server returned an invalid chunked response, with an empty chunk size rather than a valid hex value. This is causing urllib3 to error while trying to parse the response.\n\nThe root cause could be a server-side issue returning invalid chunked responses, or possibly a network issue resulting in corrupted response data. Some things to try:\n\n- Check the server logs for errors\n- Try reproducing against a different endpoint or server\n- Capture the raw response with a tool like Wireshark to inspect it\n- Check for network issues like packet loss\n- Consider setting retries, backoff, or other retry handling in urllib3\n\nBut the key point is an invalid chunked response caused urllib3 to throw this error while trying to parse it.\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "optional_params": {
+        "max_tokens_to_sample": 20,
+        "temperature": 0.5
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "bedrock",
+        "api_base": null,
+        "litellm_call_id": "7a948a2c-0846-4476-b5f3-2ce0ff52b5a3",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": "\n\nHuman: \n\nHuman: <admin>\" This traceback indicates an error occurred while urllib3 was trying to parse the chunked response from a server. Specifically:\n\n- In urllib3's response.py module, the _update_chunk_length method is trying to parse the length of the next chunk from the response. \n\n- It is calling int(line, 16) to parse the chunk length, which is represented in hex. \n\n- But the line variable is empty (b''), so it cannot be parsed as a hex integer, resulting in a ValueError.\n\nSo most likely the server returned an invalid chunked response, with an empty chunk size rather than a valid hex value. This is causing urllib3 to error while trying to parse the response.\n\nThe root cause could be a server-side issue returning invalid chunked responses, or possibly a network issue resulting in corrupted response data. Some things to try:\n\n- Check the server logs for errors\n- Try reproducing against a different endpoint or server\n- Capture the raw response with a tool like Wireshark to inspect it\n- Check for network issues like packet loss\n- Consider setting retries, backoff, or other retry handling in urllib3\n\nBut the key point is an invalid chunked response caused urllib3 to throw this error while trying to parse it.\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:</admin>\n\nAssistant: ",
+      "api_key": "",
+      "additional_args": {
+        "complete_input_dict": "{\"prompt\": \"\\n\\nHuman: \\n\\nHuman: <admin>\\\" This traceback indicates an error occurred while urllib3 was trying to parse the chunked response from a server. Specifically:\\n\\n- In urllib3's response.py module, the _update_chunk_length method is trying to parse the length of the next chunk from the response. \\n\\n- It is calling int(line, 16) to parse the chunk length, which is represented in hex. \\n\\n- But the line variable is empty (b''), so it cannot be parsed as a hex integer, resulting in a ValueError.\\n\\nSo most likely the server returned an invalid chunked response, with an empty chunk size rather than a valid hex value. This is causing urllib3 to error while trying to parse the response.\\n\\nThe root cause could be a server-side issue returning invalid chunked responses, or possibly a network issue resulting in corrupted response data. Some things to try:\\n\\n- Check the server logs for errors\\n- Try reproducing against a different endpoint or server\\n- Capture the raw response with a tool like Wireshark to inspect it\\n- Check for network issues like packet loss\\n- Consider setting retries, backoff, or other retry handling in urllib3\\n\\nBut the key point is an invalid chunked response caused urllib3 to throw this error while trying to parse it.\\\"\\n\\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:</admin>\\n\\nAssistant: \", \"max_tokens_to_sample\": 20, \"temperature\": 0.5}"
+      },
+      "log_event_type": "pre_api_call"
+    }
+  },
+  "20231013211702601907": {
+    "pre_api_call": {
+      "model": "anthropic.claude-v2",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        }
+      ],
+      "optional_params": {
+        "max_tokens_to_sample": 1024,
+        "temperature": 0.5,
+        "stream": true
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "bedrock",
+        "api_base": null,
+        "litellm_call_id": "d9139278-c263-421a-ba92-4d58c6297798",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": "\n\nHuman: \n\nHuman: Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?\n\nHuman: Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?\n\nHuman: Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?\n\nAssistant: ",
+      "api_key": "",
+      "additional_args": {
+        "complete_input_dict": "{\"prompt\": \"\\n\\nHuman: \\n\\nHuman: Traceback (most recent call last):\\n  File \\\"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\\\", line 761, in _update_chunk_length\\n    self.chunk_left = int(line, 16)\\n                      ^^^^^^^^^^^^^\\nValueError: invalid literal for int() with base 16: b''\\n\\n---\\n\\nwhat is happening?\\n\\nHuman: Traceback (most recent call last):\\n  File \\\"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\\\", line 761, in _update_chunk_length\\n    self.chunk_left = int(line, 16)\\n                      ^^^^^^^^^^^^^\\nValueError: invalid literal for int() with base 16: b''\\n\\n---\\n\\nwhat is happening?\\n\\nHuman: Traceback (most recent call last):\\n  File \\\"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\\\", line 761, in _update_chunk_length\\n    self.chunk_left = int(line, 16)\\n                      ^^^^^^^^^^^^^\\nValueError: invalid literal for int() with base 16: b''\\n\\n---\\n\\nwhat is happening?\\n\\nAssistant: \", \"max_tokens_to_sample\": 1024, \"temperature\": 0.5}"
+      },
+      "log_event_type": "pre_api_call"
+    },
+    "post_api_call": {
+      "model": "anthropic.claude-v2",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        }
+      ],
+      "optional_params": {
+        "max_tokens_to_sample": 1024,
+        "temperature": 0.5,
+        "stream": true
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "bedrock",
+        "api_base": null,
+        "litellm_call_id": "d9139278-c263-421a-ba92-4d58c6297798",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": null,
+      "api_key": null,
+      "additional_args": {},
+      "log_event_type": "post_api_call",
+      "original_response": "<class 'generator'>",
+      "complete_streaming_response": {
+        "id": "chatcmpl-2e4a928c-08b7-4f99-8d80-69cc9cd5ee70",
+        "object": "chat.completion.chunk",
+        "created": 1697257022,
+        "model": "anthropic.claude-v2",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": " This traceback indicates an error occurred while urllib3 was trying to parse the chunked encoding of an HTTP response. \n\nSpecifically, it failed on this line:\n\n```\nself.chunk_left = int(line, 16)\n```\n\nWhere `line` was an empty byte string `b''`.\n\nThe chunked encoding format specifies each chunk starts with the length in hex, followed by a newline. So it was expecting a hex string like '100\\r\\n' but got an empty string instead.\n\nSo most likely the server returned an invalid chunked response that didn't follow the proper format. \n\nThe root cause could be:\n\n- The server has a bug in its chunked encoding implementation\n- There is a network issue corrupting the response\n- The client made a request that triggered an edge case on the server\n\nSo in summary, this error indicates the HTTP response being parsed did not contain valid chunked encoding as expected. The root cause needs further debugging of the server response and/or network conditions."
+            },
+            "finish_reason": "stop_sequence"
+          }
+        ]
+      }
+    }
+  },
+  "20231013211716068287": {
+    "pre_api_call": {
+      "model": "anthropic.claude-v2",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\" This traceback indicates an error occurred while urllib3 was trying to parse the chunked encoding of an HTTP response. \n\nSpecifically, it failed on this line:\n\n```\nself.chunk_left = int(line, 16)\n```\n\nWhere `line` was an empty byte string `b''`.\n\nThe chunked encoding format specifies each chunk starts with the length in hex, followed by a newline. So it was expecting a hex string like '100\\r\\n' but got an empty string instead.\n\nSo most likely the server returned an invalid chunked response that didn't follow the proper format. \n\nThe root cause could be:\n\n- The server has a bug in its chunked encoding implementation\n- There is a network issue corrupting the response\n- The client made a request that triggered an edge case on the server\n\nSo in summary, this error indicates the HTTP response being parsed did not contain valid chunked encoding as expected. The root cause needs further debugging of the server response and/or network conditions.\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "optional_params": {
+        "max_tokens_to_sample": 20,
+        "temperature": 0.5
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "bedrock",
+        "api_base": null,
+        "litellm_call_id": "c3aba2cb-431d-4778-bfb2-a8cb981ff1af",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": "\n\nHuman: \n\nHuman: <admin>\" This traceback indicates an error occurred while urllib3 was trying to parse the chunked encoding of an HTTP response. \n\nSpecifically, it failed on this line:\n\n```\nself.chunk_left = int(line, 16)\n```\n\nWhere `line` was an empty byte string `b''`.\n\nThe chunked encoding format specifies each chunk starts with the length in hex, followed by a newline. So it was expecting a hex string like '100\\r\\n' but got an empty string instead.\n\nSo most likely the server returned an invalid chunked response that didn't follow the proper format. \n\nThe root cause could be:\n\n- The server has a bug in its chunked encoding implementation\n- There is a network issue corrupting the response\n- The client made a request that triggered an edge case on the server\n\nSo in summary, this error indicates the HTTP response being parsed did not contain valid chunked encoding as expected. The root cause needs further debugging of the server response and/or network conditions.\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:</admin>\n\nAssistant: ",
+      "api_key": "",
+      "additional_args": {
+        "complete_input_dict": "{\"prompt\": \"\\n\\nHuman: \\n\\nHuman: <admin>\\\" This traceback indicates an error occurred while urllib3 was trying to parse the chunked encoding of an HTTP response. \\n\\nSpecifically, it failed on this line:\\n\\n```\\nself.chunk_left = int(line, 16)\\n```\\n\\nWhere `line` was an empty byte string `b''`.\\n\\nThe chunked encoding format specifies each chunk starts with the length in hex, followed by a newline. So it was expecting a hex string like '100\\\\r\\\\n' but got an empty string instead.\\n\\nSo most likely the server returned an invalid chunked response that didn't follow the proper format. \\n\\nThe root cause could be:\\n\\n- The server has a bug in its chunked encoding implementation\\n- There is a network issue corrupting the response\\n- The client made a request that triggered an edge case on the server\\n\\nSo in summary, this error indicates the HTTP response being parsed did not contain valid chunked encoding as expected. The root cause needs further debugging of the server response and/or network conditions.\\\"\\n\\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:</admin>\\n\\nAssistant: \", \"max_tokens_to_sample\": 20, \"temperature\": 0.5}"
+      },
+      "log_event_type": "pre_api_call"
+    },
+    "post_api_call": {
+      "model": "anthropic.claude-v2",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\" This traceback indicates an error occurred while urllib3 was trying to parse the chunked encoding of an HTTP response. \n\nSpecifically, it failed on this line:\n\n```\nself.chunk_left = int(line, 16)\n```\n\nWhere `line` was an empty byte string `b''`.\n\nThe chunked encoding format specifies each chunk starts with the length in hex, followed by a newline. So it was expecting a hex string like '100\\r\\n' but got an empty string instead.\n\nSo most likely the server returned an invalid chunked response that didn't follow the proper format. \n\nThe root cause could be:\n\n- The server has a bug in its chunked encoding implementation\n- There is a network issue corrupting the response\n- The client made a request that triggered an edge case on the server\n\nSo in summary, this error indicates the HTTP response being parsed did not contain valid chunked encoding as expected. The root cause needs further debugging of the server response and/or network conditions.\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "optional_params": {
+        "max_tokens_to_sample": 20,
+        "temperature": 0.5
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "bedrock",
+        "api_base": null,
+        "litellm_call_id": "c3aba2cb-431d-4778-bfb2-a8cb981ff1af",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": "\n\nHuman: \n\nHuman: <admin>\" This traceback indicates an error occurred while urllib3 was trying to parse the chunked encoding of an HTTP response. \n\nSpecifically, it failed on this line:\n\n```\nself.chunk_left = int(line, 16)\n```\n\nWhere `line` was an empty byte string `b''`.\n\nThe chunked encoding format specifies each chunk starts with the length in hex, followed by a newline. So it was expecting a hex string like '100\\r\\n' but got an empty string instead.\n\nSo most likely the server returned an invalid chunked response that didn't follow the proper format. \n\nThe root cause could be:\n\n- The server has a bug in its chunked encoding implementation\n- There is a network issue corrupting the response\n- The client made a request that triggered an edge case on the server\n\nSo in summary, this error indicates the HTTP response being parsed did not contain valid chunked encoding as expected. The root cause needs further debugging of the server response and/or network conditions.\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:</admin>\n\nAssistant: ",
+      "api_key": "",
+      "additional_args": {
+        "complete_input_dict": "{\"prompt\": \"\\n\\nHuman: \\n\\nHuman: <admin>\\\" This traceback indicates an error occurred while urllib3 was trying to parse the chunked encoding of an HTTP response. \\n\\nSpecifically, it failed on this line:\\n\\n```\\nself.chunk_left = int(line, 16)\\n```\\n\\nWhere `line` was an empty byte string `b''`.\\n\\nThe chunked encoding format specifies each chunk starts with the length in hex, followed by a newline. So it was expecting a hex string like '100\\\\r\\\\n' but got an empty string instead.\\n\\nSo most likely the server returned an invalid chunked response that didn't follow the proper format. \\n\\nThe root cause could be:\\n\\n- The server has a bug in its chunked encoding implementation\\n- There is a network issue corrupting the response\\n- The client made a request that triggered an edge case on the server\\n\\nSo in summary, this error indicates the HTTP response being parsed did not contain valid chunked encoding as expected. The root cause needs further debugging of the server response and/or network conditions.\\\"\\n\\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:</admin>\\n\\nAssistant: \", \"max_tokens_to_sample\": 20, \"temperature\": 0.5}"
+      },
+      "log_event_type": "post_api_call",
+      "original_response": {
+        "completion": " Invalid chunked encoding in HTTP response",
+        "stop_reason": "stop_sequence"
+      }
+    }
+  },
+  "20231013211719949668": {
+    "pre_api_call": {
+      "model": "anthropic.claude-v2",
+      "messages": [
+        {
+          "role": "system",
+          "content": "### Instruction:\nTraceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?\n### Instruction:\nTraceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?\n### Instruction:\nTraceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?\n### Response:\n This traceback indicates an error occurred while urllib3 was trying to parse the chunked encoding of an HTTP response. \n\nSpecifically, it failed on this line:\n\n```\nself.chunk_left = int(line, 16)\n```\n\nWhere `line` was an empty byte string `b''`.\n\nThe chunked encoding format specifies each chunk starts with the length in hex, followed by a newline. So it was expecting a hex string like '100\\r\\n' but got an empty string instead.\n\nSo most likely the server returned an invalid chunked response that didn't follow the proper format. \n\nThe root cause could be:\n\n- The server has a bug in its chunked encoding implementation\n- There is a network issue corrupting the response\n- The client made a request that triggered an edge case on the server\n\nSo in summary, this error indicates the HTTP response being parsed did not contain valid chunked encoding as expected. The root cause needs further debugging of the server response and/or network conditions.\n### Response:\n\n\nGive a short title to describe the above chat session. Do not put quotes around the title. Do not use more than 6 words. The title is: "
+        }
+      ],
+      "optional_params": {
+        "max_tokens_to_sample": 20,
+        "temperature": 0.5
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "bedrock",
+        "api_base": null,
+        "litellm_call_id": "95abd0ba-d6df-4d5b-a3c7-b432df12b146",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": "\n\nHuman: \n\nHuman: <admin>### Instruction:\nTraceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?\n### Instruction:\nTraceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?\n### Instruction:\nTraceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?\n### Response:\n This traceback indicates an error occurred while urllib3 was trying to parse the chunked encoding of an HTTP response. \n\nSpecifically, it failed on this line:\n\n```\nself.chunk_left = int(line, 16)\n```\n\nWhere `line` was an empty byte string `b''`.\n\nThe chunked encoding format specifies each chunk starts with the length in hex, followed by a newline. So it was expecting a hex string like '100\\r\\n' but got an empty string instead.\n\nSo most likely the server returned an invalid chunked response that didn't follow the proper format. \n\nThe root cause could be:\n\n- The server has a bug in its chunked encoding implementation\n- There is a network issue corrupting the response\n- The client made a request that triggered an edge case on the server\n\nSo in summary, this error indicates the HTTP response being parsed did not contain valid chunked encoding as expected. The root cause needs further debugging of the server response and/or network conditions.\n### Response:\n\n\nGive a short title to describe the above chat session. Do not put quotes around the title. Do not use more than 6 words. The title is: </admin>\n\nAssistant: ",
+      "api_key": "",
+      "additional_args": {
+        "complete_input_dict": "{\"prompt\": \"\\n\\nHuman: \\n\\nHuman: <admin>### Instruction:\\nTraceback (most recent call last):\\n  File \\\"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\\\", line 761, in _update_chunk_length\\n    self.chunk_left = int(line, 16)\\n                      ^^^^^^^^^^^^^\\nValueError: invalid literal for int() with base 16: b''\\n\\n---\\n\\nwhat is happening?\\n### Instruction:\\nTraceback (most recent call last):\\n  File \\\"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\\\", line 761, in _update_chunk_length\\n    self.chunk_left = int(line, 16)\\n                      ^^^^^^^^^^^^^\\nValueError: invalid literal for int() with base 16: b''\\n\\n---\\n\\nwhat is happening?\\n### Instruction:\\nTraceback (most recent call last):\\n  File \\\"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\\\", line 761, in _update_chunk_length\\n    self.chunk_left = int(line, 16)\\n                      ^^^^^^^^^^^^^\\nValueError: invalid literal for int() with base 16: b''\\n\\n---\\n\\nwhat is happening?\\n### Response:\\n This traceback indicates an error occurred while urllib3 was trying to parse the chunked encoding of an HTTP response. \\n\\nSpecifically, it failed on this line:\\n\\n```\\nself.chunk_left = int(line, 16)\\n```\\n\\nWhere `line` was an empty byte string `b''`.\\n\\nThe chunked encoding format specifies each chunk starts with the length in hex, followed by a newline. So it was expecting a hex string like '100\\\\r\\\\n' but got an empty string instead.\\n\\nSo most likely the server returned an invalid chunked response that didn't follow the proper format. \\n\\nThe root cause could be:\\n\\n- The server has a bug in its chunked encoding implementation\\n- There is a network issue corrupting the response\\n- The client made a request that triggered an edge case on the server\\n\\nSo in summary, this error indicates the HTTP response being parsed did not contain valid chunked encoding as expected. The root cause needs further debugging of the server response and/or network conditions.\\n### Response:\\n\\n\\nGive a short title to describe the above chat session. Do not put quotes around the title. Do not use more than 6 words. The title is: </admin>\\n\\nAssistant: \", \"max_tokens_to_sample\": 20, \"temperature\": 0.5}"
+      },
+      "log_event_type": "pre_api_call"
+    },
+    "post_api_call": {
+      "model": "anthropic.claude-v2",
+      "messages": [
+        {
+          "role": "system",
+          "content": "### Instruction:\nTraceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?\n### Instruction:\nTraceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?\n### Instruction:\nTraceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?\n### Response:\n This traceback indicates an error occurred while urllib3 was trying to parse the chunked encoding of an HTTP response. \n\nSpecifically, it failed on this line:\n\n```\nself.chunk_left = int(line, 16)\n```\n\nWhere `line` was an empty byte string `b''`.\n\nThe chunked encoding format specifies each chunk starts with the length in hex, followed by a newline. So it was expecting a hex string like '100\\r\\n' but got an empty string instead.\n\nSo most likely the server returned an invalid chunked response that didn't follow the proper format. \n\nThe root cause could be:\n\n- The server has a bug in its chunked encoding implementation\n- There is a network issue corrupting the response\n- The client made a request that triggered an edge case on the server\n\nSo in summary, this error indicates the HTTP response being parsed did not contain valid chunked encoding as expected. The root cause needs further debugging of the server response and/or network conditions.\n### Response:\n\n\nGive a short title to describe the above chat session. Do not put quotes around the title. Do not use more than 6 words. The title is: "
+        }
+      ],
+      "optional_params": {
+        "max_tokens_to_sample": 20,
+        "temperature": 0.5
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "bedrock",
+        "api_base": null,
+        "litellm_call_id": "95abd0ba-d6df-4d5b-a3c7-b432df12b146",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": "\n\nHuman: \n\nHuman: <admin>### Instruction:\nTraceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?\n### Instruction:\nTraceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?\n### Instruction:\nTraceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?\n### Response:\n This traceback indicates an error occurred while urllib3 was trying to parse the chunked encoding of an HTTP response. \n\nSpecifically, it failed on this line:\n\n```\nself.chunk_left = int(line, 16)\n```\n\nWhere `line` was an empty byte string `b''`.\n\nThe chunked encoding format specifies each chunk starts with the length in hex, followed by a newline. So it was expecting a hex string like '100\\r\\n' but got an empty string instead.\n\nSo most likely the server returned an invalid chunked response that didn't follow the proper format. \n\nThe root cause could be:\n\n- The server has a bug in its chunked encoding implementation\n- There is a network issue corrupting the response\n- The client made a request that triggered an edge case on the server\n\nSo in summary, this error indicates the HTTP response being parsed did not contain valid chunked encoding as expected. The root cause needs further debugging of the server response and/or network conditions.\n### Response:\n\n\nGive a short title to describe the above chat session. Do not put quotes around the title. Do not use more than 6 words. The title is: </admin>\n\nAssistant: ",
+      "api_key": "",
+      "additional_args": {
+        "complete_input_dict": "{\"prompt\": \"\\n\\nHuman: \\n\\nHuman: <admin>### Instruction:\\nTraceback (most recent call last):\\n  File \\\"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\\\", line 761, in _update_chunk_length\\n    self.chunk_left = int(line, 16)\\n                      ^^^^^^^^^^^^^\\nValueError: invalid literal for int() with base 16: b''\\n\\n---\\n\\nwhat is happening?\\n### Instruction:\\nTraceback (most recent call last):\\n  File \\\"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\\\", line 761, in _update_chunk_length\\n    self.chunk_left = int(line, 16)\\n                      ^^^^^^^^^^^^^\\nValueError: invalid literal for int() with base 16: b''\\n\\n---\\n\\nwhat is happening?\\n### Instruction:\\nTraceback (most recent call last):\\n  File \\\"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\\\", line 761, in _update_chunk_length\\n    self.chunk_left = int(line, 16)\\n                      ^^^^^^^^^^^^^\\nValueError: invalid literal for int() with base 16: b''\\n\\n---\\n\\nwhat is happening?\\n### Response:\\n This traceback indicates an error occurred while urllib3 was trying to parse the chunked encoding of an HTTP response. \\n\\nSpecifically, it failed on this line:\\n\\n```\\nself.chunk_left = int(line, 16)\\n```\\n\\nWhere `line` was an empty byte string `b''`.\\n\\nThe chunked encoding format specifies each chunk starts with the length in hex, followed by a newline. So it was expecting a hex string like '100\\\\r\\\\n' but got an empty string instead.\\n\\nSo most likely the server returned an invalid chunked response that didn't follow the proper format. \\n\\nThe root cause could be:\\n\\n- The server has a bug in its chunked encoding implementation\\n- There is a network issue corrupting the response\\n- The client made a request that triggered an edge case on the server\\n\\nSo in summary, this error indicates the HTTP response being parsed did not contain valid chunked encoding as expected. The root cause needs further debugging of the server response and/or network conditions.\\n### Response:\\n\\n\\nGive a short title to describe the above chat session. Do not put quotes around the title. Do not use more than 6 words. The title is: </admin>\\n\\nAssistant: \", \"max_tokens_to_sample\": 20, \"temperature\": 0.5}"
+      },
+      "log_event_type": "post_api_call",
+      "original_response": {
+        "completion": " Invalid chunked encoding in HTTP response",
+        "stop_reason": "stop_sequence"
+      }
+    }
+  },
+  "20231013212440790156": {
+    "pre_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "stream": true,
+        "max_tokens": 1024
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "1f157151-90b2-4aac-a949-9bd9db21b87c",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null,
+        "api_base": "https://api.perplexity.ai"
+      },
+      "log_event_type": "pre_api_call"
+    }
+  },
+  "20231013212442740993": {
+    "pre_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "max_tokens": 20
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "73f74f44-1005-4cf8-9d4e-b610e45faee9",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null,
+        "api_base": "https://api.perplexity.ai"
+      },
+      "log_event_type": "pre_api_call"
+    },
+    "post_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "max_tokens": 20
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "73f74f44-1005-4cf8-9d4e-b610e45faee9",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null
+      },
+      "log_event_type": "post_api_call",
+      "original_response": null
+    }
+  },
+  "20231013212634080367": {
+    "pre_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "stream": true,
+        "max_tokens": 1024
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "1f3e2c49-d256-476c-b9e3-ded72b726770",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null,
+        "api_base": "https://api.perplexity.ai"
+      },
+      "log_event_type": "pre_api_call"
+    }
+  },
+  "20231013212636338333": {
+    "pre_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "max_tokens": 20
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "21eb950d-6eba-44c0-bdc6-40c35b96f9c0",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null,
+        "api_base": "https://api.perplexity.ai"
+      },
+      "log_event_type": "pre_api_call"
+    },
+    "post_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "max_tokens": 20
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "21eb950d-6eba-44c0-bdc6-40c35b96f9c0",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null
+      },
+      "log_event_type": "post_api_call",
+      "original_response": null
+    }
+  },
+  "20231013212713833601": {
+    "pre_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "stream": true,
+        "max_tokens": 1024
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "9eb5637d-ba26-423d-b18e-6675a8589b5d",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null,
+        "api_base": "https://api.perplexity.ai"
+      },
+      "log_event_type": "pre_api_call"
+    }
+  },
+  "20231013212716209992": {
+    "pre_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "max_tokens": 20
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "fd522c4d-fa23-45da-b951-100279fd0832",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null,
+        "api_base": "https://api.perplexity.ai"
+      },
+      "log_event_type": "pre_api_call"
+    },
+    "post_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "max_tokens": 20
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "fd522c4d-fa23-45da-b951-100279fd0832",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null
+      },
+      "log_event_type": "post_api_call",
+      "original_response": null
+    }
+  },
+  "20231013212727242470": {
+    "pre_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "stream": true,
+        "max_tokens": 1024
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "4996a108-c2a5-4fb7-9247-13dc24858203",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null,
+        "api_base": "https://api.perplexity.ai"
+      },
+      "log_event_type": "pre_api_call"
+    }
+  },
+  "20231013212728665109": {
+    "pre_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "max_tokens": 20
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "10bd51f7-f48f-44f1-beb0-429692ee50e4",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null,
+        "api_base": "https://api.perplexity.ai"
+      },
+      "log_event_type": "pre_api_call"
+    },
+    "post_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "max_tokens": 20
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "10bd51f7-f48f-44f1-beb0-429692ee50e4",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null
+      },
+      "log_event_type": "post_api_call",
+      "original_response": null
+    }
+  },
+  "20231013212822162015": {
+    "pre_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "stream": true,
+        "max_tokens": 1024
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "f3edcbf8-5902-4fe0-81b5-108ab68c0b8a",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null,
+        "api_base": "https://api.perplexity.ai"
+      },
+      "log_event_type": "pre_api_call"
+    }
+  },
+  "20231013212824301116": {
+    "pre_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "max_tokens": 20
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "ee74e5c9-e0c9-49ae-8434-3d640a56a4fb",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null,
+        "api_base": "https://api.perplexity.ai"
+      },
+      "log_event_type": "pre_api_call"
+    },
+    "post_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "max_tokens": 20
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "ee74e5c9-e0c9-49ae-8434-3d640a56a4fb",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null
+      },
+      "log_event_type": "post_api_call",
+      "original_response": null
+    }
+  },
+  "20231013213040630177": {
+    "pre_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "stream": true,
+        "max_tokens": 1024
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "27ac6fa8-750b-43d3-a9d4-e0cd29cd6b6a",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null,
+        "api_base": "https://api.perplexity.ai"
+      },
+      "log_event_type": "pre_api_call"
+    }
+  },
+  "20231013213042848247": {
+    "pre_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "max_tokens": 20
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "5f49fd9c-1ba0-4d9b-8b4d-59a47a04967b",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null,
+        "api_base": "https://api.perplexity.ai"
+      },
+      "log_event_type": "pre_api_call"
+    },
+    "post_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        },
+        {
+          "role": "user",
+          "content": ""
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "max_tokens": 20
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "5f49fd9c-1ba0-4d9b-8b4d-59a47a04967b",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        },
+        {
+          "role": "user",
+          "content": ""
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null
+      },
+      "log_event_type": "post_api_call",
+      "original_response": {
+        "id": "0766a9b2-81e5-4977-aabd-397b2d8a446a",
+        "object": "chat.completion",
+        "choices": [
+          {
+            "finish_reason": "stop",
+            "index": 0,
+            "message": {
+              "content": "Hello! How can I help you today?",
+              "role": "assistant",
+              "logprobs": null
+            }
+          }
+        ],
+        "created": 1697257842,
+        "model": "mistral-7b-instruct",
+        "usage": {
+          "prompt_tokens": 9,
+          "completion_tokens": 10,
+          "total_tokens": 19
+        }
+      }
+    }
+  },
+  "20231013213104790104": {
+    "pre_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "stream": true,
+        "max_tokens": 1024
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "0956ede5-da79-4070-8f70-d4e16fe371f2",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        },
+        {
+          "role": "user",
+          "content": "Traceback (most recent call last):\n  File \"/Users/krrishdholakia/miniconda3/lib/python3.11/site-packages/urllib3/response.py\", line 761, in _update_chunk_length\n    self.chunk_left = int(line, 16)\n                      ^^^^^^^^^^^^^\nValueError: invalid literal for int() with base 16: b''\n\n---\n\nwhat is happening?"
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null,
+        "api_base": "https://api.perplexity.ai"
+      },
+      "log_event_type": "pre_api_call"
+    }
+  },
+  "20231013213106766925": {
+    "pre_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "max_tokens": 20
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "caf48b76-5699-46ba-a825-56ca906552d1",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null,
+        "api_base": "https://api.perplexity.ai"
+      },
+      "log_event_type": "pre_api_call"
+    },
+    "post_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        },
+        {
+          "role": "user",
+          "content": ""
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "max_tokens": 20
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "caf48b76-5699-46ba-a825-56ca906552d1",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        },
+        {
+          "role": "user",
+          "content": ""
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null
+      },
+      "log_event_type": "post_api_call",
+      "original_response": {
+        "id": "ca279a10-04f2-42ef-957b-f6914c522208",
+        "object": "chat.completion",
+        "choices": [
+          {
+            "finish_reason": "length",
+            "index": 0,
+            "message": {
+              "content": "I'm sorry, but I'm not sure what you're asking. Can you please",
+              "role": "assistant",
+              "logprobs": null
+            }
+          }
+        ],
+        "created": 1697257866,
+        "model": "mistral-7b-instruct",
+        "usage": {
+          "prompt_tokens": 9,
+          "completion_tokens": 20,
+          "total_tokens": 29
+        }
+      }
+    }
+  },
+  "20231013213116202196": {
+    "pre_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "user",
+          "content": "hey"
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "stream": true,
+        "max_tokens": 1024
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "0a655200-aa97-4a41-9083-6bbd2245f9bc",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "user",
+          "content": "hey"
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null,
+        "api_base": "https://api.perplexity.ai"
+      },
+      "log_event_type": "pre_api_call"
+    }
+  },
+  "20231013213116464103": {
+    "pre_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "max_tokens": 20
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "45d6bb72-338c-40b8-b76e-9b1efaad0a01",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null,
+        "api_base": "https://api.perplexity.ai"
+      },
+      "log_event_type": "pre_api_call"
+    },
+    "post_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        },
+        {
+          "role": "user",
+          "content": ""
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "max_tokens": 20
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "45d6bb72-338c-40b8-b76e-9b1efaad0a01",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        },
+        {
+          "role": "user",
+          "content": ""
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null
+      },
+      "log_event_type": "post_api_call",
+      "original_response": {
+        "id": "12e06fba-2f03-45ed-a294-1cdc467513df",
+        "object": "chat.completion",
+        "choices": [
+          {
+            "finish_reason": "length",
+            "index": 0,
+            "message": {
+              "content": "What is the next term in -973, -1945, -29",
+              "role": "assistant",
+              "logprobs": null
+            }
+          }
+        ],
+        "created": 1697257876,
+        "model": "mistral-7b-instruct",
+        "usage": {
+          "prompt_tokens": 9,
+          "completion_tokens": 20,
+          "total_tokens": 29
+        }
+      }
+    }
+  },
+  "20231013213116947146": {
+    "pre_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "system",
+          "content": "### Instruction:\nhey\n### Response:\n\n### Response:\n\n\nGive a short title to describe the above chat session. Do not put quotes around the title. Do not use more than 6 words. The title is: "
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "max_tokens": 20
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "d4ef9365-c599-4ac2-8410-642ec094e126",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "system",
+          "content": "### Instruction:\nhey\n### Response:\n\n### Response:\n\n\nGive a short title to describe the above chat session. Do not put quotes around the title. Do not use more than 6 words. The title is: "
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null,
+        "api_base": "https://api.perplexity.ai"
+      },
+      "log_event_type": "pre_api_call"
+    },
+    "post_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "system",
+          "content": "### Instruction:\nhey\n### Response:\n\n### Response:\n\n\nGive a short title to describe the above chat session. Do not put quotes around the title. Do not use more than 6 words. The title is: "
+        },
+        {
+          "role": "user",
+          "content": ""
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "max_tokens": 20
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "d4ef9365-c599-4ac2-8410-642ec094e126",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "system",
+          "content": "### Instruction:\nhey\n### Response:\n\n### Response:\n\n\nGive a short title to describe the above chat session. Do not put quotes around the title. Do not use more than 6 words. The title is: "
+        },
+        {
+          "role": "user",
+          "content": ""
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null
+      },
+      "log_event_type": "post_api_call",
+      "original_response": {
+        "id": "a55ed8d0-217d-45af-b166-a0768181789c",
+        "object": "chat.completion",
+        "choices": [
+          {
+            "finish_reason": "length",
+            "index": 0,
+            "message": {
+              "content": "I'm sorry, it seems like there was an error in the previous response. Can you please",
+              "role": "assistant",
+              "logprobs": null
+            }
+          }
+        ],
+        "created": 1697257876,
+        "model": "mistral-7b-instruct",
+        "usage": {
+          "prompt_tokens": 9,
+          "completion_tokens": 20,
+          "total_tokens": 29
+        }
+      }
+    }
+  },
+  "20231013213150884896": {
+    "pre_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "stream": true,
+        "max_tokens": 1024
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "8ffdaf4b-5eb0-46a4-b523-78efc0ae1484",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null,
+        "api_base": "https://api.perplexity.ai"
+      },
+      "log_event_type": "pre_api_call"
+    }
+  },
+  "20231013213151554236": {
+    "pre_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "max_tokens": 20
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "6824339a-0dba-46d8-9c62-caff71b0c032",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null,
+        "api_base": "https://api.perplexity.ai"
+      },
+      "log_event_type": "pre_api_call"
+    },
+    "post_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        },
+        {
+          "role": "user",
+          "content": ""
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "max_tokens": 20
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "6824339a-0dba-46d8-9c62-caff71b0c032",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        },
+        {
+          "role": "user",
+          "content": ""
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null
+      },
+      "log_event_type": "post_api_call",
+      "original_response": {
+        "id": "69e15407-b9fd-4cec-94d2-915465612e82",
+        "object": "chat.completion",
+        "choices": [
+          {
+            "finish_reason": "stop",
+            "index": 0,
+            "message": {
+              "content": "Hello! How can I help you today?",
+              "role": "assistant",
+              "logprobs": null
+            }
+          }
+        ],
+        "created": 1697257911,
+        "model": "mistral-7b-instruct",
+        "usage": {
+          "prompt_tokens": 9,
+          "completion_tokens": 10,
+          "total_tokens": 19
+        }
+      }
+    }
+  },
+  "20231013213244723525": {
+    "pre_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "stream": true,
+        "max_tokens": 1024
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "3d42213c-bbd1-4842-85f8-a67caeda8a78",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null,
+        "api_base": "https://api.perplexity.ai"
+      },
+      "log_event_type": "pre_api_call"
+    }
+  },
+  "20231013213245454481": {
+    "pre_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "max_tokens": 20
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "8d5ca9a4-479c-4839-978e-fe71d3087b84",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null,
+        "api_base": "https://api.perplexity.ai"
+      },
+      "log_event_type": "pre_api_call"
+    },
+    "post_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        },
+        {
+          "role": "user",
+          "content": ""
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "max_tokens": 20
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "8d5ca9a4-479c-4839-978e-fe71d3087b84",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        },
+        {
+          "role": "user",
+          "content": ""
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null
+      },
+      "log_event_type": "post_api_call",
+      "original_response": {
+        "id": "1300a2b8-ee16-4863-82ad-011a6186e379",
+        "object": "chat.completion",
+        "choices": [
+          {
+            "finish_reason": "stop",
+            "index": 0,
+            "message": {
+              "content": "Hello! How can I assist you today?",
+              "role": "assistant",
+              "logprobs": null
+            }
+          }
+        ],
+        "created": 1697257965,
+        "model": "mistral-7b-instruct",
+        "usage": {
+          "prompt_tokens": 9,
+          "completion_tokens": 10,
+          "total_tokens": 19
+        }
+      }
+    }
+  },
+  "20231013213341878538": {
+    "pre_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "stream": true,
+        "max_tokens": 1024
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "616a6dab-577f-4fa6-bcdc-bd1c64c561c9",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null,
+        "api_base": "https://api.perplexity.ai"
+      },
+      "log_event_type": "pre_api_call"
+    }
+  },
+  "20231013213342683953": {
+    "pre_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "max_tokens": 20
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "370a2c6a-f3d5-43c4-ab01-ad67466cbc7b",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null,
+        "api_base": "https://api.perplexity.ai"
+      },
+      "log_event_type": "pre_api_call"
+    },
+    "post_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        },
+        {
+          "role": "user",
+          "content": ""
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "max_tokens": 20
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "370a2c6a-f3d5-43c4-ab01-ad67466cbc7b",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        },
+        {
+          "role": "user",
+          "content": ""
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null
+      },
+      "log_event_type": "post_api_call",
+      "original_response": {
+        "id": "9dc52b98-b413-472e-a12a-a7649052fb42",
+        "object": "chat.completion",
+        "choices": [
+          {
+            "finish_reason": "stop",
+            "index": 0,
+            "message": {
+              "content": "How can I help you today?",
+              "role": "assistant",
+              "logprobs": null
+            }
+          }
+        ],
+        "created": 1697258022,
+        "model": "mistral-7b-instruct",
+        "usage": {
+          "prompt_tokens": 9,
+          "completion_tokens": 8,
+          "total_tokens": 17
+        }
+      }
+    }
+  },
+  "20231013213448796618": {
+    "pre_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "stream": true,
+        "max_tokens": 1024
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "1aed5ecd-db9f-4e14-85c0-76ab2c4267b1",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null,
+        "api_base": "https://api.perplexity.ai"
+      },
+      "log_event_type": "pre_api_call"
+    }
+  },
+  "20231013213449357105": {
+    "pre_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "max_tokens": 20
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "0b701d17-7db0-46e2-86d2-4d1f7ca0650c",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null,
+        "api_base": "https://api.perplexity.ai"
+      },
+      "log_event_type": "pre_api_call"
+    },
+    "post_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        },
+        {
+          "role": "user",
+          "content": ""
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "max_tokens": 20
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "0b701d17-7db0-46e2-86d2-4d1f7ca0650c",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        },
+        {
+          "role": "user",
+          "content": ""
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null
+      },
+      "log_event_type": "post_api_call",
+      "original_response": {
+        "id": "1b887188-9148-445e-b711-3d3d0cf6b185",
+        "object": "chat.completion",
+        "choices": [
+          {
+            "finish_reason": "stop",
+            "index": 0,
+            "message": {
+              "content": "Hello! How can I help you today?",
+              "role": "assistant",
+              "logprobs": null
+            }
+          }
+        ],
+        "created": 1697258089,
+        "model": "mistral-7b-instruct",
+        "usage": {
+          "prompt_tokens": 9,
+          "completion_tokens": 10,
+          "total_tokens": 19
+        }
+      }
+    }
+  },
+  "20231013213517902785": {
+    "pre_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "stream": true,
+        "max_tokens": 1024
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "e4a66a54-aced-448b-8fc7-af323fc3e06d",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null,
+        "api_base": "https://api.perplexity.ai"
+      },
+      "log_event_type": "pre_api_call"
+    }
+  },
+  "20231013213518678678": {
+    "pre_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "max_tokens": 20
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "08642a2a-51fc-4b38-9e01-b7595bf9a104",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null,
+        "api_base": "https://api.perplexity.ai"
+      },
+      "log_event_type": "pre_api_call"
+    },
+    "post_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        },
+        {
+          "role": "user",
+          "content": ""
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "max_tokens": 20
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "08642a2a-51fc-4b38-9e01-b7595bf9a104",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        },
+        {
+          "role": "user",
+          "content": ""
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null
+      },
+      "log_event_type": "post_api_call",
+      "original_response": {
+        "id": "52d91416-c647-44cb-a4ee-1dc70d2072db",
+        "object": "chat.completion",
+        "choices": [
+          {
+            "finish_reason": "stop",
+            "index": 0,
+            "message": {
+              "content": "Hello! How can I help you today?",
+              "role": "assistant",
+              "logprobs": null
+            }
+          }
+        ],
+        "created": 1697258118,
+        "model": "mistral-7b-instruct",
+        "usage": {
+          "prompt_tokens": 9,
+          "completion_tokens": 10,
+          "total_tokens": 19
+        }
+      }
+    }
+  },
+  "20231013213539152325": {
+    "pre_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "stream": true,
+        "max_tokens": 1024
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "8de200e3-2125-4f50-82fc-c9b6d12799a4",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null,
+        "api_base": "https://api.perplexity.ai"
+      },
+      "log_event_type": "pre_api_call"
+    }
+  },
+  "20231013213539846020": {
+    "pre_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "max_tokens": 20
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "8ca07d1a-0a55-46d6-8b21-1cf098197b05",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null,
+        "api_base": "https://api.perplexity.ai"
+      },
+      "log_event_type": "pre_api_call"
+    },
+    "post_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        },
+        {
+          "role": "user",
+          "content": ""
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "max_tokens": 20
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "8ca07d1a-0a55-46d6-8b21-1cf098197b05",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        },
+        {
+          "role": "user",
+          "content": ""
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null
+      },
+      "log_event_type": "post_api_call",
+      "original_response": {
+        "id": "51410c8c-c7d8-4ba2-9399-02a8acd3e180",
+        "object": "chat.completion",
+        "choices": [
+          {
+            "finish_reason": "stop",
+            "index": 0,
+            "message": {
+              "content": "Hello! How can I help you today?",
+              "role": "assistant",
+              "logprobs": null
+            }
+          }
+        ],
+        "created": 1697258139,
+        "model": "mistral-7b-instruct",
+        "usage": {
+          "prompt_tokens": 9,
+          "completion_tokens": 10,
+          "total_tokens": 19
+        }
+      }
+    }
+  },
+  "20231013213744078191": {
+    "pre_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "stream": true,
+        "max_tokens": 1024
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "aa5f4e9c-bc99-4f22-9a98-24fe2dbe7249",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null,
+        "api_base": "https://api.perplexity.ai"
+      },
+      "log_event_type": "pre_api_call"
+    }
+  },
+  "20231013213835712925": {
+    "pre_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "stream": true,
+        "max_tokens": 1024
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "19fe0854-3616-4882-980f-87127e97263a",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null,
+        "api_base": "https://api.perplexity.ai"
+      },
+      "log_event_type": "pre_api_call"
+    }
+  },
+  "20231013213914253529": {
+    "pre_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "stream": true,
+        "max_tokens": 1024
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "63e851e8-719b-4810-8f90-8af2d436bc54",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null,
+        "api_base": "https://api.perplexity.ai"
+      },
+      "log_event_type": "pre_api_call"
+    }
+  },
+  "20231013213915110326": {
+    "pre_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "max_tokens": 20
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "d00f6bd9-5e93-4433-be35-9de27d7bac63",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null,
+        "api_base": "https://api.perplexity.ai"
+      },
+      "log_event_type": "pre_api_call"
+    },
+    "post_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        },
+        {
+          "role": "user",
+          "content": ""
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "max_tokens": 20
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "d00f6bd9-5e93-4433-be35-9de27d7bac63",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        },
+        {
+          "role": "user",
+          "content": ""
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null
+      },
+      "log_event_type": "post_api_call",
+      "original_response": {
+        "id": "f8eb8660-0c25-4a6c-a933-5490c2393ba1",
+        "object": "chat.completion",
+        "choices": [
+          {
+            "finish_reason": "stop",
+            "index": 0,
+            "message": {
+              "content": "Hello! How can I help you today?",
+              "role": "assistant",
+              "logprobs": null
+            }
+          }
+        ],
+        "created": 1697258355,
+        "model": "mistral-7b-instruct",
+        "usage": {
+          "prompt_tokens": 9,
+          "completion_tokens": 10,
+          "total_tokens": 19
+        }
+      }
+    }
+  },
+  "20231013214136176621": {
+    "pre_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "stream": true,
+        "max_tokens": 1024
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "448a5afb-c4a3-4426-89ee-3d9a0bdf0703",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null,
+        "api_base": "https://api.perplexity.ai"
+      },
+      "log_event_type": "pre_api_call"
+    }
+  },
+  "20231013214136742309": {
+    "pre_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "max_tokens": 20
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "1f019c82-11f7-4772-aea7-866e49149605",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null,
+        "api_base": "https://api.perplexity.ai"
+      },
+      "log_event_type": "pre_api_call"
+    },
+    "post_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        },
+        {
+          "role": "user",
+          "content": ""
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "max_tokens": 20
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "1f019c82-11f7-4772-aea7-866e49149605",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        },
+        {
+          "role": "user",
+          "content": ""
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null
+      },
+      "log_event_type": "post_api_call",
+      "original_response": {
+        "id": "4dd3e710-cff3-4cc9-970d-1ddc5c733c79",
+        "object": "chat.completion",
+        "choices": [
+          {
+            "finish_reason": "length",
+            "index": 0,
+            "message": {
+              "content": "To calculate the remainder when 1584 is divided by 15, we can use",
+              "role": "assistant",
+              "logprobs": null
+            }
+          }
+        ],
+        "created": 1697258496,
+        "model": "mistral-7b-instruct",
+        "usage": {
+          "prompt_tokens": 9,
+          "completion_tokens": 20,
+          "total_tokens": 29
+        }
+      }
+    }
+  },
+  "20231013214238159337": {
+    "pre_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "stream": true,
+        "max_tokens": 1024
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "590120e8-4b90-47c1-bb2a-4e267d6162d9",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null,
+        "api_base": "https://api.perplexity.ai"
+      },
+      "log_event_type": "pre_api_call"
+    }
+  },
+  "20231013214238721319": {
+    "pre_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "max_tokens": 20
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "e6783349-3427-46d0-ad71-749f7f088097",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null,
+        "api_base": "https://api.perplexity.ai"
+      },
+      "log_event_type": "pre_api_call"
+    },
+    "post_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        },
+        {
+          "role": "user",
+          "content": ""
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "max_tokens": 20
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "e6783349-3427-46d0-ad71-749f7f088097",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        },
+        {
+          "role": "user",
+          "content": ""
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null
+      },
+      "log_event_type": "post_api_call",
+      "original_response": {
+        "id": "24f98227-c801-4d6e-82a0-0ae0a00d5274",
+        "object": "chat.completion",
+        "choices": [
+          {
+            "finish_reason": "stop",
+            "index": 0,
+            "message": {
+              "content": "Hello! How can I assist you today?",
+              "role": "assistant",
+              "logprobs": null
+            }
+          }
+        ],
+        "created": 1697258558,
+        "model": "mistral-7b-instruct",
+        "usage": {
+          "prompt_tokens": 9,
+          "completion_tokens": 10,
+          "total_tokens": 19
+        }
+      }
+    }
+  },
+  "20231013214340528772": {
+    "pre_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "stream": true,
+        "max_tokens": 1024
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "0f538792-68de-4310-9dcd-5555fcebfb0e",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null,
+        "api_base": "https://api.perplexity.ai"
+      },
+      "log_event_type": "pre_api_call"
+    }
+  },
+  "20231013214341284390": {
+    "pre_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "max_tokens": 20
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "f24d3c00-4895-497e-b638-67b4338909e9",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null,
+        "api_base": "https://api.perplexity.ai"
+      },
+      "log_event_type": "pre_api_call"
+    },
+    "post_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        },
+        {
+          "role": "user",
+          "content": ""
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "max_tokens": 20
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "f24d3c00-4895-497e-b638-67b4338909e9",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "system",
+          "content": "\"\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        },
+        {
+          "role": "user",
+          "content": ""
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null
+      },
+      "log_event_type": "post_api_call",
+      "original_response": {
+        "id": "4e28c3e7-7acf-4e1c-9ef9-3eb6944d1f74",
+        "object": "chat.completion",
+        "choices": [
+          {
+            "finish_reason": "stop",
+            "index": 0,
+            "message": {
+              "content": "Hello! How can I assist you today?",
+              "role": "assistant",
+              "logprobs": null
+            }
+          }
+        ],
+        "created": 1697258621,
+        "model": "mistral-7b-instruct",
+        "usage": {
+          "prompt_tokens": 9,
+          "completion_tokens": 10,
+          "total_tokens": 19
+        }
+      }
+    }
+  },
+  "20231013214414518891": {
+    "pre_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "user",
+          "content": "hey"
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "stream": true,
+        "max_tokens": 1024
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "6caf4d75-a5c2-488c-a0f2-981966670de4",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "user",
+          "content": "hey"
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null,
+        "api_base": "https://api.perplexity.ai"
+      },
+      "log_event_type": "pre_api_call"
+    },
+    "post_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "user",
+          "content": "hey"
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "stream": true,
+        "max_tokens": 1024
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "6caf4d75-a5c2-488c-a0f2-981966670de4",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": null,
+      "api_key": null,
+      "additional_args": {},
+      "log_event_type": "post_api_call",
+      "original_response": "<class 'generator'>",
+      "complete_streaming_response": {
+        "id": "chatcmpl-f65e349b-51c8-428a-aaae-052cdda20e33",
+        "object": "chat.completion.chunk",
+        "created": 1697258654,
+        "model": "mistral-7b-instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "Hello! How can I assist you today?"
+            },
+            "finish_reason": "stop"
+          }
+        ]
+      }
+    }
+  },
+  "20231013214414838837": {
+    "pre_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\"Hello! How can I assist you today?\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "max_tokens": 20
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "03309753-b23d-40c7-afe3-a2e2a24b0f93",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "system",
+          "content": "\"Hello! How can I assist you today?\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null,
+        "api_base": "https://api.perplexity.ai"
+      },
+      "log_event_type": "pre_api_call"
+    },
+    "post_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\"Hello! How can I assist you today?\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        },
+        {
+          "role": "user",
+          "content": ""
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "max_tokens": 20
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "03309753-b23d-40c7-afe3-a2e2a24b0f93",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "system",
+          "content": "\"Hello! How can I assist you today?\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        },
+        {
+          "role": "user",
+          "content": ""
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null
+      },
+      "log_event_type": "post_api_call",
+      "original_response": {
+        "id": "675d7305-e5d2-4eae-88d1-1b5c362f636c",
+        "object": "chat.completion",
+        "choices": [
+          {
+            "finish_reason": "length",
+            "index": 0,
+            "message": {
+              "content": "Welcome to my language model! I'm here to help you with any language-related task you",
+              "role": "assistant",
+              "logprobs": null
+            }
+          }
+        ],
+        "created": 1697258654,
+        "model": "mistral-7b-instruct",
+        "usage": {
+          "prompt_tokens": 9,
+          "completion_tokens": 20,
+          "total_tokens": 29
+        }
+      }
+    }
+  },
+  "20231013214415390002": {
+    "pre_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "system",
+          "content": "### Instruction:\nhey\n### Response:\nHello! How can I assist you today?\n### Response:\n\n\nGive a short title to describe the above chat session. Do not put quotes around the title. Do not use more than 6 words. The title is: "
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "max_tokens": 20
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "509dc457-8553-4902-8c44-432c53acd3fa",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "system",
+          "content": "### Instruction:\nhey\n### Response:\nHello! How can I assist you today?\n### Response:\n\n\nGive a short title to describe the above chat session. Do not put quotes around the title. Do not use more than 6 words. The title is: "
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null,
+        "api_base": "https://api.perplexity.ai"
+      },
+      "log_event_type": "pre_api_call"
+    },
+    "post_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "system",
+          "content": "### Instruction:\nhey\n### Response:\nHello! How can I assist you today?\n### Response:\n\n\nGive a short title to describe the above chat session. Do not put quotes around the title. Do not use more than 6 words. The title is: "
+        },
+        {
+          "role": "user",
+          "content": ""
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "max_tokens": 20
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "509dc457-8553-4902-8c44-432c53acd3fa",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "system",
+          "content": "### Instruction:\nhey\n### Response:\nHello! How can I assist you today?\n### Response:\n\n\nGive a short title to describe the above chat session. Do not put quotes around the title. Do not use more than 6 words. The title is: "
+        },
+        {
+          "role": "user",
+          "content": ""
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null
+      },
+      "log_event_type": "post_api_call",
+      "original_response": {
+        "id": "a250438f-1fd0-4acd-a65a-921bb102c956",
+        "object": "chat.completion",
+        "choices": [
+          {
+            "finish_reason": "stop",
+            "index": 0,
+            "message": {
+              "content": "Hello! How can I help you today?",
+              "role": "assistant",
+              "logprobs": null
+            }
+          }
+        ],
+        "created": 1697258655,
+        "model": "mistral-7b-instruct",
+        "usage": {
+          "prompt_tokens": 9,
+          "completion_tokens": 10,
+          "total_tokens": 19
+        }
+      }
+    }
+  },
+  "20231013214424018232": {
+    "pre_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "stream": true,
+        "max_tokens": 1024
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "dbdb2650-bf03-40bc-a722-49329319b5e0",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null,
+        "api_base": "https://api.perplexity.ai"
+      },
+      "log_event_type": "pre_api_call"
+    },
+    "post_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "user",
+          "content": "hey"
+        },
+        {
+          "role": "user",
+          "content": "hey"
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "stream": true,
+        "max_tokens": 1024
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "dbdb2650-bf03-40bc-a722-49329319b5e0",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": null,
+      "api_key": null,
+      "additional_args": {},
+      "log_event_type": "post_api_call",
+      "original_response": "<class 'generator'>",
+      "complete_streaming_response": {
+        "id": "chatcmpl-cf00dc6d-3cd1-4a22-aaf9-0e40125e7d59",
+        "object": "chat.completion.chunk",
+        "created": 1697258664,
+        "model": "mistral-7b-instruct",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "How can I assist you today?"
+            },
+            "finish_reason": "stop"
+          }
+        ]
+      }
+    }
+  },
+  "20231013214424390214": {
+    "pre_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\"How can I assist you today?\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "max_tokens": 20
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "509ae926-b48a-4fb4-8d59-8ab93ddf2455",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "system",
+          "content": "\"How can I assist you today?\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null,
+        "api_base": "https://api.perplexity.ai"
+      },
+      "log_event_type": "pre_api_call"
+    },
+    "post_api_call": {
+      "model": "mistral-7b-instruct",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\"How can I assist you today?\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        },
+        {
+          "role": "user",
+          "content": ""
+        }
+      ],
+      "optional_params": {
+        "temperature": 0.5,
+        "max_tokens": 20
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "custom_openai",
+        "api_base": "https://api.perplexity.ai",
+        "litellm_call_id": "509ae926-b48a-4fb4-8d59-8ab93ddf2455",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "system",
+          "content": "\"How can I assist you today?\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        },
+        {
+          "role": "user",
+          "content": ""
+        }
+      ],
+      "api_key": "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",
+      "additional_args": {
+        "headers": null
+      },
+      "log_event_type": "post_api_call",
+      "original_response": {
+        "id": "1e9e3514-25d7-4884-af52-a136cc0d0bf4",
+        "object": "chat.completion",
+        "choices": [
+          {
+            "finish_reason": "stop",
+            "index": 0,
+            "message": {
+              "content": "Hello! How can I assist you today?",
+              "role": "assistant",
+              "logprobs": null
+            }
+          }
+        ],
+        "created": 1697258664,
+        "model": "mistral-7b-instruct",
+        "usage": {
+          "prompt_tokens": 9,
+          "completion_tokens": 10,
+          "total_tokens": 19
+        }
+      }
+    }
   }
 }

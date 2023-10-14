@@ -246,30 +246,53 @@ class OpenAIChatCompletion(BaseLLM):
                logger_fn=None):
         super().completion()
         headers = self.validate_environment(api_key=api_key)
-        data = {
-            "messages": messages, 
-            **optional_params
-        }
-        if "stream" in optional_params and optional_params["stream"] == True:
-            response = self._client_session.post(
-                url=f"{api_base}/chat/completions",
-                json=data,
-                headers=headers,
-                stream=optional_params["stream"]
-            )
-            if response.status_code != 200:
-                raise CustomOpenAIError(status_code=response.status_code, message=response.text)
-                
-            ## RESPONSE OBJECT
-            return response.iter_lines()
-        else:
-            response = self._client_session.post(
-                url=f"{api_base}/chat/completions",
-                json=data,
-                headers=headers,
-            )
-            if response.status_code != 200:
-                raise CustomOpenAIError(status_code=response.status_code, message=response.text)
-                
-            ## RESPONSE OBJECT
-            return self.convert_to_model_response_object(response_object=response.json(), model_response_object=model_response)
+
+        for _ in range(2): # if call fails due to alternating messages, retry with reformatted message
+            data = {
+                "model": model,
+                "messages": messages, 
+                **optional_params
+            }
+            try: 
+                if "stream" in optional_params and optional_params["stream"] == True:
+                    response = self._client_session.post(
+                        url=f"{api_base}/chat/completions",
+                        json=data,
+                        headers=headers,
+                        stream=optional_params["stream"]
+                    )
+                    if response.status_code != 200:
+                        raise CustomOpenAIError(status_code=response.status_code, message=response.text)
+                        
+                    ## RESPONSE OBJECT
+                    return response.iter_lines()
+                else:
+                    response = self._client_session.post(
+                        url=f"{api_base}/chat/completions",
+                        json=data,
+                        headers=headers,
+                    )
+                    if response.status_code != 200:
+                        raise CustomOpenAIError(status_code=response.status_code, message=response.text)
+                        
+                    ## RESPONSE OBJECT
+                    return self.convert_to_model_response_object(response_object=response.json(), model_response_object=model_response)
+            except Exception as e:
+                if "Conversation roles must alternate user/assistant" in str(e) or "user and assistant roles should be alternating" in str(e): 
+                    # reformat messages to ensure user/assistant are alternating, if there's either 2 consecutive 'user' messages or 2 consecutive 'assistant' message, add a blank 'user' or 'assistant' message to ensure compatibility
+                    new_messages = []
+                    for i in range(len(messages)-1): 
+                        new_messages.append(messages[i])
+                        if messages[i]["role"] == messages[i+1]["role"]:
+                            if messages[i]["role"] == "user":
+                                new_messages.append({"role": "assistant", "content": ""})
+                            else:
+                                new_messages.append({"role": "user", "content": ""})
+                    new_messages.append(messages[-1])
+                    messages = new_messages
+                elif "Last message must have role `user`" in str(e):
+                    new_messages = messages
+                    new_messages.append({"role": "user", "content": ""})
+                    messages = new_messages
+                else:
+                    raise e
