@@ -227,6 +227,7 @@ model_list = (
     + aleph_alpha_models
     + nlp_cloud_models
     + ollama_models
+    + bedrock_models
 )
 
 provider_list: List = [
