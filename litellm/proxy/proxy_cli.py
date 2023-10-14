@@ -88,6 +88,7 @@ def is_port_in_use(port):
 @click.option('--port', default=8000, help='Port to bind the server to.')
 @click.option('--api_base', default=None, help='API base URL.')
 @click.option('--model', default=None, help='The model name to pass to litellm expects') 
+@click.option('--add_key', default=None, help='The model name to pass to litellm expects') 
 @click.option('--deploy', is_flag=True, type=bool, help='Get a deployed proxy endpoint - api.litellm.ai')
 @click.option('--debug', default=False, is_flag=True, type=bool, help='To debug the input') 
 @click.option('--temperature', default=None, type=float, help='Set temperature for the model') 
@@ -103,19 +104,17 @@ def is_port_in_use(port):
 @click.option('--test', flag_value=True, help='proxy chat completions url to make a test request to')
 @click.option('--local', is_flag=True, default=False, help='for local debugging')
 @click.option('--cost', is_flag=True, default=False, help='for viewing cost logs')
-def run_server(host, port, api_base, model, deploy, debug, temperature, max_tokens, drop_params, create_proxy, add_function_to_prompt, config, file, max_budget, telemetry, logs, test, local, cost):
+def run_server(host, port, api_base, model, add_key, deploy, debug, temperature, max_tokens, drop_params, create_proxy, add_function_to_prompt, config, file, max_budget, telemetry, logs, test, local, cost):
     global feature_telemetry
     args = locals()
-    print(f"args: {args}")
-    print(f"logs: {logs}")
     if local:
-        from proxy_server import app, initialize, deploy_proxy, print_cost_logs, usage_telemetry
+        from proxy_server import app, initialize, deploy_proxy, print_cost_logs, usage_telemetry, add_keys_to_config
         debug = True
     else:
         try:
-            from .proxy_server import app, initialize, deploy_proxy, print_cost_logs, usage_telemetry
+            from .proxy_server import app, initialize, deploy_proxy, print_cost_logs, usage_telemetry, add_keys_to_config
         except ImportError as e: 
-            from proxy_server import app, initialize, deploy_proxy, print_cost_logs, usage_telemetry
+            from proxy_server import app, initialize, deploy_proxy, print_cost_logs, usage_telemetry, add_keys_to_config
     feature_telemetry = usage_telemetry
     if create_proxy == True: 
         repo_url = 'https://github.com/BerriAI/litellm'
@@ -146,6 +145,13 @@ def run_server(host, port, api_base, model, deploy, debug, temperature, max_toke
         recent_logs = {k.strftime("%Y%m%d%H%M%S%f"): v for k, v in sorted_times[:logs]}
 
         print(json.dumps(recent_logs, indent=4))
+        return
+    if add_key:
+        key_name, key_value = add_key.split("=")
+        add_keys_to_config(key_name, key_value)
+        with open(user_config_path) as f:
+            print(f.read())
+        print("\033[1;32mDone successfully\033[0m")
         return
     if deploy == True:
         print(f"\033[32mLiteLLM: Deploying your proxy to api.litellm.ai\033[0m\n")

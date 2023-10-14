@@ -6246,5 +6246,1078 @@
         }
       }
     }
+  },
+  "20231013220339431385": {
+    "pre_api_call": {
+      "model": "anthropic.claude-v2",
+      "messages": [
+        {
+          "role": "user",
+          "content": "user_config_path =litellm.secrets.toml\n\nwrite a python script that adds a new dictionary item to user_config_path inside the keys dictionary"
+        }
+      ],
+      "optional_params": {
+        "max_tokens_to_sample": 1024,
+        "temperature": 0.5,
+        "stream": true
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "bedrock",
+        "api_base": null,
+        "litellm_call_id": "d8ab6233-3f96-48b6-8aa0-4b094a5ef4a9",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": "\n\nHuman: \n\nHuman: user_config_path =litellm.secrets.toml\n\nwrite a python script that adds a new dictionary item to user_config_path inside the keys dictionary\n\nAssistant: ",
+      "api_key": "",
+      "additional_args": {
+        "complete_input_dict": "{\"prompt\": \"\\n\\nHuman: \\n\\nHuman: user_config_path =litellm.secrets.toml\\n\\nwrite a python script that adds a new dictionary item to user_config_path inside the keys dictionary\\n\\nAssistant: \", \"max_tokens_to_sample\": 1024, \"temperature\": 0.5}"
+      },
+      "log_event_type": "pre_api_call"
+    },
+    "post_api_call": {
+      "model": "anthropic.claude-v2",
+      "messages": [
+        {
+          "role": "user",
+          "content": "user_config_path =litellm.secrets.toml\n\nwrite a python script that adds a new dictionary item to user_config_path inside the keys dictionary"
+        }
+      ],
+      "optional_params": {
+        "max_tokens_to_sample": 1024,
+        "temperature": 0.5,
+        "stream": true
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "bedrock",
+        "api_base": null,
+        "litellm_call_id": "d8ab6233-3f96-48b6-8aa0-4b094a5ef4a9",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": null,
+      "api_key": null,
+      "additional_args": {},
+      "log_event_type": "post_api_call",
+      "original_response": "<class 'generator'>",
+      "complete_streaming_response": {
+        "id": "chatcmpl-7ba195b1-1ad5-4e29-8c5a-0b7df4be5a3a",
+        "object": "chat.completion.chunk",
+        "created": 1697259819,
+        "model": "anthropic.claude-v2",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": " Here is a Python script that adds a new dictionary item to the keys dictionary in the user_config_path file:\n\n```python\nimport toml\n\nuser_config_path = \"litellm.secrets.toml\"\n\n# Load the TOML file\nconfig = toml.load(user_config_path)\n\n# Add new key to the 'keys' dictionary  \nconfig['keys']['new_key'] = 'new_value'\n\n# Write the updated config back to the file\nwith open(user_config_path, 'w') as f:\n    toml.dump(config, f)\n```\n\nThe key steps are:\n\n1. Load the TOML file using `toml.load()`\n2. Add the new key-value pair to the 'keys' dictionary \n3. Write the updated config back to the file using `toml.dump()`\n\nThis will add {'new_key': 'new_value'} to the 'keys' dictionary in the given TOML file."
+            },
+            "finish_reason": "stop_sequence"
+          }
+        ]
+      }
+    }
+  },
+  "20231013220351116828": {
+    "pre_api_call": {
+      "model": "anthropic.claude-v2",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\" Here is a Python script that adds a new dictionary item to the keys dictionary in the user_config_path file:\n\n```python\nimport toml\n\nuser_config_path = \"litellm.secrets.toml\"\n\n# Load the TOML file\nconfig = toml.load(user_config_path)\n\n# Add new key to the 'keys' dictionary  \nconfig['keys']['new_key'] = 'new_value'\n\n# Write the updated config back to the file\nwith open(user_config_path, 'w') as f:\n    toml.dump(config, f)\n```\n\nThe key steps are:\n\n1. Load the TOML file using `toml.load()`\n2. Add the new key-value pair to the 'keys' dictionary \n3. Write the updated config back to the file using `toml.dump()`\n\nThis will add {'new_key': 'new_value'} to the 'keys' dictionary in the given TOML file.\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "optional_params": {
+        "max_tokens_to_sample": 20,
+        "temperature": 0.5
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "bedrock",
+        "api_base": null,
+        "litellm_call_id": "7b0cd5b8-f94e-470a-99d5-52d1b4b7f794",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": "\n\nHuman: \n\nHuman: <admin>\" Here is a Python script that adds a new dictionary item to the keys dictionary in the user_config_path file:\n\n```python\nimport toml\n\nuser_config_path = \"litellm.secrets.toml\"\n\n# Load the TOML file\nconfig = toml.load(user_config_path)\n\n# Add new key to the 'keys' dictionary  \nconfig['keys']['new_key'] = 'new_value'\n\n# Write the updated config back to the file\nwith open(user_config_path, 'w') as f:\n    toml.dump(config, f)\n```\n\nThe key steps are:\n\n1. Load the TOML file using `toml.load()`\n2. Add the new key-value pair to the 'keys' dictionary \n3. Write the updated config back to the file using `toml.dump()`\n\nThis will add {'new_key': 'new_value'} to the 'keys' dictionary in the given TOML file.\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:</admin>\n\nAssistant: ",
+      "api_key": "",
+      "additional_args": {
+        "complete_input_dict": "{\"prompt\": \"\\n\\nHuman: \\n\\nHuman: <admin>\\\" Here is a Python script that adds a new dictionary item to the keys dictionary in the user_config_path file:\\n\\n```python\\nimport toml\\n\\nuser_config_path = \\\"litellm.secrets.toml\\\"\\n\\n# Load the TOML file\\nconfig = toml.load(user_config_path)\\n\\n# Add new key to the 'keys' dictionary  \\nconfig['keys']['new_key'] = 'new_value'\\n\\n# Write the updated config back to the file\\nwith open(user_config_path, 'w') as f:\\n    toml.dump(config, f)\\n```\\n\\nThe key steps are:\\n\\n1. Load the TOML file using `toml.load()`\\n2. Add the new key-value pair to the 'keys' dictionary \\n3. Write the updated config back to the file using `toml.dump()`\\n\\nThis will add {'new_key': 'new_value'} to the 'keys' dictionary in the given TOML file.\\\"\\n\\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:</admin>\\n\\nAssistant: \", \"max_tokens_to_sample\": 20, \"temperature\": 0.5}"
+      },
+      "log_event_type": "pre_api_call"
+    },
+    "post_api_call": {
+      "model": "anthropic.claude-v2",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\" Here is a Python script that adds a new dictionary item to the keys dictionary in the user_config_path file:\n\n```python\nimport toml\n\nuser_config_path = \"litellm.secrets.toml\"\n\n# Load the TOML file\nconfig = toml.load(user_config_path)\n\n# Add new key to the 'keys' dictionary  \nconfig['keys']['new_key'] = 'new_value'\n\n# Write the updated config back to the file\nwith open(user_config_path, 'w') as f:\n    toml.dump(config, f)\n```\n\nThe key steps are:\n\n1. Load the TOML file using `toml.load()`\n2. Add the new key-value pair to the 'keys' dictionary \n3. Write the updated config back to the file using `toml.dump()`\n\nThis will add {'new_key': 'new_value'} to the 'keys' dictionary in the given TOML file.\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "optional_params": {
+        "max_tokens_to_sample": 20,
+        "temperature": 0.5
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "bedrock",
+        "api_base": null,
+        "litellm_call_id": "7b0cd5b8-f94e-470a-99d5-52d1b4b7f794",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": "\n\nHuman: \n\nHuman: <admin>\" Here is a Python script that adds a new dictionary item to the keys dictionary in the user_config_path file:\n\n```python\nimport toml\n\nuser_config_path = \"litellm.secrets.toml\"\n\n# Load the TOML file\nconfig = toml.load(user_config_path)\n\n# Add new key to the 'keys' dictionary  \nconfig['keys']['new_key'] = 'new_value'\n\n# Write the updated config back to the file\nwith open(user_config_path, 'w') as f:\n    toml.dump(config, f)\n```\n\nThe key steps are:\n\n1. Load the TOML file using `toml.load()`\n2. Add the new key-value pair to the 'keys' dictionary \n3. Write the updated config back to the file using `toml.dump()`\n\nThis will add {'new_key': 'new_value'} to the 'keys' dictionary in the given TOML file.\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:</admin>\n\nAssistant: ",
+      "api_key": "",
+      "additional_args": {
+        "complete_input_dict": "{\"prompt\": \"\\n\\nHuman: \\n\\nHuman: <admin>\\\" Here is a Python script that adds a new dictionary item to the keys dictionary in the user_config_path file:\\n\\n```python\\nimport toml\\n\\nuser_config_path = \\\"litellm.secrets.toml\\\"\\n\\n# Load the TOML file\\nconfig = toml.load(user_config_path)\\n\\n# Add new key to the 'keys' dictionary  \\nconfig['keys']['new_key'] = 'new_value'\\n\\n# Write the updated config back to the file\\nwith open(user_config_path, 'w') as f:\\n    toml.dump(config, f)\\n```\\n\\nThe key steps are:\\n\\n1. Load the TOML file using `toml.load()`\\n2. Add the new key-value pair to the 'keys' dictionary \\n3. Write the updated config back to the file using `toml.dump()`\\n\\nThis will add {'new_key': 'new_value'} to the 'keys' dictionary in the given TOML file.\\\"\\n\\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:</admin>\\n\\nAssistant: \", \"max_tokens_to_sample\": 20, \"temperature\": 0.5}"
+      },
+      "log_event_type": "post_api_call",
+      "original_response": {
+        "completion": " Add new key-value pair to dictionary in TOML config file",
+        "stop_reason": "stop_sequence"
+      }
+    }
+  },
+  "20231013220352219756": {
+    "pre_api_call": {
+      "model": "anthropic.claude-v2",
+      "messages": [
+        {
+          "role": "system",
+          "content": "### Instruction:\nuser_config_path =litellm.secrets.toml\n\nwrite a python script that adds a new dictionary item to user_config_path inside the keys dictionary\n### Response:\n Here is a Python script that adds a new dictionary item to the keys dictionary in the user_config_path file:\n\n```python\nimport toml\n\nuser_config_path = \"litellm.secrets.toml\"\n\n# Load the TOML file\nconfig = toml.load(user_config_path)\n\n# Add new key to the 'keys' dictionary  \nconfig['keys']['new_key'] = 'new_value'\n\n# Write the updated config back to the file\nwith open(user_config_path, 'w') as f:\n    toml.dump(config, f)\n```\n\nThe key steps are:\n\n1. Load the TOML file using `toml.load()`\n2. Add the new key-value pair to the 'keys' dictionary \n3. Write the updated config back to the file using `toml.dump()`\n\nThis will add {'new_key': 'new_value'} to the 'keys' dictionary in the given TOML file.\n### Response:\n\n\nGive a short title to describe the above chat session. Do not put quotes around the title. Do not use more than 6 words. The title is: "
+        }
+      ],
+      "optional_params": {
+        "max_tokens_to_sample": 20,
+        "temperature": 0.5
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "bedrock",
+        "api_base": null,
+        "litellm_call_id": "a562eabc-ef9f-464f-a614-52b636d7e18c",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": "\n\nHuman: \n\nHuman: <admin>### Instruction:\nuser_config_path =litellm.secrets.toml\n\nwrite a python script that adds a new dictionary item to user_config_path inside the keys dictionary\n### Response:\n Here is a Python script that adds a new dictionary item to the keys dictionary in the user_config_path file:\n\n```python\nimport toml\n\nuser_config_path = \"litellm.secrets.toml\"\n\n# Load the TOML file\nconfig = toml.load(user_config_path)\n\n# Add new key to the 'keys' dictionary  \nconfig['keys']['new_key'] = 'new_value'\n\n# Write the updated config back to the file\nwith open(user_config_path, 'w') as f:\n    toml.dump(config, f)\n```\n\nThe key steps are:\n\n1. Load the TOML file using `toml.load()`\n2. Add the new key-value pair to the 'keys' dictionary \n3. Write the updated config back to the file using `toml.dump()`\n\nThis will add {'new_key': 'new_value'} to the 'keys' dictionary in the given TOML file.\n### Response:\n\n\nGive a short title to describe the above chat session. Do not put quotes around the title. Do not use more than 6 words. The title is: </admin>\n\nAssistant: ",
+      "api_key": "",
+      "additional_args": {
+        "complete_input_dict": "{\"prompt\": \"\\n\\nHuman: \\n\\nHuman: <admin>### Instruction:\\nuser_config_path =litellm.secrets.toml\\n\\nwrite a python script that adds a new dictionary item to user_config_path inside the keys dictionary\\n### Response:\\n Here is a Python script that adds a new dictionary item to the keys dictionary in the user_config_path file:\\n\\n```python\\nimport toml\\n\\nuser_config_path = \\\"litellm.secrets.toml\\\"\\n\\n# Load the TOML file\\nconfig = toml.load(user_config_path)\\n\\n# Add new key to the 'keys' dictionary  \\nconfig['keys']['new_key'] = 'new_value'\\n\\n# Write the updated config back to the file\\nwith open(user_config_path, 'w') as f:\\n    toml.dump(config, f)\\n```\\n\\nThe key steps are:\\n\\n1. Load the TOML file using `toml.load()`\\n2. Add the new key-value pair to the 'keys' dictionary \\n3. Write the updated config back to the file using `toml.dump()`\\n\\nThis will add {'new_key': 'new_value'} to the 'keys' dictionary in the given TOML file.\\n### Response:\\n\\n\\nGive a short title to describe the above chat session. Do not put quotes around the title. Do not use more than 6 words. The title is: </admin>\\n\\nAssistant: \", \"max_tokens_to_sample\": 20, \"temperature\": 0.5}"
+      },
+      "log_event_type": "pre_api_call"
+    },
+    "post_api_call": {
+      "model": "anthropic.claude-v2",
+      "messages": [
+        {
+          "role": "system",
+          "content": "### Instruction:\nuser_config_path =litellm.secrets.toml\n\nwrite a python script that adds a new dictionary item to user_config_path inside the keys dictionary\n### Response:\n Here is a Python script that adds a new dictionary item to the keys dictionary in the user_config_path file:\n\n```python\nimport toml\n\nuser_config_path = \"litellm.secrets.toml\"\n\n# Load the TOML file\nconfig = toml.load(user_config_path)\n\n# Add new key to the 'keys' dictionary  \nconfig['keys']['new_key'] = 'new_value'\n\n# Write the updated config back to the file\nwith open(user_config_path, 'w') as f:\n    toml.dump(config, f)\n```\n\nThe key steps are:\n\n1. Load the TOML file using `toml.load()`\n2. Add the new key-value pair to the 'keys' dictionary \n3. Write the updated config back to the file using `toml.dump()`\n\nThis will add {'new_key': 'new_value'} to the 'keys' dictionary in the given TOML file.\n### Response:\n\n\nGive a short title to describe the above chat session. Do not put quotes around the title. Do not use more than 6 words. The title is: "
+        }
+      ],
+      "optional_params": {
+        "max_tokens_to_sample": 20,
+        "temperature": 0.5
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "bedrock",
+        "api_base": null,
+        "litellm_call_id": "a562eabc-ef9f-464f-a614-52b636d7e18c",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": "\n\nHuman: \n\nHuman: <admin>### Instruction:\nuser_config_path =litellm.secrets.toml\n\nwrite a python script that adds a new dictionary item to user_config_path inside the keys dictionary\n### Response:\n Here is a Python script that adds a new dictionary item to the keys dictionary in the user_config_path file:\n\n```python\nimport toml\n\nuser_config_path = \"litellm.secrets.toml\"\n\n# Load the TOML file\nconfig = toml.load(user_config_path)\n\n# Add new key to the 'keys' dictionary  \nconfig['keys']['new_key'] = 'new_value'\n\n# Write the updated config back to the file\nwith open(user_config_path, 'w') as f:\n    toml.dump(config, f)\n```\n\nThe key steps are:\n\n1. Load the TOML file using `toml.load()`\n2. Add the new key-value pair to the 'keys' dictionary \n3. Write the updated config back to the file using `toml.dump()`\n\nThis will add {'new_key': 'new_value'} to the 'keys' dictionary in the given TOML file.\n### Response:\n\n\nGive a short title to describe the above chat session. Do not put quotes around the title. Do not use more than 6 words. The title is: </admin>\n\nAssistant: ",
+      "api_key": "",
+      "additional_args": {
+        "complete_input_dict": "{\"prompt\": \"\\n\\nHuman: \\n\\nHuman: <admin>### Instruction:\\nuser_config_path =litellm.secrets.toml\\n\\nwrite a python script that adds a new dictionary item to user_config_path inside the keys dictionary\\n### Response:\\n Here is a Python script that adds a new dictionary item to the keys dictionary in the user_config_path file:\\n\\n```python\\nimport toml\\n\\nuser_config_path = \\\"litellm.secrets.toml\\\"\\n\\n# Load the TOML file\\nconfig = toml.load(user_config_path)\\n\\n# Add new key to the 'keys' dictionary  \\nconfig['keys']['new_key'] = 'new_value'\\n\\n# Write the updated config back to the file\\nwith open(user_config_path, 'w') as f:\\n    toml.dump(config, f)\\n```\\n\\nThe key steps are:\\n\\n1. Load the TOML file using `toml.load()`\\n2. Add the new key-value pair to the 'keys' dictionary \\n3. Write the updated config back to the file using `toml.dump()`\\n\\nThis will add {'new_key': 'new_value'} to the 'keys' dictionary in the given TOML file.\\n### Response:\\n\\n\\nGive a short title to describe the above chat session. Do not put quotes around the title. Do not use more than 6 words. The title is: </admin>\\n\\nAssistant: \", \"max_tokens_to_sample\": 20, \"temperature\": 0.5}"
+      },
+      "log_event_type": "post_api_call",
+      "original_response": {
+        "completion": " Adding a key to a TOML config file",
+        "stop_reason": "stop_sequence"
+      }
+    }
+  },
+  "20231013220405586160": {
+    "pre_api_call": {
+      "model": "anthropic.claude-v2",
+      "messages": [
+        {
+          "role": "user",
+          "content": "user_config_path =litellm.secrets.toml\n\nwrite a python script that adds a new dictionary item to user_config_path inside the keys dictionary"
+        },
+        {
+          "role": "assistant",
+          "content": " Here is a Python script that adds a new dictionary item to the keys dictionary in the user_config_path file:\n\n```python\nimport toml\n\nuser_config_path = \"litellm.secrets.toml\"\n\n# Load the TOML file\nconfig = toml.load(user_config_path)\n\n# Add new key to the 'keys' dictionary  \nconfig['keys']['new_key'] = 'new_value'\n\n# Write the updated config back to the file\nwith open(user_config_path, 'w') as f:\n    toml.dump(config, f)\n```\n\nThe key steps are:\n\n1. Load the TOML file using `toml.load()`\n2. Add the new key-value pair to the 'keys' dictionary \n3. Write the updated config back to the file using `toml.dump()`\n\nThis will add {'new_key': 'new_value'} to the 'keys' dictionary in the given TOML file."
+        },
+        {
+          "role": "user",
+          "content": "handle for the case that the file doesn't exist"
+        }
+      ],
+      "optional_params": {
+        "max_tokens_to_sample": 1024,
+        "temperature": 0.5,
+        "stream": true
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "bedrock",
+        "api_base": null,
+        "litellm_call_id": "faa0bd0b-24f0-4cb7-90d3-c4403ec2bda8",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": "\n\nHuman: \n\nHuman: user_config_path =litellm.secrets.toml\n\nwrite a python script that adds a new dictionary item to user_config_path inside the keys dictionary\n\nAssistant:  Here is a Python script that adds a new dictionary item to the keys dictionary in the user_config_path file:\n\n```python\nimport toml\n\nuser_config_path = \"litellm.secrets.toml\"\n\n# Load the TOML file\nconfig = toml.load(user_config_path)\n\n# Add new key to the 'keys' dictionary  \nconfig['keys']['new_key'] = 'new_value'\n\n# Write the updated config back to the file\nwith open(user_config_path, 'w') as f:\n    toml.dump(config, f)\n```\n\nThe key steps are:\n\n1. Load the TOML file using `toml.load()`\n2. Add the new key-value pair to the 'keys' dictionary \n3. Write the updated config back to the file using `toml.dump()`\n\nThis will add {'new_key': 'new_value'} to the 'keys' dictionary in the given TOML file.\n\nHuman: handle for the case that the file doesn't exist\n\nAssistant: ",
+      "api_key": "",
+      "additional_args": {
+        "complete_input_dict": "{\"prompt\": \"\\n\\nHuman: \\n\\nHuman: user_config_path =litellm.secrets.toml\\n\\nwrite a python script that adds a new dictionary item to user_config_path inside the keys dictionary\\n\\nAssistant:  Here is a Python script that adds a new dictionary item to the keys dictionary in the user_config_path file:\\n\\n```python\\nimport toml\\n\\nuser_config_path = \\\"litellm.secrets.toml\\\"\\n\\n# Load the TOML file\\nconfig = toml.load(user_config_path)\\n\\n# Add new key to the 'keys' dictionary  \\nconfig['keys']['new_key'] = 'new_value'\\n\\n# Write the updated config back to the file\\nwith open(user_config_path, 'w') as f:\\n    toml.dump(config, f)\\n```\\n\\nThe key steps are:\\n\\n1. Load the TOML file using `toml.load()`\\n2. Add the new key-value pair to the 'keys' dictionary \\n3. Write the updated config back to the file using `toml.dump()`\\n\\nThis will add {'new_key': 'new_value'} to the 'keys' dictionary in the given TOML file.\\n\\nHuman: handle for the case that the file doesn't exist\\n\\nAssistant: \", \"max_tokens_to_sample\": 1024, \"temperature\": 0.5}"
+      },
+      "log_event_type": "pre_api_call"
+    },
+    "post_api_call": {
+      "model": "anthropic.claude-v2",
+      "messages": [
+        {
+          "role": "user",
+          "content": "user_config_path =litellm.secrets.toml\n\nwrite a python script that adds a new dictionary item to user_config_path inside the keys dictionary"
+        },
+        {
+          "role": "assistant",
+          "content": " Here is a Python script that adds a new dictionary item to the keys dictionary in the user_config_path file:\n\n```python\nimport toml\n\nuser_config_path = \"litellm.secrets.toml\"\n\n# Load the TOML file\nconfig = toml.load(user_config_path)\n\n# Add new key to the 'keys' dictionary  \nconfig['keys']['new_key'] = 'new_value'\n\n# Write the updated config back to the file\nwith open(user_config_path, 'w') as f:\n    toml.dump(config, f)\n```\n\nThe key steps are:\n\n1. Load the TOML file using `toml.load()`\n2. Add the new key-value pair to the 'keys' dictionary \n3. Write the updated config back to the file using `toml.dump()`\n\nThis will add {'new_key': 'new_value'} to the 'keys' dictionary in the given TOML file."
+        },
+        {
+          "role": "user",
+          "content": "handle for the case that the file doesn't exist"
+        }
+      ],
+      "optional_params": {
+        "max_tokens_to_sample": 1024,
+        "temperature": 0.5,
+        "stream": true
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "bedrock",
+        "api_base": null,
+        "litellm_call_id": "faa0bd0b-24f0-4cb7-90d3-c4403ec2bda8",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": null,
+      "api_key": null,
+      "additional_args": {},
+      "log_event_type": "post_api_call",
+      "original_response": "<class 'generator'>",
+      "complete_streaming_response": {
+        "id": "chatcmpl-cf9f8835-bba8-4e32-ac99-13a642715823",
+        "object": "chat.completion.chunk",
+        "created": 1697259845,
+        "model": "anthropic.claude-v2",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": " Good point! We should check if the file exists before trying to load it. Here is an updated script that handles the case where the file does not exist:\n\n```python\nimport toml\nimport os\n\nuser_config_path = \"litellm.secrets.toml\"\n\n# Check if file exists\nif os.path.exists(user_config_path):\n  # Load existing file\n  config = toml.load(user_config_path) \nelse:\n  # File doesn't exist, create empty config\n  config = {}\n\n# Add new key \nconfig.setdefault('keys', {})['new_key'] = 'new_value'\n\n# Write config to file \nwith open(user_config_path, 'w') as f:\n  toml.dump(config, f)\n```\n\nThe key changes:\n\n- Check if file exists using `os.path.exists()`\n- If it doesn't exist, initialize an empty config dict\n- Use `setdefault()` to safely add the 'keys' sub-dict if needed\n- Write the config to file, which will create the file if it didn't exist\n\nThis handles the case where the file doesn't exist yet and creates it with the new key added."
+            },
+            "finish_reason": "stop_sequence"
+          }
+        ]
+      }
+    }
+  },
+  "20231013220417508501": {
+    "pre_api_call": {
+      "model": "anthropic.claude-v2",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\" Good point! We should check if the file exists before trying to load it. Here is an updated script that handles the case where the file does not exist:\n\n```python\nimport toml\nimport os\n\nuser_config_path = \"litellm.secrets.toml\"\n\n# Check if file exists\nif os.path.exists(user_config_path):\n  # Load existing file\n  config = toml.load(user_config_path) \nelse:\n  # File doesn't exist, create empty config\n  config = {}\n\n# Add new key \nconfig.setdefault('keys', {})['new_key'] = 'new_value'\n\n# Write config to file \nwith open(user_config_path, 'w') as f:\n  toml.dump(config, f)\n```\n\nThe key changes:\n\n- Check if file exists using `os.path.exists()`\n- If it doesn't exist, initialize an empty config dict\n- Use `setdefault()` to safely add the 'keys' sub-dict if needed\n- Write the config to file, which will create the file if it didn't exist\n\nThis handles the case where the file doesn't exist yet and creates it with the new key added.\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "optional_params": {
+        "max_tokens_to_sample": 20,
+        "temperature": 0.5
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "bedrock",
+        "api_base": null,
+        "litellm_call_id": "3c5586cb-46ec-4e2f-b02a-3fe5a55d2a32",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": "\n\nHuman: \n\nHuman: <admin>\" Good point! We should check if the file exists before trying to load it. Here is an updated script that handles the case where the file does not exist:\n\n```python\nimport toml\nimport os\n\nuser_config_path = \"litellm.secrets.toml\"\n\n# Check if file exists\nif os.path.exists(user_config_path):\n  # Load existing file\n  config = toml.load(user_config_path) \nelse:\n  # File doesn't exist, create empty config\n  config = {}\n\n# Add new key \nconfig.setdefault('keys', {})['new_key'] = 'new_value'\n\n# Write config to file \nwith open(user_config_path, 'w') as f:\n  toml.dump(config, f)\n```\n\nThe key changes:\n\n- Check if file exists using `os.path.exists()`\n- If it doesn't exist, initialize an empty config dict\n- Use `setdefault()` to safely add the 'keys' sub-dict if needed\n- Write the config to file, which will create the file if it didn't exist\n\nThis handles the case where the file doesn't exist yet and creates it with the new key added.\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:</admin>\n\nAssistant: ",
+      "api_key": "",
+      "additional_args": {
+        "complete_input_dict": "{\"prompt\": \"\\n\\nHuman: \\n\\nHuman: <admin>\\\" Good point! We should check if the file exists before trying to load it. Here is an updated script that handles the case where the file does not exist:\\n\\n```python\\nimport toml\\nimport os\\n\\nuser_config_path = \\\"litellm.secrets.toml\\\"\\n\\n# Check if file exists\\nif os.path.exists(user_config_path):\\n  # Load existing file\\n  config = toml.load(user_config_path) \\nelse:\\n  # File doesn't exist, create empty config\\n  config = {}\\n\\n# Add new key \\nconfig.setdefault('keys', {})['new_key'] = 'new_value'\\n\\n# Write config to file \\nwith open(user_config_path, 'w') as f:\\n  toml.dump(config, f)\\n```\\n\\nThe key changes:\\n\\n- Check if file exists using `os.path.exists()`\\n- If it doesn't exist, initialize an empty config dict\\n- Use `setdefault()` to safely add the 'keys' sub-dict if needed\\n- Write the config to file, which will create the file if it didn't exist\\n\\nThis handles the case where the file doesn't exist yet and creates it with the new key added.\\\"\\n\\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:</admin>\\n\\nAssistant: \", \"max_tokens_to_sample\": 20, \"temperature\": 0.5}"
+      },
+      "log_event_type": "pre_api_call"
+    },
+    "post_api_call": {
+      "model": "anthropic.claude-v2",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\" Good point! We should check if the file exists before trying to load it. Here is an updated script that handles the case where the file does not exist:\n\n```python\nimport toml\nimport os\n\nuser_config_path = \"litellm.secrets.toml\"\n\n# Check if file exists\nif os.path.exists(user_config_path):\n  # Load existing file\n  config = toml.load(user_config_path) \nelse:\n  # File doesn't exist, create empty config\n  config = {}\n\n# Add new key \nconfig.setdefault('keys', {})['new_key'] = 'new_value'\n\n# Write config to file \nwith open(user_config_path, 'w') as f:\n  toml.dump(config, f)\n```\n\nThe key changes:\n\n- Check if file exists using `os.path.exists()`\n- If it doesn't exist, initialize an empty config dict\n- Use `setdefault()` to safely add the 'keys' sub-dict if needed\n- Write the config to file, which will create the file if it didn't exist\n\nThis handles the case where the file doesn't exist yet and creates it with the new key added.\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "optional_params": {
+        "max_tokens_to_sample": 20,
+        "temperature": 0.5
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "bedrock",
+        "api_base": null,
+        "litellm_call_id": "3c5586cb-46ec-4e2f-b02a-3fe5a55d2a32",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": "\n\nHuman: \n\nHuman: <admin>\" Good point! We should check if the file exists before trying to load it. Here is an updated script that handles the case where the file does not exist:\n\n```python\nimport toml\nimport os\n\nuser_config_path = \"litellm.secrets.toml\"\n\n# Check if file exists\nif os.path.exists(user_config_path):\n  # Load existing file\n  config = toml.load(user_config_path) \nelse:\n  # File doesn't exist, create empty config\n  config = {}\n\n# Add new key \nconfig.setdefault('keys', {})['new_key'] = 'new_value'\n\n# Write config to file \nwith open(user_config_path, 'w') as f:\n  toml.dump(config, f)\n```\n\nThe key changes:\n\n- Check if file exists using `os.path.exists()`\n- If it doesn't exist, initialize an empty config dict\n- Use `setdefault()` to safely add the 'keys' sub-dict if needed\n- Write the config to file, which will create the file if it didn't exist\n\nThis handles the case where the file doesn't exist yet and creates it with the new key added.\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:</admin>\n\nAssistant: ",
+      "api_key": "",
+      "additional_args": {
+        "complete_input_dict": "{\"prompt\": \"\\n\\nHuman: \\n\\nHuman: <admin>\\\" Good point! We should check if the file exists before trying to load it. Here is an updated script that handles the case where the file does not exist:\\n\\n```python\\nimport toml\\nimport os\\n\\nuser_config_path = \\\"litellm.secrets.toml\\\"\\n\\n# Check if file exists\\nif os.path.exists(user_config_path):\\n  # Load existing file\\n  config = toml.load(user_config_path) \\nelse:\\n  # File doesn't exist, create empty config\\n  config = {}\\n\\n# Add new key \\nconfig.setdefault('keys', {})['new_key'] = 'new_value'\\n\\n# Write config to file \\nwith open(user_config_path, 'w') as f:\\n  toml.dump(config, f)\\n```\\n\\nThe key changes:\\n\\n- Check if file exists using `os.path.exists()`\\n- If it doesn't exist, initialize an empty config dict\\n- Use `setdefault()` to safely add the 'keys' sub-dict if needed\\n- Write the config to file, which will create the file if it didn't exist\\n\\nThis handles the case where the file doesn't exist yet and creates it with the new key added.\\\"\\n\\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:</admin>\\n\\nAssistant: \", \"max_tokens_to_sample\": 20, \"temperature\": 0.5}"
+      },
+      "log_event_type": "post_api_call",
+      "original_response": {
+        "completion": " Adding file existence check before loading config",
+        "stop_reason": "stop_sequence"
+      }
+    }
+  },
+  "20231013220935096517": {
+    "pre_api_call": {
+      "model": "anthropic.claude-v2",
+      "messages": [
+        {
+          "role": "user",
+          "content": "user_config_path =litellm.secrets.toml\n\nwrite a python script that adds a new dictionary item to user_config_path inside the keys dictionary"
+        },
+        {
+          "role": "assistant",
+          "content": " Here is a Python script that adds a new dictionary item to the keys dictionary in the user_config_path file:\n\n```python\nimport toml\n\nuser_config_path = \"litellm.secrets.toml\"\n\n# Load the TOML file\nconfig = toml.load(user_config_path)\n\n# Add new key to the 'keys' dictionary  \nconfig['keys']['new_key'] = 'new_value'\n\n# Write the updated config back to the file\nwith open(user_config_path, 'w') as f:\n    toml.dump(config, f)\n```\n\nThe key steps are:\n\n1. Load the TOML file using `toml.load()`\n2. Add the new key-value pair to the 'keys' dictionary \n3. Write the updated config back to the file using `toml.dump()`\n\nThis will add {'new_key': 'new_value'} to the 'keys' dictionary in the given TOML file."
+        },
+        {
+          "role": "user",
+          "content": "handle for the case that the file doesn't exist"
+        },
+        {
+          "role": "assistant",
+          "content": " Good point! We should check if the file exists before trying to load it. Here is an updated script that handles the case where the file does not exist:\n\n```python\nimport toml\nimport os\n\nuser_config_path = \"litellm.secrets.toml\"\n\n# Check if file exists\nif os.path.exists(user_config_path):\n  # Load existing file\n  config = toml.load(user_config_path) \nelse:\n  # File doesn't exist, create empty config\n  config = {}\n\n# Add new key \nconfig.setdefault('keys', {})['new_key'] = 'new_value'\n\n# Write config to file \nwith open(user_config_path, 'w') as f:\n  toml.dump(config, f)\n```\n\nThe key changes:\n\n- Check if file exists using `os.path.exists()`\n- If it doesn't exist, initialize an empty config dict\n- Use `setdefault()` to safely add the 'keys' sub-dict if needed\n- Write the config to file, which will create the file if it didn't exist\n\nThis handles the case where the file doesn't exist yet and creates it with the new key added."
+        },
+        {
+          "role": "user",
+          "content": "    tomllib.dump(config, f)\n    ^^^^^^^^^^^^\nAttributeError: module 'tomli' has no attribute 'dump'"
+        }
+      ],
+      "optional_params": {
+        "max_tokens_to_sample": 1024,
+        "temperature": 0.5,
+        "stream": true
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "bedrock",
+        "api_base": null,
+        "litellm_call_id": "2aef8588-ef19-4a7e-8deb-6ad798227ade",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": "\n\nHuman: \n\nHuman: user_config_path =litellm.secrets.toml\n\nwrite a python script that adds a new dictionary item to user_config_path inside the keys dictionary\n\nAssistant:  Here is a Python script that adds a new dictionary item to the keys dictionary in the user_config_path file:\n\n```python\nimport toml\n\nuser_config_path = \"litellm.secrets.toml\"\n\n# Load the TOML file\nconfig = toml.load(user_config_path)\n\n# Add new key to the 'keys' dictionary  \nconfig['keys']['new_key'] = 'new_value'\n\n# Write the updated config back to the file\nwith open(user_config_path, 'w') as f:\n    toml.dump(config, f)\n```\n\nThe key steps are:\n\n1. Load the TOML file using `toml.load()`\n2. Add the new key-value pair to the 'keys' dictionary \n3. Write the updated config back to the file using `toml.dump()`\n\nThis will add {'new_key': 'new_value'} to the 'keys' dictionary in the given TOML file.\n\nHuman: handle for the case that the file doesn't exist\n\nAssistant:  Good point! We should check if the file exists before trying to load it. Here is an updated script that handles the case where the file does not exist:\n\n```python\nimport toml\nimport os\n\nuser_config_path = \"litellm.secrets.toml\"\n\n# Check if file exists\nif os.path.exists(user_config_path):\n  # Load existing file\n  config = toml.load(user_config_path) \nelse:\n  # File doesn't exist, create empty config\n  config = {}\n\n# Add new key \nconfig.setdefault('keys', {})['new_key'] = 'new_value'\n\n# Write config to file \nwith open(user_config_path, 'w') as f:\n  toml.dump(config, f)\n```\n\nThe key changes:\n\n- Check if file exists using `os.path.exists()`\n- If it doesn't exist, initialize an empty config dict\n- Use `setdefault()` to safely add the 'keys' sub-dict if needed\n- Write the config to file, which will create the file if it didn't exist\n\nThis handles the case where the file doesn't exist yet and creates it with the new key added.\n\nHuman:     tomllib.dump(config, f)\n    ^^^^^^^^^^^^\nAttributeError: module 'tomli' has no attribute 'dump'\n\nAssistant: ",
+      "api_key": "",
+      "additional_args": {
+        "complete_input_dict": "{\"prompt\": \"\\n\\nHuman: \\n\\nHuman: user_config_path =litellm.secrets.toml\\n\\nwrite a python script that adds a new dictionary item to user_config_path inside the keys dictionary\\n\\nAssistant:  Here is a Python script that adds a new dictionary item to the keys dictionary in the user_config_path file:\\n\\n```python\\nimport toml\\n\\nuser_config_path = \\\"litellm.secrets.toml\\\"\\n\\n# Load the TOML file\\nconfig = toml.load(user_config_path)\\n\\n# Add new key to the 'keys' dictionary  \\nconfig['keys']['new_key'] = 'new_value'\\n\\n# Write the updated config back to the file\\nwith open(user_config_path, 'w') as f:\\n    toml.dump(config, f)\\n```\\n\\nThe key steps are:\\n\\n1. Load the TOML file using `toml.load()`\\n2. Add the new key-value pair to the 'keys' dictionary \\n3. Write the updated config back to the file using `toml.dump()`\\n\\nThis will add {'new_key': 'new_value'} to the 'keys' dictionary in the given TOML file.\\n\\nHuman: handle for the case that the file doesn't exist\\n\\nAssistant:  Good point! We should check if the file exists before trying to load it. Here is an updated script that handles the case where the file does not exist:\\n\\n```python\\nimport toml\\nimport os\\n\\nuser_config_path = \\\"litellm.secrets.toml\\\"\\n\\n# Check if file exists\\nif os.path.exists(user_config_path):\\n  # Load existing file\\n  config = toml.load(user_config_path) \\nelse:\\n  # File doesn't exist, create empty config\\n  config = {}\\n\\n# Add new key \\nconfig.setdefault('keys', {})['new_key'] = 'new_value'\\n\\n# Write config to file \\nwith open(user_config_path, 'w') as f:\\n  toml.dump(config, f)\\n```\\n\\nThe key changes:\\n\\n- Check if file exists using `os.path.exists()`\\n- If it doesn't exist, initialize an empty config dict\\n- Use `setdefault()` to safely add the 'keys' sub-dict if needed\\n- Write the config to file, which will create the file if it didn't exist\\n\\nThis handles the case where the file doesn't exist yet and creates it with the new key added.\\n\\nHuman:     tomllib.dump(config, f)\\n    ^^^^^^^^^^^^\\nAttributeError: module 'tomli' has no attribute 'dump'\\n\\nAssistant: \", \"max_tokens_to_sample\": 1024, \"temperature\": 0.5}"
+      },
+      "log_event_type": "pre_api_call"
+    },
+    "post_api_call": {
+      "model": "anthropic.claude-v2",
+      "messages": [
+        {
+          "role": "user",
+          "content": "user_config_path =litellm.secrets.toml\n\nwrite a python script that adds a new dictionary item to user_config_path inside the keys dictionary"
+        },
+        {
+          "role": "assistant",
+          "content": " Here is a Python script that adds a new dictionary item to the keys dictionary in the user_config_path file:\n\n```python\nimport toml\n\nuser_config_path = \"litellm.secrets.toml\"\n\n# Load the TOML file\nconfig = toml.load(user_config_path)\n\n# Add new key to the 'keys' dictionary  \nconfig['keys']['new_key'] = 'new_value'\n\n# Write the updated config back to the file\nwith open(user_config_path, 'w') as f:\n    toml.dump(config, f)\n```\n\nThe key steps are:\n\n1. Load the TOML file using `toml.load()`\n2. Add the new key-value pair to the 'keys' dictionary \n3. Write the updated config back to the file using `toml.dump()`\n\nThis will add {'new_key': 'new_value'} to the 'keys' dictionary in the given TOML file."
+        },
+        {
+          "role": "user",
+          "content": "handle for the case that the file doesn't exist"
+        },
+        {
+          "role": "assistant",
+          "content": " Good point! We should check if the file exists before trying to load it. Here is an updated script that handles the case where the file does not exist:\n\n```python\nimport toml\nimport os\n\nuser_config_path = \"litellm.secrets.toml\"\n\n# Check if file exists\nif os.path.exists(user_config_path):\n  # Load existing file\n  config = toml.load(user_config_path) \nelse:\n  # File doesn't exist, create empty config\n  config = {}\n\n# Add new key \nconfig.setdefault('keys', {})['new_key'] = 'new_value'\n\n# Write config to file \nwith open(user_config_path, 'w') as f:\n  toml.dump(config, f)\n```\n\nThe key changes:\n\n- Check if file exists using `os.path.exists()`\n- If it doesn't exist, initialize an empty config dict\n- Use `setdefault()` to safely add the 'keys' sub-dict if needed\n- Write the config to file, which will create the file if it didn't exist\n\nThis handles the case where the file doesn't exist yet and creates it with the new key added."
+        },
+        {
+          "role": "user",
+          "content": "    tomllib.dump(config, f)\n    ^^^^^^^^^^^^\nAttributeError: module 'tomli' has no attribute 'dump'"
+        }
+      ],
+      "optional_params": {
+        "max_tokens_to_sample": 1024,
+        "temperature": 0.5,
+        "stream": true
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "bedrock",
+        "api_base": null,
+        "litellm_call_id": "2aef8588-ef19-4a7e-8deb-6ad798227ade",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": null,
+      "api_key": null,
+      "additional_args": {},
+      "log_event_type": "post_api_call",
+      "original_response": "<class 'generator'>",
+      "complete_streaming_response": {
+        "id": "chatcmpl-43a09df4-3ef3-476c-9f58-5ee66c2ab8d8",
+        "object": "chat.completion.chunk",
+        "created": 1697260175,
+        "model": "anthropic.claude-v2",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": " You're right, my previous code examples had a typo using `toml.dump()` instead of `toml.dump()`. \n\nSince you're getting an AttributeError for `tomllib`, it seems you are using the `tomli` module rather than `toml`.\n\nHere is the fixed code using `tomli` to load and dump the config:\n\n```python\nimport tomli\nimport os\n\nuser_config_path = \"litellm.secrets.toml\"\n\nif os.path.exists(user_config_path):\n  config = tomli.load(user_config_path)  \nelse:\n  config = {}\n\nconfig.setdefault('keys', {})['new_key'] = 'new_value'\n\nwith open(user_config_path, 'w') as f:\n  tomli.dump(config, f)\n```\n\nThe key changes:\n\n- Use `tomli` instead of `toml`\n- Call `tomli.dump()` to write out the config\n\nLet me know if this helps resolve the AttributeError!"
+            },
+            "finish_reason": "stop_sequence"
+          }
+        ]
+      }
+    }
+  },
+  "20231013220953079681": {
+    "pre_api_call": {
+      "model": "anthropic.claude-v2",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\" You're right, my previous code examples had a typo using `toml.dump()` instead of `toml.dump()`. \n\nSince you're getting an AttributeError for `tomllib`, it seems you are using the `tomli` module rather than `toml`.\n\nHere is the fixed code using `tomli` to load and dump the config:\n\n```python\nimport tomli\nimport os\n\nuser_config_path = \"litellm.secrets.toml\"\n\nif os.path.exists(user_config_path):\n  config = tomli.load(user_config_path)  \nelse:\n  config = {}\n\nconfig.setdefault('keys', {})['new_key'] = 'new_value'\n\nwith open(user_config_path, 'w') as f:\n  tomli.dump(config, f)\n```\n\nThe key changes:\n\n- Use `tomli` instead of `toml`\n- Call `tomli.dump()` to write out the config\n\nLet me know if this helps resolve the AttributeError!\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "optional_params": {
+        "max_tokens_to_sample": 20,
+        "temperature": 0.5
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "bedrock",
+        "api_base": null,
+        "litellm_call_id": "b97a09cf-d88a-4b75-aa56-2bb57d6820c3",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": "\n\nHuman: \n\nHuman: <admin>\" You're right, my previous code examples had a typo using `toml.dump()` instead of `toml.dump()`. \n\nSince you're getting an AttributeError for `tomllib`, it seems you are using the `tomli` module rather than `toml`.\n\nHere is the fixed code using `tomli` to load and dump the config:\n\n```python\nimport tomli\nimport os\n\nuser_config_path = \"litellm.secrets.toml\"\n\nif os.path.exists(user_config_path):\n  config = tomli.load(user_config_path)  \nelse:\n  config = {}\n\nconfig.setdefault('keys', {})['new_key'] = 'new_value'\n\nwith open(user_config_path, 'w') as f:\n  tomli.dump(config, f)\n```\n\nThe key changes:\n\n- Use `tomli` instead of `toml`\n- Call `tomli.dump()` to write out the config\n\nLet me know if this helps resolve the AttributeError!\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:</admin>\n\nAssistant: ",
+      "api_key": "",
+      "additional_args": {
+        "complete_input_dict": "{\"prompt\": \"\\n\\nHuman: \\n\\nHuman: <admin>\\\" You're right, my previous code examples had a typo using `toml.dump()` instead of `toml.dump()`. \\n\\nSince you're getting an AttributeError for `tomllib`, it seems you are using the `tomli` module rather than `toml`.\\n\\nHere is the fixed code using `tomli` to load and dump the config:\\n\\n```python\\nimport tomli\\nimport os\\n\\nuser_config_path = \\\"litellm.secrets.toml\\\"\\n\\nif os.path.exists(user_config_path):\\n  config = tomli.load(user_config_path)  \\nelse:\\n  config = {}\\n\\nconfig.setdefault('keys', {})['new_key'] = 'new_value'\\n\\nwith open(user_config_path, 'w') as f:\\n  tomli.dump(config, f)\\n```\\n\\nThe key changes:\\n\\n- Use `tomli` instead of `toml`\\n- Call `tomli.dump()` to write out the config\\n\\nLet me know if this helps resolve the AttributeError!\\\"\\n\\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:</admin>\\n\\nAssistant: \", \"max_tokens_to_sample\": 20, \"temperature\": 0.5}"
+      },
+      "log_event_type": "pre_api_call"
+    },
+    "post_api_call": {
+      "model": "anthropic.claude-v2",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\" You're right, my previous code examples had a typo using `toml.dump()` instead of `toml.dump()`. \n\nSince you're getting an AttributeError for `tomllib`, it seems you are using the `tomli` module rather than `toml`.\n\nHere is the fixed code using `tomli` to load and dump the config:\n\n```python\nimport tomli\nimport os\n\nuser_config_path = \"litellm.secrets.toml\"\n\nif os.path.exists(user_config_path):\n  config = tomli.load(user_config_path)  \nelse:\n  config = {}\n\nconfig.setdefault('keys', {})['new_key'] = 'new_value'\n\nwith open(user_config_path, 'w') as f:\n  tomli.dump(config, f)\n```\n\nThe key changes:\n\n- Use `tomli` instead of `toml`\n- Call `tomli.dump()` to write out the config\n\nLet me know if this helps resolve the AttributeError!\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "optional_params": {
+        "max_tokens_to_sample": 20,
+        "temperature": 0.5
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "bedrock",
+        "api_base": null,
+        "litellm_call_id": "b97a09cf-d88a-4b75-aa56-2bb57d6820c3",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": "\n\nHuman: \n\nHuman: <admin>\" You're right, my previous code examples had a typo using `toml.dump()` instead of `toml.dump()`. \n\nSince you're getting an AttributeError for `tomllib`, it seems you are using the `tomli` module rather than `toml`.\n\nHere is the fixed code using `tomli` to load and dump the config:\n\n```python\nimport tomli\nimport os\n\nuser_config_path = \"litellm.secrets.toml\"\n\nif os.path.exists(user_config_path):\n  config = tomli.load(user_config_path)  \nelse:\n  config = {}\n\nconfig.setdefault('keys', {})['new_key'] = 'new_value'\n\nwith open(user_config_path, 'w') as f:\n  tomli.dump(config, f)\n```\n\nThe key changes:\n\n- Use `tomli` instead of `toml`\n- Call `tomli.dump()` to write out the config\n\nLet me know if this helps resolve the AttributeError!\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:</admin>\n\nAssistant: ",
+      "api_key": "",
+      "additional_args": {
+        "complete_input_dict": "{\"prompt\": \"\\n\\nHuman: \\n\\nHuman: <admin>\\\" You're right, my previous code examples had a typo using `toml.dump()` instead of `toml.dump()`. \\n\\nSince you're getting an AttributeError for `tomllib`, it seems you are using the `tomli` module rather than `toml`.\\n\\nHere is the fixed code using `tomli` to load and dump the config:\\n\\n```python\\nimport tomli\\nimport os\\n\\nuser_config_path = \\\"litellm.secrets.toml\\\"\\n\\nif os.path.exists(user_config_path):\\n  config = tomli.load(user_config_path)  \\nelse:\\n  config = {}\\n\\nconfig.setdefault('keys', {})['new_key'] = 'new_value'\\n\\nwith open(user_config_path, 'w') as f:\\n  tomli.dump(config, f)\\n```\\n\\nThe key changes:\\n\\n- Use `tomli` instead of `toml`\\n- Call `tomli.dump()` to write out the config\\n\\nLet me know if this helps resolve the AttributeError!\\\"\\n\\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:</admin>\\n\\nAssistant: \", \"max_tokens_to_sample\": 20, \"temperature\": 0.5}"
+      },
+      "log_event_type": "post_api_call",
+      "original_response": {
+        "completion": " Config file update using tomlli module",
+        "stop_reason": "stop_sequence"
+      }
+    }
+  },
+  "20231013221123589858": {
+    "pre_api_call": {
+      "model": "anthropic.claude-v2",
+      "messages": [
+        {
+          "role": "user",
+          "content": "user_config_path =litellm.secrets.toml\n\nwrite a python script that adds a new dictionary item to user_config_path inside the keys dictionary"
+        },
+        {
+          "role": "assistant",
+          "content": " Here is a Python script that adds a new dictionary item to the keys dictionary in the user_config_path file:\n\n```python\nimport toml\n\nuser_config_path = \"litellm.secrets.toml\"\n\n# Load the TOML file\nconfig = toml.load(user_config_path)\n\n# Add new key to the 'keys' dictionary  \nconfig['keys']['new_key'] = 'new_value'\n\n# Write the updated config back to the file\nwith open(user_config_path, 'w') as f:\n    toml.dump(config, f)\n```\n\nThe key steps are:\n\n1. Load the TOML file using `toml.load()`\n2. Add the new key-value pair to the 'keys' dictionary \n3. Write the updated config back to the file using `toml.dump()`\n\nThis will add {'new_key': 'new_value'} to the 'keys' dictionary in the given TOML file."
+        },
+        {
+          "role": "user",
+          "content": "handle for the case that the file doesn't exist"
+        },
+        {
+          "role": "assistant",
+          "content": " Good point! We should check if the file exists before trying to load it. Here is an updated script that handles the case where the file does not exist:\n\n```python\nimport toml\nimport os\n\nuser_config_path = \"litellm.secrets.toml\"\n\n# Check if file exists\nif os.path.exists(user_config_path):\n  # Load existing file\n  config = toml.load(user_config_path) \nelse:\n  # File doesn't exist, create empty config\n  config = {}\n\n# Add new key \nconfig.setdefault('keys', {})['new_key'] = 'new_value'\n\n# Write config to file \nwith open(user_config_path, 'w') as f:\n  toml.dump(config, f)\n```\n\nThe key changes:\n\n- Check if file exists using `os.path.exists()`\n- If it doesn't exist, initialize an empty config dict\n- Use `setdefault()` to safely add the 'keys' sub-dict if needed\n- Write the config to file, which will create the file if it didn't exist\n\nThis handles the case where the file doesn't exist yet and creates it with the new key added."
+        },
+        {
+          "role": "user",
+          "content": "    tomllib.dump(config, f)\n    ^^^^^^^^^^^^\nAttributeError: module 'tomli' has no attribute 'dump'"
+        },
+        {
+          "role": "assistant",
+          "content": " You're right, my previous code examples had a typo using `toml.dump()` instead of `toml.dump()`. \n\nSince you're getting an AttributeError for `tomllib`, it seems you are using the `tomli` module rather than `toml`.\n\nHere is the fixed code using `tomli` to load and dump the config:\n\n```python\nimport tomli\nimport os\n\nuser_config_path = \"litellm.secrets.toml\"\n\nif os.path.exists(user_config_path):\n  config = tomli.load(user_config_path)  \nelse:\n  config = {}\n\nconfig.setdefault('keys', {})['new_key'] = 'new_value'\n\nwith open(user_config_path, 'w') as f:\n  tomli.dump(config, f)\n```\n\nThe key changes:\n\n- Use `tomli` instead of `toml`\n- Call `tomli.dump()` to write out the config\n\nLet me know if this helps resolve the AttributeError!"
+        },
+        {
+          "role": "user",
+          "content": "can you write config to the filepath without using tomli?"
+        }
+      ],
+      "optional_params": {
+        "max_tokens_to_sample": 1024,
+        "temperature": 0.5,
+        "stream": true
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "bedrock",
+        "api_base": null,
+        "litellm_call_id": "d3378ee3-f4b6-417d-9243-d29cc9bb3163",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": "\n\nHuman: \n\nHuman: user_config_path =litellm.secrets.toml\n\nwrite a python script that adds a new dictionary item to user_config_path inside the keys dictionary\n\nAssistant:  Here is a Python script that adds a new dictionary item to the keys dictionary in the user_config_path file:\n\n```python\nimport toml\n\nuser_config_path = \"litellm.secrets.toml\"\n\n# Load the TOML file\nconfig = toml.load(user_config_path)\n\n# Add new key to the 'keys' dictionary  \nconfig['keys']['new_key'] = 'new_value'\n\n# Write the updated config back to the file\nwith open(user_config_path, 'w') as f:\n    toml.dump(config, f)\n```\n\nThe key steps are:\n\n1. Load the TOML file using `toml.load()`\n2. Add the new key-value pair to the 'keys' dictionary \n3. Write the updated config back to the file using `toml.dump()`\n\nThis will add {'new_key': 'new_value'} to the 'keys' dictionary in the given TOML file.\n\nHuman: handle for the case that the file doesn't exist\n\nAssistant:  Good point! We should check if the file exists before trying to load it. Here is an updated script that handles the case where the file does not exist:\n\n```python\nimport toml\nimport os\n\nuser_config_path = \"litellm.secrets.toml\"\n\n# Check if file exists\nif os.path.exists(user_config_path):\n  # Load existing file\n  config = toml.load(user_config_path) \nelse:\n  # File doesn't exist, create empty config\n  config = {}\n\n# Add new key \nconfig.setdefault('keys', {})['new_key'] = 'new_value'\n\n# Write config to file \nwith open(user_config_path, 'w') as f:\n  toml.dump(config, f)\n```\n\nThe key changes:\n\n- Check if file exists using `os.path.exists()`\n- If it doesn't exist, initialize an empty config dict\n- Use `setdefault()` to safely add the 'keys' sub-dict if needed\n- Write the config to file, which will create the file if it didn't exist\n\nThis handles the case where the file doesn't exist yet and creates it with the new key added.\n\nHuman:     tomllib.dump(config, f)\n    ^^^^^^^^^^^^\nAttributeError: module 'tomli' has no attribute 'dump'\n\nAssistant:  You're right, my previous code examples had a typo using `toml.dump()` instead of `toml.dump()`. \n\nSince you're getting an AttributeError for `tomllib`, it seems you are using the `tomli` module rather than `toml`.\n\nHere is the fixed code using `tomli` to load and dump the config:\n\n```python\nimport tomli\nimport os\n\nuser_config_path = \"litellm.secrets.toml\"\n\nif os.path.exists(user_config_path):\n  config = tomli.load(user_config_path)  \nelse:\n  config = {}\n\nconfig.setdefault('keys', {})['new_key'] = 'new_value'\n\nwith open(user_config_path, 'w') as f:\n  tomli.dump(config, f)\n```\n\nThe key changes:\n\n- Use `tomli` instead of `toml`\n- Call `tomli.dump()` to write out the config\n\nLet me know if this helps resolve the AttributeError!\n\nHuman: can you write config to the filepath without using tomli?\n\nAssistant: ",
+      "api_key": "",
+      "additional_args": {
+        "complete_input_dict": "{\"prompt\": \"\\n\\nHuman: \\n\\nHuman: user_config_path =litellm.secrets.toml\\n\\nwrite a python script that adds a new dictionary item to user_config_path inside the keys dictionary\\n\\nAssistant:  Here is a Python script that adds a new dictionary item to the keys dictionary in the user_config_path file:\\n\\n```python\\nimport toml\\n\\nuser_config_path = \\\"litellm.secrets.toml\\\"\\n\\n# Load the TOML file\\nconfig = toml.load(user_config_path)\\n\\n# Add new key to the 'keys' dictionary  \\nconfig['keys']['new_key'] = 'new_value'\\n\\n# Write the updated config back to the file\\nwith open(user_config_path, 'w') as f:\\n    toml.dump(config, f)\\n```\\n\\nThe key steps are:\\n\\n1. Load the TOML file using `toml.load()`\\n2. Add the new key-value pair to the 'keys' dictionary \\n3. Write the updated config back to the file using `toml.dump()`\\n\\nThis will add {'new_key': 'new_value'} to the 'keys' dictionary in the given TOML file.\\n\\nHuman: handle for the case that the file doesn't exist\\n\\nAssistant:  Good point! We should check if the file exists before trying to load it. Here is an updated script that handles the case where the file does not exist:\\n\\n```python\\nimport toml\\nimport os\\n\\nuser_config_path = \\\"litellm.secrets.toml\\\"\\n\\n# Check if file exists\\nif os.path.exists(user_config_path):\\n  # Load existing file\\n  config = toml.load(user_config_path) \\nelse:\\n  # File doesn't exist, create empty config\\n  config = {}\\n\\n# Add new key \\nconfig.setdefault('keys', {})['new_key'] = 'new_value'\\n\\n# Write config to file \\nwith open(user_config_path, 'w') as f:\\n  toml.dump(config, f)\\n```\\n\\nThe key changes:\\n\\n- Check if file exists using `os.path.exists()`\\n- If it doesn't exist, initialize an empty config dict\\n- Use `setdefault()` to safely add the 'keys' sub-dict if needed\\n- Write the config to file, which will create the file if it didn't exist\\n\\nThis handles the case where the file doesn't exist yet and creates it with the new key added.\\n\\nHuman:     tomllib.dump(config, f)\\n    ^^^^^^^^^^^^\\nAttributeError: module 'tomli' has no attribute 'dump'\\n\\nAssistant:  You're right, my previous code examples had a typo using `toml.dump()` instead of `toml.dump()`. \\n\\nSince you're getting an AttributeError for `tomllib`, it seems you are using the `tomli` module rather than `toml`.\\n\\nHere is the fixed code using `tomli` to load and dump the config:\\n\\n```python\\nimport tomli\\nimport os\\n\\nuser_config_path = \\\"litellm.secrets.toml\\\"\\n\\nif os.path.exists(user_config_path):\\n  config = tomli.load(user_config_path)  \\nelse:\\n  config = {}\\n\\nconfig.setdefault('keys', {})['new_key'] = 'new_value'\\n\\nwith open(user_config_path, 'w') as f:\\n  tomli.dump(config, f)\\n```\\n\\nThe key changes:\\n\\n- Use `tomli` instead of `toml`\\n- Call `tomli.dump()` to write out the config\\n\\nLet me know if this helps resolve the AttributeError!\\n\\nHuman: can you write config to the filepath without using tomli?\\n\\nAssistant: \", \"max_tokens_to_sample\": 1024, \"temperature\": 0.5}"
+      },
+      "log_event_type": "pre_api_call"
+    },
+    "post_api_call": {
+      "model": "anthropic.claude-v2",
+      "messages": [
+        {
+          "role": "user",
+          "content": "user_config_path =litellm.secrets.toml\n\nwrite a python script that adds a new dictionary item to user_config_path inside the keys dictionary"
+        },
+        {
+          "role": "assistant",
+          "content": " Here is a Python script that adds a new dictionary item to the keys dictionary in the user_config_path file:\n\n```python\nimport toml\n\nuser_config_path = \"litellm.secrets.toml\"\n\n# Load the TOML file\nconfig = toml.load(user_config_path)\n\n# Add new key to the 'keys' dictionary  \nconfig['keys']['new_key'] = 'new_value'\n\n# Write the updated config back to the file\nwith open(user_config_path, 'w') as f:\n    toml.dump(config, f)\n```\n\nThe key steps are:\n\n1. Load the TOML file using `toml.load()`\n2. Add the new key-value pair to the 'keys' dictionary \n3. Write the updated config back to the file using `toml.dump()`\n\nThis will add {'new_key': 'new_value'} to the 'keys' dictionary in the given TOML file."
+        },
+        {
+          "role": "user",
+          "content": "handle for the case that the file doesn't exist"
+        },
+        {
+          "role": "assistant",
+          "content": " Good point! We should check if the file exists before trying to load it. Here is an updated script that handles the case where the file does not exist:\n\n```python\nimport toml\nimport os\n\nuser_config_path = \"litellm.secrets.toml\"\n\n# Check if file exists\nif os.path.exists(user_config_path):\n  # Load existing file\n  config = toml.load(user_config_path) \nelse:\n  # File doesn't exist, create empty config\n  config = {}\n\n# Add new key \nconfig.setdefault('keys', {})['new_key'] = 'new_value'\n\n# Write config to file \nwith open(user_config_path, 'w') as f:\n  toml.dump(config, f)\n```\n\nThe key changes:\n\n- Check if file exists using `os.path.exists()`\n- If it doesn't exist, initialize an empty config dict\n- Use `setdefault()` to safely add the 'keys' sub-dict if needed\n- Write the config to file, which will create the file if it didn't exist\n\nThis handles the case where the file doesn't exist yet and creates it with the new key added."
+        },
+        {
+          "role": "user",
+          "content": "    tomllib.dump(config, f)\n    ^^^^^^^^^^^^\nAttributeError: module 'tomli' has no attribute 'dump'"
+        },
+        {
+          "role": "assistant",
+          "content": " You're right, my previous code examples had a typo using `toml.dump()` instead of `toml.dump()`. \n\nSince you're getting an AttributeError for `tomllib`, it seems you are using the `tomli` module rather than `toml`.\n\nHere is the fixed code using `tomli` to load and dump the config:\n\n```python\nimport tomli\nimport os\n\nuser_config_path = \"litellm.secrets.toml\"\n\nif os.path.exists(user_config_path):\n  config = tomli.load(user_config_path)  \nelse:\n  config = {}\n\nconfig.setdefault('keys', {})['new_key'] = 'new_value'\n\nwith open(user_config_path, 'w') as f:\n  tomli.dump(config, f)\n```\n\nThe key changes:\n\n- Use `tomli` instead of `toml`\n- Call `tomli.dump()` to write out the config\n\nLet me know if this helps resolve the AttributeError!"
+        },
+        {
+          "role": "user",
+          "content": "can you write config to the filepath without using tomli?"
+        }
+      ],
+      "optional_params": {
+        "max_tokens_to_sample": 1024,
+        "temperature": 0.5,
+        "stream": true
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "bedrock",
+        "api_base": null,
+        "litellm_call_id": "d3378ee3-f4b6-417d-9243-d29cc9bb3163",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": null,
+      "api_key": null,
+      "additional_args": {},
+      "log_event_type": "post_api_call",
+      "original_response": "<class 'generator'>",
+      "complete_streaming_response": {
+        "id": "chatcmpl-b6c37047-e964-4501-a075-785a2dc54e48",
+        "object": "chat.completion.chunk",
+        "created": 1697260283,
+        "model": "anthropic.claude-v2",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": " Yes, you can write the config data to the file without using the tomli module. \n\nSince the config is a python dictionary, you can directly write it to the file in JSON format using the json module:\n\n```python\nimport json \nimport os\n\nuser_config_path = \"litellm.secrets.json\" \n\nif os.path.exists(user_config_path):\n  with open(user_config_path) as f:\n    config = json.load(f)\nelse:\n  config = {}\n\nconfig.setdefault('keys', {})['new_key'] = 'new_value'\n\nwith open(user_config_path, 'w') as f:\n  json.dump(config, f)\n```\n\nThe key points:\n\n- Load config using json.load() and write with json.dump() \n- This will store the data in JSON format rather than TOML\n- Change file extension to .json\n\nNo need for the tomli module. The config will be saved to the file in JSON format.\n\nLet me know if you have any other questions!"
+            },
+            "finish_reason": "stop_sequence"
+          }
+        ]
+      }
+    }
+  },
+  "20231013221138277938": {
+    "pre_api_call": {
+      "model": "anthropic.claude-v2",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\" Yes, you can write the config data to the file without using the tomli module. \n\nSince the config is a python dictionary, you can directly write it to the file in JSON format using the json module:\n\n```python\nimport json \nimport os\n\nuser_config_path = \"litellm.secrets.json\" \n\nif os.path.exists(user_config_path):\n  with open(user_config_path) as f:\n    config = json.load(f)\nelse:\n  config = {}\n\nconfig.setdefault('keys', {})['new_key'] = 'new_value'\n\nwith open(user_config_path, 'w') as f:\n  json.dump(config, f)\n```\n\nThe key points:\n\n- Load config using json.load() and write with json.dump() \n- This will store the data in JSON format rather than TOML\n- Change file extension to .json\n\nNo need for the tomli module. The config will be saved to the file in JSON format.\n\nLet me know if you have any other questions!\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "optional_params": {
+        "max_tokens_to_sample": 20,
+        "temperature": 0.5
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "bedrock",
+        "api_base": null,
+        "litellm_call_id": "15d5e700-8347-4c3d-9981-602df847a111",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": "\n\nHuman: \n\nHuman: <admin>\" Yes, you can write the config data to the file without using the tomli module. \n\nSince the config is a python dictionary, you can directly write it to the file in JSON format using the json module:\n\n```python\nimport json \nimport os\n\nuser_config_path = \"litellm.secrets.json\" \n\nif os.path.exists(user_config_path):\n  with open(user_config_path) as f:\n    config = json.load(f)\nelse:\n  config = {}\n\nconfig.setdefault('keys', {})['new_key'] = 'new_value'\n\nwith open(user_config_path, 'w') as f:\n  json.dump(config, f)\n```\n\nThe key points:\n\n- Load config using json.load() and write with json.dump() \n- This will store the data in JSON format rather than TOML\n- Change file extension to .json\n\nNo need for the tomli module. The config will be saved to the file in JSON format.\n\nLet me know if you have any other questions!\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:</admin>\n\nAssistant: ",
+      "api_key": "",
+      "additional_args": {
+        "complete_input_dict": "{\"prompt\": \"\\n\\nHuman: \\n\\nHuman: <admin>\\\" Yes, you can write the config data to the file without using the tomli module. \\n\\nSince the config is a python dictionary, you can directly write it to the file in JSON format using the json module:\\n\\n```python\\nimport json \\nimport os\\n\\nuser_config_path = \\\"litellm.secrets.json\\\" \\n\\nif os.path.exists(user_config_path):\\n  with open(user_config_path) as f:\\n    config = json.load(f)\\nelse:\\n  config = {}\\n\\nconfig.setdefault('keys', {})['new_key'] = 'new_value'\\n\\nwith open(user_config_path, 'w') as f:\\n  json.dump(config, f)\\n```\\n\\nThe key points:\\n\\n- Load config using json.load() and write with json.dump() \\n- This will store the data in JSON format rather than TOML\\n- Change file extension to .json\\n\\nNo need for the tomli module. The config will be saved to the file in JSON format.\\n\\nLet me know if you have any other questions!\\\"\\n\\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:</admin>\\n\\nAssistant: \", \"max_tokens_to_sample\": 20, \"temperature\": 0.5}"
+      },
+      "log_event_type": "pre_api_call"
+    },
+    "post_api_call": {
+      "model": "anthropic.claude-v2",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\" Yes, you can write the config data to the file without using the tomli module. \n\nSince the config is a python dictionary, you can directly write it to the file in JSON format using the json module:\n\n```python\nimport json \nimport os\n\nuser_config_path = \"litellm.secrets.json\" \n\nif os.path.exists(user_config_path):\n  with open(user_config_path) as f:\n    config = json.load(f)\nelse:\n  config = {}\n\nconfig.setdefault('keys', {})['new_key'] = 'new_value'\n\nwith open(user_config_path, 'w') as f:\n  json.dump(config, f)\n```\n\nThe key points:\n\n- Load config using json.load() and write with json.dump() \n- This will store the data in JSON format rather than TOML\n- Change file extension to .json\n\nNo need for the tomli module. The config will be saved to the file in JSON format.\n\nLet me know if you have any other questions!\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "optional_params": {
+        "max_tokens_to_sample": 20,
+        "temperature": 0.5
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "bedrock",
+        "api_base": null,
+        "litellm_call_id": "15d5e700-8347-4c3d-9981-602df847a111",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": "\n\nHuman: \n\nHuman: <admin>\" Yes, you can write the config data to the file without using the tomli module. \n\nSince the config is a python dictionary, you can directly write it to the file in JSON format using the json module:\n\n```python\nimport json \nimport os\n\nuser_config_path = \"litellm.secrets.json\" \n\nif os.path.exists(user_config_path):\n  with open(user_config_path) as f:\n    config = json.load(f)\nelse:\n  config = {}\n\nconfig.setdefault('keys', {})['new_key'] = 'new_value'\n\nwith open(user_config_path, 'w') as f:\n  json.dump(config, f)\n```\n\nThe key points:\n\n- Load config using json.load() and write with json.dump() \n- This will store the data in JSON format rather than TOML\n- Change file extension to .json\n\nNo need for the tomli module. The config will be saved to the file in JSON format.\n\nLet me know if you have any other questions!\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:</admin>\n\nAssistant: ",
+      "api_key": "",
+      "additional_args": {
+        "complete_input_dict": "{\"prompt\": \"\\n\\nHuman: \\n\\nHuman: <admin>\\\" Yes, you can write the config data to the file without using the tomli module. \\n\\nSince the config is a python dictionary, you can directly write it to the file in JSON format using the json module:\\n\\n```python\\nimport json \\nimport os\\n\\nuser_config_path = \\\"litellm.secrets.json\\\" \\n\\nif os.path.exists(user_config_path):\\n  with open(user_config_path) as f:\\n    config = json.load(f)\\nelse:\\n  config = {}\\n\\nconfig.setdefault('keys', {})['new_key'] = 'new_value'\\n\\nwith open(user_config_path, 'w') as f:\\n  json.dump(config, f)\\n```\\n\\nThe key points:\\n\\n- Load config using json.load() and write with json.dump() \\n- This will store the data in JSON format rather than TOML\\n- Change file extension to .json\\n\\nNo need for the tomli module. The config will be saved to the file in JSON format.\\n\\nLet me know if you have any other questions!\\\"\\n\\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:</admin>\\n\\nAssistant: \", \"max_tokens_to_sample\": 20, \"temperature\": 0.5}"
+      },
+      "log_event_type": "post_api_call",
+      "original_response": {
+        "completion": " Writing config data to file without tomli module",
+        "stop_reason": "stop_sequence"
+      }
+    }
+  },
+  "20231013221146823431": {
+    "pre_api_call": {
+      "model": "anthropic.claude-v2",
+      "messages": [
+        {
+          "role": "assistant",
+          "content": " Here is a Python script that adds a new dictionary item to the keys dictionary in the user_config_path file:\n\n```python\nimport toml\n\nuser_config_path = \"litellm.secrets.toml\"\n\n# Load the TOML file\nconfig = toml.load(user_config_path)\n\n# Add new key to the 'keys' dictionary  \nconfig['keys']['new_key'] = 'new_value'\n\n# Write the updated config back to the file\nwith open(user_config_path, 'w') as f:\n    toml.dump(config, f)\n```\n\nThe key steps are:\n\n1. Load the TOML file using `toml.load()`\n2. Add the new key-value pair to the 'keys' dictionary \n3. Write the updated config back to the file using `toml.dump()`\n\nThis will add {'new_key': 'new_value'} to the 'keys' dictionary in the given TOML file."
+        },
+        {
+          "role": "user",
+          "content": "handle for the case that the file doesn't exist"
+        },
+        {
+          "role": "assistant",
+          "content": " Good point! We should check if the file exists before trying to load it. Here is an updated script that handles the case where the file does not exist:\n\n```python\nimport toml\nimport os\n\nuser_config_path = \"litellm.secrets.toml\"\n\n# Check if file exists\nif os.path.exists(user_config_path):\n  # Load existing file\n  config = toml.load(user_config_path) \nelse:\n  # File doesn't exist, create empty config\n  config = {}\n\n# Add new key \nconfig.setdefault('keys', {})['new_key'] = 'new_value'\n\n# Write config to file \nwith open(user_config_path, 'w') as f:\n  toml.dump(config, f)\n```\n\nThe key changes:\n\n- Check if file exists using `os.path.exists()`\n- If it doesn't exist, initialize an empty config dict\n- Use `setdefault()` to safely add the 'keys' sub-dict if needed\n- Write the config to file, which will create the file if it didn't exist\n\nThis handles the case where the file doesn't exist yet and creates it with the new key added."
+        },
+        {
+          "role": "user",
+          "content": "    tomllib.dump(config, f)\n    ^^^^^^^^^^^^\nAttributeError: module 'tomli' has no attribute 'dump'"
+        },
+        {
+          "role": "assistant",
+          "content": " You're right, my previous code examples had a typo using `toml.dump()` instead of `toml.dump()`. \n\nSince you're getting an AttributeError for `tomllib`, it seems you are using the `tomli` module rather than `toml`.\n\nHere is the fixed code using `tomli` to load and dump the config:\n\n```python\nimport tomli\nimport os\n\nuser_config_path = \"litellm.secrets.toml\"\n\nif os.path.exists(user_config_path):\n  config = tomli.load(user_config_path)  \nelse:\n  config = {}\n\nconfig.setdefault('keys', {})['new_key'] = 'new_value'\n\nwith open(user_config_path, 'w') as f:\n  tomli.dump(config, f)\n```\n\nThe key changes:\n\n- Use `tomli` instead of `toml`\n- Call `tomli.dump()` to write out the config\n\nLet me know if this helps resolve the AttributeError!"
+        },
+        {
+          "role": "user",
+          "content": "can you write config to the filepath without using tomli?"
+        },
+        {
+          "role": "assistant",
+          "content": " Yes, you can write the config data to the file without using the tomli module. \n\nSince the config is a python dictionary, you can directly write it to the file in JSON format using the json module:\n\n```python\nimport json \nimport os\n\nuser_config_path = \"litellm.secrets.json\" \n\nif os.path.exists(user_config_path):\n  with open(user_config_path) as f:\n    config = json.load(f)\nelse:\n  config = {}\n\nconfig.setdefault('keys', {})['new_key'] = 'new_value'\n\nwith open(user_config_path, 'w') as f:\n  json.dump(config, f)\n```\n\nThe key points:\n\n- Load config using json.load() and write with json.dump() \n- This will store the data in JSON format rather than TOML\n- Change file extension to .json\n\nNo need for the tomli module. The config will be saved to the file in JSON format.\n\nLet me know if you have any other questions!"
+        },
+        {
+          "role": "user",
+          "content": "no i need to do it as a toml"
+        }
+      ],
+      "optional_params": {
+        "max_tokens_to_sample": 1024,
+        "temperature": 0.5,
+        "stream": true
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "bedrock",
+        "api_base": null,
+        "litellm_call_id": "4ad531ac-dabd-42b6-98eb-5f06f9bab106",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": "\n\nHuman: \n\nAssistant:  Here is a Python script that adds a new dictionary item to the keys dictionary in the user_config_path file:\n\n```python\nimport toml\n\nuser_config_path = \"litellm.secrets.toml\"\n\n# Load the TOML file\nconfig = toml.load(user_config_path)\n\n# Add new key to the 'keys' dictionary  \nconfig['keys']['new_key'] = 'new_value'\n\n# Write the updated config back to the file\nwith open(user_config_path, 'w') as f:\n    toml.dump(config, f)\n```\n\nThe key steps are:\n\n1. Load the TOML file using `toml.load()`\n2. Add the new key-value pair to the 'keys' dictionary \n3. Write the updated config back to the file using `toml.dump()`\n\nThis will add {'new_key': 'new_value'} to the 'keys' dictionary in the given TOML file.\n\nHuman: handle for the case that the file doesn't exist\n\nAssistant:  Good point! We should check if the file exists before trying to load it. Here is an updated script that handles the case where the file does not exist:\n\n```python\nimport toml\nimport os\n\nuser_config_path = \"litellm.secrets.toml\"\n\n# Check if file exists\nif os.path.exists(user_config_path):\n  # Load existing file\n  config = toml.load(user_config_path) \nelse:\n  # File doesn't exist, create empty config\n  config = {}\n\n# Add new key \nconfig.setdefault('keys', {})['new_key'] = 'new_value'\n\n# Write config to file \nwith open(user_config_path, 'w') as f:\n  toml.dump(config, f)\n```\n\nThe key changes:\n\n- Check if file exists using `os.path.exists()`\n- If it doesn't exist, initialize an empty config dict\n- Use `setdefault()` to safely add the 'keys' sub-dict if needed\n- Write the config to file, which will create the file if it didn't exist\n\nThis handles the case where the file doesn't exist yet and creates it with the new key added.\n\nHuman:     tomllib.dump(config, f)\n    ^^^^^^^^^^^^\nAttributeError: module 'tomli' has no attribute 'dump'\n\nAssistant:  You're right, my previous code examples had a typo using `toml.dump()` instead of `toml.dump()`. \n\nSince you're getting an AttributeError for `tomllib`, it seems you are using the `tomli` module rather than `toml`.\n\nHere is the fixed code using `tomli` to load and dump the config:\n\n```python\nimport tomli\nimport os\n\nuser_config_path = \"litellm.secrets.toml\"\n\nif os.path.exists(user_config_path):\n  config = tomli.load(user_config_path)  \nelse:\n  config = {}\n\nconfig.setdefault('keys', {})['new_key'] = 'new_value'\n\nwith open(user_config_path, 'w') as f:\n  tomli.dump(config, f)\n```\n\nThe key changes:\n\n- Use `tomli` instead of `toml`\n- Call `tomli.dump()` to write out the config\n\nLet me know if this helps resolve the AttributeError!\n\nHuman: can you write config to the filepath without using tomli?\n\nAssistant:  Yes, you can write the config data to the file without using the tomli module. \n\nSince the config is a python dictionary, you can directly write it to the file in JSON format using the json module:\n\n```python\nimport json \nimport os\n\nuser_config_path = \"litellm.secrets.json\" \n\nif os.path.exists(user_config_path):\n  with open(user_config_path) as f:\n    config = json.load(f)\nelse:\n  config = {}\n\nconfig.setdefault('keys', {})['new_key'] = 'new_value'\n\nwith open(user_config_path, 'w') as f:\n  json.dump(config, f)\n```\n\nThe key points:\n\n- Load config using json.load() and write with json.dump() \n- This will store the data in JSON format rather than TOML\n- Change file extension to .json\n\nNo need for the tomli module. The config will be saved to the file in JSON format.\n\nLet me know if you have any other questions!\n\nHuman: no i need to do it as a toml\n\nAssistant: ",
+      "api_key": "",
+      "additional_args": {
+        "complete_input_dict": "{\"prompt\": \"\\n\\nHuman: \\n\\nAssistant:  Here is a Python script that adds a new dictionary item to the keys dictionary in the user_config_path file:\\n\\n```python\\nimport toml\\n\\nuser_config_path = \\\"litellm.secrets.toml\\\"\\n\\n# Load the TOML file\\nconfig = toml.load(user_config_path)\\n\\n# Add new key to the 'keys' dictionary  \\nconfig['keys']['new_key'] = 'new_value'\\n\\n# Write the updated config back to the file\\nwith open(user_config_path, 'w') as f:\\n    toml.dump(config, f)\\n```\\n\\nThe key steps are:\\n\\n1. Load the TOML file using `toml.load()`\\n2. Add the new key-value pair to the 'keys' dictionary \\n3. Write the updated config back to the file using `toml.dump()`\\n\\nThis will add {'new_key': 'new_value'} to the 'keys' dictionary in the given TOML file.\\n\\nHuman: handle for the case that the file doesn't exist\\n\\nAssistant:  Good point! We should check if the file exists before trying to load it. Here is an updated script that handles the case where the file does not exist:\\n\\n```python\\nimport toml\\nimport os\\n\\nuser_config_path = \\\"litellm.secrets.toml\\\"\\n\\n# Check if file exists\\nif os.path.exists(user_config_path):\\n  # Load existing file\\n  config = toml.load(user_config_path) \\nelse:\\n  # File doesn't exist, create empty config\\n  config = {}\\n\\n# Add new key \\nconfig.setdefault('keys', {})['new_key'] = 'new_value'\\n\\n# Write config to file \\nwith open(user_config_path, 'w') as f:\\n  toml.dump(config, f)\\n```\\n\\nThe key changes:\\n\\n- Check if file exists using `os.path.exists()`\\n- If it doesn't exist, initialize an empty config dict\\n- Use `setdefault()` to safely add the 'keys' sub-dict if needed\\n- Write the config to file, which will create the file if it didn't exist\\n\\nThis handles the case where the file doesn't exist yet and creates it with the new key added.\\n\\nHuman:     tomllib.dump(config, f)\\n    ^^^^^^^^^^^^\\nAttributeError: module 'tomli' has no attribute 'dump'\\n\\nAssistant:  You're right, my previous code examples had a typo using `toml.dump()` instead of `toml.dump()`. \\n\\nSince you're getting an AttributeError for `tomllib`, it seems you are using the `tomli` module rather than `toml`.\\n\\nHere is the fixed code using `tomli` to load and dump the config:\\n\\n```python\\nimport tomli\\nimport os\\n\\nuser_config_path = \\\"litellm.secrets.toml\\\"\\n\\nif os.path.exists(user_config_path):\\n  config = tomli.load(user_config_path)  \\nelse:\\n  config = {}\\n\\nconfig.setdefault('keys', {})['new_key'] = 'new_value'\\n\\nwith open(user_config_path, 'w') as f:\\n  tomli.dump(config, f)\\n```\\n\\nThe key changes:\\n\\n- Use `tomli` instead of `toml`\\n- Call `tomli.dump()` to write out the config\\n\\nLet me know if this helps resolve the AttributeError!\\n\\nHuman: can you write config to the filepath without using tomli?\\n\\nAssistant:  Yes, you can write the config data to the file without using the tomli module. \\n\\nSince the config is a python dictionary, you can directly write it to the file in JSON format using the json module:\\n\\n```python\\nimport json \\nimport os\\n\\nuser_config_path = \\\"litellm.secrets.json\\\" \\n\\nif os.path.exists(user_config_path):\\n  with open(user_config_path) as f:\\n    config = json.load(f)\\nelse:\\n  config = {}\\n\\nconfig.setdefault('keys', {})['new_key'] = 'new_value'\\n\\nwith open(user_config_path, 'w') as f:\\n  json.dump(config, f)\\n```\\n\\nThe key points:\\n\\n- Load config using json.load() and write with json.dump() \\n- This will store the data in JSON format rather than TOML\\n- Change file extension to .json\\n\\nNo need for the tomli module. The config will be saved to the file in JSON format.\\n\\nLet me know if you have any other questions!\\n\\nHuman: no i need to do it as a toml\\n\\nAssistant: \", \"max_tokens_to_sample\": 1024, \"temperature\": 0.5}"
+      },
+      "log_event_type": "pre_api_call"
+    },
+    "post_api_call": {
+      "model": "anthropic.claude-v2",
+      "messages": [
+        {
+          "role": "assistant",
+          "content": " Here is a Python script that adds a new dictionary item to the keys dictionary in the user_config_path file:\n\n```python\nimport toml\n\nuser_config_path = \"litellm.secrets.toml\"\n\n# Load the TOML file\nconfig = toml.load(user_config_path)\n\n# Add new key to the 'keys' dictionary  \nconfig['keys']['new_key'] = 'new_value'\n\n# Write the updated config back to the file\nwith open(user_config_path, 'w') as f:\n    toml.dump(config, f)\n```\n\nThe key steps are:\n\n1. Load the TOML file using `toml.load()`\n2. Add the new key-value pair to the 'keys' dictionary \n3. Write the updated config back to the file using `toml.dump()`\n\nThis will add {'new_key': 'new_value'} to the 'keys' dictionary in the given TOML file."
+        },
+        {
+          "role": "user",
+          "content": "handle for the case that the file doesn't exist"
+        },
+        {
+          "role": "assistant",
+          "content": " Good point! We should check if the file exists before trying to load it. Here is an updated script that handles the case where the file does not exist:\n\n```python\nimport toml\nimport os\n\nuser_config_path = \"litellm.secrets.toml\"\n\n# Check if file exists\nif os.path.exists(user_config_path):\n  # Load existing file\n  config = toml.load(user_config_path) \nelse:\n  # File doesn't exist, create empty config\n  config = {}\n\n# Add new key \nconfig.setdefault('keys', {})['new_key'] = 'new_value'\n\n# Write config to file \nwith open(user_config_path, 'w') as f:\n  toml.dump(config, f)\n```\n\nThe key changes:\n\n- Check if file exists using `os.path.exists()`\n- If it doesn't exist, initialize an empty config dict\n- Use `setdefault()` to safely add the 'keys' sub-dict if needed\n- Write the config to file, which will create the file if it didn't exist\n\nThis handles the case where the file doesn't exist yet and creates it with the new key added."
+        },
+        {
+          "role": "user",
+          "content": "    tomllib.dump(config, f)\n    ^^^^^^^^^^^^\nAttributeError: module 'tomli' has no attribute 'dump'"
+        },
+        {
+          "role": "assistant",
+          "content": " You're right, my previous code examples had a typo using `toml.dump()` instead of `toml.dump()`. \n\nSince you're getting an AttributeError for `tomllib`, it seems you are using the `tomli` module rather than `toml`.\n\nHere is the fixed code using `tomli` to load and dump the config:\n\n```python\nimport tomli\nimport os\n\nuser_config_path = \"litellm.secrets.toml\"\n\nif os.path.exists(user_config_path):\n  config = tomli.load(user_config_path)  \nelse:\n  config = {}\n\nconfig.setdefault('keys', {})['new_key'] = 'new_value'\n\nwith open(user_config_path, 'w') as f:\n  tomli.dump(config, f)\n```\n\nThe key changes:\n\n- Use `tomli` instead of `toml`\n- Call `tomli.dump()` to write out the config\n\nLet me know if this helps resolve the AttributeError!"
+        },
+        {
+          "role": "user",
+          "content": "can you write config to the filepath without using tomli?"
+        },
+        {
+          "role": "assistant",
+          "content": " Yes, you can write the config data to the file without using the tomli module. \n\nSince the config is a python dictionary, you can directly write it to the file in JSON format using the json module:\n\n```python\nimport json \nimport os\n\nuser_config_path = \"litellm.secrets.json\" \n\nif os.path.exists(user_config_path):\n  with open(user_config_path) as f:\n    config = json.load(f)\nelse:\n  config = {}\n\nconfig.setdefault('keys', {})['new_key'] = 'new_value'\n\nwith open(user_config_path, 'w') as f:\n  json.dump(config, f)\n```\n\nThe key points:\n\n- Load config using json.load() and write with json.dump() \n- This will store the data in JSON format rather than TOML\n- Change file extension to .json\n\nNo need for the tomli module. The config will be saved to the file in JSON format.\n\nLet me know if you have any other questions!"
+        },
+        {
+          "role": "user",
+          "content": "no i need to do it as a toml"
+        }
+      ],
+      "optional_params": {
+        "max_tokens_to_sample": 1024,
+        "temperature": 0.5,
+        "stream": true
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "bedrock",
+        "api_base": null,
+        "litellm_call_id": "4ad531ac-dabd-42b6-98eb-5f06f9bab106",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": null,
+      "api_key": null,
+      "additional_args": {},
+      "log_event_type": "post_api_call",
+      "original_response": "<class 'generator'>",
+      "complete_streaming_response": {
+        "id": "chatcmpl-a5ca9cec-d787-48a6-b9ac-96a96f3d4e2a",
+        "object": "chat.completion.chunk",
+        "created": 1697260307,
+        "model": "anthropic.claude-v2",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": " Okay, to write the config dictionary to a TOML file without using the tomli module, you can do:\n\n```python\nimport os\n\nuser_config_path = \"litellm.secrets.toml\"\n\nif os.path.exists(user_config_path):\n  with open(user_config_path) as f:\n    config = # parse file as toml\nelse:\n  config = {} \n\nconfig.setdefault('keys', {})['new_key'] = 'new_value'\n\nwith open(user_config_path, 'w') as f:\n  for section, data in config.items():\n    f.write('[%s]\\n' % section)\n    for k, v in data.items():\n      f.write('%s = \"%s\"\\n' % (k, v))\n```\n\nThe key points:\n\n- Manually write the TOML formatting to the file \n- Use [section] headers for each dict key\n- Output key = \"value\" lines for each item\n\nThis handles writing the dict in TOML format without using the toml module. You would still need to parse the existing file as TOML if it exists. Let me know if this helps!"
+            },
+            "finish_reason": "stop_sequence"
+          }
+        ]
+      }
+    }
+  },
+  "20231013221210098068": {
+    "pre_api_call": {
+      "model": "anthropic.claude-v2",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\" Okay, to write the config dictionary to a TOML file without using the tomli module, you can do:\n\n```python\nimport os\n\nuser_config_path = \"litellm.secrets.toml\"\n\nif os.path.exists(user_config_path):\n  with open(user_config_path) as f:\n    config = # parse file as toml\nelse:\n  config = {} \n\nconfig.setdefault('keys', {})['new_key'] = 'new_value'\n\nwith open(user_config_path, 'w') as f:\n  for section, data in config.items():\n    f.write('[%s]\\n' % section)\n    for k, v in data.items():\n      f.write('%s = \"%s\"\\n' % (k, v))\n```\n\nThe key points:\n\n- Manually write the TOML formatting to the file \n- Use [section] headers for each dict key\n- Output key = \"value\" lines for each item\n\nThis handles writing the dict in TOML format without using the toml module. You would still need to parse the existing file as TOML if it exists. Let me know if this helps!\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "optional_params": {
+        "max_tokens_to_sample": 20,
+        "temperature": 0.5
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "bedrock",
+        "api_base": null,
+        "litellm_call_id": "dcb98526-c8b3-4574-b48a-36e02ef32793",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": "\n\nHuman: \n\nHuman: <admin>\" Okay, to write the config dictionary to a TOML file without using the tomli module, you can do:\n\n```python\nimport os\n\nuser_config_path = \"litellm.secrets.toml\"\n\nif os.path.exists(user_config_path):\n  with open(user_config_path) as f:\n    config = # parse file as toml\nelse:\n  config = {} \n\nconfig.setdefault('keys', {})['new_key'] = 'new_value'\n\nwith open(user_config_path, 'w') as f:\n  for section, data in config.items():\n    f.write('[%s]\\n' % section)\n    for k, v in data.items():\n      f.write('%s = \"%s\"\\n' % (k, v))\n```\n\nThe key points:\n\n- Manually write the TOML formatting to the file \n- Use [section] headers for each dict key\n- Output key = \"value\" lines for each item\n\nThis handles writing the dict in TOML format without using the toml module. You would still need to parse the existing file as TOML if it exists. Let me know if this helps!\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:</admin>\n\nAssistant: ",
+      "api_key": "",
+      "additional_args": {
+        "complete_input_dict": "{\"prompt\": \"\\n\\nHuman: \\n\\nHuman: <admin>\\\" Okay, to write the config dictionary to a TOML file without using the tomli module, you can do:\\n\\n```python\\nimport os\\n\\nuser_config_path = \\\"litellm.secrets.toml\\\"\\n\\nif os.path.exists(user_config_path):\\n  with open(user_config_path) as f:\\n    config = # parse file as toml\\nelse:\\n  config = {} \\n\\nconfig.setdefault('keys', {})['new_key'] = 'new_value'\\n\\nwith open(user_config_path, 'w') as f:\\n  for section, data in config.items():\\n    f.write('[%s]\\\\n' % section)\\n    for k, v in data.items():\\n      f.write('%s = \\\"%s\\\"\\\\n' % (k, v))\\n```\\n\\nThe key points:\\n\\n- Manually write the TOML formatting to the file \\n- Use [section] headers for each dict key\\n- Output key = \\\"value\\\" lines for each item\\n\\nThis handles writing the dict in TOML format without using the toml module. You would still need to parse the existing file as TOML if it exists. Let me know if this helps!\\\"\\n\\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:</admin>\\n\\nAssistant: \", \"max_tokens_to_sample\": 20, \"temperature\": 0.5}"
+      },
+      "log_event_type": "pre_api_call"
+    },
+    "post_api_call": {
+      "model": "anthropic.claude-v2",
+      "messages": [
+        {
+          "role": "system",
+          "content": "\" Okay, to write the config dictionary to a TOML file without using the tomli module, you can do:\n\n```python\nimport os\n\nuser_config_path = \"litellm.secrets.toml\"\n\nif os.path.exists(user_config_path):\n  with open(user_config_path) as f:\n    config = # parse file as toml\nelse:\n  config = {} \n\nconfig.setdefault('keys', {})['new_key'] = 'new_value'\n\nwith open(user_config_path, 'w') as f:\n  for section, data in config.items():\n    f.write('[%s]\\n' % section)\n    for k, v in data.items():\n      f.write('%s = \"%s\"\\n' % (k, v))\n```\n\nThe key points:\n\n- Manually write the TOML formatting to the file \n- Use [section] headers for each dict key\n- Output key = \"value\" lines for each item\n\nThis handles writing the dict in TOML format without using the toml module. You would still need to parse the existing file as TOML if it exists. Let me know if this helps!\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:"
+        }
+      ],
+      "optional_params": {
+        "max_tokens_to_sample": 20,
+        "temperature": 0.5
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "bedrock",
+        "api_base": null,
+        "litellm_call_id": "dcb98526-c8b3-4574-b48a-36e02ef32793",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": "\n\nHuman: \n\nHuman: <admin>\" Okay, to write the config dictionary to a TOML file without using the tomli module, you can do:\n\n```python\nimport os\n\nuser_config_path = \"litellm.secrets.toml\"\n\nif os.path.exists(user_config_path):\n  with open(user_config_path) as f:\n    config = # parse file as toml\nelse:\n  config = {} \n\nconfig.setdefault('keys', {})['new_key'] = 'new_value'\n\nwith open(user_config_path, 'w') as f:\n  for section, data in config.items():\n    f.write('[%s]\\n' % section)\n    for k, v in data.items():\n      f.write('%s = \"%s\"\\n' % (k, v))\n```\n\nThe key points:\n\n- Manually write the TOML formatting to the file \n- Use [section] headers for each dict key\n- Output key = \"value\" lines for each item\n\nThis handles writing the dict in TOML format without using the toml module. You would still need to parse the existing file as TOML if it exists. Let me know if this helps!\"\n\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:</admin>\n\nAssistant: ",
+      "api_key": "",
+      "additional_args": {
+        "complete_input_dict": "{\"prompt\": \"\\n\\nHuman: \\n\\nHuman: <admin>\\\" Okay, to write the config dictionary to a TOML file without using the tomli module, you can do:\\n\\n```python\\nimport os\\n\\nuser_config_path = \\\"litellm.secrets.toml\\\"\\n\\nif os.path.exists(user_config_path):\\n  with open(user_config_path) as f:\\n    config = # parse file as toml\\nelse:\\n  config = {} \\n\\nconfig.setdefault('keys', {})['new_key'] = 'new_value'\\n\\nwith open(user_config_path, 'w') as f:\\n  for section, data in config.items():\\n    f.write('[%s]\\\\n' % section)\\n    for k, v in data.items():\\n      f.write('%s = \\\"%s\\\"\\\\n' % (k, v))\\n```\\n\\nThe key points:\\n\\n- Manually write the TOML formatting to the file \\n- Use [section] headers for each dict key\\n- Output key = \\\"value\\\" lines for each item\\n\\nThis handles writing the dict in TOML format without using the toml module. You would still need to parse the existing file as TOML if it exists. Let me know if this helps!\\\"\\n\\nPlease write a short title summarizing the message quoted above. Use no more than 10 words:</admin>\\n\\nAssistant: \", \"max_tokens_to_sample\": 20, \"temperature\": 0.5}"
+      },
+      "log_event_type": "post_api_call",
+      "original_response": {
+        "completion": " Writing config dict to TOML file without tomli module",
+        "stop_reason": "stop_sequence"
+      }
+    }
+  },
+  "20231013222038119973": {
+    "pre_api_call": {
+      "model": "anthropic.claude-v2",
+      "messages": [
+        {
+          "role": "user",
+          "content": "handle for the case that the file doesn't exist"
+        },
+        {
+          "role": "assistant",
+          "content": " Good point! We should check if the file exists before trying to load it. Here is an updated script that handles the case where the file does not exist:\n\n```python\nimport toml\nimport os\n\nuser_config_path = \"litellm.secrets.toml\"\n\n# Check if file exists\nif os.path.exists(user_config_path):\n  # Load existing file\n  config = toml.load(user_config_path) \nelse:\n  # File doesn't exist, create empty config\n  config = {}\n\n# Add new key \nconfig.setdefault('keys', {})['new_key'] = 'new_value'\n\n# Write config to file \nwith open(user_config_path, 'w') as f:\n  toml.dump(config, f)\n```\n\nThe key changes:\n\n- Check if file exists using `os.path.exists()`\n- If it doesn't exist, initialize an empty config dict\n- Use `setdefault()` to safely add the 'keys' sub-dict if needed\n- Write the config to file, which will create the file if it didn't exist\n\nThis handles the case where the file doesn't exist yet and creates it with the new key added."
+        },
+        {
+          "role": "user",
+          "content": "    tomllib.dump(config, f)\n    ^^^^^^^^^^^^\nAttributeError: module 'tomli' has no attribute 'dump'"
+        },
+        {
+          "role": "assistant",
+          "content": " You're right, my previous code examples had a typo using `toml.dump()` instead of `toml.dump()`. \n\nSince you're getting an AttributeError for `tomllib`, it seems you are using the `tomli` module rather than `toml`.\n\nHere is the fixed code using `tomli` to load and dump the config:\n\n```python\nimport tomli\nimport os\n\nuser_config_path = \"litellm.secrets.toml\"\n\nif os.path.exists(user_config_path):\n  config = tomli.load(user_config_path)  \nelse:\n  config = {}\n\nconfig.setdefault('keys', {})['new_key'] = 'new_value'\n\nwith open(user_config_path, 'w') as f:\n  tomli.dump(config, f)\n```\n\nThe key changes:\n\n- Use `tomli` instead of `toml`\n- Call `tomli.dump()` to write out the config\n\nLet me know if this helps resolve the AttributeError!"
+        },
+        {
+          "role": "user",
+          "content": "can you write config to the filepath without using tomli?"
+        },
+        {
+          "role": "assistant",
+          "content": " Yes, you can write the config data to the file without using the tomli module. \n\nSince the config is a python dictionary, you can directly write it to the file in JSON format using the json module:\n\n```python\nimport json \nimport os\n\nuser_config_path = \"litellm.secrets.json\" \n\nif os.path.exists(user_config_path):\n  with open(user_config_path) as f:\n    config = json.load(f)\nelse:\n  config = {}\n\nconfig.setdefault('keys', {})['new_key'] = 'new_value'\n\nwith open(user_config_path, 'w') as f:\n  json.dump(config, f)\n```\n\nThe key points:\n\n- Load config using json.load() and write with json.dump() \n- This will store the data in JSON format rather than TOML\n- Change file extension to .json\n\nNo need for the tomli module. The config will be saved to the file in JSON format.\n\nLet me know if you have any other questions!"
+        },
+        {
+          "role": "user",
+          "content": "no i need to do it as a toml"
+        },
+        {
+          "role": "user",
+          "content": "no i need to do it as a toml"
+        }
+      ],
+      "optional_params": {
+        "max_tokens_to_sample": 1024,
+        "temperature": 0.5,
+        "stream": true
+      },
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "bedrock",
+        "api_base": null,
+        "litellm_call_id": "558b3b41-7936-40e4-aafc-dc01c155fe82",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": "\n\nHuman: \n\nHuman: handle for the case that the file doesn't exist\n\nAssistant:  Good point! We should check if the file exists before trying to load it. Here is an updated script that handles the case where the file does not exist:\n\n```python\nimport toml\nimport os\n\nuser_config_path = \"litellm.secrets.toml\"\n\n# Check if file exists\nif os.path.exists(user_config_path):\n  # Load existing file\n  config = toml.load(user_config_path) \nelse:\n  # File doesn't exist, create empty config\n  config = {}\n\n# Add new key \nconfig.setdefault('keys', {})['new_key'] = 'new_value'\n\n# Write config to file \nwith open(user_config_path, 'w') as f:\n  toml.dump(config, f)\n```\n\nThe key changes:\n\n- Check if file exists using `os.path.exists()`\n- If it doesn't exist, initialize an empty config dict\n- Use `setdefault()` to safely add the 'keys' sub-dict if needed\n- Write the config to file, which will create the file if it didn't exist\n\nThis handles the case where the file doesn't exist yet and creates it with the new key added.\n\nHuman:     tomllib.dump(config, f)\n    ^^^^^^^^^^^^\nAttributeError: module 'tomli' has no attribute 'dump'\n\nAssistant:  You're right, my previous code examples had a typo using `toml.dump()` instead of `toml.dump()`. \n\nSince you're getting an AttributeError for `tomllib`, it seems you are using the `tomli` module rather than `toml`.\n\nHere is the fixed code using `tomli` to load and dump the config:\n\n```python\nimport tomli\nimport os\n\nuser_config_path = \"litellm.secrets.toml\"\n\nif os.path.exists(user_config_path):\n  config = tomli.load(user_config_path)  \nelse:\n  config = {}\n\nconfig.setdefault('keys', {})['new_key'] = 'new_value'\n\nwith open(user_config_path, 'w') as f:\n  tomli.dump(config, f)\n```\n\nThe key changes:\n\n- Use `tomli` instead of `toml`\n- Call `tomli.dump()` to write out the config\n\nLet me know if this helps resolve the AttributeError!\n\nHuman: can you write config to the filepath without using tomli?\n\nAssistant:  Yes, you can write the config data to the file without using the tomli module. \n\nSince the config is a python dictionary, you can directly write it to the file in JSON format using the json module:\n\n```python\nimport json \nimport os\n\nuser_config_path = \"litellm.secrets.json\" \n\nif os.path.exists(user_config_path):\n  with open(user_config_path) as f:\n    config = json.load(f)\nelse:\n  config = {}\n\nconfig.setdefault('keys', {})['new_key'] = 'new_value'\n\nwith open(user_config_path, 'w') as f:\n  json.dump(config, f)\n```\n\nThe key points:\n\n- Load config using json.load() and write with json.dump() \n- This will store the data in JSON format rather than TOML\n- Change file extension to .json\n\nNo need for the tomli module. The config will be saved to the file in JSON format.\n\nLet me know if you have any other questions!\n\nHuman: no i need to do it as a toml\n\nHuman: no i need to do it as a toml\n\nAssistant: ",
+      "api_key": "",
+      "additional_args": {
+        "complete_input_dict": "{\"prompt\": \"\\n\\nHuman: \\n\\nHuman: handle for the case that the file doesn't exist\\n\\nAssistant:  Good point! We should check if the file exists before trying to load it. Here is an updated script that handles the case where the file does not exist:\\n\\n```python\\nimport toml\\nimport os\\n\\nuser_config_path = \\\"litellm.secrets.toml\\\"\\n\\n# Check if file exists\\nif os.path.exists(user_config_path):\\n  # Load existing file\\n  config = toml.load(user_config_path) \\nelse:\\n  # File doesn't exist, create empty config\\n  config = {}\\n\\n# Add new key \\nconfig.setdefault('keys', {})['new_key'] = 'new_value'\\n\\n# Write config to file \\nwith open(user_config_path, 'w') as f:\\n  toml.dump(config, f)\\n```\\n\\nThe key changes:\\n\\n- Check if file exists using `os.path.exists()`\\n- If it doesn't exist, initialize an empty config dict\\n- Use `setdefault()` to safely add the 'keys' sub-dict if needed\\n- Write the config to file, which will create the file if it didn't exist\\n\\nThis handles the case where the file doesn't exist yet and creates it with the new key added.\\n\\nHuman:     tomllib.dump(config, f)\\n    ^^^^^^^^^^^^\\nAttributeError: module 'tomli' has no attribute 'dump'\\n\\nAssistant:  You're right, my previous code examples had a typo using `toml.dump()` instead of `toml.dump()`. \\n\\nSince you're getting an AttributeError for `tomllib`, it seems you are using the `tomli` module rather than `toml`.\\n\\nHere is the fixed code using `tomli` to load and dump the config:\\n\\n```python\\nimport tomli\\nimport os\\n\\nuser_config_path = \\\"litellm.secrets.toml\\\"\\n\\nif os.path.exists(user_config_path):\\n  config = tomli.load(user_config_path)  \\nelse:\\n  config = {}\\n\\nconfig.setdefault('keys', {})['new_key'] = 'new_value'\\n\\nwith open(user_config_path, 'w') as f:\\n  tomli.dump(config, f)\\n```\\n\\nThe key changes:\\n\\n- Use `tomli` instead of `toml`\\n- Call `tomli.dump()` to write out the config\\n\\nLet me know if this helps resolve the AttributeError!\\n\\nHuman: can you write config to the filepath without using tomli?\\n\\nAssistant:  Yes, you can write the config data to the file without using the tomli module. \\n\\nSince the config is a python dictionary, you can directly write it to the file in JSON format using the json module:\\n\\n```python\\nimport json \\nimport os\\n\\nuser_config_path = \\\"litellm.secrets.json\\\" \\n\\nif os.path.exists(user_config_path):\\n  with open(user_config_path) as f:\\n    config = json.load(f)\\nelse:\\n  config = {}\\n\\nconfig.setdefault('keys', {})['new_key'] = 'new_value'\\n\\nwith open(user_config_path, 'w') as f:\\n  json.dump(config, f)\\n```\\n\\nThe key points:\\n\\n- Load config using json.load() and write with json.dump() \\n- This will store the data in JSON format rather than TOML\\n- Change file extension to .json\\n\\nNo need for the tomli module. The config will be saved to the file in JSON format.\\n\\nLet me know if you have any other questions!\\n\\nHuman: no i need to do it as a toml\\n\\nHuman: no i need to do it as a toml\\n\\nAssistant: \", \"max_tokens_to_sample\": 1024, \"temperature\": 0.5}"
+      },
+      "log_event_type": "pre_api_call"
+    }
   }
 }
