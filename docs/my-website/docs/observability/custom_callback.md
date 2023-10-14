@@ -119,7 +119,14 @@ LiteLLM accepts a metadata dictionary in the completion call. You can pass addit
 Since this is a [litellm-specific param](https://github.com/BerriAI/litellm/blob/b6a015404eed8a0fa701e98f4581604629300ee3/litellm/main.py#L235), it's accessible via kwargs["litellm_params"]
 
 ```python
-# litellm.set_verbose = False
+from litellm import completion
+import os, litellm
+
+## set ENV variables
+os.environ["OPENAI_API_KEY"] = "your-api-key"
+
+messages = [{ "content": "Hello, how are you?","role": "user"}]
+
 def custom_callback(
     kwargs,                 # kwargs to completion
     completion_response,    # response from completion
@@ -131,7 +138,7 @@ def custom_callback(
 # Assign the custom callback function
 litellm.success_callback = [custom_callback]
 
-response = completion(model="claude-instant-1", messages=messages, metadata={"hello": "world"})
+response = litellm.completion(model="gpt-3.5-turbo", messages=messages, metadata={"hello": "world"})
 ```
 
 ## Examples
