@@ -3207,28 +3207,32 @@ class CustomStreamWrapper:
             return {"text": text, "is_finished": is_finished, "finish_reason": finish_reason}
 
     def handle_huggingface_chunk(self, chunk):
-        chunk = chunk.decode("utf-8")
-        text = "" 
-        is_finished = False
-        finish_reason = ""
-        print_verbose(f"chunk: {chunk}")
-        if chunk.startswith("data:"):
-            data_json = json.loads(chunk[5:])
-            print_verbose(f"data json: {data_json}")
-            if "token" in data_json and "text" in data_json["token"]:
-                text = data_json["token"]["text"]
-            if data_json.get("details", False) and data_json["details"].get("finish_reason", False):
-                is_finished = True
-                finish_reason = data_json["details"]["finish_reason"]
-            elif data_json.get("generated_text", False): # if full generated text exists, then stream is complete
-                text = "" # don't return the final bos token
-                is_finished = True
-                finish_reason = "stop"
+        try:
+            chunk = chunk.decode("utf-8")
+            text = "" 
+            is_finished = False
+            finish_reason = ""
+            print_verbose(f"chunk: {chunk}")
+            if chunk.startswith("data:"):
+                data_json = json.loads(chunk[5:])
+                print_verbose(f"data json: {data_json}")
+                if "token" in data_json and "text" in data_json["token"]:
+                    text = data_json["token"]["text"]
+                if data_json.get("details", False) and data_json["details"].get("finish_reason", False):
+                    is_finished = True
+                    finish_reason = data_json["details"]["finish_reason"]
+                elif data_json.get("generated_text", False): # if full generated text exists, then stream is complete
+                    text = "" # don't return the final bos token
+                    is_finished = True
+                    finish_reason = "stop"
 
+                return {"text": text, "is_finished": is_finished, "finish_reason": finish_reason}
+            elif "error" in chunk: 
+                raise ValueError(chunk)
             return {"text": text, "is_finished": is_finished, "finish_reason": finish_reason}
-        elif "error" in chunk: 
-            raise ValueError(chunk)
-        return {"text": text, "is_finished": is_finished, "finish_reason": finish_reason}
+        except Exception as e: 
+            traceback.print_exc()
+            # raise(e)
     
     def handle_ai21_chunk(self, chunk): # fake streaming
         chunk = chunk.decode("utf-8")

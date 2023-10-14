@@ -88,13 +88,15 @@ def is_port_in_use(port):
 @click.option('--port', default=8000, help='Port to bind the server to.')
 @click.option('--api_base', default=None, help='API base URL.')
 @click.option('--model', default=None, help='The model name to pass to litellm expects') 
+@click.option('--alias', default=None, help='The alias for the model - use this to give a litellm model name (e.g. "huggingface/codellama/CodeLlama-7b-Instruct-hf") a more user-friendly name ("codellama")') 
 @click.option('--add_key', default=None, help='The model name to pass to litellm expects') 
+@click.option('--headers', default=None, help='headers for the API call') 
 @click.option('--deploy', is_flag=True, type=bool, help='Get a deployed proxy endpoint - api.litellm.ai')
+@click.option('--save', is_flag=True, type=bool, help='Save the model-specific config')
 @click.option('--debug', default=False, is_flag=True, type=bool, help='To debug the input') 
 @click.option('--temperature', default=None, type=float, help='Set temperature for the model') 
 @click.option('--max_tokens', default=None, type=int, help='Set max tokens for the model') 
 @click.option('--drop_params', is_flag=True, help='Drop any unmapped params') 
-@click.option('--save', is_flag=True, help='Save params to config, to persist across restarts') 
 @click.option('--create_proxy', is_flag=True, help='Creates a local OpenAI-compatible server template') 
 @click.option('--add_function_to_prompt', is_flag=True, help='If function passed but unsupported, pass it as prompt') 
 @click.option('--config', '-c', is_flag=True, help='Configure Litellm')  
@@ -105,7 +107,7 @@ def is_port_in_use(port):
 @click.option('--test', flag_value=True, help='proxy chat completions url to make a test request to')
 @click.option('--local', is_flag=True, default=False, help='for local debugging')
 @click.option('--cost', is_flag=True, default=False, help='for viewing cost logs')
-def run_server(host, port, api_base, model, add_key, deploy, debug, temperature, max_tokens, drop_params, create_proxy, add_function_to_prompt, config, file, max_budget, telemetry, logs, test, local, cost, save):
+def run_server(host, port, api_base, model, alias, add_key, headers, deploy, save, debug, temperature, max_tokens, drop_params, create_proxy, add_function_to_prompt, config, file, max_budget, telemetry, logs, test, local, cost):
     global feature_telemetry
     args = locals()
     if local:
@@ -133,19 +135,22 @@ def run_server(host, port, api_base, model, add_key, deploy, debug, temperature,
     if logs is not None:
         if logs == 0: # default to 1
             logs = 1
-        with open('api_log.json') as f:
-            data = json.load(f)
+        try:
+            with open('api_log.json') as f:
+                data = json.load(f)
 
-        # convert keys to datetime objects    
-        log_times = {datetime.strptime(k, "%Y%m%d%H%M%S%f"): v for k, v in data.items()}
+            # convert keys to datetime objects    
+            log_times = {datetime.strptime(k, "%Y%m%d%H%M%S%f"): v for k, v in data.items()}
 
-        # sort by timestamp    
-        sorted_times = sorted(log_times.items(), key=operator.itemgetter(0), reverse=True)
+            # sort by timestamp    
+            sorted_times = sorted(log_times.items(), key=operator.itemgetter(0), reverse=True)
 
-        # get n recent logs
-        recent_logs = {k.strftime("%Y%m%d%H%M%S%f"): v for k, v in sorted_times[:logs]}
+            # get n recent logs
+            recent_logs = {k.strftime("%Y%m%d%H%M%S%f"): v for k, v in sorted_times[:logs]}
 
-        print(json.dumps(recent_logs, indent=4))
+            print(json.dumps(recent_logs, indent=4))
+        except:
+            print("LiteLLM: No logs saved!")
         return
     if add_key:
         key_name, key_value = add_key.split("=")
@@ -200,7 +205,9 @@ def run_server(host, port, api_base, model, add_key, deploy, debug, temperature,
             click.echo(f'LiteLLM: streaming response from proxy {chunk}')
         return
     else:
-        initialize(model, api_base, debug, temperature, max_tokens, max_budget, telemetry, drop_params, add_function_to_prompt)
+        if headers:
+            headers = json.loads(headers)
+        initialize(model=model, alias=alias, api_base=api_base, debug=debug, temperature=temperature, max_tokens=max_tokens, max_budget=max_budget, telemetry=telemetry, drop_params=drop_params, add_function_to_prompt=add_function_to_prompt, headers=headers, save=save)
         try:
             import uvicorn
         except:
