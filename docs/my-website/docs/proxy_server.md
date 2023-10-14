@@ -300,35 +300,90 @@ print(result)
 ::: 
 
 ## Advanced
-### Configure Model
-
-To save API Keys, change model prompt, etc. you'll need to create a local instance of it:
-```shell
-$ litellm --create_proxy
+### Save API Keys 
+```shell 
+$ litellm --api_key OPENAI_API_KEY=sk-...
 ```
-This will create a local project called `litellm-proxy` in your current directory, that has: 
-* **proxy_cli.py**: Runs the proxy
-* **proxy_server.py**: Contains the API calling logic
-    - `/chat/completions`: receives `openai.ChatCompletion.create` call.
-    - `/completions`: receives `openai.Completion.create` call.
-    - `/models`: receives `openai.Model.list()` call
-* **secrets.toml**: Stores your api keys, model configs, etc.
+LiteLLM will save this to a locally stored config file, and persist this across sessions. 
 
-Run it by doing:
+LiteLLM Proxy supports all litellm supported api keys. To add keys for a specific provider, check this list:
+
+<Tabs>
+<TabItem value="huggingface" label="Huggingface">
+
 ```shell
-$ cd litellm-proxy
-```
-```shell
-$ python proxy_cli.py --model ollama/llama # replace with your model name
+$ litellm --add_key HUGGINGFACE_API_KEY=my-api-key #[OPTIONAL]
 ```
 
-To set api base, temperature, and max tokens, add it to your cli command
+</TabItem>
+<TabItem value="anthropic" label="Anthropic">
+
 ```shell
-litellm --model ollama/llama2 \
-  --api_base http://localhost:11434 \
-  --max_tokens 250 \
-  --temperature 0.5
+$ litellm --add_key ANTHROPIC_API_KEY=my-api-key
 ```
+
+</TabItem>
+
+<TabItem value="together_ai" label="TogetherAI">
+
+```shell
+$ litellm --add_key TOGETHERAI_API_KEY=my-api-key
+```
+
+</TabItem>
+
+<TabItem value="replicate" label="Replicate">
+
+```shell
+$ litellm --add_key REPLICATE_API_KEY=my-api-key
+```
+
+</TabItem>
+
+<TabItem value="bedrock" label="Bedrock">
+
+```shell
+$ litellm --add_key AWS_ACCESS_KEY_ID=my-key-id
+$ litellm --add_key AWS_SECRET_ACCESS_KEY=my-secret-access-key
+```
+
+</TabItem>
+
+<TabItem value="palm" label="Palm">
+
+```shell
+$ litellm --add_key PALM_API_KEY=my-palm-key
+```
+
+</TabItem>
+
+<TabItem value="azure" label="Azure OpenAI">
+
+```shell
+$ litellm --add_key AZURE_API_KEY=my-api-key
+$ litellm --add_key AZURE_API_BASE=my-api-base
+
+```
+
+</TabItem>
+
+<TabItem value="ai21" label="AI21">
+
+```shell
+$ litellm --add_key AI21_API_KEY=my-api-key
+```
+
+</TabItem>
+
+<TabItem value="cohere" label="Cohere">
+
+```shell
+$ litellm --add_key COHERE_API_KEY=my-api-key
+```
+
+</TabItem>
+
+</Tabs>
 
 ### Create a proxy for multiple LLMs
 ```shell 
@@ -355,6 +410,121 @@ response = openai.ChatCompletion.create(model="ollama/llama2", messages=[{"role"
 print(response)
 ```
 
+### Logs
+
+```shell
+$ litellm --logs
+```
+
+This will return the most recent log (the call that went to the LLM API + the received response).
+
+LiteLLM Proxy will also save your logs to a file called `api_logs.json` in the current directory. 
+
+### Configure Proxy
+
+If you need to: 
+* save API keys 
+* set litellm params (e.g. drop unmapped params, set fallback models, etc.)
+* set model-specific params (max tokens, temperature, api base, prompt template)
+
+You can do set these just for that session (via cli), or persist these across restarts (via config file).
+
+
+E.g.: Set api base, max tokens and temperature. 
+
+**For that session**: 
+```shell
+litellm --model ollama/llama2 \
+  --api_base http://localhost:11434 \
+  --max_tokens 250 \
+  --temperature 0.5
+
+# OpenAI-compatible server running on http://0.0.0.0:8000
+```
+
+**Across restarts**:  
+Create a file called `litellm_config.toml` and paste this in there:
+
+```shell
+[model."ollama/llama2"] # run via `litellm --model ollama/llama2`
+max_tokens = 250 # set max tokens for the model 
+temperature = 0.5 # set temperature for the model 
+api_base = "http://localhost:11434" # set a custom api base for the model
+```
+
+&nbsp;   
+
+Save it to the proxy with: 
+```shell
+$ litellm --config -f ./litellm_config.toml 
+```
+LiteLLM will save a copy of this file in it's package, so it can persist these settings across restarts.
+
+
+**Complete Config File**
+
+```shell
+### API KEYS ### 
+[keys]
+# HUGGINGFACE_API_KEY="" # Uncomment to save your Hugging Face API key
+# OPENAI_API_KEY="" # Uncomment to save your OpenAI API Key
+# TOGETHERAI_API_KEY="" # Uncomment to save your TogetherAI API key
+# NLP_CLOUD_API_KEY="" # Uncomment to save your NLP Cloud API key
+# ANTHROPIC_API_KEY="" # Uncomment to save your Anthropic API key
+# REPLICATE_API_KEY="" # Uncomment to save your Replicate API key
+# AWS_ACCESS_KEY_ID = "" # Uncomment to save your Bedrock/Sagemaker access keys
+# AWS_SECRET_ACCESS_KEY = "" # Uncomment to save your Bedrock/Sagemaker access keys
+
+### LITELLM PARAMS ### 
+[general]
+# add_function_to_prompt = True # e.g: Ollama doesn't support functions, so add it to the prompt instead
+# drop_params = True # drop any params not supported by the provider (e.g. Ollama)
+# default_model = "gpt-4" # route all requests to this model
+# fallbacks = ["gpt-3.5-turbo", "gpt-3.5-turbo-16k"] # models you want to fallback to in case completion call fails (remember: add relevant keys) 
+
+### MODEL PARAMS ### 
+[model."ollama/llama2"] # run via `litellm --model ollama/llama2`
+# max_tokens = "" # set max tokens for the model 
+# temperature = "" # set temperature for the model 
+# api_base = "" # set a custom api base for the model
+
+[model."ollama/llama2".prompt_template] # [OPTIONAL] LiteLLM can automatically formats the prompt - docs: https://docs.litellm.ai/docs/completion/prompt_formatting
+# MODEL_SYSTEM_MESSAGE_START_TOKEN = "[INST] <<SYS>>\n" # This does not need to be a token, can be any string
+# MODEL_SYSTEM_MESSAGE_END_TOKEN = "\n<</SYS>>\n [/INST]\n" # This does not need to be a token, can be any string
+
+# MODEL_USER_MESSAGE_START_TOKEN = "[INST] " # This does not need to be a token, can be any string
+# MODEL_USER_MESSAGE_END_TOKEN = " [/INST]\n" # Applies only to user messages. Can be any string.
+
+# MODEL_ASSISTANT_MESSAGE_START_TOKEN = "" # Applies only to assistant messages. Can be any string.
+# MODEL_ASSISTANT_MESSAGE_END_TOKEN = "\n" # Applies only to system messages. Can be any string.
+
+# MODEL_PRE_PROMPT = "You are a good bot" # Applied at the start of the prompt
+# MODEL_POST_PROMPT = "Now answer as best as you can" # Applied at the end of the prompt
+```
+[**🔥 [Tutorial] modify a model prompt on the proxy**](./tutorials/model_config_proxy.md)
+
+
+### Clone Proxy
+To create a local instance of the proxy run:
+```shell
+$ litellm --create_proxy
+```
+This will create a local project called `litellm-proxy` in your current directory, that has: 
+* **proxy_cli.py**: Runs the proxy
+* **proxy_server.py**: Contains the API calling logic
+    - `/chat/completions`: receives `openai.ChatCompletion.create` call.
+    - `/completions`: receives `openai.Completion.create` call.
+    - `/models`: receives `openai.Model.list()` call
+* **secrets.toml**: Stores your api keys, model configs, etc.
+
+Run it by doing:
+```shell
+$ cd litellm-proxy
+```
+```shell
+$ python proxy_cli.py --model ollama/llama # replace with your model name
+```
+
 ### Tracking costs
 By default litellm proxy writes cost logs to litellm/proxy/costs.json
 
@@ -374,17 +544,6 @@ You can view costs on the cli using
 ```shell
 litellm --cost
 ```
-
-### Ollama Logs
-Ollama calls can sometimes fail (out-of-memory errors, etc.). 
-
-To see your logs just call 
-
-```shell
-$ curl 'http://0.0.0.0:8000/ollama_logs'
-```
-
-This will return your logs from `~/.ollama/logs/server.log`. 
 
 ### Deploy Proxy
 

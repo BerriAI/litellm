@@ -137,22 +137,7 @@ def load_config():
         ## load keys
         if "keys" in user_config:
             for key in user_config["keys"]:
-                if key == "HUGGINGFACE_API_KEY":
-                    litellm.huggingface_key = user_config["keys"][key]
-                elif key == "OPENAI_API_KEY":
-                    litellm.openai_key = user_config["keys"][key]
-                elif key == "TOGETHERAI_API_KEY": 
-                    litellm.togetherai_api_key = user_config["keys"][key]
-                elif key == "NLP_CLOUD_API_KEY": 
-                    litellm.nlp_cloud_key = user_config["keys"][key]
-                elif key == "ANTHROPIC_API_KEY":
-                    litellm.anthropic_key = user_config["keys"][key]
-                elif key == "REPLICATE_API_KEY":
-                    litellm.replicate_key = user_config["keys"][key]
-                elif key == "AWS_ACCESS_KEY_ID":
-                    os.environ["AWS_ACCESS_KEY_ID"] = user_config["keys"][key]
-                elif key == "AWS_SECRET_ACCESS_KEY":
-                    os.environ["AWS_SECRET_ACCESS_KEY"] = user_config["keys"][key]
+                os.environ[key] = user_config["keys"][key] # litellm can read keys from the environment
 
         ## settings 
         if "general" in user_config:
@@ -309,14 +294,12 @@ def track_cost_callback(
                 completion=output_text
             )
             model = kwargs['model']
-            print("streaming response_cost", response_cost)
 
         # for non streaming responses
         else:
             # we pass the completion_response obj
             if kwargs["stream"] != True:
                 response_cost = litellm.completion_cost(completion_response=completion_response)
-                print("regular response_cost", response_cost)
                 model = completion_response["model"]
 
         # read/write from json for storing daily model costs 

@@ -3,6 +3,7 @@ import Image from '@theme/IdealImage';
 # Customize Prompt Templates on OpenAI-Compatible server 
 
 **You will learn:** How to set a custom prompt template on our OpenAI compatible server. 
+**How?** We will modify the prompt template for CodeLlama
 
 ## Step 1: Start OpenAI Compatible server
 Let's spin up a local OpenAI-compatible server, to call a deployed `codellama/CodeLlama-34b-Instruct-hf` model using Huggingface's [Text-Generation-Inference (TGI)](https://github.com/huggingface/text-generation-inference) format.
