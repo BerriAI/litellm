@@ -1419,6 +1419,14 @@ def get_optional_params(  # use the openai defaults
             optional_params["top_p"] = top_p
         if stream:
             optional_params["stream"] = stream
+    elif custom_llm_provider == "deepinfra":
+        supported_params = ["temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "deployment_id", "request_timeout"]
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = non_default_params
+        if temperature != None:
+            if temperature ==0 and model == "mistralai/Mistral-7B-Instruct-v0.1": # this model does no support temperature == 0
+                temperature = 0.0001 # close to 0
+            optional_params["temperature"] = temperature
     else:  # assume passing in params for openai/azure openai
         supported_params = ["functions", "function_call", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "deployment_id", "request_timeout"]
         _check_valid_arg(supported_params=supported_params)
