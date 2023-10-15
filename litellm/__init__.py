@@ -248,7 +248,6 @@ provider_list: List = [
     "bedrock",
     "vllm",
     "nlp_cloud",
-    "bedrock",
     "petals",
     "oobabooga",
     "ollama",

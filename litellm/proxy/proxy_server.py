@@ -485,7 +485,7 @@ def model_list():
             object="list",
         )
     else:
-        all_models = litellm.model_list
+        all_models = litellm.utils.get_valid_models()
         return dict(
             data = [{"id": model, "object": "model", "created": 1677610602, "owned_by": "openai"} for model in all_models],
             object="list",
