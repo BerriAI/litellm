@@ -35,6 +35,7 @@ jobs:
             pip install "boto3>=1.28.57"
             pip install appdirs
             pip install langchain
+            pip install numpydoc
       - save_cache:
           paths:
             - ./venv
