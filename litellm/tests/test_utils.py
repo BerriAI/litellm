@@ -10,7 +10,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import pytest
 import litellm
-from litellm.utils import trim_messages, get_token_count, get_valid_models, check_valid_key, validate_environment
+from litellm.utils import trim_messages, get_token_count, get_valid_models, check_valid_key, validate_environment, function_to_dict
 
 # Assuming your trim_messages, shorten_message_to_fit_limit, and get_token_count functions are all in a module named 'message_utils'
 
@@ -102,3 +102,54 @@ def test_validate_environment_empty_model():
         raise Exception() 
 
 # test_validate_environment_empty_model()
+
+def test_function_to_dict():
+    print("testing function to dict for get current weather")
+    def get_current_weather(location: str, unit: str):
+        """Get the current weather in a given location
+
+        Parameters
+        ----------
+        location : str
+            The city and state, e.g. San Francisco, CA
+        unit : {'celsius', 'fahrenheit'}
+            Temperature unit
+
+        Returns
+        -------
+        str
+            a sentence indicating the weather
+        """
+        if location == "Boston, MA":
+            return "The weather is 12F"
+    function_json = litellm.utils.function_to_dict(get_current_weather)
+    print(function_json)
+
+    expected_output = {
+        'name': 'get_current_weather', 
+        'description': 'Get the current weather in a given location', 
+        'parameters': {
+            'type': 'object', 
+            'properties': {
+                'location': {'type': 'string', 'description': 'The city and state, e.g. San Francisco, CA'}, 
+                'unit': {'type': 'string', 'description': 'Temperature unit', 'enum': "['fahrenheit', 'celsius']"}
+            }, 
+            'required': ['location', 'unit']
+        }
+    }
+    print(expected_output)
+    
+    assert function_json['name'] == expected_output["name"]
+    assert function_json["description"] == expected_output["description"]
+    assert function_json["parameters"]["type"] == expected_output["parameters"]["type"]
+    assert function_json["parameters"]["properties"]["location"] == expected_output["parameters"]["properties"]["location"]
+
+    # the enum can change it can be - which is why we don't assert on unit
+    # {'type': 'string', 'description': 'Temperature unit', 'enum': "['fahrenheit', 'celsius']"}
+    # {'type': 'string', 'description': 'Temperature unit', 'enum': "['celsius', 'fahrenheit']"}
+
+    assert function_json["parameters"]["required"] == expected_output["parameters"]["required"]
+
+    print("passed")
+# test_function_to_dict()
+
