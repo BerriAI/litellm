@@ -575,7 +575,7 @@
         "max_tokens": 6144,
         "input_cost_per_token": 0.000001875,
         "output_cost_per_token": 0.000001875,
-        "litellm_provider": "openrouter",
+        "litellm_provider": "deepinfra",
         "mode": "chat"
     },
     "deepinfra/codellama/CodeLlama-34b-Instruct-hf": {
