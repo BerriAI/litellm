@@ -427,7 +427,7 @@ def logger(
             thread = threading.Thread(target=write_to_log, daemon=True)
             thread.start()
   except: 
-      traceback.print_exc()
+    pass
 
 litellm.input_callback = [logger]
 litellm.success_callback = [logger]
