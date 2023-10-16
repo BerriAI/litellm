@@ -36,7 +36,8 @@ LiteLLM manages
 
 **🚨 Seeing errors?** [![Chat on WhatsApp](https://img.shields.io/static/v1?label=Chat%20on&message=WhatsApp&color=success&logo=WhatsApp&style=flat-square)](https://wa.link/huol9n) [![Chat on Discord](https://img.shields.io/static/v1?label=Chat%20on&message=Discord&color=blue&logo=Discord&style=flat-square)](https://discord.gg/wuPM9dRgDw) 
 
-**05/10/2023:** LiteLLM is adopting Semantic Versioning for all commits. [Learn more](https://github.com/BerriAI/litellm/issues/532)
+**10/05/2023:** LiteLLM is adopting Semantic Versioning for all commits. [Learn more](https://github.com/BerriAI/litellm/issues/532)  
+**10/16/2023:** **Self-hosted OpenAI-proxy server** [Learn more](https://docs.litellm.ai/docs/proxy_server#deploy-proxy)
 
 # Usage
 
@@ -88,6 +89,27 @@ This works for async + streaming as well.
 litellm --model <model_name>
 ```
 Running your model locally or on a custom endpoint ? Set the `--api-base` parameter [see how](https://docs.litellm.ai/docs/proxy_server)
+
+### Self-host server
+
+1. Clone the repo ([Docs](https://docs.litellm.ai/docs/proxy_server#deploy-proxy))
+```shell
+git clone https://github.com/BerriAI/litellm.git
+```
+
+2. Modify `template_secrets.toml`
+```shell
+[keys]
+OPENAI_API_KEY="sk-..."
+
+[general]
+default_model = "gpt-3.5-turbo"
+```
+
+3. Deploy
+```shell
+docker build -t litellm . && docker run -p 8000:8000 litellm
+```
 
 ## Supported Provider ([Docs](https://docs.litellm.ai/docs/providers))
 | Provider      | [Completion](https://docs.litellm.ai/docs/#basic-usage) | [Streaming](https://docs.litellm.ai/docs/completion/stream#streaming-responses)  | [Async Completion](https://docs.litellm.ai/docs/completion/stream#async-completion)  | [Async Streaming](https://docs.litellm.ai/docs/completion/stream#async-streaming)  |
