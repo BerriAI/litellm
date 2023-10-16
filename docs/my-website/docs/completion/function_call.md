@@ -104,3 +104,53 @@ functions = litellm.utils.function_to_dict(get_current_weather)
 response = completion(model="gpt-3.5-turbo-0613", messages=messages, functions=functions)
 print(response)
 ```
+
+## Function calling for Non-OpenAI LLMs
+**For Non OpenAI LLMs - LiteLLM raises an exception if you try using it for function calling**
+
+### Adding Function to prompt
+For Non OpenAI LLMs LiteLLM allows you to add the function to the prompt set: `litellm.add_function_to_prompt = True`
+
+#### Usage
+```python
+import os, litellm
+from litellm import completion
+
+# IMPORTANT - Set this to TRUE to add the function to the prompt for Non OpenAI LLMs
+litellm.add_function_to_prompt = True # set add_function_to_prompt for Non OpenAI LLMs
+
+os.environ['OPENAI_API_KEY'] = ""
+
+messages = [
+    {"role": "user", "content": "What is the weather like in Boston?"}
+]
+
+def get_current_weather(location):
+  if location == "Boston, MA":
+    return "The weather is 12F"
+
+functions = [
+    {
+      "name": "get_current_weather",
+      "description": "Get the current weather in a given location",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "location": {
+            "type": "string",
+            "description": "The city and state, e.g. San Francisco, CA"
+          },
+          "unit": {
+            "type": "string",
+            "enum": ["celsius", "fahrenheit"]
+          }
+        },
+        "required": ["location"]
+      }
+    }
+  ]
+
+response = completion(model="claude-2", messages=messages, functions=functions)
+print(response)
+```
+
