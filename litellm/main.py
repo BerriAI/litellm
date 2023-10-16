@@ -1551,6 +1551,9 @@ def embedding(
 
 ###### Text Completion ################
 def text_completion(*args, **kwargs):
+    """
+    This maps to the Openai.Completion.create format, which has a different I/O (accepts prompt, returning ["choices"]["text"].
+    """
     if "prompt" in kwargs:
         messages = [{"role": "system", "content": kwargs["prompt"]}]
         kwargs["messages"] = messages
