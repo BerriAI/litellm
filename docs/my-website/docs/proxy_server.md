@@ -323,6 +323,13 @@ $ litellm --add_key ANTHROPIC_API_KEY=my-api-key
 ```
 
 </TabItem>
+<TabItem value="perplexity" label="PerplexityAI">
+
+```shell
+$ litellm --add_key PERPLEXITYAI_API_KEY=my-api-key
+```
+
+</TabItem>
 
 <TabItem value="together_ai" label="TogetherAI">
 
