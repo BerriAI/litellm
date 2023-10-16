@@ -1559,7 +1559,6 @@ def text_completion(*args, **kwargs):
         kwargs["messages"] = messages
         kwargs.pop("prompt")
         response = completion(*args, **kwargs) # assume the response is the openai response object 
-        print(f"response: {response}")
         formatted_response_obj = {
             "id": response["id"],
             "object": "text_completion",
