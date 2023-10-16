@@ -90,9 +90,16 @@ litellm --model <model_name>
 ```
 Running your model locally or on a custom endpoint ? Set the `--api-base` parameter [see how](https://docs.litellm.ai/docs/proxy_server)
 
-### Self-host server
+### Multiple LLMs ([Docs](https://docs.litellm.ai/docs/proxy_server#multiple-llms))
+```shell
+$ litellm
 
-1. Clone the repo ([Docs](https://docs.litellm.ai/docs/proxy_server#deploy-proxy))
+#INFO: litellm proxy running on http://0.0.0.0:8000
+```
+
+### Self-host server ([Docs](https://docs.litellm.ai/docs/proxy_server#deploy-proxy))
+
+1. Clone the repo 
 ```shell
 git clone https://github.com/BerriAI/litellm.git
 ```
