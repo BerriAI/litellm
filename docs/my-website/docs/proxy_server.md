@@ -300,7 +300,104 @@ print(result)
 ::: 
 
 ## Advanced
-### Save API Keys 
+
+### Multiple LLMs
+```shell 
+$ litellm
+
+#INFO: litellm proxy running on http://0.0.0.0:8000
+```
+
+#### Send a request to your proxy
+```python
+import openai 
+
+openai.api_key = "any-string-here"
+openai.api_base = "http://0.0.0.0:8080" # your proxy url
+
+# call gpt-3.5-turbo
+response = openai.ChatCompletion.create(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hey"}])
+
+print(response)
+
+# call ollama/llama2
+response = openai.ChatCompletion.create(model="ollama/llama2", messages=[{"role": "user", "content": "Hey"}])
+
+print(response)
+```
+
+### Logs
+
+```shell
+$ litellm --logs
+```
+
+This will return the most recent log (the call that went to the LLM API + the received response).
+
+All logs are saved to a file called `api_logs.json` in the current directory. 
+
+### Deploy Proxy
+
+<Tabs>
+<TabItem value="self-hosted" label="Self-Hosted">
+
+**Step 1: Clone the repo**
+```shell
+git clone https://github.com/BerriAI/litellm.git
+```
+
+**Step 2: Modify `secrets_template.toml`**  
+Add your api keys / configure default model: 
+```shell
+[keys]
+OPENAI_API_KEY="sk-..."
+
+[general]
+default_model = "gpt-3.5-turbo"
+```
+
+**Step 3: Deploy Proxy**  
+```shell
+docker build -t litellm . && docker run -p 8000:8000 litellm
+```
+</TabItem>
+<TabItem value="docker" label="Ollama/OpenAI Docker">
+Use this to deploy local models with Ollama that's OpenAI-compatible. 
+
+It works for models like Mistral, Llama2, CodeLlama, etc. (any model supported by [Ollama](https://ollama.ai/library))
+
+**usage**
+```shell
+docker run --name ollama litellm/ollama
+```
+
+More details 👉 https://hub.docker.com/r/litellm/ollama
+</TabItem>
+<TabItem value="litellm-hosted" label="LiteLLM-Hosted">
+
+Deploy the proxy to https://api.litellm.ai
+
+```shell 
+$ export ANTHROPIC_API_KEY=sk-ant-api03-1..
+$ litellm --model claude-instant-1 --deploy
+
+#INFO:     Uvicorn running on https://api.litellm.ai/44508ad4
+```
+
+This will host a ChatCompletions API at: https://api.litellm.ai/44508ad4
+</TabItem>
+</Tabs>
+
+### Configure Proxy
+
+If you need to: 
+* save API keys 
+* set litellm params (e.g. drop unmapped params, set fallback models, etc.)
+* set model-specific params (max tokens, temperature, api base, prompt template)
+
+You can do set these just for that session (via cli), or persist these across restarts (via config file).
+
+#### Save API Keys 
 ```shell 
 $ litellm --api_key OPENAI_API_KEY=sk-...
 ```
@@ -392,51 +489,6 @@ $ litellm --add_key COHERE_API_KEY=my-api-key
 
 </Tabs>
 
-### Create a proxy for multiple LLMs
-```shell 
-$ litellm
-
-#INFO: litellm proxy running on http://0.0.0.0:8000
-```
-
-#### Send a request to your proxy
-```python
-import openai 
-
-openai.api_key = "any-string-here"
-openai.api_base = "http://0.0.0.0:8080" # your proxy url
-
-# call gpt-3.5-turbo
-response = openai.ChatCompletion.create(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hey"}])
-
-print(response)
-
-# call ollama/llama2
-response = openai.ChatCompletion.create(model="ollama/llama2", messages=[{"role": "user", "content": "Hey"}])
-
-print(response)
-```
-
-### Logs
-
-```shell
-$ litellm --logs
-```
-
-This will return the most recent log (the call that went to the LLM API + the received response).
-
-LiteLLM Proxy will also save your logs to a file called `api_logs.json` in the current directory. 
-
-### Configure Proxy
-
-If you need to: 
-* save API keys 
-* set litellm params (e.g. drop unmapped params, set fallback models, etc.)
-* set model-specific params (max tokens, temperature, api base, prompt template)
-
-You can do set these just for that session (via cli), or persist these across restarts (via config file).
-
-
 E.g.: Set api base, max tokens and temperature. 
 
 **For that session**: 
@@ -511,28 +563,7 @@ LiteLLM will save a copy of this file in it's package, so it can persist these s
 [**🔥 [Tutorial] modify a model prompt on the proxy**](./tutorials/model_config_proxy.md)
 
 
-### Clone Proxy
-To create a local instance of the proxy run:
-```shell
-$ litellm --create_proxy
-```
-This will create a local project called `litellm-proxy` in your current directory, that has: 
-* **proxy_cli.py**: Runs the proxy
-* **proxy_server.py**: Contains the API calling logic
-    - `/chat/completions`: receives `openai.ChatCompletion.create` call.
-    - `/completions`: receives `openai.Completion.create` call.
-    - `/models`: receives `openai.Model.list()` call
-* **secrets.toml**: Stores your api keys, model configs, etc.
-
-Run it by doing:
-```shell
-$ cd litellm-proxy
-```
-```shell
-$ python proxy_cli.py --model ollama/llama # replace with your model name
-```
-
-### Tracking costs
+### Track Costs
 By default litellm proxy writes cost logs to litellm/proxy/costs.json
 
 How can the proxy be better? Let us know [here](https://github.com/BerriAI/litellm/issues)
@@ -551,64 +582,6 @@ You can view costs on the cli using
 ```shell
 litellm --cost
 ```
-
-### Deploy Proxy
-
-<Tabs>
-<TabItem value="docker" label="Ollama/OpenAI Docker">
-Use this to deploy local models with Ollama that's OpenAI-compatible. 
-
-It works for models like Mistral, Llama2, CodeLlama, etc. (any model supported by [Ollama](https://ollama.ai/library))
-
-**usage**
-```shell
-docker run --name ollama litellm/ollama
-```
-
-More details 👉 https://hub.docker.com/r/litellm/ollama
-</TabItem>
-<TabItem value="self-hosted" label="Self-Hosted">
-
-**Step 1: Clone the repo**
-```shell
-git clone https://github.com/BerriAI/liteLLM-proxy.git
-```
-
-**Step 2: Put your API keys in .env** 
-Copy the .env.template and put in the relevant keys (e.g. OPENAI_API_KEY="sk-..")
-
-**Step 3: Test your proxy**
-Start your proxy server
-```shell
-cd litellm-proxy && python3 main.py 
-```
-
-Make your first call 
-```python
-import openai 
-
-openai.api_key = "sk-litellm-master-key"
-openai.api_base = "http://0.0.0.0:8080"
-
-response = openai.ChatCompletion.create(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hey"}])
-
-print(response)
-```
-</TabItem>
-<TabItem value="litellm-hosted" label="LiteLLM-Hosted">
-
-Deploy the proxy to https://api.litellm.ai
-
-```shell 
-$ export ANTHROPIC_API_KEY=sk-ant-api03-1..
-$ litellm --model claude-instant-1 --deploy
-
-#INFO:     Uvicorn running on https://api.litellm.ai/44508ad4
-```
-
-This will host a ChatCompletions API at: https://api.litellm.ai/44508ad4
-</TabItem>
-</Tabs>
 
 ## Support/ talk with founders
 
