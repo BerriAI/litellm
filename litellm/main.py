@@ -375,7 +375,7 @@ def completion(
             model in litellm.open_ai_chat_completion_models
             or custom_llm_provider == "custom_openai"
             or custom_llm_provider == "openai"
-            or "ft:gpt-3.5-turbo" in model  # finetuned gpt-3.5-turbo
+            or "ft:gpt-3.5-turbo" in model  # finetune gpt-3.5-turbo
         ):  # allow user to make an openai call with a custom base
             # note: if a user sets a custom base - we should ensure this works
             # allow for the setting of dynamic and stateful api-bases

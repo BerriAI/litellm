@@ -1461,7 +1461,7 @@ def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None, api_
 
         # check if model in known model provider list  -> for huggingface models, raise exception as they don't have a fixed provider (can be togetherai, anyscale, baseten, runpod, et.)
         ## openai - chatcompletion + text completion
-        if model in litellm.open_ai_chat_completion_models:
+        if model in litellm.open_ai_chat_completion_models or "ft:gpt-3.5-turbo" in model:
             custom_llm_provider = "openai"
         elif model in litellm.open_ai_text_completion_models:
             custom_llm_provider = "text-completion-openai"
