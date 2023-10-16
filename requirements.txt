@@ -1,0 +1,9 @@
+openai
+python-dotenv
+tiktoken
+importlib-metadata
+tokenizers
+click
+jinja2
+certifi
+appdirs
