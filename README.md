@@ -32,7 +32,7 @@
 LiteLLM manages
 - Translating inputs to the provider's completion and embedding endpoints
 - Guarantees [consistent output](https://docs.litellm.ai/docs/completion/output), text responses will always be available at `['choices'][0]['message']['content']`
-- Exception mapping - common exceptions across providers are mapped to the OpenAI exception types
+- Exception mapping - common exceptions across providers are mapped to the OpenAI exception types.
 
 **🚨 Seeing errors?** [![Chat on WhatsApp](https://img.shields.io/static/v1?label=Chat%20on&message=WhatsApp&color=success&logo=WhatsApp&style=flat-square)](https://wa.link/huol9n) [![Chat on Discord](https://img.shields.io/static/v1?label=Chat%20on&message=Discord&color=blue&logo=Discord&style=flat-square)](https://discord.gg/wuPM9dRgDw) 
 
@@ -149,7 +149,7 @@ Step 4: Submit a PR with your changes! 🚀
 - Our emails ✉️ ishaan@berri.ai / krrish@berri.ai
 
 # Why did we build this 
-- **Need for simplicity**: Our code started to get extremely complicated managing & translating calls between Azure, OpenAI, Cohere
+- **Need for simplicity**: Our code started to get extremely complicated managing & translating calls between Azure, OpenAI and Cohere.
 
 # Contributors
 
