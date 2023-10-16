@@ -139,7 +139,7 @@ const config = {
                 href: 'https://discord.com/invite/wuPM9dRgDw',
               },
               {
-                label: 'Twitter',
+                label: 'X (Twitter)',
                 href: 'https://twitter.com/LiteLLM',
               },
             ],
