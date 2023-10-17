@@ -7,7 +7,6 @@ from dotenv import load_dotenv
 import operator
 
 config_filename = "litellm.secrets.toml"
-pkg_config_filename = "template.secrets.toml"
 # Using appdirs to determine user-specific config path
 config_dir = appdirs.user_config_dir("litellm")
 user_config_path = os.path.join(config_dir, config_filename)
