@@ -13,11 +13,12 @@ try:
     import tomli as tomllib
     import appdirs
     import tomli_w
+    import backoff
 except ImportError:
     import subprocess
     import sys
 
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "uvicorn", "fastapi", "tomli", "appdirs", "tomli-w"])
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "uvicorn", "fastapi", "tomli", "appdirs", "tomli-w", "backoff"])
     import uvicorn
     import fastapi
     import tomli as tomllib
