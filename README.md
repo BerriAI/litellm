@@ -19,6 +19,12 @@
     <a href="https://www.ycombinator.com/companies/berriai">
         <img src="https://img.shields.io/badge/Y%20Combinator-W23-orange?style=flat-square" alt="Y Combinator W23">
     </a>
+    <a href="https://wa.link/huol9n">
+        <img src="https://img.shields.io/static/v1?label=Chat%20on&message=WhatsApp&color=success&logo=WhatsApp&style=flat-square" alt="Whatsapp">
+    </a>
+    <a href="https://discord.gg/wuPM9dRgDw">
+        <img src="https://img.shields.io/static/v1?label=Chat%20on&message=Discord&color=blue&logo=Discord&style=flat-square" alt="Discord">
+    </a>
 </h4>
 <table align="center" style="border:0; padding-top: 20px; border-collapse: separate; border-spacing: 10px;">
 <tr>
@@ -33,8 +39,6 @@ LiteLLM manages
 - Translating inputs to the provider's completion and embedding endpoints
 - Guarantees [consistent output](https://docs.litellm.ai/docs/completion/output), text responses will always be available at `['choices'][0]['message']['content']`
 - Exception mapping - common exceptions across providers are mapped to the OpenAI exception types.
-
-**🚨 Seeing errors?** [![Chat on WhatsApp](https://img.shields.io/static/v1?label=Chat%20on&message=WhatsApp&color=success&logo=WhatsApp&style=flat-square)](https://wa.link/huol9n) [![Chat on Discord](https://img.shields.io/static/v1?label=Chat%20on&message=Discord&color=blue&logo=Discord&style=flat-square)](https://discord.gg/wuPM9dRgDw) 
 
 **10/05/2023:** LiteLLM is adopting Semantic Versioning for all commits. [Learn more](https://github.com/BerriAI/litellm/issues/532)  
 **10/16/2023:** **Self-hosted OpenAI-proxy server** [Learn more](https://docs.litellm.ai/docs/proxy_server#deploy-proxy)
