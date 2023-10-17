@@ -729,7 +729,6 @@ def completion(
                 headers
                 or litellm.headers
             )
-            print(f'headers before hf rest api: {hf_headers}')
             model_response = huggingface_restapi.completion(
                 model=model,
                 messages=messages,

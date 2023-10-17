@@ -1,6 +1,7 @@
 import sys, os, platform, time, copy
 import threading
 import shutil, random, traceback
+messages = []
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path - for litellm local dev
@@ -70,6 +71,7 @@ print()
 import litellm
 from fastapi import FastAPI, Request
 from fastapi.routing import APIRouter
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 import json
@@ -105,6 +107,12 @@ def print_verbose(print_statement):
     global user_debug 
     if user_debug: 
          print(print_statement)
+
+def find_avatar_url(role):
+    role = role.replace(" ", "%20")
+    avatar_filename = f"avatars/{role}.png"
+    avatar_url = f"/static/{avatar_filename}"
+    return avatar_url
 
 def usage_telemetry(feature: str): # helps us know if people are using this feature. Set `litellm --telemetry False` to your cli call to turn this off
     if user_telemetry: 
@@ -161,7 +169,14 @@ def save_params_to_config(data: dict):
     # Write config to file 
     with open(user_config_path, 'wb') as f:
         tomli_w.dump(config, f)
-        
+
+def print_cost_logs():
+    with open('costs.json', 'r') as f:
+        # print this in green
+        print("\033[1;32m")
+        print(f.read())
+        print("\033[0m")
+    return
 
 def load_config():
     try: 
@@ -469,13 +484,20 @@ async def v1_chat_completion(request: Request):
     response = litellm_completion(data, type="chat_completion")
     return response
 
-def print_cost_logs():
-    with open('costs.json', 'r') as f:
-        # print this in green
-        print("\033[1;32m")
-        print(f.read())
-        print("\033[0m")
-    return
+@router.post("/send_message")
+async def send_message(request: Request):
+    try:
+        data = await request.json()
+        role = data.get("role")
+        text = data.get("text")
+
+        avatarUrl = find_avatar_url(role)
+
+        message = {"role": role, "text": text, "avatarUrl": avatarUrl}
+        messages.append(message)
+        return jsonable_encoder(messages)
+    except:
+        return "An error occurred", 500
 
 @router.get("/ollama_logs")
 async def retrieve_server_log(request: Request):
