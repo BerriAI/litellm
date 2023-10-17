@@ -13,7 +13,7 @@ from click.testing import CliRunner
 import pytest
 import litellm
 from litellm.proxy.llm import litellm_completion
-
+from litellm.proxy.proxy_server import initialize
 def test_azure_call():
     try: 
         data = {
@@ -25,4 +25,13 @@ def test_azure_call():
     except Exception as e: 
         pytest.fail(f"An error occurred: {e}")
 
-test_azure_call()
+## test debug 
+def test_debug(): 
+    try: 
+        initialize(model=None, alias=None, api_base=None, debug=True, temperature=None, max_tokens=None, max_budget=None, telemetry=None, drop_params=None, add_function_to_prompt=None, headers=None, save=None)
+        assert litellm.set_verbose == True
+    except Exception as e: 
+        pytest.fail(f"An error occurred: {e}")
+
+# test_debug()
+## test logs 

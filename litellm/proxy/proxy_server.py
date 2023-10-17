@@ -278,6 +278,8 @@ def initialize(model, alias, api_base, debug, temperature, max_tokens, max_budge
     if max_budget:  # litellm-specific param
         litellm.max_budget = max_budget
         dynamic_config["general"]["max_budget"] = max_budget
+    if debug: # litellm-specific param
+        litellm.set_verbose = True
     if save:
         save_params_to_config(dynamic_config)
         with open(user_config_path) as f:
@@ -384,24 +386,25 @@ def logger(
 
             thread = threading.Thread(target=write_to_log, daemon=True)
             thread.start()
-        elif log_event_type == 'post_api_call':
-            if "stream" not in kwargs["optional_params"] or kwargs["optional_params"]["stream"] is False or kwargs.get(
-                    "complete_streaming_response", False):
-                inference_params = copy.deepcopy(kwargs)
-                timestamp = inference_params.pop('start_time')
-                dt_key = timestamp.strftime("%Y%m%d%H%M%S%f")[:23]
+        ## Commenting out post-api call logging as it would break json writes on cli error
+        # elif log_event_type == 'post_api_call':
+        #     if "stream" not in kwargs["optional_params"] or kwargs["optional_params"]["stream"] is False or kwargs.get(
+        #             "complete_streaming_response", False):
+        #         inference_params = copy.deepcopy(kwargs)
+        #         timestamp = inference_params.pop('start_time')
+        #         dt_key = timestamp.strftime("%Y%m%d%H%M%S%f")[:23]
 
-                with open(log_file, 'r') as f:
-                    existing_data = json.load(f)
+        #         with open(log_file, 'r') as f:
+        #             existing_data = json.load(f)
 
-                existing_data[dt_key]['post_api_call'] = inference_params
+        #         existing_data[dt_key]['post_api_call'] = inference_params
 
-                def write_to_log():
-                    with open(log_file, 'w') as f:
-                        json.dump(existing_data, f, indent=2)
+        #         def write_to_log():
+        #             with open(log_file, 'w') as f:
+        #                 json.dump(existing_data, f, indent=2)
 
-                thread = threading.Thread(target=write_to_log, daemon=True)
-                thread.start()
+        #         thread = threading.Thread(target=write_to_log, daemon=True)
+        #         thread.start()
     except:
         pass
 
