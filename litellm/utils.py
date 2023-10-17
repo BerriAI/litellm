@@ -3092,14 +3092,31 @@ def exception_type(
                     raise original_exception
                 raise original_exception
             elif custom_llm_provider == "ollama":
-                error_str = original_exception.get("error", "")
+                if isinstance(original_exception, dict):
+                    error_str = original_exception.get("error", "")
+                else: 
+                    error_str = str(original_exception)
                 if "no such file or directory" in error_str:
                     exception_mapping_worked = True
                     raise InvalidRequestError(
-                            message=f"Ollama Exception Invalid Model/Model not loaded - {original_exception}",
+                            message=f"OllamaException: Invalid Model/Model not loaded - {original_exception}",
                             model=model,
                             llm_provider="ollama"
                         )
+                elif "Failed to establish a new connection" in error_str: 
+                    exception_mapping_worked = True
+                    raise ServiceUnavailableError(
+                        message=f"OllamaException: {original_exception}",
+                        llm_provider="ollama", 
+                        model=model
+                    )
+                elif "Invalid response object from API" in error_str:
+                    exception_mapping_worked = True
+                    raise InvalidRequestError(
+                        message=f"OllamaException: {original_exception}",
+                        llm_provider="ollama",
+                        model=model
+                    )
             elif custom_llm_provider == "vllm":
                 if hasattr(original_exception, "status_code"):
                     if original_exception.status_code == 0:
