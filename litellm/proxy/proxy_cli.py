@@ -90,7 +90,6 @@ def is_port_in_use(port):
 @click.option('--alias', default=None, help='The alias for the model - use this to give a litellm model name (e.g. "huggingface/codellama/CodeLlama-7b-Instruct-hf") a more user-friendly name ("codellama")') 
 @click.option('--add_key', default=None, help='The model name to pass to litellm expects') 
 @click.option('--headers', default=None, help='headers for the API call') 
-@click.option('--deploy', is_flag=True, type=bool, help='Get a deployed proxy endpoint - api.litellm.ai')
 @click.option('--save', is_flag=True, type=bool, help='Save the model-specific config')
 @click.option('--debug', default=False, is_flag=True, type=bool, help='To debug the input') 
 @click.option('--temperature', default=None, type=float, help='Set temperature for the model') 
@@ -106,17 +105,17 @@ def is_port_in_use(port):
 @click.option('--test', flag_value=True, help='proxy chat completions url to make a test request to')
 @click.option('--local', is_flag=True, default=False, help='for local debugging')
 @click.option('--cost', is_flag=True, default=False, help='for viewing cost logs')
-def run_server(host, port, api_base, model, alias, add_key, headers, deploy, save, debug, temperature, max_tokens, drop_params, create_proxy, add_function_to_prompt, config, file, max_budget, telemetry, logs, test, local, cost):
+def run_server(host, port, api_base, model, alias, add_key, headers, save, debug, temperature, max_tokens, drop_params, create_proxy, add_function_to_prompt, config, file, max_budget, telemetry, logs, test, local, cost):
     global feature_telemetry
     args = locals()
     if local:
-        from proxy_server import app, initialize, deploy_proxy, print_cost_logs, usage_telemetry, add_keys_to_config
+        from proxy_server import app, initialize, print_cost_logs, usage_telemetry, add_keys_to_config
         debug = True
     else:
         try:
-            from .proxy_server import app, initialize, deploy_proxy, print_cost_logs, usage_telemetry, add_keys_to_config
+            from .proxy_server import app, initialize, print_cost_logs, usage_telemetry, add_keys_to_config
         except ImportError as e: 
-            from proxy_server import app, initialize, deploy_proxy, print_cost_logs, usage_telemetry, add_keys_to_config
+            from proxy_server import app, initialize, print_cost_logs, usage_telemetry, add_keys_to_config
     feature_telemetry = usage_telemetry
     if create_proxy == True: 
         repo_url = 'https://github.com/BerriAI/litellm'
@@ -157,15 +156,6 @@ def run_server(host, port, api_base, model, alias, add_key, headers, deploy, sav
         with open(user_config_path) as f:
             print(f.read())
         print("\033[1;32mDone successfully\033[0m")
-        return
-    if deploy == True:
-        print(f"\033[32mLiteLLM: Deploying your proxy to api.litellm.ai\033[0m\n")
-        print(f"\033[32mLiteLLM: Deploying proxy for model: {model}\033[0m\n")
-        url = deploy_proxy(model, api_base, debug, temperature, max_tokens, telemetry, deploy)
-        print(f"\033[32mLiteLLM: Deploy Successfull\033[0m\n")
-        print(f"\033[32mLiteLLM: Your deployed url: {url}\033[0m\n")
-
-        print(f"\033[32mLiteLLM: Test your URL using the following: \"litellm --test {url}\"\033[0m")
         return
     if model and "ollama" in model: 
         run_ollama_serve()
@@ -213,7 +203,7 @@ def run_server(host, port, api_base, model, alias, add_key, headers, deploy, sav
             raise ImportError("Uvicorn needs to be imported. Run - `pip install uvicorn`")
         print(f"\033[32mLiteLLM: Test your local endpoint with: \"litellm --test\" [In a new terminal tab]\033[0m\n")
         print(f"\033[32mLiteLLM: View available endpoints for this server on: http://{host}:{port}\033[0m\n")
-        print(f"\033[32mLiteLLM: Deploy your proxy using the following: \"litellm --model claude-instant-1 --deploy\" Get an https://api.litellm.ai/chat/completions endpoint \033[0m\n")
+        print(f"\033[32mLiteLLM: Self-host your proxy using the following: https://docs.litellm.ai/docs/proxy_server#deploy-proxy \033[0m\n")
         
         if port == 8000 and is_port_in_use(port):
             port = random.randint(1024, 49152)
