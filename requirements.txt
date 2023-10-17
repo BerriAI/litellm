@@ -7,3 +7,5 @@ click
 jinja2
 certifi
 appdirs
+backoff
+boto3
