@@ -182,67 +182,70 @@ def save_params_to_config(data: dict):
 
 
 def load_config():
-    global user_config, user_api_base, user_max_tokens, user_temperature, user_model
-    # As the .env file is typically much simpler in structure, we use load_dotenv here directly
-    with open(user_config_path, "rb") as f:
-        user_config = tomllib.load(f)
+    try: 
+        global user_config, user_api_base, user_max_tokens, user_temperature, user_model
+        # As the .env file is typically much simpler in structure, we use load_dotenv here directly
+        with open(user_config_path, "rb") as f:
+            user_config = tomllib.load(f)
 
-    ## load keys
-    if "keys" in user_config:
-        for key in user_config["keys"]:
-            os.environ[key] = user_config["keys"][key]  # litellm can read keys from the environment
-    ## settings
-    if "general" in user_config:
-        litellm.add_function_to_prompt = user_config["general"].get("add_function_to_prompt",
-                                                                    True)  # by default add function to prompt if unsupported by provider
-        litellm.drop_params = user_config["general"].get("drop_params",
-                                                         True)  # by default drop params if unsupported by provider
-        litellm.model_fallbacks = user_config["general"].get("fallbacks",
-                                                             None)  # fallback models in case initial completion call fails
-        default_model = user_config["general"].get("default_model", None)  # route all requests to this model.
+        ## load keys
+        if "keys" in user_config:
+            for key in user_config["keys"]:
+                os.environ[key] = user_config["keys"][key]  # litellm can read keys from the environment
+        ## settings
+        if "general" in user_config:
+            litellm.add_function_to_prompt = user_config["general"].get("add_function_to_prompt",
+                                                                        True)  # by default add function to prompt if unsupported by provider
+            litellm.drop_params = user_config["general"].get("drop_params",
+                                                            True)  # by default drop params if unsupported by provider
+            litellm.model_fallbacks = user_config["general"].get("fallbacks",
+                                                                None)  # fallback models in case initial completion call fails
+            default_model = user_config["general"].get("default_model", None)  # route all requests to this model.
 
-        if user_model is None:  # `litellm --model <model-name>`` > default_model.
-            user_model = default_model
+            if user_model is None:  # `litellm --model <model-name>`` > default_model.
+                user_model = default_model
 
-    ## load model config - to set this run `litellm --config`
-    model_config = None
-    if "model" in user_config:
-        if user_model in user_config["model"]:
-            model_config = user_config["model"][user_model]
+        ## load model config - to set this run `litellm --config`
+        model_config = None
+        if "model" in user_config:
+            if user_model in user_config["model"]:
+                model_config = user_config["model"][user_model]
 
-    print_verbose(f"user_config: {user_config}")
-    print_verbose(f"model_config: {model_config}")
-    print_verbose(f"user_model: {user_model}")
-    if model_config is None:
-        return
+        print_verbose(f"user_config: {user_config}")
+        print_verbose(f"model_config: {model_config}")
+        print_verbose(f"user_model: {user_model}")
+        if model_config is None:
+            return
 
-    user_max_tokens = model_config.get("max_tokens", None)
-    user_temperature = model_config.get("temperature", None)
-    user_api_base = model_config.get("api_base", None)
+        user_max_tokens = model_config.get("max_tokens", None)
+        user_temperature = model_config.get("temperature", None)
+        user_api_base = model_config.get("api_base", None)
 
-    ## custom prompt template
-    if "prompt_template" in model_config:
-        model_prompt_template = model_config["prompt_template"]
-        if len(model_prompt_template.keys()) > 0:  # if user has initialized this at all
-            litellm.register_prompt_template(
-                model=user_model,
-                initial_prompt_value=model_prompt_template.get("MODEL_PRE_PROMPT", ""),
-                roles={
-                    "system": {
-                        "pre_message": model_prompt_template.get("MODEL_SYSTEM_MESSAGE_START_TOKEN", ""),
-                        "post_message": model_prompt_template.get("MODEL_SYSTEM_MESSAGE_END_TOKEN", ""),
+        ## custom prompt template
+        if "prompt_template" in model_config:
+            model_prompt_template = model_config["prompt_template"]
+            if len(model_prompt_template.keys()) > 0:  # if user has initialized this at all
+                litellm.register_prompt_template(
+                    model=user_model,
+                    initial_prompt_value=model_prompt_template.get("MODEL_PRE_PROMPT", ""),
+                    roles={
+                        "system": {
+                            "pre_message": model_prompt_template.get("MODEL_SYSTEM_MESSAGE_START_TOKEN", ""),
+                            "post_message": model_prompt_template.get("MODEL_SYSTEM_MESSAGE_END_TOKEN", ""),
+                        },
+                        "user": {
+                            "pre_message": model_prompt_template.get("MODEL_USER_MESSAGE_START_TOKEN", ""),
+                            "post_message": model_prompt_template.get("MODEL_USER_MESSAGE_END_TOKEN", ""),
+                        },
+                        "assistant": {
+                            "pre_message": model_prompt_template.get("MODEL_ASSISTANT_MESSAGE_START_TOKEN", ""),
+                            "post_message": model_prompt_template.get("MODEL_ASSISTANT_MESSAGE_END_TOKEN", ""),
+                        }
                     },
-                    "user": {
-                        "pre_message": model_prompt_template.get("MODEL_USER_MESSAGE_START_TOKEN", ""),
-                        "post_message": model_prompt_template.get("MODEL_USER_MESSAGE_END_TOKEN", ""),
-                    },
-                    "assistant": {
-                        "pre_message": model_prompt_template.get("MODEL_ASSISTANT_MESSAGE_START_TOKEN", ""),
-                        "post_message": model_prompt_template.get("MODEL_ASSISTANT_MESSAGE_END_TOKEN", ""),
-                    }
-                },
-                final_prompt_value=model_prompt_template.get("MODEL_POST_PROMPT", ""),
-            )
+                    final_prompt_value=model_prompt_template.get("MODEL_POST_PROMPT", ""),
+                )
+    except: 
+        pass
 
 
 def initialize(model, alias, api_base, debug, temperature, max_tokens, max_budget, telemetry, drop_params,
