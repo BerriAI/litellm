@@ -475,19 +475,6 @@ docker run --name ollama litellm/ollama
 
 More details 👉 https://hub.docker.com/r/litellm/ollama
 </TabItem>
-<TabItem value="litellm-hosted" label="LiteLLM-Hosted">
-
-Deploy the proxy to https://api.litellm.ai
-
-```shell 
-$ export ANTHROPIC_API_KEY=sk-ant-api03-1..
-$ litellm --model claude-instant-1 --deploy
-
-#INFO:     Uvicorn running on https://api.litellm.ai/44508ad4
-```
-
-This will host a ChatCompletions API at: https://api.litellm.ai/44508ad4
-</TabItem>
 </Tabs>
 
 ### Configure Proxy
