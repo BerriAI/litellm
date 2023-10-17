@@ -2,6 +2,7 @@
 .env
 litellm_uuid.txt
 __pycache__/
+*.pyc
 bun.lockb
 **/.DS_Store
 .aider*
