@@ -1,6 +1,7 @@
 # Function Calling 
 LiteLLM only supports: OpenAI gpt-4-0613 and gpt-3.5-turbo-0613 for function calling 
 ## Quick Start 
+This is exactly how OpenAI supports function calling for gpt-4-0613 and gpt-3.5-turbo-0613
 ```python
 import os, litellm
 from litellm import completion
@@ -11,10 +12,12 @@ messages = [
     {"role": "user", "content": "What is the weather like in Boston?"}
 ]
 
+# python function that will get executed
 def get_current_weather(location):
   if location == "Boston, MA":
     return "The weather is 12F"
 
+# JSON Schema to pass to OpenAI
 functions = [
     {
       "name": "get_current_weather",
@@ -40,13 +43,16 @@ response = completion(model="gpt-3.5-turbo-0613", messages=messages, functions=f
 print(response)
 ```
 
-## Using - litellm.utils.function_to_dict
+## litellm.function_to_dict - Convert Functions to dictionary for OpenAI function calling
 `function_to_dict` allows you to pass a function docstring and produce a dictionary usable for OpenAI function calling
 
-### Usage
-Define your function, use `litellm.utils.function_to_dict` to convert your function to a dictionary usable for OpenAI 
+### Using `function_to_dict`
+1. Define your function `get_current_weather`
+2. Add a docstring to your function `get_current_weather`
+3. Pass the function to `litellm.utils.function_to_dict` to get the dictionary for OpenAI function calling
 
 ```python
+# function with docstring
 def get_current_weather(location: str, unit: str):
         """Get the current weather in a given location
 
@@ -64,11 +70,13 @@ def get_current_weather(location: str, unit: str):
         """
         if location == "Boston, MA":
             return "The weather is 12F"
-    function_json = litellm.utils.function_to_dict(get_current_weather)
-    print(function_json)
+
+# use litellm.utils.function_to_dict to convert function to dict
+function_json = litellm.utils.function_to_dict(get_current_weather)
+print(function_json)
 ```
 
-#### Output
+#### Output from function_to_dict
 ```json
 {
     'name': 'get_current_weather', 
