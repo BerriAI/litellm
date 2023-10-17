@@ -235,7 +235,6 @@ def load_config():
             )
 
 
-
 def initialize(model, alias, api_base, debug, temperature, max_tokens, max_budget, telemetry, drop_params,
                add_function_to_prompt, headers, save):
     global user_model, user_api_base, user_debug, user_max_tokens, user_temperature, user_telemetry, user_headers
@@ -462,36 +461,24 @@ def model_list():
         )
 
 
+@router.post("/v1/completions")
 @router.post("/completions")
 async def completion(request: Request):
     data = await request.json()
+    print_verbose(f"data passed in: {data}")
     return litellm_completion(data=data, type="completion", user_model=user_model, user_temperature=user_temperature,
                               user_max_tokens=user_max_tokens, user_api_base=user_api_base, user_headers=user_headers,
                               user_debug=user_debug)
 
 
+@router.post("/v1/chat/completions")
 @router.post("/chat/completions")
 async def chat_completion(request: Request):
     data = await request.json()
-    response = litellm_completion(data, type="chat_completion", user_model=user_model,
-                                  user_temperature=user_temperature, user_max_tokens=user_max_tokens,
-                                  user_api_base=user_api_base, user_headers=user_headers, user_debug=user_debug)
-    return response
-
-
-# V1 Endpoints - some apps expect a v1 endpoint - these call the regular function
-@router.post("/v1/completions")
-async def v1_completion(request: Request):
-    data = await request.json()
-    return litellm_completion(data=data, type="completion")
-
-
-@router.post("/v1/chat/completions")
-async def v1_chat_completion(request: Request):
-    data = await request.json()
     print_verbose(f"data passed in: {data}")
-    response = litellm_completion(data, type="chat_completion")
-    return response
+    return litellm_completion(data, type="chat_completion", user_model=user_model,
+                              user_temperature=user_temperature, user_max_tokens=user_max_tokens,
+                              user_api_base=user_api_base, user_headers=user_headers, user_debug=user_debug)
 
 
 def print_cost_logs():
