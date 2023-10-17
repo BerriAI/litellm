@@ -82,7 +82,7 @@ for chunk in result:
 ```
 
 ## OpenAI Proxy Server ([Docs](https://docs.litellm.ai/docs/proxy_server))
-Spin up a local server to translate openai api calls to any non-openai model (e.g. Huggingface, TogetherAI, Ollama, etc.)
+Create an OpenAI API compatible server to call any non-openai model (e.g. Huggingface, TogetherAI, Ollama, etc.)
 
 This works for async + streaming as well. 
 ```python
