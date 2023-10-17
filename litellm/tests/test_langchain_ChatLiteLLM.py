@@ -36,7 +36,7 @@ def test_chat_gpt():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_chat_gpt()
+# test_chat_gpt()
 
 
 def test_claude():
@@ -53,7 +53,7 @@ def test_claude():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_claude()
+# test_claude()
 
 def test_palm():
     try:
@@ -69,5 +69,39 @@ def test_palm():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_palm()
+# test_palm()
+
+
+# def test_openai_with_params():
+#     try:
+#         api_key = os.environ["OPENAI_API_KEY"]
+#         os.environ.pop("OPENAI_API_KEY")
+#         print("testing openai with params")
+#         llm = ChatLiteLLM(
+#             model="gpt-3.5-turbo",
+#             openai_api_key=api_key,
+#             # Prefer using None which is the default value, endpoint could be empty string
+#             openai_api_base= None,
+#             max_tokens=20,
+#             temperature=0.5,
+#             request_timeout=10,
+#             model_kwargs={
+#                 "frequency_penalty": 0,
+#                 "presence_penalty": 0,
+#             },
+#             verbose=True,
+#             max_retries=0,
+#         )
+#         messages = [
+#             HumanMessage(
+#                 content="what model are you"
+#             )
+#         ]
+#         resp = llm(messages)
+
+#         print(resp)
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
+
+# test_openai_with_params()
 
