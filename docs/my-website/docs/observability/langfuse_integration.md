@@ -7,6 +7,11 @@ Detailed production traces and a granular view on quality, cost and latency
 
 <Image img={require('../../img/langfuse.png')} />
 
+:::info
+We want to learn how we can make the callbacks better! Meet the LiteLLM [founders](https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version) or
+join our [discord](https://discord.gg/wuPM9dRgDw)
+::: 
+
 ## Pre-Requisites
 Ensure you have run `pip install langfuse` for this integration
 ```shell
@@ -97,3 +102,9 @@ https://replit.com/@BerriAI/LiteLLMFastAPILangfuse
 ### Data not getting logged to Langfuse ? 
 - Ensure you're on the latest version of langfuse `pip install langfuse -U`. The latest version allows litellm to log JSON input/outputs to langfuse
 
+## Support & Talk to Founders
+
+- [Schedule Demo 👋](https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version)
+- [Community Discord 💭](https://discord.gg/wuPM9dRgDw)
+- Our numbers 📞 +1 (770) 8783-106 / ‭+1 (412) 618-6238‬
+- Our emails ✉️ ishaan@berri.ai / krrish@berri.ai
