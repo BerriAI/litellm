@@ -121,7 +121,7 @@ def completion(
                     sum_logprob = 0
                     for token in completion_response[0]["details"]["tokens"]:
                         sum_logprob += token["logprob"]
-                    model_response["choices"][0]["message"]["logprobs"] = sum_logprob
+                    model_response["choices"][0]["message"]._logprobs = sum_logprob
             else:
                 raise BasetenError(
                     message=f"Unable to parse response. Original response: {response.text}",

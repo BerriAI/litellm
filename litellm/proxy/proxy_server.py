@@ -2,6 +2,7 @@ import sys, os, platform, time, copy
 import threading
 import shutil, random, traceback
 
+messages = []
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path - for litellm local dev
@@ -72,6 +73,7 @@ print()
 import litellm
 from fastapi import FastAPI, Request
 from fastapi.routing import APIRouter
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 import json
@@ -109,6 +111,13 @@ def print_verbose(print_statement):
     global user_debug
     if user_debug:
         print(print_statement)
+
+
+def find_avatar_url(role):
+    role = role.replace(" ", "%20")
+    avatar_filename = f"avatars/{role}.png"
+    avatar_url = f"/static/{avatar_filename}"
+    return avatar_url
 
 
 def usage_telemetry(
@@ -461,24 +470,21 @@ def model_list():
         )
 
 
-@router.post("/v1/completions")
 @router.post("/completions")
 async def completion(request: Request):
     data = await request.json()
-    print_verbose(f"data passed in: {data}")
     return litellm_completion(data=data, type="completion", user_model=user_model, user_temperature=user_temperature,
                               user_max_tokens=user_max_tokens, user_api_base=user_api_base, user_headers=user_headers,
                               user_debug=user_debug)
 
 
-@router.post("/v1/chat/completions")
 @router.post("/chat/completions")
 async def chat_completion(request: Request):
     data = await request.json()
     print_verbose(f"data passed in: {data}")
     return litellm_completion(data, type="chat_completion", user_model=user_model,
-                              user_temperature=user_temperature, user_max_tokens=user_max_tokens,
-                              user_api_base=user_api_base, user_headers=user_headers, user_debug=user_debug)
+                                  user_temperature=user_temperature, user_max_tokens=user_max_tokens,
+                                  user_api_base=user_api_base, user_headers=user_headers, user_debug=user_debug)
 
 
 def print_cost_logs():
