@@ -36,9 +36,9 @@ class LangFuseLogger:
             # print(response_obj['choices'][0]['message']['content'])
             # print(response_obj['usage']['prompt_tokens'])
             # print(response_obj['usage']['completion_tokens'])
-
+            metadata = kwargs.get("metadata", {})
             self.Langfuse.generation(InitialGeneration(
-                name="litellm-completion",
+                name=metadata.get("generation_name", "litellm-completion"),
                 startTime=start_time,
                 endTime=end_time,
                 model=kwargs['model'],
@@ -49,6 +49,7 @@ class LangFuseLogger:
                     prompt_tokens=response_obj['usage']['prompt_tokens'],
                     completion_tokens=response_obj['usage']['completion_tokens']
                 ),
+                metadata=metadata
             ))
             self.Langfuse.flush()
             print_verbose(
