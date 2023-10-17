@@ -2,7 +2,7 @@ import sys, os, platform, time, copy
 import threading
 import shutil, random, traceback
 
-messages = []
+messages: list = []
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path - for litellm local dev
@@ -25,9 +25,9 @@ except ImportError:
     import tomli_w
 
 try:
-    from .llm import litellm_completion
+    from .llm import litellm_completion 
 except ImportError as e:
-    from llm import litellm_completion
+    from llm import litellm_completion # type: ignore
 
 import random
 
