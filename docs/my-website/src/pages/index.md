@@ -286,6 +286,24 @@ except OpenAIError as e:
     print(e)
 ```
 
+## Logging Observability - Log LLM Input/Output ([Docs](https://docs.litellm.ai/docs/observability/callbacks))
+LiteLLM exposes pre defined callbacks to send data to LLMonitor, Langfuse, Helicone, Promptlayer, Traceloop, Slack
+```python
+from litellm import completion
+
+## set env variables for logging tools
+os.environ["PROMPTLAYER_API_KEY"] = "your-promptlayer-key"
+os.environ["LLMONITOR_APP_ID"] = "your-llmonitor-app-id"
+
+os.environ["OPENAI_API_KEY"]
+
+# set callbacks
+litellm.success_callback = ["promptlayer", "llmonitor"] # log input/output to promptlayer, llmonitor, supabase
+
+#openai call
+response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])
+```
+
 ## Calculate Costs, Usage, Latency
 
 Pass the completion response to `litellm.completion_cost(completion_response=response)` and get the cost
