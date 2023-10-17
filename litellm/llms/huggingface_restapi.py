@@ -141,7 +141,6 @@ def completion(
     litellm_params=None,
     logger_fn=None,
 ):
-    print(f'headers inside hf rest api: {headers}')
     headers = validate_environment(api_key, headers)
     task = get_hf_task_for_model(model)
     print_verbose(f"{model}, {task}")
@@ -254,8 +253,6 @@ def completion(
 
         ## Some servers might return streaming responses even though stream was not set to true. (e.g. Baseten)
         is_streamed = False 
-        print(f"response keys: {response.__dict__.keys()}")
-        print(f"response keys: {response.__dict__['headers']}")
         if response.__dict__['headers']["Content-Type"] == "text/event-stream":
             is_streamed = True
         
@@ -313,7 +310,7 @@ def completion(
                     sum_logprob = 0
                     for token in completion_response[0]["details"]["tokens"]:
                         sum_logprob += token["logprob"]
-                    model_response["choices"][0]["message"]["logprobs"] = sum_logprob
+                    model_response["choices"][0]["message"]._logprob = sum_logprob
                 if "best_of" in optional_params and optional_params["best_of"] > 1: 
                     if "details" in completion_response[0] and "best_of_sequences" in completion_response[0]["details"]:
                         choices_list = []
@@ -337,9 +334,14 @@ def completion(
         prompt_tokens = len(
             encoding.encode(input_text)
         )  ##[TODO] use the llama2 tokenizer here
-        completion_tokens = len(
-            encoding.encode(model_response["choices"][0]["message"].get("content", ""))
-        )  ##[TODO] use the llama2 tokenizer here
+        print_verbose(f'output: {model_response["choices"][0]["message"]}')
+        output_text = model_response["choices"][0]["message"].get("content", "")
+        if output_text is not None and len(output_text) > 0:
+            completion_tokens = len(
+                encoding.encode(model_response["choices"][0]["message"].get("content", ""))
+            )  ##[TODO] use the llama2 tokenizer here
+        else: 
+            completion_tokens = 0
 
         model_response["created"] = time.time()
         model_response["model"] = model

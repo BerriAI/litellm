@@ -9,6 +9,7 @@ import backoff
 import openai.error
 
 import litellm
+from litellm.utils import trim_messages
 import litellm.exceptions
 
 cost_dict: Dict[str, Dict[str, float]] = defaultdict(dict)
@@ -113,7 +114,7 @@ def litellm_completion(data: Dict,
                 user_api_base: Optional[str], 
                 user_headers: Optional[dict], 
                 user_debug: bool) -> litellm.ModelResponse:
-    try: 
+    try:  
         global debug
         debug = user_debug
         if user_model:
