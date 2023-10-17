@@ -10,7 +10,7 @@ import openai.error
 
 import litellm
 from litellm.utils import trim_messages
-import litellm.exceptions
+from litellm.exceptions import ServiceUnavailableError, InvalidRequestError
 
 cost_dict: Dict[str, Dict[str, float]] = defaultdict(dict)
 cost_dict_lock = threading.Lock()
@@ -50,16 +50,16 @@ class UnknownLLMError(Exception):
 
 def handle_llm_exception(e: Exception, user_api_base: Optional[str]=None):
     print(f"\033[1;31mLiteLLM.Exception: {str(e)}\033[0m")
-    if isinstance(e, openai.error.ServiceUnavailableError) and e.llm_provider == "ollama": 
+    if isinstance(e, ServiceUnavailableError) and e.llm_provider == "ollama": # type: ignore
         run_ollama_serve()
-    if isinstance(e, openai.error.InvalidRequestError) and e.llm_provider == "ollama": 
+    if isinstance(e, InvalidRequestError) and e.llm_provider == "ollama": # type: ignore
         completion_call_details = {}
-        completion_call_details["model"] = e.model
+        completion_call_details["model"] = e.model # type: ignore
         if user_api_base: 
             completion_call_details["api_base"] = user_api_base
         else: 
             completion_call_details["api_base"] = None
-        print(f"\033[1;31mLiteLLM.Exception: Invalid API Call. Call details: Model: \033[1;37m{e.model}\033[1;31m; LLM Provider: \033[1;37m{e.llm_provider}\033[1;31m; Custom API Base - \033[1;37m{completion_call_details['api_base']}\033[1;31m\033[0m")
+        print(f"\033[1;31mLiteLLM.Exception: Invalid API Call. Call details: Model: \033[1;37m{e.model}\033[1;31m; LLM Provider: \033[1;37m{e.llm_provider}\033[1;31m; Custom API Base - \033[1;37m{completion_call_details['api_base']}\033[1;31m\033[0m") # type: ignore
         if completion_call_details["api_base"] == "http://localhost:11434": 
             print()
             print("Trying to call ollama? Try `litellm --model ollama/llama2 --api_base http://localhost:11434`")
@@ -113,7 +113,7 @@ def litellm_completion(data: Dict,
                 user_max_tokens: Optional[int], 
                 user_api_base: Optional[str], 
                 user_headers: Optional[dict], 
-                user_debug: bool) -> litellm.ModelResponse:
+                user_debug: bool):
     try:  
         global debug
         debug = user_debug
