@@ -37,14 +37,24 @@ class LangFuseLogger:
             # print(response_obj['usage']['prompt_tokens'])
             # print(response_obj['usage']['completion_tokens'])
             metadata = kwargs.get("metadata", {})
+            prompt = [kwargs['messages']]
+
+            # langfuse does not accept jsons for logging metadata #
+            kwargs.pop("litellm_logging_obj", None)
+            kwargs.pop("messages", None)
+            kwargs.pop("functions", None) # ensure it's a safe pop
+            kwargs.pop("function_call", None) # ensure it's a safe pop
+            kwargs.pop("metadata", None) # ensure it's a safe pop
+            # end of processing langfuse ########################
+
             self.Langfuse.generation(InitialGeneration(
                 name=metadata.get("generation_name", "litellm-completion"),
                 startTime=start_time,
                 endTime=end_time,
                 model=kwargs['model'],
-                # modelParameters= kwargs,
-                prompt=[kwargs['messages']],
-                completion=response_obj['choices'][0]['message']['content'],
+                modelParameters= kwargs,
+                prompt=prompt,
+                completion=response_obj['choices'][0]['message'],
                 usage=Usage(
                     prompt_tokens=response_obj['usage']['prompt_tokens'],
                     completion_tokens=response_obj['usage']['completion_tokens']
