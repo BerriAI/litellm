@@ -86,7 +86,7 @@ def is_port_in_use(port):
 @click.option('--host', default='0.0.0.0', help='Host for the server to listen on.')
 @click.option('--port', default=8000, help='Port to bind the server to.')
 @click.option('--api_base', default=None, help='API base URL.')
-@click.option('--model', default=None, help='The model name to pass to litellm expects') 
+@click.option('--model', '-m', default=None, help='The model name to pass to litellm expects') 
 @click.option('--alias', default=None, help='The alias for the model - use this to give a litellm model name (e.g. "huggingface/codellama/CodeLlama-7b-Instruct-hf") a more user-friendly name ("codellama")') 
 @click.option('--add_key', default=None, help='The model name to pass to litellm expects') 
 @click.option('--headers', default=None, help='headers for the API call') 
@@ -158,6 +158,7 @@ def run_server(host, port, api_base, model, alias, add_key, headers, save, debug
         print("\033[1;32mDone successfully\033[0m")
         return
     if model and "ollama" in model: 
+        print(f"ollama called")
         run_ollama_serve()
     if cost == True:
         print_cost_logs()
