@@ -306,7 +306,6 @@ def completion(
             metadata=metadata
         )
         logging.update_environment_variables(model=model, user=user, optional_params=optional_params, litellm_params=litellm_params)
-        print("CUSTOM PROVIDER", custom_llm_provider)
         if custom_llm_provider == "azure":
             # azure configs
             api_type = get_secret("AZURE_API_TYPE") or "azure"
