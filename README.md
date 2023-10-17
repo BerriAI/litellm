@@ -87,15 +87,10 @@ Create an OpenAI API compatible server to call any non-openai model (e.g. Huggin
 This works for async + streaming as well. 
 ```python
 litellm --model <model_name>
-```
-Running your model locally or on a custom endpoint ? Set the `--api-base` parameter [see how](https://docs.litellm.ai/docs/proxy_server)
-
-### Multiple LLMs ([Docs](https://docs.litellm.ai/docs/proxy_server#multiple-llms))
-```shell
-$ litellm
 
 #INFO: litellm proxy running on http://0.0.0.0:8000
 ```
+Running your model locally or on a custom endpoint ? Set the `--api-base` parameter [see how](https://docs.litellm.ai/docs/proxy_server)
 
 ### Self-host server ([Docs](https://docs.litellm.ai/docs/proxy_server#deploy-proxy))
 
