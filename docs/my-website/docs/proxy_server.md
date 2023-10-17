@@ -288,6 +288,28 @@ admin.initiate_chat(
 
 Credits [@Nathan](https://gist.github.com/CUexter) for this tutorial.
 </TabItem>
+<TabItem value="chatDev" label="ChatDev">
+
+### Setup ChatDev ([Docs](https://github.com/OpenBMB/ChatDev#%EF%B8%8F-quickstart))
+```shell
+git clone https://github.com/OpenBMB/ChatDev.git
+cd ChatDev
+conda create -n ChatDev_conda_env python=3.9 -y
+conda activate ChatDev_conda_env
+pip install -r requirements.txt
+```
+### Run ChatDev w/ Proxy
+```shell 
+export OPENAI_API_KEY="sk-1234"
+```
+
+```shell 
+export OPENAI_API_BASE="http://0.0.0.0:8000"
+```
+```shell
+python3 run.py --task "a script that says hello world" --name "hello world"
+```
+</TabItem>
 <TabItem value="langroid" label="Langroid">
 
 ```python

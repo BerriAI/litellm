@@ -56,12 +56,13 @@ Here's what an example response looks like
 You can also access information like latency. 
 
 ```python
-import litellm
+from litellm import completion
+import os
 os.environ["ANTHROPIC_API_KEY"] = "your-api-key"
 
 messages=[{"role": "user", "content": "Hey!"}]
 
 response = completion(model="claude-2", messages=messages)
 
-print(response.response_ms) # 616.25
+print(response.response_ms) # 616.25# 616.25
 ```
