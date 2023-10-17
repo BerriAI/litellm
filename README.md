@@ -143,7 +143,11 @@ docker build -t litellm . && docker run -p 8000:8000 litellm
 | [deepinfra](https://docs.litellm.ai/docs/providers/deepinfra)  | ✅ | ✅ | ✅ | ✅ |
 
 [**Read the Docs**](https://docs.litellm.ai/docs/)
-# Contributing
+## Logging Observability - Log LLM Input/Output ([Docs](https://docs.litellm.ai/docs/observability/callbacks))
+LiteLLM exposes pre defined callbacks to send data to LLMonitor, Langfuse, Helicone, Promptlayer, Traceloop, Slack
+
+
+## Contributing
 To contribute: Clone the repo locally -> Make a change -> Submit a PR with the change. 
 
 Here's how to modify the repo locally: 
