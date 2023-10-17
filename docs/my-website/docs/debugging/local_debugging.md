@@ -1,5 +1,5 @@
 # Local Debugging
-There's 2 ways to do local debugging - `litellm.set_verbose=True` and by passing in a custom function `completion(...logger_fn=<your_local_function>)`
+There's 2 ways to do local debugging - `litellm.set_verbose=True` and by passing in a custom function `completion(...logger_fn=<your_local_function>)`. Warning: Make sure to not use `set_verbose` in production. It logs API keys, which might end up in log files.
 
 ## Set Verbose 
 
