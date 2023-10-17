@@ -130,7 +130,7 @@ def completion(
         try:
             import torch
             from transformers import AutoTokenizer
-            from petals import AutoDistributedModelForCausalLM
+            from petals import AutoDistributedModelForCausalLM # type: ignore
         except:
             raise Exception(
                 "Importing torch, transformers, petals failed\nTry pip installing petals \npip install git+https://github.com/bigscience-workshop/petals"

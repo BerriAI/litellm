@@ -18,7 +18,7 @@ class VLLMError(Exception):
 # check if vllm is installed
 def validate_environment(model: str, llm: Any =None):
     try: 
-        from vllm import LLM, SamplingParams
+        from vllm import LLM, SamplingParams # type: ignore
         if llm is None:
             llm = LLM(model=model)
         return llm, SamplingParams

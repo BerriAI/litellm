@@ -5,7 +5,7 @@ from enum import Enum
 import requests
 import time
 import litellm
-from typing import Callable
+from typing import Callable, Dict, List, Any
 from litellm.utils import ModelResponse, Choices, Message, CustomStreamWrapper
 from typing import Optional
 from .prompt_templates.factory import prompt_factory, custom_prompt
@@ -265,7 +265,7 @@ def completion(
             content = ""
             for chunk in streamed_response: 
                 content += chunk["choices"][0]["delta"]["content"]
-            completion_response = [{"generated_text": content}]
+            completion_response: List[Dict[str, Any]] = [{"generated_text": content}]
             ## LOGGING
             logging_obj.post_call(
                 input=input_text,
@@ -298,10 +298,10 @@ def completion(
             )
         else:
             if task == "conversational": 
-                if len(completion_response["generated_text"]) > 0: 
+                if len(completion_response["generated_text"]) > 0: # type: ignore
                     model_response["choices"][0]["message"][
                         "content"
-                    ] = completion_response["generated_text"]
+                    ] = completion_response["generated_text"] # type: ignore
             elif task == "text-generation-inference": 
                 if len(completion_response[0]["generated_text"]) > 0: 
                     model_response["choices"][0]["message"][
@@ -360,7 +360,7 @@ def embedding(
     model_response=None,
     encoding=None,
 ):
-    headers = validate_environment(api_key)
+    headers = validate_environment(api_key, headers=None)
     # print_verbose(f"{model}, {task}")
     embed_url = ""
     if "https" in model:
