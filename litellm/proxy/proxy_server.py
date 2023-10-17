@@ -282,52 +282,6 @@ def initialize(model, alias, api_base, debug, temperature, max_tokens, max_budge
     user_telemetry = telemetry
     usage_telemetry(feature="local_proxy_server")
 
-
-def deploy_proxy(model, api_base, debug, temperature, max_tokens, telemetry, deploy):
-    import requests
-    # Load .env file
-
-    # Prepare data for posting
-    data = {
-        "model": model,
-        "api_base": api_base,
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-    }
-
-    # print(data)
-
-    # Make post request to the url
-    url = "https://litellm-api.onrender.com/deploy"
-    # url = "http://0.0.0.0:4000/deploy"
-
-    with open(".env", "w") as env_file:
-        for row in data:
-            env_file.write(f"{row.upper()}='{data[row]}'\n")
-        env_file.write("\n\n")
-        for key in os.environ:
-            value = os.environ[key]
-            env_file.write(f"{key}='{value}'\n")
-        # env_file.write(str(os.environ))
-
-    files = {"file": open(".env", "rb")}
-    # print(files)
-
-    response = requests.post(url, data=data, files=files)
-    # print(response)
-    # Check the status of the request
-    if response.status_code != 200:
-        return f"Request to url: {url} failed with status: {response.status_code}"
-
-    # Reading the response
-    response_data = response.json()
-    # print(response_data)
-    url = response_data["url"]
-    # # Do something with response_data
-
-    return url
-
-
 def track_cost_callback(
         kwargs,  # kwargs to completion
         completion_response,  # response from completion
