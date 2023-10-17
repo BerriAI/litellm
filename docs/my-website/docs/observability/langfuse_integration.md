@@ -1,6 +1,6 @@
 import Image from '@theme/IdealImage';
 
-# LangFuse Tutorial
+# Langfuse - Logging LLM Input/Output
 
 LangFuse is open Source Observability & Analytics for LLM Apps
 Detailed production traces and a granular view on quality, cost and latency
@@ -11,11 +11,33 @@ Detailed production traces and a granular view on quality, cost and latency
 liteLLM provides `callbacks`, making it easy for you to log data depending on the status of your responses.
 
 ## Pre-Requisites
+Ensure you have run `pip install langfuse` for this integration
 ```shell
-pip install litellm langfuse
+pip install langfuse litellm
 ```
 
-## Using Callbacks
+## Quick Start
+```python
+# pip install langfuse 
+import litellm
+import os
+
+# from https://cloud.langfuse.com/
+os.environ["LANGFUSE_PUBLIC_KEY"] = ""
+os.environ["LANGFUSE_SECRET_KEY"] = ""
+os.environ['OPENAI_API_KEY']=""
+
+# set langfuse as a callback, litellm will send the data to langfuse
+litellm.success_callback = ["langfuse"] 
+ 
+# openai call
+response = litellm.completion(
+  model="gpt-3.5-turbo",
+  messages=[
+    {"role": "user", "content": "Hi 👋 - i'm openai"}
+  ]
+)
+```
 
 <a target="_blank" href="https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/logging_observability/LiteLLM_Langfuse.ipynb">
   <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
