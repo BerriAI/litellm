@@ -208,11 +208,12 @@ user_proxy.initiate_chat(assistant, message="Plot a chart of META and TESLA stoc
 
 Credits [@victordibia](https://github.com/microsoft/autogen/issues/45#issuecomment-1749921972) for this tutorial.
 </TabItem>
-<TabItem value="multi-agent AutoGen" label="AutoGen Multi-Agent">
+<TabItem value="multi-LLM AutoGen" label="AutoGen Multi-LLM">
+
+
 ```python
 from autogen import AssistantAgent, GroupChatManager, UserProxyAgent
 from autogen.agentchat import GroupChat
-
 config_list = [
     {
         "model": "ollama/mistralorca",
