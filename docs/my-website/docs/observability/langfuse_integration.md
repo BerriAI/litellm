@@ -15,7 +15,7 @@ liteLLM provides `callbacks`, making it easy for you to log data depending on th
 pip install litellm langfuse
 ```
 
-### Using Callbacks
+## Using Callbacks
 
 <a target="_blank" href="https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/logging_observability/LiteLLM_Langfuse.ipynb">
   <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
@@ -29,7 +29,7 @@ Use just 2 lines of code, to instantly log your responses **across all providers
 litellm.success_callback = ["langfuse"]
 ```
 
-### API keys for Langfuse
+## API keys for Langfuse
 Set the following variables in your .env
 ```python
 # Required 
@@ -40,7 +40,7 @@ os.environ["LANGFUSE_PUBLIC_KEY"]
 os.environ["LANGFUSE_HOST"] # optional
 ```
 
-### Complete code
+## Complete code
 
 ```python
 import litellm
@@ -81,6 +81,45 @@ response = completion(
 print(response)
 
 ```
+
+## Advanced
+### Set Custom Generation names, pass metadata
+
+```python
+import litellm
+from litellm import completion
+import os
+
+# from https://cloud.langfuse.com/
+os.environ["LANGFUSE_PUBLIC_KEY"] = ""
+os.environ["LANGFUSE_SECRET_KEY"] = ""
+
+
+# OpenAI and Cohere keys 
+# You can use any of the litellm supported providers: https://docs.litellm.ai/docs/providers
+os.environ['OPENAI_API_KEY']=""
+
+# set langfuse as a callback, litellm will send the data to langfuse
+litellm.success_callback = ["langfuse"] 
+ 
+# openai call
+response = completion(
+  model="gpt-3.5-turbo",
+  messages=[
+    {"role": "user", "content": "Hi 👋 - i'm openai"}
+  ],
+  metadata = {
+    "generation_name": "litellm-ishaan-gen", # set langfuse generation name
+    # custom metadata fields
+    "project": "litellm-proxy" 
+  }
+)
+ 
+print(response)
+
+```
+
+
 
 ### Example - FastAPI Server with LiteLLM + Langfuse
 https://replit.com/@BerriAI/LiteLLMFastAPILangfuse
