@@ -633,6 +633,21 @@ You can view costs on the cli using
 litellm --cost
 ```
 
+### Performance
+
+We load-tested 500,000 HTTP connections on the FastAPI server for 1 minute, using [wrk](https://github.com/wg/wrk).
+
+There are our results: 
+
+```shell
+Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency   156.38ms   25.52ms 361.91ms   84.73%
+    Req/Sec    13.61      5.13    40.00     57.50%
+  383625 requests in 1.00m, 391.10MB read
+  Socket errors: connect 0, read 1632, write 1, timeout 0
+```
+
+
 ## Support/ talk with founders
 
 - [Schedule Demo 👋](https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version)
