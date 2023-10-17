@@ -186,9 +186,6 @@ Step 4: Submit a PR with your changes! 🚀
 - push your fork to your GitHub repo 
 - submit a PR from there 
 
-[Learn more on how to make a PR](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/creating-a-pull-request)
-
-
 # Support / talk with founders
 - [Schedule Demo 👋](https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version)
 - [Community Discord 💭](https://discord.gg/wuPM9dRgDw)
