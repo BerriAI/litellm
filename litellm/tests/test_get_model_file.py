@@ -7,6 +7,6 @@ import litellm
 import pytest
 
 try:
-    print(litellm.get_model_cost_map())
+    print(litellm.get_model_cost_map(url="fake-url"))
 except Exception as e:
     pytest.fail(f"An exception occurred: {e}")
