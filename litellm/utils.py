@@ -2509,7 +2509,7 @@ def exception_type(
         if isinstance(original_exception, OriginalError):
             # Handle the OpenAIError
             exception_mapping_worked = True
-            if model in litellm.openrouter_models:
+            if custom_llm_provider == "openrouter":
                 if original_exception.http_status == 413:
                     raise InvalidRequestError(
                         message=str(original_exception),
@@ -3169,7 +3169,14 @@ def exception_type(
                             model=model
                         )
         exception_mapping_worked = True
-        raise APIError(status_code=500, message=str(original_exception), llm_provider=custom_llm_provider, model=model)
+        if "InvalidRequestError.__init__() missing 1 required positional argument: 'param'" in str(original_exception): # deal with edge-case invalid request error bug in openai-python sdk
+            raise InvalidRequestError(
+                message=f"OpenAIException: This can happen due to missing AZURE_API_VERSION: {str(original_exception)}",
+                model=model, 
+                llm_provider=custom_llm_provider
+            )
+        else:
+            raise APIError(status_code=500, message=str(original_exception), llm_provider=custom_llm_provider, model=model)
     except Exception as e:
         # LOGGING
         exception_logging(

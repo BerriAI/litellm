@@ -248,7 +248,7 @@ def load_config():
         pass
 
 
-def initialize(model, alias, api_base, debug, temperature, max_tokens, max_budget, telemetry, drop_params,
+def initialize(model, alias, api_base, api_version, debug, temperature, max_tokens, max_budget, telemetry, drop_params,
                add_function_to_prompt, headers, save):
     global user_model, user_api_base, user_debug, user_max_tokens, user_temperature, user_telemetry, user_headers
     user_model = model
@@ -261,6 +261,8 @@ def initialize(model, alias, api_base, debug, temperature, max_tokens, max_budge
     if api_base:  # model-specific param
         user_api_base = api_base
         dynamic_config[user_model]["api_base"] = api_base
+    if api_version: 
+        os.environ["AZURE_API_VERSION"] = api_version # set this for azure - litellm can read this from the env
     if max_tokens:  # model-specific param
         user_max_tokens = max_tokens
         dynamic_config[user_model]["max_tokens"] = max_tokens
