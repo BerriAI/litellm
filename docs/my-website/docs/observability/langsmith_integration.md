@@ -43,6 +43,32 @@ response = litellm.completion(
 )
 ```
 
+## Advanced
+### Set Custom Project & Run names
+
+```python
+import litellm
+import os
+
+os.environ["LANGSMITH_API_KEY"] = ""
+# LLM API Keys
+os.environ['OPENAI_API_KEY']=""
+
+# set langfuse as a callback, litellm will send the data to langfuse
+litellm.success_callback = ["langfuse"] 
+ 
+response = litellm.completion(
+    model="gpt-3.5-turbo",
+     messages=[
+        {"role": "user", "content": "Hi 👋 - i'm openai"}
+    ],
+    metadata={
+        "run_name": "litellmRUN",               # langsmith run name
+        "project_name": "litellm-completion",   # langsmith project name
+    }
+)
+print(response)
+```
 ## Support & Talk to Founders
 
 - [Schedule Demo 👋](https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version)
