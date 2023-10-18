@@ -25,6 +25,15 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}
+      - name: Get tag to build
+        id: tag
+        run: |
+          echo "latest=ghcr.io/${{ github.repository }}:latest" >> $GITHUB_OUTPUT
+          if [[ -z "${{ github.event.inputs.tag }}" ]]; then
+            echo "versioned=ghcr.io/${{ github.repository }}:${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          else
+            echo "versioned=ghcr.io/${{ github.repository }}:${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+          fi
       - name: Build and release Docker images
         uses: docker/build-push-action@v5
         with:
@@ -32,4 +41,5 @@ jobs:
           tags: |
             ${{ steps.tag.outputs.latest }}
             ${{ steps.tag.outputs.versioned }}
+          labels: ${{ steps.meta.outputs.labels }}
           push: true
