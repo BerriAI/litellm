@@ -48,16 +48,17 @@ model_fallbacks: Optional[List] = None
 
 def get_model_cost_map():
     url = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
-    
     try:
         response = requests.get(url)
         response.raise_for_status()  # Raise an exception if request is unsuccessful
         content = response.json()
         return content
-    except requests.exceptions.RequestException as e:
-        return {}
     except:
-        return {}
+        import importlib.resources
+        import json
+        with importlib.resources.open_text("litellm", "model_prices_and_context_window_backup.json") as f:
+            content = json.load(f)
+            return content
 model_cost = get_model_cost_map()
 custom_prompt_dict:Dict[str, dict] = {}
 ####### THREAD-SPECIFIC DATA ###################
