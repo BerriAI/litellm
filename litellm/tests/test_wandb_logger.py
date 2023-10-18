@@ -9,7 +9,7 @@ import litellm
 
 litellm.success_callback = ["wandb"]
 
-litellm.set_verbose = True
+# litellm.set_verbose = True
 import time
 
 
@@ -24,7 +24,7 @@ def test_wandb_logging():
                               max_tokens=10,
                               temperature=0.2
                               )
-        print(response)
+        # print(response)
     except Exception as e:
         print(e)
 
