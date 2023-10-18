@@ -28,7 +28,7 @@ def test_azure_call():
 ## test debug 
 def test_debug(): 
     try: 
-        initialize(model=None, alias=None, api_base=None, debug=True, temperature=None, max_tokens=None, max_budget=None, telemetry=None, drop_params=None, add_function_to_prompt=None, headers=None, save=None)
+        initialize(model=None, alias=None, api_base=None, debug=True, temperature=None, max_tokens=None, max_budget=None, telemetry=None, drop_params=None, add_function_to_prompt=None, headers=None, save=None, api_version=None)
         assert litellm.set_verbose == True
     except Exception as e: 
         pytest.fail(f"An error occurred: {e}")
