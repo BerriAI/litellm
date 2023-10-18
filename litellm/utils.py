@@ -1608,20 +1608,32 @@ def get_api_key(llm_provider: str, dynamic_api_key: Optional[str]):
 
 def get_max_tokens(model: str):
     """
-    Get the maximum tokens (context window) for a given model.
+    Get a dict for the maximum tokens (context window), 
+    input_cost_per_token, output_cost_per_token  for a given model.
 
     Parameters:
-        model (str): The name of the model.
+    model (str): The name of the model.
 
     Returns:
-        int: The maximum tokens for the given model.
+        dict: A dictionary containing the following information:
+            - max_tokens (int): The maximum number of tokens allowed for the given model.
+            - input_cost_per_token (float): The cost per token for input.
+            - output_cost_per_token (float): The cost per token for output.
+            - litellm_provider (str): The provider of the model (e.g., "openai").
+            - mode (str): The mode of the model (e.g., "chat" or "completion").
 
     Raises:
         Exception: If the model is not mapped yet.
 
     Example:
-        >>> get_max_tokens("gpt-3.5-turbo")
-        4096
+        >>> get_max_tokens("gpt-4")
+        {
+            "max_tokens": 8192,
+            "input_cost_per_token": 0.00003,
+            "output_cost_per_token": 0.00006,
+            "litellm_provider": "openai",
+            "mode": "chat"
+        }
     """
     try:
         return litellm.model_cost[model]
