@@ -20,7 +20,7 @@ try:
     V = TypeVar("V")
 
 
-    class OpenAIResponse(Protocol[K, V]):
+    class OpenAIResponse(Protocol[K, V]): # type: ignore
         # contains a (known) object attribute
         object: Literal["chat.completion", "edit", "text_completion"]
 
