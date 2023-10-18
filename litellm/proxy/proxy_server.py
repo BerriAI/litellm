@@ -100,6 +100,7 @@ user_temperature = None
 user_telemetry = True
 user_config = None
 user_headers = None
+local_logging = True # writes logs to a local api_log.json file for debugging
 config_filename = "litellm.secrets.toml"
 config_dir = os.getcwd()
 config_dir = appdirs.user_config_dir("litellm")
@@ -183,7 +184,7 @@ def save_params_to_config(data: dict):
 
 def load_config():
     try: 
-        global user_config, user_api_base, user_max_tokens, user_temperature, user_model
+        global user_config, user_api_base, user_max_tokens, user_temperature, user_model, local_logging
         # As the .env file is typically much simpler in structure, we use load_dotenv here directly
         with open(user_config_path, "rb") as f:
             user_config = tomllib.load(f)
@@ -201,6 +202,8 @@ def load_config():
             litellm.model_fallbacks = user_config["general"].get("fallbacks",
                                                                 None)  # fallback models in case initial completion call fails
             default_model = user_config["general"].get("default_model", None)  # route all requests to this model.
+
+            local_logging = user_config["general"].get("local_logging", True)
 
             if user_model is None:  # `litellm --model <model-name>`` > default_model.
                 user_model = default_model
@@ -388,25 +391,6 @@ def logger(
 
             thread = threading.Thread(target=write_to_log, daemon=True)
             thread.start()
-        ## Commenting out post-api call logging as it would break json writes on cli error
-        # elif log_event_type == 'post_api_call':
-        #     if "stream" not in kwargs["optional_params"] or kwargs["optional_params"]["stream"] is False or kwargs.get(
-        #             "complete_streaming_response", False):
-        #         inference_params = copy.deepcopy(kwargs)
-        #         timestamp = inference_params.pop('start_time')
-        #         dt_key = timestamp.strftime("%Y%m%d%H%M%S%f")[:23]
-
-        #         with open(log_file, 'r') as f:
-        #             existing_data = json.load(f)
-
-        #         existing_data[dt_key]['post_api_call'] = inference_params
-
-        #         def write_to_log():
-        #             with open(log_file, 'w') as f:
-        #                 json.dump(existing_data, f, indent=2)
-
-        #         thread = threading.Thread(target=write_to_log, daemon=True)
-        #         thread.start()
     except:
         pass
 
