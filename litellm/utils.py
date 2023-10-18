@@ -34,6 +34,7 @@ from .integrations.berrispend import BerriSpendLogger
 from .integrations.supabase import Supabase
 from .integrations.llmonitor import LLMonitorLogger
 from .integrations.prompt_layer import PromptLayerLogger
+from .integrations.weights_biases import WeightsBiasesLogger
 from .integrations.custom_logger import CustomLogger
 from .integrations.langfuse import LangFuseLogger
 from .integrations.litedebugger import LiteDebugger
@@ -64,6 +65,7 @@ slack_app = None
 alerts_channel = None
 heliconeLogger = None
 promptLayerLogger = None
+weightsBiasesLogger = None
 customLogger = None
 langFuseLogger = None
 llmonitorLogger = None
@@ -221,7 +223,7 @@ class CallTypes(Enum):
 
 # Logging function -> log the exact model details + what's being sent | Non-Blocking
 class Logging:
-    global supabaseClient, liteDebuggerClient, promptLayerLogger, capture_exception, add_breadcrumb
+    global supabaseClient, liteDebuggerClient, promptLayerLogger, weightsBiasesLogger, capture_exception, add_breadcrumb
 
     def __init__(self, model, messages, stream, call_type, start_time, litellm_call_id, function_id):
         if call_type not in [item.value for item in CallTypes]:
@@ -515,6 +517,16 @@ class Logging:
                             litellm_call_id=litellm_params.get("litellm_call_id", str(uuid.uuid4())),
                             print_verbose=print_verbose,
                         )
+                    if callback == "wandb":
+                        print_verbose("reaches wandb for logging!")
+                        weightsBiasesLogger.log_event(
+                            kwargs=self.model_call_details,
+                            response_obj=result,
+                            start_time=start_time,
+                            end_time=end_time,
+                            print_verbose=print_verbose,
+                        )
+
                     if callable(callback): # custom logger functions
                         customLogger.log_event(
                             kwargs=self.model_call_details,
@@ -1933,7 +1945,7 @@ def validate_environment(model: Optional[str]=None) -> dict:
     return {"keys_in_environment": keys_in_environment, "missing_keys": missing_keys} 
 
 def set_callbacks(callback_list, function_id=None):
-    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, llmonitorLogger, promptLayerLogger, langFuseLogger, customLogger
+    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, llmonitorLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger
     try:
         for callback in callback_list:
             print_verbose(f"callback: {callback}")
@@ -1996,6 +2008,8 @@ def set_callbacks(callback_list, function_id=None):
                 promptLayerLogger = PromptLayerLogger()
             elif callback == "langfuse":
                 langFuseLogger = LangFuseLogger()
+            elif callback == "wandb":
+                weightsBiasesLogger = WeightsBiasesLogger()
             elif callback == "aispend":
                 aispendLogger = AISpendLogger()
             elif callback == "berrispend":
