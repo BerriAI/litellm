@@ -1,8 +1,8 @@
 FROM python:3.10
 
+ENV LITELLM_CONFIG_PATH="/litellm.secrets.toml"
 COPY . /app
 WORKDIR /app
-RUN mkdir -p /root/.config/litellm/ && cp /app/secrets_template.toml /root/.config/litellm/litellm.secrets.toml
 RUN pip install -r requirements.txt
 
 WORKDIR /app/litellm/proxy 
