@@ -86,6 +86,7 @@ def is_port_in_use(port):
 @click.option('--host', default='0.0.0.0', help='Host for the server to listen on.')
 @click.option('--port', default=8000, help='Port to bind the server to.')
 @click.option('--api_base', default=None, help='API base URL.')
+@click.option('--api_version', default="2023-07-01-preview", help='For azure - pass in the api version.')
 @click.option('--model', '-m', default=None, help='The model name to pass to litellm expects') 
 @click.option('--alias', default=None, help='The alias for the model - use this to give a litellm model name (e.g. "huggingface/codellama/CodeLlama-7b-Instruct-hf") a more user-friendly name ("codellama")') 
 @click.option('--add_key', default=None, help='The model name to pass to litellm expects') 
@@ -105,7 +106,7 @@ def is_port_in_use(port):
 @click.option('--test', flag_value=True, help='proxy chat completions url to make a test request to')
 @click.option('--local', is_flag=True, default=False, help='for local debugging')
 @click.option('--cost', is_flag=True, default=False, help='for viewing cost logs')
-def run_server(host, port, api_base, model, alias, add_key, headers, save, debug, temperature, max_tokens, drop_params, create_proxy, add_function_to_prompt, config, file, max_budget, telemetry, logs, test, local, cost):
+def run_server(host, port, api_base, api_version, model, alias, add_key, headers, save, debug, temperature, max_tokens, drop_params, create_proxy, add_function_to_prompt, config, file, max_budget, telemetry, logs, test, local, cost):
     global feature_telemetry
     args = locals()
     if local:
@@ -197,7 +198,7 @@ def run_server(host, port, api_base, model, alias, add_key, headers, save, debug
     else:
         if headers:
             headers = json.loads(headers)
-        initialize(model=model, alias=alias, api_base=api_base, debug=debug, temperature=temperature, max_tokens=max_tokens, max_budget=max_budget, telemetry=telemetry, drop_params=drop_params, add_function_to_prompt=add_function_to_prompt, headers=headers, save=save)
+        initialize(model=model, alias=alias, api_base=api_base, api_version=api_version, debug=debug, temperature=temperature, max_tokens=max_tokens, max_budget=max_budget, telemetry=telemetry, drop_params=drop_params, add_function_to_prompt=add_function_to_prompt, headers=headers, save=save)
         try:
             import uvicorn
         except:
