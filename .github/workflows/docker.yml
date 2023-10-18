@@ -38,7 +38,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          platforms: linux/386,linux/amd64,linux/arm64
+          platforms: linux/amd64,linux/arm64
           tags: |
             ${{ steps.tag.outputs.latest }}
             ${{ steps.tag.outputs.versioned }}
