@@ -34,6 +34,7 @@ from .integrations.berrispend import BerriSpendLogger
 from .integrations.supabase import Supabase
 from .integrations.llmonitor import LLMonitorLogger
 from .integrations.prompt_layer import PromptLayerLogger
+from .integrations.langsmith import LangsmithLogger
 from .integrations.weights_biases import WeightsBiasesLogger
 from .integrations.custom_logger import CustomLogger
 from .integrations.langfuse import LangFuseLogger
@@ -65,6 +66,7 @@ slack_app = None
 alerts_channel = None
 heliconeLogger = None
 promptLayerLogger = None
+langsmithLogger = None
 weightsBiasesLogger = None
 customLogger = None
 langFuseLogger = None
@@ -223,7 +225,7 @@ class CallTypes(Enum):
 
 # Logging function -> log the exact model details + what's being sent | Non-Blocking
 class Logging:
-    global supabaseClient, liteDebuggerClient, promptLayerLogger, weightsBiasesLogger, capture_exception, add_breadcrumb
+    global supabaseClient, liteDebuggerClient, promptLayerLogger, weightsBiasesLogger, langsmithLogger, capture_exception, add_breadcrumb
 
     def __init__(self, model, messages, stream, call_type, start_time, litellm_call_id, function_id):
         if call_type not in [item.value for item in CallTypes]:
@@ -526,7 +528,15 @@ class Logging:
                             end_time=end_time,
                             print_verbose=print_verbose,
                         )
-
+                    if callback == "langsmith":
+                        print_verbose("reaches langsmtih for logging!")
+                        langsmithLogger.log_event(
+                            kwargs=self.model_call_details,
+                            response_obj=result,
+                            start_time=start_time,
+                            end_time=end_time,
+                            print_verbose=print_verbose,
+                        )
                     if callable(callback): # custom logger functions
                         customLogger.log_event(
                             kwargs=self.model_call_details,
@@ -1957,7 +1967,7 @@ def validate_environment(model: Optional[str]=None) -> dict:
     return {"keys_in_environment": keys_in_environment, "missing_keys": missing_keys} 
 
 def set_callbacks(callback_list, function_id=None):
-    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, llmonitorLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger
+    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, llmonitorLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, langsmithLogger
     try:
         for callback in callback_list:
             print_verbose(f"callback: {callback}")
@@ -2022,6 +2032,8 @@ def set_callbacks(callback_list, function_id=None):
                 langFuseLogger = LangFuseLogger()
             elif callback == "wandb":
                 weightsBiasesLogger = WeightsBiasesLogger()
+            elif callback == "langsmith":
+                langsmithLogger = LangsmithLogger()
             elif callback == "aispend":
                 aispendLogger = AISpendLogger()
             elif callback == "berrispend":
