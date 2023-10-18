@@ -157,6 +157,9 @@ response = completion(
   messages=[{ "content": "Hello, how are you?","role": "user"}],
   stream=True,
 )
+
+for chunk in response: 
+  print(chunk)
 ```
 
 </TabItem>
@@ -174,6 +177,9 @@ response = completion(
   messages=[{ "content": "Hello, how are you?","role": "user"}],
   stream=True,
 )
+
+for chunk in response: 
+  print(chunk)
 ```
 
 </TabItem>
@@ -193,6 +199,9 @@ response = completion(
   messages=[{ "content": "Hello, how are you?","role": "user"}],
   stream=True,
 )
+
+for chunk in response: 
+  print(chunk)
 ```
 
 </TabItem>
@@ -213,7 +222,9 @@ response = completion(
   stream=True,
 )
 
-print(response)
+
+for chunk in response: 
+  print(chunk)
 ```
 
 </TabItem>
@@ -235,6 +246,9 @@ response = completion(
   messages = [{ "content": "Hello, how are you?","role": "user"}],
   stream=True,
 )
+
+for chunk in response: 
+  print(chunk)
 ```
 
 </TabItem>
@@ -251,6 +265,9 @@ response = completion(
             api_base="http://localhost:11434",
             stream=True,
 )
+
+for chunk in response: 
+  print(chunk)
 ```
 </TabItem>
 <TabItem value="or" label="Openrouter">
@@ -267,6 +284,9 @@ response = completion(
   messages = [{ "content": "Hello, how are you?","role": "user"}],
   stream=True,
 )
+
+for chunk in response: 
+  print(chunk)
 ```
 </TabItem>
 
