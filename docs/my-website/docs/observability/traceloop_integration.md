@@ -30,7 +30,7 @@ To get better visualizations on how your code behaves, you may want to annotate 
 
 ## Exporting traces to other systems (e.g. Datadog, New Relic, and others)
 
-Since Traceloop DK uses OpenTelemetry to send data, you can easily export your traces to other systems, such as Datadog, New Relic, and others. See [Traceloop docs on exporters](https://traceloop.com/docs/python-sdk/exporters) for more information.
+Since Traceloop SDK uses OpenTelemetry to send data, you can easily export your traces to other systems, such as Datadog, New Relic, and others. See [Traceloop docs on exporters](https://traceloop.com/docs/python-sdk/exporters) for more information.
 
 ## Support
 
