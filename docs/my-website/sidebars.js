@@ -130,6 +130,7 @@ const sidebars = {
       label: "Caching",
       items: [
         "caching/caching",
+        "caching/redis_cache",
         "caching/caching_api",
         "caching/gpt_cache",
       ],
