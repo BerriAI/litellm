@@ -1,4 +1,4 @@
-# Load-Balance Router
+# API Load-Balancing
 
 Use this if you're trying to load-balance across multiple deployments. 
 
