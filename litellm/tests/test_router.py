@@ -8,11 +8,12 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 from litellm import Router
+from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 
 load_dotenv()
 
-model_list = [{
+model_list = [{ # list of model deployments 
 	"model_name": "gpt-3.5-turbo", # openai model name 
 	"litellm_params": { # params for litellm completion/embedding call 
 		"model": "azure/chatgpt-v-2", 
@@ -42,9 +43,19 @@ model_list = [{
 	"rpm": 9000
 }]
 
-router = Router(model_list=model_list)
+router = Router(model_list=model_list, redis_host=os.getenv("REDIS_HOST"), redis_password=os.getenv("REDIS_PASSWORD"), redis_port=os.getenv("REDIS_PORT"))
 
-# openai.ChatCompletion.create replacement
-response = router.completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hey, how's it going?"}])
+completions = [] 
+with ThreadPoolExecutor(max_workers=100) as executor:
+	kwargs = {
+		"model": "gpt-3.5-turbo",
+		"messages": [{"role": "user", "content": "Hey, how's it going?"}]
+	}
+	for _ in range(20):
+		future = executor.submit(router.completion, **kwargs)
+		completions.append(future)
 
-print(response)
+# Retrieve the results from the futures
+results = [future.result() for future in completions]
+
+print(results)
