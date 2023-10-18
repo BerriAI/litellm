@@ -1,4 +1,4 @@
-# LLM API Load-Balancing
+# Azure API Load-Balancing
 
 Use this if you're trying to load-balance across multiple Azure/OpenAI deployments. 
 
