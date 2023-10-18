@@ -158,7 +158,10 @@ class Cache():
             The cached result if it exists, otherwise None.
         """
         try:  # never block execution
-            cache_key = self.get_cache_key(*args, **kwargs)
+            if "cache_key" in kwargs: 
+                cache_key = kwargs["cache_key"]
+            else: 
+                cache_key = self.get_cache_key(*args, **kwargs)
             if cache_key is not None:
                 cached_result = self.cache.get_cache(cache_key)
                 if cached_result != None and 'stream' in kwargs and kwargs['stream'] == True:
@@ -182,7 +185,10 @@ class Cache():
             None
         """
         try:
-            cache_key = self.get_cache_key(*args, **kwargs)
+            if "cache_key" in kwargs: 
+                cache_key = kwargs["cache_key"]
+            else: 
+                cache_key = self.get_cache_key(*args, **kwargs)
             # print("adding to cache", cache_key, result)
             # print(cache_key)
             if cache_key is not None:
