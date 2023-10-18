@@ -1,7 +1,12 @@
-# API Load-Balancing
+# LLM API Load-Balancing
 
-Use this if you're trying to load-balance across multiple deployments. 
+Use this if you're trying to load-balance across multiple Azure/OpenAI deployments. 
 
+`Router` prevents failed requests, by picking the deployment which is below rate-limit and has the least amount of tokens used. 
+
+In production, [Router connects to a Redis Cache](#redis-queue) to track usage across multiple deployments.
+
+## Quick Start
 
 ```python
 pip install litellm
@@ -45,6 +50,17 @@ router = Router(model_list=model_list)
 # openai.ChatCompletion.create replacement
 response = router.completion(model="gpt-3.5-turbo", 
 				messages=[{"role": "user", "content": "Hey, how's it going?"}]
+
+print(response)
+```
+
+## Redis Queue 
+
+```python
+router = Router(model_list=model_list, 
+                redis_host=os.getenv("REDIS_HOST"), 
+                redis_password=os.getenv("REDIS_PASSWORD"), 
+                redis_port=os.getenv("REDIS_PORT"))
 
 print(response)
 ```
