@@ -116,6 +116,7 @@ const sidebars = {
         "observability/custom_callback",
         "observability/sentry",
         "observability/promptlayer_integration",
+        "observability/wandb_integration",
         "observability/langfuse_integration",
         "observability/traceloop_integration",
         "observability/llmonitor_integration",
