@@ -118,6 +118,7 @@ const sidebars = {
         "observability/promptlayer_integration",
         "observability/wandb_integration",
         "observability/langfuse_integration",
+        "observability/langsmith_integration",
         "observability/traceloop_integration",
         "observability/llmonitor_integration",
         "observability/helicone_integration",

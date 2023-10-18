@@ -1,9 +1,10 @@
 import Image from '@theme/IdealImage';
 
-# Weights & Biases - Logging LLM Input/Output
-Weights & Biases helps AI developers build better models faster https://wandb.ai
+# Langsmith - Logging LLM Input/Output
+An all-in-one developer platform for every step of the application lifecycle
+https://smith.langchain.com/
 
-<Image img={require('../../img/wandb.png')} />
+<Image img={require('../../img/langsmith.png')} />
 
 :::info
 We want to learn how we can make the callbacks better! Meet the LiteLLM [founders](https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version) or
@@ -11,28 +12,27 @@ join our [discord](https://discord.gg/wuPM9dRgDw)
 ::: 
 
 ## Pre-Requisites
-Ensure you have run `pip install wandb` for this integration
 ```shell
-pip install wandb litellm
+pip install litellm
 ```
 
 ## Quick Start
-Use just 2 lines of code, to instantly log your responses **across all providers** with Weights & Biases
+Use just 2 lines of code, to instantly log your responses **across all providers** with Langsmith
+
 
 ```python
-litellm.success_callback = ["wandb"]
+litellm.success_callback = ["langsmith"]
 ```
 ```python
-# pip install wandb 
 import litellm
 import os
 
-os.environ["WANDB_API_KEY"] = ""
+os.environ["LANGSMITH_API_KEY"] = ""
 # LLM API Keys
 os.environ['OPENAI_API_KEY']=""
 
-# set wandb as a callback, litellm will send the data to Weights & Biases
-litellm.success_callback = ["wandb"] 
+# set langsmith as a callback, litellm will send the data to langsmith
+litellm.success_callback = ["langsmith"] 
  
 # openai call
 response = litellm.completion(
