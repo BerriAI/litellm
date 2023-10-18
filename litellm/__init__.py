@@ -348,3 +348,5 @@ from .exceptions import (
 )
 from .budget_manager import BudgetManager
 from .proxy.proxy_cli import run_server
+from .router import Router
+
