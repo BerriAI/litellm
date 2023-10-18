@@ -17,7 +17,7 @@ def test_langsmith_logging():
         response = completion(model="claude-instant-1.2",
                               messages=[{
                                   "role": "user",
-                                  "content": "Hi 👋 - i'm claude"
+                                  "content": "what llm are u"
                               }],
                               max_tokens=10,
                               temperature=0.2
@@ -27,3 +27,24 @@ def test_langsmith_logging():
         print(e)
 
 test_langsmith_logging()
+
+
+def test_langsmith_logging_with_metadata():
+    try:
+        response = completion(model="gpt-3.5-turbo",
+                              messages=[{
+                                  "role": "user",
+                                  "content": "what llm are u"
+                              }],
+                              max_tokens=10,
+                              temperature=0.2,
+                              metadata={
+                                  "run_name": "litellmRUN",
+                                  "project_name": "litellm-completion",
+                              }
+                              )
+        print(response)
+    except Exception as e:
+        print(e)
+
+test_langsmith_logging_with_metadata()
