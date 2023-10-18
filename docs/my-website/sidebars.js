@@ -83,7 +83,7 @@ const sidebars = {
     },
     "proxy_server",
     "budget_manager",
-    "rate_limit_manager",
+    "routing",
     "set_keys",
     "completion/token_usage",
     {
