@@ -3,7 +3,7 @@ import TabItem from '@theme/TabItem';
 
 # OpenAI Proxy Server
 
-A local, fast, and lightweight OpenAI-compatible server to call 100+ LLM APIs. 
+A fast, and lightweight OpenAI-compatible server to call 100+ LLM APIs. 
 
 :::info
 We want to learn how we can make the proxy better! Meet the [founders](https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version) or
@@ -136,6 +136,82 @@ $ litellm --model command-nightly
 </Tabs>
 
 [**Jump to Code**](https://github.com/BerriAI/litellm/blob/fef4146396d5d87006259e00095a62e3900d6bb4/litellm/proxy.py#L36)
+
+## [Docker Image Tutorial]: Use with LibreChat, Smart-Chatbot-UI
+Here's how to use our Docker image to go to prod with LiteLLM Proxy Server + LibreChat/Smart-Chatbot-UI/etc. 
+
+```shell
+git clone https://github.com/BerriAI/litellm.git
+```
+
+Add your API keys / LLM configs to `template_secrets.toml`.
+```shell
+[keys]
+OPENAI_API_KEY="sk-..."
+
+[general]
+default_model = "gpt-3.5-turbo"
+```
+
+Run Docker image: 
+```shell
+docker build -t litellm . && docker run -p 8000:8000 litellm
+```
+
+<Tabs>
+<TabItem value="librechat" label="LibreChat">
+
+#### 1. Clone the repo
+
+```shell
+git clone https://github.com/danny-avila/LibreChat.git
+```
+
+
+#### 2. Modify `docker-compose.yml`
+```yaml
+OPENAI_REVERSE_PROXY=http://host.docker.internal:8000/v1/chat/completions
+```
+
+#### 3. Save fake OpenAI key in `.env`
+```env
+OPENAI_API_KEY=sk-1234
+```
+
+#### 4. Run LibreChat: 
+```shell
+docker compose up
+```
+</TabItem>
+<TabItem value="smart-chatbot-ui" label="SmartChatbotUI">
+
+#### 1. Clone the repo
+```shell
+git clone https://github.com/dotneet/smart-chatbot-ui.git
+```
+
+#### 2. Install Dependencies
+```shell
+npm i
+```
+
+#### 3. Create your env
+```shell
+cp .env.local.example .env.local
+```
+
+#### 4. Set the API Key and Base
+```env
+OPENAI_API_KEY="my-fake-key"
+OPENAI_API_HOST="http://0.0.0.0:8000
+```
+
+#### 5. Run with docker compose
+```shell
+docker compose up -d
+```
+</TabItem>
+</Tabs>
 
 ## [Tutorial]: Use with Continue-Dev/Aider/AutoGen/Langroid/etc.
 
