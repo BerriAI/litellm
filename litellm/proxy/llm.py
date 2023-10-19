@@ -113,7 +113,8 @@ def litellm_completion(data: Dict,
                 user_max_tokens: Optional[int], 
                 user_api_base: Optional[str], 
                 user_headers: Optional[dict], 
-                user_debug: bool):
+                user_debug: bool,
+                model_router: Optional[litellm.Router]):
     try:  
         global debug
         debug = user_debug
@@ -129,9 +130,15 @@ def litellm_completion(data: Dict,
         if user_headers: 
             data["headers"] = user_headers
         if type == "completion": 
-            response = litellm.text_completion(**data)
+            if data["model"] in model_router.get_model_names(): 
+                model_router.text_completion(**data)
+            else:
+                response = litellm.text_completion(**data)
         elif type == "chat_completion": 
-            response = litellm.completion(**data)
+            if data["model"] in model_router.get_model_names(): 
+                model_router.completion(**data)
+            else:
+                response = litellm.completion(**data)
         if 'stream' in data and data['stream'] == True: # use generate_responses to stream responses
             return StreamingResponse(data_generator(response), media_type='text/event-stream')
         print_verbose(f"response: {response}")
