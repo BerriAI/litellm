@@ -87,16 +87,6 @@ model_list = [{ # list of model deployments
     },
     "tpm": 240000,
     "rpm": 1800
-}, { # list of model deployments 
-    "model_name": "gpt-3.5-turbo", # openai model name 
-    "litellm_params": { # params for litellm completion/embedding call 
-        "model": "azure/chatgpt-function-calling", 
-        "api_key": "my-azure-api-key-2",
-        "api_version": "my-azure-api-version-2",
-        "api_base": "my-azure-api-base-2"
-    },
-    "tpm": 240000,
-    "rpm": 1800
 }, {
     "model_name": "gpt-3.5-turbo", # openai model name 
     "litellm_params": { # params for litellm completion/embedding call 
@@ -111,6 +101,16 @@ model_list = [{ # list of model deployments
 #### 3. Run with Docker Image
 ```shell
 docker build -t litellm . && docker run -p 8000:8000 litellm
+
+## OpenAI Compatible Endpoint at: http://0.0.0.0:8000
 ```
 
+**replace openai base**
 
+```python
+import openai 
+
+openai.api_base = "http://0.0.0.0:8000"
+
+print(openai.ChatCompletion.create(model="gpt-3.5-turbo", messages=[{"role":"user", "content":"Hey!"}]))
+```
