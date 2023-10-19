@@ -120,6 +120,7 @@ const sidebars = {
         "observability/wandb_integration",
         "observability/langfuse_integration",
         "observability/langsmith_integration",
+        "observability/slack_integration",
         "observability/traceloop_integration",
         "observability/llmonitor_integration",
         "observability/helicone_integration",
