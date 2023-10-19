@@ -573,11 +573,15 @@ class Logging:
             if end_time is None:
                 end_time = datetime.datetime.now()
 
+            # on some exceptions, model_call_details is not always initialized, this ensures that we still log those exceptions
+            if not hasattr(self, "model_call_details"):
+                self.model_call_details = {}
+
             self.model_call_details["log_event_type"] = "failed_api_call"
             self.model_call_details["exception"] = exception
             self.model_call_details["traceback_exception"] = traceback_exception
             self.model_call_details["end_time"] = end_time
-
+            result = None # result sent to all loggers, init this to None incase it's not created 
             for callback in litellm.failure_callback:
                 try:
                     if callback == "lite_debugger":
