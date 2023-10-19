@@ -327,6 +327,50 @@ print("Cost for completion call with gpt-3.5-turbo: ", f"${float(cost):.10f}")
 Cost for completion call with gpt-3.5-turbo:  $0.0000775000
 ```
 
+### Track Costs, Usage, Latency for streaming
+Use a callback function for this - more info on custom callbacks: https://docs.litellm.ai/docs/observability/custom_callback
+
+```python
+import litellm
+
+# track_cost_callback 
+def track_cost_callback(
+    kwargs,                 # kwargs to completion
+    completion_response,    # response from completion
+    start_time, end_time    # start/end time
+):
+    try:
+        # check if it has collected an entire stream response
+        if "complete_streaming_response" in kwargs:
+            # for tracking streaming cost we pass the "messages" and the output_text to litellm.completion_cost 
+            completion_response=kwargs["complete_streaming_response"]
+            input_text = kwargs["messages"]
+            output_text = completion_response["choices"][0]["message"]["content"]
+            response_cost = litellm.completion_cost(
+                model = kwargs["model"],
+                messages = input_text,
+                completion=output_text
+            )
+            print("streaming response_cost", response_cost)
+    except:
+        pass
+# set callback 
+litellm.success_callback = [track_cost_callback] # set custom callback function
+
+# litellm.completion() call
+response = completion(
+    model="gpt-3.5-turbo",
+    messages=[
+        {
+            "role": "user",
+            "content": "Hi 👋 - i'm openai"
+        }
+    ],
+    stream=True
+)
+```
+
+
 Need a dedicated key? Email us @ krrish@berri.ai
 
 
