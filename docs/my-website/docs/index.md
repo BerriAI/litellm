@@ -350,7 +350,10 @@ Cost for completion call with gpt-3.5-turbo:  $0.0000775000
 ```
 
 ### Track Costs, Usage, Latency for streaming
-Use a callback function for this - more info on custom callbacks: https://docs.litellm.ai/docs/observability/custom_callback
+We use a custom callback function for this - more info on custom callbacks: https://docs.litellm.ai/docs/observability/custom_callback
+- We define a callback function to calculate cost `def track_cost_callback()`
+- In `def track_cost_callback()` we check if the stream is complete - `if "complete_streaming_response" in kwargs`
+- Use `litellm.completion_cost()` to calculate cost, once the stream is complete
 
 ```python
 import litellm
