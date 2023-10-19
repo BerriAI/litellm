@@ -380,8 +380,7 @@ from langroid.language_models.openai_gpt import OpenAIGPTConfig, OpenAIGPT
 # configure the LLM
 my_llm_config = OpenAIGPTConfig(
     #format: "local/[URL where LiteLLM proxy is listening]
-    chat_model="local/localhost:8000", 
-    chat_context_length=2048,  # adjust based on model
+    api_base="http://0.0.0.0:8000", 
 )
 
 # create llm, one-off interaction
@@ -706,45 +705,6 @@ $ litellm --logs
 This will return the most recent log (the call that went to the LLM API + the received response).
 
 All logs are saved to a file called `api_logs.json` in the current directory. 
-
-### Deploy Proxy
-
-<Tabs>
-<TabItem value="self-hosted" label="Self-Hosted">
-
-**Step 1: Clone the repo**
-```shell
-git clone https://github.com/BerriAI/litellm.git
-```
-
-**Step 2: Modify `secrets_template.toml`**  
-Add your api keys / configure default model: 
-```shell
-[keys]
-OPENAI_API_KEY="sk-..."
-
-[general]
-default_model = "gpt-3.5-turbo"
-```
-
-**Step 3: Deploy Proxy**  
-```shell
-docker build -t litellm . && docker run -p 8000:8000 litellm
-```
-</TabItem>
-<TabItem value="docker" label="Ollama/OpenAI Docker">
-Use this to deploy local models with Ollama that's OpenAI-compatible. 
-
-It works for models like Mistral, Llama2, CodeLlama, etc. (any model supported by [Ollama](https://ollama.ai/library))
-
-**usage**
-```shell
-docker run --name ollama litellm/ollama
-```
-
-More details 👉 https://hub.docker.com/r/litellm/ollama
-</TabItem>
-</Tabs>
 
 ### Configure Proxy
 
