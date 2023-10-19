@@ -76,7 +76,7 @@ git clone https://github.com/BerriAI/litellm.git
 
 #### 2. Add Azure/OpenAI deployments to `secrets_template.toml`
 ```python 
-[model."gpt-3.5-turbo"]
+[model."gpt-3.5-turbo"] # model name passed in /chat/completion call or `litellm --model gpt-3.5-turbo`
 model_list = [{ # list of model deployments 
     "model_name": "gpt-3.5-turbo", # openai model name 
     "litellm_params": { # params for litellm completion/embedding call 
