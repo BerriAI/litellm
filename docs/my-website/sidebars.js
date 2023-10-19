@@ -93,6 +93,7 @@ const sidebars = {
         'tutorials/azure_openai',
         'tutorials/ab_test_llms',
         'tutorials/oobabooga',
+        "tutorials/gradio_integration.md",
         "tutorials/model_config_proxy",
         'tutorials/huggingface_codellama',
         'tutorials/huggingface_tutorial', 
