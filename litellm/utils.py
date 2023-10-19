@@ -333,6 +333,7 @@ class Logging:
                             messages=self.messages,
                             kwargs=self.model_call_details,
                             print_verbose=print_verbose,
+                            callback_func=callback
                         )
                 except Exception as e:
                     traceback.print_exc()
@@ -544,6 +545,7 @@ class Logging:
                             start_time=start_time,
                             end_time=end_time,
                             print_verbose=print_verbose,
+                            callback_func=callback
                         )
 
                 except Exception as e:
@@ -617,6 +619,7 @@ class Logging:
                             start_time=start_time,
                             end_time=end_time,
                             print_verbose=print_verbose,
+                            callback_func=callback
                         )
                 except Exception as e:
                     print_verbose(
@@ -2052,7 +2055,7 @@ def set_callbacks(callback_list, function_id=None):
                 else:
                     liteDebuggerClient = LiteDebugger(email=str(uuid.uuid4()))
             elif callable(callback):
-                customLogger = CustomLogger(callback_func=callback)
+                customLogger = CustomLogger()
     except Exception as e:
         raise e
 
