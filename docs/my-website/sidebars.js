@@ -113,7 +113,6 @@ const sidebars = {
       items: [
         'debugging/local_debugging',
         "observability/callbacks",
-        "observability/integrations",
         "observability/custom_callback",
         "observability/sentry",
         "observability/promptlayer_integration",
