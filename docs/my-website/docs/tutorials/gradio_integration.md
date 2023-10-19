@@ -59,4 +59,4 @@ gr.ChatInterface(
 ### Recommended Extensions:
 * Add command line arguments to define target model & inference endpoints
 
-Credits to [ZQ](https://x.com/ZQ), for this tutorial.
+Credits to [ZQ](https://x.com/ZQ_Dev), for this tutorial.
