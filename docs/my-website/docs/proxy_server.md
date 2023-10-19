@@ -137,8 +137,9 @@ $ litellm --model command-nightly
 
 [**Jump to Code**](https://github.com/BerriAI/litellm/blob/fef4146396d5d87006259e00095a62e3900d6bb4/litellm/proxy.py#L36)
 
-## [Docker Image Tutorial]: Use with LibreChat, Smart-Chatbot-UI
-Here's how to use our Docker image to go to prod with LiteLLM Proxy Server + LibreChat/Smart-Chatbot-UI/etc. 
+## Docker
+
+Here's how to use our Docker image to go to production with OpenAI Proxy Server
 
 ```shell
 git clone https://github.com/BerriAI/litellm.git
@@ -148,17 +149,40 @@ Add your API keys / LLM configs to `template_secrets.toml`.
 ```shell
 [keys]
 OPENAI_API_KEY="sk-..."
-
-[general]
-default_model = "gpt-3.5-turbo"
+COHERE_API_KEY="Wa-..."
 ```
+
+[All Configs](https://github.com/BerriAI/litellm/blob/main/secrets_template.toml)
 
 Run Docker image: 
 ```shell
 docker build -t litellm . && docker run -p 8000:8000 litellm
+
+## INFO: OpenAI Proxy server running on http://0.0.0.0:8000
 ```
 
+### Tutorial: Use with Multiple LLMs + LibreChat/Chatbot-UI/Auto-Gen/ChatDev/Langroid,etc. 
 <Tabs>
+<TabItem value="multiple-LLMs" label="Multiple LLMs">
+
+Replace openai base: 
+```python
+import openai 
+
+openai.api_key = "any-string-here"
+openai.api_base = "http://0.0.0.0:8080" # your proxy url
+
+# call openai
+response = openai.ChatCompletion.create(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hey"}])
+
+print(response)
+
+# call cohere
+response = openai.ChatCompletion.create(model="command-nightly", messages=[{"role": "user", "content": "Hey"}])
+
+print(response)
+```
+</TabItem>
 <TabItem value="librechat" label="LibreChat">
 
 #### 1. Clone the repo
@@ -211,11 +235,178 @@ OPENAI_API_HOST="http://0.0.0.0:8000
 docker compose up -d
 ```
 </TabItem>
+<TabItem value="autogen" label="AutoGen">
+
+```python
+pip install pyautogen
+```
+
+```python
+from autogen import AssistantAgent, UserProxyAgent, oai
+config_list=[
+    {
+        "model": "my-fake-model",
+        "api_base": "http://0.0.0.0:8000",  #litellm compatible endpoint
+        "api_type": "open_ai",
+        "api_key": "NULL", # just a placeholder
+    }
+]
+
+response = oai.Completion.create(config_list=config_list, prompt="Hi")
+print(response) # works fine
+
+llm_config={
+    "config_list": config_list,
+}
+
+assistant = AssistantAgent("assistant", llm_config=llm_config)
+user_proxy = UserProxyAgent("user_proxy")
+user_proxy.initiate_chat(assistant, message="Plot a chart of META and TESLA stock price change YTD.", config_list=config_list)
+```
+
+Credits [@victordibia](https://github.com/microsoft/autogen/issues/45#issuecomment-1749921972) for this tutorial.
+</TabItem>
+<TabItem value="multi-LLM AutoGen" label="AutoGen Multi-LLM">
+
+
+```python
+from autogen import AssistantAgent, GroupChatManager, UserProxyAgent
+from autogen.agentchat import GroupChat
+config_list = [
+    {
+        "model": "ollama/mistralorca",
+        "api_base": "http://0.0.0.0:8000",  # litellm compatible endpoint
+        "api_type": "open_ai",
+        "api_key": "NULL",  # just a placeholder
+    }
+]
+llm_config = {"config_list": config_list, "seed": 42}
+
+code_config_list = [
+    {
+        "model": "ollama/phind-code",
+        "api_base": "http://0.0.0.0:8000",  # litellm compatible endpoint
+        "api_type": "open_ai",
+        "api_key": "NULL",  # just a placeholder
+    }
+]
+
+code_config = {"config_list": code_config_list, "seed": 42}
+
+admin = UserProxyAgent(
+    name="Admin",
+    system_message="A human admin. Interact with the planner to discuss the plan. Plan execution needs to be approved by this admin.",
+    llm_config=llm_config,
+    code_execution_config=False,
+)
+
+
+engineer = AssistantAgent(
+    name="Engineer",
+    llm_config=code_config,
+    system_message="""Engineer. You follow an approved plan. You write python/shell code to solve tasks. Wrap the code in a code block that specifies the script type. The user can't modify your code. So do not suggest incomplete code which requires others to modify. Don't use a code block if it's not intended to be executed by the executor.
+Don't include multiple code blocks in one response. Do not ask others to copy and paste the result. Check the execution result returned by the executor.
+If the result indicates there is an error, fix the error and output the code again. Suggest the full code instead of partial code or code changes. If the error can't be fixed or if the task is not solved even after the code is executed successfully, analyze the problem, revisit your assumption, collect additional info you need, and think of a different approach to try.
+""",
+)
+planner = AssistantAgent(
+    name="Planner",
+    system_message="""Planner. Suggest a plan. Revise the plan based on feedback from admin and critic, until admin approval.
+The plan may involve an engineer who can write code and a scientist who doesn't write code.
+Explain the plan first. Be clear which step is performed by an engineer, and which step is performed by a scientist.
+""",
+    llm_config=llm_config,
+)
+executor = UserProxyAgent(
+    name="Executor",
+    system_message="Executor. Execute the code written by the engineer and report the result.",
+    human_input_mode="NEVER",
+    llm_config=llm_config,
+    code_execution_config={"last_n_messages": 3, "work_dir": "paper"},
+)
+critic = AssistantAgent(
+    name="Critic",
+    system_message="Critic. Double check plan, claims, code from other agents and provide feedback. Check whether the plan includes adding verifiable info such as source URL.",
+    llm_config=llm_config,
+)
+groupchat = GroupChat(
+    agents=[admin, engineer, planner, executor, critic],
+    messages=[],
+    max_round=50,
+)
+manager = GroupChatManager(groupchat=groupchat, llm_config=llm_config)
+
+
+admin.initiate_chat(
+    manager,
+    message="""
+""",
+)
+```
+
+Credits [@Nathan](https://gist.github.com/CUexter) for this tutorial.
+</TabItem>
+<TabItem value="chatDev" label="ChatDev">
+
+### Setup ChatDev ([Docs](https://github.com/OpenBMB/ChatDev#%EF%B8%8F-quickstart))
+```shell
+git clone https://github.com/OpenBMB/ChatDev.git
+cd ChatDev
+conda create -n ChatDev_conda_env python=3.9 -y
+conda activate ChatDev_conda_env
+pip install -r requirements.txt
+```
+### Run ChatDev w/ Proxy
+```shell 
+export OPENAI_API_KEY="sk-1234"
+```
+
+```shell 
+export OPENAI_API_BASE="http://0.0.0.0:8000"
+```
+```shell
+python3 run.py --task "a script that says hello world" --name "hello world"
+```
+</TabItem>
+<TabItem value="langroid" label="Langroid">
+
+```python
+pip install langroid
+```
+
+```python
+from langroid.language_models.openai_gpt import OpenAIGPTConfig, OpenAIGPT
+
+# configure the LLM
+my_llm_config = OpenAIGPTConfig(
+    #format: "local/[URL where LiteLLM proxy is listening]
+    chat_model="local/localhost:8000", 
+    chat_context_length=2048,  # adjust based on model
+)
+
+# create llm, one-off interaction
+llm = OpenAIGPT(my_llm_config)
+response = mdl.chat("What is the capital of China?", max_tokens=50)
+
+# Create an Agent with this LLM, wrap it in a Task, and 
+# run it as an interactive chat app:
+from langroid.agent.base import ChatAgent, ChatAgentConfig
+from langroid.agent.task import Task
+
+agent_config = ChatAgentConfig(llm=my_llm_config, name="my-llm-agent")
+agent = ChatAgent(agent_config)
+
+task = Task(agent, name="my-llm-task")
+task.run() 
+```
+
+Credits [@pchalasani](https://github.com/pchalasani) and [Langroid](https://github.com/langroid/langroid) for this tutorial.
+</TabItem>
 </Tabs>
 
-## [Tutorial]: Use with Continue-Dev/Aider/AutoGen/Langroid/etc.
+## Local Proxy
 
-Here's how to use the proxy to test codellama/mistral/etc. models for different github repos 
+Here's how to use the local proxy to test codellama/mistral/etc. models for different github repos 
 
 ```shell
 pip install litellm
@@ -227,8 +418,35 @@ $ ollama pull codellama # OUR Local CodeLlama
 $ litellm --model ollama/codellama --temperature 0.3 --max_tokens 2048
 ```
 
-Implementation for different repos 
+### Tutorial: Use with Multiple LLMs + Aider/AutoGen/Langroid/etc.
 <Tabs>
+<TabItem value="multiple-LLMs" label="Multiple LLMs">
+
+```shell 
+$ litellm
+
+#INFO: litellm proxy running on http://0.0.0.0:8000
+```
+
+#### Send a request to your proxy
+```python
+import openai 
+
+openai.api_key = "any-string-here"
+openai.api_base = "http://0.0.0.0:8080" # your proxy url
+
+# call gpt-3.5-turbo
+response = openai.ChatCompletion.create(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hey"}])
+
+print(response)
+
+# call ollama/llama2
+response = openai.ChatCompletion.create(model="ollama/llama2", messages=[{"role": "user", "content": "Hey"}])
+
+print(response)
+```
+
+</TabItem>
 <TabItem value="continue-dev" label="ContinueDev">
 
 Continue-Dev brings ChatGPT to VSCode. See how to [install it here](https://continue.dev/docs/quickstart).
@@ -478,31 +696,6 @@ print(result)
 ::: 
 
 ## Advanced
-
-### Multiple LLMs
-```shell 
-$ litellm
-
-#INFO: litellm proxy running on http://0.0.0.0:8000
-```
-
-#### Send a request to your proxy
-```python
-import openai 
-
-openai.api_key = "any-string-here"
-openai.api_base = "http://0.0.0.0:8080" # your proxy url
-
-# call gpt-3.5-turbo
-response = openai.ChatCompletion.create(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hey"}])
-
-print(response)
-
-# call ollama/llama2
-response = openai.ChatCompletion.create(model="ollama/llama2", messages=[{"role": "user", "content": "Hey"}])
-
-print(response)
-```
 
 ### Logs
 
