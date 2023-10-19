@@ -15,7 +15,7 @@ First, sign up to get an API key on the [Traceloop dashboard](https://app.tracel
 Then, install the Traceloop SDK:
 
 ```
-pip install traceloop
+pip install traceloop-sdk
 ```
 
 Use just 1 line of code, to instantly log your LLM responses:
