@@ -379,7 +379,7 @@ from langroid.language_models.openai_gpt import OpenAIGPTConfig, OpenAIGPT
 
 # configure the LLM
 my_llm_config = OpenAIGPTConfig(
-    #format: "local/[URL where LiteLLM proxy is listening]
+    # where proxy server is listening 
     api_base="http://0.0.0.0:8000", 
 )
 
