@@ -586,7 +586,7 @@ def completion(
                 return response
             response = model_response
 
-        elif model in litellm.anthropic_models:
+        elif custom_llm_provider=="anthropic":
             anthropic_key = (
                 api_key or litellm.anthropic_key or os.environ.get("ANTHROPIC_API_KEY") or litellm.api_key
             )
@@ -600,6 +600,7 @@ def completion(
                 model=model,
                 messages=messages,
                 api_base=api_base,
+                custom_prompt_dict=litellm.custom_prompt_dict,
                 model_response=model_response,
                 print_verbose=print_verbose,
                 optional_params=optional_params,
@@ -1036,6 +1037,7 @@ def completion(
             model_response = bedrock.completion(
                 model=model,
                 messages=messages,
+                custom_prompt_dict=litellm.custom_prompt_dict,
                 model_response=model_response,
                 print_verbose=print_verbose,
                 optional_params=optional_params,
