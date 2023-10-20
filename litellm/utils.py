@@ -1550,7 +1550,7 @@ def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None, api_
         dynamic_api_key = None
         # check if llm provider provided
         if custom_llm_provider:
-            return model, custom_llm_provider, dynamic_api_key
+            return model, custom_llm_provider, dynamic_api_key, api_base
 
         # check if llm provider part of model name
         if model.split("/",1)[0] in litellm.provider_list:
