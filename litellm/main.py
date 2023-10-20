@@ -582,9 +582,16 @@ def completion(
             anthropic_key = (
                 api_key or litellm.anthropic_key or os.environ.get("ANTHROPIC_API_KEY") or litellm.api_key
             )
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret("ANTHROPIC_API_BASE")
+                or "https://api.anthropic.com/v1/complete"
+            )
             model_response = anthropic.completion(
                 model=model,
                 messages=messages,
+                api_base=api_base,
                 model_response=model_response,
                 print_verbose=print_verbose,
                 optional_params=optional_params,
