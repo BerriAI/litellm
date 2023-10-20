@@ -432,6 +432,7 @@ def test_completion_claude_stream():
 
 def test_completion_palm_stream():
     try:
+        print("Streaming palm response")
         messages = [
             {"role": "system", "content": "You are a helpful assistant."},
             {
@@ -447,6 +448,7 @@ def test_completion_palm_stream():
         complete_response = ""
         # Add any assertions here to check the response
         for idx, chunk in enumerate(response):
+            print(chunk.choices[0].delta)
             chunk, finished = streaming_format_tests(idx, chunk)
             if finished:
                 break
