@@ -1,0 +1,41 @@
+{
+  "20231020092117501221": {
+    "pre_api_call": {
+      "model": "chatgpt-v-2",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Hey!"
+        }
+      ],
+      "optional_params": {},
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": null,
+        "verbose": false,
+        "custom_llm_provider": "azure",
+        "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com/",
+        "litellm_call_id": "853a40c6-2b0a-41f0-9750-4974d079a6e7",
+        "model_alias_map": {},
+        "completion_call_id": null,
+        "metadata": null,
+        "stream_response": {}
+      },
+      "input": [
+        {
+          "role": "user",
+          "content": "Hey!"
+        }
+      ],
+      "api_key": "6314c6dc63f448c9873844297f408c74",
+      "additional_args": {
+        "headers": null,
+        "api_version": "2023-05-15",
+        "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com/"
+      },
+      "log_event_type": "pre_api_call"
+    }
+  }
+}
