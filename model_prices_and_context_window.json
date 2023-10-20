@@ -572,9 +572,9 @@
         "mode": "completion"
     },
     "deepinfra/meta-llama/Llama-2-70b-chat-hf": {
-        "max_tokens": 6144,
-        "input_cost_per_token": 0.000001875,
-        "output_cost_per_token": 0.000001875,
+        "max_tokens": 4096,
+        "input_cost_per_token": 0.000000700,
+        "output_cost_per_token": 0.000000950,
         "litellm_provider": "deepinfra",
         "mode": "chat"
     },
