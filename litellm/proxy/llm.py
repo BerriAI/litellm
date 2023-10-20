@@ -111,6 +111,7 @@ def litellm_completion(data: Dict,
                 user_model: Optional[str], 
                 user_temperature: Optional[str], 
                 user_max_tokens: Optional[int], 
+                user_request_timeout: Optional[int],
                 user_api_base: Optional[str], 
                 user_headers: Optional[dict], 
                 user_debug: bool,
@@ -123,6 +124,8 @@ def litellm_completion(data: Dict,
         # override with user settings
         if user_temperature: 
             data["temperature"] = user_temperature
+        if user_request_timeout:
+            data["request_timeout"] = user_request_timeout
         if user_max_tokens: 
             data["max_tokens"] = user_max_tokens
         if user_api_base: 
