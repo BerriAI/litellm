@@ -100,6 +100,7 @@ nlp_cloud_models: List = []
 aleph_alpha_models: List = []
 bedrock_models: List = []
 deepinfra_models: List = []
+perplexity_models: List = []
 for key, value in model_cost.items():
     if value.get('litellm_provider') == 'openai':
         open_ai_chat_completion_models.append(key)
@@ -130,6 +131,8 @@ for key, value in model_cost.items():
         bedrock_models.append(key)
     elif value.get('litellm_provider') == 'deepinfra':
         deepinfra_models.append(key)
+    elif value.get('litellm_provider') == 'perplexity':
+        perplexity_models.append(key)
 
 # known openai compatible endpoints - we'll eventually move this list to the model_prices_and_context_window.json dictionary
 openai_compatible_endpoints: List = [
@@ -234,6 +237,7 @@ model_list = (
     + ollama_models
     + bedrock_models
     + deepinfra_models
+    + perplexity_models
 )
 
 provider_list: List = [
@@ -277,6 +281,7 @@ models_by_provider: dict = {
     "petals": petals_models,
     "ollama": ollama_models,
     "deepinfra": deepinfra_models,
+    "perplexity": perplexity_models,
 }
 
 # mapping for those models which have larger equivalents 
