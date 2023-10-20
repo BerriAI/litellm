@@ -507,3 +507,5 @@ assert len(response_2_text) > len(response_1_text)
 - `logit_bias`: *map (optional)* - Used to modify the probability of specific tokens appearing in the completion.
 
 - `user`: *string (optional)* - A unique identifier representing your end-user. This can help OpenAI to monitor and detect abuse.
+
+- `request_timeout`: *int (optional)* - Timeout in seconds for completion requests (Defaults to 600 seconds)
