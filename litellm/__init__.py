@@ -258,6 +258,7 @@ provider_list: List = [
     "oobabooga",
     "ollama",
     "deepinfra",
+    "perplexity",
     "custom", # custom apis
 ]
 
