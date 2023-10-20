@@ -869,6 +869,42 @@ def get_replicate_completion_pricing(completion_response=None, total_time=0.0):
     return a100_80gb_price_per_second_public*total_time
 
 
+def _select_tokenizer(model: str): 
+    # cohere 
+    if model in litellm.cohere_models:
+        tokenizer = Tokenizer.from_pretrained("Cohere/command-nightly")
+        return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
+    # anthropic 
+    elif model in litellm.anthropic_models:
+        # Read the JSON file
+        filename = pkg_resources.resource_filename(__name__, 'llms/tokenizers/anthropic_tokenizer.json')
+        with open(filename, 'r') as f:
+            json_data = json.load(f)
+        # Decode the JSON data from utf-8
+        json_data_decoded = json.dumps(json_data, ensure_ascii=False)
+        # Convert to str
+        json_str = str(json_data_decoded)
+        # load tokenizer
+        tokenizer = Tokenizer.from_str(json_str)
+        return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
+    # llama2 
+    elif "llama-2" in model.lower(): 
+        tokenizer = Tokenizer.from_pretrained("hf-internal-testing/llama-tokenizer")
+        return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
+    # default - tiktoken
+    else: 
+        return {"type": "openai_tokenizer", "tokenizer": encoding}
+
+def encode(model: str, text: str): 
+    tokenizer_json = _select_tokenizer(model=model)
+    enc = tokenizer_json["tokenizer"].encode(text)
+    return enc
+
+def decode(model: str, tokens: List[int]): 
+    tokenizer_json = _select_tokenizer(model=model)
+    dec = tokenizer_json["tokenizer"].decode(tokens)
+    return dec
+
 def token_counter(model="", text=None,  messages: Optional[List] = None):
     """
     Count the number of tokens in a given text using a specified model.
@@ -881,42 +917,22 @@ def token_counter(model="", text=None,  messages: Optional[List] = None):
     Returns:
     int: The number of tokens in the text.
     """
-    # use tiktoken or anthropic's tokenizer depending on the model
+    # use tiktoken, anthropic, cohere or llama2's tokenizer depending on the model
     if text == None:
         if messages is not None:
-            text = " ".join([message["content"] for message in messages])
+            text = "".join([message["content"] for message in messages])
         else:
             raise ValueError("text and messages cannot both be None")
     num_tokens = 0
 
     if model is not None: 
-        # cohere 
-        if model in litellm.cohere_models:
-            tokenizer = Tokenizer.from_pretrained("Cohere/command-nightly")
-            enc = tokenizer.encode(text)
+        tokenizer_json = _select_tokenizer(model=model)
+        if tokenizer_json["type"] == "huggingface_tokenizer": 
+            enc = tokenizer_json["tokenizer"].encode(text)
             num_tokens = len(enc.ids)
-        # anthropic 
-        elif model in litellm.anthropic_models:
-            # Read the JSON file
-            filename = pkg_resources.resource_filename(__name__, 'llms/tokenizers/anthropic_tokenizer.json')
-            with open(filename, 'r') as f:
-                json_data = json.load(f)
-            # Decode the JSON data from utf-8
-            json_data_decoded = json.dumps(json_data, ensure_ascii=False)
-            # Convert to str
-            json_str = str(json_data_decoded)
-            # load tokenizer
-            tokenizer = Tokenizer.from_str(json_str)
-            enc = tokenizer.encode(text)
-            num_tokens = len(enc.ids)
-        # llama2 
-        elif "llama-2" in model.lower(): 
-            tokenizer = Tokenizer.from_pretrained("hf-internal-testing/llama-tokenizer")
-            enc = tokenizer.encode(text)
-            num_tokens = len(enc.ids)
-        # default - tiktoken
-        else: 
-            num_tokens = len(encoding.encode(text))
+        elif tokenizer_json["type"] == "openai_tokenizer": 
+            enc = tokenizer_json["tokenizer"].encode(text)
+            num_tokens = len(enc)
     else:
         num_tokens = len(encoding.encode(text))
     return num_tokens
