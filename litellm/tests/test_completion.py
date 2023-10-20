@@ -110,7 +110,7 @@ def test_completion_with_litellm_call_id():
 
 def test_completion_perplexity_api():
     try:
-        litellm.set_verbose=True
+        # litellm.set_verbose=True
         messages=[{
             "role": "system", 
             "content": "You're a good bot"
@@ -129,7 +129,30 @@ def test_completion_perplexity_api():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-# test_completion_perplexity_api()
+test_completion_perplexity_api()
+
+def test_completion_perplexity_api_2():
+    try:
+        # litellm.set_verbose=True
+        messages=[{
+            "role": "system", 
+            "content": "You're a good bot"
+        },{
+            "role": "user", 
+            "content": "Hey", 
+        },{
+            "role": "user", 
+            "content": "Hey", 
+        }]
+        response = completion(
+            model="perplexity/mistral-7b-instruct", 
+            messages=messages
+        )
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+test_completion_perplexity_api_2()
+
 # commenting out as this is a flaky test on circle ci
 # def test_completion_nlp_cloud():
 #     try:
