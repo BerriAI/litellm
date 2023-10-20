@@ -1,3 +1,4 @@
+from enum import Enum
 import requests, traceback
 import json
 from jinja2 import Template, exceptions, Environment, meta
@@ -201,6 +202,31 @@ def hf_chat_template(model: str, messages: list):
     except: 
         raise Exception("Error rendering template")
 
+# Anthropic template 
+def anthropic_pt(messages: list): # format - https://docs.anthropic.com/claude/reference/complete_post
+    class AnthropicConstants(Enum):
+        HUMAN_PROMPT = "\n\nHuman: "
+        AI_PROMPT = "\n\nAssistant: "
+    
+    prompt = "" 
+    for idx, message in enumerate(messages): # needs to start with `\n\nHuman: ` and end with `\n\nAssistant: `
+        if message["role"] == "user":
+            prompt += (
+                f"{AnthropicConstants.HUMAN_PROMPT.value}{message['content']}"
+            )
+        elif message["role"] == "system":
+            prompt += (
+                f"{AnthropicConstants.HUMAN_PROMPT.value}<admin>{message['content']}</admin>"
+            )
+        else:
+            prompt += (
+                f"{AnthropicConstants.AI_PROMPT.value}{message['content']}"
+            )
+        if idx == 0 and message["role"] == "assistant": # ensure the prompt always starts with `\n\nHuman: `
+            prompt = f"{AnthropicConstants.HUMAN_PROMPT.value}" + prompt
+    prompt += f"{AnthropicConstants.AI_PROMPT.value}"
+    return prompt 
+
 # Function call template 
 def function_call_prompt(messages: list, functions: list):
     function_prompt = "The following functions are available to you:"
@@ -249,6 +275,8 @@ def prompt_factory(model: str, messages: list, custom_llm_provider: Optional[str
 
     if custom_llm_provider == "ollama": 
         return ollama_pt(messages=messages)
+    elif custom_llm_provider == "anthropic":
+        return anthropic_pt(messages=messages)
     
     try:
         if "meta-llama/llama-2" in model:
