@@ -221,5 +221,5 @@ class Router:
         # ------------
         # Update usage
         # ------------
-        self.cache.increment(tpm_key, total_tokens)
-        self.cache.increment(rpm_key, 1)
+        self.increment(tpm_key, total_tokens)
+        self.increment(rpm_key, 1)
