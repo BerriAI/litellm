@@ -95,6 +95,7 @@ def is_port_in_use(port):
 @click.option('--debug', default=False, is_flag=True, type=bool, help='To debug the input') 
 @click.option('--temperature', default=None, type=float, help='Set temperature for the model') 
 @click.option('--max_tokens', default=None, type=int, help='Set max tokens for the model') 
+@click.option('--request_timeout', default=600, type=int, help='Set timeout in seconds for completion calls') 
 @click.option('--drop_params', is_flag=True, help='Drop any unmapped params') 
 @click.option('--create_proxy', is_flag=True, help='Creates a local OpenAI-compatible server template') 
 @click.option('--add_function_to_prompt', is_flag=True, help='If function passed but unsupported, pass it as prompt') 
@@ -106,7 +107,7 @@ def is_port_in_use(port):
 @click.option('--test', flag_value=True, help='proxy chat completions url to make a test request to')
 @click.option('--local', is_flag=True, default=False, help='for local debugging')
 @click.option('--cost', is_flag=True, default=False, help='for viewing cost logs')
-def run_server(host, port, api_base, api_version, model, alias, add_key, headers, save, debug, temperature, max_tokens, drop_params, create_proxy, add_function_to_prompt, config, file, max_budget, telemetry, logs, test, local, cost):
+def run_server(host, port, api_base, api_version, model, alias, add_key, headers, save, debug, temperature, max_tokens, request_timeout, drop_params, create_proxy, add_function_to_prompt, config, file, max_budget, telemetry, logs, test, local, cost):
     global feature_telemetry
     args = locals()
     if local:
@@ -198,7 +199,7 @@ def run_server(host, port, api_base, api_version, model, alias, add_key, headers
     else:
         if headers:
             headers = json.loads(headers)
-        initialize(model=model, alias=alias, api_base=api_base, api_version=api_version, debug=debug, temperature=temperature, max_tokens=max_tokens, max_budget=max_budget, telemetry=telemetry, drop_params=drop_params, add_function_to_prompt=add_function_to_prompt, headers=headers, save=save)
+        initialize(model=model, alias=alias, api_base=api_base, api_version=api_version, debug=debug, temperature=temperature, max_tokens=max_tokens, request_timeout=request_timeout, max_budget=max_budget, telemetry=telemetry, drop_params=drop_params, add_function_to_prompt=add_function_to_prompt, headers=headers, save=save)
         try:
             import uvicorn
         except:
