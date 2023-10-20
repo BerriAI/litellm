@@ -20,11 +20,12 @@ def test_azure_call():
             "model": "azure/chatgpt-v-2",
             "messages": [{"role": "user", "content": "Hey!"}]
         }
-        result = litellm_completion(data=data, user_api_base=os.getenv("AZURE_API_BASE"), type="chat_completion", user_temperature=None, user_max_tokens=None, user_model=None, user_headers=None, user_debug=False)
+        result = litellm_completion(data=data, user_api_base=os.getenv("AZURE_API_BASE"), type="chat_completion", user_temperature=None, user_max_tokens=None, user_model=None, user_headers=None, user_debug=False, model_router=None)
         return result
     except Exception as e: 
         pytest.fail(f"An error occurred: {e}")
 
+# test_azure_call()
 ## test debug 
 def test_debug(): 
     try: 
