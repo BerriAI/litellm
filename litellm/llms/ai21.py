@@ -92,6 +92,7 @@ def validate_environment(api_key):
 def completion(
     model: str,
     messages: list,
+    api_base: str,
     model_response: ModelResponse,
     print_verbose: Callable,
     encoding,
@@ -137,7 +138,7 @@ def completion(
         )
     ## COMPLETION CALL
     response = requests.post(
-        "https://api.ai21.com/studio/v1/" + model + "/complete", headers=headers, data=json.dumps(data)
+        api_base + model + "/complete", headers=headers, data=json.dumps(data)
     )
     if "stream" in optional_params and optional_params["stream"] == True:
         return response.iter_lines()

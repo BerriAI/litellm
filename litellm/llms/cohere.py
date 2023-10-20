@@ -100,6 +100,7 @@ def validate_environment(api_key):
 def completion(
     model: str,
     messages: list,
+    api_base: str,
     model_response: ModelResponse,
     print_verbose: Callable,
     encoding,
@@ -110,7 +111,7 @@ def completion(
     logger_fn=None,
 ):
     headers = validate_environment(api_key)
-    completion_url = "https://api.cohere.ai/v1/generate"
+    completion_url = api_base
     model = model
     prompt = " ".join(message["content"] for message in messages)
 

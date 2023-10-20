@@ -96,6 +96,7 @@ def validate_environment(api_key):
 def completion(
     model: str,
     messages: list,
+    api_base: str,
     model_response: ModelResponse,
     print_verbose: Callable,
     encoding,
@@ -114,7 +115,7 @@ def completion(
         if k not in optional_params: # completion(top_k=3) > togetherai_config(top_k=3) <- allows for dynamic variables to be passed in
             optional_params[k] = v
 
-    completion_url_fragment_1 = "https://api.nlpcloud.io/v1/gpu/"
+    completion_url_fragment_1 = api_base
     completion_url_fragment_2 = "/generation"
     model = model
     text = " ".join(message["content"] for message in messages)
@@ -125,6 +126,7 @@ def completion(
     }
 
     completion_url = completion_url_fragment_1 + model + completion_url_fragment_2
+
     ## LOGGING
     logging_obj.pre_call(
             input=text,
