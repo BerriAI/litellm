@@ -1088,6 +1088,7 @@ def register_model(model_cost: dict):
         elif value.get('litellm_provider') == 'bedrock': 
             if key not in litellm.bedrock_models:
                 litellm.bedrock_models.append(key)
+    return model_cost
 
 def get_litellm_params(
     return_async=False,
