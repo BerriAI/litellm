@@ -612,5 +612,40 @@
         "output_cost_per_token": 0.00000095,
         "litellm_provider": "deepinfra",
         "mode": "chat"
+      },
+      "codellama-34b-instruct": { 
+        "max_tokens": 4096, 
+        "input_cost_per_token": 0.0000000, 
+        "output_cost_per_token": 0.000000, 
+        "litellm_provider": "perplexity", 
+        "mode": "chat" 
+      },
+      "llama-2-13b-chat": { 
+        "max_tokens": 4096, 
+        "input_cost_per_token": 0.0000000, 
+        "output_cost_per_token": 0.000000, 
+        "litellm_provider": "perplexity", 
+        "mode": "chat" 
+      },
+      "llama-2-70b-chat": { 
+        "max_tokens": 4096, 
+        "input_cost_per_token": 0.0000000, 
+        "output_cost_per_token": 0.000000, 
+        "litellm_provider": "perplexity", 
+        "mode": "chat" 
+      },
+      "mistral-7b-instruct": { 
+        "max_tokens": 4096, 
+        "input_cost_per_token": 0.0000000, 
+        "output_cost_per_token": 0.000000, 
+        "litellm_provider": "perplexity", 
+        "mode": "chat" 
+      },
+      "replit-code-v1.5-3b": { 
+        "max_tokens": 4096, 
+        "input_cost_per_token": 0.0000000, 
+        "output_cost_per_token": 0.000000, 
+        "litellm_provider": "perplexity", 
+        "mode": "chat" 
       }
 }
