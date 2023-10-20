@@ -1497,7 +1497,7 @@ def embedding(
     Raises:
     - exception_type: If an exception occurs during the API call.
     """
-    model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(model, custom_llm_provider)
+    model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base)
     try:
         response = None
         logging = litellm_logging_obj
