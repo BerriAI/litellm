@@ -325,7 +325,9 @@ from .utils import (
     check_valid_key,
     get_llm_provider,
     completion_with_config,
-    register_model
+    register_model,
+    encode, 
+    decode
 )
 from .llms.huggingface_restapi import HuggingfaceConfig
 from .llms.anthropic import AnthropicConfig
