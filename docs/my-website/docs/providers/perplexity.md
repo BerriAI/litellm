@@ -44,11 +44,11 @@ All models listed here https://docs.perplexity.ai/docs/model-cards are supported
 
 | Model Name               | Function Call                                                                                                                                                      |
 |--------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| codellama-34b-instruct   | `completion(model="codellama-34b-instruct", messages, api_base="https://api.perplexity.ai")`                                                         |
-| llama-2-13b-chat         | `completion(model="llama-2-13b-chat", messages, api_base="https://api.perplexity.ai")`                                                               |
-| llama-2-70b-chat         | `completion(model="llama-2-70b-chat", messages, api_base="https://api.perplexity.ai")`                                                               |
-| mistral-7b-instruct      | `completion(model="mistral-7b-instruct", messages, api_base="https://api.perplexity.ai")`                                                            |
-| replit-code-v1.5-3b     | `completion(model="replit-code-v1.5-3b", messages, api_base="https://api.perplexity.ai")`                                                            |
+| codellama-34b-instruct | `completion(model="perplexity/codellama-34b-instruct", messages)` | 
+| llama-2-13b-chat | `completion(model="perplexity/llama-2-13b-chat", messages)` | 
+| llama-2-70b-chat | `completion(model="perplexity/llama-2-70b-chat", messages)` | 
+| mistral-7b-instruct | `completion(model="perplexity/mistral-7b-instruct", messages)` | 
+| replit-code-v1.5-3b | `completion(model="perplexity/replit-code-v1.5-3b", messages)` |
 
 
 
