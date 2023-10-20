@@ -43,7 +43,7 @@ model_list = [{ # list of model deployments
 	"rpm": 9000
 }]
 
-router = Router(model_list=model_list, redis_host=os.getenv("REDIS_HOST"), redis_password=os.getenv("REDIS_PASSWORD"), redis_port=os.getenv("REDIS_PORT"))
+router = Router(model_list=model_list, redis_host=os.getenv("REDIS_HOST"), redis_password=os.getenv("REDIS_PASSWORD"), redis_port=int(os.getenv("REDIS_PORT"))) # type: ignore
 
 completions = [] 
 with ThreadPoolExecutor(max_workers=100) as executor:
@@ -52,7 +52,7 @@ with ThreadPoolExecutor(max_workers=100) as executor:
 		"messages": [{"role": "user", "content": "Hey, how's it going?"}]
 	}
 	for _ in range(20):
-		future = executor.submit(router.completion, **kwargs)
+		future = executor.submit(router.completion, **kwargs) # type: ignore
 		completions.append(future)
 
 # Retrieve the results from the futures
