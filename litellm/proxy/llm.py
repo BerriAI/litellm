@@ -130,12 +130,12 @@ def litellm_completion(data: Dict,
         if user_headers: 
             data["headers"] = user_headers
         if type == "completion": 
-            if data["model"] in model_router.get_model_names(): 
+            if model_router and data["model"] in model_router.get_model_names(): 
                 model_router.text_completion(**data)
             else:
                 response = litellm.text_completion(**data)
         elif type == "chat_completion": 
-            if data["model"] in model_router.get_model_names(): 
+            if model_router and data["model"] in model_router.get_model_names(): 
                 model_router.completion(**data)
             else:
                 response = litellm.completion(**data)
