@@ -38,5 +38,39 @@ def test_embedding_openai():
         print(e)
 
 
-test_chat_openai()
-test_embedding_openai()
+# test_chat_openai()
+# test_embedding_openai()
+
+
+def test_llmonitor_logging_function_calling():
+    function1 = [
+        {
+            "name": "get_current_weather",
+            "description": "Get the current weather in a given location",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {
+                        "type": "string",
+                        "description": "The city and state, e.g. San Francisco, CA",
+                    },
+                    "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                },
+                "required": ["location"],
+            },
+        }
+    ]
+    try:
+        response = completion(model="gpt-3.5-turbo",
+                              messages=[{
+                                  "role": "user",
+                                  "content": "what's the weather in boston"
+                              }],
+                              temperature=0.1,
+                              functions=function1,
+            )
+        print(response)
+    except Exception as e:
+        print(e)
+
+# test_llmonitor_logging_function_calling()
