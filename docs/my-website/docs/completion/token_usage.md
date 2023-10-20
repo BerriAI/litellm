@@ -13,7 +13,9 @@ However, we also expose 5 helper functions + **[NEW]** an API to calculate token
 
 - `model_cost`: This returns a dictionary for all models, with their max_tokens, input_cost_per_token and output_cost_per_token. It uses the `api.litellm.ai` call shown below. [**Jump to code**](#5-model_cost)
 
-- `api.litellm.ai`: Live token + price count across [all supported models](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json). [**Jump to code**](#6-apilitellmai)
+- `register_model`: This registers new / overrides existing models (and their pricing details) in the model cost dictionary. [**Jump to code**](#6-register_model)
+
+- `api.litellm.ai`: Live token + price count across [all supported models](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json). [**Jump to code**](#7-apilitellmai)
 
 📣 This is a community maintained list. Contributions are welcome! ❤️
 
@@ -82,7 +84,26 @@ from litellm import model_cost
 print(model_cost) # {'gpt-3.5-turbo': {'max_tokens': 4000, 'input_cost_per_token': 1.5e-06, 'output_cost_per_token': 2e-06}, ...}
 ```
 
-### 6. `api.litellm.ai`
+### 6. `register_model`
+
+* Output: Returns updated model_cost dictionary + updates litellm.model_cost with model details.  
+
+```python
+from litellm import register_model
+
+litellm.register_model({
+        "gpt-4": {
+        "max_tokens": 8192, 
+        "input_cost_per_token": 0.00002, 
+        "output_cost_per_token": 0.00006, 
+        "litellm_provider": "openai", 
+        "mode": "chat"
+    },
+})
+```
+
+
+### 7. `api.litellm.ai`
 
 **Example Curl Request**
 ```shell
