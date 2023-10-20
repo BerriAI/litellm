@@ -560,9 +560,17 @@ def completion(
                 or get_secret("REPLICATE_API_TOKEN")
             )
 
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret("REPLICATE_API_BASE")
+                or "https://api.replicate.com/v1"
+            )
+
             model_response = replicate.completion(
                 model=model,
                 messages=messages,
+                api_base=api_base,
                 model_response=model_response,
                 print_verbose=print_verbose,
                 optional_params=optional_params,
@@ -611,9 +619,17 @@ def completion(
                 api_key or litellm.nlp_cloud_key or get_secret("NLP_CLOUD_API_KEY") or litellm.api_key
             )
 
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret("NLP_CLOUD_API_BASE")
+                or "https://api.nlpcloud.io/v1/gpu/"
+            )
+
             model_response = nlp_cloud.completion(
                 model=model,
                 messages=messages,
+                api_base=api_base,
                 model_response=model_response,
                 print_verbose=print_verbose,
                 optional_params=optional_params,
@@ -634,9 +650,17 @@ def completion(
                 api_key or litellm.aleph_alpha_key or get_secret("ALEPH_ALPHA_API_KEY") or get_secret("ALEPHALPHA_API_KEY") or litellm.api_key
             )
 
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret("ALEPH_ALPHA_API_BASE")
+                or "https://api.aleph-alpha.com/complete"
+            )
+
             model_response = aleph_alpha.completion(
                 model=model,
                 messages=messages,
+                api_base=api_base,
                 model_response=model_response,
                 print_verbose=print_verbose,
                 optional_params=optional_params,
@@ -661,9 +685,18 @@ def completion(
                 or get_secret("CO_API_KEY")
                 or litellm.api_key
             )
+
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret("COHERE_API_BASE")
+                or "https://api.cohere.ai/v1/generate"
+            )
+            
             model_response = cohere.completion(
                 model=model,
                 messages=messages,
+                api_base=api_base,
                 model_response=model_response,
                 print_verbose=print_verbose,
                 optional_params=optional_params,
@@ -687,6 +720,14 @@ def completion(
                 litellm.openai_key or
                 get_secret("DEEPINFRA_API_KEY")
             )
+
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret("DEEPINFRA_API_BASE")
+                or "https://api.deepinfra.com/v1/openai"
+            )
+
             ## LOGGING
             logging.pre_call(
                 input=messages,
@@ -698,7 +739,7 @@ def completion(
                 response = openai.ChatCompletion.create(
                     model=model,
                     messages=messages,
-                    api_base="https://api.deepinfra.com/v1/openai", # use the deepinfra api base
+                    api_base=api_base, # use the deepinfra api base
                     api_type="openai",
                     api_version=api_version, # default None
                     **optional_params,
@@ -840,10 +881,18 @@ def completion(
                 or get_secret("TOGETHERAI_API_KEY")
                 or litellm.api_key
             )
+
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret("TOGETHERAI_API_BASE")
+                or "https://api.together.xyz/inference"
+            )
             
             model_response = together_ai.completion(
                 model=model,
                 messages=messages,
+                api_base=api_base,
                 model_response=model_response,
                 print_verbose=print_verbose,
                 optional_params=optional_params,
@@ -923,10 +972,19 @@ def completion(
                 or litellm.ai21_key
                 or os.environ.get("AI21_API_KEY")
                 or litellm.api_key
-            )            
+            )
+
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret("AI21_API_BASE")
+                or "https://api.ai21.com/studio/v1/"
+            )
+        
             model_response = ai21.completion(
                 model=model,
                 messages=messages,
+                api_base=api_base,
                 model_response=model_response,
                 print_verbose=print_verbose,
                 optional_params=optional_params,

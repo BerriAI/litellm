@@ -80,6 +80,7 @@ def validate_environment(api_key):
 def completion(
     model: str,
     messages: list,
+    api_base: str, 
     model_response: ModelResponse,
     print_verbose: Callable,
     encoding,
@@ -129,7 +130,7 @@ def completion(
             and optional_params["stream_tokens"] == True
         ):
         response = requests.post(
-            "https://api.together.xyz/inference",
+            api_base,
             headers=headers,
             data=json.dumps(data),
             stream=optional_params["stream_tokens"],
@@ -137,7 +138,7 @@ def completion(
         return response.iter_lines()
     else:
         response = requests.post(
-            "https://api.together.xyz/inference",
+            api_base,
             headers=headers,
             data=json.dumps(data)
         )
