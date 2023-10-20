@@ -70,6 +70,7 @@ def validate_environment(api_key):
 def completion(
     model: str,
     messages: list,
+    api_base: str,
     model_response: ModelResponse,
     print_verbose: Callable,
     encoding,
@@ -121,7 +122,7 @@ def completion(
     ## COMPLETION CALL
     if "stream" in optional_params and optional_params["stream"] == True:
         response = requests.post(
-            "https://api.anthropic.com/v1/complete",
+            api_base,
             headers=headers,
             data=json.dumps(data),
             stream=optional_params["stream"],
@@ -129,7 +130,7 @@ def completion(
         return response.iter_lines()
     else:
         response = requests.post(
-            "https://api.anthropic.com/v1/complete", headers=headers, data=json.dumps(data)
+            api_base, headers=headers, data=json.dumps(data)
         )
         ## LOGGING
         logging_obj.post_call(
