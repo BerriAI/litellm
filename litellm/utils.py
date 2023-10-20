@@ -2798,8 +2798,8 @@ def exception_type(
                         )
                 exception_mapping_worked = True
                 raise APIError(
-                    status_code=original_exception.status_code, 
-                    message=f"ReplicateException - {original_exception.message}",
+                    status_code=500, 
+                    message=f"ReplicateException - {str(original_exception)}",
                     llm_provider="replicate",
                     model=model
                 )

@@ -178,6 +178,7 @@ def completion(
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
     api_key: Optional[str] = None,
+    model_list: Optional[list] = None, # pass in a list of api_base,keys, etc. 
 
     # Optional liteLLM function params
     **kwargs,
@@ -205,6 +206,7 @@ def completion(
         api_base (str, optional): Base URL for the API (default is None).
         api_version (str, optional): API version (default is None).
         api_key (str, optional): API key (default is None).
+        model_list (list, optional): List of api base, version, keys
 
         LITELLM Specific Params
         mock_response (str, optional): If provided, return a mock completion response for testing or debugging purposes (default is None).
@@ -233,7 +235,7 @@ def completion(
     headers = kwargs.get("headers", None)
     ######## end of unpacking kwargs ###########
     openai_params = ["functions", "function_call", "temperature", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "request_timeout", "api_base", "api_version", "api_key"]
-    litellm_params = ["metadata", "acompletion", "caching", "return_async", "mock_response", "api_key", "api_version", "api_base", "force_timeout", "logger_fn", "verbose", "custom_llm_provider", "litellm_logging_obj", "litellm_call_id", "use_client", "id", "fallbacks", "azure", "headers"]
+    litellm_params = ["metadata", "acompletion", "caching", "return_async", "mock_response", "api_key", "api_version", "api_base", "force_timeout", "logger_fn", "verbose", "custom_llm_provider", "litellm_logging_obj", "litellm_call_id", "use_client", "id", "fallbacks", "azure", "headers", "model_list"]
     default_params = openai_params + litellm_params
     non_default_params = {k: v for k,v in kwargs.items() if k not in default_params} # model-specific params - pass them straight to the model/provider
     if mock_response:
@@ -246,6 +248,9 @@ def completion(
         )
         if fallbacks is not None:
             return completion_with_fallbacks(**args)
+        if model_list is not None: 
+            deployments = [m["litellm_params"] for m in model_list if m["model_name"] == model]
+            return batch_completion_models(deployments=deployments, **args)
         if litellm.model_alias_map and model in litellm.model_alias_map:
             args["model_alias_map"] = litellm.model_alias_map
             model = litellm.model_alias_map[
@@ -1375,6 +1380,29 @@ def batch_completion_models(*args, **kwargs):
             for model, future in sorted(futures.items(), key=lambda x: models.index(x[0])):
                 if future.result() is not None:
                     return future.result()
+    elif "deployments" in kwargs: 
+        deployments = kwargs["deployments"]
+        kwargs.pop("deployments")
+        kwargs.pop("model_list")
+        nested_kwargs = kwargs.pop("kwargs", {})
+        futures = {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(deployments)) as executor:
+            for deployment in deployments:
+                for key in kwargs.keys(): 
+                    if key not in deployment: # don't override deployment values e.g. model name, api base, etc. 
+                        deployment[key] = kwargs[key]
+                kwargs = {**deployment, **nested_kwargs}
+                futures[deployment["model"]] = executor.submit(completion, **kwargs)
+
+            print(f"futures: {futures}")
+            # done, not_done = concurrent.futures.wait(futures.values(), return_when=concurrent.futures.FIRST_COMPLETED)
+
+            # done is a set of futures that completed
+            for _, future in futures.items(): 
+                if future.result() is not None: 
+                    return future.result()
+            # for future in done:
+            #     return future.result()
 
     return None  # If no response is received from any model
 
