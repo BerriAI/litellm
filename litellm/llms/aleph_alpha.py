@@ -160,6 +160,7 @@ def validate_environment(api_key):
 def completion(
     model: str,
     messages: list,
+    api_base: str,
     model_response: ModelResponse,
     print_verbose: Callable,
     encoding,
@@ -178,7 +179,7 @@ def completion(
         if k not in optional_params: # completion(top_k=3) > aleph_alpha_config(top_k=3) <- allows for dynamic variables to be passed in
             optional_params[k] = v
 
-    completion_url = "https://api.aleph-alpha.com/complete"
+    completion_url = api_base
     model = model
     prompt = ""
     if "control" in model:  # follow the ###Instruction / ###Response format
