@@ -6,6 +6,7 @@ import time
 from typing import Callable, Optional
 from litellm.utils import ModelResponse
 import litellm 
+from .prompt_templates.factory import prompt_factory, custom_prompt
 
 class AnthropicConstants(Enum):
     HUMAN_PROMPT = "\n\nHuman: "
@@ -71,6 +72,7 @@ def completion(
     model: str,
     messages: list,
     api_base: str,
+    custom_prompt_dict: dict,
     model_response: ModelResponse,
     print_verbose: Callable,
     encoding,
@@ -81,25 +83,18 @@ def completion(
     logger_fn=None,
 ):
     headers = validate_environment(api_key)
-    prompt = f"{AnthropicConstants.HUMAN_PROMPT.value}"
-    for message in messages:
-        if "role" in message:
-            if message["role"] == "user":
-                prompt += (
-                    f"{AnthropicConstants.HUMAN_PROMPT.value}{message['content']}"
-                )
-            elif message["role"] == "system":
-                prompt += (
-                    f"{AnthropicConstants.HUMAN_PROMPT.value}<admin>{message['content']}</admin>"
-                )
-            else:
-                prompt += (
-                    f"{AnthropicConstants.AI_PROMPT.value}{message['content']}"
-                )
-        else:
-            prompt += f"{AnthropicConstants.HUMAN_PROMPT.value}{message['content']}"
-    prompt += f"{AnthropicConstants.AI_PROMPT.value}"
-
+    if model in custom_prompt_dict:
+            # check if the model has a registered custom prompt
+            model_prompt_details = custom_prompt_dict[model]
+            prompt = custom_prompt(
+                role_dict=model_prompt_details["roles"], 
+                initial_prompt_value=model_prompt_details["initial_prompt_value"],  
+                final_prompt_value=model_prompt_details["final_prompt_value"], 
+                messages=messages
+            )
+    else:
+        prompt = prompt_factory(model=model, messages=messages, custom_llm_provider="anthropic")
+        
     ## Load Config
     config = litellm.AnthropicConfig.get_config() 
     for k, v in config.items(): 
