@@ -9,7 +9,7 @@ import operator
 config_filename = "litellm.secrets.toml"
 # Using appdirs to determine user-specific config path
 config_dir = appdirs.user_config_dir("litellm")
-user_config_path = os.path.join(config_dir, config_filename)
+user_config_path = os.getenv("LITELLM_CONFIG_PATH", os.path.join(config_dir, config_filename))
 
 load_dotenv()
 from importlib import resources
