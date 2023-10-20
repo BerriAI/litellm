@@ -28,10 +28,13 @@ def parse_messages(input):
 
         if "message" in message:
             return clean_message(message["message"])
+        text = message["content"]
+        if text == None:
+            text = message.get("function_call", None)
 
         return {
             "role": message["role"],
-            "text": message["content"],
+            "text": text,
         }
 
     if isinstance(input, list):
