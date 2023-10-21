@@ -1,5 +1,5 @@
 import openai
-openai.api_base = "http://127.0.0.1:8000"
+openai.api_base = "http://0.0.0.0:8000"
 openai.api_key = "this can be anything"
 print("making request")
 
