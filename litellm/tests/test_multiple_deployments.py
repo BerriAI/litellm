@@ -44,5 +44,9 @@ def test_multiple_deployments():
     try: 
         ## LiteLLM completion call ## returns first response 
         response = completion(model="mistral-7b-instruct", messages=messages, model_list=model_list)
+        print(f"response: {response}")
     except Exception as e:
+        traceback.print_exc()
         pytest.fail(f"An exception occurred: {e}")
+
+test_multiple_deployments()
