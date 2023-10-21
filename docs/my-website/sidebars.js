@@ -132,11 +132,16 @@ const sidebars = {
     {
       type: "category",
       label: "Caching",
+      link: {
+        type: 'generated-index',
+        title: 'Providers',
+        description: 'Learn how to deploy + call models from different providers on LiteLLM',
+        slug: '/caching',
+      },
       items: [
-        "caching/caching",
+        "caching/local_caching",
         "caching/redis_cache",
         "caching/caching_api",
-        "caching/gpt_cache",
       ],
     },
     {
