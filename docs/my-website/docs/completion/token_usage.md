@@ -95,9 +95,10 @@ print(prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar)
 
 ### 5. `completion_cost`
 
-* Input: Accepts a `litellm.completion()` response
+* Input: Accepts a `litellm.completion()` response **OR** prompt + completion strings
 * Output: Returns a `float` of cost for the `completion` call 
 
+**litellm.completion()**
 ```python
 from litellm import completion, completion_cost
 
@@ -112,6 +113,13 @@ formatted_string = f"${float(cost):.10f}"
 print(formatted_string)
 ```
 
+**prompt + completion string**
+```python
+from litellm import completion_cost
+cost = completion_cost(prompt="Hey!", completion="How's it going?")
+formatted_string = f"${float(cost):.10f}"
+print(formatted_string)
+```
 ### 6. `get_max_tokens`
 
 * Input: Accepts a model name - e.g. `gpt-3.5-turbo` (to get a complete list, call `litellm.model_list`)
