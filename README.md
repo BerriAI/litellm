@@ -26,6 +26,9 @@
         <img src="https://img.shields.io/static/v1?label=Chat%20on&message=Discord&color=blue&logo=Discord&style=flat-square" alt="Discord">
     </a>
 </h4>
+<h4 align = "center">
+            <a href="https://railway.app/template/YTHiYS?referralCode=t3ukrU"><img src="https://railway.app/button.svg" alt="Deploy on Railway" /></a>
+</h4>
 <table align="center" style="border:0; padding-top: 20px; border-collapse: separate; border-spacing: 10px;">
 <tr>
     <td style="border:none;"><a href="https://docs.litellm.ai/docs/" target="_blank">Docs</a></td>
