@@ -5,6 +5,6 @@ COPY . /app
 WORKDIR /app
 RUN pip install -r requirements.txt
 
-WORKDIR /app/litellm/proxy 
+WORKDIR /app/litellm-proxy 
 EXPOSE 8000
-ENTRYPOINT [ "python3", "proxy_cli.py" ]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
