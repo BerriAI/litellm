@@ -5,7 +5,7 @@ COPY . /app
 WORKDIR /app
 RUN pip install -r requirements.txt
 
-WORKDIR /app/litellm-proxy 
+WORKDIR /app/openai-proxy
 EXPOSE $PORT 
 
 CMD exec uvicorn main:app --host 0.0.0.0 --port $PORT
