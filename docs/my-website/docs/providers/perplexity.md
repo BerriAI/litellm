@@ -14,9 +14,8 @@ import os
 
 os.environ['PERPLEXITYAI_API_KEY'] = ""
 response = completion(
-    model="mistral-7b-instruct", 
-    messages=messages,
-    api_base="https://api.perplexity.ai"
+    model="perplexity/mistral-7b-instruct", 
+    messages=messages
 )
 print(response)
 ```
@@ -28,9 +27,8 @@ import os
 
 os.environ['PERPLEXITYAI_API_KEY'] = ""
 response = completion(
-    model="mistral-7b-instruct", 
+    model="perplexity/mistral-7b-instruct", 
     messages=messages,
-    api_base="https://api.perplexity.ai",
     stream=True
 )
 
