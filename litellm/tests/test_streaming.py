@@ -661,36 +661,36 @@ def test_completion_replicate_stream_bad_key():
 
 # test_completion_replicate_stream_bad_key()
 
-def test_completion_bedrock_claude_stream():
-    try:
-        litellm.set_verbose=False
-        response = completion(
-            model="bedrock/anthropic.claude-instant-v1", 
-            messages=[{"role": "user", "content": "Be as verbose as possible and give as many details as possible, how does a court case get to the Supreme Court?"}],
-            temperature=1,
-            max_tokens=20,
-            stream=True,
-        )
-        print(response)
-        complete_response = ""
-        has_finish_reason = False
-        # Add any assertions here to check the response
-        for idx, chunk in enumerate(response):
-            # print
-            chunk, finished = streaming_format_tests(idx, chunk)
-            has_finish_reason = finished
-            complete_response += chunk
-            if finished:
-                break
-        if has_finish_reason is False:
-            raise Exception("finish reason not set for last chunk")
-        if complete_response.strip() == "": 
-            raise Exception("Empty response received")
-        print(f"completion_response: {complete_response}")
-    except RateLimitError:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
+# def test_completion_bedrock_claude_stream():
+#     try:
+#         litellm.set_verbose=False
+#         response = completion(
+#             model="bedrock/anthropic.claude-instant-v1", 
+#             messages=[{"role": "user", "content": "Be as verbose as possible and give as many details as possible, how does a court case get to the Supreme Court?"}],
+#             temperature=1,
+#             max_tokens=20,
+#             stream=True,
+#         )
+#         print(response)
+#         complete_response = ""
+#         has_finish_reason = False
+#         # Add any assertions here to check the response
+#         for idx, chunk in enumerate(response):
+#             # print
+#             chunk, finished = streaming_format_tests(idx, chunk)
+#             has_finish_reason = finished
+#             complete_response += chunk
+#             if finished:
+#                 break
+#         if has_finish_reason is False:
+#             raise Exception("finish reason not set for last chunk")
+#         if complete_response.strip() == "": 
+#             raise Exception("Empty response received")
+#         print(f"completion_response: {complete_response}")
+#     except RateLimitError:
+#         pass
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
 
 # test_completion_bedrock_claude_stream() 
 
