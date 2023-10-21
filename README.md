@@ -63,7 +63,7 @@ print(response)
 ```
 
 ## Streaming ([Docs](https://docs.litellm.ai/docs/completion/stream))
-liteLLM supports streaming the model response back, pass `stream=True` to get a streaming iterator in response.
+liteLLM supports streaming the model response back, pass `stream=True` to get a streaming iterator in response.  
 Streaming is supported for all models (Bedrock, Huggingface, TogetherAI, Azure, OpenAI, etc.)
 ```python
 response = completion(model="gpt-3.5-turbo", messages=messages, stream=True)
