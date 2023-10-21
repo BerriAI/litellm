@@ -6,7 +6,7 @@
         <br>
     </p>
 <h4 align = "center">
-            <a href="https://railway.app/template/YTHiYS?referralCode=t3ukrU"><img src="https://railway.app/button.svg" alt="Deploy on Railway" /></a>
+            <a href="https://railway.app/template/YTHiYS"><img src="https://railway.app/button.svg" alt="Deploy on Railway" /></a>
 </h4>
 <h4 align="center">
     <a href="https://pypi.org/project/litellm/" target="_blank">
