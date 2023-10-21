@@ -34,7 +34,7 @@ LiteLLM manages
 **10/05/2023:** LiteLLM is adopting Semantic Versioning for all commits. [Learn more](https://github.com/BerriAI/litellm/issues/532)  
 **10/16/2023:** **Self-hosted OpenAI-proxy server** [Learn more](https://docs.litellm.ai/docs/proxy_server#deploy-proxy)
 
-# Usage
+# Usage ([**Docs**](https://docs.litellm.ai/docs/))
 
 <a target="_blank" href="https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/liteLLM_Getting_Started.ipynb">
   <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
