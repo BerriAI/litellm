@@ -127,6 +127,7 @@
     },
     "claude-instant-1": {
         "max_tokens": 100000,
+        "max_output_tokens": 8191,
         "input_cost_per_token": 0.00000163,
         "output_cost_per_token": 0.00000551,
         "litellm_provider": "anthropic",
@@ -134,6 +135,7 @@
     },
     "claude-instant-1.2": {
         "max_tokens": 100000,
+        "max_output_tokens": 8191,
         "input_cost_per_token": 0.00000163,
         "output_cost_per_token": 0.00000551,
         "litellm_provider": "anthropic",
@@ -141,6 +143,7 @@
     },
     "claude-2": {
         "max_tokens": 100000,
+        "max_output_tokens": 8191,
         "input_cost_per_token": 0.00001102,
         "output_cost_per_token": 0.00003268,
         "litellm_provider": "anthropic",
@@ -293,6 +296,7 @@
     },
     "openrouter/anthropic/claude-instant-v1": {
         "max_tokens": 100000,
+        "max_output_tokens": 8191,
         "input_cost_per_token": 0.00000163,
         "output_cost_per_token": 0.00000551,
         "litellm_provider": "openrouter",
@@ -300,6 +304,7 @@
     },
     "openrouter/anthropic/claude-2": {
         "max_tokens": 100000,
+        "max_output_tokens": 8191,
         "input_cost_per_token": 0.00001102,
         "output_cost_per_token": 0.00003268,
         "litellm_provider": "openrouter",
@@ -496,6 +501,7 @@
     },
     "anthropic.claude-v1": {
         "max_tokens": 100000, 
+        "max_output_tokens": 8191,
         "input_cost_per_token": 0.00001102,
         "output_cost_per_token": 0.00003268,
         "litellm_provider": "bedrock",
@@ -503,6 +509,7 @@
     },
     "anthropic.claude-v2": {
         "max_tokens": 100000, 
+        "max_output_tokens": 8191,
         "input_cost_per_token": 0.00001102,
         "output_cost_per_token": 0.00003268,
         "litellm_provider": "bedrock",
@@ -510,6 +517,7 @@
     },
     "anthropic.claude-instant-v1": {
         "max_tokens": 100000, 
+        "max_output_tokens": 8191,
         "input_cost_per_token": 0.00000163,
         "output_cost_per_token": 0.00000551,
         "litellm_provider": "bedrock",
