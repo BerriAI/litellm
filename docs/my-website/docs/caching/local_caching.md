@@ -32,6 +32,18 @@ response2 = completion(
 # response1 == response2, response 1 is cached
 ```
 
+## Custom Key-Value Pairs 
+Add custom key-value pairs to your cache. 
+
+```python 
+from litellm.caching import Cache
+cache = Cache()
+
+cache.add_cache(cache_key="test-key", result="1234")
+
+cache.get_cache(cache_key="test-key)
+```
+
 ## Caching with Streaming 
 LiteLLM can cache your streamed responses for you
 
