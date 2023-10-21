@@ -103,7 +103,7 @@ print(prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar)
 from litellm import completion, completion_cost
 
 response = completion(
-            model="together_ai/togethercomputer/llama-2-70b-chat",
+            model="bedrock/anthropic.claude-v2",
             messages=messages,
             request_timeout=200,
         )
@@ -116,7 +116,7 @@ print(formatted_string)
 **prompt + completion string**
 ```python
 from litellm import completion_cost
-cost = completion_cost(prompt="Hey!", completion="How's it going?")
+cost = completion_cost(model="bedrock/anthropic.claude-v2", prompt="Hey!", completion="How's it going?")
 formatted_string = f"${float(cost):.10f}"
 print(formatted_string)
 ```
