@@ -1394,15 +1394,10 @@ def batch_completion_models(*args, **kwargs):
                 kwargs = {**deployment, **nested_kwargs}
                 futures[deployment["model"]] = executor.submit(completion, **kwargs)
 
-            print(f"futures: {futures}")
-            # done, not_done = concurrent.futures.wait(futures.values(), return_when=concurrent.futures.FIRST_COMPLETED)
+            done, not_done = concurrent.futures.wait(futures.values(), return_when=concurrent.futures.FIRST_COMPLETED)
 
-            # done is a set of futures that completed
-            for _, future in futures.items(): 
-                if future.result() is not None: 
-                    return future.result()
-            # for future in done:
-            #     return future.result()
+            for future in done:
+                return future.result()
 
     return None  # If no response is received from any model
 
