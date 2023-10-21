@@ -4,11 +4,10 @@
     <p align="center">
         <p align="center">Call all LLM APIs using the OpenAI format [Anthropic, Huggingface, Cohere, TogetherAI, Azure, OpenAI, etc.]
         <br>
-        <br>
-        <a href="https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version?month=2023-10">Schedule Demo</a>
-        ·
-        <a href="https://github.com/BerriAI/litellm/issues/new?assignees=&labels=enhancement&projects=&template=feature_request.yml&title=%5BFeature%5D%3A+">Feature Request</a>
     </p>
+<h4 align = "center">
+            <a href="https://railway.app/template/YTHiYS?referralCode=t3ukrU"><img src="https://railway.app/button.svg" alt="Deploy on Railway" /></a>
+</h4>
 <h4 align="center">
     <a href="https://pypi.org/project/litellm/" target="_blank">
         <img src="https://img.shields.io/pypi/v/litellm.svg" alt="PyPI Version">
@@ -26,17 +25,6 @@
         <img src="https://img.shields.io/static/v1?label=Chat%20on&message=Discord&color=blue&logo=Discord&style=flat-square" alt="Discord">
     </a>
 </h4>
-<h4 align = "center">
-            <a href="https://railway.app/template/YTHiYS?referralCode=t3ukrU"><img src="https://railway.app/button.svg" alt="Deploy on Railway" /></a>
-</h4>
-<table align="center" style="border:0; padding-top: 20px; border-collapse: separate; border-spacing: 10px;">
-<tr>
-    <td style="border:none;"><a href="https://docs.litellm.ai/docs/" target="_blank">Docs</a></td>
-    <td style="border:none;"><a href="https://docs.litellm.ai/docs/providers" target="_blank">100+ Supported Models</a></td>
-    <td style="border:none;"><a href="https://www.loom.com/share/bd4e9029a1da4fd4a3e40e41c87ebb3a?sid=d6c82c80-1e57-4519-a9df-0c5cc8c4c40d" target="_blank" rel="noopener noreferrer">Demo Video</a></td>
-        
-</tr>
-</table>
 
 LiteLLM manages
 - Translating inputs to the provider's completion and embedding endpoints
