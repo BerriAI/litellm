@@ -1,5 +1,5 @@
 import openai
-openai.api_base = "http://127.0.0.1:8000"
+openai.api_base = "http://0.0.0.0:8000"
 print("making request")
 openai.api_key = "anything" # this gets passed as a header 
 
