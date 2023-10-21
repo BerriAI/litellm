@@ -1,6 +1,0 @@
-[submodule "fastrepl-proxy"]
-	path = fastrepl-proxy
-	url = https://github.com/BerriAI/litellm
-[submodule "proxy-server"]
-	path = proxy-server
-	url = https://github.com/BerriAI/litellm/tree/main/litellm/proxy
