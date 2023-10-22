@@ -6,7 +6,7 @@ from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 import json
 
-app = FastAPI()
+app = FastAPI(docs_url="/", title="LiteLLM API")
 router = APIRouter()
 origins = ["*"]
 
