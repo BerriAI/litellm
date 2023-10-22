@@ -3,7 +3,7 @@ services:
   - type: web
     name: webdis
     runtime: docker
-    rootDir: webdis
+    rootDir: ./
     healthCheckPath: /
     envVars:
     - key: PORT
