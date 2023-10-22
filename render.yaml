@@ -1,0 +1,10 @@
+services:
+  # A Docker web service
+  - type: web
+    name: webdis
+    runtime: docker
+    rootDir: webdis
+    healthCheckPath: /
+    envVars:
+    - key: PORT
+      value: 8000
