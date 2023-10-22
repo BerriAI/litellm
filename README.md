@@ -5,6 +5,12 @@
         <p align="center">Call all LLM APIs using the OpenAI format [Bedrock, Huggingface, Cohere, TogetherAI, Azure, OpenAI, etc.]
         <br>
     </p>
+
+<h4 align="center">
+        <a href="https://render.com/deploy" target="_blank">
+                <img src="https://render.com/images/deploy-to-render-button.svg"
+        </a>
+</h4>
 <h4 align="center">
     <a href="https://pypi.org/project/litellm/" target="_blank">
         <img src="https://img.shields.io/pypi/v/litellm.svg" alt="PyPI Version">
