@@ -28,7 +28,19 @@ $ uvicorn main:app --host 0.0.0.0 --port 8000
 - `/chat/completions` - chat completions endpoint to call 100+ LLMs
 - `/models` - available models on server
 
-## replace openai base
+## Making Requests to Proxy
+### Curl
+```shell
+curl http://0.0.0.0:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+     "model": "gpt-3.5-turbo",
+     "messages": [{"role": "user", "content": "Say this is a test!"}],
+     "temperature": 0.7
+   }'
+```
+
+### replace openai base
 ```python 
 import openai 
 openai.api_base = "http://0.0.0.0:8000"
