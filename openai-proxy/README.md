@@ -1,6 +1,10 @@
-# openai-proxy
+# Openai-proxy
 
 A simple, fast, and lightweight **OpenAI-compatible server** to call 100+ LLM APIs.
+
+## Endpoints:
+- `/chat/completions` - chat completions endpoint to call 100+ LLMs
+- `/models` - available models on server
 
 <p align="center" style="margin: 2%">
         <a href="https://render.com/deploy?repo=https://github.com/BerriAI/litellm" target="_blank">
@@ -11,7 +15,7 @@ A simple, fast, and lightweight **OpenAI-compatible server** to call 100+ LLM AP
         </a>
 </p>
 
-## usage 
+## Usage 
 
 ```shell 
 $ git clone https://github.com/BerriAI/litellm.git
