@@ -63,8 +63,12 @@ Looking for the CLI tool/local proxy? It's [here](./proxy_server.md)
 ::: 
 
 ## Deploy on Google Cloud Run
+**Click the button** to deploy to Google Cloud Run
 
 [![Deploy](https://deploy.cloud.run/button.svg)](https://deploy.cloud.run?git_repo=https://github.com/BerriAI/litellm)
+
+On a successfull deploy your Cloud Run Shell will have this output
+<Image img={require('../img/cloud_run0.png')} />
 
 ### Set LLM API Keys
 #### Environment Variables 
