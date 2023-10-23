@@ -4,6 +4,10 @@ import Image from '@theme/IdealImage';
 
 A simple, fast, and lightweight **OpenAI-compatible server** to call 100+ LLM APIs in the OpenAI Input/Output format
 
+## Endpoints:
+- `/chat/completions` - chat completions endpoint to call 100+ LLMs
+- `/models` - available models on server
+
 [![Deploy](https://deploy.cloud.run/button.svg)](https://deploy.cloud.run?git_repo=https://github.com/BerriAI/litellm)
 
 :::info
