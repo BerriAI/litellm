@@ -20,12 +20,12 @@ class Router:
 
     router = Router(model_list=model_list)
     """
+    model_names = []
     def __init__(self, 
                  model_list: Optional[list]=None,
                  redis_host: Optional[str] = None,
                  redis_port: Optional[int] = None,
                  redis_password: Optional[str] = None) -> None:
-        self.model_names = []
         if model_list:
             self.model_list = model_list
             self.model_names = [m["model_name"] for m in model_list]
