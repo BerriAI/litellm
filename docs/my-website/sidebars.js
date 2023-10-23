@@ -83,8 +83,8 @@ const sidebars = {
         "providers/petals",
       ]
     },
-    "proxy_server",
     "budget_manager",
+    "simple_proxy",
     "routing",
     "set_keys",
     "completion/token_usage",
@@ -156,6 +156,7 @@ const sidebars = {
       label: 'Extras',
       items: [
         'extras/contributing',
+        "proxy_server",
         {
           type: "category",
           label: "❤️ 🚅 Projects built on LiteLLM",
