@@ -4,6 +4,7 @@ from fastapi.routing import APIRouter
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 import json
+import os
 
 app = FastAPI(docs_url="/", title="LiteLLM API")
 router = APIRouter()
