@@ -60,10 +60,10 @@ async def completion(request: Request):
 async def chat_completion(request: Request):
     try:
         data = await request.json()
-
-        api_key = request.headers.get("authorization")
-        api_key = api_key.split(" ")[1]
-        data["api_key"] = api_key
+        if "authorization" in request.headers: # if users pass LLM api keys as part of header
+            api_key = request.headers.get("authorization")
+            api_key = api_key.split(" ")[1]
+            data["api_key"] = api_key
         response = litellm.completion(
             **data
         )
