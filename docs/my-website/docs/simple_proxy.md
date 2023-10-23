@@ -31,6 +31,10 @@ $ cd ./litellm/openai-proxy
 $ uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
+## Auth - LLM API keys
+- This server allows you to store LLM API keys in the environment variables. Example `OPENAI_API_KEY`, `AZURE_API_KEY`. More Info [required variables for each provider](https://docs.litellm.ai/docs/providers)
+- Pass auth params `api_key`,`api_base`, `api_version` etc to the `/chat/completions` endpoint
+
 ## Replace openai base
 ```python 
 import openai 
