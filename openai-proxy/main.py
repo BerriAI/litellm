@@ -1,6 +1,6 @@
 
 import litellm
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.routing import APIRouter
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -58,17 +58,20 @@ async def completion(request: Request):
 @router.post("/v1/chat/completions")
 @router.post("/chat/completions")
 async def chat_completion(request: Request):
-    data = await request.json()
+    try:
+        data = await request.json()
 
-    api_key = request.headers.get("authorization")
-    api_key = api_key.split(" ")[1]
-    data["api_key"] = api_key
-    response = litellm.completion(
-        **data
-    )
-    if 'stream' in data and data['stream'] == True: # use generate_responses to stream responses
-            return StreamingResponse(data_generator(response), media_type='text/event-stream')
-    return response
+        api_key = request.headers.get("authorization")
+        api_key = api_key.split(" ")[1]
+        data["api_key"] = api_key
+        response = litellm.completion(
+            **data
+        )
+        if 'stream' in data and data['stream'] == True: # use generate_responses to stream responses
+                return StreamingResponse(data_generator(response), media_type='text/event-stream')
+        return response
+    except Exception as e:
+        return HTTPException(status_code=500, detail=str(e))
 
 @router.get("/")
 async def home(request: Request):
