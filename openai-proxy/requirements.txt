@@ -3,3 +3,4 @@ fastapi
 uvicorn
 boto3
 litellm
+dotenv

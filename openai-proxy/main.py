@@ -5,6 +5,9 @@ from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 import json
 import os
+from utils import set_callbacks
+import dotenv
+dotenv.load_dotenv() # load env variables
 
 app = FastAPI(docs_url="/", title="LiteLLM API")
 router = APIRouter()
@@ -17,9 +20,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-if ("LANGUFSE_PUBLIC_KEY" in os.environ and "LANGUFSE_SECRET_KEY" in os.environ) or "LANGFUSE_HOST" in os.environ: 
-  litellm.success_callback = ["langfuse"] 
+set_callbacks() # sets litellm callbacks for logging if they exist in the environment 
 
 #### API ENDPOINTS ####
 @router.post("/v1/models")
