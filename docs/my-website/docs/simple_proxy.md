@@ -1,4 +1,6 @@
 import Image from '@theme/IdealImage';
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
 
 # OpenAI Proxy Server
 
@@ -71,6 +73,10 @@ On a successfull deploy your Cloud Run Shell will have this output
 <Image img={require('../img/cloud_run0.png')} />
 
 ## Testing your deployed proxy
+
+<Tabs>
+<TabItem value="openai" label="OpenAI">
+
 ```shell
 curl https://litellm-7yjrj3ha2q-uc.a.run.app/v1/chat/completions \
   -H "Content-Type: application/json" \
@@ -81,6 +87,53 @@ curl https://litellm-7yjrj3ha2q-uc.a.run.app/v1/chat/completions \
      "api_key": "your-openai-key"
    }'
 ```
+
+</TabItem>
+<TabItem value="azure" label="Azure">
+
+```shell
+curl https://litellm-7yjrj3ha2q-uc.a.run.app/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+     "model": "gpt-3.5-turbo",
+     "messages": [{"role": "user", "content": "Say this is a test!"}],
+     "temperature": 0.7,
+     "api_key": "your-openai-key"
+   }'
+```
+
+</TabItem>
+
+<TabItem value="bedrock" label="Bedrock">
+
+```shell
+curl https://litellm-7yjrj3ha2q-uc.a.run.app/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+     "model": "gpt-3.5-turbo",
+     "messages": [{"role": "user", "content": "Say this is a test!"}],
+     "temperature": 0.7,
+     "api_key": "your-openai-key"
+   }'
+```
+
+</TabItem>
+
+<TabItem value="or" label="Openrouter">
+
+```shell
+curl https://litellm-7yjrj3ha2q-uc.a.run.app/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+     "model": "gpt-3.5-turbo",
+     "messages": [{"role": "user", "content": "Say this is a test!"}],
+     "temperature": 0.7,
+     "api_key": "your-openai-key"
+   }'
+```
+</TabItem>
+
+</Tabs>
 
 ### Set LLM API Keys
 #### Environment Variables 
