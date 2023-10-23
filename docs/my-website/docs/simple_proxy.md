@@ -84,8 +84,7 @@ curl https://litellm-7yjrj3ha2q-uc.a.run.app/v1/chat/completions \
   -d '{
      "model": "gpt-3.5-turbo",
      "messages": [{"role": "user", "content": "Say this is a test!"}],
-     "temperature": 0.7,
-     "api_key": "your-openai-key"
+     "temperature": 0.7
    }'
 ```
 
@@ -104,31 +103,15 @@ curl https://litellm-7yjrj3ha2q-uc.a.run.app/v1/chat/completions \
 
 </TabItem>
 
-<TabItem value="bedrock" label="Bedrock">
+<TabItem value="anthropic" label="Anthropic">
 
 ```shell
 curl https://litellm-7yjrj3ha2q-uc.a.run.app/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-     "model": "gpt-3.5-turbo",
+     "model": "claude-2",
      "messages": [{"role": "user", "content": "Say this is a test!"}],
      "temperature": 0.7,
-     "api_key": "your-openai-key"
-   }'
-```
-
-</TabItem>
-
-<TabItem value="or" label="Openrouter">
-
-```shell
-curl https://litellm-7yjrj3ha2q-uc.a.run.app/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-     "model": "gpt-3.5-turbo",
-     "messages": [{"role": "user", "content": "Say this is a test!"}],
-     "temperature": 0.7,
-     "api_key": "your-openai-key"
    }'
 ```
 </TabItem>
