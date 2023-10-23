@@ -58,9 +58,6 @@ response = openai.ChatCompletion.create(
 print(response)
 ``` 
 
-[**See how to call Huggingface,Bedrock,TogetherAI,Anthropic, etc.**](https://docs.litellm.ai/docs/proxy_server)
-
-
 :::info
 Looking for the CLI tool/local proxy? It's [here](./proxy_server.md)
 ::: 
