@@ -2,17 +2,14 @@
 
 A simple, fast, and lightweight **OpenAI-compatible server** to call 100+ LLM APIs.
 
-<h4 align="center">
+<p align="center" style="margin: 2%">
         <a href="https://render.com/deploy?repo=https://github.com/BerriAI/litellm" target="_blank">
-                <img src="https://render.com/images/deploy-to-render-button.svg" width="200" height="200"/>
+                <img src="https://render.com/images/deploy-to-render-button.svg" width="200"/>
         </a>
         <a href="https://deploy.cloud.run" target="_blank">
-                <img src="https://deploy.cloud.run/button.svg" width="200" height="200"/>
+                <img src="https://deploy.cloud.run/button.svg" width="200"/>
         </a>
-        <a href="https://docs.litellm.ai/docs/simple_proxy" target="_blank">
-                <p>1-click OpenAI Proxy</p>
-        </a>
-</h4>
+</p>
 
 ## usage 
 
