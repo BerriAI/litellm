@@ -8,15 +8,15 @@
 
 <h4 align="center">
         <a href="https://render.com/deploy?repo=https://github.com/BerriAI/litellm" target="_blank">
-                <img src="https://render.com/images/deploy-to-render-button.svg"/>
+                <img src="https://render.com/images/deploy-to-render-button.svg" width=200/>
         </a>
         <a href="https://deploy.cloud.run" target="_blank">
-                <img src="https://deploy.cloud.run/button.svg"/>
-        </a>
-        <a href="https://docs.litellm.ai/docs/simple_proxy" target="_blank">
-                <p>1-click OpenAI Proxy</p>
+                <img src="https://deploy.cloud.run/button.svg" width=200/>
         </a>
 </h4>
+<a href="https://docs.litellm.ai/docs/simple_proxy" target="_blank">
+<h4 align="center">1-click OpenAI Proxy</h4>
+</a>
 <h4 align="center">
     <a href="https://pypi.org/project/litellm/" target="_blank">
         <img src="https://img.shields.io/pypi/v/litellm.svg" alt="PyPI Version">
