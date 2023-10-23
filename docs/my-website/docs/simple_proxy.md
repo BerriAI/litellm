@@ -25,12 +25,14 @@ $ uvicorn main:app --host 0.0.0.0 --port 8000
 ## Replace openai base
 ```python 
 import openai 
-openai.api_base = "http://0.0.0.0:8000"
-
+openai.api_base = "http://0.0.0.0:8000" # proxy url
+openai.api_key = "does-not-matter"
 # call cohere
-openai.api_key = "my-cohere-key" # this gets passed as a header 
-
-response = openai.ChatCompletion.create(model="command-nightly", messages=[{"role":"user", "content":"Hey!"}])
+response = openai.ChatCompletion.create(
+    model="command-nightly", 
+    messages=[{"role":"user", "content":"Hey!"}],
+    api_key="your-cohere-api-key", # enter your key here
+)
 
 # call bedrock 
 response = openai.ChatCompletion.create(
