@@ -51,4 +51,4 @@ response = openai.ChatCompletion.create(
 print(response)
 ``` 
 
-[**See how to call Huggingface,Bedrock,TogetherAI,Anthropic, etc.**](https://docs.litellm.ai/docs/proxy_server)
+[**See how to call Huggingface,Bedrock,TogetherAI,Anthropic, etc.**](https://docs.litellm.ai/docs/simple_proxy)
