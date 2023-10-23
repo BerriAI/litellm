@@ -1447,6 +1447,21 @@ def batch_completion_models_all_responses(*args, **kwargs):
     return responses
 
 ### EMBEDDING ENDPOINTS ####################
+
+async def aembedding(*args, **kwargs):
+    loop = asyncio.get_event_loop()
+
+    # Use a partial function to pass your keyword arguments
+    func = partial(embedding, *args, **kwargs)
+
+    # Add the context to the function
+    ctx = contextvars.copy_context()
+    func_with_context = partial(ctx.run, func)
+
+    # Call the synchronous function using run_in_executor
+    response =  await loop.run_in_executor(None, func_with_context)
+    return response
+
 @client
 @timeout(  # type: ignore
     60
