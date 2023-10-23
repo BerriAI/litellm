@@ -10,6 +10,9 @@
         <a href="https://render.com/deploy?repo=https://github.com/BerriAI/litellm" target="_blank">
                 <img src="https://render.com/images/deploy-to-render-button.svg"/>
         </a>
+        <a href="https://deploy.cloud.run" target="_blank">
+                <img src="https://deploy.cloud.run/button.svg"/>
+        </a>
         <a href="https://docs.litellm.ai/docs/proxy_server" target="_blank">
                 <p>1-click OpenAI Proxy</p>
         </a>
