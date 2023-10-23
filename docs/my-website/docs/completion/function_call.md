@@ -103,11 +103,25 @@ messages = [
     {"role": "user", "content": "What is the weather like in Boston?"}
 ]
 
-def get_current_weather(location):
-  if location == "Boston, MA":
-    return "The weather is 12F"
+def get_current_weather(location: str, unit: str):
+    """Get the current weather in a given location
 
-functions = litellm.utils.function_to_dict(get_current_weather)
+    Parameters
+    ----------
+    location : str
+        The city and state, e.g. San Francisco, CA
+    unit : str {'celsius', 'fahrenheit'}
+        Temperature unit
+
+    Returns
+    -------
+    str
+        a sentence indicating the weather
+    """
+    if location == "Boston, MA":
+        return "The weather is 12F"
+
+functions = [litellm.utils.function_to_dict(get_current_weather)]
 
 response = completion(model="gpt-3.5-turbo-0613", messages=messages, functions=functions)
 print(response)
@@ -127,7 +141,7 @@ from litellm import completion
 # IMPORTANT - Set this to TRUE to add the function to the prompt for Non OpenAI LLMs
 litellm.add_function_to_prompt = True # set add_function_to_prompt for Non OpenAI LLMs
 
-os.environ['OPENAI_API_KEY'] = ""
+os.environ['ANTHROPIC_API_KEY'] = ""
 
 messages = [
     {"role": "user", "content": "What is the weather like in Boston?"}
