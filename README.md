@@ -13,7 +13,7 @@
         <a href="https://deploy.cloud.run" target="_blank">
                 <img src="https://deploy.cloud.run/button.svg"/>
         </a>
-        <a href="https://docs.litellm.ai/docs/proxy_server" target="_blank">
+        <a href="https://docs.litellm.ai/docs/simple_proxy" target="_blank">
                 <p>1-click OpenAI Proxy</p>
         </a>
 </h4>
