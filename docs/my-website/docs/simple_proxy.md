@@ -70,6 +70,19 @@ Looking for the CLI tool/local proxy? It's [here](./proxy_server.md)
 On a successfull deploy your Cloud Run Shell will have this output
 <Image img={require('../img/cloud_run0.png')} />
 
+## Testing your deployed proxy
+```shell
+curl https://litellm-7yjrj3ha2q-ue.a.run.app/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer litellm" \
+  -d '{
+     "model": "gpt-3.5-turbo",
+     "messages": [{"role": "user", "content": "Say this is a test!"}],
+     "temperature": 0.7,
+     "api_key": your-openai-api-key
+   }'
+```
+
 ### Set LLM API Keys
 #### Environment Variables 
 More info [here](https://cloud.google.com/run/docs/configuring/services/environment-variables#console)
