@@ -40,28 +40,25 @@ curl http://0.0.0.0:8000/v1/chat/completions \
    }'
 ```
 
-### replace openai base
+### Replace openai base
 ```python 
 import openai 
 openai.api_base = "http://0.0.0.0:8000"
 
-# call cohere
-openai.api_key = "my-cohere-key" # this gets passed as a header 
-
-response = openai.ChatCompletion.create(model="command-nightly", messages=[{"role":"user", "content":"Hey!"}])
-
-# call bedrock 
+# cohere call
 response = openai.ChatCompletion.create(
-    model = "bedrock/anthropic.claude-instant-v1",
-    messages = [
-        {
-            "role": "user",
-            "content": "Hey!"
-        }
-    ],
-    aws_access_key_id="",
-    aws_secret_access_key="",
-    aws_region_name="us-west-2",
+        model="command-nightly",
+        messages=[{"role":"user", "content":"Say this is a test!"}],
+        api_key = "your-cohere-api-key"
+)
+
+# bedrock call
+response = openai.ChatCompletion.create(
+        model = "bedrock/anthropic.claude-instant-v1",
+        messages=[{"role":"user", "content":"Say this is a test!"}],
+        aws_access_key_id="",
+        aws_secret_access_key="",
+        aws_region_name="us-west-2",
 )
 
 print(response)
