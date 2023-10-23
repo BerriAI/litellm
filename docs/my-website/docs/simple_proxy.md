@@ -72,14 +72,13 @@ On a successfull deploy your Cloud Run Shell will have this output
 
 ## Testing your deployed proxy
 ```shell
-curl https://litellm-7yjrj3ha2q-ue.a.run.app/v1/chat/completions \
+curl https://litellm-7yjrj3ha2q-uc.a.run.app/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer litellm" \
   -d '{
      "model": "gpt-3.5-turbo",
      "messages": [{"role": "user", "content": "Say this is a test!"}],
      "temperature": 0.7,
-     "api_key": your-openai-api-key
+     "api_key": "your-openai-key"
    }'
 ```
 
