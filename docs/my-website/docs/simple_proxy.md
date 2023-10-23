@@ -1,4 +1,7 @@
+import Image from '@theme/IdealImage';
+
 # OpenAI Proxy Server
+
 A simple, fast, and lightweight **OpenAI-compatible server** to call 100+ LLM APIs.
 
 [![Deploy](https://deploy.cloud.run/button.svg)](https://deploy.cloud.run?git_repo=https://github.com/BerriAI/litellm)
@@ -61,5 +64,22 @@ Looking for the CLI tool/local proxy? It's [here](./proxy_server.md)
 ## Deploy on Google Cloud Run
 
 [![Deploy](https://deploy.cloud.run/button.svg)](https://deploy.cloud.run?git_repo=https://github.com/BerriAI/litellm)
+
+### Set LLM API Keys
+#### Environment Variables 
+More info [here](https://cloud.google.com/run/docs/configuring/services/environment-variables#console)
+
+1. In the Google Cloud console, go to Cloud Run: [Go to Cloud Run](https://console.cloud.google.com/run)
+
+2. Click on the **litellm** service
+<Image img={require('../img/cloud_run1.png')} />
+
+3. Click **Edit and Deploy New Revision**
+<Image img={require('../img/cloud_run2.png')} />
+
+4. Enter your Environment Variables
+Example `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`
+<Image img={require('../img/cloud_run3.png')} />
+
 
 
