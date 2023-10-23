@@ -20,7 +20,7 @@ class Router:
 
     router = Router(model_list=model_list)
     """
-    model_names = []
+    model_names: List = []
     def __init__(self, 
                  model_list: Optional[list]=None,
                  redis_host: Optional[str] = None,
