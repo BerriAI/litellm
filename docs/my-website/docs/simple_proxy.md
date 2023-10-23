@@ -7,7 +7,7 @@ join our [discord](https://discord.gg/wuPM9dRgDw)
 ::: 
 
 
-## usage 
+## Usage 
 
 ```shell 
 $ git clone https://github.com/BerriAI/litellm.git
@@ -20,7 +20,7 @@ $ cd ./litellm/openai-proxy
 $ uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
-## replace openai base
+## Replace openai base
 ```python 
 import openai 
 openai.api_base = "http://0.0.0.0:8000"
@@ -53,3 +53,9 @@ print(response)
 :::info
 Looking for the CLI tool/local proxy? It's [here](./proxy_server.md)
 ::: 
+
+## Deploy on Google Cloud Run
+
+[![Deploy](https://deploy.cloud.run/button.svg)](https://deploy.cloud.run?git_repo=https://github.com/BerriAI/litellm)
+
+
