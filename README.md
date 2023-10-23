@@ -8,10 +8,10 @@
 
 <h4 align="center">
         <a href="https://render.com/deploy?repo=https://github.com/BerriAI/litellm" target="_blank">
-                <img src="https://render.com/images/deploy-to-render-button.svg" width=173/>
+                <img src="https://render.com/images/deploy-to-render-button.svg" width=200 height=100/>
         </a>
         <a href="https://deploy.cloud.run" target="_blank">
-                <img src="https://deploy.cloud.run/button.svg" width=200/>
+                <img src="https://deploy.cloud.run/button.svg" width=200 height=100/>
         </a>
 </h4>
 <h4 align="center"><a href="https://github.com/BerriAI/litellm/tree/main/openai-proxy" target="_blank">OpenAI Proxy Server</a></h4>
