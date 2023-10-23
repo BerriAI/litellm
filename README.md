@@ -14,7 +14,7 @@
                 <img src="https://railway.app/button.svg" width=200 />
         </a>
         <a href="https://deploy.cloud.run" target="_blank">
-                <img src="https://deploy.cloud.run/button.svg" width=200/>
+                <img src="https://deploy.cloud.run/button.svg" width=200 height=50/>
         </a>
 </h4>
 <h4 align="center"><a href="https://github.com/BerriAI/litellm/tree/main/openai-proxy" target="_blank">OpenAI Proxy Server</a></h4>
