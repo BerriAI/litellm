@@ -58,7 +58,6 @@ async def completion(request: Request):
 @router.post("/v1/chat/completions")
 @router.post("/chat/completions")
 async def chat_completion(request: Request):
-    litellm.set_verbose=True
     data = await request.json()
 
     api_key = request.headers.get("authorization")
