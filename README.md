@@ -14,8 +14,8 @@
                 <img src="https://deploy.cloud.run/button.svg" width=200/>
         </a>
 </h4>
-<a href="https://docs.litellm.ai/docs/simple_proxy" target="_blank">
-<h4 align="center">1-click OpenAI Proxy</h4>
+<a href="https://github.com/BerriAI/litellm/tree/main/openai-proxy" target="_blank">
+<h4 align="center">OpenAI Proxy Server</h4>
 </a>
 <h4 align="center">
     <a href="https://pypi.org/project/litellm/" target="_blank">
@@ -83,38 +83,6 @@ for chunk in response:
 result = completion('claude-2', messages, stream=True)
 for chunk in result:
   print(chunk['choices'][0]['delta'])
-```
-
-## OpenAI Proxy Server ([Docs](https://docs.litellm.ai/docs/proxy_server))
-Create an OpenAI API compatible server to call any non-openai model (e.g. Huggingface, TogetherAI, Ollama, etc.)
-
-This works for async + streaming as well. 
-```python
-litellm --model <model_name>
-
-#INFO: litellm proxy running on http://0.0.0.0:8000
-```
-Running your model locally or on a custom endpoint ? Set the `--api-base` parameter [see how](https://docs.litellm.ai/docs/proxy_server)
-
-### Self-host server ([Docs](https://docs.litellm.ai/docs/proxy_server#deploy-proxy))
-
-1. Clone the repo 
-```shell
-git clone https://github.com/BerriAI/litellm.git
-```
-
-2. Modify `template_secrets.toml`
-```shell
-[keys]
-OPENAI_API_KEY="sk-..."
-
-[general]
-default_model = "gpt-3.5-turbo"
-```
-
-3. Deploy
-```shell
-docker build -t litellm . && docker run -p 8000:8000 litellm
 ```
 
 ## Supported Provider ([Docs](https://docs.litellm.ai/docs/providers))
