@@ -83,8 +83,8 @@ const sidebars = {
         "providers/petals",
       ]
     },
-    "budget_manager",
     "simple_proxy",
+    "budget_manager",
     "routing",
     "set_keys",
     "completion/token_usage",
