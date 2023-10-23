@@ -1,7 +1,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# OpenAI Proxy Server
+# Local OpenAI Proxy Server
 
 A fast, and lightweight OpenAI-compatible server to call 100+ LLM APIs. 
 
