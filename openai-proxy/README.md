@@ -1,4 +1,4 @@
-# Openai-proxy
+# openai-proxy
 
 A simple, fast, and lightweight **OpenAI-compatible server** to call 100+ LLM APIs.
 
