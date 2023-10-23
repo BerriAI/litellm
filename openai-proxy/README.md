@@ -4,7 +4,7 @@ A simple, fast, and lightweight **OpenAI-compatible server** to call 100+ LLM AP
 
 <p align="center" style="margin: 2%">
         <a href="https://render.com/deploy?repo=https://github.com/BerriAI/litellm" target="_blank">
-                <img src="https://render.com/images/deploy-to-render-button.svg" width="200"/>
+                <img src="https://render.com/images/deploy-to-render-button.svg" width="173"/>
         </a>
         <a href="https://deploy.cloud.run" target="_blank">
                 <img src="https://deploy.cloud.run/button.svg" width="200"/>
