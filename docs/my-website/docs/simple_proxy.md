@@ -2,7 +2,7 @@ import Image from '@theme/IdealImage';
 
 # OpenAI Proxy Server
 
-A simple, fast, and lightweight **OpenAI-compatible server** to call 100+ LLM APIs.
+A simple, fast, and lightweight **OpenAI-compatible server** to call 100+ LLM APIs in the OpenAI Input/Output format
 
 [![Deploy](https://deploy.cloud.run/button.svg)](https://deploy.cloud.run?git_repo=https://github.com/BerriAI/litellm)
 
