@@ -17,18 +17,6 @@ A simple, fast, and lightweight **OpenAI-compatible server** to call 100+ LLM AP
 docker run -e PORT=8000 -p 8000:8000 ghcr.io/berriai/litellm:latest
 ```
 
-### Running Locally
-```shell 
-$ git clone https://github.com/BerriAI/litellm.git
-```
-```shell
-$ cd ./litellm/openai-proxy
-```
-
-```shell
-$ uvicorn main:app --host 0.0.0.0 --port 8000
-```
-
 ## Endpoints:
 - `/chat/completions` - chat completions endpoint to call 100+ LLMs
 - `/models` - available models on server
@@ -68,5 +56,18 @@ response = openai.ChatCompletion.create(
 
 print(response)
 ``` 
+
+
+### Running Locally
+```shell 
+$ git clone https://github.com/BerriAI/litellm.git
+```
+```shell
+$ cd ./litellm/openai-proxy
+```
+
+```shell
+$ uvicorn main:app --host 0.0.0.0 --port 8000
+```
 
 [**See how to call Huggingface,Bedrock,TogetherAI,Anthropic, etc.**](https://docs.litellm.ai/docs/simple_proxy)
