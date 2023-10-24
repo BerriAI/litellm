@@ -341,10 +341,10 @@ def completion(
                 },
             )
             ## COMPLETION CALL
+            optional_params['headers'] = optional_params.get("headers", litellm.headers)
             response = openai.ChatCompletion.create(
                 engine=model,
                 messages=messages,
-                headers=optional_params.get("headers", litellm.headers),
                 api_key=api_key,
                 api_base=api_base,
                 api_version=api_version,
