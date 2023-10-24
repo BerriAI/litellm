@@ -17,7 +17,7 @@
                 <img src="https://deploy.cloud.run/button.svg" width=200 height=50/>
         </a>
 </h4>
-<h4 align="center"><a href="https://github.com/BerriAI/litellm/tree/main/openai-proxy" target="_blank">OpenAI Proxy Server</a></h4>
+<h4 align="center"><a href="https://github.com/BerriAI/litellm/tree/main/openai-proxy" target="_blank">Create OpenAI Proxy Server</a></h4>
 <h4 align="center">
     <a href="https://pypi.org/project/litellm/" target="_blank">
         <img src="https://img.shields.io/pypi/v/litellm.svg" alt="PyPI Version">
