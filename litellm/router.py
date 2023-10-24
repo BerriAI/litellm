@@ -61,6 +61,8 @@ class Router:
 
         data = deployment["litellm_params"]
         data["messages"] = messages
+        for key, value in kwargs.items():
+            data[key] = value
         # call via litellm.completion() 
         return litellm.completion(**data)
     
@@ -78,6 +80,8 @@ class Router:
 
         data = deployment["litellm_params"]
         data["prompt"] = prompt
+        for key, value in kwargs.items():
+            data[key] = value
         # call via litellm.completion() 
         return litellm.text_completion(**data)        
 
@@ -203,7 +207,10 @@ class Router:
         # get value 
         cached_value = self.cache.get_cache(key)
         # update value 
-        cached_value = cached_value + increment_value
+        try:
+            cached_value = cached_value + increment_value
+        except: 
+            cached_value = increment_value
         # save updated value
         self.cache.add_cache(result=cached_value, cache_key=key)
     
