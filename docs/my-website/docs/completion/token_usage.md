@@ -145,8 +145,10 @@ print(model_cost) # {'gpt-3.5-turbo': {'max_tokens': 4000, 'input_cost_per_token
 
 ### 8. `register_model`
 
+* Input: Provide EITHER a model cost dictionary or a url to a hosted json blob
 * Output: Returns updated model_cost dictionary + updates litellm.model_cost with model details.  
 
+**Dictionary**
 ```python
 from litellm import register_model
 
@@ -159,6 +161,14 @@ litellm.register_model({
         "mode": "chat"
     },
 })
+```
+
+**URL for json blob**
+```python
+import litellm
+
+litellm.register_model(model_cost=
+"https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json")
 ```
 
 ### 9. `api.litellm.ai`
