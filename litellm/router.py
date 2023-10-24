@@ -61,10 +61,8 @@ class Router:
 
         data = deployment["litellm_params"]
         data["messages"] = messages
-        for key, value in kwargs.items():
-            data[key] = value
         # call via litellm.completion() 
-        return litellm.completion(**data)
+        return litellm.completion(**{**data, **kwargs})
     
     def text_completion(self, 
                         model: str, 
@@ -80,10 +78,8 @@ class Router:
 
         data = deployment["litellm_params"]
         data["prompt"] = prompt
-        for key, value in kwargs.items():
-            data[key] = value
         # call via litellm.completion() 
-        return litellm.text_completion(**data)        
+        return litellm.text_completion(**{**data, **kwargs})        
 
     def embedding(self, 
                   model: str,
@@ -96,7 +92,7 @@ class Router:
         data = deployment["litellm_params"]
         data["input"] = input
         # call via litellm.embedding() 
-        return litellm.embedding(**data)
+        return litellm.embedding(**{**data, **kwargs})
     
     def set_model_list(self, model_list: list):
         self.model_list = model_list
