@@ -4156,6 +4156,7 @@ def shorten_message_to_fit_limit(
         ratio = (tokens_needed) / total_tokens
         
         new_length = int(len(content) * ratio) -1
+        new_length = max(0, new_length)
 
         half_length = new_length // 2
         left_half = content[:half_length]
