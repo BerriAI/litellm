@@ -62,7 +62,8 @@ async def completion(request: Request):
 async def chat_completion(request: Request):
     try:
         data = await request.json()
-        if "authorization" in request.headers: # if users pass LLM api keys as part of header
+        # default to always using the "ENV" variables, only if AUTH_STRATEGY==DYNAMIC then reads headers
+        if os.getenv("AUTH_STRATEGY", None) == "DYNAMIC" and "authorization" in request.headers: # if users pass LLM api keys as part of header
             api_key = request.headers.get("authorization")
             api_key = api_key.replace("Bearer", "").strip() 
             if len(api_key.strip()) > 0:
