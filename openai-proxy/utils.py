@@ -16,7 +16,6 @@ def set_callbacks():
     
     ## CACHING 
     ### REDIS
-    print(f"redis host: {len(os.getenv('REDIS_HOST', ''))}; redis port: {len(os.getenv('REDIS_PORT', ''))}; redis password: {len(os.getenv('REDIS_PASSWORD'))}")
     if len(os.getenv("REDIS_HOST", "")) >  0 and len(os.getenv("REDIS_PORT", "")) > 0 and len(os.getenv("REDIS_PASSWORD", "")) > 0: 
         from litellm.caching import Cache
         litellm.cache = Cache(type="redis", host=os.getenv("REDIS_HOST"), port=os.getenv("REDIS_PORT"), password=os.getenv("REDIS_PASSWORD"))
