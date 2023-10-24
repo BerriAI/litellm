@@ -342,6 +342,7 @@ def test_custom_redis_cache_with_key():
 
     if response3['choices'][0]['message']['content'] == response2['choices'][0]['message']['content']:
         pytest.fail(f"Error occurred:")        
+    litellm.cache = None
 
 test_custom_redis_cache_with_key()
 
@@ -359,6 +360,7 @@ def test_hosted_cache():
         print(f"response1: {response1}")
         print(f"response2: {response2}")
         pytest.fail(f"Hosted cache: Response2 is not cached and the same as response 1")
+    litellm.cache = None
 
 # test_hosted_cache()
 
