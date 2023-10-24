@@ -9,10 +9,10 @@ failure_callback: List[Union[str, Callable]] = []
 set_verbose = False
 email: Optional[
     str
-] = None  # for hosted dashboard. Learn more - https://docs.litellm.ai/docs/debugging/hosted_debugging
+] = None  # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
 token: Optional[
     str
-] = None  # for hosted dashboard. Learn more - https://docs.litellm.ai/docs/debugging/hosted_debugging
+] = None  # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
 telemetry = True
 max_tokens = 256  # OpenAI Defaults
 drop_params = False
@@ -34,9 +34,9 @@ aleph_alpha_key: Optional[str] = None
 nlp_cloud_key: Optional[str] = None
 use_client: bool = False
 logging: bool = True
-caching: bool = False # deprecated son
-caching_with_models: bool = False  # if you want the caching key to be model + prompt # deprecated soon
-cache: Optional[Cache] = None # cache object
+caching: bool = False # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
+caching_with_models: bool = False  # # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
+cache: Optional[Cache] = None # cache object <- use this - https://docs.litellm.ai/docs/caching
 model_alias_map: Dict[str, str] = {}
 max_budget: float = 0.0 # set the max budget across all providers
 _current_cost = 0 # private variable, used if max budget is set 
@@ -44,11 +44,10 @@ error_logs: Dict = {}
 add_function_to_prompt: bool = False # if function calling not supported by api, append function call details to system prompt
 client_session: Optional[requests.Session] = None
 model_fallbacks: Optional[List] = None
+model_cost_map_url: str = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
 #############################################
 
 def get_model_cost_map(url: Optional[str]=None):
-    if url is None:
-        url = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
     try:
         response = requests.get(url)
         response.raise_for_status()  # Raise an exception if request is unsuccessful
@@ -60,7 +59,7 @@ def get_model_cost_map(url: Optional[str]=None):
         with importlib.resources.open_text("litellm", "model_prices_and_context_window_backup.json") as f:
             content = json.load(f)
             return content
-model_cost = get_model_cost_map()
+model_cost = get_model_cost_map(url=model_cost_map_url)
 custom_prompt_dict:Dict[str, dict] = {}
 ####### THREAD-SPECIFIC DATA ###################
 class MyLocal(threading.local):
