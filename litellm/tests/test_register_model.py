@@ -24,4 +24,13 @@ def test_update_model_cost():
     except Exception as e:
         pytest.fail(f"An error occurred: {e}")
 
-test_update_model_cost()
+# test_update_model_cost()
+
+def test_update_model_cost_map_url(): 
+    try: 
+        litellm.register_model(model_cost="https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json")
+        assert litellm.model_cost["gpt-4"]["input_cost_per_token"] == 0.00003
+    except Exception as e:
+        pytest.fail(f"An error occurred: {e}")
+
+test_update_model_cost_map_url()
