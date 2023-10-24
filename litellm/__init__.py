@@ -47,7 +47,7 @@ model_fallbacks: Optional[List] = None
 model_cost_map_url: str = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
 #############################################
 
-def get_model_cost_map(url: Optional[str]=None):
+def get_model_cost_map(url: str):
     try:
         response = requests.get(url)
         response.raise_for_status()  # Raise an exception if request is unsuccessful

@@ -39,8 +39,6 @@ def test_multiple_messages_trimming():
         {"role": "user", "content": "This is another long message that will also exceed the limit."}
     ]
     trimmed_messages = trim_messages(messages=messages, model="gpt-3.5-turbo", max_tokens=20)
-    print("Trimmed messages")
-    print(trimmed_messages)
     # print(get_token_count(messages=trimmed_messages, model="gpt-3.5-turbo"))
     assert(get_token_count(messages=trimmed_messages, model="gpt-3.5-turbo")) <= 20
 # test_multiple_messages_trimming()
