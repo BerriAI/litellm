@@ -13,7 +13,7 @@
         <a href="https://railway.app/template/YTHiYS?referralCode=t3ukrU" target="_blank">
                 <img src="https://railway.app/button.svg" width=200 />
         </a>
-        <a href="https://deploy.cloud.run" target="_blank">
+        <a href="https://l.linklyhq.com/l/1uHtX" target="_blank">
                 <img src="https://deploy.cloud.run/button.svg" width=200 height=50/>
         </a>
 </h4>
