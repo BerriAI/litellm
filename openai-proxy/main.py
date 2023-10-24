@@ -1,4 +1,4 @@
-import litellm, os
+import litellm, os, traceback
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.routing import APIRouter
 from fastapi.responses import StreamingResponse, FileResponse
@@ -21,7 +21,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 set_callbacks() # sets litellm callbacks for logging if they exist in the environment 
-
 #### API ENDPOINTS ####
 @router.post("/v1/models")
 @router.get("/models")  # if project requires model list
@@ -65,8 +64,10 @@ async def chat_completion(request: Request):
         data = await request.json()
         if "authorization" in request.headers: # if users pass LLM api keys as part of header
             api_key = request.headers.get("authorization")
-            api_key = api_key.split(" ")[1]
-            data["api_key"] = api_key
+            api_key = api_key.replace("Bearer", "").strip() 
+            if len(api_key.strip()) > 0:
+                api_key = api_key
+                data["api_key"] = api_key
         response = litellm.completion(
             **data
         )
@@ -74,7 +75,10 @@ async def chat_completion(request: Request):
                 return StreamingResponse(data_generator(response), media_type='text/event-stream')
         return response
     except Exception as e:
-        return HTTPException(status_code=500, detail=str(e))
+        error_traceback = traceback.format_exc()
+        error_msg = f"{str(e)}\n\n{error_traceback}"
+        return {"error": error_msg}
+        # raise HTTPException(status_code=500, detail=error_msg)
 
 @router.get("/")
 async def home(request: Request):
