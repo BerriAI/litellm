@@ -20,7 +20,6 @@ import aiohttp
 import logging
 import asyncio
 from tokenizers import Tokenizer
-import pkg_resources
 from dataclasses import (
     dataclass,
     field,
@@ -875,6 +874,7 @@ def get_replicate_completion_pricing(completion_response=None, total_time=0.0):
 
 def _select_tokenizer(model: str): 
     # cohere 
+    import pkg_resources
     if model in litellm.cohere_models:
         tokenizer = Tokenizer.from_pretrained("Cohere/command-nightly")
         return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
