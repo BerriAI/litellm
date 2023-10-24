@@ -68,14 +68,14 @@ def test_function_calling():
 	litellm.set_verbose =True
 	model_list = [
 		{
-				"model_name": "gpt-3.5-turbo-0613",
-				"litellm_params": {
-					"model": "gpt-3.5-turbo-0613",
-					"api_key": "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",
-				},
-				"tpm": 100000,
-				"rpm": 10000,
+			"model_name": "gpt-3.5-turbo-0613",
+			"litellm_params": {
+				"model": "gpt-3.5-turbo-0613",
+				"api_key": os.getenv("OPENAI_API_KEY"),
 			},
+			"tpm": 100000,
+			"rpm": 10000,
+		},
 	]
 
 	messages = [
@@ -106,4 +106,45 @@ def test_function_calling():
 	response = router.completion(model="gpt-3.5-turbo-0613", messages=messages, functions=functions)
 	print(response)
 
-test_function_calling() 
+### FUNCTION CALLING -> NORMAL COMPLETION
+def test_litellm_params_not_overwritten_by_function_calling():
+	model_list = [
+		{
+			"model_name": "gpt-3.5-turbo-0613",
+			"litellm_params": {
+				"model": "gpt-3.5-turbo-0613",
+				"api_key": os.getenv("OPENAI_API_KEY"),
+			},
+			"tpm": 100000,
+			"rpm": 10000,
+		},
+	]
+
+	messages = [
+		{"role": "user", "content": "What is the weather like in Boston?"}
+	]
+	functions = [
+		{
+		"name": "get_current_weather",
+		"description": "Get the current weather in a given location",
+		"parameters": {
+			"type": "object",
+			"properties": {
+			"location": {
+				"type": "string",
+				"description": "The city and state, e.g. San Francisco, CA"
+			},
+			"unit": {
+				"type": "string",
+				"enum": ["celsius", "fahrenheit"]
+			}
+			},
+			"required": ["location"]
+		}
+		}
+	]
+
+	router = Router(model_list=model_list)
+	_ = router.completion(model="gpt-3.5-turbo-0613", messages=messages, functions=functions)
+	response = router.completion(model="gpt-3.5-turbo-0613", messages=messages)
+	assert response.choices[0].finish_reason != "function_call"
