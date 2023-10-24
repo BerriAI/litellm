@@ -7,7 +7,11 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      REPO_NAME: ${{ github.repository }}
     steps:
+      - name: Convert repo name to lowercase
+        run: echo "REPO_NAME=$(echo "$REPO_NAME" | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
       - name: Checkout
         uses: actions/checkout@v4
       - name: Set up QEMU
@@ -24,15 +28,15 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ghcr.io/${{ env.REPO_NAME }}
       - name: Get tag to build
         id: tag
         run: |
-          echo "latest=ghcr.io/${{ github.repository }}:latest" >> $GITHUB_OUTPUT
+          echo "latest=ghcr.io/${{ env.REPO_NAME }}:latest" >> $GITHUB_OUTPUT
           if [[ -z "${{ github.event.inputs.tag }}" ]]; then
-            echo "versioned=ghcr.io/${{ github.repository }}:${{ github.ref_name }}" >> $GITHUB_OUTPUT
+            echo "versioned=ghcr.io/${{ env.REPO_NAME }}:${{ github.ref_name }}" >> $GITHUB_OUTPUT
           else
-            echo "versioned=ghcr.io/${{ github.repository }}:${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+            echo "versioned=ghcr.io/${{ env.REPO_NAME }}:${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
           fi
       - name: Build and release Docker images
         uses: docker/build-push-action@v5
