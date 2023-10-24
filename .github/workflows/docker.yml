@@ -29,15 +29,15 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ REPOSITORY_LC }}
+          images: ghcr.io/${ REPOSITORY_LC }
       - name: Get tag to build
         id: tag
         run: |
-          echo "latest=ghcr.io/${{ REPOSITORY_LC }}:latest" >> $GITHUB_OUTPUT
+          echo "latest=ghcr.io/${ REPOSITORY_LC }:latest" >> $GITHUB_OUTPUT
           if [[ -z "${{ github.event.inputs.tag }}" ]]; then
-            echo "versioned=ghcr.io/${{ REPOSITORY_LC }}:${{ github.ref_name }}" >> $GITHUB_OUTPUT
+            echo "versioned=ghcr.io/${ REPOSITORY_LC }:${{ github.ref_name }}" >> $GITHUB_OUTPUT
           else
-            echo "versioned=ghcr.io/${{ REPOSITORY_LC }}:${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+            echo "versioned=ghcr.io/${ REPOSITORY_LC }:${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
           fi
       - name: Build and release Docker images
         uses: docker/build-push-action@v5
