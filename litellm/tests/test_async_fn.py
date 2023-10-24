@@ -30,6 +30,8 @@ def test_get_response_streaming():
         user_message = "Hello, how are you?"
         messages = [{"content": user_message, "role": "user"}]
         try:
+            import litellm
+            litellm.set_verbose = True
             response = await acompletion(model="gpt-3.5-turbo", messages=messages, stream=True)
             print(type(response))
 

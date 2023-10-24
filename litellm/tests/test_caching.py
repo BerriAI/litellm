@@ -311,7 +311,6 @@ def test_redis_cache_completion():
 def custom_get_cache_key(*args, **kwargs):
     # return key to use for your cache:
     key = kwargs.get("model", "") + str(kwargs.get("messages", "")) + str(kwargs.get("temperature", "")) + str(kwargs.get("logit_bias", ""))
-    print("key for cache", key)
     return key
 
 def test_custom_redis_cache_with_key():
