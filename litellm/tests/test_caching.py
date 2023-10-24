@@ -190,7 +190,7 @@ def test_embedding_caching_azure():
     os.environ['AZURE_API_BASE'] = api_base
     os.environ['AZURE_API_KEY'] = api_key
 
-test_embedding_caching_azure()
+# test_embedding_caching_azure()
 
 
 # test caching with streaming
@@ -344,7 +344,7 @@ def test_custom_redis_cache_with_key():
     if response3['choices'][0]['message']['content'] == response2['choices'][0]['message']['content']:
         pytest.fail(f"Error occurred:")        
 
-# test_custom_redis_cache_with_key()
+test_custom_redis_cache_with_key()
 
 def test_hosted_cache():
     litellm.cache = Cache(type="hosted") # use api.litellm.ai for caching
