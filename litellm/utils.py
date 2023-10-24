@@ -771,13 +771,15 @@ def client(original_function):
 
             # [OPTIONAL] CHECK CACHE
             # remove this after deprecating litellm.caching
+            print_verbose(f"litellm.caching: {litellm.caching}; litellm.caching_with_models: {litellm.caching_with_models}")
             if (litellm.caching or litellm.caching_with_models) and litellm.cache is None:
                 litellm.cache = Cache() 
 
+            print_verbose(f"kwargs[caching]: {kwargs.get('caching', False)}; litellm.cache: {litellm.cache}")
             if kwargs.get("caching", False) or litellm.cache is not None: # allow users to control returning cached responses from the completion function
                 # checking cache
                 if (litellm.cache != None or litellm.caching or litellm.caching_with_models):
-                    print_verbose(f"LiteLLM: Checking Cache")
+                    print_verbose(f"Checking Cache")
                     cached_result = litellm.cache.get_cache(*args, **kwargs)
                     if cached_result != None:
                         print_verbose(f"Cache Hit!")
