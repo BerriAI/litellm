@@ -1,4 +1,4 @@
-# Openai-proxy
+# openai-proxy
 
 A simple, fast, and lightweight **OpenAI-compatible server** to call 100+ LLM APIs.
 
@@ -15,6 +15,8 @@ A simple, fast, and lightweight **OpenAI-compatible server** to call 100+ LLM AP
 
 ```shell
 docker run -e PORT=8000 -p 8000:8000 ghcr.io/berriai/litellm:latest
+
+# UVICORN: OpenAI Proxy running on http://0.0.0.0:8000
 ```
 
 ## Endpoints:
