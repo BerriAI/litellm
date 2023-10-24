@@ -7,7 +7,7 @@
     </p>
 
 <h4 align="center">
-        <a href="https://render.com/deploy?repo=https://github.com/BerriAI/litellm" target="_blank" >
+        <a href="https://l.linklyhq.com/l/1uHsr" target="_blank" >
                 <img src="https://render.com/images/deploy-to-render-button.svg" width=200/>
         </a>
         <a href="https://railway.app/template/YTHiYS?referralCode=t3ukrU" target="_blank">
