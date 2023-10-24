@@ -776,7 +776,8 @@ def client(original_function):
                 litellm.cache = Cache() 
 
             print_verbose(f"kwargs[caching]: {kwargs.get('caching', False)}; litellm.cache: {litellm.cache}")
-            if kwargs.get("caching", False) or litellm.cache is not None: # allow users to control returning cached responses from the completion function
+            # if caching is false, don't run this 
+            if (kwargs.get("caching", None) is None and litellm.cache is not None) or kwargs.get("caching", False) == True: # allow users to control returning cached responses from the completion function
                 # checking cache
                 if (litellm.cache != None or litellm.caching or litellm.caching_with_models):
                     print_verbose(f"Checking Cache")

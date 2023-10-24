@@ -1480,7 +1480,7 @@ def embedding(
     api_version: Optional[str] = None,
     api_key: Optional[str] = None,
     api_type: Optional[str] = None,
-    caching=False,
+    caching: bool=False,
     custom_llm_provider=None,
 ):
     """

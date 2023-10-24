@@ -121,7 +121,7 @@ def completion(
             model_response = text_model.predict_streaming(prompt, **optional_params)
             return model_response
 
-        completion_response = text_model.predict(prompt, **optional_params)
+        completion_response = text_model.predict(prompt, **optional_params).text
         
     ## LOGGING
     logging_obj.post_call(
