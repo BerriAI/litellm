@@ -13,6 +13,11 @@ A simple, fast, and lightweight **OpenAI-compatible server** to call 100+ LLM AP
 
 ## Usage 
 
+```shell
+docker run -e PORT=8000 -p 8000:8000 ghcr.io/berriai/litellm:latest
+```
+
+### Running Locally
 ```shell 
 $ git clone https://github.com/BerriAI/litellm.git
 ```
