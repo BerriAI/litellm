@@ -4155,8 +4155,7 @@ def shorten_message_to_fit_limit(
 
         ratio = (tokens_needed) / total_tokens
         
-        new_length = int(len(content) * ratio)
-        print_verbose(new_length)
+        new_length = int(len(content) * ratio) -1
 
         half_length = new_length // 2
         left_half = content[:half_length]
@@ -4195,6 +4194,7 @@ def trim_messages(
     # Initialize max_tokens
     # if users pass in max tokens, trim to this amount
     try:
+        print_verbose(f"trimming messages")
         if max_tokens == None:
             # Check if model is valid
             if model in litellm.model_cost:
@@ -4212,6 +4212,7 @@ def trim_messages(
                 system_message += message["content"]
 
         current_tokens = token_counter(model=model, messages=messages)
+        print_verbose(f"Current tokens: {current_tokens}, max tokens: {max_tokens}")
 
         # Do nothing if current tokens under messages
         if current_tokens < max_tokens:
@@ -4230,7 +4231,8 @@ def trim_messages(
             return final_messages, response_tokens
 
         return final_messages
-    except: # [NON-Blocking, if error occurs just return final_messages
+    except Exception as e: # [NON-Blocking, if error occurs just return final_messages
+        print("Got exception while token trimming", e)
         return messages
 
 # this helper reads the .env and returns a list of supported llms for user
