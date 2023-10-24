@@ -1026,12 +1026,14 @@ def test_completion_sagemaker():
 # test_completion_custom_api_base()
 
 # def test_vertex_ai():
-#     test_models = litellm.vertex_chat_models + litellm.vertex_code_chat_models + litellm.vertex_text_models + litellm.vertex_code_text_models
+#     # test_models = litellm.vertex_chat_models + litellm.vertex_code_chat_models + litellm.vertex_text_models + litellm.vertex_code_text_models
+#     test_models = ["chat-bison"]
 #     for model in test_models:
 #         try:
 #             print("making request", model)
-#             response = completion(model=model, messages=[{"role": "user", "content": "write code for saying hi"}])
+#             response = completion(model="chat-bison", messages=[{'role': 'user', 'content': 'hi'}])
 #             print(response)
+#             assert type(response.choices[0].message.content) == str
 #         except Exception as e:
 #             pytest.fail(f"Error occurred: {e}")
 # test_vertex_ai()
