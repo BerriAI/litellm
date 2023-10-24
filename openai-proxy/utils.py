@@ -4,7 +4,7 @@ dotenv.load_dotenv() # load env variables
 
 def set_callbacks():
     ## LOGGING
-    if len(os.getenv("SET_VERBOSE")) > 0: 
+    if len(os.getenv("SET_VERBOSE", "")) > 0: 
         if os.getenv("SET_VERBOSE") == "True": 
             litellm.set_verbose = True
         else: 
