@@ -112,7 +112,7 @@ def completion(
             model_response = chat.send_message_streaming(prompt, **optional_params)
             return model_response
 
-        completion_response = chat.send_message(prompt, **optional_params)
+        completion_response = chat.send_message(prompt, **optional_params).text
     elif mode == "text":
         ## LOGGING
         logging_obj.pre_call(input=prompt, api_key=None)
