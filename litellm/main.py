@@ -344,7 +344,7 @@ def completion(
             response = openai.ChatCompletion.create(
                 engine=model,
                 messages=messages,
-                headers=litellm.headers,
+                headers=optional_params.get("headers", litellm.headers),
                 api_key=api_key,
                 api_base=api_base,
                 api_version=api_version,
