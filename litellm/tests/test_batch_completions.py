@@ -63,30 +63,3 @@ def test_batch_completion_models_all_responses():
 #         pytest.fail(f"An error occurred: {e}")
 # test_batch_completions()
 
-
-
-def test_rate_limit_handler():
-    import asyncio
-    ##### USAGE ################
-
-    jobs = [
-        {"model": "gpt-3.5-turbo-16k", "messages": [{"content": "Please provide a summary of the latest scientific discoveries.", "role": "user"}]},
-        {"model": "gpt-3.5-turbo-16k", "messages": [{"content": "Please provide a summary of the latest scientific discoveries.", "role": "user"}]},
-    ]
-
-    from litellm import RateLimitManager
-
-    handler = RateLimitManager(
-        max_requests_per_minute = 60,
-        max_tokens_per_minute = 20000
-    )
-
-    try:
-        asyncio.run(
-        handler.batch_completion(
-            jobs = jobs,
-            api_key=os.environ['OPENAI_API_KEY'],
-        )
-    )
-    except Exception as e:
-        print(e)
