@@ -25,7 +25,8 @@ class Router:
                  model_list: Optional[list]=None,
                  redis_host: Optional[str] = None,
                  redis_port: Optional[int] = None,
-                 redis_password: Optional[str] = None) -> None:
+                 redis_password: Optional[str] = None, 
+                 cache_responses: bool = False) -> None:
         if model_list:
             self.model_list = model_list
             self.model_names = [m["model_name"] for m in model_list]
@@ -41,7 +42,8 @@ class Router:
                 "type": "local"
             }
         self.cache = litellm.Cache(cache_config) # use Redis for tracking load balancing
-        litellm.cache = litellm.Cache(**cache_config) # use Redis for caching completion requests 
+        if cache_responses:
+            litellm.cache = litellm.Cache(**cache_config) # use Redis for caching completion requests 
         litellm.success_callback = [self.deployment_callback]
     
     def completion(self,
@@ -58,9 +60,10 @@ class Router:
 
         # pick the one that is available (lowest TPM/RPM)
         deployment = self.get_available_deployment(model=model, messages=messages)
-
+        print(f"kwargs: {kwargs}")
         data = deployment["litellm_params"]
         data["messages"] = messages
+        print(f"data: {data}")
         # call via litellm.completion() 
         return litellm.completion(**{**data, **kwargs})
     

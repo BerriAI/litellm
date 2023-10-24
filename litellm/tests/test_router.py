@@ -65,7 +65,6 @@ def test_multiple_deployments():
 ### FUNCTION CALLING 
 
 def test_function_calling(): 
-	litellm.set_verbose =True
 	model_list = [
 		{
 			"model_name": "gpt-3.5-turbo-0613",
@@ -151,3 +150,5 @@ def test_litellm_params_not_overwritten_by_function_calling():
 		assert response.choices[0].finish_reason != "function_call"
 	except Exception as e:
 		pytest.fail(f"Error occurred: {e}")
+
+test_litellm_params_not_overwritten_by_function_calling()
