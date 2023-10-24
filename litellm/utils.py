@@ -774,12 +774,13 @@ def client(original_function):
             if (litellm.caching or litellm.caching_with_models) and litellm.cache is None:
                 litellm.cache = Cache() 
 
-            if kwargs.get("caching", False): # allow users to control returning cached responses from the completion function
+            if kwargs.get("caching", False) or litellm.cache is not None: # allow users to control returning cached responses from the completion function
                 # checking cache
                 if (litellm.cache != None or litellm.caching or litellm.caching_with_models):
                     print_verbose(f"LiteLLM: Checking Cache")
                     cached_result = litellm.cache.get_cache(*args, **kwargs)
                     if cached_result != None:
+                        print_verbose(f"Cache Hit!")
                         return cached_result
 
             # MODEL CALL
