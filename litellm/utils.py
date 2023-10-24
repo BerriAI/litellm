@@ -1049,9 +1049,10 @@ def completion_cost(
         return 0.0 # this should not block a users execution path
 
 ####### HELPER FUNCTIONS ################
-def register_model(model_cost: dict): 
+def register_model(model_cost: Union[str, dict]): 
     """
     Register new / Override existing models (and their pricing) to specific providers. 
+    Provide EITHER a model cost dictionary or a url to a hosted json blob
     Example usage: 
     model_cost_dict = {
         "gpt-4": {
@@ -1063,9 +1064,15 @@ def register_model(model_cost: dict):
         },
     }
     """
-    for key, value in model_cost.items():
+    loaded_model_cost = {}
+    if isinstance(model_cost, dict): 
+        loaded_model_cost = model_cost
+    elif isinstance(model_cost, str): 
+        loaded_model_cost = litellm.get_model_cost_map(url=model_cost)
+
+    for key, value in loaded_model_cost.items():
         ## override / add new keys to the existing model cost dictionary
-        litellm.model_cost[key] = model_cost[key]
+        litellm.model_cost[key] = loaded_model_cost[key]
 
         # add new model names to provider lists
         if value.get('litellm_provider') == 'openai':
