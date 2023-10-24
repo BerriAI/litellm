@@ -10,7 +10,7 @@ A simple, fast, and lightweight **OpenAI-compatible server** to call 100+ LLM AP
 - `/chat/completions` - chat completions endpoint to call 100+ LLMs
 - `/models` - available models on server
 
-[![Deploy](https://deploy.cloud.run/button.svg)](https://deploy.cloud.run?git_repo=https://github.com/BerriAI/litellm)
+[![Deploy](https://deploy.cloud.run/button.svg)](https://l.linklyhq.com/l/1uHtX)
 
 :::info
 We want to learn how we can make the proxy better! Meet the [founders](https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version) or
@@ -71,7 +71,7 @@ Looking for the CLI tool/local proxy? It's [here](./proxy_server.md)
 ## Deploy on Google Cloud Run
 **Click the button** to deploy to Google Cloud Run
 
-[![Deploy](https://deploy.cloud.run/button.svg)](https://deploy.cloud.run?git_repo=https://github.com/BerriAI/litellm)
+[![Deploy](https://deploy.cloud.run/button.svg)](https://l.linklyhq.com/l/1uHtX)
 
 On a successfull deploy your Cloud Run Shell will have this output
 <Image img={require('../img/cloud_run0.png')} />
