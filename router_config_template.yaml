@@ -1,4 +1,4 @@
-model_list: # refer to https://docs.litellm.ai/docs/routing#quick-start
+model_list: # refer to https://docs.litellm.ai/docs/routing
   - model_name: gpt-3.5-turbo
     litellm_params:
       model: azure/chatgpt-v-2 # azure/<your-deployment-name>
