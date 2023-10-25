@@ -21,6 +21,7 @@ docker run -e PORT=8000 -p 8000:8000 ghcr.io/berriai/litellm:latest
 
 ## Endpoints:
 - `/chat/completions` - chat completions endpoint to call 100+ LLMs
+- `/router/completions` - for multiple deployments of the same model (e.g. Azure OpenAI), uses the least used deployment. [Learn more](https://docs.litellm.ai/docs/routing)
 - `/models` - available models on server
 
 ## Making Requests to Proxy
