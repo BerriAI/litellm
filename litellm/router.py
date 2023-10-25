@@ -54,7 +54,6 @@ class Router:
                    messages: List[Dict[str, str]],
                    is_retry: Optional[bool] = False,
                    is_fallback: Optional[bool] = False,
-                   is_async: Optional[bool] = False,
                    **kwargs): 
         """
         Example usage: 
@@ -68,6 +67,19 @@ class Router:
         data["caching"] = self.cache_responses
         # call via litellm.completion() 
         return litellm.completion(**{**data, **kwargs})
+
+    async def acompletion(self, 
+                    model: str, 
+                    messages: List[Dict[str, str]], 
+                    is_retry: Optional[bool] = False,
+                    is_fallback: Optional[bool] = False,
+                    **kwargs):
+        # pick the one that is available (lowest TPM/RPM)
+        deployment = self.get_available_deployment(model=model, messages=messages)
+        data = deployment["litellm_params"]
+        data["messages"] = messages
+        data["caching"] = self.cache_responses
+        return await litellm.acompletion(**{**data, **kwargs})
     
     def text_completion(self, 
                         model: str, 
@@ -83,6 +95,7 @@ class Router:
 
         data = deployment["litellm_params"]
         data["prompt"] = prompt
+        data["caching"] = self.cache_responses
         # call via litellm.completion() 
         return litellm.text_completion(**{**data, **kwargs})        
 
@@ -96,6 +109,7 @@ class Router:
 
         data = deployment["litellm_params"]
         data["input"] = input
+        data["caching"] = self.cache_responses
         # call via litellm.embedding() 
         return litellm.embedding(**{**data, **kwargs})
     
