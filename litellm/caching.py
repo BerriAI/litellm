@@ -30,17 +30,25 @@ class RedisCache():
         self.redis_client = redis.Redis(host=host, port=port, password=password)
 
     def set_cache(self, key, value):
-        self.redis_client.set(key, str(value))
+        try:
+            self.redis_client.set(key, str(value))
+        except Exception as e:
+            # NON blocking - notify users Redis is throwing an exception
+            print("LiteLLM Caching: Got exception from REDIS: ", e)
 
     def get_cache(self, key):
-        # TODO convert this to a ModelResponse object
-        cached_response = self.redis_client.get(key)
-        if cached_response!=None:
-            # cached_response is in `b{} convert it to ModelResponse
-            cached_response = cached_response.decode("utf-8")  # Convert bytes to string
-            cached_response = json.loads(cached_response)  # Convert string to dictionary
-            cached_response['cache'] = True # set cache-hit flag to True
-            return cached_response
+        try:
+            # TODO convert this to a ModelResponse object
+            cached_response = self.redis_client.get(key)
+            if cached_response!=None:
+                # cached_response is in `b{} convert it to ModelResponse
+                cached_response = cached_response.decode("utf-8")  # Convert bytes to string
+                cached_response = json.loads(cached_response)  # Convert string to dictionary
+                cached_response['cache'] = True # set cache-hit flag to True
+                return cached_response
+        except Exception as e:
+            # NON blocking - notify users Redis is throwing an exception
+            print("LiteLLM Caching: Got exception from REDIS: ", e)
 
 class HostedCache():
     def set_cache(self, key, value):
