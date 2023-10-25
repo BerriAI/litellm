@@ -112,7 +112,7 @@ async def router_completion(request: Request):
     try: 
         data = await request.json()
         if "model_list" in data: 
-            llm_router = litellm.Router(model_list=data["model_list"])
+            llm_router = litellm.Router(model_list=data.pop("model_list"))
         if llm_router is None: 
             raise Exception("Save model list via config.yaml. Eg.: ` docker build -t myapp --build-arg CONFIG_FILE=myconfig.yaml .` or pass it in as model_list=[..] as part of the request body")
         
@@ -132,11 +132,12 @@ async def router_completion(request: Request):
 async def router_embedding(request: Request):
     global llm_router
     try: 
-        if llm_router is None: 
-            raise Exception("Save model list via config.yaml. Eg.: ` docker build -t myapp --build-arg CONFIG_FILE=myconfig.yaml .`")
-        
         data = await request.json()
-        # openai.ChatCompletion.create replacement
+        if "model_list" in data: 
+            llm_router = litellm.Router(model_list=data.pop("model_list"))
+        if llm_router is None: 
+            raise Exception("Save model list via config.yaml. Eg.: ` docker build -t myapp --build-arg CONFIG_FILE=myconfig.yaml .` or pass it in as model_list=[..] as part of the request body")
+
         response = await llm_router.aembedding(model="gpt-3.5-turbo", 
                         messages=[{"role": "user", "content": "Hey, how's it going?"}])
 
