@@ -171,6 +171,9 @@
             },
             "user": {
               "type": "string"
+            },
+            "caching": {
+              "type": "boolean"
             }
           },
           "required": ["messages", "model"]
