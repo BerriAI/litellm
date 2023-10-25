@@ -1,5 +1,7 @@
 import os, litellm
+import yaml
 import dotenv
+from typing import Optional
 dotenv.load_dotenv() # load env variables
 
 def set_callbacks():
@@ -21,5 +23,25 @@ def set_callbacks():
         litellm.cache = Cache(type="redis", host=os.getenv("REDIS_HOST"), port=os.getenv("REDIS_PORT"), password=os.getenv("REDIS_PASSWORD"))
 
 
+def load_router_config(router: Optional[litellm.Router]):
+    config = {}
+    config_file = 'config.yaml'
 
+    if os.path.exists(config_file):
+        with open(config_file, 'r') as file:
+            config = yaml.safe_load(file)
+    else:
+        print(f"Config file '{config_file}' not found.")
+
+    ## MODEL LIST
+    model_list = config.get('model_list', None)
+    if model_list: 
+        router = litellm.Router(model_list=model_list)
     
+    ## ENVIRONMENT VARIABLES
+    environment_variables = config.get('environment_variables', None)
+    if environment_variables: 
+        for key, value in environment_variables.items(): 
+            os.environ[key] = value
+
+    return router
