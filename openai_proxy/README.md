@@ -25,6 +25,8 @@ docker run -e PORT=8000 -p 8000:8000 ghcr.io/berriai/litellm:latest
 
 ## Making Requests to Proxy
 ### Curl
+
+**Call OpenAI**
 ```shell
 curl http://0.0.0.0:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
@@ -34,7 +36,7 @@ curl http://0.0.0.0:8000/v1/chat/completions \
      "temperature": 0.7
    }'
 ```
-
+**Call Bedrock**
 ```shell
 curl http://0.0.0.0:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
