@@ -2,7 +2,7 @@
 #    This tests calling batch_completions by running 100 messages together
 
 import sys, os
-import traceback
+import traceback, asyncio
 import pytest
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -151,4 +151,33 @@ def test_litellm_params_not_overwritten_by_function_calling():
 	except Exception as e:
 		pytest.fail(f"Error occurred: {e}")
 
-test_litellm_params_not_overwritten_by_function_calling()
+# test_litellm_params_not_overwritten_by_function_calling()
+
+def test_acompletion_on_router(): 
+	try:
+		model_list = [
+			{
+				"model_name": "gpt-3.5-turbo",
+				"litellm_params": {
+					"model": "gpt-3.5-turbo-0613",
+					"api_key": os.getenv("OPENAI_API_KEY"),
+				},
+				"tpm": 100000,
+				"rpm": 10000,
+			},
+		]
+
+		messages = [
+			{"role": "user", "content": "What is the weather like in Boston?"}
+		]
+
+		async def get_response(): 
+			router = Router(model_list=model_list)
+			response = await router.acompletion(model="gpt-3.5-turbo", messages=messages)
+			return response
+		response = asyncio.run(get_response())
+
+		assert isinstance(response['choices'][0]['message']['content'], str)
+	except Exception as e:
+		traceback.print_exc()
+		pytest.fail(f"Error occurred: {e}")
