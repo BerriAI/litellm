@@ -1,3 +1,4 @@
+litellm
 openai
 fastapi
 uvicorn
