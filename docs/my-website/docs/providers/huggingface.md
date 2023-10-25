@@ -85,7 +85,7 @@ print(response)
 </TabItem>
 </Tabs>
 
-## Usage - Streaming
+## Streaming
 
 <a target="_blank" href="https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/LiteLLM_HuggingFace.ipynb">
   <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
@@ -114,6 +114,18 @@ response = completion(
 print(response)
 for chunk in response:
   print(chunk)
+```
+
+## Embedding
+LiteLLM supports Huggingface's [text-embedding-inference](https://github.com/huggingface/text-embeddings-inference) format.
+```python
+from litellm import embedding
+import os
+os.environ['HUGGINGFACE_API_KEY'] = ""
+response = embedding(
+    model='huggingface/microsoft/codebert-base', 
+    input=["good morning from litellm"]
+)
 ```
 
 ### [OPTIONAL] API KEYS + API BASE
