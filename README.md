@@ -16,8 +16,8 @@
         <a href="https://l.linklyhq.com/l/1uHtX" target="_blank">
                 <img src="https://deploy.cloud.run/button.svg" width=200 height=50/>
         </a>
-        <a href="https://infisical.com/docs/self-hosting/deployment-options/aws-ec2">
-            <img src=".github/deploy-to-aws.png" width="137" />
+        <a href="">
+            <img src=".github/deploy-to-aws.png"  height=40/>
           </a>
 </h4>
 <h4 align="center"><a href="https://github.com/BerriAI/litellm/tree/main/litellm_server" target="_blank">LiteLLM Server</a></h4>
