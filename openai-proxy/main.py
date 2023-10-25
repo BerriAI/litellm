@@ -56,6 +56,26 @@ async def completion(request: Request):
             return StreamingResponse(data_generator(response), media_type='text/event-stream')
     return response
 
+@router.post("/v1/embeddings")
+@router.post("/embeddings")
+async def embedding(request: Request):
+    try: 
+        data = await request.json() 
+        # default to always using the "ENV" variables, only if AUTH_STRATEGY==DYNAMIC then reads headers
+        if os.getenv("AUTH_STRATEGY", None) == "DYNAMIC" and "authorization" in request.headers: # if users pass LLM api keys as part of header
+            api_key = request.headers.get("authorization")
+            api_key = api_key.replace("Bearer", "").strip() 
+            if len(api_key.strip()) > 0:
+                api_key = api_key
+                data["api_key"] = api_key
+        response = litellm.embedding(
+            **data
+        )
+        return response
+    except Exception as e:
+        error_traceback = traceback.format_exc()
+        error_msg = f"{str(e)}\n\n{error_traceback}"
+        return {"error": error_msg}
 
 @router.post("/v1/chat/completions")
 @router.post("/chat/completions")
