@@ -19,7 +19,7 @@ join our [discord](https://discord.gg/wuPM9dRgDw)
 ::: 
 
 
-## Usage 
+## Local Usage 
 
 ```shell 
 $ git clone https://github.com/BerriAI/litellm.git
@@ -32,42 +32,59 @@ $ cd ./litellm/openai-proxy
 $ uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
-## Auth - LLM API keys
-- This server allows you to store LLM API keys in the environment variables. Example `OPENAI_API_KEY`, `AZURE_API_KEY`. More Info [required variables for each provider](https://docs.litellm.ai/docs/providers)
-- Pass auth params `api_key`,`api_base`, `api_version` etc to the `/chat/completions` endpoint
+## Test Request
+Ensure your API keys are set in the Environment for these requests
 
-## Replace openai base
-```python 
-import openai 
-openai.api_base = "http://0.0.0.0:8000" # proxy url
-openai.api_key = "does-not-matter"
-# call cohere
-response = openai.ChatCompletion.create(
-    model="command-nightly", 
-    messages=[{"role":"user", "content":"Hey!"}],
-    api_key="your-cohere-api-key", # enter your key here
-)
+<Tabs>
+<TabItem value="openai" label="OpenAI">
 
-# call bedrock 
-response = openai.ChatCompletion.create(
-    model = "bedrock/anthropic.claude-instant-v1",
-    messages = [
-        {
-            "role": "user",
-            "content": "Hey!"
-        }
-    ],
-    aws_access_key_id="",
-    aws_secret_access_key="",
-    aws_region_name="us-west-2",
-)
+```shell
+curl http://0.0.0.0:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+     "model": "gpt-3.5-turbo",
+     "messages": [{"role": "user", "content": "Say this is a test!"}],
+     "temperature": 0.7
+   }'
+```
 
-print(response)
-``` 
+</TabItem>
+<TabItem value="azure" label="Azure">
 
-:::info
-Looking for the CLI tool/local proxy? It's [here](./proxy_server.md)
-::: 
+```shell
+curl http://0.0.0.0:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+     "model": "azure/<your-deployment-name>",
+     "messages": [{"role": "user", "content": "Say this is a test!"}],
+     "temperature": 0.7
+   }'
+```
+
+</TabItem>
+
+<TabItem value="anthropic" label="Anthropic">
+
+```shell
+curl http://0.0.0.0:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+     "model": "claude-2",
+     "messages": [{"role": "user", "content": "Say this is a test!"}],
+     "temperature": 0.7,
+   }'
+```
+</TabItem>
+
+</Tabs>
+
+
+## Setting LLM API keys
+This server allows two ways of passing API keys to litellm
+- Environment Variables - This server by default assumes the LLM API Keys are stored in the environment variables
+- Dynamic Variables passed to `/chat/completions`
+  - Set `AUTH_STRATEGY=DYNAMIC` in the Environment 
+  - Pass required auth params `api_key`,`api_base`, `api_version` with the request params
 
 ## Deploy on Google Cloud Run
 **Click the button** to deploy to Google Cloud Run
