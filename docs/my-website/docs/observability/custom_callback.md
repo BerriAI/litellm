@@ -1,4 +1,8 @@
 # Custom Callback Functions for Completion()
+You can set custom callbacks to trigger for:
+- `litellm.input_callback`   - Track inputs/transformed inputs before making the LLM API call
+- `litellm.success_callback` - Track inputs/outputs after making LLM API call
+- `litellm.failure_callback` - Track inputs/outputs + exceptions for litellm calls
 
 ## Defining a Custom Callback Function
 Create a custom callback function that takes specific arguments:
@@ -15,6 +19,12 @@ def custom_callback(
     print("completion_response", completion_response)
     print("start_time", start_time)
     print("end_time", end_time)
+```
+
+### Setting the custom callback function
+```python
+import litellm
+litellm.success_callback = [custom_callback]
 ```
 
 ## Using Your Custom Callback Function
@@ -199,6 +209,37 @@ response = completion(
 
 print(response)
 ```
+
+### Custom Callback to log transformed Input to LLMs
+```python
+def get_transformed_inputs(
+    kwargs,
+):
+    params_to_model = kwargs["additional_args"]["complete_input_dict"]
+    print("params to model", params_to_model)
+
+litellm.input_callback = [get_transformed_inputs]
+
+def test_chat_openai():
+    try:
+        response = completion(model="claude-2",
+                              messages=[{
+                                  "role": "user",
+                                  "content": "Hi 👋 - i'm openai"
+                              }])
+
+        print(response)
+
+    except Exception as e:
+        print(e)
+        pass
+```
+
+#### Output
+```shell
+params to model {'model': 'claude-2', 'prompt': "\n\nHuman: Hi 👋 - i'm openai\n\nAssistant: ", 'max_tokens_to_sample': 256}
+```
+
 ### Custom Callback to write to Mixpanel
 
 ```python
