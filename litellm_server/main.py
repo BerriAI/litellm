@@ -9,7 +9,7 @@ from typing import Optional
 try:
     from utils import set_callbacks, load_router_config
 except ImportError:
-    from openai_proxy.utils import set_callbacks, load_router_config
+    from litellm_server.utils import set_callbacks, load_router_config
 import dotenv
 dotenv.load_dotenv() # load env variables
 
