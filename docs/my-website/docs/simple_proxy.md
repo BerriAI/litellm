@@ -169,5 +169,20 @@ On a successfull deploy https://dashboard.render.com/ should display the followi
 
 <Image img={require('../img/render2.png')} />
 
+## Advanced
+### Caching - Completion() and Embedding() Responses
+
+#### Caching on Redis
+In order to enable Redis caching:
+- Add the following credentials to your server environment - litellm will begin caching your responses
+
+  ```
+  REDIS_HOST = ""       # REDIS_HOST='redis-18841.c274.us-east-1-3.ec2.cloud.redislabs.com'
+  REDIS_PORT = ""       # REDIS_PORT='18841'
+  REDIS_PASSWORD = ""   # REDIS_PASSWORD='liteLlmIsAmazing'
+  ```
+
+
+
 
 
