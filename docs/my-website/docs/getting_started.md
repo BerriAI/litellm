@@ -64,7 +64,7 @@ More details 👉
 LiteLLM maps exceptions across all supported providers to the OpenAI exceptions. All our exceptions inherit from OpenAI's exception types, so any error-handling you have for that, should work out of the box with LiteLLM. 
 
 ```python 
-from openai.errors import OpenAIError
+from openai.error import OpenAIError
 from litellm import completion
 
 os.environ["ANTHROPIC_API_KEY"] = "bad-key"
