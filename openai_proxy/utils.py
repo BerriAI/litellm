@@ -47,10 +47,13 @@ def load_router_config(router: Optional[litellm.Router]):
     config = {}
     config_file = '/app/config.yaml'
 
-    if os.path.exists(config_file):
-        with open(config_file, 'r') as file:
-            config = yaml.safe_load(file)
-    else:
+    try: 
+        if os.path.exists(config_file):
+            with open(config_file, 'r') as file:
+                config = yaml.safe_load(file)
+        else:
+            print(f"Config file '{config_file}' not found.")
+    except:
         print(f"Config file '{config_file}' not found.")
 
     ## MODEL LIST
