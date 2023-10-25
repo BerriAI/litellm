@@ -2,7 +2,7 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# 💥 OpenAI Proxy Server - Deploy LiteLLM
+# 💥 LiteLLM Server - Deploy LiteLLM
 
 A simple, fast, and lightweight **OpenAI-compatible server** to call 100+ LLM APIs in the OpenAI Input/Output format
 
@@ -201,6 +201,30 @@ curl http://0.0.0.0:8000/v1/chat/completions \
 ```
 
 #### Control caching per completion request
+Caching can be switched on/off per /chat/completions request
+- Caching on for completion - pass `caching=True`:
+  ```shell
+  curl http://0.0.0.0:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+     "model": "gpt-3.5-turbo",
+     "messages": [{"role": "user", "content": "write a poem about litellm!"}],
+     "temperature": 0.7,
+     "caching": true
+   }'
+  ```
+- Caching off for completion - pass `caching=False`:
+  ```shell
+  curl http://0.0.0.0:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+     "model": "gpt-3.5-turbo",
+     "messages": [{"role": "user", "content": "write a poem about litellm!"}],
+     "temperature": 0.7,
+     "caching": false
+   }'
+  ```
+
 
 
 
