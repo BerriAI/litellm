@@ -3,12 +3,13 @@ openai.api_base = "http://0.0.0.0:8000"
 dotenv.load_dotenv()
 openai.api_key = os.getenv("ANTHROPIC_API_KEY") # this gets passed as a header 
 
+
 response1 = openai.ChatCompletion.create(
     model = "claude-instant-1",
     messages = [
         {
             "role": "user",
-            "content": "this is a test message, what model / llm are you"
+            "content": "write a short poem about litellm"
         }
     ],
 )
@@ -25,7 +26,7 @@ response2 = openai.ChatCompletion.create(
     messages = [
         {
             "role": "user",
-            "content": "this is a test message, what model / llm are you"
+            "content": "write a short poem about litellm"
         }
     ],
 )
@@ -43,7 +44,7 @@ try:
         messages = [
             {
                 "role": "user",
-                "content": "this is a test message, what model / llm are you"
+                "content": "write a short poem about litellm"
             }
         ],
     )
