@@ -50,6 +50,43 @@ LiteLLM manages
   <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
 </a>
 
+## Setting Up a Virtual Environment for `litellm`
+
+1. **Install Python Virtual Environment Module**:
+
+   Make sure you have the Python Virtual Environment module installed. You can check if it's installed by running the following command:
+ ```
+  python -m venv --help
+ ```
+
+2. **Create a Virtual Environment**:
+
+To create a virtual environment, navigate to your project directory and run the following command. Replace `myenv` with your preferred environment name:
+```
+  python -m venv myenv
+ ```
+
+3. **Activate the Virtual Environment**:
+
+- **On Windows**:
+
+  ```
+  myenv\Scripts\activate
+  ```
+
+- **On macOS and Linux**:
+
+  ```
+  source myenv/bin/activate
+  ```
+
+Your terminal prompt should change, indicating that you're in the virtual environment.
+
+4. **Install Dependencies**:
+
+Inside the virtual environment, install the `litellm` library and other dependencies using `pip`:
+You can now develop your project within the isolated environment. All packages and scripts will be specific to this environment.
+
 ```
 pip install litellm
 ```
