@@ -230,7 +230,7 @@
         "max_tokens": 32000,
         "input_cost_per_token": 0.000000125,
         "output_cost_per_token": 0.000000125,
-        "litellm_provider": "vertex_ai-chat-models",
+        "litellm_provider": "vertex_ai-code-chat-models",
         "mode": "chat"
     },
     "command-nightly": {
