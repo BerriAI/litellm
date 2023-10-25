@@ -19,11 +19,15 @@ class LangFuseLogger:
         self.secret_key = os.getenv("LANGFUSE_SECRET_KEY")
         self.public_key = os.getenv("LANGFUSE_PUBLIC_KEY")
         self.langfuse_host = os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
+        self.langfuse_release = os.getenv("LANGFUSE_RELEASE")
+        self.langfuse_debug = os.getenv("LANGFUSE_DEBUG")
         self.Langfuse =  Langfuse(
-                        public_key=self.public_key,
-                        secret_key=self.secret_key,
-                        host=self.langfuse_host,
-                    )
+            public_key=self.public_key,
+            secret_key=self.secret_key,
+            host=self.langfuse_host,
+            release=self.langfuse_release,
+            debug=self.langfuse_debug
+        )
 
     def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
         # Method definition
