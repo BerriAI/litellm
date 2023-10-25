@@ -56,12 +56,20 @@ def send_slack_alert(
     else:
         print(f"Failed to send message to Slack. Status code: {response.status_code}")
         print(response.json())
-    
+
+def get_transformed_inputs(
+    kwargs,
+):
+    params_to_model = kwargs["additional_args"]["complete_input_dict"]
+    print("params to model", params_to_model)
+
 litellm.success_callback = [custom_callback, send_slack_alert]
 litellm.failure_callback = [send_slack_alert]
 
 
 litellm.set_verbose = True
+
+litellm.input_callback = [get_transformed_inputs]
 
 
 def test_chat_openai():
