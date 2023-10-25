@@ -1,7 +1,7 @@
 model_list:
   - model_name: gpt-3.5-turbo
     litellm_params:
-      model: azure/chatgpt-v-2
+      model: azure/chatgpt-v-2 # azure/<your-deployment-name>
       api_key: your_azure_api_key
       api_version: your_azure_api_version
       api_base: your_azure_api_base
@@ -23,6 +23,6 @@ model_list:
     rpm: 9000 # REPLACE with your openai rpm
 
 environment_variables:
-	REDIS_HOST: your_redis_host
-	REDIS_PASSWORD: your_redis_password
-	REDIS_PORT: your_redis_port 
+  REDIS_HOST: your_redis_host
+  REDIS_PASSWORD: your_redis_password
+  REDIS_PORT: your_redis_port 

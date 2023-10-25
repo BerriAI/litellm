@@ -1,4 +1,20 @@
 import os, litellm
+import pkg_resources
+
+def get_package_version(package_name):
+    try:
+        package = pkg_resources.get_distribution(package_name)
+        return package.version
+    except pkg_resources.DistributionNotFound:
+        return None
+
+# Usage example
+package_name = "litellm"
+version = get_package_version(package_name)
+if version:
+    print(f"The version of {package_name} is {version}")
+else:
+    print(f"{package_name} is not installed")
 import yaml
 import dotenv
 from typing import Optional
@@ -29,7 +45,7 @@ def set_callbacks():
 
 def load_router_config(router: Optional[litellm.Router]):
     config = {}
-    config_file = 'config.yaml'
+    config_file = '/app/config.yaml'
 
     if os.path.exists(config_file):
         with open(config_file, 'r') as file:
