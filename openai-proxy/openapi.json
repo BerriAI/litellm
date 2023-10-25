@@ -6,187 +6,75 @@
       "description": "API for LiteLLM"
     },
     "paths": {
-     "/chat/completions": {
-    "post": {
-      "summary": "Create chat completion for 100+ LLM APIs",
-      "requestBody": {
-        "required": true,
-        "content": {
-          "application/json": {
-            "schema": {
-              "type": "object",
-              "properties": {
-                "model": {
-                  "type": "string",
-                  "description": "ID of the model to use"
-                },
-                "messages": {
-                  "type": "array",
-                  "items": {
-                    "type": "object",
-                    "properties": {
-                      "role": {
-                        "type": "string",
-                        "description": "The role of the message's author"
-                      },
-                      "content": {
-                        "type": "string",
-                        "description": "The contents of the message"
-                      },
-                      "name": {
-                        "type": "string",
-                        "description": "The name of the author of the message"
-                      },
-                      "function_call": {
-                        "type": "object",
-                        "description": "The name and arguments of a function that should be called"
-                      }
-                    }
-                  }
-                },
-                "functions": {
-                  "type": "array",
-                  "items": {
-                    "type": "object",
-                    "properties": {
-                      "name": {
-                        "type": "string",
-                        "description": "The name of the function to be called"
-                      },
-                      "description": {
-                        "type": "string",
-                        "description": "A description explaining what the function does"
-                      },
-                      "parameters": {
-                        "type": "object",
-                        "description": "The parameters that the function accepts"
-                      },
-                      "function_call": {
-                        "type": "string",
-                        "description": "Controls how the model responds to function calls"
-                      }
-                    }
-                  }
-                },
-                "temperature": {
-                  "type": "number",
-                  "description": "The sampling temperature to be used"
-                },
-                "top_p": {
-                  "type": "number",
-                  "description": "An alternative to sampling with temperature"
-                },
-                "n": {
-                  "type": "integer",
-                  "description": "The number of chat completion choices to generate for each input message"
-                },
-                "stream": {
-                  "type": "boolean",
-                  "description": "If set to true, it sends partial message deltas"
-                },
-                "stop": {
-                  "type": "array",
-                  "items": {
-                    "type": "string"
-                  },
-                  "description": "Up to 4 sequences where the API will stop generating further tokens"
-                },
-                "max_tokens": {
-                  "type": "integer",
-                  "description": "The maximum number of tokens to generate in the chat completion"
-                },
-                "presence_penalty": {
-                  "type": "number",
-                  "description": "It is used to penalize new tokens based on their existence in the text so far"
-                },
-                "frequency_penalty": {
-                  "type": "number",
-                  "description": "It is used to penalize new tokens based on their frequency in the text so far"
-                },
-                "logit_bias": {
-                  "type": "object",
-                  "description": "Used to modify the probability of specific tokens appearing in the completion"
-                },
-                "user": {
-                  "type": "string",
-                  "description": "A unique identifier representing your end-user"
-                }
-              }
-            }
-          }
-        }
-      },
-      "responses": {
-        "200": {
-          "description": "Successful operation",
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "choices": {
-                    "type": "array",
-                    "items": {
-                      "type": "object",
-                      "properties": {
-                        "finish_reason": {
-                          "type": "string"
-                        },
-                        "index": {
-                          "type": "integer"
-                        },
-                        "message": {
-                          "type": "object",
-                          "properties": {
-                            "role": {
-                              "type": "string"
-                            },
-                            "content": {
-                              "type": "string"
-                            }
-                          }
-                        }
-                      }
-                    }
-                  },
-                  "created": {
-                    "type": "string"
-                  },
-                  "model": {
-                    "type": "string"
-                  },
-                  "usage": {
-                    "type": "object",
-                    "properties": {
-                      "prompt_tokens": {
-                        "type": "integer"
-                      },
-                      "completion_tokens": {
-                        "type": "integer"
-                      },
-                      "total_tokens": {
-                        "type": "integer"
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        },
-        "500": {
-          "description": "Server error"
-        }
-      }
-    }
-  },
-  
-      "/completions": {
+      "/chat/completions": {
         "post": {
-          "summary": "Create completion",
+          "summary": "Create chat completion for 100+ LLM APIs",
+          "requestBody": {
+            "description": "Input parameters for chat completions",
+            "required": true,
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatCompletionsRequest"
+                },
+                "example": {
+                    "model": "gpt-3.5-turbo",
+                    "messages": [
+                      {
+                        "role": "system",
+                        "content": "You are a helpful assistant."
+                      },
+                      {
+                        "role": "user",
+                        "content": "this is a test message from litellm proxy, can you ack"
+                      }
+                    ],
+                    "frequency_penalty": 0.0,
+                    "max_tokens": 500,
+                    "n": 1,
+                    "presence_penalty": 0.0,
+                    "stop": "###",
+                    "stream": false,
+                    "temperature": 0.7,
+                    "top_p": 0.8,
+                    "user": "test-litellm"
+                  }
+  
+              }
+            }
+          },
           "responses": {
             "200": {
-              "description": "Successful operation"
+              "description": "Successful operation",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ChatCompletionsResponse"
+                  },
+                  "example": {
+                  "object": "chat.completion",
+                  "id": "chatcmpl-92861fad-b36c-41a1-88db-139344819276",
+                  "choices": [
+                    {
+                      "finish_reason": "stop_sequence",
+                      "index": 0,
+                      "message": {
+                        "content": "I'm a large language model trained by OpenAI, ACK receiving this message",
+                        "role": "assistant"
+                      }
+                    }
+                  ],
+                  "created": 1698253693.169062,
+                  "model": "gpt-3.5-turbo",
+                  "usage": {
+                    "prompt_tokens": 14,
+                    "completion_tokens": 102,
+                    "total_tokens": 116
+                  }
+                }
+  
+                }
+              }
             },
             "500": {
               "description": "Server error"
@@ -195,21 +83,148 @@
         }
       },
       "/models": {
-        "get": {
-          "summary": "Get models",
-          "responses": {
-            "200": {
-              "description": "Successful operation"
+          "get": {
+            "summary": "Get models",
+            "responses": {
+              "200": {
+                "description": "Successful operation"
+              }
+            }
+          }
+        },
+        "/": {
+          "get": {
+            "summary": "Swagger docs",
+            "responses": {
+              "200": {
+                "description": "Successful operation"
+              }
             }
           }
         }
-      },
-      "/": {
-        "get": {
-          "summary": "Swagger docs",
-          "responses": {
-            "200": {
-              "description": "Successful operation"
+    },
+    "components": {
+      "schemas": {
+        "ChatCompletionsRequest": {
+          "type": "object",
+          "properties": {
+            "messages": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "role": {
+                    "type": "string"
+                  },
+                  "content": {
+                    "type": "string"
+                  }
+                },
+                "required": ["role", "content"]
+              }
+            },
+            "model": {
+              "type": "string"
+            },
+            "frequency_penalty": {
+              "type": "number"
+            },
+            "function_call": {
+              "type": ["string", "object"]
+            },
+            "functions": {
+              "type": "array"
+            },
+            "logit_bias": {
+              "type": "object"
+            },
+            "max_tokens": {
+              "type": "integer"
+            },
+            "n": {
+              "type": "integer"
+            },
+            "presence_penalty": {
+              "type": "number"
+            },
+            "stop": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              ]
+            },
+            "stream": {
+              "type": "boolean"
+            },
+            "temperature": {
+              "type": "number"
+            },
+            "top_p": {
+              "type": "number"
+            },
+            "user": {
+              "type": "string"
+            }
+          },
+          "required": ["messages", "model"]
+        },
+        "ChatCompletionsResponse": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "choices": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "finish_reason": {
+                    "type": "string"
+                  },
+                  "index": {
+                    "type": "integer"
+                  },
+                  "message": {
+                    "type": "object",
+                    "properties": {
+                      "created": {
+                        "type": "integer"
+                      },
+                      "model": {
+                        "type": "string"
+                      },
+                      "object": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["created", "model", "object"]
+                  },
+                  "usage": {
+                    "type": "object",
+                    "properties": {
+                      "completion_tokens": {
+                        "type": "integer"
+                      },
+                      "prompt_tokens": {
+                        "type": "integer"
+                      },
+                      "total_tokens": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": ["completion_tokens", "prompt_tokens", "total_tokens"]
+                  }
+                },
+                "required": ["finish_reason", "index", "message", "usage"]
+              }
             }
           }
         }
