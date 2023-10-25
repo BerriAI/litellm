@@ -71,6 +71,7 @@ const sidebars = {
         "providers/anthropic", 
         "providers/aws_sagemaker",
         "providers/bedrock", 
+        "providers/anyscale",
         "providers/perplexity", 
         "providers/vllm", 
         "providers/deepinfra",
