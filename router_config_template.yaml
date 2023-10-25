@@ -1,0 +1,28 @@
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: azure/chatgpt-v-2
+      api_key: your_azure_api_key
+      api_version: your_azure_api_version
+      api_base: your_azure_api_base
+    tpm: 240000 # REPLACE with your azure deployment tpm
+    rpm: 1800 # REPLACE with your azure deployment rpm
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: azure/chatgpt-functioncalling
+      api_key: your_azure_api_key
+      api_version: your_azure_api_version
+      api_base: your_azure_api_base
+    tpm: 240000
+    rpm: 1800
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+      api_key: your_openai_api_key
+    tpm: 1000000 # REPLACE with your openai tpm
+    rpm: 9000 # REPLACE with your openai rpm
+
+environment_variables:
+	REDIS_HOST: your_redis_host
+	REDIS_PASSWORD: your_redis_password
+	REDIS_PORT: your_redis_port 
