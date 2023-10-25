@@ -159,4 +159,15 @@ Example `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`
 <Image img={require('../img/cloud_run3.png')} />
 
 
+## Deploy on Render
+**Click the button** to deploy to Render
+
+[![Deploy](https://render.com/images/deploy-to-render-button.svg)](https://l.linklyhq.com/l/1uHsr)
+
+On a successfull deploy https://dashboard.render.com/ should display the following
+<Image img={require('../img/render1.png')} />
+
+<Image img={require('../img/render2.png')} />
+
+
 
