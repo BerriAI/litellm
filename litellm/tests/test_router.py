@@ -181,3 +181,29 @@ def test_acompletion_on_router():
 	except Exception as e:
 		traceback.print_exc()
 		pytest.fail(f"Error occurred: {e}")
+
+
+def test_aembedding_on_router():
+	try:
+		model_list = [
+			{
+				"model_name": "text-embedding-ada-002",
+				"litellm_params": {
+					"model": "text-embedding-ada-002",
+				},
+				"tpm": 100000,
+				"rpm": 10000,
+			},
+		]
+
+		async def embedding_call():
+			router = Router(model_list=model_list)
+			response = await router.aembedding(
+				model="text-embedding-ada-002",
+				input=["good morning from litellm", "this is another item"],
+			)
+			print(response)
+		asyncio.run(embedding_call())
+	except Exception as e:
+		traceback.print_exc()
+		pytest.fail(f"Error occurred: {e}")
