@@ -176,58 +176,66 @@
           "required": ["messages", "model"]
         },
         "ChatCompletionsResponse": {
-          "type": "object",
-          "properties": {
-            "id": {
-              "type": "string"
-            },
-            "choices": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "properties": {
-                  "finish_reason": {
-                    "type": "string"
-                  },
-                  "index": {
-                    "type": "integer"
-                  },
-                  "message": {
-                    "type": "object",
-                    "properties": {
-                      "created": {
-                        "type": "integer"
-                      },
-                      "model": {
-                        "type": "string"
-                      },
-                      "object": {
-                        "type": "string"
-                      }
-                    },
-                    "required": ["created", "model", "object"]
-                  },
-                  "usage": {
-                    "type": "object",
-                    "properties": {
-                      "completion_tokens": {
-                        "type": "integer"
-                      },
-                      "prompt_tokens": {
-                        "type": "integer"
-                      },
-                      "total_tokens": {
-                        "type": "integer"
-                      }
-                    },
-                    "required": ["completion_tokens", "prompt_tokens", "total_tokens"]
-                  }
+        "type": "object",
+        "properties": {
+          "object": {
+            "type": "string"
+          },
+          "choices": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "finish_reason": {
+                  "type": "string"
                 },
-                "required": ["finish_reason", "index", "message", "usage"]
-              }
+                "index": {
+                  "type": "integer"
+                },
+                "message": {
+                  "type": "object",
+                  "properties": {
+                    "content": {
+                      "type": "string"
+                    },
+                    "role": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["content", "role"]
+                },
+                "usage": {
+                  "type": "object",
+                  "properties": {
+                    "prompt_tokens": {
+                      "type": "integer"
+                    },
+                    "completion_tokens": {
+                      "type": "integer"
+                    },
+                    "total_tokens": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": ["prompt_tokens", "completion_tokens", "total_tokens"]
+                }
+              },
+              "required": ["finish_reason", "index", "message", "usage"]
             }
+          },
+          "id": {
+            "type": "string"
+          },
+          "created": {
+            "type": "number"
+          },
+          "model": {
+            "type": "string"
           }
-        }
+        },
+        "required": ["object", "choices", "id", "created", "model"]
+      }
+  
       }
     }
   }
