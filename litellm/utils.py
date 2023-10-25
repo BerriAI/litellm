@@ -1572,7 +1572,11 @@ def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None, api_
                 api_base = "https://api.perplexity.ai"
                 dynamic_api_key = os.getenv("PERPLEXITYAI_API_KEY")
                 custom_llm_provider = "custom_openai"
-
+            elif custom_llm_provider == "anyscale": 
+                # anyscale is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
+                api_base = "https://api.endpoints.anyscale.com/v1"
+                dynamic_api_key = os.getenv("ANYSCALE_API_KEY")
+                custom_llm_provider = "custom_openai"
             return model, custom_llm_provider, dynamic_api_key, api_base
 
         # check if api base is a known openai compatible endpoint

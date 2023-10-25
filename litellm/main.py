@@ -950,7 +950,6 @@ def completion(
             vertex_ai_location = (litellm.vertex_location 
                                   or get_secret("VERTEXAI_LOCATION"))
 
-            # palm does not support streaming as yet :(
             model_response = vertex_ai.completion(
                 model=model,
                 messages=messages,

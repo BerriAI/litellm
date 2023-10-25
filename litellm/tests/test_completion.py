@@ -51,7 +51,7 @@ def test_completion_claude():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_completion_claude()
+# test_completion_claude()
 
 # def test_completion_oobabooga():
 #     try:
@@ -129,7 +129,7 @@ def test_completion_perplexity_api():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_completion_perplexity_api()
+# test_completion_perplexity_api()
 
 def test_completion_perplexity_api_2():
     try:
@@ -151,7 +151,7 @@ def test_completion_perplexity_api_2():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_perplexity_api_2()
+# test_completion_perplexity_api_2()
 
 # commenting out as this is a flaky test on circle ci
 # def test_completion_nlp_cloud():
@@ -1031,7 +1031,7 @@ def test_completion_together_ai():
 #     for model in test_models:
 #         try:
 #             print("making request", model)
-#             response = completion(model="chat-bison", messages=[{'role': 'user', 'content': 'hi'}])
+#             response = completion(model="vertex_ai/codechat-bison-32k", messages=[{'role': 'user', 'content': 'hi'}])
 #             print(response)
 #             assert type(response.choices[0].message.content) == str
 #         except Exception as e:
@@ -1068,6 +1068,49 @@ def test_completion_with_fallbacks():
         pytest.fail(f"Error occurred: {e}")
 
 # test_completion_with_fallbacks()
+def test_completion_anyscale_api():
+    try:
+        # litellm.set_verbose=True
+        messages=[{
+            "role": "system", 
+            "content": "You're a good bot"
+        },{
+            "role": "user", 
+            "content": "Hey", 
+        },{
+            "role": "user", 
+            "content": "Hey", 
+        }]
+        response = completion(
+            model="anyscale/meta-llama/Llama-2-7b-chat-hf", 
+            messages=messages,)
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+# test_completion_anyscale_api()
+
+def test_completion_anyscale_2():
+    try:
+        # litellm.set_verbose=True
+        messages=[{
+            "role": "system", 
+            "content": "You're a good bot"
+        },{
+            "role": "user", 
+            "content": "Hey", 
+        },{
+            "role": "user", 
+            "content": "Hey", 
+        }]
+        response = completion(
+            model="anyscale/meta-llama/Llama-2-7b-chat-hf", 
+            messages=messages
+        )
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+test_completion_anyscale_2()
 # def test_completion_with_fallbacks_multiple_keys():
 #     print(f"backup key 1: {os.getenv('BACKUP_OPENAI_API_KEY_1')}")
 #     print(f"backup key 2: {os.getenv('BACKUP_OPENAI_API_KEY_2')}")
