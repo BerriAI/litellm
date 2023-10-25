@@ -32,7 +32,7 @@ $ cd ./litellm/openai-proxy
 $ uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
-## Test Request
+### Test Request
 Ensure your API keys are set in the Environment for these requests
 
 <Tabs>
