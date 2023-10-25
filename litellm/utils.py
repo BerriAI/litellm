@@ -2411,6 +2411,15 @@ def handle_success(args, kwargs, result, start_time, end_time):
                         end_time=end_time,
                         print_verbose=print_verbose,
                     )
+                
+                elif callback == "traceloop":
+                    traceloopLogger.log_event(
+                        kwargs=kwargs,
+                        response_obj=result,
+                        start_time=start_time,
+                        end_time=end_time,
+                        print_verbose=print_verbose,
+                    )
 
                 elif callback == "aispend":
                     print_verbose("reaches aispend for logging!")

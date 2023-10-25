@@ -10,21 +10,18 @@ It is based on [OpenTelemetry](https://opentelemetry.io), so it can provide full
 
 ## Getting Started
 
-First, sign up to get an API key on the [Traceloop dashboard](https://app.traceloop.com/settings/api-keys).
-
-Then, install the Traceloop SDK:
+Install the Traceloop SDK:
 
 ```
 pip install traceloop-sdk
 ```
 
-Use just 1 line of code, to instantly log your LLM responses:
+Use just 2 lines of code, to instantly log your LLM responses with OpenTelemetry:
 
 ```python
+Traceloop.init(app_name=<YOUR APP NAME>, disable_batch=True)
 litellm.success_callback = ["traceloop"]
 ```
-
-When running your app, make sure to set the `TRACELOOP_API_KEY` environment variable to your API key.
 
 To get better visualizations on how your code behaves, you may want to annotate specific parts of your LLM chain. See [Traceloop docs on decorators](https://traceloop.com/docs/python-sdk/decorators) for more information.
 
