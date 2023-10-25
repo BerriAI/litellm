@@ -82,7 +82,6 @@ const sidebars = {
         "providers/aleph_alpha", 
         "providers/baseten", 
         "providers/openrouter", 
-        // "providers/custom",
         "providers/custom_openai_proxy",
         "providers/petals",
       ]
