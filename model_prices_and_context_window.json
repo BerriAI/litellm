@@ -655,5 +655,40 @@
         "output_cost_per_token": 0.000000, 
         "litellm_provider": "perplexity", 
         "mode": "chat" 
+      },
+      "anyscale/meta-llama/Llama-2-7b-chat-hf": {
+        "max_tokens": 4096, 
+        "input_cost_per_token": 0.00000015, 
+        "output_cost_per_token": 0.00000015, 
+        "litellm_provider": "anyscale", 
+        "mode": "chat"
+      },
+      "anyscale/mistralai/Mistral-7B-Instruct-v0.1": {
+        "max_tokens": 4096, 
+        "input_cost_per_token": 0.00000015, 
+        "output_cost_per_token": 0.00000015,
+        "litellm_provider": "anyscale", 
+        "mode": "chat"
+      },
+      "anyscale/meta-llama/Llama-2-13b-chat-hf": {
+        "max_tokens": 4096, 
+        "input_cost_per_token": 0.00000025, 
+        "output_cost_per_token": 0.00000025, 
+        "litellm_provider": "anyscale", 
+        "mode": "chat"
+      },
+      "anyscale/meta-llama/Llama-2-70b-chat-hf": {
+        "max_tokens": 4096, 
+        "input_cost_per_token": 0.000001, 
+        "output_cost_per_token": 0.000001, 
+        "litellm_provider": "anyscale", 
+        "mode": "chat"
+      },
+      "anyscale/codellama/CodeLlama-34b-Instruct-hf": {
+        "max_tokens": 4096, 
+        "input_cost_per_token": 0.000001, 
+        "output_cost_per_token": 0.000001, 
+        "litellm_provider": "anyscale", 
+        "mode": "chat"
       }
 }

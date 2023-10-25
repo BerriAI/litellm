@@ -262,6 +262,7 @@ provider_list: List = [
     "ollama",
     "deepinfra",
     "perplexity",
+    "anyscale",
     "custom", # custom apis
 ]
 
