@@ -94,7 +94,7 @@ This server allows two ways of passing API keys to litellm
 On a successfull deploy your Cloud Run Shell will have this output
 <Image img={require('../img/cloud_run0.png')} />
 
-## Testing your deployed proxy
+### Testing your deployed proxy
 **Assuming the required keys are set as Environment Variables**
 
 https://litellm-7yjrj3ha2q-uc.a.run.app is our example proxy, substitute it with your deployed cloud run app
