@@ -52,9 +52,9 @@ def load_router_config(router: Optional[litellm.Router]):
             with open(config_file, 'r') as file:
                 config = yaml.safe_load(file)
         else:
-            print(f"Config file '{config_file}' not found.")
+            pass
     except:
-        print(f"Config file '{config_file}' not found.")
+        pass
 
     ## MODEL LIST
     model_list = config.get('model_list', None)
