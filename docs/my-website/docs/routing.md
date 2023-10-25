@@ -1,6 +1,6 @@
-# Azure API Load-Balancing
+# Manage Multiple Deployments
 
-Use this if you're trying to load-balance across multiple Azure/OpenAI deployments. 
+Use this if you're trying to load-balance across multiple deployments (e.g. Azure/OpenAI). 
 
 `Router` prevents failed requests, by picking the deployment which is below rate-limit and has the least amount of tokens used. 
 
