@@ -39,7 +39,7 @@ curl http://0.0.0.0:8000/v1/chat/completions \
 curl http://0.0.0.0:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-     "model": "claude-instant-1",
+     "model": "bedrock/anthropic.claude-instant-v1",
      "messages": [{"role": "user", "content": "Say this is a test!"}],
      "temperature": 0.7
    }'
