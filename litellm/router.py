@@ -112,7 +112,20 @@ class Router:
         data["caching"] = self.cache_responses
         # call via litellm.embedding() 
         return litellm.embedding(**{**data, **kwargs})
-    
+
+    async def aembedding(self,
+                         model: str,
+                         input: Union[str, List],
+                         is_async: Optional[bool] = True,
+                         **kwargs) -> Union[List[float], None]:
+        # pick the one that is available (lowest TPM/RPM)
+        deployment = self.get_available_deployment(model=model, input=input)
+
+        data = deployment["litellm_params"]
+        data["input"] = input
+        data["caching"] = self.cache_responses
+        return await litellm.aembedding(**{**data, **kwargs})
+
     def set_model_list(self, model_list: list):
         self.model_list = model_list
 
