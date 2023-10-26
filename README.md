@@ -16,7 +16,7 @@
         <a href="https://l.linklyhq.com/l/1uHtX" target="_blank">
                 <img src="https://deploy.cloud.run/button.svg" width=200 height=50/>
         </a>
-        <a href="">
+        <a href="https://docs.litellm.ai/docs/simple_proxy#deploy-on-aws-apprunner">
             <img src=".github/deploy-to-aws.png"  height=40/>
           </a>
 </h4>
