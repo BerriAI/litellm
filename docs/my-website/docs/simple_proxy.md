@@ -180,7 +180,7 @@ On a successfull deploy https://dashboard.render.com/ should display the followi
 
   **Assuming the required keys are set as Environment Variables** Example: `OPENAI_API_KEY`
 
-  https://b2w6emmkzp.us-east-1.awsapprunner.com is our example server, substitute it with your deployed cloud run app
+  https://b2w6emmkzp.us-east-1.awsapprunner.com is our example server, substitute it with your deployed apprunner endpoint
 
   <Tabs>
   <TabItem value="openai" label="OpenAI">
