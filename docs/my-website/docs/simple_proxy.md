@@ -12,6 +12,7 @@ A simple, fast, and lightweight **OpenAI-compatible server** to call 100+ LLM AP
 
 [![Deploy](https://deploy.cloud.run/button.svg)](https://l.linklyhq.com/l/1uHtX)
 [![Deploy](https://render.com/images/deploy-to-render-button.svg)](https://l.linklyhq.com/l/1uHsr)
+[![Deploy](../img/deploy-to-aws.png)](https://l.linklyhq.com/l/1uHsr)
 
 :::info
 We want to learn how we can make the proxy better! Meet the [founders](https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version) or
@@ -168,6 +169,12 @@ On a successfull deploy https://dashboard.render.com/ should display the followi
 <Image img={require('../img/render1.png')} />
 
 <Image img={require('../img/render2.png')} />
+
+## Deploy on AWS Apprunner
+1. Navigate to to App Runner on AWS Console: https://console.aws.amazon.com/apprunner/home?region=us-east-1#/services
+
+
+
 
 ## Advanced
 ### Caching - Completion() and Embedding() Responses
