@@ -53,7 +53,7 @@ curl http://0.0.0.0:8000/v1/chat/completions \
 $ git clone https://github.com/BerriAI/litellm.git
 ```
 ```shell
-$ cd ./litellm/openai-proxy
+$ cd ./litellm/litellm_server
 ```
 
 ```shell
