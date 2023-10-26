@@ -13,8 +13,8 @@ class LangFuseLogger:
     def __init__(self):
         try:
             from langfuse import Langfuse
-        except:
-            raise Exception("\033[91mLangfuse not installed, try running 'pip install langfuse' to fix this error\033[0m")
+        except Exception as e:
+            raise Exception("\033[91mLangfuse not installed, try running 'pip install langfuse' to fix this error\033[0m", e)
         # Instance variables
         self.secret_key = os.getenv("LANGFUSE_SECRET_KEY")
         self.public_key = os.getenv("LANGFUSE_PUBLIC_KEY")
