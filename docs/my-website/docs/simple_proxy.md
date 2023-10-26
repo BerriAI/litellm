@@ -12,7 +12,7 @@ A simple, fast, and lightweight **OpenAI-compatible server** to call 100+ LLM AP
 
 [![Deploy](https://deploy.cloud.run/button.svg)](https://l.linklyhq.com/l/1uHtX)
 [![Deploy](https://render.com/images/deploy-to-render-button.svg)](https://l.linklyhq.com/l/1uHsr)
-[![Deploy](../img/deploy-to-aws.png)](https://l.linklyhq.com/l/1uHsr)
+[![Deploy](../img/deploy-to-aws.png)](https://docs.litellm.ai/docs/simple_proxy#deploy-on-aws-apprunner)
 
 :::info
 We want to learn how we can make the proxy better! Meet the [founders](https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version) or
@@ -171,10 +171,40 @@ On a successfull deploy https://dashboard.render.com/ should display the followi
 <Image img={require('../img/render2.png')} />
 
 ## Deploy on AWS Apprunner
-1. Navigate to to App Runner on AWS Console: https://console.aws.amazon.com/apprunner/home?region=us-east-1#/services
-
-
-
+1. Fork LiteLLM https://github.com/BerriAI/litellm 
+2. Navigate to to App Runner on AWS Console: https://console.aws.amazon.com/apprunner/home#/services
+3. Click "Create Service" <Image img={require('../img/aws_0.png')} />
+4. Set Source and deployment
+  - Select Repository type as "Source code repository" 
+  - Select GitHub as Provider
+  <Image img={require('../img/aws_1.png')} />
+  - Select your litellm fork as "Repository"
+  - Set litellm_server as Source directory
+  <Image img={require('../img/aws_2.png')} />
+5. Configure build
+  - Set "Runtime" to Python3
+  - Set "Build command" to `pip install -r requirements.txt`
+  - Set "Start command" to  uvicorn main:app --host 0.0.0.0 --port 8080
+  <Image img={require('../img/aws_3.png')} />
+6. Configure service
+  - Optional - Set LLM API Keys, example `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`
+  - If you want to pass LLM API keys as params to `/chat/completions` then this is not required
+  <Image img={require('../img/aws_4.png')} />
+7. Review and Create
+  - Click Deploy
+  - On successfull deploy you should see your litellm server endpoint
+  <Image img={require('../img/aws_5.png')} />
+8. Testing your endpoint
+    Assuming `OPENAI_API_KEY` is set in the environment variables
+    ```shell
+    curl https://b2w6emmkzp.us-east-1.awsapprunner.com /v1/chat/completions \
+      -H "Content-Type: application/json" \
+      -d '{
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "Say this is a test!"}],
+        "temperature": 0.7
+      }'
+    ```
 
 ## Advanced
 ### Caching - Completion() and Embedding() Responses
