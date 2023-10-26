@@ -173,28 +173,10 @@ On a successfull deploy https://dashboard.render.com/ should display the followi
 ## Deploy on AWS Apprunner
 1. Fork LiteLLM https://github.com/BerriAI/litellm 
 2. Navigate to to App Runner on AWS Console: https://console.aws.amazon.com/apprunner/home#/services
-3. Click "Create Service" <Image img={require('../img/aws_0.png')} />
-4. Set Source and deployment
-  - Select Repository type as "Source code repository" 
-  - Select GitHub as Provider
-  <Image img={require('../img/aws_1.png')} />
-  - Select your litellm fork as "Repository"
-  - Set litellm_server as Source directory
-  <Image img={require('../img/aws_2.png')} />
-5. Configure build
-  - Set "Runtime" to Python3
-  - Set "Build command" to `pip install -r requirements.txt`
-  - Set "Start command" to  uvicorn main:app --host 0.0.0.0 --port 8080
-  <Image img={require('../img/aws_3.png')} />
-6. Configure service
-  - Optional - Set LLM API Keys, example `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`
-  - If you want to pass LLM API keys as params to `/chat/completions` then this is not required
-  <Image img={require('../img/aws_4.png')} />
-7. Review and Create
-  - Click Deploy
-  - On successfull deploy you should see your litellm server endpoint
-  <Image img={require('../img/aws_5.png')} />
-8. Testing your endpoint
+
+<iframe width="800" height="450" src="https://www.loom.com/embed/5fccced4dde8461a8caeee97addb2231?sid=eac60660-073e-455e-a737-b3d05a5a756a" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
+
+3. Testing your endpoint
     Assuming `OPENAI_API_KEY` is set in the environment variables
     ```shell
     curl https://b2w6emmkzp.us-east-1.awsapprunner.com /v1/chat/completions \
@@ -205,6 +187,7 @@ On a successfull deploy https://dashboard.render.com/ should display the followi
         "temperature": 0.7
       }'
     ```
+
 
 ## Advanced
 ### Caching - Completion() and Embedding() Responses
