@@ -91,7 +91,8 @@ async def chat_completion(request: Request):
     try:
         data = await request.json()
         # default to always using the "ENV" variables, only if AUTH_STRATEGY==DYNAMIC then reads headers
-        if os.getenv("AUTH_STRATEGY", None) == "DYNAMIC" and "authorization" in request.headers: # if users pass LLM api keys as part of header
+        keys_in_environment, _ = litellm.validate_environment(model=data["model"])
+        if (keys_in_environment is False or os.getenv("AUTH_STRATEGY", None) == "DYNAMIC") and "authorization" in request.headers: # if users pass LLM api keys as part of header
             api_key = request.headers.get("authorization")
             api_key = api_key.replace("Bearer", "").strip() 
             if len(api_key.strip()) > 0:
