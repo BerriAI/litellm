@@ -48,7 +48,7 @@ $ uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
 ### Custom Config 
-1. Create + Modify router_config.yaml (save your azure/openai/etc. deployment info)
+1. Create + Modify [router_config.yaml](https://github.com/BerriAI/litellm/blob/main/router_config_template.yaml) (save your azure/openai/etc. deployment info)
 ```shell
 cp ./router_config_template.yaml ./router_config.yaml
 ```
