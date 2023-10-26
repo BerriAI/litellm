@@ -29,7 +29,7 @@ curl http://0.0.0.0:8000/v1/chat/completions \
    }'
 ```
 
-[**See how to call Huggingface,Bedrock,TogetherAI,Anthropic, etc.**]([https://docs.litellm.ai/docs/simple_proxy](https://docs.litellm.ai/docs/providers))
+[**See how to call Huggingface,Bedrock,TogetherAI,Anthropic, etc.**](https://docs.litellm.ai/docs/providers)
 ## Endpoints:
 - `/chat/completions` - chat completions endpoint to call 100+ LLMs
 - `/router/completions` - for multiple deployments of the same model (e.g. Azure OpenAI), uses the least used deployment. [Learn more](https://docs.litellm.ai/docs/routing)
