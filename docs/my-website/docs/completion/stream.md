@@ -35,7 +35,7 @@ print(response)
 We've implemented an `__anext__()` function in the streaming object returned. This enables async iteration over the streaming object. 
 
 ### Usage
-Here's an example of using it with openai. But this 
+Here's an example of using it with openai.
 ```python
 from litellm import completion
 import asyncio, os, traceback, time
