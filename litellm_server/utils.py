@@ -55,6 +55,12 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: Optio
     except:
         pass
 
+    ## LITELLM MODULE SETTINGS (e.g. litellm.drop_params=True,..)
+    litellm_settings = config.get('litellm_settings', None)
+    if litellm_settings: 
+        for key, value in litellm_settings.items(): 
+            setattr(litellm, key, value)
+
     ## MODEL LIST
     model_list = config.get('model_list', None)
     if model_list: 
