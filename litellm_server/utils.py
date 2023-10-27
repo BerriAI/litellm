@@ -43,13 +43,12 @@ def set_callbacks():
 
 
 
-def load_router_config(router: Optional[litellm.Router]):
+def load_router_config(router: Optional[litellm.Router], config_file_path: Optional[str]='/app/config.yaml'):
     config = {}
-    config_file = '/app/config.yaml'
 
     try: 
-        if os.path.exists(config_file):
-            with open(config_file, 'r') as file:
+        if os.path.exists(config_file_path):
+            with open(config_file_path, 'r') as file:
                 config = yaml.safe_load(file)
         else:
             pass
