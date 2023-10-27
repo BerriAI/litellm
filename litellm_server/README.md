@@ -32,8 +32,31 @@ curl http://0.0.0.0:8000/v1/chat/completions \
 [**See how to call Huggingface,Bedrock,TogetherAI,Anthropic, etc.**](https://docs.litellm.ai/docs/providers)
 ## Endpoints:
 - `/chat/completions` - chat completions endpoint to call 100+ LLMs
-- `/router/completions` - for multiple deployments of the same model (e.g. Azure OpenAI), uses the least used deployment. [Learn more](https://docs.litellm.ai/docs/routing)
 - `/models` - available models on server
+
+## Save Model-specific params (API Base, API Keys, Temperature, etc.)
+Use the [router_config_template.yaml](https://github.com/BerriAI/litellm/blob/main/router_config_template.yaml) to save model-specific information like api_base, api_key, temperature, max_tokens, etc. 
+
+1. Create a `config.yaml` file
+```shell
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params: # params for litellm.completion() - https://docs.litellm.ai/docs/completion/input#input---request-body
+      model: azure/chatgpt-v-2 # azure/<your-deployment-name>
+      api_key: your_azure_api_key
+      api_version: your_azure_api_version
+      api_base: your_azure_api_base
+  - model_name: mistral-7b
+    litellm_params:
+      model: ollama/mistral
+      api_base: your_ollama_api_base
+```
+
+2. Start the server
+
+```shell
+docker run --name litellm_server_1 -e PORT=8000 -p 8000:8000 -v $(pwd)/config.yaml:/app/config.yaml litellm_server
+```
 
 ## Running Locally
 ```shell 
