@@ -1,14 +1,30 @@
-# Sentry Tutorial 
+import Image from '@theme/IdealImage';
+
+# Sentry - Log LLM Exceptions
 [Sentry](https://sentry.io/) provides error monitoring for production. LiteLLM can add breadcrumbs and send exceptions to Sentry with this integration
 
-This works on normal, async and streaming completion calls
+Track exceptions for:
+- litellm.completion() - completion()for 100+ LLMs
+- litellm.acompletion() - async completion()
+- Streaming completion() & acompletion() calls
 
-### usage 
+<Image img={require('../../img/sentry.png')} />
 
+
+## Usage
+
+### Set SENTRY_DSN & callback
+
+```python
+import litellm, os
+os.environ["SENTRY_DSN"] = "your-sentry-url"
+litellm.failure_callback=["sentry"]
+```
+
+### Sentry callback with completion
 ```python
 import litellm
 from litellm import completion 
-litellm.set_verbose = True
 
 litellm.input_callback=["sentry"] # adds sentry breadcrumbing
 litellm.failure_callback=["sentry"] # [OPTIONAL] if you want litellm to capture -> send exception to sentry
