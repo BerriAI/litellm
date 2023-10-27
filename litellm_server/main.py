@@ -98,6 +98,7 @@ async def chat_completion(request: Request):
             if len(api_key.strip()) > 0:
                 api_key = api_key
                 data["api_key"] = api_key
+        print(f"data going into litellm: {data}")
         response = litellm.completion(
             **data
         )
