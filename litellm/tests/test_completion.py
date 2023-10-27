@@ -1031,6 +1031,9 @@ def test_completion_together_ai():
 #             print("making request", model)
 #             response = completion(model="vertex_ai/codechat-bison-32k", messages=[{'role': 'user', 'content': 'hi'}])
 #             print(response)
+
+#             print(response.usage.completion_tokens)
+#             print(response['usage']['completion_tokens'])
 #             assert type(response.choices[0].message.content) == str
 #         except Exception as e:
 #             pytest.fail(f"Error occurred: {e}")
