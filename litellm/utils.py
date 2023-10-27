@@ -146,6 +146,16 @@ class Choices(OpenAIObject):
         else:
             self.message = message
 
+class Usage(OpenAIObject):
+    def __init__(self, prompt_tokens=None, completion_tokens=None, total_tokens=None, **params):
+        super(Usage, self).__init__(**params)
+        if prompt_tokens:
+            self.prompt_tokens = prompt_tokens
+        if completion_tokens:
+            self.completion_tokens = completion_tokens
+        if total_tokens:
+            self.total_tokens = total_tokens
+
 class StreamingChoices(OpenAIObject):
     def __init__(self, finish_reason=None, index=0, delta: Optional[Delta]=None, **params):
         super(StreamingChoices, self).__init__(**params)
@@ -180,15 +190,11 @@ class ModelResponse(OpenAIObject):
         else:
             self._response_ms = None
         self.model = model
-        self.usage = (
-            usage
-            if usage
-            else {
-                "prompt_tokens": None,
-                "completion_tokens": None,
-                "total_tokens": None,
-            }
-        )
+        if usage:
+            self.usage = usage
+        else:
+            print("using the usage class")
+            self.usage = Usage()
         super(ModelResponse, self).__init__(**params)
 
     def to_dict_recursive(self):
