@@ -58,5 +58,5 @@ docker build -t litellm_server . --build-arg CONFIG_FILE=./router_config.yaml
 ```
 3. Run Docker Image
 ```shell
-docker run --name litellm-proxy -e PORT=8000 -p 8000:8000 litellm_server
+docker run --name litellm_server -e PORT=8000 -p 8000:8000 litellm_server
 ```
