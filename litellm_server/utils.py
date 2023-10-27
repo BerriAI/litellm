@@ -67,4 +67,4 @@ def load_router_config(router: Optional[litellm.Router]):
         for key, value in environment_variables.items(): 
             os.environ[key] = value
 
-    return router
+    return router, model_list
