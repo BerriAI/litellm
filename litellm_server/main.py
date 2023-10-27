@@ -39,6 +39,8 @@ else:
 @router.get("/models")  # if project requires model list
 def model_list():
     all_models = litellm.utils.get_valid_models()
+    if llm_model_list: 
+        all_models += llm_model_list
     return dict(
         data=[
             {
