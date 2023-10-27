@@ -6,19 +6,224 @@ import TabItem from '@theme/TabItem';
 
 A simple, fast, and lightweight **OpenAI-compatible server** to call 100+ LLM APIs in the OpenAI Input/Output format
 
-## Endpoints:
-- `/chat/completions` - chat completions endpoint to call 100+ LLMs
-- `/models` - available models on server
-
-[![Deploy](https://deploy.cloud.run/button.svg)](https://l.linklyhq.com/l/1uHtX)
-[![Deploy](https://render.com/images/deploy-to-render-button.svg)](https://l.linklyhq.com/l/1uHsr)
-[![Deploy](../img/deploy-to-aws.png)](https://docs.litellm.ai/docs/simple_proxy#deploy-on-aws-apprunner)
+[**See Code**](https://github.com/BerriAI/litellm/tree/main/litellm_server)
 
 :::info
 We want to learn how we can make the server better! Meet the [founders](https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version) or
 join our [discord](https://discord.gg/wuPM9dRgDw)
 ::: 
 
+## Usage 
+
+```shell
+docker run -e PORT=8000 -e OPENAI_API_KEY=<your-openai-key> -p 8000:8000 ghcr.io/berriai/litellm:latest
+
+# UVICORN: OpenAI Proxy running on http://0.0.0.0:8000
+```
+
+```shell
+curl http://0.0.0.0:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+     "model": "gpt-3.5-turbo",
+     "messages": [{"role": "user", "content": "Say this is a test!"}],
+     "temperature": 0.7
+   }'
+```
+
+#### Other supported models:
+<Tabs>
+<TabItem value="bedrock" label="Bedrock">
+
+```shell
+$ docker run -e PORT=8000 -e AWS_ACCESS_KEY_ID=<your-access-key> -e AWS_SECRET_ACCESS_KEY=<your-secret-key> -p 8000:8000 ghcr.io/berriai/litellm:latest
+```
+
+</TabItem>
+<TabItem value="huggingface" label="Huggingface">
+
+If, you're calling it via Huggingface Inference Endpoints. 
+```shell
+$ docker run -e PORT=8000 -e HUGGINGFACE_API_KEY=<your-api-key> -p 8000:8000 ghcr.io/berriai/litellm:latest
+```
+
+Else,
+```shell
+$ docker run -e PORT=8000 -p 8000:8000 ghcr.io/berriai/litellm:latest
+```
+
+
+</TabItem>
+<TabItem value="anthropic" label="Anthropic">
+
+```shell
+$ docker run -e PORT=8000 -e ANTHROPIC_API_KEY=<your-api-key> -p 8000:8000 ghcr.io/berriai/litellm:latest
+```
+
+</TabItem>
+
+<TabItem value="ollama" label="Ollama">
+
+```shell
+$ docker run -e PORT=8000 -e OLLAMA_API_BASE=<your-ollama-api-base> -p 8000:8000 ghcr.io/berriai/litellm:latest
+```
+
+</TabItem>
+
+
+<TabItem value="together_ai" label="TogetherAI">
+
+```shell
+$ docker run -e PORT=8000 -e TOGETHERAI_API_KEY=<your-api-key> -p 8000:8000 ghcr.io/berriai/litellm:latest
+```
+
+</TabItem>
+
+<TabItem value="replicate" label="Replicate">
+
+```shell
+$ docker run -e PORT=8000 -e REPLICATE_API_KEY=<your-api-key> -p 8000:8000 ghcr.io/berriai/litellm:latest
+```
+
+</TabItem>
+
+<TabItem value="palm" label="Palm">
+
+```shell
+$ docker run -e PORT=8000 -e PALM_API_KEY=<your-api-key> -p 8000:8000 ghcr.io/berriai/litellm:latest
+```
+
+</TabItem>
+
+<TabItem value="azure" label="Azure OpenAI">
+
+```shell
+$ docker run -e PORT=8000 -e AZURE_API_KEY=<your-api-key> -e AZURE_API_BASE=<your-api-base> -p 8000:8000 ghcr.io/berriai/litellm:latest
+```
+
+</TabItem>
+
+<TabItem value="ai21" label="AI21">
+
+```shell
+$ docker run -e PORT=8000 -e AI21_API_KEY=<your-api-key> -p 8000:8000 ghcr.io/berriai/litellm:latest
+```
+
+</TabItem>
+
+<TabItem value="cohere" label="Cohere">
+
+```shell
+$ docker run -e PORT=8000 -e COHERE_API_KEY=<your-api-key> -p 8000:8000 ghcr.io/berriai/litellm:latest
+```
+
+</TabItem>
+
+</Tabs>
+
+## Endpoints:
+- `/chat/completions` - chat completions endpoint to call 100+ LLMs
+- `/embeddings` - embedding endpoint for Azure, OpenAI, Huggingface endpoints
+- `/models` - available models on server
+
+
+## Save Model-specific params (API Base, API Keys, Temperature, etc.)
+Use the [router_config_template.yaml](https://github.com/BerriAI/litellm/blob/main/router_config_template.yaml) to save model-specific information like api_base, api_key, temperature, max_tokens, etc. 
+
+1. Create a `config.yaml` file
+```shell
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params: # params for litellm.completion() - https://docs.litellm.ai/docs/completion/input#input---request-body
+      model: azure/chatgpt-v-2 # azure/<your-deployment-name>
+      api_key: your_azure_api_key
+      api_version: your_azure_api_version
+      api_base: your_azure_api_base
+  - model_name: mistral-7b
+    litellm_params:
+      model: ollama/mistral
+      api_base: your_ollama_api_base
+```
+
+2. Start the server
+
+```shell
+docker run -e PORT=8000 -p 8000:8000 -v $(pwd)/config.yaml:/app/config.yaml ghcr.io/berriai/litellm:latest
+```
+## Caching 
+
+Add Redis Caching to your server via environment variables  
+
+```env
+### REDIS
+REDIS_HOST = "" 
+REDIS_PORT = "" 
+REDIS_PASSWORD = "" 
+```
+
+Docker command: 
+
+```shell
+docker run -e REDIST_HOST=<your-redis-host> -e REDIS_PORT=<your-redis-port> -e REDIS_PASSWORD=<your-redis-password> -e PORT=8000 -p 8000:8000 ghcr.io/berriai/litellm:latest
+```
+
+## Logging 
+
+1. Debug Logs
+Print the input/output params by setting `SET_VERBOSE = "True"`.
+
+Docker command:
+
+```shell
+docker run -e SET_VERBOSE="True" -e PORT=8000 -p 8000:8000 ghcr.io/berriai/litellm:latest
+```
+2. Add Langfuse Logging to your server via environment variables  
+
+```env
+### LANGFUSE
+LANGFUSE_PUBLIC_KEY = ""
+LANGFUSE_SECRET_KEY = ""
+# Optional, defaults to https://cloud.langfuse.com
+LANGFUSE_HOST = "" # optional
+```
+
+Docker command: 
+
+```shell
+docker run -e LANGFUSE_PUBLIC_KEY=<your-public-key> -e LANGFUSE_SECRET_KEY=<your-secret-key> -e LANGFUSE_HOST=<your-langfuse-host> -e PORT=8000 -p 8000:8000 ghcr.io/berriai/litellm:latest
+```
+
+## Tutorials 
+
+<Tabs>
+<TabItem value="chat-ui" label="Chat UI">
+Here's the `docker-compose.yml` for running LiteLLM Server with Mckay Wrigley's Chat-UI: 
+```yaml
+version: '3'
+services:
+  container1:
+    image: ghcr.io/berriai/litellm:latest
+    ports:
+      - '8000:8000'
+    environment:
+      - PORT=8000
+      - OPENAI_API_KEY=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
+
+  container2:
+    image: ghcr.io/mckaywrigley/chatbot-ui:main
+    ports:
+      - '3000:3000'
+    environment:
+      - OPENAI_API_KEY=my-fake-key
+      - OPENAI_API_HOST=http://container1:8000
+```
+
+Run this via: 
+```shell
+docker-compose up
+```
+</TabItem>
+</Tabs>
 
 ## Local Usage 
 
@@ -33,59 +238,16 @@ $ cd ./litellm/litellm_server
 $ uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
-### Test Request
-Ensure your API keys are set in the Environment for these requests
-
-<Tabs>
-<TabItem value="openai" label="OpenAI">
-
-```shell
-curl http://0.0.0.0:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-     "model": "gpt-3.5-turbo",
-     "messages": [{"role": "user", "content": "Say this is a test!"}],
-     "temperature": 0.7
-   }'
-```
-
-</TabItem>
-<TabItem value="azure" label="Azure">
-
-```shell
-curl http://0.0.0.0:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-     "model": "azure/<your-deployment-name>",
-     "messages": [{"role": "user", "content": "Say this is a test!"}],
-     "temperature": 0.7
-   }'
-```
-
-</TabItem>
-
-<TabItem value="anthropic" label="Anthropic">
-
-```shell
-curl http://0.0.0.0:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-     "model": "claude-2",
-     "messages": [{"role": "user", "content": "Say this is a test!"}],
-     "temperature": 0.7,
-   }'
-```
-</TabItem>
-
-</Tabs>
-
-
 ## Setting LLM API keys
 This server allows two ways of passing API keys to litellm
 - Environment Variables - This server by default assumes the LLM API Keys are stored in the environment variables
 - Dynamic Variables passed to `/chat/completions`
   - Set `AUTH_STRATEGY=DYNAMIC` in the Environment 
   - Pass required auth params `api_key`,`api_base`, `api_version` with the request params
+
+
+<Tabs>
+<TabItem value="gcp-run" label="Google Cloud Run">
 
 ## Deploy on Google Cloud Run
 **Click the button** to deploy to Google Cloud Run
@@ -159,6 +321,8 @@ More info [here](https://cloud.google.com/run/docs/configuring/services/environm
 Example `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`
 <Image img={require('../img/cloud_run3.png')} />
 
+</TabItem>
+<TabItem value="render" label="Render">
 
 ## Deploy on Render
 **Click the button** to deploy to Render
@@ -169,6 +333,8 @@ On a successfull deploy https://dashboard.render.com/ should display the followi
 <Image img={require('../img/render1.png')} />
 
 <Image img={require('../img/render2.png')} />
+</TabItem>
+<TabItem value="aws-apprunner" label="AWS Apprunner">
 
 ## Deploy on AWS Apprunner
 1. Fork LiteLLM https://github.com/BerriAI/litellm 
@@ -225,6 +391,8 @@ On a successfull deploy https://dashboard.render.com/ should display the followi
 
   </Tabs>
 
+</TabItem>
+</Tabs>
 
 ## Advanced
 ### Caching - Completion() and Embedding() Responses

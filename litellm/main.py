@@ -1087,6 +1087,7 @@ def completion(
             api_base = (
                 litellm.api_base or
                 api_base or
+                get_secret("OLLAMA_API_BASE") or 
                 "http://localhost:11434"
                 
             )
