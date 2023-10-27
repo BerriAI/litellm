@@ -194,10 +194,7 @@ def init_bedrock_client(
 
         # we need to read region name from env
         # I assume majority of users use .env for auth 
-        region_name = (
-            get_secret("AWS_REGION_NAME") or
-            "us-west-2"  # default to us-west-2 if user not specified
-        )
+        region_name = get_secret("AWS_REGION_NAME") # reads env for AWS_REGION_NAME, defaults to None
         client = boto3.client(
             service_name="bedrock-runtime",
             region_name=region_name,
