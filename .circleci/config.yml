@@ -36,7 +36,7 @@ jobs:
             pip install appdirs
             pip install langchain
             pip install numpydoc
-            pip install traceloop
+            pip install traceloop-sdk
       - save_cache:
           paths:
             - ./venv
