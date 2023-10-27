@@ -5,6 +5,10 @@ import TabItem from '@theme/TabItem';
 
 https://github.com/BerriAI/litellm
 
+[![Deploy](https://deploy.cloud.run/button.svg)](https://l.linklyhq.com/l/1uHtX)
+[![Deploy](https://render.com/images/deploy-to-render-button.svg)](https://l.linklyhq.com/l/1uHsr)
+[![Deploy](../img/deploy-to-aws.png)](https://docs.litellm.ai/docs/simple_proxy#deploy-on-aws-apprunner)
+
 import QuickStart from '../src/components/QuickStart.js'
 
 ## **Call 100+ LLMs using the same Input/Output Format**
