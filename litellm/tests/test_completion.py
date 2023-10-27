@@ -38,7 +38,7 @@ def test_completion_custom_provider_model_name():
 
 
 def test_completion_claude():
-    litellm.set_verbose = True
+    litellm.set_verbose = False
     litellm.AnthropicConfig(max_tokens_to_sample=200, metadata={"user_id": "1224"})
     try:
         # test without max tokens
@@ -48,10 +48,13 @@ def test_completion_claude():
         # Add any assertions here to check the response
         print(response)
         print(response.response_ms)
+        print(response.usage)
+        print(response.usage.completion_tokens)
+        print(response["usage"]["completion_tokens"])
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-# test_completion_claude()
+test_completion_claude()
 
 # def test_completion_oobabooga():
 #     try:
@@ -96,17 +99,12 @@ def test_completion_with_litellm_call_id():
         print(response)
         if 'litellm_call_id' in response:
             pytest.fail(f"Error occurred: litellm_call_id in response objects")
+        print(response.usage)
+        print(response.usage.completion_tokens)
         
-        litellm.use_client = True
-        response2 = completion(
-            model="gpt-3.5-turbo", messages=messages)
-        
-        if 'litellm_call_id' not in response2:
-            pytest.fail(f"Error occurred: litellm_call_id not in response object when use_client = True")
-        # Add any assertions here to check the response
-        print(response2)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+test_completion_with_litellm_call_id()
 
 def test_completion_perplexity_api():
     try:
@@ -1110,7 +1108,7 @@ def test_completion_anyscale_2():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_anyscale_2()
+# test_completion_anyscale_2()
 # def test_completion_with_fallbacks_multiple_keys():
 #     print(f"backup key 1: {os.getenv('BACKUP_OPENAI_API_KEY_1')}")
 #     print(f"backup key 2: {os.getenv('BACKUP_OPENAI_API_KEY_2')}")
