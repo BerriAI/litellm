@@ -5,10 +5,6 @@ import TabItem from '@theme/TabItem';
 
 https://github.com/BerriAI/litellm
 
-[![Deploy](https://deploy.cloud.run/button.svg)](https://l.linklyhq.com/l/1uHtX)
-[![Deploy](https://render.com/images/deploy-to-render-button.svg)](https://l.linklyhq.com/l/1uHsr)
-[![Deploy](../img/deploy-to-aws.png)](https://docs.litellm.ai/docs/simple_proxy#deploy-on-aws-apprunner)
-
 import QuickStart from '../src/components/QuickStart.js'
 
 ## **Call 100+ LLMs using the same Input/Output Format**
@@ -399,7 +395,20 @@ response = completion(
 )
 ```
 
-Need a dedicated key? Email us @ krrish@berri.ai
+## 💥 LiteLLM Server - Deploy LiteLLM
+1-Click Deploy 
+A simple, fast, and lightweight OpenAI-compatible server to call 100+ LLM APIs in the OpenAI Input/Output format
+
+### Server Endpoints:
+- `/chat/completions` - chat completions endpoint to call 100+ LLMs
+- `/models` - available models on serve
+
+👉 Docs: https://docs.litellm.ai/docs/simple_proxy
+
+[![Deploy](https://deploy.cloud.run/button.svg)](https://l.linklyhq.com/l/1uHtX)
+[![Deploy](https://render.com/images/deploy-to-render-button.svg)](https://l.linklyhq.com/l/1uHsr)
+[![Deploy](../img/deploy-to-aws.png)](https://docs.litellm.ai/docs/simple_proxy#deploy-on-aws-apprunner)
+
 
 
 ## More details
