@@ -92,12 +92,16 @@ async def chat_completion(request: Request):
         data = await request.json()
         # default to always using the "ENV" variables, only if AUTH_STRATEGY==DYNAMIC then reads headers
         keys_in_environment, _ = litellm.validate_environment(model=data["model"])
+        print(f"keys_in_environment: {keys_in_environment}")
+        print(f"auth in request headers: {request.headers}")
         if (keys_in_environment is False or os.getenv("AUTH_STRATEGY", None) == "DYNAMIC") and "authorization" in request.headers: # if users pass LLM api keys as part of header
             api_key = request.headers.get("authorization")
+            print(f"api key from headers: {api_key}")
             api_key = api_key.replace("Bearer", "").strip() 
             if len(api_key.strip()) > 0:
                 api_key = api_key
                 data["api_key"] = api_key
+            print(f"final api key: {api_key}")
         print(f"data going into litellm: {data}")
         response = litellm.completion(
             **data
