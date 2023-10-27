@@ -4079,8 +4079,7 @@ def completion_with_fallbacks(**kwargs):
                 if isinstance(model, dict): # completion(model="gpt-4", fallbacks=[{"api_key": "", "api_base": ""}, {"api_key": "", "api_base": ""}])
                     kwargs["api_key"] = model.get("api_key", None)
                     kwargs["api_base"] = model.get("api_base", None)
-                    model = original_model
-                    print(f"switched api keys")
+                    model = model.get("model", original_model)
                 elif (
                     model in rate_limited_models
                 ):  # check if model is currently cooling down
