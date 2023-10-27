@@ -29,7 +29,11 @@ llm_router: Optional[litellm.Router] = None
 llm_model_list: Optional[list] = None
 
 set_callbacks() # sets litellm callbacks for logging if they exist in the environment 
-llm_router, llm_model_list = load_router_config(router=llm_router)
+
+if "CONFIG_FILE_PATH" in os.environ:
+    llm_router, llm_model_list = load_router_config(router=llm_router, config_file_path=os.getenv("CONFIG_FILE_PATH"))
+else:
+    llm_router, llm_model_list = load_router_config(router=llm_router)
 #### API ENDPOINTS ####
 @router.get("/v1/models")
 @router.get("/models")  # if project requires model list
@@ -103,7 +107,12 @@ async def chat_completion(request: Request):
                 data["api_key"] = api_key
         ## CHECK CONFIG ## 
         if llm_model_list and data["model"] in [m["model_name"] for m in llm_model_list]:
-             return await router_completion(request=request)
+            for m in llm_model_list: 
+                if data["model"] == m["model_name"]: 
+                    for key, value in m["litellm_params"].items(): 
+                        data[key] = value
+                    break
+        print(f"data going into litellm completion: {data}")
         response = litellm.completion(
             **data
         )
