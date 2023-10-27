@@ -12,6 +12,7 @@ litellm.failure_callback = ["sentry"]
 import time
 
 def test_exception_tracking():
+    print('expect this to fail and log to sentry')
     litellm.set_verbose=True
     os.environ["OPENAI_API_KEY"] = "ss"
     try:
