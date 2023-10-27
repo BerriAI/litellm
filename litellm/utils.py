@@ -1997,6 +1997,12 @@ def validate_environment(model: Optional[str]=None) -> dict:
                 keys_in_environment = True
             else:
                 missing_keys.append("NLP_CLOUD_API_KEY")
+        elif custom_llm_provider == "bedrock": 
+            if "AWS_ACCESS_KEY_ID" in os.environ and "AWS_SECRET_ACCESS_KEY" in os.environ: 
+                keys_in_environment = True
+            else:
+                missing_keys.append("AWS_ACCESS_KEY_ID")
+                missing_keys.append("AWS_SECRET_ACCESS_KEY")
     else:
         ## openai - chatcompletion + text completion
         if model in litellm.open_ai_chat_completion_models or litellm.open_ai_text_completion_models:
