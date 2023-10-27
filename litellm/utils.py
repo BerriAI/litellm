@@ -2105,7 +2105,7 @@ def set_callbacks(callback_list, function_id=None):
                     else "1.0"
                 )
                 sentry_sdk_instance.init(
-                    dsn=os.environ.get("SENTRY_API_URL"),
+                    dsn=os.environ.get("SENTRY_DSN"),
                     traces_sample_rate=float(sentry_trace_rate),
                 )
                 capture_exception = sentry_sdk_instance.capture_exception
