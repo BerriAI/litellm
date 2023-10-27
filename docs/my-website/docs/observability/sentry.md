@@ -14,7 +14,7 @@ litellm.input_callback=["sentry"] # adds sentry breadcrumbing
 litellm.failure_callback=["sentry"] # [OPTIONAL] if you want litellm to capture -> send exception to sentry
 
 import os 
-os.environ["SENTRY_API_URL"] = "your-sentry-url"
+os.environ["SENTRY_DSN"] = "your-sentry-url"
 os.environ["OPENAI_API_KEY"] = "your-openai-key"
 
 # set bad key to trigger error 

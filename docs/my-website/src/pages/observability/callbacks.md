@@ -22,7 +22,7 @@ litellm.success_callback=["posthog", "helicone", "llmonitor"]
 litellm.failure_callback=["sentry", "llmonitor"]
 
 ## set env variables
-os.environ['SENTRY_API_URL'], os.environ['SENTRY_API_TRACE_RATE']= ""
+os.environ['SENTRY_DSN'], os.environ['SENTRY_API_TRACE_RATE']= ""
 os.environ['POSTHOG_API_KEY'], os.environ['POSTHOG_API_URL'] = "api-key", "api-url"
 os.environ["HELICONE_API_KEY"] = ""
 
