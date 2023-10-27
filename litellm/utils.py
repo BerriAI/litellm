@@ -4203,7 +4203,6 @@ def trim_messages(
     Args:
         messages: Input messages to be trimmed. Each message is a dictionary with 'role' and 'content'.
         model: The LiteLLM model being used (determines the token limit).
-        system_message: Optional system message to preserve at the start of the conversation.
         trim_ratio: Target ratio of tokens to use after trimming. Default is 0.75, meaning it will trim messages so they use about 75% of the model's token limit.
         return_response_tokens: If True, also return the number of tokens left available for the response after trimming.
         max_tokens: Instead of specifying a model or trim_ratio, you can specify this directly.
