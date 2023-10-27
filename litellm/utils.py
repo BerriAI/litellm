@@ -193,7 +193,6 @@ class ModelResponse(OpenAIObject):
         if usage:
             self.usage = usage
         else:
-            print("using the usage class")
             self.usage = Usage()
         super(ModelResponse, self).__init__(**params)
 
