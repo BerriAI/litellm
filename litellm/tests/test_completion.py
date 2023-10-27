@@ -54,7 +54,7 @@ def test_completion_claude():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_completion_claude()
+# test_completion_claude()
 
 # def test_completion_oobabooga():
 #     try:
@@ -104,7 +104,7 @@ def test_completion_with_litellm_call_id():
         
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_with_litellm_call_id()
+# test_completion_with_litellm_call_id()
 
 def test_completion_perplexity_api():
     try:
