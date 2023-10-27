@@ -144,11 +144,9 @@ def completion(
         encoding.encode(model_response["choices"][0]["message"].get("content", ""))
     )
 
-    model_response["usage"] = {
-        "prompt_tokens": prompt_tokens,
-        "completion_tokens": completion_tokens,
-        "total_tokens": prompt_tokens + completion_tokens,
-    }
+    model_response.usage.completion_tokens = completion_tokens
+    model_response.usage.prompt_tokens = prompt_tokens
+    model_response.usage.total_tokens = prompt_tokens + completion_tokens
     return model_response
 
 
