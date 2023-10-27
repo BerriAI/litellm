@@ -30,7 +30,7 @@ llm_router: Optional[litellm.Router] = None
 set_callbacks() # sets litellm callbacks for logging if they exist in the environment 
 llm_router = load_router_config(router=llm_router)
 #### API ENDPOINTS ####
-@router.post("/v1/models")
+@router.get("/v1/models")
 @router.get("/models")  # if project requires model list
 def model_list():
     all_models = litellm.utils.get_valid_models()
