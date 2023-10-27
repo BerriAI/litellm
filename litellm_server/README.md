@@ -55,7 +55,7 @@ model_list:
 2. Start the server
 
 ```shell
-docker run --name litellm_server_1 -e PORT=8000 -p 8000:8000 -v $(pwd)/config.yaml:/app/config.yaml litellm_server
+docker run -e PORT=8000 -p 8000:8000 -v $(pwd)/config.yaml:/app/config.yaml ghcr.io/berriai/litellm:latest
 ```
 
 ## Running Locally
