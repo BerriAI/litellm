@@ -19,9 +19,8 @@ LiteLLM Server provides:
 
 ```shell
 docker run -e PORT=8000 -e OPENAI_API_KEY=<your-openai-key> -p 8000:8000 ghcr.io/berriai/litellm:latest
-
-# UVICORN: OpenAI Proxy running on http://0.0.0.0:8000
 ```
+OpenAI Proxy running on http://0.0.0.0:8000
 
 ```shell
 curl http://0.0.0.0:8000/v1/chat/completions \
