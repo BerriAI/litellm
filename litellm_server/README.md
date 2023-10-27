@@ -61,6 +61,49 @@ model_list:
 ```shell
 docker run -e PORT=8000 -p 8000:8000 -v $(pwd)/config.yaml:/app/config.yaml ghcr.io/berriai/litellm:latest
 ```
+## Caching 
+
+Add Redis Caching to your server via environment variables  
+
+```env
+### REDIS
+REDIS_HOST = "" 
+REDIS_PORT = "" 
+REDIS_PASSWORD = "" 
+```
+
+Docker command: 
+
+```shell
+docker run -e REDIST_HOST=<your-redis-host> -e REDIS_PORT=<your-redis-port> -e REDIS_PASSWORD=<your-redis-password> -e PORT=8000 -p 8000:8000 ghcr.io/berriai/litellm:latest
+```
+
+## Logging 
+
+1. Debug Logs
+Print the input/output params by setting `SET_VERBOSE = "True"`.
+
+Docker command:
+
+```shell
+docker run -e SET_VERBOSE="True" -e PORT=8000 -p 8000:8000 ghcr.io/berriai/litellm:latest
+```
+
+Add Langfuse Logging to your server via environment variables  
+
+```env
+### LANGFUSE
+LANGFUSE_PUBLIC_KEY = ""
+LANGFUSE_SECRET_KEY = ""
+# Optional, defaults to https://cloud.langfuse.com
+LANGFUSE_HOST = "" # optional
+```
+
+Docker command: 
+
+```shell
+docker run -e LANGFUSE_PUBLIC_KEY=<your-public-key> -e LANGFUSE_SECRET_KEY=<your-secret-key> -e LANGFUSE_HOST=<your-langfuse-host> -e PORT=8000 -p 8000:8000 ghcr.io/berriai/litellm:latest
+```
 
 ## Running Locally
 ```shell 
@@ -73,7 +116,6 @@ $ cd ./litellm/litellm_server
 ```shell
 $ uvicorn main:app --host 0.0.0.0 --port 8000
 ```
-
 ### Custom Config 
 1. Create + Modify [router_config.yaml](https://github.com/BerriAI/litellm/blob/main/router_config_template.yaml) (save your azure/openai/etc. deployment info)
 ```shell
