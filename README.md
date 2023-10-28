@@ -82,6 +82,27 @@ Never fail a request using LiteLLM
 from litellm import completion
 # if gpt-4 fails, retry the request with gpt-3.5-turbo->command-nightly->claude-instant-1
 response = completion(model="gpt-4",messages=messages, fallbacks=["gpt-3.5-turbo" "command-nightly", "claude-instant-1"])
+
+# if azure/gpt-4 fails, retry the request with fallback api_keys/api_base
+response = completion(model="azure/gpt-4", messages=messages, api_key=api_key, fallbacks=[{"api_key": "good-key-1"}, {"api_key": "good-key-2", "api_base": "good-api-base-2"}])
+```
+
+## Logging Observability - Log LLM Input/Output ([Docs](https://docs.litellm.ai/docs/observability/callbacks))
+LiteLLM exposes pre defined callbacks to send data to LLMonitor, Langfuse, Helicone, Promptlayer, Traceloop, Slack
+```python
+from litellm import completion
+
+## set env variables for logging tools
+os.environ["PROMPTLAYER_API_KEY"] = "your-promptlayer-key"
+os.environ["LLMONITOR_APP_ID"] = "your-llmonitor-app-id"
+
+os.environ["OPENAI_API_KEY"]
+
+# set callbacks
+litellm.success_callback = ["promptlayer", "llmonitor"] # log input/output to promptlayer, llmonitor, supabase
+
+#openai call
+response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])
 ```
 
 
@@ -110,23 +131,6 @@ response = completion(model="gpt-4",messages=messages, fallbacks=["gpt-3.5-turbo
 | [deepinfra](https://docs.litellm.ai/docs/providers/deepinfra)  | ✅ | ✅ | ✅ | ✅ |
 
 [**Read the Docs**](https://docs.litellm.ai/docs/)
-## Logging Observability - Log LLM Input/Output ([Docs](https://docs.litellm.ai/docs/observability/callbacks))
-LiteLLM exposes pre defined callbacks to send data to LLMonitor, Langfuse, Helicone, Promptlayer, Traceloop, Slack
-```python
-from litellm import completion
-
-## set env variables for logging tools
-os.environ["PROMPTLAYER_API_KEY"] = "your-promptlayer-key"
-os.environ["LLMONITOR_APP_ID"] = "your-llmonitor-app-id"
-
-os.environ["OPENAI_API_KEY"]
-
-# set callbacks
-litellm.success_callback = ["promptlayer", "llmonitor"] # log input/output to promptlayer, llmonitor, supabase
-
-#openai call
-response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])
-```
 
 ## Contributing
 To contribute: Clone the repo locally -> Make a change -> Submit a PR with the change. 
