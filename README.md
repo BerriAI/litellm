@@ -64,6 +64,7 @@ print(response)
 liteLLM supports streaming the model response back, pass `stream=True` to get a streaming iterator in response.  
 Streaming is supported for all models (Bedrock, Huggingface, TogetherAI, Azure, OpenAI, etc.)
 ```python
+from litellm import completion
 response = completion(model="gpt-3.5-turbo", messages=messages, stream=True)
 for chunk in response:
     print(chunk['choices'][0]['delta'])
@@ -73,6 +74,16 @@ result = completion('claude-2', messages, stream=True)
 for chunk in result:
   print(chunk['choices'][0]['delta'])
 ```
+
+## Reliability - Fallback LLMs
+Never fail a request using LiteLLM
+
+```python
+from litellm import completion
+# if gpt-4 fails, retry the request with gpt-3.5-turbo->command-nightly->claude-instant-1
+response = completion(model="gpt-4",messages=messages, fallbacks=["gpt-3.5-turbo" "command-nightly", "claude-instant-1"])
+```
+
 
 ## Supported Provider ([Docs](https://docs.litellm.ai/docs/providers))
 | Provider      | [Completion](https://docs.litellm.ai/docs/#basic-usage) | [Streaming](https://docs.litellm.ai/docs/completion/stream#streaming-responses)  | [Async Completion](https://docs.litellm.ai/docs/completion/stream#async-completion)  | [Async Streaming](https://docs.litellm.ai/docs/completion/stream#async-streaming)  |
