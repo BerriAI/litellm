@@ -6,6 +6,12 @@ import TabItem from '@theme/TabItem';
 
 A simple, fast, and lightweight **OpenAI-compatible server** to call 100+ LLM APIs in the OpenAI Input/Output format
 
+LiteLLM Server supports:
+
+* LLM API Calls in the OpenAI ChatCompletions format
+* Caching + Logging capabilities (Redis and Langfuse, respectively)
+* Setting API keys in the request headers or in the .env
+
 [**See Code**](https://github.com/BerriAI/litellm/tree/main/litellm_server)
 
 :::info
@@ -16,14 +22,14 @@ join our [discord](https://discord.gg/wuPM9dRgDw)
 ## Usage 
 
 ```shell
-docker run -e PORT=8000 -e OPENAI_API_KEY=<your-openai-key> -p 8000:8000 ghcr.io/berriai/litellm:latest
-
-# UVICORN: OpenAI Proxy running on http://0.0.0.0:8000
+docker run -e PORT=8000 -p 8000:8000 ghcr.io/berriai/litellm:latest
 ```
+OpenAI Proxy running on http://0.0.0.0:8000
 
 ```shell
 curl http://0.0.0.0:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $YOUR_API_KEY"
   -d '{
      "model": "gpt-3.5-turbo",
      "messages": [{"role": "user", "content": "Say this is a test!"}],
@@ -42,6 +48,7 @@ $ docker run -e PORT=8000 -e AWS_ACCESS_KEY_ID=<your-access-key> -e AWS_SECRET_A
 </TabItem>
 <TabItem value="huggingface" label="Huggingface">
 
+**Set API Keys in .env**  
 If, you're calling it via Huggingface Inference Endpoints. 
 ```shell
 $ docker run -e PORT=8000 -e HUGGINGFACE_API_KEY=<your-api-key> -p 8000:8000 ghcr.io/berriai/litellm:latest
@@ -52,13 +59,39 @@ Else,
 $ docker run -e PORT=8000 -p 8000:8000 ghcr.io/berriai/litellm:latest
 ```
 
+**Set API Keys in request headers**
+```shell
+curl http://0.0.0.0:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $HUGGINGFACE_API_KEY"
+  -d '{
+     "model": "huggingface/bigcoder/starcoder",
+     "messages": [{"role": "user", "content": "Say this is a test!"}],
+     "temperature": 0.7
+   }'
+```
+
 
 </TabItem>
 <TabItem value="anthropic" label="Anthropic">
 
+**Set API Keys in .env**  
 ```shell
 $ docker run -e PORT=8000 -e ANTHROPIC_API_KEY=<your-api-key> -p 8000:8000 ghcr.io/berriai/litellm:latest
 ```
+
+**Set API Keys in request headers**
+```shell
+curl http://0.0.0.0:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $ANTHROPIC_API_KEY"
+  -d '{
+     "model": "claude-2",
+     "messages": [{"role": "user", "content": "Say this is a test!"}],
+     "temperature": 0.7
+   }'
+```
+
 
 </TabItem>
 
@@ -73,30 +106,71 @@ $ docker run -e PORT=8000 -e OLLAMA_API_BASE=<your-ollama-api-base> -p 8000:8000
 
 <TabItem value="together_ai" label="TogetherAI">
 
+**Set API Keys in .env**  
 ```shell
 $ docker run -e PORT=8000 -e TOGETHERAI_API_KEY=<your-api-key> -p 8000:8000 ghcr.io/berriai/litellm:latest
+```
+
+**Set API Keys in request headers**
+```shell
+curl http://0.0.0.0:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOGETHERAI_API_KEY"
+  -d '{
+     "model": "together_ai/togethercomputer/llama-2-70b-chat",
+     "messages": [{"role": "user", "content": "Say this is a test!"}],
+     "temperature": 0.7
+   }'
 ```
 
 </TabItem>
 
 <TabItem value="replicate" label="Replicate">
 
+**Set API Keys in .env**  
 ```shell
 $ docker run -e PORT=8000 -e REPLICATE_API_KEY=<your-api-key> -p 8000:8000 ghcr.io/berriai/litellm:latest
 ```
+
+**Set API Keys in request headers**
+```shell
+curl http://0.0.0.0:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $REPLICATE_API_KEY"
+  -d '{
+     "model": "replicate/llama-2-70b-chat:2796ee9483c3fd7aa2e171d38f4ca12251a30609463dcfd4cd76703f22e96cdf",
+     "messages": [{"role": "user", "content": "Say this is a test!"}],
+     "temperature": 0.7
+   }'
+```
+
 
 </TabItem>
 
 <TabItem value="palm" label="Palm">
 
+**Set API Keys in .env**  
 ```shell
 $ docker run -e PORT=8000 -e PALM_API_KEY=<your-api-key> -p 8000:8000 ghcr.io/berriai/litellm:latest
+```
+
+**Set API Keys in request headers**
+```shell
+curl http://0.0.0.0:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $PALM_API_KEY"
+  -d '{
+     "model": "palm/chat-bison",
+     "messages": [{"role": "user", "content": "Say this is a test!"}],
+     "temperature": 0.7
+   }'
 ```
 
 </TabItem>
 
 <TabItem value="azure" label="Azure OpenAI">
 
+**Set API Keys in .env**  
 ```shell
 $ docker run -e PORT=8000 -e AZURE_API_KEY=<your-api-key> -e AZURE_API_BASE=<your-api-base> -p 8000:8000 ghcr.io/berriai/litellm:latest
 ```
@@ -105,23 +179,57 @@ $ docker run -e PORT=8000 -e AZURE_API_KEY=<your-api-key> -e AZURE_API_BASE=<you
 
 <TabItem value="ai21" label="AI21">
 
+**Set API Keys in .env**  
 ```shell
 $ docker run -e PORT=8000 -e AI21_API_KEY=<your-api-key> -p 8000:8000 ghcr.io/berriai/litellm:latest
+```
+
+**Set API Keys in request headers**
+```shell
+curl http://0.0.0.0:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $AI21_API_KEY"
+  -d '{
+     "model": "j2-mid",
+     "messages": [{"role": "user", "content": "Say this is a test!"}],
+     "temperature": 0.7
+   }'
 ```
 
 </TabItem>
 
 <TabItem value="cohere" label="Cohere">
 
+**Set API Keys in .env**  
+
 ```shell
 $ docker run -e PORT=8000 -e COHERE_API_KEY=<your-api-key> -p 8000:8000 ghcr.io/berriai/litellm:latest
 ```
+
+**Set API Keys in request headers**
+```shell
+curl http://0.0.0.0:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $COHERE_API_KEY"
+  -d '{
+     "model": "command-nightly",
+     "messages": [{"role": "user", "content": "Say this is a test!"}],
+     "temperature": 0.7
+   }'
+```
+
 
 </TabItem>
 
 </Tabs>
 
-## Tutorials (Chat-UI, NeMO-Guardrails, PromptTools, Phoenix ArizeAI etc.)
+## Tutorials (Chat-UI, NeMO-Guardrails, PromptTools, Phoenix ArizeAI, Langchain, ragas, etc.)
+
+**Start server:**
+```shell
+`docker run -e PORT=8000 -p 8000:8000 ghcr.io/berriai/litellm:latest`
+```
+The server is now live on http://0.0.0.0:8000
 
 <Tabs>
 <TabItem value="chat-ui" label="Chat UI">
@@ -245,6 +353,89 @@ model = OpenAIModel(
     model_name="claude-2",
     temperature=0.0,
 )
+```
+</TabItem>
+<TabItem value="langchain" label="Langchain">
+
+```python
+from langchain.chat_models import ChatOpenAI
+from langchain.prompts.chat import (
+    ChatPromptTemplate,
+    SystemMessagePromptTemplate,
+    AIMessagePromptTemplate,
+    HumanMessagePromptTemplate,
+)
+from langchain.schema import AIMessage, HumanMessage, SystemMessage
+
+chat = ChatOpenAI(model_name="claude-instant-1", openai_api_key="my-anthropic-key", openai_api_base="http://0.0.0.0:8000")
+
+messages = [
+    SystemMessage(
+        content="You are a helpful assistant that translates English to French."
+    ),
+    HumanMessage(
+        content="Translate this sentence from English to French. I love programming."
+    ),
+]
+chat(messages)
+```
+</TabItem>
+<TabItem value="ragas" label="ragas">
+
+#### Evaluating with Open-Source LLMs 
+
+Use [Ragas](https://github.com/explodinggradients/ragas/blob/7b123533df80d0ada33a2cb2dd2fdedf36807f33/docs/howtos/customisations/llms.ipynb#L247) to evaluate LLMs for RAG-scenarios.
+```python
+from langchain.chat_models import ChatOpenAI
+
+inference_server_url = "http://localhost:8080/v1"
+
+chat = ChatOpenAI(
+    model="bedrock/anthropic.claude-v2",
+    openai_api_key="no-key",
+    openai_api_base=inference_server_url,
+    max_tokens=5,
+    temperature=0,
+)
+
+from ragas.metrics import (
+    context_precision,
+    answer_relevancy,
+    faithfulness,
+    context_recall,
+)
+from ragas.metrics.critique import harmfulness
+
+# change the LLM
+
+faithfulness.llm.langchain_llm = chat
+answer_relevancy.llm.langchain_llm = chat
+context_precision.llm.langchain_llm = chat
+context_recall.llm.langchain_llm = chat
+harmfulness.llm.langchain_llm = chat
+
+
+# evaluate
+from ragas import evaluate
+
+result = evaluate(
+    fiqa_eval["baseline"].select(range(5)),  # showing only 5 for demonstration
+    metrics=[faithfulness],
+)
+
+result
+```
+</TabItem>
+<TabItem value="llama_index" label="Llama Index">
+
+```python
+!pip install llama-index
+```
+```python
+from llama_index.llms import OpenAI
+
+response = OpenAI(model="claude-2", api_key="your-anthropic-key",api_base="http://0.0.0.0:8000").complete('Paul Graham is ')
+print(response)
 ```
 </TabItem>
 </Tabs>
