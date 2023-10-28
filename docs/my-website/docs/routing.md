@@ -1,4 +1,18 @@
-# Manage Multiple Deployments
+# Reliability - Model Fallbacks, Manage Multiple Deployments
+
+## Model Fallbacks
+Never fail a request using LiteLLM, LiteLLM allows you to define fallback models for completion requests
+```python
+from litellm import completion
+# if gpt-4 fails, retry the request with gpt-3.5-turbo->command-nightly->claude-instant-1
+response = completion(model="gpt-4",messages=messages, fallbacks=["gpt-3.5-turbo" "command-nightly", "claude-instant-1"])
+
+# if azure/gpt-4 fails, retry the request with fallback api_keys/api_base
+response = completion(model="azure/gpt-4", messages=messages, api_key=api_key, fallbacks=[{"api_key": "good-key-1"}, {"api_key": "good-key-2", "api_base": "good-api-base-2"}])
+
+```
+
+## Manage Multiple Deployments
 
 Use this if you're trying to load-balance across multiple deployments (e.g. Azure/OpenAI). 
 
@@ -6,11 +20,7 @@ Use this if you're trying to load-balance across multiple deployments (e.g. Azur
 
 In production, [Router connects to a Redis Cache](#redis-queue) to track usage across multiple deployments.
 
-## Quick Start
-
-```python
-pip install litellm
-```
+### Quick Start
 
 ```python
 from litellm import Router
@@ -54,7 +64,7 @@ response = router.completion(model="gpt-3.5-turbo",
 print(response)
 ```
 
-## Redis Queue 
+### Redis Queue 
 
 In production, we use Redis to track usage across multiple Azure deployments.
 
@@ -67,7 +77,7 @@ router = Router(model_list=model_list,
 print(response)
 ```
 
-## Deploy Router 
+### Deploy Router 
 
 1. Clone repo
 ```shell
