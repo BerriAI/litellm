@@ -2,14 +2,20 @@
 
 A simple, fast, and lightweight **OpenAI-compatible server** to call 100+ LLM APIs.
 
-<p align="center" style="margin: 2%">
-        <a href="https://l.linklyhq.com/l/1uHsr" target="_blank">
-                <img src="https://render.com/images/deploy-to-render-button.svg" width="173"/>
+<h4 align="center">
+        <a href="https://l.linklyhq.com/l/1uHsr" target="_blank" >
+                <img src="https://render.com/images/deploy-to-render-button.svg" width=200/>
+        </a>
+        <a href="https://railway.app/template/YTHiYS?referralCode=t3ukrU" target="_blank">
+                <img src="https://railway.app/button.svg" width=200 />
         </a>
         <a href="https://l.linklyhq.com/l/1uHtX" target="_blank">
-                <img src="https://deploy.cloud.run/button.svg" width="200"/>
+                <img src="https://deploy.cloud.run/button.svg" width=200 height=50/>
         </a>
-</p>
+        <a href="https://docs.litellm.ai/docs/simple_proxy#deploy-on-aws-apprunner" target="_blank">
+            <img src="https://github.com/BerriAI/litellm/blob/main/.github/deploy-to-aws.png"  height=40/>
+          </a>
+</h4>
 
 LiteLLM Server provides: 
 - A fixed endpoint to call all LiteLLM-supported models/providers
