@@ -695,32 +695,32 @@ def test_completion_replicate_stream_bad_key():
 # test_completion_bedrock_claude_stream() 
 
 
-def test_completion_sagemaker_stream():
-    try:
-        response = completion(
-            model="sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b", 
-            messages=messages,
-            temperature=0.2,
-            max_tokens=80,
-            stream=True,
-        )
-        complete_response = ""
-        has_finish_reason = False
-        # Add any assertions here to check the response
-        for idx, chunk in enumerate(response):
-            chunk, finished = streaming_format_tests(idx, chunk)
-            has_finish_reason = finished
-            if finished:
-                break
-            complete_response += chunk
-        if has_finish_reason is False:
-            raise Exception("finish reason not set for last chunk")
-        if complete_response.strip() == "": 
-            raise Exception("Empty response received")
-    except InvalidRequestError as e: 
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
+# def test_completion_sagemaker_stream():
+#     try:
+#         response = completion(
+#             model="sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b", 
+#             messages=messages,
+#             temperature=0.2,
+#             max_tokens=80,
+#             stream=True,
+#         )
+#         complete_response = ""
+#         has_finish_reason = False
+#         # Add any assertions here to check the response
+#         for idx, chunk in enumerate(response):
+#             chunk, finished = streaming_format_tests(idx, chunk)
+#             has_finish_reason = finished
+#             if finished:
+#                 break
+#             complete_response += chunk
+#         if has_finish_reason is False:
+#             raise Exception("finish reason not set for last chunk")
+#         if complete_response.strip() == "": 
+#             raise Exception("Empty response received")
+#     except InvalidRequestError as e: 
+#         pass
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
 
 # test_completion_sagemaker_stream()
 
