@@ -4060,7 +4060,6 @@ def completion_with_split_tests(models={}, messages=[], use_client=False, overri
     return litellm.completion(model=selected_llm, messages=messages, use_client=use_client, **kwargs)
 
 def completion_with_fallbacks(**kwargs):
-    print(f"kwargs inside completion_with_fallbacks: {kwargs}")
     nested_kwargs = kwargs.pop("kwargs", {})
     response = None
     rate_limited_models = set()
@@ -4071,6 +4070,7 @@ def completion_with_fallbacks(**kwargs):
     if "fallbacks" in nested_kwargs:
         del nested_kwargs["fallbacks"]  # remove fallbacks so it's not recursive
 
+    # max time to process a request with fallbacks: default 45s
     while response == None and time.time() - start_time < 45:
         for model in fallbacks:
             # loop thru all models
@@ -4097,10 +4097,10 @@ def completion_with_fallbacks(**kwargs):
                 if kwargs.get("model"):
                     del kwargs["model"]
 
-                print(f"trying to make completion call with model: {model}")
+                print_verbose(f"trying to make completion call with model: {model}")
                 kwargs = {**kwargs, **nested_kwargs} # combine the openai + litellm params at the same level
                 response = litellm.completion(**kwargs, model=model)
-                print(f"response: {response}")
+                print_verbose(f"response: {response}")
                 if response != None:
                     return response
 
