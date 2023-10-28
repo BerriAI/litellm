@@ -51,10 +51,12 @@ def test_completion_claude():
         print(response.usage)
         print(response.usage.completion_tokens)
         print(response["usage"]["completion_tokens"])
+        # print("new cost tracking")
+        print(response.cost())
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-# test_completion_claude()
+test_completion_claude()
 
 # def test_completion_oobabooga():
 #     try:
