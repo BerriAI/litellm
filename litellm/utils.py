@@ -757,8 +757,10 @@ def client(original_function):
     def wrapper(*args, **kwargs):
         start_time = datetime.datetime.now()
         result = None
-        litellm_call_id = str(uuid.uuid4())
-        kwargs["litellm_call_id"] = litellm_call_id
+
+        # only set litellm_call_id if its not in kwargs
+        if "litellm_call_id" not in kwargs:
+            kwargs["litellm_call_id"] = str(uuid.uuid4())
         try:
             model = args[0] if len(args) > 0 else kwargs["model"]
         except:
