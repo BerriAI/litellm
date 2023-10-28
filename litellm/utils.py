@@ -201,6 +201,10 @@ class ModelResponse(OpenAIObject):
         d["choices"] = [choice.to_dict_recursive() for choice in self.choices]
         return d
 
+    def cost(self):
+        # for non streaming responses
+        return completion_cost(completion_response=self)
+
 class EmbeddingResponse(OpenAIObject):
     def __init__(self, id=None, choices=None, created=None, model=None, usage=None, stream=False, response_ms=None, **params):
         self.object = "list"
