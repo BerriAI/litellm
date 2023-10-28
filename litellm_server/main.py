@@ -94,10 +94,13 @@ async def embedding(request: Request):
 
 @router.post("/v1/chat/completions")
 @router.post("/chat/completions")
-async def chat_completion(request: Request):
+@router.post("/openai/deployments/{model}/chat/completions") # azure compatible endpoint
+async def chat_completion(request: Request, model: Optional[str] = None):
     global llm_model_list
     try:
         data = await request.json()
+        if model: 
+            data["model"] = model
         ## CHECK KEYS ## 
         # default to always using the "ENV" variables, only if AUTH_STRATEGY==DYNAMIC then reads headers
         env_validation = litellm.validate_environment(model=data["model"])
