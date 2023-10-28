@@ -4,6 +4,7 @@ import dotenv
 dotenv.load_dotenv() # load env variables
 
 def print_verbose(print_statement): 
+    print(f"SET_VERBOSE value: {os.environ['SET_VERBOSE']}")
     if os.environ["SET_VERBOSE"] == "True":
         print(print_statement)
 
