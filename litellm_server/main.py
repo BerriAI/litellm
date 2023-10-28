@@ -7,7 +7,7 @@ import json
 import os
 from typing import Optional
 try:
-    from utils import set_callbacks, load_router_config
+    from utils import set_callbacks, load_router_config, print_verbose
 except ImportError:
     from litellm_server.utils import set_callbacks, load_router_config, print_verbose
 import dotenv
