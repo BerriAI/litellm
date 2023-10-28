@@ -184,6 +184,42 @@ new_message = app.generate(messages=[{
 }])
 ``` 
 </TabItem>
+<TabItem value="prompttools" label="PromptTools">
+
+Use [PromptTools](https://github.com/hegelai/prompttools) for evaluating different LLMs
+
+1. Start server
+```shell
+`docker run -e PORT=8000 -p 8000:8000 ghcr.io/berriai/litellm:latest`
+```
+
+2. Install dependencies 
+```python 
+pip install prompttools
+```
+
+3. Run script 
+```python 
+import os
+os.environ['DEBUG']=""  # Set this to "" to call OpenAI's API
+os.environ['AZURE_OPENAI_KEY'] = "my-api-key"  # Insert your key here
+
+from typing import Dict, List
+from prompttools.experiment import OpenAIChatExperiment
+
+models = ["gpt-3.5-turbo", "gpt-3.5-turbo-0613"]
+messages = [
+    [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "Who was the first president?"},
+    ]
+]
+temperatures = [0.0, 1.0]
+# You can add more parameters that you'd like to test here.
+
+experiment = OpenAIChatExperiment(models, messages, temperature=temperatures, azure_openai_service_configs={"AZURE_OPENAI_ENDPOINT": "http://0.0.0.0:8000", "API_TYPE": "azure", "API_VERSION": "2023-05-15"})
+```
+</TabItem>
 </Tabs>
 
 
