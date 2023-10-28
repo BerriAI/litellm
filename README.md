@@ -5,22 +5,7 @@
         <p align="center">Call all LLM APIs using the OpenAI format [Bedrock, Huggingface, Cohere, TogetherAI, Azure, OpenAI, etc.]
         <br>
     </p>
-
-<h4 align="center">
-        <a href="https://l.linklyhq.com/l/1uHsr" target="_blank" >
-                <img src="https://render.com/images/deploy-to-render-button.svg" width=200/>
-        </a>
-        <a href="https://railway.app/template/YTHiYS?referralCode=t3ukrU" target="_blank">
-                <img src="https://railway.app/button.svg" width=200 />
-        </a>
-        <a href="https://l.linklyhq.com/l/1uHtX" target="_blank">
-                <img src="https://deploy.cloud.run/button.svg" width=200 height=50/>
-        </a>
-        <a href="https://docs.litellm.ai/docs/simple_proxy#deploy-on-aws-apprunner" target="_blank">
-            <img src=".github/deploy-to-aws.png"  height=40/>
-          </a>
-</h4>
-<h4 align="center"><a href="https://github.com/BerriAI/litellm/tree/main/litellm_server" target="_blank">LiteLLM Server</a></h4>
+<h4 align="center"><a href="https://github.com/BerriAI/litellm/tree/main/litellm_server" target="_blank">Add models without changing client code → LiteLLM Server</a></h4>
 <h4 align="center">
     <a href="https://pypi.org/project/litellm/" target="_blank">
         <img src="https://img.shields.io/pypi/v/litellm.svg" alt="PyPI Version">
