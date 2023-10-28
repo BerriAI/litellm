@@ -17,9 +17,10 @@ A simple, fast, and lightweight **OpenAI-compatible server** to call 100+ LLM AP
           </a>
 </h4>
 
-LiteLLM Server provides: 
-- A fixed endpoint to call all LiteLLM-supported models/providers
+LiteLLM Server supports: 
+- LLM API Calls in the OpenAI ChatCompletions format 
 - Caching + Logging capabilities (Redis and Langfuse, respectively)
+- Setting API keys in the request headers or in the .env 
 
 ## Usage 
 
