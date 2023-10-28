@@ -108,7 +108,8 @@ async def chat_completion(request: Request, model: Optional[str] = None):
         if (env_validation['keys_in_environment'] is False or os.getenv("AUTH_STRATEGY", None) == "DYNAMIC") and ("authorization" in request.headers or "api-key" in request.headers): # if users pass LLM api keys as part of header
             api_key = request.headers.get("authorization")
             print(f"api_key in headers: {api_key}")
-            api_key = api_key.split(" ")[1]
+            if " " in api_key:
+                api_key = api_key.split(" ")[1]
             print(f"api_key split: {api_key}")
             if len(api_key) > 0:
                 api_key = api_key
