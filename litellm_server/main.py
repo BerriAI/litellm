@@ -94,7 +94,7 @@ async def embedding(request: Request):
 
 @router.post("/v1/chat/completions")
 @router.post("/chat/completions")
-@router.post("/openai/deployments/{model}/chat/completions") # azure compatible endpoint
+@router.post("/openai/deployments/{model:path}/chat/completions") # azure compatible endpoint
 async def chat_completion(request: Request, model: Optional[str] = None):
     global llm_model_list
     try:
