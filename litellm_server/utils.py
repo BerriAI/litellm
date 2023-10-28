@@ -2,7 +2,7 @@ import os, litellm
 import pkg_resources
 
 def print_verbose(print_statement): 
-    if os.environ["SET_VERBOSE"] == True:
+    if os.environ["SET_VERBOSE"] == "True":
         print(print_statement)
 
 def get_package_version(package_name):
