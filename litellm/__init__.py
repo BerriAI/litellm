@@ -324,7 +324,6 @@ from .utils import (
     Logging,
     acreate,
     get_model_list,
-    completion_with_split_tests,
     get_max_tokens,
     register_prompt_template,
     validate_environment,
