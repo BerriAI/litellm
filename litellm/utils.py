@@ -4002,6 +4002,7 @@ def completion_with_fallbacks(**kwargs):
     fallbacks = [kwargs["model"]] + nested_kwargs.get("fallbacks", [])
     if "fallbacks" in nested_kwargs:
         del nested_kwargs["fallbacks"]  # remove fallbacks so it's not recursive
+    litellm_call_id = str(uuid.uuid4())
 
     # max time to process a request with fallbacks: default 45s
     while response == None and time.time() - start_time < 45:
@@ -4031,6 +4032,7 @@ def completion_with_fallbacks(**kwargs):
                     del kwargs["model"]
 
                 print_verbose(f"trying to make completion call with model: {model}")
+                kwargs["litellm_call_id"] = litellm_call_id
                 kwargs = {**kwargs, **nested_kwargs} # combine the openai + litellm params at the same level
                 response = litellm.completion(**kwargs, model=model)
                 print_verbose(f"response: {response}")
