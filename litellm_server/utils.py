@@ -1,5 +1,7 @@
 import os, litellm
 import pkg_resources
+import dotenv
+dotenv.load_dotenv() # load env variables
 
 def print_verbose(print_statement): 
     if os.environ["SET_VERBOSE"] == "True":
