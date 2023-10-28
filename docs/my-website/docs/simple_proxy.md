@@ -121,6 +121,72 @@ $ docker run -e PORT=8000 -e COHERE_API_KEY=<your-api-key> -p 8000:8000 ghcr.io/
 
 </Tabs>
 
+## Tutorials (Chat-UI, NeMO-Guardrails, etc.)
+
+<Tabs>
+<TabItem value="chat-ui" label="Chat UI">
+
+Here's the `docker-compose.yml` for running LiteLLM Server with Mckay Wrigley's Chat-UI: 
+```yaml
+version: '3'
+services:
+  container1:
+    image: ghcr.io/berriai/litellm:latest
+    ports:
+      - '8000:8000'
+    environment:
+      - PORT=8000
+      - OPENAI_API_KEY=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
+
+  container2:
+    image: ghcr.io/mckaywrigley/chatbot-ui:main
+    ports:
+      - '3000:3000'
+    environment:
+      - OPENAI_API_KEY=my-fake-key
+      - OPENAI_API_HOST=http://container1:8000
+```
+
+Run this via: 
+```shell
+docker-compose up
+```
+</TabItem>
+<TabItem value="nemo-guardrails" label="NeMO-Guardrails">
+
+#### Adding NeMO-Guardrails to Bedrock 
+
+1. Start server
+```shell
+`docker run -e PORT=8000 -e AWS_ACCESS_KEY_ID=<your-aws-access-key> -e AWS_SECRET_ACCESS_KEY=<your-aws-secret-key> -p 8000:8000 ghcr.io/berriai/litellm:latest`
+```
+
+2. Install dependencies
+```shell
+pip install nemoguardrails langchain
+```
+
+3. Run script
+```python
+import openai
+from langchain.chat_models import ChatOpenAI
+
+llm = ChatOpenAI(model_name="bedrock/anthropic.claude-v2", openai_api_base="http://0.0.0.0:8000", openai_api_key="my-fake-key")
+
+from nemoguardrails import LLMRails, RailsConfig
+
+config = RailsConfig.from_path("./config.yml")
+app = LLMRails(config, llm=llm)
+
+new_message = app.generate(messages=[{
+    "role": "user",
+    "content": "Hello! What can you do for me?"
+}])
+``` 
+</TabItem>
+</Tabs>
+
+
 ## Endpoints:
 - `/chat/completions` - chat completions endpoint to call 100+ LLMs
 - `/embeddings` - embedding endpoint for Azure, OpenAI, Huggingface endpoints
@@ -192,38 +258,6 @@ Docker command:
 ```shell
 docker run -e LANGFUSE_PUBLIC_KEY=<your-public-key> -e LANGFUSE_SECRET_KEY=<your-secret-key> -e LANGFUSE_HOST=<your-langfuse-host> -e PORT=8000 -p 8000:8000 ghcr.io/berriai/litellm:latest
 ```
-
-## Tutorials 
-
-<Tabs>
-<TabItem value="chat-ui" label="Chat UI">
-Here's the `docker-compose.yml` for running LiteLLM Server with Mckay Wrigley's Chat-UI: 
-```yaml
-version: '3'
-services:
-  container1:
-    image: ghcr.io/berriai/litellm:latest
-    ports:
-      - '8000:8000'
-    environment:
-      - PORT=8000
-      - OPENAI_API_KEY=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
-
-  container2:
-    image: ghcr.io/mckaywrigley/chatbot-ui:main
-    ports:
-      - '3000:3000'
-    environment:
-      - OPENAI_API_KEY=my-fake-key
-      - OPENAI_API_HOST=http://container1:8000
-```
-
-Run this via: 
-```shell
-docker-compose up
-```
-</TabItem>
-</Tabs>
 
 ## Local Usage 
 
