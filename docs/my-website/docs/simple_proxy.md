@@ -2,9 +2,9 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# 💥 LiteLLM Server - Deploy LiteLLM
+# 💥 OpenAI Compatible Server
 
-A simple, fast, and lightweight **OpenAI-compatible server** to call 100+ LLM APIs in the OpenAI Input/Output format
+LiteLLM Server, is a simple, fast, and lightweight **OpenAI-compatible server** to call 100+ LLM APIs in the OpenAI Input/Output format
 
 LiteLLM Server supports:
 
@@ -223,7 +223,7 @@ curl http://0.0.0.0:8000/v1/chat/completions \
 
 </Tabs>
 
-## Tutorials (Chat-UI, NeMO-Guardrails, PromptTools, Phoenix ArizeAI, Langchain, ragas, etc.)
+## Tutorials (Chat-UI, NeMO-Guardrails, PromptTools, Phoenix ArizeAI, Langchain, ragas, LlamaIndex, etc.)
 
 **Start server:**
 ```shell
