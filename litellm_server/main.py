@@ -106,13 +106,13 @@ async def chat_completion(request: Request, model: Optional[str] = None):
         env_validation = litellm.validate_environment(model=data["model"])
         if (env_validation['keys_in_environment'] is False or os.getenv("AUTH_STRATEGY", None) == "DYNAMIC") and "authorization" in request.headers: # if users pass LLM api keys as part of header
             api_key = request.headers.get("authorization")
-            print_verbose(f"api_key in headers: {api_key}")
+            print(f"api_key in headers: {api_key}")
             api_key = api_key.split(" ")[1]
-            print_verbose(f"api_key split: {api_key}")
+            print(f"api_key split: {api_key}")
             if len(api_key) > 0:
                 api_key = api_key
                 data["api_key"] = api_key
-                print_verbose(f"api_key in data: {api_key}")
+                print(f"api_key in data: {api_key}")
         ## CHECK CONFIG ## 
         if llm_model_list and data["model"] in [m["model_name"] for m in llm_model_list]:
             for m in llm_model_list: 
@@ -120,7 +120,7 @@ async def chat_completion(request: Request, model: Optional[str] = None):
                     for key, value in m["litellm_params"].items(): 
                         data[key] = value
                     break
-        print_verbose(f"data going into litellm completion: {data}")
+        print(f"data going into litellm completion: {data}")
         response = litellm.completion(
             **data
         )
