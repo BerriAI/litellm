@@ -121,7 +121,7 @@ $ docker run -e PORT=8000 -e COHERE_API_KEY=<your-api-key> -p 8000:8000 ghcr.io/
 
 </Tabs>
 
-## Tutorials (Chat-UI, NeMO-Guardrails, etc.)
+## Tutorials (Chat-UI, NeMO-Guardrails, PromptTools, Phoenix ArizeAI etc.)
 
 <Tabs>
 <TabItem value="chat-ui" label="Chat UI">
@@ -218,6 +218,33 @@ temperatures = [0.0, 1.0]
 # You can add more parameters that you'd like to test here.
 
 experiment = OpenAIChatExperiment(models, messages, temperature=temperatures, azure_openai_service_configs={"AZURE_OPENAI_ENDPOINT": "http://0.0.0.0:8000", "API_TYPE": "azure", "API_VERSION": "2023-05-15"})
+```
+</TabItem>
+<TabItem value="phoenix-arizeai" label="ArizeAI">
+
+Use [Arize AI's LLM Evals](https://github.com/Arize-ai/phoenix#llm-evals) to evaluate different LLMs
+
+1. Start server
+```shell
+`docker run -e PORT=8000 -p 8000:8000 ghcr.io/berriai/litellm:latest`
+```
+
+2. Use this LLM Evals Quickstart colab
+[![Open in Colab](https://img.shields.io/static/v1?message=Open%20in%20Colab&logo=googlecolab&labelColor=grey&color=blue&logoColor=orange&label=%20)](https://colab.research.google.com/github/Arize-ai/phoenix/blob/main/tutorials/evals/evaluate_relevance_classifications.ipynb)
+
+3. Call the model
+```python
+import openai 
+
+## SET API BASE + PROVIDER KEY
+openai.api_base = "http://0.0.0.0:8000
+openai.api_key = "my-anthropic-key"
+
+## CALL MODEL 
+model = OpenAIModel(
+    model_name="claude-2",
+    temperature=0.0,
+)
 ```
 </TabItem>
 </Tabs>
