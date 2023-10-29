@@ -2,7 +2,7 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# 💥 OpenAI Compatible Server
+# 💥 Evaluate LLMs - OpenAI Compatible Server
 
 LiteLLM Server, is a simple, fast, and lightweight **OpenAI-compatible server** to call 100+ LLM APIs in the OpenAI Input/Output format
 
