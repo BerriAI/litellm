@@ -85,6 +85,7 @@ def completion(
     api_version: Optional[str] = None,
     api_key: Optional[str] = None,
     fallbacks: Optional[list] = None, # pass in a list of api_base,keys, etc. 
+    metadata: Optional[dict] = None # additional call metadata, passed to logging integrations / custom callbacks
 
     **kwargs,
 ) -> ModelResponse:
@@ -147,6 +148,8 @@ def completion(
 - `api_version`: *string (optional)* - (Azure-specific) the api version for the call
 
 - `fallbacks`: *list (optional)* - A list of model names + params to be used, in case the initial call fails
+
+- `metadata`: *dict (optional)* - Any additional data you want to be logged when the call is made (sent to logging integrations, eg. promptlayer and accessible via custom callback function)
 
 ## Provider-specific Params
 Providers might offer params not supported by OpenAI (e.g. top_k). You can pass those in 2 ways: 
