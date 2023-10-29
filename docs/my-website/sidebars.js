@@ -37,7 +37,6 @@ const sidebars = {
         "completion/function_call",
         "completion/model_alias", 
         "completion/reliable_completions", 
-        "completion/multiple_deployments",
         "completion/config",
         "completion/batching",
         "completion/mock_requests",
