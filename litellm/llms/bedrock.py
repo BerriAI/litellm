@@ -1,4 +1,5 @@
 import json, copy, types
+import os
 from enum import Enum
 import time
 from typing import Callable, Optional
@@ -190,11 +191,14 @@ def init_bedrock_client(
         )
     else:
         # aws_access_key_id is None, assume user is trying to auth using env variables 
-        # boto3 automaticaly reads env variables
+        # boto3 automatically reads env variables
 
         # we need to read region name from env
-        # I assume majority of users use .env for auth 
+        # I assume majority of users use .env for auth
         region_name = get_secret("AWS_REGION_NAME") # reads env for AWS_REGION_NAME, defaults to None
+        # if litellm config `AWS_REGION_NAME` is not set, attempt to read AWS default env variable name `AWS_REGION`
+        if not region_name:
+            region_name = get_secret("AWS_REGION")
         client = boto3.client(
             service_name="bedrock-runtime",
             region_name=region_name,
