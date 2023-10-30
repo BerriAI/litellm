@@ -544,12 +544,12 @@
         "output_cost_per_token": 0.0000004
     },
     "together-ai-20.1b-40b": {
-        "input_cost_per_token": 0.000001,
-        "output_cost_per_token": 0.000001
+        "input_cost_per_token": 0.0000008,
+        "output_cost_per_token": 0.0000008
     },
     "together-ai-40.1b-70b": {
-        "input_cost_per_token": 0.000003,
-        "output_cost_per_token": 0.000003
+        "input_cost_per_token": 0.000001,
+        "output_cost_per_token": 0.000001
     },
     "ollama/llama2": {
         "max_tokens": 4096,
