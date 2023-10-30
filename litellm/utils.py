@@ -3934,6 +3934,34 @@ def read_config_args(config_path) -> dict:
 ########## experimental completion variants ############################
 
 def completion_with_config(config: Union[dict, str], **kwargs):
+    """
+    Generate a litellm.completion() using a config dict and all supported completion args 
+
+    Example config;
+    config = {
+        "default_fallback_models": # [Optional] List of model names to try if a call fails
+        "available_models": # [Optional] List of all possible models you could call 
+        "adapt_to_prompt_size": # [Optional] True/False - if you want to select model based on prompt size (will pick from available_models)
+        "model": {
+            "model-name": {
+                "needs_moderation": # [Optional] True/False - if you want to call openai moderations endpoint before making completion call. Will raise exception, if flagged. 
+                "error_handling": {
+                    "error-type": { # One of the errors listed here - https://docs.litellm.ai/docs/exception_mapping#custom-mapping-list
+                        "fallback_model": "" # str, name of the model it should try instead, when that error occurs 
+                    }
+                }
+            }
+        }
+    }
+
+    Parameters:
+        config (Union[dict, str]): A configuration for litellm
+        **kwargs: Additional keyword arguments for litellm.completion
+
+    Returns:
+        litellm.ModelResponse: A ModelResponse with the generated completion
+
+    """
     if config is not None:
         if isinstance(config, str):
             config = read_config_args(config)
