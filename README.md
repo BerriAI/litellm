@@ -81,7 +81,7 @@ Never fail a request using LiteLLM
 ```python
 from litellm import completion
 # if gpt-4 fails, retry the request with gpt-3.5-turbo->command-nightly->claude-instant-1
-response = completion(model="gpt-4",messages=messages, fallbacks=["gpt-3.5-turbo" "command-nightly", "claude-instant-1"])
+response = completion(model="gpt-4",messages=messages, fallbacks=["gpt-3.5-turbo", "command-nightly", "claude-instant-1"])
 
 # if azure/gpt-4 fails, retry the request with fallback api_keys/api_base
 response = completion(model="azure/gpt-4", messages=messages, api_key=api_key, fallbacks=[{"api_key": "good-key-1"}, {"api_key": "good-key-2", "api_base": "good-api-base-2"}])
