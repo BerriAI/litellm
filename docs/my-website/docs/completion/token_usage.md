@@ -31,21 +31,10 @@ Encoding has model-specific tokenizers for anthropic, cohere, llama2 and openai.
 ```python
 from litellm import encode, decode
 
-
-def test_encoding_and_decoding():
-    try: 
-        sample_text = "Hellö World, this is my input string!"
-
-        # openai tokenizer 
-        openai_tokens = token_counter(model="gpt-3.5-turbo", text=sample_text)
-
-        openai_text = encode(model="gpt-3.5-turbo", tokens=openai_tokens)
-
-        assert openai_text == sample_text
-    except: 
-        pass
-
-test_encoding_and_decoding()
+sample_text = "Hellö World, this is my input string!"
+# openai encoding + decoding
+openai_tokens = encode(model="gpt-3.5-turbo", text=sample_text)
+print(openai_tokens)
 ```
 
 ### 2. `decode`
@@ -55,21 +44,11 @@ Decoding is supported for anthropic, cohere, llama2 and openai.
 ```python
 from litellm import encode, decode
 
-
-def test_encoding_and_decoding():
-    try: 
-        sample_text = "Hellö World, this is my input string!"
-
-        # openai tokenizer 
-        openai_tokens = token_counter(model="gpt-3.5-turbo", text=sample_text)
-
-        openai_text = decode(model="gpt-3.5-turbo", tokens=openai_tokens)
-
-        assert openai_text == sample_text
-    except: 
-        pass
-
-test_encoding_and_decoding()
+sample_text = "Hellö World, this is my input string!"
+# openai encoding + decoding
+openai_tokens = encode(model="gpt-3.5-turbo", text=sample_text)
+openai_text = decode(model="gpt-3.5-turbo", tokens=openai_tokens)
+print(openai_text)
 ```
 
 ### 3. `token_counter`
