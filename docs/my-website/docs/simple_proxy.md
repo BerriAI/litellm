@@ -244,7 +244,7 @@ services:
       - '8000:8000'
     environment:
       - PORT=8000
-      - OPENAI_API_KEY=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
+      - OPENAI_API_KEY=<your-openai-key>
 
   container2:
     image: ghcr.io/mckaywrigley/chatbot-ui:main
