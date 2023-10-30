@@ -1,4 +1,4 @@
-# Reliability - Model Fallbacks, Manage Multiple Deployments
+# Reliability - Fallbacks, Multiple Deployments
 
 ## Model Fallbacks
 Never fail a request using LiteLLM, LiteLLM allows you to define fallback models for completion requests
