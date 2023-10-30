@@ -1469,6 +1469,16 @@ def batch_completion_models_all_responses(*args, **kwargs):
 ### EMBEDDING ENDPOINTS ####################
 
 async def aembedding(*args, **kwargs):
+    """
+    Asynchronously calls the `embedding` function with the given arguments and keyword arguments.
+
+    Parameters:
+    - `args` (tuple): Positional arguments to be passed to the `embedding` function.
+    - `kwargs` (dict): Keyword arguments to be passed to the `embedding` function.
+
+    Returns:
+    - `response` (Any): The response returned by the `embedding` function.
+    """
     loop = asyncio.get_event_loop()
 
     # Use a partial function to pass your keyword arguments
