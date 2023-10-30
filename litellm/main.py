@@ -72,21 +72,42 @@ openai_proxy_chat_completions = OpenAIChatCompletion()
 
 async def acompletion(*args, **kwargs):
     """
-    Asynchronously perform a completion() using the any LiteLLM model (ex gpt-3.5-turbo, claude-2)
-
-    This function takes the same arguments as the 'completion' function and is used for asynchronous completion requests.
+    Asynchronously executes a litellm.completion() call for any of litellm supported llms (example gpt-4, gpt-3.5-turbo, claude-2, command-nightly)
 
     Parameters:
-        *args: Positional arguments to pass to the 'litellm.completion' function.
-        **kwargs: Keyword arguments to pass to the 'litellm.completion' function.
+        model (str): The name of the language model to use for text completion. see all supported LLMs: https://docs.litellm.ai/docs/providers/
+        messages (List): A list of message objects representing the conversation context (default is an empty list).
 
+        OPTIONAL PARAMS
+        functions (List, optional): A list of functions to apply to the conversation messages (default is an empty list).
+        function_call (str, optional): The name of the function to call within the conversation (default is an empty string).
+        temperature (float, optional): The temperature parameter for controlling the randomness of the output (default is 1.0).
+        top_p (float, optional): The top-p parameter for nucleus sampling (default is 1.0).
+        n (int, optional): The number of completions to generate (default is 1).
+        stream (bool, optional): If True, return a streaming response (default is False).
+        stop(string/list, optional): - Up to 4 sequences where the LLM API will stop generating further tokens.
+        max_tokens (integer, optional): The maximum number of tokens in the generated completion (default is infinity).
+        presence_penalty (float, optional): It is used to penalize new tokens based on their existence in the text so far.
+        frequency_penalty: It is used to penalize new tokens based on their frequency in the text so far.
+        logit_bias (dict, optional): Used to modify the probability of specific tokens appearing in the completion.
+        user (str, optional):  A unique identifier representing your end-user. This can help the LLM provider to monitor and detect abuse.
+        metadata (dict, optional): Pass in additional metadata to tag your completion calls - eg. prompt version, details, etc. 
+        api_base (str, optional): Base URL for the API (default is None).
+        api_version (str, optional): API version (default is None).
+        api_key (str, optional): API key (default is None).
+        model_list (list, optional): List of api base, version, keys
+
+        LITELLM Specific Params
+        mock_response (str, optional): If provided, return a mock completion response for testing or debugging purposes (default is None).
+        force_timeout (int, optional): The maximum execution time in seconds for the completion request (default is 600).
+        custom_llm_provider (str, optional): Used for Non-OpenAI LLMs, Example usage for bedrock, set model="amazon.titan-tg1-large" and custom_llm_provider="bedrock"
     Returns:
-        The completion response, either as a litellm.ModelResponse Object or an async generator if 'stream' is set to True.
+        ModelResponse: A response object containing the generated completion and associated metadata.
 
-    Note:
-        - This function uses asynchronous programming to perform completions.
-        - It leverages the 'loop.run_in_executor' method to execute the synchronous 'completion' function.
-        - If 'stream' is set to True in kwargs, the function returns an async generator.
+    Notes:
+        - This function is an asynchronous version of the `completion` function.
+        - The `completion` function is called using `run_in_executor` to execute synchronously in the event loop.
+        - If `stream` is True, the function returns an async generator that yields completion lines.
     """
     loop = asyncio.get_event_loop()
 
