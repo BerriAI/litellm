@@ -1321,6 +1321,30 @@ def batch_completion(
     request_timeout: Optional[int] = None,
     # Optional liteLLM function params
     **kwargs):
+    """
+    Batch litellm.completion function for a given model.
+
+    Args:
+        model (str): The model to use for generating completions.
+        messages (List, optional): List of messages to use as input for generating completions. Defaults to [].
+        functions (List, optional): List of functions to use as input for generating completions. Defaults to [].
+        function_call (str, optional): The function call to use as input for generating completions. Defaults to "".
+        temperature (float, optional): The temperature parameter for generating completions. Defaults to None.
+        top_p (float, optional): The top-p parameter for generating completions. Defaults to None.
+        n (int, optional): The number of completions to generate. Defaults to None.
+        stream (bool, optional): Whether to stream completions or not. Defaults to None.
+        stop (optional): The stop parameter for generating completions. Defaults to None.
+        max_tokens (float, optional): The maximum number of tokens to generate. Defaults to None.
+        presence_penalty (float, optional): The presence penalty for generating completions. Defaults to None.
+        frequency_penalty (float, optional): The frequency penalty for generating completions. Defaults to None.
+        logit_bias (dict, optional): The logit bias for generating completions. Defaults to {}.
+        user (str, optional): The user string for generating completions. Defaults to "".
+        deployment_id (optional): The deployment ID for generating completions. Defaults to None.
+        request_timeout (int, optional): The request timeout for generating completions. Defaults to None.
+
+    Returns:
+        list: A list of completion results.
+    """
     args = locals()
     batch_messages = messages
     completions = []
