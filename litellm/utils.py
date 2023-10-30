@@ -4204,8 +4204,16 @@ def trim_messages(
         print("Got exception while token trimming", e)
         return messages
 
-# this helper reads the .env and returns a list of supported llms for user
 def get_valid_models():
+    """
+    Returns a list of valid LLMs based on the set environment variables
+    
+    Args:
+        None
+
+    Returns:
+        A list of valid LLMs
+    """
     try:
         # get keys set in .env
         environ_keys = os.environ.keys()
