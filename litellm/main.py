@@ -1289,6 +1289,9 @@ def completion(
 
 
 def completion_with_retries(*args, **kwargs):
+    """
+    Executes a litellm.completion() with 3 retries
+    """
     try:
         import tenacity
     except:
