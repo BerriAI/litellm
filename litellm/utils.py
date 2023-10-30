@@ -1926,6 +1926,17 @@ def load_test_model(
         }
 
 def validate_environment(model: Optional[str]=None) -> dict:
+    """
+    Checks if the environment variables are valid for the given model.
+    
+    Args:
+        model (Optional[str]): The name of the model. Defaults to None.
+        
+    Returns:
+        dict: A dictionary containing the following keys:
+            - keys_in_environment (bool): True if all the required keys are present in the environment, False otherwise.
+            - missing_keys (List[str]): A list of missing keys in the environment.
+    """
     keys_in_environment = False
     missing_keys: List[str] = []
 
