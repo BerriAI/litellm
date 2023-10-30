@@ -39,7 +39,7 @@ def test_encoding_and_decoding():
         # openai tokenizer 
         openai_tokens = token_counter(model="gpt-3.5-turbo", text=sample_text)
 
-        openai_text = decode(model="gpt-3.5-turbo", tokens=openai_tokens)
+        openai_text = encode(model="gpt-3.5-turbo", tokens=openai_tokens)
 
         assert openai_text == sample_text
     except: 

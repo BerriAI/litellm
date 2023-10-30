@@ -911,6 +911,16 @@ def _select_tokenizer(model: str):
         return {"type": "openai_tokenizer", "tokenizer": encoding}
 
 def encode(model: str, text: str): 
+    """
+    Encodes the given text using the specified model.
+
+    Args:
+        model (str): The name of the model to use for tokenization.
+        text (str): The text to be encoded.
+
+    Returns:
+        enc: The encoded text.
+    """
     tokenizer_json = _select_tokenizer(model=model)
     enc = tokenizer_json["tokenizer"].encode(text)
     return enc
