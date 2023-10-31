@@ -417,7 +417,7 @@ def completion(
             )
             # set API KEY
             print_verbose(
-                f"api_key: {api_key}; dynamic_api_key: {dynamic_api_key}; litellm.api_key: {litellm.api_key}; litellm.openai_key: {litellm.openai_key}"
+                f"api_key: {api_key}; dynamic_api_key: {dynamic_api_key}; litellm.api_key: {litellm.api_key}; litellm.openai_key: {litellm.openai_key}; os.environ['OPENAI_API_KEY']: {os.environ['OPENAI_API_KEY']}"
             )
             api_key = (
                 api_key or
