@@ -128,7 +128,6 @@ print(response)
 ```
 
 ## Function calling for Non-OpenAI LLMs
-**For Non OpenAI LLMs - LiteLLM raises an exception if you try using it for function calling**
 
 ### Adding Function to prompt
 For Non OpenAI LLMs LiteLLM allows you to add the function to the prompt set: `litellm.add_function_to_prompt = True`
