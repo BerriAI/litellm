@@ -10,7 +10,17 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import litellm
-from litellm import acompletion, acreate
+from litellm import completion, acompletion, acreate
+
+def test_sync_response():
+    litellm.set_verbose = True
+    user_message = "Hello, how are you?"
+    messages = [{"content": user_message, "role": "user"}]
+    try:
+        response = completion(model="gpt-3.5-turbo", messages=messages)
+    except Exception as e:
+        pytest.fail(f"An exception occurred: {e}")
+
 
 def test_async_response():
     import asyncio
