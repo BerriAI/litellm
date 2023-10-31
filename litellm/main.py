@@ -1441,10 +1441,33 @@ def batch_completion_models(*args, **kwargs):
                 kwargs = {**deployment, **nested_kwargs}
                 futures[deployment["model"]] = executor.submit(completion, **kwargs)
 
-            done, not_done = concurrent.futures.wait(futures.values(), return_when=concurrent.futures.FIRST_COMPLETED)
+            while futures:
+                # wait for the first returned future
+                print_verbose("\n\n waiting for next result\n\n")
+                done, _ = concurrent.futures.wait(futures.values(), return_when=concurrent.futures.FIRST_COMPLETED)
+                print_verbose(f"done list\n{done}")
+                for future in done:
+                    try:
+                        result = future.result()
+                        return result
+                    except Exception as e:
+                        # if model 1 fails, continue with response from model 2, model3
+                        print_verbose(f"\n\ngot an exception, ignoring, removing from futures")
+                        print_verbose(futures)
+                        new_futures = {}
+                        for key, value in futures.items():
+                            if future == value:
+                                print_verbose(f"removing key{key}")
+                                continue
+                            else:
+                                new_futures[key] = value
+                        futures = new_futures
+                        print_verbose(f"new futures{futures}")
+                        continue
 
-            for future in done:
-                return future.result()
+                
+                print_verbose("\n\ndone looping through futures\n\n")
+                print_verbose(futures)
 
     return None  # If no response is received from any model
 
