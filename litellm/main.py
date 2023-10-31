@@ -906,15 +906,19 @@ def completion(
                 openai.api_key = get_secret("OPENROUTER_API_KEY") or get_secret(
                     "OR_API_KEY"
                 ) or litellm.api_key
+
+            data = {
+                "model": model, 
+                "messages": messages,  
+                **optional_params
+            }
             ## LOGGING
-            logging.pre_call(input=messages, api_key=openai.api_key)
+            logging.pre_call(input=messages, api_key=openai.api_key, additional_args={"complete_input_dict": data, "headers": headers})
             ## COMPLETION CALL
             if litellm.headers:
                 response = openai.ChatCompletion.create(
-                    model=model,
-                    messages=messages,
                     headers=litellm.headers,
-                    **optional_params,
+                    **data,
                 )
             else:
                 openrouter_site_url = get_secret("OR_SITE_URL")
@@ -926,13 +930,11 @@ def completion(
                 if openrouter_app_name is None:
                     openrouter_app_name = "liteLLM"
                 response = openai.ChatCompletion.create(
-                    model=model,
-                    messages=messages,
                     headers={
                         "HTTP-Referer": openrouter_site_url,  # To identify your site
                         "X-Title": openrouter_app_name,  # To identify your app
                     },
-                    **optional_params,
+                    **data,
                 )
             ## LOGGING
             logging.post_call(
