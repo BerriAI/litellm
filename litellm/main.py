@@ -525,7 +525,7 @@ def completion(
                 # https://platform.openai.com/docs/api-reference/completions/create
                 prompt = messages[0]["content"]
             else:
-                prompt = " ".join([message["content"] for message in messages])
+                prompt = " ".join([message["content"] for message in messages]) # type: ignore
             ## LOGGING
             logging.pre_call(
                 input=prompt,
@@ -1188,7 +1188,7 @@ def completion(
             model_response["choices"][0]["message"]["content"] = response_string
             model_response["created"] = time.time()
             model_response["model"] = "ollama/" + model
-            prompt_tokens = len(encoding.encode(prompt))
+            prompt_tokens = len(encoding.encode(prompt)) # type: ignore
             completion_tokens = len(encoding.encode(response_string))
             model_response["usage"] = {
                 "prompt_tokens": prompt_tokens,
@@ -1284,7 +1284,7 @@ def completion(
             )
 
             """
-            prompt = " ".join([message["content"] for message in messages])
+            prompt = " ".join([message["content"] for message in messages]) # type: ignore
             resp = requests.post(url, json={
                 'model': model,
                 'params': {
