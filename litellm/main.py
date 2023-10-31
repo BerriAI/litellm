@@ -517,11 +517,15 @@ def completion(
             for k, v in config.items():
                 if k not in optional_params: # completion(top_k=3) > openai_text_config(top_k=3) <- allows for dynamic variables to be passed in
                     optional_params[k] = v
-
-
             if litellm.organization:
                 openai.organization = litellm.organization
-            prompt = " ".join([message["content"] for message in messages])
+
+            if len(messages)>0 and "content" in messages[0] and type(messages[0]["content"]) == list: 
+                # text-davinci-003 can accept a string or array, if it's an array, assume the array is set in messages[0]['content']
+                # https://platform.openai.com/docs/api-reference/completions/create
+                prompt = messages[0]["content"]
+            else:
+                prompt = " ".join([message["content"] for message in messages])
             ## LOGGING
             logging.pre_call(
                 input=prompt,
