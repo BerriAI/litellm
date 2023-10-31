@@ -5,13 +5,9 @@ LiteLLM supports OpenAI Chat + Text completion and embedding calls.
 
 ```python
 import os 
-
 os.environ["OPENAI_API_KEY"] = "your-api-key"
+os.environ["OPENAI_ORGANIZATION"] = "your-org-id" # OPTIONAL
 ```
-**Need a dedicated key?**
-Email us @ krrish@berri.ai 
-
-[**See all supported models by the litellm api key**](../proxy_api.md#supported-models-for-litellm-key)
 
 ### Usage
 ```python
@@ -20,28 +16,29 @@ from litellm import completion
 
 os.environ["OPENAI_API_KEY"] = "your-api-key"
 
-
-messages = [{ "content": "Hello, how are you?","role": "user"}]
-
 # openai call
-response = completion("gpt-3.5-turbo", messages)
+response = completion(
+    model = "gpt-3.5-turbo", 
+    messages=[{ "content": "Hello, how are you?","role": "user"}]
+)
 ```
 
 ### OpenAI Chat Completion Models
 
-| Model Name       | Function Call                          | Required OS Variables                |
-|------------------|----------------------------------------|--------------------------------------|
-| gpt-3.5-turbo    | `completion('gpt-3.5-turbo', messages)` | `os.environ['OPENAI_API_KEY']`       |
-| gpt-3.5-turbo-0301    | `completion('gpt-3.5-turbo-0301', messages)` | `os.environ['OPENAI_API_KEY']`       |
-| gpt-3.5-turbo-0613    | `completion('gpt-3.5-turbo-0613', messages)` | `os.environ['OPENAI_API_KEY']`       |
-| gpt-3.5-turbo-16k    | `completion('gpt-3.5-turbo-16k', messages)` | `os.environ['OPENAI_API_KEY']`       |
-| gpt-3.5-turbo-16k-0613    | `completion('gpt-3.5-turbo-16k-0613', messages)` | `os.environ['OPENAI_API_KEY']`       |
-| gpt-4            | `completion('gpt-4', messages)`         | `os.environ['OPENAI_API_KEY']`       |
-| gpt-4-0314            | `completion('gpt-4-0314', messages)`         | `os.environ['OPENAI_API_KEY']`       |
-| gpt-4-0613            | `completion('gpt-4-0613', messages)`         | `os.environ['OPENAI_API_KEY']`       |
-| gpt-4-32k            | `completion('gpt-4-32k', messages)`         | `os.environ['OPENAI_API_KEY']`       |
-| gpt-4-32k-0314            | `completion('gpt-4-32k-0314', messages)`         | `os.environ['OPENAI_API_KEY']`       |
-| gpt-4-32k-0613            | `completion('gpt-4-32k-0613', messages)`         | `os.environ['OPENAI_API_KEY']`       |
+| Model Name            | Function Call                                                   |
+|-----------------------|-----------------------------------------------------------------|
+| gpt-3.5-turbo         | `response = completion(model="gpt-3.5-turbo", messages=messages)` |
+| gpt-3.5-turbo-0301    | `response = completion(model="gpt-3.5-turbo-0301", messages=messages)` |
+| gpt-3.5-turbo-0613    | `response = completion(model="gpt-3.5-turbo-0613", messages=messages)` |
+| gpt-3.5-turbo-16k     | `response = completion(model="gpt-3.5-turbo-16k", messages=messages)` |
+| gpt-3.5-turbo-16k-0613| `response = completion(model="gpt-3.5-turbo-16k-0613", messages=messages)` |
+| gpt-4                 | `response = completion(model="gpt-4", messages=messages)` |
+| gpt-4-0314            | `response = completion(model="gpt-4-0314", messages=messages)` |
+| gpt-4-0613            | `response = completion(model="gpt-4-0613", messages=messages)` |
+| gpt-4-32k             | `response = completion(model="gpt-4-32k", messages=messages)` |
+| gpt-4-32k-0314        | `response = completion(model="gpt-4-32k-0314", messages=messages)` |
+| gpt-4-32k-0613        | `response = completion(model="gpt-4-32k-0613", messages=messages)` |
+
 
 These also support the `OPENAI_API_BASE` environment variable, which can be used to specify a custom API endpoint.
 
