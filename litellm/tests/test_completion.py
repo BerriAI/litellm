@@ -56,7 +56,7 @@ def test_completion_claude():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_completion_claude()
+# test_completion_claude()
 
 # def test_completion_oobabooga():
 #     try:
@@ -1273,6 +1273,14 @@ def test_completion_palm():
 #         pytest.fail(f"Error occurred: {e}")
 
 
+def test_maritalk():
+    messages = [{"role": "user", "content": "Hey"}]
+    try:
+        response = completion("maritalk", messages=messages)
+        print(f"response: {response}")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+# test_maritalk()
 
 def test_completion_together_ai_stream():
     user_message = "Write 1pg about YC & litellm"
