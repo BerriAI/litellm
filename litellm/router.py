@@ -162,9 +162,10 @@ class Router:
         current_tpm, current_rpm = self._get_deployment_usage(deployment_name=deployment["litellm_params"]["model"])
 
         # get encoding
-        if messages:
+        token_count = 0
+        if messages is not None:
             token_count = litellm.token_counter(model=deployment["model_name"], messages=messages)
-        elif input:
+        elif input is not None:
             if isinstance(input, List):
                 input_text = "".join(text for text in input)
             else:
