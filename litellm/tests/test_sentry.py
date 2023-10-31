@@ -30,6 +30,7 @@ def test_exception_tracking():
     except Exception as e:
         print("got_exception")
         print(e)
+    os.environ["OPENAI_API_KEY"]  = old_api_key
 
 test_exception_tracking()
 
