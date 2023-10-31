@@ -562,6 +562,7 @@ def completion(
                 },
             )
             ## RESPONSE OBJECT
+            model_response._hidden_params["original_response"] = response # track original response, if users make a litellm.text_completion() request, we can return the original response
             choices_list = []
             for idx, item in enumerate(response["choices"]):
                 if len(item["text"]) > 0: 
@@ -1776,11 +1777,18 @@ def text_completion(*args, **kwargs):
     """
     This maps to the Openai.Completion.create format, which has a different I/O (accepts prompt, returning ["choices"]["text"].
     """
+    if "engine" in  kwargs:
+        kwargs["model"] = kwargs["engine"]
+        kwargs.pop("engine")
     if "prompt" in kwargs:
         messages = [{"role": "system", "content": kwargs["prompt"]}]
         kwargs["messages"] = messages
         kwargs.pop("prompt")
         response = completion(*args, **kwargs) # assume the response is the openai response object 
+
+        # if the model is text-davinci-003, return raw response from openai
+        if kwargs["model"] in litellm.open_ai_text_completion_models and response._hidden_params.get("original_response", None) != None:
+            return response._hidden_params.get("original_response", None)
         formatted_response_obj = {
             "id": response["id"],
             "object": "text_completion",
