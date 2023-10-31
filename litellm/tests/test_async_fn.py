@@ -39,7 +39,6 @@ def test_async_response():
 def test_get_response_streaming():
     import asyncio
     async def test_async_call():
-        litellm.set_verbose = True
         user_message = "Hello, how are you?"
         messages = [{"content": user_message, "role": "user"}]
         try:
