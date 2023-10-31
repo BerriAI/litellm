@@ -398,6 +398,18 @@ def test_completion_openai_prompt():
         pytest.fail(f"Error occurred: {e}")
 
 
+def test_completion_openai_prompt_array():
+    try:
+        litellm.set_verbose=True
+        response = text_completion(
+            model="text-davinci-003", prompt=[[3152, 833]], max_tokens=10
+        )
+        print(response)
+        response_str = response["choices"][0]["text"]
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+# test_completion_openai_prompt_array()
+
 def test_completion_text_openai():
     try:
         # litellm.set_verbose=True
