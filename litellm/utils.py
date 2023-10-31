@@ -194,6 +194,7 @@ class ModelResponse(OpenAIObject):
             self.usage = usage
         else:
             self.usage = Usage()
+        self._hidden_params = {} # used in case users want to access the original model response
         super(ModelResponse, self).__init__(**params)
 
     def to_dict_recursive(self):
