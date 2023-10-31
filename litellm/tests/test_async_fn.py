@@ -9,11 +9,13 @@ import asyncio
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
+import litellm
 from litellm import acompletion, acreate
 
 def test_async_response():
     import asyncio
     async def test_get_response():
+        litellm.set_verbose = True
         user_message = "Hello, how are you?"
         messages = [{"content": user_message, "role": "user"}]
         try:
@@ -27,6 +29,7 @@ def test_async_response():
 def test_get_response_streaming():
     import asyncio
     async def test_async_call():
+        litellm.set_verbose = True
         user_message = "Hello, how are you?"
         messages = [{"content": user_message, "role": "user"}]
         try:
