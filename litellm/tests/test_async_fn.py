@@ -17,7 +17,7 @@ def test_sync_response():
     user_message = "Hello, how are you?"
     messages = [{"content": user_message, "role": "user"}]
     try:
-        response = completion(model="gpt-3.5-turbo", messages=messages)
+        response = completion(model="gpt-3.5-turbo", messages=messages, api_key=os.environ["OPENAI_API_KEY"])
     except Exception as e:
         pytest.fail(f"An exception occurred: {e}")
 
