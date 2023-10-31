@@ -55,7 +55,23 @@ These also support the `OPENAI_API_BASE` environment variable, which can be used
 | davinci-002         | `response = completion(model="davinci-002", messages=messages)` |
 
 
+### Setting Organization-ID for completion calls
+This can be set in one of the following ways:
+- Environment Variable `OPENAI_ORGANIZATION`
+- Params to `litellm.completion(model=model, organization="your-organization-id")`
+- Set as `litellm.organization="your-organization-id"`
+```python
+import os 
+from litellm import completion
 
+os.environ["OPENAI_API_KEY"] = "your-api-key"
+os.environ["OPENAI_ORGANIZATION"] = "your-org-id" # OPTIONAL
+
+response = completion(
+    model = "gpt-3.5-turbo", 
+    messages=[{ "content": "Hello, how are you?","role": "user"}]
+)
+```
 ### Using Helicone Proxy with LiteLLM
 ```python
 import os 
