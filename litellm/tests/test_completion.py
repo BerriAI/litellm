@@ -56,7 +56,7 @@ def test_completion_claude():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-# test_completion_claude()
+test_completion_claude()
 
 # def test_completion_oobabooga():
 #     try:
@@ -400,9 +400,9 @@ def test_completion_openai_prompt():
 
 def test_completion_openai_prompt_array():
     try:
-        litellm.set_verbose=True
+        litellm.set_verbose=False
         response = text_completion(
-            model="text-davinci-003", prompt=[[3152, 833]], max_tokens=10
+            model="text-davinci-003", prompt=[[3152, 833]], max_tokens=10, logprobs=10
         )
         print(response)
         response_str = response["choices"][0]["text"]
