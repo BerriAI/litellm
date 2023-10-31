@@ -416,9 +416,6 @@ def completion(
                 or None # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
             )
             # set API KEY
-            print_verbose(
-                f"api_key: {api_key}; dynamic_api_key: {dynamic_api_key}; litellm.api_key: {litellm.api_key}; litellm.openai_key: {litellm.openai_key}; os.environ['OPENAI_API_KEY']: {os.environ['OPENAI_API_KEY']}"
-            )
             api_key = (
                 api_key or
                 dynamic_api_key or # allows us to read env variables for compatible openai api's like perplexity 
