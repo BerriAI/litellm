@@ -44,15 +44,16 @@ These also support the `OPENAI_API_BASE` environment variable, which can be used
 
 ### OpenAI Text Completion Models / Instruct Models
 
-| Model Name       | Function Call                              | Required OS Variables                |
-|------------------|--------------------------------------------|--------------------------------------|
-| gpt-3.5-turbo-instruct | `completion('gpt-3.5-turbo-instruct', messages)` | `os.environ['OPENAI_API_KEY'`       |
-| text-davinci-003 | `completion('text-davinci-003', messages)` | `os.environ['OPENAI_API_KEY']`       |
-| ada-001 | `completion('ada-001', messages)` | `os.environ['OPENAI_API_KEY']`       |
-| curie-001 | `completion('curie-001', messages)` | `os.environ['OPENAI_API_KEY']`       |
-| babbage-001 | `completion('babbage-001', messages)` | `os.environ['OPENAI_API_KEY']`       |
-| babbage-002 | `completion('ada-001', messages)` | `os.environ['OPENAI_API_KEY']`       |
-| davinci-002 | `completion('davinci-002', messages)` | `os.environ['OPENAI_API_KEY']`       |
+| Model Name          | Function Call                                      |
+|---------------------|----------------------------------------------------|
+| gpt-3.5-turbo-instruct | `response = completion(model="gpt-3.5-turbo-instruct", messages=messages)` |
+| text-davinci-003    | `response = completion(model="text-davinci-003", messages=messages)` |
+| ada-001             | `response = completion(model="ada-001", messages=messages)` |
+| curie-001           | `response = completion(model="curie-001", messages=messages)` |
+| babbage-001         | `response = completion(model="babbage-001", messages=messages)` |
+| babbage-002         | `response = completion(model="babbage-002", messages=messages)` |
+| davinci-002         | `response = completion(model="davinci-002", messages=messages)` |
+
 
 
 ### Using Helicone Proxy with LiteLLM
