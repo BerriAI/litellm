@@ -50,9 +50,9 @@ Use the [router_config_template.yaml](https://github.com/BerriAI/litellm/blob/ma
 1. Create a `config.yaml` file
 ```shell
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-3.5-turbo # set model alias 
     litellm_params: # params for litellm.completion() - https://docs.litellm.ai/docs/completion/input#input---request-body
-      model: azure/chatgpt-v-2 # azure/<your-deployment-name>
+      model: azure/chatgpt-v-2 # azure/<your-deployment-name> <- actual name used for litellm.completion()
       api_key: your_azure_api_key
       api_version: your_azure_api_version
       api_base: your_azure_api_base
