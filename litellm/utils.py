@@ -1700,6 +1700,8 @@ def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None, api_
         # cohere embeddings
         elif model in litellm.cohere_embedding_models:
             custom_llm_provider = "cohere"
+        elif model in litellm.bedrock_embedding_models:
+            custom_llm_provider = "bedrock"
 
         if custom_llm_provider is None or custom_llm_provider=="":
             print()
