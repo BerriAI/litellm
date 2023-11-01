@@ -81,7 +81,7 @@ def test_cohere_embedding():
 def test_bedrock_embedding():
     try:
         response = embedding(
-            model="bedrock/amazon.titan-embed-text-v1", input=["good morning from litellm, attempting to embed data"]
+            model="amazon.titan-embed-text-v1", input=["good morning from litellm, attempting to embed data"]
         )
         print(f"response:", response)
     except Exception as e:
