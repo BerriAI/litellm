@@ -408,7 +408,7 @@ def test_completion_openai_prompt_array():
         response_str = response["choices"][0]["text"]
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_openai_prompt_array()
+# test_completion_openai_prompt_array()
 
 def test_completion_hf_prompt_array():
     try:
@@ -423,7 +423,7 @@ def test_completion_hf_prompt_array():
         response_str = response["choices"][0]["text"]
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_hf_prompt_array()
+# test_completion_hf_prompt_array()
 
 def test_completion_text_openai():
     try:
@@ -878,6 +878,26 @@ def test_completion_bedrock_claude():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 # test_completion_bedrock_claude()
+
+def test_completion_bedrock_cohere():
+    print("calling bedrock cohere")
+    try:
+        response = completion(
+            model="bedrock/cohere.command-text-v14", 
+            messages=[{"role": "user", "content": "hi"}],
+            temperature=0.1,
+            max_tokens=10,
+            stream=True
+        )
+        # Add any assertions here to check the response
+        print(response)
+        for chunk in response:
+            print(chunk)
+    except RateLimitError:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+# test_completion_bedrock_cohere()
 
 
 def test_completion_bedrock_claude_completion_auth():
