@@ -128,7 +128,9 @@ response = embedding(
 )
 ```
 
-### [OPTIONAL] API KEYS + API BASE
+## Advanced
+
+### Setting API KEYS + API BASE
 If required, you can set the api key + api base, set it in your os environment. [Code for how it's sent](https://github.com/BerriAI/litellm/blob/0100ab2382a0e720c7978fbf662cc6e6920e7e03/litellm/llms/huggingface_restapi.py#L25)
 
 ```python
@@ -198,7 +200,7 @@ test_huggingface_custom_model()
 
 [Implementation Code](https://github.com/BerriAI/litellm/blob/c0b3da2c14c791a0b755f0b1e5a9ef065951ecbf/litellm/llms/huggingface_restapi.py#L52)
 
-## deploying a model on huggingface
+### Deploying a model on huggingface
 You can use any chat/text model from Hugging Face with the following steps:
 
 * Copy your model id/url from Huggingface Inference Endpoints
