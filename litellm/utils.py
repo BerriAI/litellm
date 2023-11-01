@@ -4359,3 +4359,48 @@ def get_valid_models():
         return valid_models
     except:
         return [] # NON-Blocking
+
+# used for litellm.text_completion() to transform HF logprobs to OpenAI.Completion() format
+def transform_logprobs(hf_response):
+    # Initialize an empty list for the transformed logprobs
+    transformed_logprobs = []
+
+    # For each Hugging Face response, transform the logprobs
+    for response in hf_response:
+        # Extract the relevant information from the response
+        response_details = response['details']
+        tokens = response_details['prefill'] + response_details['tokens']
+
+        # Initialize an empty list for the token information
+        token_info = {
+            'tokens': [],
+            'token_logprobs': [],
+            'text_offset': [],
+            'top_logprobs': [],
+        }
+
+        stub_top_logprobs = { "alternative_1": -1, "alternative_2": -2, "alternative_3": -3 }
+
+
+        # For each element in the 'tokens' list, extract the relevant information
+        for i, token in enumerate(tokens):
+            # Extract the text of the token
+            token_text = token['text']
+
+            # Extract the logprob of the token
+            token_logprob = token['logprob']
+
+            # Add the token information to the 'token_info' list
+            token_info['tokens'].append(token_text)
+            token_info['token_logprobs'].append(token_logprob)
+            token_info['top_logprobs'].append(stub_top_logprobs)
+
+
+            # Add the text offset of the token
+            # This is computed as the sum of the lengths of all previous tokens
+            token_info['text_offset'].append(sum(len(t['text']) for t in tokens[:i]))
+
+        # Add the 'token_info' list to the 'transformed_logprobs' list
+        transformed_logprobs = token_info
+
+    return transformed_logprobs
