@@ -1791,6 +1791,15 @@ def text_completion(*args, **kwargs):
         # if the model is text-davinci-003, return raw response from openai
         if kwargs["model"] in litellm.open_ai_text_completion_models and response._hidden_params.get("original_response", None) != None:
             return response._hidden_params.get("original_response", None)
+        transformed_logprobs = None
+        try:
+            raw_response = response._hidden_params.get("original_response", None)
+            transformed_logprobs = {
+                "tokens": [token['text'] for token in raw_response[0]['details']['tokens']],
+                "token_logprobs": [token['logprob'] for token in raw_response[0]['details']['tokens']]
+            }
+        except Exception as e:
+            print("LiteLLM non blocking exception", e)
         formatted_response_obj = {
             "id": response["id"],
             "object": "text_completion",
@@ -1800,7 +1809,7 @@ def text_completion(*args, **kwargs):
             {
                 "text": response["choices"][0]["message"]["content"],
                 "index": response["choices"][0]["index"],
-                "logprobs": None,
+                "logprobs": transformed_logprobs,
                 "finish_reason": response["choices"][0]["finish_reason"]
             }
             ],

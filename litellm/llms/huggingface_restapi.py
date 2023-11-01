@@ -348,6 +348,7 @@ def completion(
         model_response.usage.completion_tokens = completion_tokens
         model_response.usage.prompt_tokens = prompt_tokens
         model_response.usage.total_tokens = prompt_tokens + completion_tokens
+        model_response._hidden_params["original_response"] = completion_response
         return model_response
 
 
