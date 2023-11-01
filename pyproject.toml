@@ -17,6 +17,7 @@ click = "*"
 jinja2 = "^3.1.2"
 certifi = "^2023.7.22"
 appdirs = "^1.4.4"
+numpydoc = "^1.6.0"
 
 [tool.poetry.scripts]
 litellm = 'litellm:run_server'
