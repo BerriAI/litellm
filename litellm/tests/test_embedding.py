@@ -78,6 +78,16 @@ def test_cohere_embedding():
 
 # test_cohere_embedding()
 
+def test_bedrock_embedding():
+    try:
+        response = embedding(
+            model="bedrock/amazon.titan-embed-text-v1", input=["good morning from litellm, attempting to embed data"]
+        )
+        print(f"response:", response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+# test_bedrock_embedding()
+
 # comment out hf tests - since hf endpoints are unstable
 # def test_hf_embedding():
 #     try:
