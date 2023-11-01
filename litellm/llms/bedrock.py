@@ -326,6 +326,8 @@ def completion(
         for k, v in config.items(): 
             if k not in inference_params: # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
                 inference_params[k] = v
+        if optional_params.get("stream", False) == True:
+            inference_params["stream"] = True # cohere requires stream = True in inference params
         data = json.dumps({
             "prompt": prompt,
             **inference_params
