@@ -20,6 +20,12 @@ def custom_callback(
     print(completion_response)
     print(start_time)
     print(end_time)
+    if "complete_streaming_response" in kwargs:
+        print("\n\n complete response\n\n")
+        complete_streaming_response = kwargs["complete_streaming_response"]
+        print(kwargs["complete_streaming_response"])
+        usage = complete_streaming_response["usage"]
+        print("usage", usage)
 def send_slack_alert(
         kwargs,
         completion_response,
@@ -67,20 +73,23 @@ litellm.success_callback = [custom_callback, send_slack_alert]
 litellm.failure_callback = [send_slack_alert]
 
 
-litellm.set_verbose = True
+litellm.set_verbose = False
 
-litellm.input_callback = [get_transformed_inputs]
+# litellm.input_callback = [get_transformed_inputs]
 
 
 def test_chat_openai():
     try:
-        response = completion(model="gpt-2",
+        response = completion(model="gpt-3.5-turbo",
                               messages=[{
                                   "role": "user",
                                   "content": "Hi 👋 - i'm openai"
-                              }])
+                              }],
+                              stream=True)
 
         print(response)
+        for chunk in response:
+            print(chunk)
 
     except Exception as e:
         print(e)

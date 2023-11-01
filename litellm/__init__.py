@@ -23,6 +23,7 @@ azure_key: Optional[str] = None
 anthropic_key: Optional[str] = None
 replicate_key: Optional[str] = None
 cohere_key: Optional[str] = None
+maritalk_key: Optional[str] = None
 ai21_key: Optional[str] = None
 openrouter_key: Optional[str] = None
 huggingface_key: Optional[str] = None
@@ -218,6 +219,10 @@ ollama_models = [
     "llama2"
 ]
 
+maritalk_models = [
+    "maritalk"
+]
+
 model_list = (
     open_ai_chat_completion_models
     + open_ai_text_completion_models
@@ -237,6 +242,7 @@ model_list = (
     + bedrock_models
     + deepinfra_models
     + perplexity_models
+    + maritalk_models
 )
 
 provider_list: List = [
@@ -263,6 +269,7 @@ provider_list: List = [
     "deepinfra",
     "perplexity",
     "anyscale",
+    "maritalk",
     "custom", # custom apis
 ]
 
@@ -282,6 +289,7 @@ models_by_provider: dict = {
     "ollama": ollama_models,
     "deepinfra": deepinfra_models,
     "perplexity": perplexity_models,
+    "maritalk": maritalk_models
 }
 
 # mapping for those models which have larger equivalents 
@@ -347,6 +355,7 @@ from .llms.petals import PetalsConfig
 from .llms.vertex_ai import VertexAIConfig
 from .llms.sagemaker import SagemakerConfig
 from .llms.ollama import OllamaConfig
+from .llms.maritalk import MaritTalkConfig
 from .llms.bedrock import AmazonTitanConfig, AmazonAI21Config, AmazonAnthropicConfig, AmazonCohereConfig
 from .llms.openai import OpenAIConfig, OpenAITextCompletionConfig, AzureOpenAIConfig
 from .main import *  # type: ignore

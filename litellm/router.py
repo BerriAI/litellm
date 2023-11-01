@@ -26,6 +26,7 @@ class Router:
     model_map: dict = {}
     model_names: List[str] = []
     cache_responses: bool = False
+    default_cache_time_seconds: int = 1 * 60 * 60  # 1 hour
 
     def __init__(self,
                  model_list: Optional[list] = None,
@@ -150,7 +151,10 @@ class Router:
         Function LiteLLM submits a callback to after a successful
         completion. Purpose of this is ti update TPM/RPM usage per model
         """
-        model_name = kwargs.get('model', None)  # i.e. azure/gpt35turbo
+        model_name = kwargs.get('model', None)  # i.e. gpt35turbo
+        custom_llm_provider = kwargs.get("litellm_params", {}).get('custom_llm_provider', None)  # i.e. azure
+        if custom_llm_provider:
+            model_name = f"{custom_llm_provider}/{model_name}"
         total_tokens = completion_response['usage']['total_tokens']
         self._set_deployment_usage(model_name, total_tokens)
 
@@ -164,7 +168,7 @@ class Router:
         # get list of potential deployments
         potential_deployments = self.model_map[model]
 
-        # set first model as current model
+        # set first model as current model to calculate token count
         deployment = potential_deployments[0]
 
         # get model tpm, rpm limits
@@ -174,9 +178,10 @@ class Router:
         current_tpm, current_rpm = self._get_deployment_usage(deployment_name=deployment["litellm_params"]["model"])
 
         # get encoding
-        if messages:
+        token_count = 0
+        if messages is not None:
             token_count = litellm.token_counter(model=deployment["model_name"], messages=messages)
-        elif input:
+        elif input is not None:
             if isinstance(input, List):
                 input_text = "".join(text for text in input)
             else:
@@ -185,29 +190,27 @@ class Router:
         else:
             raise ValueError("Either messages or input must be provided.")
 
-        # if at model limit, return lowest used
-        if current_tpm + token_count > tpm or current_rpm + 1 >= rpm:
-            # -----------------------
-            # Find lowest used model
-            # ----------------------
-            lowest_tpm = float('inf')
-            deployment = None
+        # -----------------------
+        # Find lowest used model
+        # ----------------------
+        lowest_tpm = float("inf")
+        deployment = None
 
-            # Go through all the models to get tpm, rpm
-            for item in potential_deployments:
-                item_tpm, item_rpm = self._get_deployment_usage(deployment_name=item["litellm_params"]["model"])
+        # Go through all the models to get tpm, rpm
+        for item in potential_deployments:
+            item_tpm, item_rpm = self._get_deployment_usage(deployment_name=item["litellm_params"]["model"])
 
-                if item_tpm == 0:
-                    return item
-                elif item_tpm + token_count > item["tpm"] or item_rpm + 1 >= item["rpm"]:
-                    continue
-                elif item_tpm < lowest_tpm:
-                    lowest_tpm = item_tpm
-                    deployment = item
+            if item_tpm == 0:
+                return item
+            elif item_tpm + token_count > item["tpm"] or item_rpm + 1 >= item["rpm"]:
+                continue
+            elif item_tpm < lowest_tpm:
+                lowest_tpm = item_tpm
+                deployment = item
 
-            # if none, raise exception
-            if deployment is None:
-                raise ValueError("No models available.")
+        # if none, raise exception
+        if deployment is None:
+            raise ValueError("No models available.")
 
         # return model
         return deployment
@@ -226,21 +229,21 @@ class Router:
         # ------------
         # Return usage
         # ------------
-        tpm = self.cache.get_cache(tpm_key) or 0
-        rpm = self.cache.get_cache(rpm_key) or 0
+        tpm = self.cache.get_cache(cache_key=tpm_key) or 0
+        rpm = self.cache.get_cache(cache_key=rpm_key) or 0
 
         return int(tpm), int(rpm)
 
     def increment(self, key: str, increment_value: int) -> None:
         # get value
-        cached_value = self.cache.get_cache(key)
+        cached_value = self.cache.get_cache(cache_key=key)
         # update value
         try:
             cached_value += increment_value
         except TypeError:
             cached_value = increment_value
         # save updated value
-        self.cache.add_cache(result=cached_value, cache_key=key)
+        self.cache.add_cache(result=cached_value, cache_key=key, ttl=self.default_cache_time_seconds)
 
     def _set_deployment_usage(
             self,

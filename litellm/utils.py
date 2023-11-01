@@ -194,6 +194,7 @@ class ModelResponse(OpenAIObject):
             self.usage = usage
         else:
             self.usage = Usage()
+        self._hidden_params = {} # used in case users want to access the original model response
         super(ModelResponse, self).__init__(**params)
 
     def to_dict_recursive(self):
@@ -823,6 +824,23 @@ def client(original_function):
             result._response_ms = (end_time - start_time).total_seconds() * 1000 # return response latency in ms like openai
             return result
         except Exception as e:
+            call_type = original_function.__name__
+            if call_type == CallTypes.completion.value:
+                num_retries = kwargs.get("num_retries", None)
+                context_window_fallback_dict = kwargs.get("context_window_fallback_dict", {})
+
+                if num_retries: 
+                    if (isinstance(e, openai.error.APIError) 
+                    or isinstance(e, openai.error.Timeout) 
+                    or isinstance(e, openai.error.ServiceUnavailableError)):
+                        kwargs["num_retries"] = num_retries
+                        return litellm.completion_with_retries(*args, **kwargs)
+                elif isinstance(e, litellm.exceptions.ContextWindowExceededError) and context_window_fallback_dict and model in context_window_fallback_dict:
+                    if len(args) > 0:
+                        args[0]  = context_window_fallback_dict[model]
+                    else:
+                        kwargs["model"] = context_window_fallback_dict[model]
+                    return original_function(*args, **kwargs)
             traceback_exception = traceback.format_exc()
             crash_reporting(*args, **kwargs, exception=traceback_exception)
             end_time = datetime.datetime.now()
@@ -911,6 +929,16 @@ def _select_tokenizer(model: str):
         return {"type": "openai_tokenizer", "tokenizer": encoding}
 
 def encode(model: str, text: str): 
+    """
+    Encodes the given text using the specified model.
+
+    Args:
+        model (str): The name of the model to use for tokenization.
+        text (str): The text to be encoded.
+
+    Returns:
+        enc: The encoded text.
+    """
     tokenizer_json = _select_tokenizer(model=model)
     enc = tokenizer_json["tokenizer"].encode(text)
     return enc
@@ -1275,8 +1303,25 @@ def get_optional_params(  # use the openai defaults
             optional_params["presence_penalty"] = presence_penalty
         if stop:
             optional_params["stop_sequences"] = stop
-    elif custom_llm_provider == "perplexity":
-        optional_params[""]
+    elif custom_llm_provider == "maritalk":
+        ## check if unsupported param passed in 
+        supported_params = ["stream", "temperature", "max_tokens", "top_p", "presence_penalty", "stop"]
+        _check_valid_arg(supported_params=supported_params)
+        # handle cohere params
+        if stream:
+            optional_params["stream"] = stream
+        if temperature:
+            optional_params["temperature"] = temperature
+        if max_tokens:
+            optional_params["max_tokens"] = max_tokens
+        if logit_bias != {}:
+            optional_params["logit_bias"] = logit_bias
+        if top_p: 
+            optional_params["p"] = top_p
+        if presence_penalty: 
+            optional_params["repetition_penalty"] = presence_penalty
+        if stop:
+            optional_params["stopping_tokens"] = stop
     elif custom_llm_provider == "replicate":
         ## check if unsupported param passed in 
         supported_params = ["stream", "temperature", "max_tokens", "top_p", "stop", "seed"]
@@ -1320,6 +1365,10 @@ def get_optional_params(  # use the openai defaults
             optional_params["best_of"] = n
         if presence_penalty:
             optional_params["repetition_penalty"] = presence_penalty
+        if "echo" in special_params:
+            # https://huggingface.co/docs/huggingface_hub/main/en/package_reference/inference_client#huggingface_hub.InferenceClient.text_generation.decoder_input_details
+            #  Return the decoder input token logprobs and ids. You must set details=True as well for it to be taken into account. Defaults to False
+            optional_params["decoder_input_details"] = special_params["echo"]
     elif custom_llm_provider == "together_ai":
         ## check if unsupported param passed in 
         supported_params = ["stream", "temperature", "max_tokens", "top_p", "stop", "frequency_penalty"]
@@ -1575,7 +1624,7 @@ def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None, api_
             return model, custom_llm_provider, dynamic_api_key, api_base
 
         # check if llm provider part of model name
-        if model.split("/",1)[0] in litellm.provider_list:
+        if model.split("/",1)[0] in litellm.provider_list and model.split("/",1)[0] not in litellm.model_list:
             custom_llm_provider = model.split("/", 1)[0]
             model = model.split("/", 1)[1]
             if custom_llm_provider == "perplexity":
@@ -1621,6 +1670,9 @@ def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None, api_
         ## openrouter
         elif model in litellm.openrouter_models:
             custom_llm_provider = "openrouter"
+        ## openrouter
+        elif model in litellm.maritalk_models:
+            custom_llm_provider = "maritalk"
         ## vertex - text + chat models
         elif model in litellm.vertex_chat_models or model in litellm.vertex_text_models:
             custom_llm_provider = "vertex_ai"
@@ -1926,6 +1978,17 @@ def load_test_model(
         }
 
 def validate_environment(model: Optional[str]=None) -> dict:
+    """
+    Checks if the environment variables are valid for the given model.
+    
+    Args:
+        model (Optional[str]): The name of the model. Defaults to None.
+        
+    Returns:
+        dict: A dictionary containing the following keys:
+            - keys_in_environment (bool): True if all the required keys are present in the environment, False otherwise.
+            - missing_keys (List[str]): A list of missing keys in the environment.
+    """
     keys_in_environment = False
     missing_keys: List[str] = []
 
@@ -2508,10 +2571,17 @@ def valid_model(model):
     except:
         raise InvalidRequestError(message="", model=model, llm_provider="")
 
-# check valid api key 
 def check_valid_key(model: str, api_key: str):
-    # returns True if key is valid for the model
-    # returns False if key is invalid for the model
+    """
+    Checks if a given API key is valid for a specific model by making a litellm.completion call with max_tokens=10
+
+    Args:
+        model (str): The name of the model to check the API key against.
+        api_key (str): The API key to be checked.
+
+    Returns:
+        bool: True if the API key is valid for the model, False otherwise.
+    """
     messages = [{"role": "user", "content": "Hey, how's it going?"}]
     try:
         litellm.completion(model=model, messages=messages, api_key=api_key, max_tokens=10)
@@ -3300,7 +3370,7 @@ def exception_type(
             elif custom_llm_provider == "ollama":
                 if "no attribute 'async_get_ollama_response_stream" in error_str:
                     raise ImportError("Import error - trying to use async for ollama. import async_generator failed. Try 'pip install async_generator'")
-            elif custom_llm_provider == "custom_openai":
+            elif custom_llm_provider == "custom_openai" or custom_llm_provider == "maritalk":
                 if hasattr(original_exception, "status_code"):
                     exception_mapping_worked = True
                     if original_exception.status_code == 401:
@@ -3562,6 +3632,17 @@ class CustomStreamWrapper:
         except:
             raise ValueError(f"Unable to parse response. Original response: {chunk}")
     
+    def handle_maritalk_chunk(self, chunk): # fake streaming
+        chunk = chunk.decode("utf-8")
+        data_json = json.loads(chunk)
+        try:
+            text = data_json["answer"]
+            is_finished = True
+            finish_reason = "stop"
+            return {"text": text, "is_finished": is_finished, "finish_reason": finish_reason}
+        except:
+            raise ValueError(f"Unable to parse response. Original response: {chunk}")
+    
     def handle_nlp_cloud_chunk(self, chunk):
         chunk = chunk.decode("utf-8")
         data_json = json.loads(chunk)
@@ -3699,6 +3780,14 @@ class CustomStreamWrapper:
                 if stop_reason != None:
                     is_finished = True
                     finish_reason = stop_reason
+            ######## bedrock.cohere mappings ###############
+            # cohere mapping
+            elif "text" in chunk_data:
+                text = chunk_data["text"] # bedrock.cohere
+            # cohere mapping for finish reason
+            elif "finish_reason" in chunk_data:
+                finish_reason = chunk_data["finish_reason"]
+                is_finished = True
             elif chunk_data.get("completionReason", None): 
                 is_finished = True
                 finish_reason = chunk_data["completionReason"]
@@ -3745,6 +3834,12 @@ class CustomStreamWrapper:
                 elif self.custom_llm_provider and self.custom_llm_provider == "ai21": #ai21 doesn't provide streaming
                     chunk = next(self.completion_stream)
                     response_obj = self.handle_ai21_chunk(chunk)
+                    completion_obj["content"] = response_obj["text"]
+                    if response_obj["is_finished"]: 
+                        model_response.choices[0].finish_reason = response_obj["finish_reason"]
+                elif self.custom_llm_provider and self.custom_llm_provider == "maritalk":
+                    chunk = next(self.completion_stream)
+                    response_obj = self.handle_maritalk_chunk(chunk)
                     completion_obj["content"] = response_obj["text"]
                     if response_obj["is_finished"]: 
                         model_response.choices[0].finish_reason = response_obj["finish_reason"]
@@ -3906,6 +4001,34 @@ def read_config_args(config_path) -> dict:
 ########## experimental completion variants ############################
 
 def completion_with_config(config: Union[dict, str], **kwargs):
+    """
+    Generate a litellm.completion() using a config dict and all supported completion args 
+
+    Example config;
+    config = {
+        "default_fallback_models": # [Optional] List of model names to try if a call fails
+        "available_models": # [Optional] List of all possible models you could call 
+        "adapt_to_prompt_size": # [Optional] True/False - if you want to select model based on prompt size (will pick from available_models)
+        "model": {
+            "model-name": {
+                "needs_moderation": # [Optional] True/False - if you want to call openai moderations endpoint before making completion call. Will raise exception, if flagged. 
+                "error_handling": {
+                    "error-type": { # One of the errors listed here - https://docs.litellm.ai/docs/exception_mapping#custom-mapping-list
+                        "fallback_model": "" # str, name of the model it should try instead, when that error occurs 
+                    }
+                }
+            }
+        }
+    }
+
+    Parameters:
+        config (Union[dict, str]): A configuration for litellm
+        **kwargs: Additional keyword arguments for litellm.completion
+
+    Returns:
+        litellm.ModelResponse: A ModelResponse with the generated completion
+
+    """
     if config is not None:
         if isinstance(config, str):
             config = read_config_args(config)
@@ -4197,8 +4320,16 @@ def trim_messages(
         print("Got exception while token trimming", e)
         return messages
 
-# this helper reads the .env and returns a list of supported llms for user
 def get_valid_models():
+    """
+    Returns a list of valid LLMs based on the set environment variables
+    
+    Args:
+        None
+
+    Returns:
+        A list of valid LLMs
+    """
     try:
         # get keys set in .env
         environ_keys = os.environ.keys()

@@ -244,7 +244,7 @@ services:
       - '8000:8000'
     environment:
       - PORT=8000
-      - OPENAI_API_KEY=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
+      - OPENAI_API_KEY=<your-openai-key>
 
   container2:
     image: ghcr.io/mckaywrigley/chatbot-ui:main
@@ -470,6 +470,23 @@ model_list:
 ```shell
 docker run -e PORT=8000 -p 8000:8000 -v $(pwd)/config.yaml:/app/config.yaml ghcr.io/berriai/litellm:latest
 ```
+## Model Alias 
+
+Set a model alias for your deployments. 
+
+In the `config.yaml` the model_name parameter is the user-facing name to use for your deployment. 
+
+E.g.: If we want to save a Huggingface TGI Mistral-7b deployment, as 'mistral-7b' for our users, we might save it as: 
+
+```yaml
+model_list:
+  - model_name: mistral-7b # ALIAS
+    litellm_params:
+      model: huggingface/mistralai/Mistral-7B-Instruct-v0.1 # ACTUAL NAME
+      api_key: your_huggingface_api_key # [OPTIONAL] if deployed on huggingface inference endpoints
+      api_base: your_api_base # url where model is deployed 
+```
+
 ## Caching 
 
 Add Redis Caching to your server via environment variables  

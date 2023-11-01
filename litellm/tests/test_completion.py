@@ -56,7 +56,7 @@ def test_completion_claude():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_completion_claude()
+# test_completion_claude()
 
 # def test_completion_oobabooga():
 #     try:
@@ -397,6 +397,33 @@ def test_completion_openai_prompt():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+
+def test_completion_openai_prompt_array():
+    try:
+        litellm.set_verbose=False
+        response = text_completion(
+            model="text-davinci-003", prompt="good morning", max_tokens=10, logprobs=10, echo=True
+        )
+        print(response)
+        response_str = response["choices"][0]["text"]
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+# test_completion_openai_prompt_array()
+
+def test_completion_hf_prompt_array():
+    try:
+        litellm.set_verbose=False
+        response = text_completion(
+            model="huggingface/bigcode/starcoder", 
+            prompt="good morning", 
+            max_tokens=10, logprobs=10,
+            echo=True
+        )
+        print(response)
+        response_str = response["choices"][0]["text"]
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+# test_completion_hf_prompt_array()
 
 def test_completion_text_openai():
     try:
@@ -800,93 +827,113 @@ def test_completion_together_ai():
 #     except Exception as e:
 #         pytest.fail(f"Error occurred: {e}")
 
-# def test_completion_sagemaker():
-#     try:
-#         response = completion(
-#             model="sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b", 
-#             messages=messages,
-#             temperature=0.2,
-#             max_tokens=80,
-#             logger_fn=logger_fn
-#         )
-#         # Add any assertions here to check the response
-#         print(response)
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
+def test_completion_sagemaker():
+    try:
+        response = completion(
+            model="sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b", 
+            messages=messages,
+            temperature=0.2,
+            max_tokens=80,
+            logger_fn=logger_fn
+        )
+        # Add any assertions here to check the response
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 # test_completion_sagemaker()
 
-# def test_completion_bedrock_titan():
-#     try:
-#         response = completion(
-#             model="bedrock/amazon.titan-tg1-large", 
-#             messages=messages,
-#             temperature=0.2,
-#             max_tokens=200,
-#             top_p=0.8,
-#             logger_fn=logger_fn
-#         )
-#         # Add any assertions here to check the response
-#         print(response)
-#     except RateLimitError:
-#         pass
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
+def test_completion_bedrock_titan():
+    try:
+        response = completion(
+            model="bedrock/amazon.titan-tg1-large", 
+            messages=messages,
+            temperature=0.2,
+            max_tokens=200,
+            top_p=0.8,
+            logger_fn=logger_fn
+        )
+        # Add any assertions here to check the response
+        print(response)
+    except RateLimitError:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 # test_completion_bedrock_titan()
 
-# def test_completion_bedrock_claude():
-#     print("calling claude")
-#     try:
-#         response = completion(
-#             model="anthropic.claude-instant-v1", 
-#             messages=messages,
-#             max_tokens=10,
-#             temperature=0.1,
-#             logger_fn=logger_fn
-#         )
-#         # Add any assertions here to check the response
-#         print(response)
-#     except RateLimitError:
-#         pass
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
+def test_completion_bedrock_claude():
+    print("calling claude")
+    try:
+        response = completion(
+            model="anthropic.claude-instant-v1", 
+            messages=messages,
+            max_tokens=10,
+            temperature=0.1,
+            logger_fn=logger_fn
+        )
+        # Add any assertions here to check the response
+        print(response)
+    except RateLimitError:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 # test_completion_bedrock_claude()
 
+def test_completion_bedrock_cohere():
+    print("calling bedrock cohere")
+    try:
+        response = completion(
+            model="bedrock/cohere.command-text-v14", 
+            messages=[{"role": "user", "content": "hi"}],
+            temperature=0.1,
+            max_tokens=10,
+            stream=True
+        )
+        # Add any assertions here to check the response
+        print(response)
+        for chunk in response:
+            print(chunk)
+    except RateLimitError:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+# test_completion_bedrock_cohere()
 
-# def test_completion_bedrock_claude_completion_auth():
-#     print("calling bedrock claude completion params auth")
-#     import os
 
-#     aws_access_key_id = os.environ["AWS_ACCESS_KEY_ID"]
-#     aws_secret_access_key = os.environ["AWS_SECRET_ACCESS_KEY"]
-#     aws_region_name = os.environ["AWS_REGION_NAME"]
+def test_completion_bedrock_claude_completion_auth():
+    print("calling bedrock claude completion params auth")
+    import os
 
-#     os.environ["AWS_ACCESS_KEY_ID"] = ""
-#     os.environ["AWS_SECRET_ACCESS_KEY"] = ""
-#     os.environ["AWS_REGION_NAME"] = ""
+    aws_access_key_id = os.environ["AWS_ACCESS_KEY_ID"]
+    aws_secret_access_key = os.environ["AWS_SECRET_ACCESS_KEY"]
+    aws_region_name = os.environ["AWS_REGION_NAME"]
+
+    os.environ["AWS_ACCESS_KEY_ID"] = ""
+    os.environ["AWS_SECRET_ACCESS_KEY"] = ""
+    os.environ["AWS_REGION_NAME"] = ""
 
 
-#     try:
-#         response = completion(
-#             model="bedrock/anthropic.claude-instant-v1", 
-#             messages=messages,
-#             max_tokens=10,
-#             temperature=0.1,
-#             logger_fn=logger_fn,
-#             aws_access_key_id=aws_access_key_id,
-#             aws_secret_access_key=aws_secret_access_key,
-#             aws_region_name=aws_region_name,
-#         )
-#         # Add any assertions here to check the response
-#         print(response)
+    try:
+        response = completion(
+            model="bedrock/anthropic.claude-instant-v1", 
+            messages=messages,
+            max_tokens=10,
+            temperature=0.1,
+            logger_fn=logger_fn,
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            aws_region_name=aws_region_name,
+        )
+        # Add any assertions here to check the response
+        print(response)
 
-#         os.environ["AWS_ACCESS_KEY_ID"] = aws_access_key_id
-#         os.environ["AWS_SECRET_ACCESS_KEY"] = aws_secret_access_key
-#         os.environ["AWS_REGION_NAME"] = aws_region_name
-#     except RateLimitError:
-#         pass
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
+        os.environ["AWS_ACCESS_KEY_ID"] = aws_access_key_id
+        os.environ["AWS_SECRET_ACCESS_KEY"] = aws_secret_access_key
+        os.environ["AWS_REGION_NAME"] = aws_region_name
+    except RateLimitError:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 # test_completion_bedrock_claude_completion_auth()
 
 # def test_completion_bedrock_claude_external_client_auth():
@@ -1273,6 +1320,14 @@ def test_completion_palm():
 #         pytest.fail(f"Error occurred: {e}")
 
 
+# def test_maritalk():
+#     messages = [{"role": "user", "content": "Hey"}]
+#     try:
+#         response = completion("maritalk", messages=messages)
+#         print(f"response: {response}")
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
+# test_maritalk()
 
 def test_completion_together_ai_stream():
     user_message = "Write 1pg about YC & litellm"

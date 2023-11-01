@@ -44,7 +44,16 @@ def test_context_window(model):
     with pytest.raises(ContextWindowExceededError):
         completion(model=model, messages=messages)
 
+@pytest.mark.parametrize("model", models)
+def test_context_window_with_fallbacks(model):
+    ctx_window_fallback_dict = {"command-nightly": "claude-2"}
+    sample_text = "how does a court case get to the Supreme Court?" * 1000
+    messages = [{"content": sample_text, "role": "user"}]
+
+    completion(model=model, messages=messages, context_window_fallback_dict=ctx_window_fallback_dict)
+
 # test_context_window(model="command-nightly")
+test_context_window_with_fallbacks(model="command-nightly")
 # Test 2: InvalidAuth Errors
 @pytest.mark.parametrize("model", models)
 def invalid_auth(model):  # set the model key to an invalid key, depending on the model

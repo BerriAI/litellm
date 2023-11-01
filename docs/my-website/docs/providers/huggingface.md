@@ -128,13 +128,81 @@ response = embedding(
 )
 ```
 
-### [OPTIONAL] API KEYS + API BASE
+## Advanced
+
+### Setting API KEYS + API BASE
 If required, you can set the api key + api base, set it in your os environment. [Code for how it's sent](https://github.com/BerriAI/litellm/blob/0100ab2382a0e720c7978fbf662cc6e6920e7e03/litellm/llms/huggingface_restapi.py#L25)
 
 ```python
 import os 
 os.environ["HUGGINGFACE_API_KEY"] = ""
 os.environ["HUGGINGFACE_API_BASE"] = "" 
+```
+
+### Viewing Log probs
+
+#### Using `decoder_input_details` - OpenAI `echo`
+The `echo` param is supported by OpenAI Completions - Use `litellm.text_completion()` for this 
+```python
+from litellm import text_completion
+response = text_completion(
+    model="huggingface/bigcode/starcoder", 
+    prompt="good morning", 
+    max_tokens=10, logprobs=10,
+    echo=True
+)
+ ```
+
+#### Output
+ ```json
+{
+   "id":"chatcmpl-3fc71792-c442-4ba1-a611-19dd0ac371ad",
+   "object":"text_completion",
+   "created":1698801125.936519,
+   "model":"bigcode/starcoder",
+   "choices":[
+      {
+         "text":", I'm going to make you a sand",
+         "index":0,
+         "logprobs":{
+            "tokens":[
+               "good",
+               " morning",
+               ",",
+               " I",
+               "'m",
+               " going",
+               " to",
+               " make",
+               " you",
+               " a",
+               " s",
+               "and"
+            ],
+            "token_logprobs":[
+               "None",
+               -14.96875,
+               -2.2285156,
+               -2.734375,
+               -2.0957031,
+               -2.0917969,
+               -0.09429932,
+               -3.1132812,
+               -1.3203125,
+               -1.2304688,
+               -1.6201172,
+               -0.010292053
+            ]
+         },
+         "finish_reason":"length"
+      }
+   ],
+   "usage":{
+      "completion_tokens":9,
+      "prompt_tokens":2,
+      "total_tokens":11
+   }
+}
 ```
 
 ### Models with Prompt Formatting
@@ -198,7 +266,7 @@ test_huggingface_custom_model()
 
 [Implementation Code](https://github.com/BerriAI/litellm/blob/c0b3da2c14c791a0b755f0b1e5a9ef065951ecbf/litellm/llms/huggingface_restapi.py#L52)
 
-## deploying a model on huggingface
+### Deploying a model on huggingface
 You can use any chat/text model from Hugging Face with the following steps:
 
 * Copy your model id/url from Huggingface Inference Endpoints

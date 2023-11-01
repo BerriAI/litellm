@@ -1,4 +1,5 @@
 import json, copy, types
+import os
 from enum import Enum
 import time
 from typing import Callable, Optional
@@ -174,7 +175,31 @@ def init_bedrock_client(
         aws_access_key_id = None,
         aws_secret_access_key = None,
         aws_region_name=None,
+        aws_bedrock_runtime_endpoint=None,
     ):
+
+    # check for custom AWS_REGION_NAME and use it if not passed to init_bedrock_client
+    litellm_aws_region_name = get_secret("AWS_REGION_NAME")
+    standard_aws_region_name = get_secret("AWS_REGION")
+    if region_name:
+        pass
+    elif aws_region_name:
+        region_name = aws_region_name
+    elif litellm_aws_region_name:
+        region_name = litellm_aws_region_name
+    elif standard_aws_region_name:
+        region_name = standard_aws_region_name
+    else:
+        raise BedrockError(message="AWS region not set: set AWS_REGION_NAME or AWS_REGION env variable or in .env file")
+
+    # check for custom AWS_BEDROCK_RUNTIME_ENDPOINT and use it if not passed to init_bedrock_client
+    env_aws_bedrock_runtime_endpoint = get_secret("AWS_BEDROCK_RUNTIME_ENDPOINT")
+    if aws_bedrock_runtime_endpoint:
+        endpoint_url = aws_bedrock_runtime_endpoint
+    elif env_aws_bedrock_runtime_endpoint:
+        endpoint_url = env_aws_bedrock_runtime_endpoint
+    else:
+        endpoint_url = f'https://bedrock-runtime.{region_name}.amazonaws.com'
 
     import boto3
     if aws_access_key_id != None:
@@ -185,20 +210,17 @@ def init_bedrock_client(
             service_name="bedrock-runtime",
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
-            region_name=aws_region_name,
-            endpoint_url=f'https://bedrock-runtime.{aws_region_name}.amazonaws.com'
+            region_name=region_name,
+            endpoint_url=endpoint_url,
         )
     else:
         # aws_access_key_id is None, assume user is trying to auth using env variables 
-        # boto3 automaticaly reads env variables
+        # boto3 automatically reads env variables
 
-        # we need to read region name from env
-        # I assume majority of users use .env for auth 
-        region_name = get_secret("AWS_REGION_NAME") # reads env for AWS_REGION_NAME, defaults to None
         client = boto3.client(
             service_name="bedrock-runtime",
             region_name=region_name,
-            endpoint_url=f'https://bedrock-runtime.{region_name}.amazonaws.com'
+            endpoint_url=endpoint_url,
         )
 
     return client
@@ -304,6 +326,8 @@ def completion(
         for k, v in config.items(): 
             if k not in inference_params: # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
                 inference_params[k] = v
+        if optional_params.get("stream", False) == True:
+            inference_params["stream"] = True # cohere requires stream = True in inference params
         data = json.dumps({
             "prompt": prompt,
             **inference_params

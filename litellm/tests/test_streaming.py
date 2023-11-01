@@ -724,6 +724,23 @@ def test_completion_replicate_stream_bad_key():
 
 # test_completion_sagemaker_stream()
 
+
+# def test_maritalk_streaming():
+#     messages = [{"role": "user", "content": "Hey"}]
+#     try:
+#         response = completion("maritalk", messages=messages, stream=True)
+#         complete_response = ""
+#         start_time = time.time()
+#         for idx, chunk in enumerate(response):
+#             chunk, finished = streaming_format_tests(idx, chunk)
+#             complete_response += chunk
+#             if finished:
+#                 break
+#         if complete_response.strip() == "": 
+#             raise Exception("Empty response received")
+#     except:
+#         pytest.fail(f"error occurred: {traceback.format_exc()}")
+# test_maritalk_streaming()
 # test on openai completion call
 def test_openai_text_completion_call():
     try:
