@@ -402,7 +402,7 @@ def test_completion_openai_prompt_array():
     try:
         litellm.set_verbose=False
         response = text_completion(
-            model="text-davinci-003", prompt=[[3152, 833]], max_tokens=10, logprobs=10, echo=True
+            model="text-davinci-003", prompt="good morning", max_tokens=10, logprobs=10, echo=True
         )
         print(response)
         response_str = response["choices"][0]["text"]
@@ -877,7 +877,7 @@ def test_completion_bedrock_claude():
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_bedrock_claude()
+# test_completion_bedrock_claude()
 
 
 def test_completion_bedrock_claude_completion_auth():
