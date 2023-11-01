@@ -9,7 +9,7 @@
 
 import litellm
 import time
-import json
+import json, traceback
 
 
 def get_prompt(*args, **kwargs):
@@ -37,6 +37,7 @@ class RedisCache(BaseCache):
     def __init__(self, host, port, password):
         import redis
         # if users don't provider one, use the default litellm cache
+        print(f"HOST: {host}; PORT: {port}; PASSWORD: {password}")
         self.redis_client = redis.Redis(host=host, port=port, password=password)
 
     def set_cache(self, key, value, **kwargs):
@@ -45,7 +46,7 @@ class RedisCache(BaseCache):
             self.redis_client.set(name=key, value=str(value), ex=ttl)
         except Exception as e:
             # NON blocking - notify users Redis is throwing an exception
-            print("LiteLLM Caching: Got exception from REDIS: ", e)
+            print("LiteLLM Caching: set() - Got exception from REDIS : ", e)
 
     def get_cache(self, key, **kwargs):
         try:
@@ -59,7 +60,8 @@ class RedisCache(BaseCache):
                 return cached_response
         except Exception as e:
             # NON blocking - notify users Redis is throwing an exception
-            print("LiteLLM Caching: Got exception from REDIS: ", e)
+            traceback.print_exc()
+            print("LiteLLM Caching: get() - Got exception from REDIS: ", e)
 
 
 class HostedCache(BaseCache):
@@ -104,7 +106,13 @@ class InMemoryCache(BaseCache):
                 if time.time() > self.ttl_dict[key]:
                     self.cache_dict.pop(key, None)
                     return None
-            return self.cache_dict[key]
+            original_cached_response = self.cache_dict[key]
+            try: 
+                cached_response = json.loads(original_cached_response)
+            except: 
+                cached_response = original_cached_response
+            cached_response['cache'] = True  # set cache-hit flag to True
+            return cached_response
         return None
 
 
@@ -196,7 +204,8 @@ class Cache:
                     # print(cached_result)
                     return self.generate_streaming_content(cached_result["choices"][0]['message']['content'])
                 return cached_result
-        except:
+        except Exception as e:
+            print(f"An exception occurred: {traceback.format_exc()}")
             return None
 
     def add_cache(self, result, *args, **kwargs):
