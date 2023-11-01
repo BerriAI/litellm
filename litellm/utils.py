@@ -1421,7 +1421,7 @@ def get_optional_params(  # use the openai defaults
         if n: 
             optional_params["candidate_count"] = n
         if stop: 
-            optional_params["stopSequences"] = stop
+            optional_params["stop_sequences"] = stop
         if max_tokens: 
             optional_params["max_output_tokens"] = max_tokens
     elif (

@@ -705,7 +705,7 @@ def test_completion_azure3():
 
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_azure3()
+# test_completion_azure3()
 
 # new azure test for using litellm. vars, 
 # use the following vars in this test and make an azure_api_call
@@ -1149,7 +1149,7 @@ def test_completion_with_fallbacks():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_completion_with_fallbacks()
+# test_completion_with_fallbacks()
 def test_completion_anyscale_api():
     try:
         # litellm.set_verbose=True
@@ -1329,13 +1329,13 @@ def test_completion_palm():
     # litellm.set_verbose = True
     model_name = "palm/chat-bison"
     try:
-        response = completion(model=model_name, messages=messages)
+        response = completion(model=model_name, messages=messages, stop=["stop"])
         # Add any assertions here to check the response
         print(response)
         print(response.response_ms)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_completion_palm()
+test_completion_palm()
 
 # test_completion_deep_infra()
 # test_completion_ai21()
