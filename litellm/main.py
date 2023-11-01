@@ -357,6 +357,11 @@ def completion(
                 get_secret("AZURE_API_KEY")
             )
 
+            headers = (
+                headers or
+                litellm.headers
+            )
+
             ## LOAD CONFIG - if set
             config=litellm.AzureOpenAIConfig.get_config()
             for k, v in config.items():
@@ -368,7 +373,7 @@ def completion(
                 input=messages,
                 api_key=api_key,
                 additional_args={
-                    "headers": litellm.headers,
+                    "headers": headers,
                     "api_version": api_version,
                     "api_base": api_base,
                 },
@@ -377,7 +382,7 @@ def completion(
             response = openai.ChatCompletion.create(
                 engine=model,
                 messages=messages,
-                headers=litellm.headers,
+                headers=headers,
                 api_key=api_key,
                 api_base=api_base,
                 api_version=api_version,
@@ -393,7 +398,7 @@ def completion(
                 api_key=api_key,
                 original_response=response,
                 additional_args={
-                    "headers": litellm.headers,
+                    "headers": headers,
                     "api_version": api_version,
                     "api_base": api_base,
                 },
@@ -426,6 +431,11 @@ def completion(
                 get_secret("OPENAI_API_KEY")
             )
 
+            headers = (
+                    headers or
+                    litellm.headers
+            )
+
             ## LOAD CONFIG - if set
             config=litellm.OpenAIConfig.get_config()
             for k, v in config.items():
@@ -436,7 +446,7 @@ def completion(
             logging.pre_call(
                 input=messages,
                 api_key=api_key,
-                additional_args={"headers": litellm.headers, "api_base": api_base},
+                additional_args={"headers": headers, "api_base": api_base},
             )
             ## COMPLETION CALL
             try:
@@ -457,7 +467,7 @@ def completion(
                     response = openai.ChatCompletion.create(
                         model=model,
                         messages=messages,
-                        headers=litellm.headers, # None by default
+                        headers=headers, # None by default
                         api_base=api_base, # thread safe setting base, key, api_version
                         api_key=api_key,
                         api_type="openai",
@@ -470,7 +480,7 @@ def completion(
                     input=messages,
                     api_key=api_key,
                     original_response=str(e),
-                    additional_args={"headers": litellm.headers},
+                    additional_args={"headers": headers},
                 )
                 raise e
             
@@ -482,7 +492,7 @@ def completion(
                 input=messages,
                 api_key=api_key,
                 original_response=response,
-                additional_args={"headers": litellm.headers},
+                additional_args={"headers": headers},
             )
         elif (
             model in litellm.open_ai_text_completion_models
@@ -514,6 +524,11 @@ def completion(
                 get_secret("OPENAI_API_KEY")
             )
 
+            headers = (
+                headers or
+                litellm.headers
+            )
+
             ## LOAD CONFIG - if set
             config=litellm.OpenAITextCompletionConfig.get_config()
             for k, v in config.items():
@@ -534,7 +549,7 @@ def completion(
                 api_key=api_key,
                 additional_args={
                     "openai_organization": litellm.organization,
-                    "headers": litellm.headers,
+                    "headers": headers,
                     "api_base": api_base,
                     "api_type": openai.api_type,
                 },
@@ -543,7 +558,7 @@ def completion(
             response = openai.Completion.create(
                 model=model, 
                 prompt=prompt,
-                headers=litellm.headers,
+                headers=headers,
                 api_key = api_key,
                 api_base=api_base,
                 **optional_params
@@ -558,7 +573,7 @@ def completion(
                 original_response=response,
                 additional_args={
                     "openai_organization": litellm.organization,
-                    "headers": litellm.headers,
+                    "headers": headers,
                     "api_base": openai.api_base,
                     "api_type": openai.api_type,
                 },
@@ -796,6 +811,11 @@ def completion(
                 or "https://api.deepinfra.com/v1/openai"
             )
 
+            headers = (
+                headers or
+                litellm.headers
+            )
+
             ## LOGGING
             logging.pre_call(
                 input=messages,
@@ -828,7 +848,7 @@ def completion(
                 input=messages,
                 api_key=api_key,
                 original_response=response,
-                additional_args={"headers": litellm.headers},
+                additional_args={"headers": headers},
             )
         elif ( 
             custom_llm_provider == "huggingface"
@@ -909,6 +929,11 @@ def completion(
                     "OR_API_KEY"
                 ) or litellm.api_key
 
+            headers = (
+                headers or
+                litellm.headers
+            )
+
             data = {
                 "model": model, 
                 "messages": messages,  
@@ -917,9 +942,9 @@ def completion(
             ## LOGGING
             logging.pre_call(input=messages, api_key=openai.api_key, additional_args={"complete_input_dict": data, "headers": headers})
             ## COMPLETION CALL
-            if litellm.headers:
+            if headers:
                 response = openai.ChatCompletion.create(
-                    headers=litellm.headers,
+                    headers=headers,
                     **data,
                 )
             else:
