@@ -1127,7 +1127,7 @@ def token_counter(model="", text=None, messages: Optional[List] = None):
     int: The number of tokens in the text.
     """
     # use tiktoken, anthropic, cohere or llama2's tokenizer depending on the model
-    if text == None:
+    if text is None:
         if messages is not None:
             text = "".join([message["content"] for message in messages])
         else:
@@ -4743,17 +4743,16 @@ def process_system_message(
         A tuple containing the system message event dictionary and the remaining token allowance.
     """
     system_message_event = {"role": "system", "content": system_message}
-    system_message_tokens = get_token_count(system_message_event, model)
-
+    system_message_tokens = get_token_count([system_message_event], model)
     if system_message_tokens > max_tokens:
         print_verbose(
             "`tokentrimmer`: Warning, system message exceeds token limit. Trimming..."
         )
         # shorten system message to fit within max_tokens
-        new_system_message = shorten_message_to_fit_limit(
+        system_message_event = shorten_message_to_fit_limit(
             system_message_event, max_tokens, model
         )
-        system_message_tokens = get_token_count(new_system_message, model)
+        system_message_tokens = get_token_count([system_message_event], model)
 
     return system_message_event, max_tokens - system_message_tokens
 
@@ -4900,7 +4899,7 @@ def _get_last_sentences(content: str, number: int) -> str:
     if match:
         stop_character_index = match.start()
         # Return content from the first sentence delimiter found
-        return shortened_content[stop_character_index + 1 :]
+        return shortened_content[stop_character_index + 1 :].strip()
     else:
         # Return an empty string if no delimiter is found
         return ""
@@ -4989,6 +4988,7 @@ def shorten_message_to_fit_limit(
     Dict[str, str]
         The message dictionary with the "content" field modified to fit the token limit.
     """
+    message = message.copy()  # no inplace change of dictionnary
     while True:
         total_tokens = get_token_count([message], model)
         if total_tokens <= tokens_needed:
@@ -5072,19 +5072,24 @@ def trim_messages(
       0)
     """
     if max_tokens is None:
-        if model not in litellm.model_cost:
-            raise ValueError("Invalid model name or max_tokens must be specified.")
-        max_tokens_for_model = litellm.model_cost[model]["max_tokens"]
+        max_tokens_for_model = get_max_tokens(model)["max_tokens"]
         max_tokens = int(max_tokens_for_model * trim_ratio)
 
     current_tokens = get_token_count(messages, model)
+    print_verbose(f"Current tokens: {current_tokens}, max tokens: {max_tokens}")
 
     if current_tokens < max_tokens:
-        return (
-            messages,
-            max_tokens - current_tokens if return_response_tokens else messages,
-        )
-
+        print_verbose(f"keeping messages, no trimming")
+        if return_response_tokens:
+            return (
+                messages,
+                max_tokens - current_tokens,
+            )
+        else:
+            return messages
+    print_verbose(
+        f"Need to trim input messages: {messages}, current_tokens{current_tokens}, max_tokens: {max_tokens}"
+    )
     system_messages = [msg for msg in messages if msg["role"] == "system"]
     non_system_messages = [msg for msg in messages if msg["role"] != "system"]
 
@@ -5093,7 +5098,7 @@ def trim_messages(
         system_message_event, remaining_tokens = process_system_message(
             system_message, max_tokens, model
         )
-        messages = non_system_messages + system_message_event
+        messages = non_system_messages + [system_message_event]
     else:
         remaining_tokens = max_tokens
     final_messages = process_messages(messages, remaining_tokens, model)
