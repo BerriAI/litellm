@@ -84,8 +84,11 @@ def completion(
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
     api_key: Optional[str] = None,
+    num_retries: Optional[int] = None, # set to retry a model if an APIError, TimeoutError, or ServiceUnavailableError occurs 
+    context_window_fallback_dict: Optional[dict] = None, # mapping of model to use if call fails due to context window error
     fallbacks: Optional[list] = None, # pass in a list of api_base,keys, etc. 
     metadata: Optional[dict] = None # additional call metadata, passed to logging integrations / custom callbacks
+    
 
     **kwargs,
 ) -> ModelResponse:
@@ -143,9 +146,15 @@ def completion(
 
 - `request_timeout`: *int (optional)* - Timeout in seconds for completion requests (Defaults to 600 seconds)
 
+#### litellm-specific params 
+
 - `api_base`: *string (optional)* - The api endpoint you want to call the model with
 
 - `api_version`: *string (optional)* - (Azure-specific) the api version for the call
+
+- `num_retries`: *int (optional)* - The number of times to retry the API call if an APIError, TimeoutError or ServiceUnavailableError occurs 
+
+- `context_window_fallback_dict`: *dict (optional)* - A mapping of model to use if call fails due to context window error
 
 - `fallbacks`: *list (optional)* - A list of model names + params to be used, in case the initial call fails
 

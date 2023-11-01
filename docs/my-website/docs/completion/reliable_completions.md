@@ -1,62 +1,53 @@
 # Reliability
+
+LiteLLM helps prevent failed requests in 2 ways: 
+- Retries
+- Fallbacks: Context Window + General
+
 ## Helper utils 
 LiteLLM supports the following functions for reliability:
 * `litellm.longer_context_model_fallback_dict`: Dictionary which has a mapping for those models which have larger equivalents  
-* `completion_with_retries`: use tenacity retries
+* `num_retries`: use tenacity retries
 * `completion()` with fallbacks: switch between models/keys/api bases in case of errors. 
-
-## Context Window Errors 
-
-```python 
-from litellm import longer_context_model_fallback_dict, ContextWindowExceededError
-
-sample_text = "how does a court case get to the Supreme Court?" * 1000
-messages = [{"content": user_message, "role": "user"}]
-model = "gpt-3.5-turbo"
-try: 
-    # try the original model
-    response = completion(model=model, messages=messages) 
-# catch the context window error
-except ContextWindowExceededError as e:
-    if model in longer_context_model_fallback_dict: 
-        # switch to the equivalent larger model -> gpt.3.5-turbo-16k 
-        new_model = longer_context_model_fallback_dict[model]
-        response = completion(new_model, messages)
-
-print(response)
-```
-
 
 ## Retry failed requests
 
-You can use this as a drop-in replacement for the `completion()` function to use tenacity retries - by default we retry the call 3 times. 
+Call it in completion like this `completion(..num_retries=2)`.
+
 
 Here's a quick look at how you can use it: 
 
 ```python 
-from litellm import completion_with_retries
+from litellm import completion
 
 user_message = "Hello, whats the weather in San Francisco??"
 messages = [{"content": user_message, "role": "user"}]
 
 # normal call 
-def test_completion_custom_provider_model_name():
-    try:
-        response = completion_with_retries(
+response = completion(
             model="gpt-3.5-turbo",
             messages=messages,
+            num_retries=2
         )
-        # Add any assertions here to check the response
-        print(response)
-    except Exception as e:
-        printf"Error occurred: {e}")
 ```
 
-## Switch Models/API Keys/API Bases
+## Fallbacks 
+
+### Context Window Fallbacks
+```python 
+from litellm import completion
+
+fallback_dict = {"gpt-3.5-turbo": "gpt-3.5-turbo-16k"}
+messages = [{"content": "how does a court case get to the Supreme Court?" * 500, "role": "user"}]
+
+completion(model="gpt-3.5-turbo", messages=messages, context_window_fallback_dict=ctx_window_fallback_dict)
+```
+
+### Fallbacks - Switch Models/API Keys/API Bases
 
 LLM APIs can be unstable, completion() with fallbacks ensures you'll always get a response from your calls
 
-### Usage 
+#### Usage 
 To use fallback models with `completion()`, specify a list of models in the `fallbacks` parameter. 
 
 The `fallbacks` list should include the primary model you want to use, followed by additional models that can be used as backups in case the primary model fails to provide a response.
@@ -76,6 +67,11 @@ response = completion(model="azure/gpt-4", messages=messages, api_key=api_key,
     fallbacks=[{"api_key": "good-key-1"}, {"api_key": "good-key-2", "api_base": "good-api-base-2"}])
 ```
 
+[Check out this section for implementation details](#fallbacks-1)
+
+## Implementation Details 
+
+### Fallbacks
 #### Output from calls
 ```
 Completion with 'bad-model': got exception Unable to map your input to a model. Check your input - {'model': 'bad-model'
@@ -112,7 +108,7 @@ completion call gpt-3.5-turbo
 When you pass `fallbacks` to `completion`, it makes the first `completion` call using the primary model specified as `model` in `completion(model=model)`. If the primary model fails or encounters an error, it automatically tries the `fallbacks` models in the specified order. This ensures a response even if the primary model is unavailable.
 
 
-### Key components of Model Fallbacks implementation:
+#### Key components of Model Fallbacks implementation:
 * Looping through `fallbacks`
 * Cool-Downs for rate-limited models
 
