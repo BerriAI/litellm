@@ -255,9 +255,10 @@ def completion(
     fallbacks = kwargs.get('fallbacks', None)
     headers = kwargs.get("headers", None)
     num_retries = kwargs.get("num_retries", None)
+    context_window_fallback_dict = kwargs.get("context_window_fallback_dict", None)
     ######## end of unpacking kwargs ###########
     openai_params = ["functions", "function_call", "temperature", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "request_timeout", "api_base", "api_version", "api_key"]
-    litellm_params = ["metadata", "acompletion", "caching", "return_async", "mock_response", "api_key", "api_version", "api_base", "force_timeout", "logger_fn", "verbose", "custom_llm_provider", "litellm_logging_obj", "litellm_call_id", "use_client", "id", "fallbacks", "azure", "headers", "model_list", "num_retries"]
+    litellm_params = ["metadata", "acompletion", "caching", "return_async", "mock_response", "api_key", "api_version", "api_base", "force_timeout", "logger_fn", "verbose", "custom_llm_provider", "litellm_logging_obj", "litellm_call_id", "use_client", "id", "fallbacks", "azure", "headers", "model_list", "num_retries", "context_window_fallback_dict"]
     default_params = openai_params + litellm_params
     non_default_params = {k: v for k,v in kwargs.items() if k not in default_params} # model-specific params - pass them straight to the model/provider
     if mock_response:
@@ -1326,18 +1327,9 @@ def completion(
         return response
     except Exception as e:
         ## Map to OpenAI Exception
-        try: 
-            raise exception_type(
+        raise exception_type(
                 model=model, custom_llm_provider=custom_llm_provider, original_exception=e, completion_kwargs=args,
             )
-        except Exception as e: 
-            if num_retries: 
-                if (isinstance(e, openai.error.APIError) 
-                or isinstance(e, openai.error.Timeout) 
-                or isinstance(e, openai.error.ServiceUnavailableError)):
-                    return completion_with_retries(num_retries=num_retries, **args)
-            else:
-                raise e
 
 
 def completion_with_retries(*args, **kwargs):
