@@ -49,3 +49,5 @@ def test_completion_with_num_retries():
         pass
     except Exception as e: 
         pytest.fail(f"Unmapped exception occurred")
+
+# test_completion_with_num_retries()

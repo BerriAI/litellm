@@ -824,6 +824,23 @@ def client(original_function):
             result._response_ms = (end_time - start_time).total_seconds() * 1000 # return response latency in ms like openai
             return result
         except Exception as e:
+            call_type = original_function.__name__
+            if call_type == CallTypes.completion.value:
+                num_retries = kwargs.get("num_retries", None)
+                context_window_fallback_dict = kwargs.get("context_window_fallback_dict", {})
+
+                if num_retries: 
+                    if (isinstance(e, openai.error.APIError) 
+                    or isinstance(e, openai.error.Timeout) 
+                    or isinstance(e, openai.error.ServiceUnavailableError)):
+                        kwargs["num_retries"] = num_retries
+                        return litellm.completion_with_retries(*args, **kwargs)
+                elif isinstance(e, litellm.exceptions.ContextWindowExceededError) and context_window_fallback_dict and model in context_window_fallback_dict:
+                    if len(args) > 0:
+                        args[0]  = context_window_fallback_dict[model]
+                    else:
+                        kwargs["model"] = context_window_fallback_dict[model]
+                    return original_function(*args, **kwargs)
             traceback_exception = traceback.format_exc()
             crash_reporting(*args, **kwargs, exception=traceback_exception)
             end_time = datetime.datetime.now()
