@@ -233,6 +233,7 @@ def completion(
         mock_response (str, optional): If provided, return a mock completion response for testing or debugging purposes (default is None).
         force_timeout (int, optional): The maximum execution time in seconds for the completion request (default is 600).
         custom_llm_provider (str, optional): Used for Non-OpenAI LLMs, Example usage for bedrock, set model="amazon.titan-tg1-large" and custom_llm_provider="bedrock"
+        num_retries (int, optional): The number of retries to attempt (default is 0).
     Returns:
         ModelResponse: A response object containing the generated completion and associated metadata.
 
