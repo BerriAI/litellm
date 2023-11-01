@@ -419,6 +419,63 @@ def completion(
     return model_response
 
 
-def embedding():
+def embedding(
+    model: str,
+    input: list,
+    logging_obj=None,
+    model_response=None,
+    optional_params=None,
+    encoding=None,
+):
     # logic for parsing in - calling - parsing out model embedding calls
-    pass
+    # pop aws_secret_access_key, aws_access_key_id, aws_region_name from kwargs, since completion calls fail with them
+    aws_secret_access_key = optional_params.pop("aws_secret_access_key", None)
+    aws_access_key_id = optional_params.pop("aws_access_key_id", None)
+    aws_region_name = optional_params.pop("aws_region_name", None)
+
+    # use passed in BedrockRuntime.Client if provided, otherwise create a new one
+    client = optional_params.pop(
+        "aws_bedrock_client",
+        # only pass variables that are not None
+        init_bedrock_client(
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            aws_region_name=aws_region_name,
+        ),
+    )
+    
+    # translate to bedrock
+    # bedrock only accepts (str) for inputText
+    if type(input) == list:
+        if len(input) > 1: # input is a list with more than 1 elem, raise Exception, Bedrock only supports one element 
+            raise BedrockError(message="Bedrock cannot embed() more than one string - len(input) must always ==  1, input = ['hi from litellm']", status_code=400)
+        input_str = "".join(input)
+
+    response = client.invoke_model(
+        body=json.dumps({
+            "inputText": input_str
+        }),
+        modelId=model,
+        accept="*/*",
+        contentType="application/json"
+    )
+
+    response_body = json.loads(response.get('body').read())
+
+    embedding_response = response_body["embedding"]
+
+    model_response["object"] = "list"
+    model_response["data"] = embedding_response
+    model_response["model"] = model
+    input_tokens = 0
+
+    input_tokens+=len(encoding.encode(input_str)) 
+
+    model_response["usage"] = { 
+        "prompt_tokens": input_tokens, 
+        "total_tokens": input_tokens,
+    }
+
+
+
+    return model_response
