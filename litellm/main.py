@@ -1633,6 +1633,7 @@ def embedding(
     api_type: Optional[str] = None,
     caching: bool=False,
     custom_llm_provider=None,
+    **kwargs
 ):
     """
     Embedding function that calls an API to generate embeddings for the given input.
@@ -1782,6 +1783,15 @@ def embedding(
                 api_key=api_key,
                 api_base=api_base,
                 logging_obj=logging,
+                model_response= EmbeddingResponse()
+            )
+        elif custom_llm_provider == "bedrock":
+            response = bedrock.embedding(
+                model=model,
+                input=input,
+                encoding=encoding,
+                logging_obj=logging,
+                optional_params=kwargs,
                 model_response= EmbeddingResponse()
             )
         else:
