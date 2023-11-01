@@ -1888,11 +1888,11 @@ def stream_chunk_builder(chunks: list):
                 "finish_reason": finish_reason,
             }
         ],
-        # "usage": {
-        #     "prompt_tokens": 0,  # Modify as needed
-        #     "completion_tokens": 0,  # Modify as needed
-        #     "total_tokens": 0  # Modify as needed
-        # }
+        "usage": {
+            "prompt_tokens": 0,  # Modify as needed
+            "completion_tokens": 0,  # Modify as needed
+            "total_tokens": 0  # Modify as needed
+        }
     }
 
     # Extract the "content" strings from the nested dictionaries within "choices"
@@ -1939,6 +1939,5 @@ def stream_chunk_builder(chunks: list):
 
 
     # # Update usage information if needed
-    # response["usage"]["completion_tokens"] = token
-
+    response["usage"]["completion_tokens"] = litellm.utils.token_counter(model=model, text=combined_content)
     return response
