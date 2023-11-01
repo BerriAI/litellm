@@ -316,9 +316,9 @@ def test_custom_redis_cache_with_key():
 
     # patch this redis cache get and set call
 
-    response1 = completion(model="gpt-3.5-turbo", messages=messages, temperature=1, caching=True)
-    response2 = completion(model="gpt-3.5-turbo", messages=messages, temperature=1, caching=True)
-    response3 = completion(model="gpt-3.5-turbo", messages=messages, temperature=1, caching=False)
+    response1 = completion(model="gpt-3.5-turbo", messages=messages, temperature=1, caching=True, num_retries=3)
+    response2 = completion(model="gpt-3.5-turbo", messages=messages, temperature=1, caching=True, num_retries=3)
+    response3 = completion(model="gpt-3.5-turbo", messages=messages, temperature=1, caching=False, num_retries=3)
 
     print(f"response1: {response1}")
     print(f"response2: {response2}")
