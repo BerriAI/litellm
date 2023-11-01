@@ -386,7 +386,7 @@ def embedding(
         }
     else:
         data = {
-            "inputs": input
+            "inputs": input # type: ignore
         }
     
     ## LOGGING
