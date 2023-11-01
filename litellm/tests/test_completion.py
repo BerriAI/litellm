@@ -56,7 +56,7 @@ def test_completion_claude():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_completion_claude()
+# test_completion_claude()
 
 # def test_completion_oobabooga():
 #     try:
@@ -402,13 +402,28 @@ def test_completion_openai_prompt_array():
     try:
         litellm.set_verbose=False
         response = text_completion(
-            model="text-davinci-003", prompt=[[3152, 833]], max_tokens=10, logprobs=10
+            model="text-davinci-003", prompt=[[3152, 833]], max_tokens=10, logprobs=10, echo=True
         )
         print(response)
         response_str = response["choices"][0]["text"]
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_completion_openai_prompt_array()
+test_completion_openai_prompt_array()
+
+def test_completion_hf_prompt_array():
+    try:
+        litellm.set_verbose=False
+        response = text_completion(
+            model="huggingface/bigcode/starcoder", 
+            prompt="good morning", 
+            max_tokens=10, logprobs=10,
+            echo=True
+        )
+        print(response)
+        response_str = response["choices"][0]["text"]
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+test_completion_hf_prompt_array()
 
 def test_completion_text_openai():
     try:
