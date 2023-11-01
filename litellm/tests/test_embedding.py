@@ -89,17 +89,17 @@ def test_bedrock_embedding():
 # test_bedrock_embedding()
 
 # comment out hf tests - since hf endpoints are unstable
-# def test_hf_embedding():
-#     try:
-#         # huggingface/microsoft/codebert-base
-#         # huggingface/facebook/bart-large
-#         response = embedding(
-#             model="huggingface/BAAI/bge-large-zh", input=["good morning from litellm", "this is another item"]
-#         )
-#         print(f"response:", response)
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
-# test_hf_embedding()
+def test_hf_embedding():
+    try:
+        # huggingface/microsoft/codebert-base
+        # huggingface/facebook/bart-large
+        response = embedding(
+            model="huggingface/sentence-transformers/all-MiniLM-L6-v2", input=["good morning from litellm", "this is another item"]
+        )
+        print(f"response:", response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+test_hf_embedding()
 
 # test async embeddings
 def test_aembedding():
