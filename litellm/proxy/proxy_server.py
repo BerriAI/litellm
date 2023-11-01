@@ -1,6 +1,6 @@
 import sys, os, platform, time, copy
 import threading
-import shutil, random, traceback
+import shutil, random, traceback, requests
 
 messages: list = []
 sys.path.insert(
@@ -475,33 +475,34 @@ litellm.failure_callback = [logger]
 @router.post("/v1/models")
 @router.get("/models")  # if project requires model list
 def model_list():
-    if user_model != None:
-        return dict(
-            data=[
-                {
-                    "id": user_model,
-                    "object": "model",
-                    "created": 1677610602,
-                    "owned_by": "openai",
-                }
-            ],
-            object="list",
-        )
-    else:
-        all_models = litellm.utils.get_valid_models()
-        return dict(
-            data=[
-                {
-                    "id": model,
-                    "object": "model",
-                    "created": 1677610602,
-                    "owned_by": "openai",
-                }
-                for model in all_models
-            ],
-            object="list",
-        )
+    # all_models = litellm.utils.get_valid_models()
+    # if llm_model_list: 
+    #     all_models += llm_model_list
 
+    
+    all_models = litellm.utils.get_valid_models()
+    if user_model is not None:
+        all_models += user_model
+    ### CHECK OLLAMA MODELS ### 
+    try:
+        response = requests.get("http://0.0.0.0:11434/api/tags")
+        models = response.json()["models"]
+        ollama_models = [m["name"].replace(":latest", "") for m in models]
+        all_models.extend(ollama_models)
+    except Exception as e: 
+        traceback.print_exc()
+    return dict(
+        data=[
+            {
+                "id": model,
+                "object": "model",
+                "created": 1677610602,
+                "owned_by": "openai",
+            }
+            for model in all_models
+        ],
+        object="list",
+    )
 
 @router.post("/v1/completions")
 @router.post("/completions")
