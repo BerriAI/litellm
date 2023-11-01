@@ -1,7 +1,7 @@
 # Function Calling 
-LiteLLM only supports: OpenAI gpt-4-0613 and gpt-3.5-turbo-0613 for function calling 
+
 ## Quick Start 
-This is exactly how OpenAI supports function calling for gpt-4-0613 and gpt-3.5-turbo-0613
+
 ```python
 import os, litellm
 from litellm import completion
