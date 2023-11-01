@@ -7,6 +7,7 @@
 #
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
+import re
 import sys
 import dotenv, json, traceback, threading
 import subprocess, os
@@ -53,7 +54,7 @@ from .exceptions import (
     APIError,
     BudgetExceededError,
 )
-from typing import cast, List, Dict, Union, Optional
+from typing import cast, List, Dict, Union, Optional, Tuple
 from .caching import Cache
 
 ####### ENVIRONMENT VARIABLES ####################
@@ -4721,7 +4722,26 @@ def completion_with_fallbacks(**kwargs):
     return response
 
 
-def process_system_message(system_message, max_tokens, model):
+def process_system_message(
+    system_message: str, max_tokens: int, model: str
+) -> Tuple[Dict[str, str], int]:
+    """
+    Process a system message to ensure it does not exceed the maximum token limit.
+
+    Parameters
+    ----------
+    system_message : str
+        The content of the system message.
+    max_tokens : int
+        The maximum allowed token count.
+    model : str
+        The language model used for token counting.
+
+    Returns
+    -------
+    Tuple[Dict[str, str], int]
+        A tuple containing the system message event dictionary and the remaining token allowance.
+    """
     system_message_event = {"role": "system", "content": system_message}
     system_message_tokens = get_token_count(system_message_event, model)
 
@@ -4738,7 +4758,26 @@ def process_system_message(system_message, max_tokens, model):
     return system_message_event, max_tokens - system_message_tokens
 
 
-def process_messages(messages, max_tokens, model):
+def process_messages(
+    messages: List[Dict[str, str]], max_tokens: int, model: str
+) -> List[Dict[str, str]]:
+    """
+    Process a list of messages to ensure the total token count does not exceed a maximum limit.
+
+    Parameters
+    ----------
+    messages : List[Dict[str, str]]
+        A list of message dictionaries to be processed.
+    max_tokens : int
+        The maximum allowed token count.
+    model : str
+        The language model used for token counting.
+
+    Returns
+    -------
+    List[Dict[str, str]]
+        A list of processed message dictionaries that fit within the token limit.
+    """
     # Process messages from older to more recent
     messages = messages[::-1]
     final_messages = []
@@ -4751,7 +4790,31 @@ def process_messages(messages, max_tokens, model):
     return final_messages
 
 
-def attempt_message_addition(final_messages, message, max_tokens, model):
+def attempt_message_addition(
+    final_messages: List[Dict[str, str]],
+    message: Dict[str, str],
+    max_tokens: int,
+    model: str,
+) -> List[Dict[str, str]]:
+    """
+    Attempt to add a message to a list of messages without exceeding the maximum token limit.
+
+    Parameters
+    ----------
+    final_messages : List[Dict[str, str]]
+        The current list of messages.
+    message : Dict[str, str]
+        The new message to be added.
+    max_tokens : int
+        The maximum allowed token count.
+    model : str
+        The language model used for token counting.
+
+    Returns
+    -------
+    List[Dict[str, str]]
+        The list of messages including the new message if it fits the token limit, otherwise unchanged.
+    """
     temp_messages = [message] + final_messages
     temp_message_tokens = get_token_count(messages=temp_messages, model=model)
 
@@ -4761,8 +4824,11 @@ def attempt_message_addition(final_messages, message, max_tokens, model):
     # if temp_message_tokens > max_tokens, try shortening temp_messages
     elif "function_call" not in message:
         # fit updated_message to be within temp_message_tokens - max_tokens (aka the amount temp_message_tokens is greate than max_tokens)
+
         updated_message = shorten_message_to_fit_limit(
-            message, temp_message_tokens - max_tokens, model
+            message,
+            temp_message_tokens - max_tokens,
+            model,
         )
         if can_add_message(updated_message, final_messages, max_tokens, model):
             return [updated_message] + final_messages
@@ -4770,7 +4836,28 @@ def attempt_message_addition(final_messages, message, max_tokens, model):
     return final_messages
 
 
-def can_add_message(message, messages, max_tokens, model):
+def can_add_message(
+    message: Dict[str, str], messages: List[Dict[str, str]], max_tokens: int, model: str
+) -> bool:
+    """
+    Check if a message can be added to a list of messages without exceeding the token limit.
+
+    Parameters
+    ----------
+    message : Dict[str, str]
+        The message to check.
+    messages : List[Dict[str, str]]
+        The current list of messages.
+    max_tokens : int
+        The maximum token count allowed.
+    model : str
+        The language model used for token counting.
+
+    Returns
+    -------
+    bool
+        True if the message can be added without exceeding the limit, False otherwise.
+    """
     if get_token_count(messages + [message], model) <= max_tokens:
         return True
     return False
@@ -4780,108 +4867,241 @@ def get_token_count(messages, model):
     return token_counter(model=model, messages=messages)
 
 
-def shorten_message_to_fit_limit(message, tokens_needed, model):
+def _get_last_sentences(content: str, number: int) -> str:
     """
-    Shorten a message to fit within a token limit by removing characters from the middle.
+    Extract the last sentences from the content based on a number of characters.
+
+    This function finds the last sentences that fit within the specified number of
+    characters from the end, based on sentence delimiters.
+
+    Parameters
+    ----------
+    content : str
+        The text content from which to extract sentences.
+    number : int
+        The number of characters from the end to consider for extracting sentences.
+
+    Returns
+    -------
+    str
+        The extracted sentences from the end of the content or an empty string if no
+        sentence delimiter is found within the specified range. If number is higher
+        than the content length, returns the content.
     """
-    content = message["content"]
+    if number >= len(content):
+        return content
 
-    while True:
-        total_tokens = get_token_count([message], model)
+    # Regular expression pattern for sentence delimiters
+    stop_sign_pattern = r"[!?.]+(?=$|\s)|[\n\r]"
 
-        if total_tokens <= tokens_needed:
-            break
+    # Search for the pattern starting from the number of characters from the end
+    shortened_content = content[-number:]
+    match = re.search(stop_sign_pattern, shortened_content)
+    if match:
+        stop_character_index = match.start()
+        # Return content from the first sentence delimiter found
+        return shortened_content[stop_character_index + 1 :]
+    else:
+        # Return an empty string if no delimiter is found
+        return ""
 
-        ratio = (tokens_needed) / total_tokens
 
-        new_length = int(len(content) * ratio) - 1
+def shorten_message_content(
+    content: str,
+    tokens_needed: int,
+    total_tokens: int,
+    content_trimming_strategy: str = "filler",
+) -> str:
+    """
+    Shorten message content to fit within a token limit using a specified content_trimming_strategy.
+
+    The function can shorten the content by either inserting a filler in the middle
+    of the content or by keeping only the last sentences of the content.
+
+    Parameters
+    ----------
+    content : str
+        The original content of the message to be shortened.
+    tokens_needed : int
+        The number of tokens that the content needs to be reduced to.
+    total_tokens : int
+        The current total number of tokens in the content.
+    content_trimming_strategy : str, optional
+        The content_trimming_strategy to use for shortening the message. Options are:
+        - 'filler': Insert the filler `[...]` in the middle of the content.
+        - 'last_sentences': Keep only the last sentences of the content.
+        Default is 'filler'.
+
+    Returns
+    -------
+    str
+        The shortened content based on the specified content_trimming_strategy.
+
+    Raises
+    ------
+    ValueError
+        If the `content_trimming_strategy` is not one of the expected options.
+    """
+    if tokens_needed >= total_tokens:
+        return content
+
+    ratio = tokens_needed / total_tokens
+    new_length = int(len(content) * ratio)
+
+    if content_trimming_strategy == "filler":
+        filler = "[...]"
+        new_length = new_length - len(filler)
         new_length = max(0, new_length)
-
         half_length = new_length // 2
         left_half = content[:half_length]
         right_half = content[-half_length:]
+        return left_half + filler + right_half
+    elif content_trimming_strategy == "last_sentences":
+        return _get_last_sentences(content, new_length)
+    else:
+        raise ValueError(
+            f"Unknown content_trimming_strategy '{content_trimming_strategy}'. Expected 'filler' or 'last_sentences'."
+        )
 
-        trimmed_content = left_half + ".." + right_half
-        message["content"] = trimmed_content
-        content = trimmed_content
 
+def shorten_message_to_fit_limit(
+    message: Dict[str, str],
+    tokens_needed: int,
+    model: str,
+    content_trimming_strategy: str = "filler",
+) -> Dict[str, str]:
+    """
+    Shorten a message's content to fit within a specified token limit.
+
+    Parameters
+    ----------
+    message : Dict[str, str]
+        A dictionary representing the message, should include a "content" key among others.
+    tokens_needed : int
+        The number of tokens that the content needs to be reduced to.
+    model : str
+        The language model used for token counting.
+    content_trimming_strategy : str, optional
+        The strategy to use for trimming content, by default "filler".
+
+    Returns
+    -------
+    Dict[str, str]
+        The message dictionary with the "content" field modified to fit the token limit.
+    """
+    while True:
+        total_tokens = get_token_count([message], model)
+        if total_tokens <= tokens_needed:
+            break
+        message["content"] = shorten_message_content(
+            message["content"], tokens_needed, total_tokens, content_trimming_strategy
+        )
     return message
 
 
 # LiteLLM token trimmer
-# this code is borrowed from https://github.com/KillianLucas/tokentrim/blob/main/tokentrim/tokentrim.py
+# this code is modified from https://github.com/KillianLucas/tokentrim/blob/main/tokentrim/tokentrim.py
 # Credits for this code go to Killian Lucas
 def trim_messages(
-    messages,
+    messages: List[Dict[str, str]],
     model: Optional[str] = None,
     trim_ratio: float = 0.75,
     return_response_tokens: bool = False,
-    max_tokens=None,
-):
+    max_tokens: Optional[int] = None,
+) -> Union[List[Dict[str, str]], Tuple[List[Dict[str, str]], int]]:
     """
-    Trim a list of messages to fit within a model's token limit.
+    If above the token limit, trims a list of messages to ensure they fit within a specified token limit.
 
-    Args:
-        messages: Input messages to be trimmed. Each message is a dictionary with 'role' and 'content'.
-        model: The LiteLLM model being used (determines the token limit).
-        trim_ratio: Target ratio of tokens to use after trimming. Default is 0.75, meaning it will trim messages so they use about 75% of the model's token limit.
-        return_response_tokens: If True, also return the number of tokens left available for the response after trimming.
-        max_tokens: Instead of specifying a model or trim_ratio, you can specify this directly.
+    This function processes a list of messages, each of which is represented as a dictionary
+    containing at least 'role' and 'content' keys. It returns only the last N messages for which
+    the number of tokens for `messages[N:]` is smaller than a token limit. `messages[N]` may be
+    trimmed to respect this limit. This token limit can be defined directly via `max_tokens`*`trim_ratio`
+    or computed from a given model's maximum token limit and the specified trim ratio.
 
-    Returns:
-        Trimmed messages and optionally the number of tokens available for response.
+    This function prioritize system messages by moving them to the end of the list of messages in case of
+    trimming.
+
+    If below the token limit, it will return the original list of messages.
+
+    Parameters
+    ----------
+    messages : List[Dict[str, str]]
+        A list of message dictionaries to be trimmed. Each message should have at least
+        a 'role' key and a 'content' key.
+    model : Optional[str], default=None
+        The name of the LiteLLM model being used. This is used to determine the token limit
+        if `max_tokens` is not provided.
+    trim_ratio : float, default=0.75
+        The target ratio of the token limit to be used after trimming. For example, a `trim_ratio`
+        of 0.75 would aim to use only 75% of the maximum token count allowed.
+    return_response_tokens : bool, default=False
+        If set to True, the function will return a tuple where the first element is the list
+        of trimmed messages and the second element is an integer representing the number of tokens
+        available for the response after trimming.
+    max_tokens : Optional[int], default=None
+        The maximum number of tokens to be used. If this is not provided, the token limit is
+        determined based on the specified model and `trim_ratio`.
+
+    Returns
+    -------
+    List[Dict[str, str]] or Tuple[List[Dict[str, str]], int]
+        If `return_response_tokens` is False, returns a list of trimmed message dictionaries.
+        If `return_response_tokens` is True, returns a tuple where the first element is the
+        list of trimmed message dictionaries and the second element is the remaining token count
+        for the response.
+
+    Raises
+    ------
+    ValueError
+        If neither `max_tokens` is provided nor a valid `model` is specified.
+
+    See Also
+    --------
+    get_token_count : Function used to count the tokens of the messages.
+
+    Examples
+    --------
+    >>> messages = [{"role": "user" if i % 2 else "assistant", "content": chr(i+32)*100} for i in range(127-32)]
+    >>> trimmed_messages = trim_messages(messages, model="gpt3", trim_ratio=0.8)
+    >>> print(trimmed_messages)
+    ([{'content': 'qq..qq', 'role': 'user'},
+      {'content': '}}}}}}}}}}}}}}}}}}}}}}}..}}}}}}}}}}}}}}}}}}}}}}}',
+      'role': 'user'},
+      {'content': '~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~',
+      'role': 'assistant'}],
+      0)
     """
-    # Initialize max_tokens
-    # if users pass in max tokens, trim to this amount
-    try:
-        print_verbose(f"trimming messages")
-        if max_tokens == None:
-            # Check if model is valid
-            if model in litellm.model_cost:
-                max_tokens_for_model = litellm.model_cost[model]["max_tokens"]
-                max_tokens = int(max_tokens_for_model * trim_ratio)
-            else:
-                # if user did not specify max tokens
-                # or passed an llm litellm does not know
-                # do nothing, just return messages
-                return
+    if max_tokens is None:
+        if model not in litellm.model_cost:
+            raise ValueError("Invalid model name or max_tokens must be specified.")
+        max_tokens_for_model = litellm.model_cost[model]["max_tokens"]
+        max_tokens = int(max_tokens_for_model * trim_ratio)
 
-        system_message = ""
-        for message in messages:
-            if message["role"] == "system":
-                system_message += message["content"]
+    current_tokens = get_token_count(messages, model)
 
-        current_tokens = token_counter(model=model, messages=messages)
-        print_verbose(f"Current tokens: {current_tokens}, max tokens: {max_tokens}")
-
-        # Do nothing if current tokens under messages
-        if current_tokens < max_tokens:
-            return messages
-
-        #### Trimming messages if current_tokens > max_tokens
-        print_verbose(
-            f"Need to trim input messages: {messages}, current_tokens{current_tokens}, max_tokens: {max_tokens}"
-        )
-        if system_message:
-            system_message_event, max_tokens = process_system_message(
-                system_message=system_message, max_tokens=max_tokens, model=model
-            )
-            messages = messages + [system_message_event]
-
-        final_messages = process_messages(
-            messages=messages, max_tokens=max_tokens, model=model
+    if current_tokens < max_tokens:
+        return (
+            messages,
+            max_tokens - current_tokens if return_response_tokens else messages,
         )
 
-        if (
-            return_response_tokens
-        ):  # if user wants token count with new trimmed messages
-            response_tokens = max_tokens - get_token_count(final_messages, model)
-            return final_messages, response_tokens
+    system_messages = [msg for msg in messages if msg["role"] == "system"]
+    non_system_messages = [msg for msg in messages if msg["role"] != "system"]
 
-        return final_messages
-    except Exception as e:  # [NON-Blocking, if error occurs just return final_messages
-        print("Got exception while token trimming", e)
-        return messages
+    system_message = "".join(msg["content"] for msg in system_messages)
+    if system_message:
+        system_message_event, remaining_tokens = process_system_message(
+            system_message, max_tokens, model
+        )
+        messages = non_system_messages + system_message_event
+    else:
+        remaining_tokens = max_tokens
+    final_messages = process_messages(messages, remaining_tokens, model)
+    if return_response_tokens:
+        response_tokens = remaining_tokens - get_token_count(final_messages, model)
+        return final_messages, response_tokens
+
+    return final_messages
 
 
 def get_valid_models():
