@@ -1332,10 +1332,9 @@ def completion(
             )
         except Exception as e: 
             if num_retries: 
-                if (isinstance(e, openai.APIError) 
-                or isinstance(e, openai.Timeout) 
-                or isinstance(e, openai.Timeout) 
-                or isinstance(e, openai.ServiceUnavailableError)):
+                if (isinstance(e, openai.error.APIError) 
+                or isinstance(e, openai.error.Timeout) 
+                or isinstance(e, openai.error.ServiceUnavailableError)):
                     return completion_with_retries(num_retries=num_retries, **args)
             else:
                 raise e
