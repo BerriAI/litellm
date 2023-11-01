@@ -1933,6 +1933,7 @@ def stream_chunk_builder(chunks: list):
 
     # Extract the "content" strings from the nested dictionaries within "choices"
     content_list = []
+    combined_content = ""
 
     if "function_call" in chunks[0]["choices"][0]["delta"]:
         argument_list = []
