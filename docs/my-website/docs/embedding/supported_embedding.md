@@ -52,6 +52,33 @@ print(response)
 
 h/t to [Mikko](https://www.linkedin.com/in/mikkolehtimaki/) for this integration
 
+
+## Bedrock Embedding
+
+### API keys
+This can be set as env variables or passed as **params to litellm.embedding()**
+```python
+import os
+os.environ["AWS_ACCESS_KEY_ID"] = ""  # Access key
+os.environ["AWS_SECRET_ACCESS_KEY"] = "" # Secret access key
+os.environ["AWS_REGION_NAME"] = "" # us-east-1, us-east-2, us-west-1, us-west-2
+```
+
+### Usage
+```python
+from litellm import embedding
+response = embedding(
+    model="bedrock/amazon.titan-embed-text-v1",
+    input=["good morning from litellm"],
+)
+print(response)
+```
+
+| Model Name           | Function Call                               |
+|----------------------|---------------------------------------------|
+| Titan Embeddings - G1 | `embedding(model="bedrock/amazon.titan-embed-text-v1", input=input)` |
+
+
 ## Cohere Embedding Models
 https://docs.cohere.com/reference/embed
 
