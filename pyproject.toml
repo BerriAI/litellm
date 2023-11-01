@@ -21,6 +21,9 @@ appdirs = "^1.4.4"
 [tool.poetry.scripts]
 litellm = 'litellm:run_server'
 
+[tool.poetry.group.dev.dependencies]
+pytest = "^7.4.3"
+
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
