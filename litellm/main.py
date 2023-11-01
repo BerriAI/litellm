@@ -1792,11 +1792,21 @@ def text_completion(*args, **kwargs):
         if kwargs["model"] in litellm.open_ai_text_completion_models and response._hidden_params.get("original_response", None) != None:
             return response._hidden_params.get("original_response", None)
         transformed_logprobs = None
+        # only supported for TGI models
         try:
             raw_response = response._hidden_params.get("original_response", None)
+            tokens = []
+            token_logprobs = []
+            if "prefill" in raw_response[0]["details"]:
+                prefills = raw_response[0]["details"]['prefill']
+                for prefill in prefills:
+                    tokens.append(prefill['text'])
+                    token_logprobs.append(prefill['logprob'])
+            new_tokens = [token['text'] for token in raw_response[0]['details']['tokens']]
+            new_token_logprobs = [token['logprob'] for token in raw_response[0]['details']['tokens']]         
             transformed_logprobs = {
-                "tokens": [token['text'] for token in raw_response[0]['details']['tokens']],
-                "token_logprobs": [token['logprob'] for token in raw_response[0]['details']['tokens']]
+                "tokens": tokens + new_tokens,
+                "token_logprobs": token_logprobs + new_token_logprobs
             }
         except Exception as e:
             print("LiteLLM non blocking exception", e)
