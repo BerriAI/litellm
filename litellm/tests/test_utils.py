@@ -149,5 +149,3 @@ def test_function_to_dict():
     assert function_json["parameters"]["required"] == expected_output["parameters"]["required"]
 
     print("passed")
-# test_function_to_dict()
-

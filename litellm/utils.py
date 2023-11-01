@@ -1103,7 +1103,7 @@ def register_model(model_cost: Union[str, dict]):
             "mode": "chat"
         },
     }
-    """
+    """    
     loaded_model_cost = {}
     if isinstance(model_cost, dict): 
         loaded_model_cost = model_cost
