@@ -78,6 +78,14 @@ litellm.api_base = "https://hosted-llm-api.co"
 response = litellm.completion(messages=messages, model="gpt-3.5-turbo")
 ```
 
+### litellm.api_version
+
+```python
+import litellm
+litellm.api_version = "2023-05-15"
+response = litellm.completion(messages=messages, model="gpt-3.5-turbo")
+```
+
 ### litellm.organization
 ```python
 import litellm
