@@ -3763,6 +3763,14 @@ class CustomStreamWrapper:
                 if stop_reason != None:
                     is_finished = True
                     finish_reason = stop_reason
+            ######## bedrock.cohere mappings ###############
+            # cohere mapping
+            elif "text" in chunk_data:
+                text = chunk_data["text"] # bedrock.cohere
+            # cohere mapping for finish reason
+            elif "finish_reason" in chunk_data:
+                finish_reason = chunk_data["finish_reason"]
+                is_finished = True
             elif chunk_data.get("completionReason", None): 
                 is_finished = True
                 finish_reason = chunk_data["completionReason"]
