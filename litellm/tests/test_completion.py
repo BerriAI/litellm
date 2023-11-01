@@ -675,6 +675,38 @@ def test_completion_azure2():
 
 # test_completion_azure2()
 
+def test_completion_azure3():
+    # test if we can pass api_base, api_version and api_key in compleition()
+    try:
+        print("azure gpt-3.5 test\n\n")
+        litellm.set_verbose=True
+        litellm.api_base = os.environ["AZURE_API_BASE"]
+        litellm.api_key = os.environ["AZURE_API_KEY"]
+        litellm.api_version = os.environ["AZURE_API_VERSION"]
+
+        os.environ["AZURE_API_BASE"] = ""
+        os.environ["AZURE_API_VERSION"] = ""
+        os.environ["AZURE_API_KEY"] = ""
+
+
+        ## Test azure call
+        response = completion(
+            model="azure/chatgpt-v-2",
+            messages=messages,
+            max_tokens=10,
+        )
+
+        # Add any assertions here to check the response
+        print(response)
+
+        os.environ["AZURE_API_BASE"] = litellm.api_base
+        os.environ["AZURE_API_VERSION"] = litellm.api_version
+        os.environ["AZURE_API_KEY"] = litellm.api_key
+
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+test_completion_azure3()
+
 # new azure test for using litellm. vars, 
 # use the following vars in this test and make an azure_api_call
 #  litellm.api_type = self.azure_api_type 
