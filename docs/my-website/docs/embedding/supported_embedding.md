@@ -68,7 +68,7 @@ os.environ["AWS_REGION_NAME"] = "" # us-east-1, us-east-2, us-west-1, us-west-2
 ```python
 from litellm import embedding
 response = embedding(
-    model="bedrock/amazon.titan-embed-text-v1",
+    model="amazon.titan-embed-text-v1",
     input=["good morning from litellm"],
 )
 print(response)
@@ -76,7 +76,7 @@ print(response)
 
 | Model Name           | Function Call                               |
 |----------------------|---------------------------------------------|
-| Titan Embeddings - G1 | `embedding(model="bedrock/amazon.titan-embed-text-v1", input=input)` |
+| Titan Embeddings - G1 | `embedding(model="amazon.titan-embed-text-v1", input=input)` |
 
 
 ## Cohere Embedding Models
