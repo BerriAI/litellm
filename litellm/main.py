@@ -1764,6 +1764,7 @@ def embedding(
             response = cohere.embedding(
                 model=model,
                 input=input,
+                optional_params=kwargs,
                 encoding=encoding,
                 api_key=cohere_key,
                 logging_obj=logging,
