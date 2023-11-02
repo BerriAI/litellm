@@ -1674,7 +1674,12 @@ def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None, api_
         elif model in litellm.maritalk_models:
             custom_llm_provider = "maritalk"
         ## vertex - text + chat models
-        elif model in litellm.vertex_chat_models or model in litellm.vertex_text_models:
+        elif(
+            model in litellm.vertex_chat_models or 
+            model in litellm.vertex_code_chat_models or
+            model in litellm.vertex_text_models or
+            model in litellm.vertex_code_text_models
+        ):
             custom_llm_provider = "vertex_ai"
         ## ai21 
         elif model in litellm.ai21_models:
