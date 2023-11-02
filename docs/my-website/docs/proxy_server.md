@@ -5,10 +5,6 @@ import TabItem from '@theme/TabItem';
 
 A fast, and lightweight OpenAI-compatible server to call 100+ LLM APIs. 
 
-:::info
-This is deprecated. Support for the CLI tool will be removed in our next MAJOR release - https://github.com/BerriAI/litellm/discussions/648.
-::: 
-
 ## Usage 
 ```shell
 pip install litellm
