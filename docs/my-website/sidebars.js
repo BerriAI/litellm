@@ -98,6 +98,7 @@ const sidebars = {
         'tutorials/oobabooga',
         "tutorials/gradio_integration",
         "tutorials/model_config_proxy",
+        "tutorials/lm_evaluation_harness",
         'tutorials/huggingface_codellama',
         'tutorials/huggingface_tutorial', 
         'tutorials/TogetherAI_liteLLM', 
