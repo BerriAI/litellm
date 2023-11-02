@@ -137,6 +137,10 @@ def completion(
     response = requests.post(
         completion_url, headers=headers, data=json.dumps(data), stream=optional_params["stream"] if "stream" in optional_params else False
     )
+    ## error handling for cohere calls
+    if response.status_code!=200:
+        raise CohereError(message=response.text, status_code=response.status_code)
+
     if "stream" in optional_params and optional_params["stream"] == True:
         return response.iter_lines()
     else:
@@ -210,7 +214,6 @@ def embedding(
     response = requests.post(
         embed_url, headers=headers, data=json.dumps(data)
     )
-
     ## LOGGING
     logging_obj.post_call(
             input=input,
@@ -230,6 +233,8 @@ def embedding(
             'usage'
         }
     """
+    if response.status_code!=200:
+        raise CohereError(message=response.text, status_code=response.status_code)
     embeddings = response.json()['embeddings']
     output_data = []
     for idx, embedding in enumerate(embeddings):
