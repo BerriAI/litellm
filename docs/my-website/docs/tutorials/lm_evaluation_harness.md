@@ -2,6 +2,8 @@
 
 Evaluate LLMs 20x faster with TGI via litellm proxy's `/completions` endpoint. 
 
+This tutorial assumes you're using [lm-evaluation-harness](https://github.com/EleutherAI/lm-evaluation-harness)
+
 **Step 1: Start the local proxy**
 ```shell
 $ litellm --model huggingface/bigcode/starcoder
