@@ -506,6 +506,7 @@ def model_list():
 
 @router.post("/v1/completions")
 @router.post("/completions")
+@router.post("/engines/{model:path}/completions")
 async def completion(request: Request):
     data = await request.json()
     return litellm_completion(data=data, type="completion", user_model=user_model, user_temperature=user_temperature,
