@@ -1094,12 +1094,15 @@ def test_completion_bedrock_claude_completion_auth():
 # test_completion_custom_api_base()
 
 # def test_vertex_ai():
-#     # test_models = litellm.vertex_chat_models + litellm.vertex_code_chat_models + litellm.vertex_text_models + litellm.vertex_code_text_models
-#     test_models = ["chat-bison"]
+#     test_models = ["codechat-bison"] + litellm.vertex_chat_models + litellm.vertex_code_chat_models + litellm.vertex_text_models + litellm.vertex_code_text_models
+#     # test_models = ["chat-bison"]
 #     for model in test_models:
 #         try:
+#             if model in ["code-gecko@001", "code-gecko@latest"]:
+#                 # our account does not have access to this model
+#                 continue
 #             print("making request", model)
-#             response = completion(model="vertex_ai/codechat-bison-32k", messages=[{'role': 'user', 'content': 'hi'}])
+#             response = completion(model=model, messages=[{'role': 'user', 'content': 'hi'}])
 #             print(response)
 
 #             print(response.usage.completion_tokens)
