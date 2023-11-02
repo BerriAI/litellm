@@ -176,6 +176,9 @@ def run_server(host, port, api_base, api_version, model, alias, add_key, headers
         openai.api_key = "temp-key"
         print(openai.api_base)
 
+        response = openai.Completion.create(model="gpt-3.5-turbo", prompt='hello who are you')
+        print(response)
+
         response = openai.ChatCompletion.create(model="gpt-3.5-turbo", messages = [
             {
                 "role": "user",
