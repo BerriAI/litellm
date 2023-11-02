@@ -427,20 +427,11 @@ def test_completion_hf_prompt_array():
 
 def test_completion_text_openai():
     try:
-        # litellm.set_verbose=True
-        response = completion(model="text-davinci-003", messages=messages)
-        # Add any assertions here to check the response
-        print(response)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-def test_completion_gpt_instruct():
-    try:
         response = completion(model="gpt-3.5-turbo-instruct", messages=messages)
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_completion_gpt_instruct()
+test_completion_text_openai()
 
 def test_completion_openai_with_optional_params():
     try:
