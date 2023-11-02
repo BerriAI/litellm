@@ -472,7 +472,7 @@ litellm.failure_callback = [logger]
 
 
 #### API ENDPOINTS ####
-@router.post("/v1/models")
+@router.get("/v1/models")
 @router.get("/models")  # if project requires model list
 def model_list():
     # all_models = litellm.utils.get_valid_models()
