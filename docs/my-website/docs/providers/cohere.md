@@ -42,3 +42,16 @@ for chunk in response:
 ```
 
 LiteLLM supports 'command', 'command-light', 'command-medium', 'command-medium-beta', 'command-xlarge-beta', 'command-nightly' models from [Cohere](https://cohere.com/). 
+
+## Embedding
+
+```python
+from litellm import embedding
+os.environ["COHERE_API_KEY"] = "cohere key"
+
+# cohere call
+response = embedding(
+    model="embed-english-v3.0", 
+    input=["good morning from litellm", "this is another item"], 
+)
+```
