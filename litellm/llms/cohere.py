@@ -195,6 +195,7 @@ def embedding(
     logging_obj=None,
     model_response=None,
     encoding=None,
+    optional_params=None,
 ):
     headers = validate_environment(api_key)
     embed_url = "https://api.cohere.ai/v1/embed"
@@ -202,7 +203,12 @@ def embedding(
     data = {
         "model": model,
         "texts": input,
+        **optional_params
     }
+
+    if "3" in model and "input_type" not in data:
+        # cohere v3 embedding models require input_type, if no input_type is provided, default to "search_document"
+        data["input_type"] = "search_document"
 
     ## LOGGING
     logging_obj.pre_call(
