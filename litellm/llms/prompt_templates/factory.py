@@ -267,6 +267,7 @@ def custom_prompt(role_dict: dict, messages: list, initial_prompt_value: str="",
             bos_open = False
 
     prompt += final_prompt_value
+    print(f"COMPLETE PROMPT: {prompt}")
     return prompt
 
 def prompt_factory(model: str, messages: list, custom_llm_provider: Optional[str]=None):
