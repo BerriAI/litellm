@@ -56,6 +56,27 @@ response = embedding(
 )
 ```
 
+### Setting - Input Type for v3 models
+v3 Models have a required parameter: `input_type`, it can be one of the following four values:
+
+- `input_type="search_document"`: (default) Use this for texts (documents) you want to store in your vector database
+- `input_type="search_query"`: Use this for search queries to find the most relevant documents in your vector database
+- `input_type="classification"`: Use this if you use the embeddings as an input for a classification system
+- `input_type="clustering"`: Use this if you use the embeddings for text clustering
+
+https://txt.cohere.com/introducing-embed-v3/
+```python
+from litellm import embedding
+os.environ["COHERE_API_KEY"] = "cohere key"
+
+# cohere call
+response = embedding(
+    model="embed-english-v3.0", 
+    input=["good morning from litellm", "this is another item"], 
+    input_type="search_document" 
+)
+```
+
 ### Supported Embedding Models
 | Model Name               | Function Call                                                |
 |--------------------------|--------------------------------------------------------------|
