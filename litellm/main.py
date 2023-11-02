@@ -496,7 +496,8 @@ def completion(
                 additional_args={"headers": headers},
             )
         elif (
-            model in litellm.open_ai_text_completion_models
+            custom_llm_provider == "text-completion-openai"
+            or model in litellm.open_ai_text_completion_models
             or "ft:babbage-002" in model
             or "ft:davinci-002" in model  # support for finetuned completion models
             # NOTE: Do NOT add custom_llm_provider == "openai". 
