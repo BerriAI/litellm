@@ -69,6 +69,7 @@ def test_openai_azure_embedding():
 
 def test_cohere_embedding():
     try:
+        # litellm.set_verbose=True
         response = embedding(
             model="embed-english-v2.0", input=["good morning from litellm", "this is another item"]
         )
@@ -77,6 +78,19 @@ def test_cohere_embedding():
         pytest.fail(f"Error occurred: {e}")
 
 # test_cohere_embedding()
+
+def test_cohere_embedding3():
+    try:
+        litellm.set_verbose=True
+        response = embedding(
+            model="embed-english-v3.0", 
+            input=["good morning from litellm", "this is another item"], 
+        )
+        print(f"response:", response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+# test_cohere_embedding3()
 
 def test_bedrock_embedding():
     try:
@@ -99,7 +113,7 @@ def test_hf_embedding():
         print(f"response:", response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_hf_embedding()
+# test_hf_embedding()
 
 # test async embeddings
 def test_aembedding():
