@@ -89,12 +89,15 @@ import os
 os.environ['COHERE_API_KEY'] = ""
 response = embedding('embed-english-v2.0', input=["good morning from litellm"])
 ```
-
-| Model Name            | Function Call | Required OS Variables                        |
-|-----------------------|--------------------------------------------------------------|-------------------------------------------------|
-| embed-english-v2.0    | `embedding('embed-english-v2.0', input=input)`               | `os.environ['COHERE_API_KEY']`                                             |
-| embed-english-light-v2.0 | `embedding('embed-english-light-v2.0', input=input)`         | `os.environ['COHERE_API_KEY']`                                             |
-| embed-multilingual-v2.0 | `embedding('embed-multilingual-v2.0', input=input)`         | `os.environ['COHERE_API_KEY']`                                             |
+| Model Name               | Function Call                                                |
+|--------------------------|--------------------------------------------------------------|
+| embed-english-v3.0       | `embedding(model="embed-english-v3.0", input=["good morning from litellm", "this is another item"])` |
+| embed-english-light-v3.0 | `embedding(model="embed-english-light-v3.0", input=["good morning from litellm", "this is another item"])` |
+| embed-multilingual-v3.0  | `embedding(model="embed-multilingual-v3.0", input=["good morning from litellm", "this is another item"])` |
+| embed-multilingual-light-v3.0 | `embedding(model="embed-multilingual-light-v3.0", input=["good morning from litellm", "this is another item"])` |
+| embed-english-v2.0       | `embedding(model="embed-english-v2.0", input=["good morning from litellm", "this is another item"])` |
+| embed-english-light-v2.0 | `embedding(model="embed-english-light-v2.0", input=["good morning from litellm", "this is another item"])` |
+| embed-multilingual-v2.0  | `embedding(model="embed-multilingual-v2.0", input=["good morning from litellm", "this is another item"])` |
 
 ## HuggingFace Embedding Models
 LiteLLM supports all Feature-Extraction Embedding models: https://huggingface.co/models?pipeline_tag=feature-extraction
