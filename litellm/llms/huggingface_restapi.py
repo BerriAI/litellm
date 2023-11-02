@@ -193,9 +193,9 @@ def completion(
             # check if the model has a registered custom prompt
             model_prompt_details = custom_prompt_dict[model]
             prompt = custom_prompt(
-                role_dict=model_prompt_details["roles"], 
-                initial_prompt_value=model_prompt_details["initial_prompt_value"],  
-                final_prompt_value=model_prompt_details["final_prompt_value"], 
+                role_dict=model_prompt_details.get("roles", None), 
+                initial_prompt_value=model_prompt_details.get("initial_prompt_value", ""),  
+                final_prompt_value=model_prompt_details.get("final_prompt_value", ""), 
                 messages=messages
             )
         else:
@@ -213,10 +213,12 @@ def completion(
             # check if the model has a registered custom prompt
             model_prompt_details = custom_prompt_dict[model]
             prompt = custom_prompt(
-                role_dict=model_prompt_details["roles"], 
-                initial_prompt_value=model_prompt_details["initial_prompt_value"],  
-                final_prompt_value=model_prompt_details["final_prompt_value"], 
-                messages=messages
+                role_dict=model_prompt_details.get("roles", {}), 
+                initial_prompt_value=model_prompt_details.get("initial_prompt_value", ""),  
+                final_prompt_value=model_prompt_details.get("final_prompt_value", ""), 
+                bos_token=model_prompt_details.get("bos_token", ""),
+                eos_token=model_prompt_details.get("eos_token", ""),
+                messages=messages,
             )
         else:
             prompt = prompt_factory(model=model, messages=messages)

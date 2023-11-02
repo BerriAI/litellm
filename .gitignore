@@ -13,3 +13,4 @@ litellm/proxy/litellm_secrets.toml
 litellm/proxy/api_log.json
 .idea/
 router_config.yaml
+litellm_server/config.yaml

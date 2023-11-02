@@ -431,7 +431,7 @@ def test_completion_text_openai():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_text_openai()
+# test_completion_text_openai()
 
 def test_completion_openai_with_optional_params():
     try:
@@ -837,18 +837,16 @@ def test_completion_together_ai():
         pytest.fail(f"Error occurred: {e}")
 
 # test_completion_together_ai()
-# def test_customprompt_together_ai():
-#     try:
-#         litellm.register_prompt_template(
-#             model="OpenAssistant/llama2-70b-oasst-sft-v10",
-#             roles={"system":"<|im_start|>system", "assistant":"<|im_start|>assistant", "user":"<|im_start|>user"}, # tell LiteLLM how you want to map the openai messages to this model
-#             pre_message_sep= "\n",
-#             post_message_sep= "\n"
-#         )
-#         response = completion(model="together_ai/OpenAssistant/llama2-70b-oasst-sft-v10", messages=messages)
-#         print(response)
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
+def test_customprompt_together_ai():
+    try:
+        litellm.set_verbose = True
+        response = completion(model="together_ai/OpenAssistant/llama2-70b-oasst-sft-v10", messages=messages, 
+                              roles={"system":{"pre_message":"<|im_start|>system\n", "post_message":"<|im_end|>"}, "assistant":{"pre_message":"<|im_start|>assistant\n","post_message":"<|im_end|>"}, "user":{"pre_message":"<|im_start|>user\n","post_message":"<|im_end|>"}})
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+test_customprompt_together_ai()
 
 def test_completion_sagemaker():
     try:
