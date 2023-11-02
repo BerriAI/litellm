@@ -1997,7 +1997,10 @@ def validate_environment(model: Optional[str]=None) -> dict:
     if model is None:
         return {"keys_in_environment": keys_in_environment, "missing_keys": missing_keys} 
     ## EXTRACT LLM PROVIDER - if model name provided
-    custom_llm_provider = get_llm_provider(model=model)
+    try:
+        custom_llm_provider = get_llm_provider(model=model)
+    except:
+        custom_llm_provider = None
     # # check if llm provider part of model name
     # if model.split("/",1)[0] in litellm.provider_list:
     #     custom_llm_provider = model.split("/", 1)[0]
