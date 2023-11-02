@@ -1,27 +1,44 @@
 # Cohere
 
-LiteLLM supports 'command', 'command-light', 'command-medium', 'command-medium-beta', 'command-xlarge-beta', 'command-nightly' models from [Cohere](https://cohere.com/). 
-
-Like AI21, these models are available without a waitlist. 
-
-### API KEYS
+## API KEYS
 
 ```python
 import os 
 os.environ["COHERE_API_KEY"] = ""
 ```
 
-### Example Usage
+## Usage
 
 ```python
-
 from litellm import completion
 
 ## set ENV variables
 os.environ["COHERE_API_KEY"] = "cohere key"
 
-messages = [{ "content": "Hello, how are you?","role": "user"}]
+# cohere call
+response = completion(
+    model="command-nightly", 
+    messages = [{ "content": "Hello, how are you?","role": "user"}]
+)
+```
+
+## Usage - Streaming
+
+```python
+from litellm import completion
+
+## set ENV variables
+os.environ["COHERE_API_KEY"] = "cohere key"
 
 # cohere call
-response = completion("command-nightly", messages)
+response = completion(
+    model="command-nightly", 
+    messages = [{ "content": "Hello, how are you?","role": "user"}],
+    stream=True
+)
+
+for chunk in response:
+    print(chunk)
 ```
+
+LiteLLM supports 'command', 'command-light', 'command-medium', 'command-medium-beta', 'command-xlarge-beta', 'command-nightly' models from [Cohere](https://cohere.com/). 
