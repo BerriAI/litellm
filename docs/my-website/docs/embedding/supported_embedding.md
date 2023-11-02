@@ -85,9 +85,14 @@ https://docs.cohere.com/reference/embed
 ### Usage
 ```python
 from litellm import embedding
-import os
-os.environ['COHERE_API_KEY'] = ""
-response = embedding('embed-english-v2.0', input=["good morning from litellm"])
+os.environ["COHERE_API_KEY"] = "cohere key"
+
+# cohere call
+response = embedding(
+    model="embed-english-v3.0", 
+    input=["good morning from litellm", "this is another item"], 
+    input_type="search_document" # optional param for v3 llms
+)
 ```
 | Model Name               | Function Call                                                |
 |--------------------------|--------------------------------------------------------------|
