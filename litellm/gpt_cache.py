@@ -1,4 +1,5 @@
 ###### LiteLLM Integration with GPT Cache #########
+# will be deprecated soon https://github.com/BerriAI/litellm/discussions/648#discussioncomment-7461510 
 import gptcache
 
 # openai.ChatCompletion._llm_handler = litellm.completion
