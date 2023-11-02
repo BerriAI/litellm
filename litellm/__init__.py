@@ -316,7 +316,14 @@ longer_context_model_fallback_dict: dict = {
 
 ####### EMBEDDING MODELS ###################
 open_ai_embedding_models: List = ["text-embedding-ada-002"]
-cohere_embedding_models: List = ["embed-english-v2.0", "embed-english-light-v2.0", "embed-multilingual-v2.0"]
+cohere_embedding_models: List = [
+    "embed-english-v3.0",
+    "embed-english-light-v3.0",
+    "embed-multilingual-v3.0", 
+    "embed-english-v2.0", 
+    "embed-english-light-v2.0", 
+    "embed-multilingual-v2.0", 
+]
 bedrock_embedding_models: List = ["amazon.titan-embed-text-v1"]
 
 from .timeout import timeout
