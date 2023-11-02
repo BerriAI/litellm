@@ -415,7 +415,7 @@ def test_completion_hf_prompt_array():
         litellm.set_verbose=False
         response = text_completion(
             model="huggingface/bigcode/starcoder", 
-            prompt="good morning", 
+            prompt=[[33074, 25, 1374],[284, 651, 284, 479, 17716, 322, 13, 25750]], 
             max_tokens=10, logprobs=10,
             echo=True
         )
@@ -1335,7 +1335,7 @@ def test_completion_palm():
         print(response.response_ms)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_palm()
+# test_completion_palm()
 
 # test_completion_deep_infra()
 # test_completion_ai21()
