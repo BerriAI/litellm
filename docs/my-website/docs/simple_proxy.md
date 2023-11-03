@@ -211,8 +211,6 @@ $ litellm --config /path/to/config.yaml
 
 ## Multiple Models 
 
-Evaluate between multiple models. 
-
 If you have 1 model running on a local GPU and another that's hosted (e.g. on Runpod), you can call both via the same litellm server by listing them in your `config.yaml`. 
 
 ```yaml
@@ -225,6 +223,10 @@ model_list:
     litellm_params:
       model: huggingface/HuggingFaceH4/zephyr-7b-beta
       api_base: https://<my-hosted-endpoint>
+```
+
+```shell
+$ litellm --config /path/to/config.yaml
 ```
 
 ### Evaluate model
