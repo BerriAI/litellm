@@ -826,7 +826,12 @@ def client(original_function):
         except Exception as e:
             call_type = original_function.__name__
             if call_type == CallTypes.completion.value:
-                num_retries = kwargs.get("num_retries", None)
+                num_retries = (
+                    kwargs.get("num_retries", None)
+                    or litellm.num_retries
+                    or None
+                )
+                litellm.num_retries = None # set retries to None to prevent infinite loops 
                 context_window_fallback_dict = kwargs.get("context_window_fallback_dict", {})
 
                 if num_retries: 
