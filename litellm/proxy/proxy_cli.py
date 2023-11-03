@@ -176,13 +176,13 @@ def run_server(host, port, api_base, api_version, model, alias, add_key, headers
         openai.api_key = "temp-key"
         print(openai.api_base)
 
-        response = openai.Completion.create(model="gpt-3.5-turbo", prompt='hello who are you')
+        response = openai.Completion.create(model="gpt-3.5-turbo", prompt='this is a test request, write a short poem')
         print(response)
 
         response = openai.ChatCompletion.create(model="gpt-3.5-turbo", messages = [
             {
                 "role": "user",
-                "content": "this is a test request, acknowledge that you got it"
+                "content": "this is a test request, write a short poem"
             }
         ])
         click.echo(f'LiteLLM: response from proxy {response}')
@@ -191,7 +191,7 @@ def run_server(host, port, api_base, api_version, model, alias, add_key, headers
         response = openai.ChatCompletion.create(model="gpt-3.5-turbo", messages = [
             {
                 "role": "user",
-                "content": "this is a test request, acknowledge that you got it"
+                "content": "this is a test request, write a short poem"
             }
         ],
         stream=True,
