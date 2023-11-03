@@ -41,6 +41,15 @@ This will now automatically route any requests for gpt-3.5-turbo to bigcode star
 
 #### Other supported models:
 <Tabs>
+<TabItem value="bedrock" label="Bedrock">
+
+```shell
+$ export AWS_ACCESS_KEY_ID=""
+$ export AWS_REGION_NAME="" # e.g. us-west-2
+$ export AWS_SECRET_ACCESS_KEY=""
+$ litellm --model bedrock/anthropic.claude-v2
+```
+</TabItem>
 <TabItem value="vllm-local" label="VLLM">
 Assuming you're running vllm locally
 

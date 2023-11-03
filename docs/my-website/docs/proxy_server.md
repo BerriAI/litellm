@@ -5,6 +5,12 @@ import TabItem from '@theme/TabItem';
 
 A fast, and lightweight OpenAI-compatible server to call 100+ LLM APIs. 
 
+:::info
+
+Docs outdated. New docs 👉 [here](./simple_proxy.md)
+
+:::
+
 ## Usage 
 ```shell
 pip install litellm
