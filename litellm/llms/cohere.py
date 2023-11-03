@@ -227,7 +227,6 @@ def embedding(
             additional_args={"complete_input_dict": data},
             original_response=response,
         )
-    # print(response.json())
     """
         response 
         {
