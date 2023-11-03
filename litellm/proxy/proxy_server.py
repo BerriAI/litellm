@@ -508,24 +508,36 @@ def model_list():
 @router.post("/completions")
 @router.post("/engines/{model:path}/completions")
 async def completion(request: Request):
-    body = await request.body()
-    body_str = body.decode()
-    data = ast.literal_eval(body_str)
-    return litellm_completion(data=data, type="completion", user_model=user_model, user_temperature=user_temperature,
-                              user_max_tokens=user_max_tokens, user_api_base=user_api_base, user_headers=user_headers,
-                              user_debug=user_debug, model_router=model_router, user_request_timeout=user_request_timeout)
-
+    try:
+        body = await request.body()
+        body_str = body.decode()
+        try:
+            data = ast.literal_eval(body_str)
+        except:
+            data = json.loads(body_str)
+        return litellm_completion(data=data, type="completion", user_model=user_model, user_temperature=user_temperature,
+                                user_max_tokens=user_max_tokens, user_api_base=user_api_base, user_headers=user_headers,
+                                user_debug=user_debug, model_router=model_router, user_request_timeout=user_request_timeout)
+    except Exception as e:
+        print(e)
+        return
 
 @router.post("/v1/chat/completions")
 @router.post("/chat/completions")
 async def chat_completion(request: Request):
-    body = await request.body()
-    body_str = body.decode()
-    data = ast.literal_eval(body_str)
-    return litellm_completion(data, type="chat_completion", user_model=user_model,
-                              user_temperature=user_temperature, user_max_tokens=user_max_tokens,
-                              user_api_base=user_api_base, user_headers=user_headers, user_debug=user_debug, model_router=model_router, user_request_timeout=user_request_timeout)
-
+    try:
+        body = await request.body()
+        body_str = body.decode()
+        try:
+            data = ast.literal_eval(body_str)
+        except:
+            data = json.loads(body_str)
+        return litellm_completion(data, type="chat_completion", user_model=user_model,
+                                user_temperature=user_temperature, user_max_tokens=user_max_tokens,
+                                user_api_base=user_api_base, user_headers=user_headers, user_debug=user_debug, model_router=model_router, user_request_timeout=user_request_timeout)
+    except Exception as e:
+        print(e)
+        return
 
 def print_cost_logs():
     with open("costs.json", "r") as f:
