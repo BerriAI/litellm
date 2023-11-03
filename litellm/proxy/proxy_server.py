@@ -531,7 +531,6 @@ def litellm_completion(*args, **kwargs):
                 for key, value in m["litellm_params"].items(): 
                     kwargs[key] = value
                 break
-    print(f"call going to litellm: {kwargs}")
     if call_type == "chat_completion":
         response = litellm.completion(*args, **kwargs)
     elif call_type == "text_completion":
