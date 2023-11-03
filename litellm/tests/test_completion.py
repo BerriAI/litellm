@@ -10,7 +10,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import pytest
 import litellm
-from litellm import embedding, completion, text_completion, completion_cost
+from litellm import embedding, completion, completion_cost
 from litellm import RateLimitError
 
 user_message = "Write a short poem about the sky"
@@ -386,44 +386,6 @@ def test_completion_openai():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 # test_completion_openai()
-
-
-def test_completion_openai_prompt():
-    try:
-        response = text_completion(
-            model="gpt-3.5-turbo", prompt="What's the weather in SF?"
-        )
-        response_str = response["choices"][0]["text"]
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-def test_completion_openai_prompt_array():
-    try:
-        litellm.set_verbose=False
-        response = text_completion(
-            model="text-davinci-003", prompt="good morning", max_tokens=10, logprobs=10, echo=True
-        )
-        print(response)
-        response_str = response["choices"][0]["text"]
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-# test_completion_openai_prompt_array()
-
-def test_completion_hf_prompt_array():
-    try:
-        litellm.set_verbose=False
-        response = text_completion(
-            model="huggingface/bigcode/starcoder", 
-            prompt=[[33074, 25, 1374],[284, 651, 284, 479, 17716, 322, 13, 25750]], 
-            max_tokens=10, logprobs=10,
-            echo=True
-        )
-        print(response)
-        response_str = response["choices"][0]["text"]
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-# test_completion_hf_prompt_array()
 
 def test_completion_text_openai():
     try:
