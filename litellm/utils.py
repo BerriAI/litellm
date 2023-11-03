@@ -3723,7 +3723,7 @@ class CustomStreamWrapper:
             finish_reason = None
             if str_line.startswith("data:"):
                 data_json = json.loads(str_line[5:])
-                print(f"delta content: {data_json['choices'][0]['delta']}")
+                print_verbose(f"delta content: {data_json['choices'][0]['delta']}")
                 text = data_json["choices"][0]["delta"].get("content", "") 
                 if data_json["choices"][0].get("finish_reason", None): 
                     is_finished = True
@@ -3953,7 +3953,7 @@ class CustomStreamWrapper:
                     chunk = next(self.completion_stream)
                     response_obj = self.handle_custom_openai_chat_completion_chunk(chunk)
                     completion_obj["content"] = response_obj["text"]
-                    print(f"completion obj content: {completion_obj['content']}")
+                    print_verbose(f"completion obj content: {completion_obj['content']}")
                     if response_obj["is_finished"]: 
                         model_response.choices[0].finish_reason = response_obj["finish_reason"]
                 else: # openai chat/azure models
