@@ -1902,15 +1902,10 @@ def text_completion(*args, **kwargs):
             responses = [None for x in prompt] # init responses 
             for i, request in enumerate(prompt):
                 decoded_prompt = tokenizer.decode(request)
-                # print("\ndecoded\n", decoded_prompt)
-                # print("type decoded", type(decoded_prompt))
                 new_kwargs = copy.deepcopy(kwargs)
                 new_kwargs["prompt"] = decoded_prompt
-                # print("making new individual request", new_kwargs)
                 response = text_completion(**new_kwargs)
-                # print("assigning for ", i)
                 responses[i] = response["choices"][0]
-            print(responses)
             formatted_response_obj = {
                 "id": response["id"],
                 "object": "text_completion",
