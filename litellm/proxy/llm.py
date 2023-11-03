@@ -116,7 +116,8 @@ def litellm_completion(data: Dict,
                 user_headers: Optional[dict], 
                 user_debug: bool,
                 model_router: Optional[litellm.Router]):
-    try:  
+    try:
+        litellm.set_verbose=False
         global debug
         debug = user_debug
         if user_model:
