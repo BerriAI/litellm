@@ -3515,7 +3515,7 @@ def litellm_telemetry(data):
         }
         # Make the POST request to litellm logging api
         response = requests.post(
-            "https://litellm.berri.ai/logging",
+            "https://litellm-logging.onrender.com/logging",
             headers={"Content-Type": "application/json"},
             json=payload,
         )
