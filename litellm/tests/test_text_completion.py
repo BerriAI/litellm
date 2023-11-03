@@ -24,9 +24,11 @@ def test_completion_openai_prompt():
         response = text_completion(
             model="gpt-3.5-turbo", prompt="What's the weather in SF?"
         )
+        print(response)
         response_str = response["choices"][0]["text"]
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+# test_completion_openai_prompt()
 
 
 def test_completion_openai_prompt_array():
@@ -61,10 +63,10 @@ def test_completion_hf_prompt_array():
             model="huggingface/mistralai/Mistral-7B-v0.1", 
             prompt=token_prompt, # token prompt is a 2d list
         )
-        print("\n\n response\n\n")
+        print("\n\n response")
 
         print(response)
         # response_str = response["choices"][0]["text"]
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_hf_prompt_array()
+# test_completion_hf_prompt_array()
