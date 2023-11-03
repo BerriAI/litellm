@@ -8,9 +8,9 @@ LiteLLM Server, is a simple, fast, and lightweight **OpenAI-compatible server** 
 
 LiteLLM Server supports:
 
-* LLM API Calls in the OpenAI ChatCompletions format
-* Set custom prompt templates
-* Caching + Logging capabilities (Redis and Langfuse, respectively)
+* Call [Huggingface/Bedrock/TogetherAI/etc.](#other-supported-models) in the OpenAI ChatCompletions format
+* Set custom prompt templates + model-specific configs (temperature, max_tokens, etc.)
+* Caching (In-memory + Redis)
 
 [**See Code**](https://github.com/BerriAI/litellm/tree/main/litellm_server)
 
