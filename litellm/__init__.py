@@ -46,6 +46,7 @@ add_function_to_prompt: bool = False # if function calling not supported by api,
 client_session: Optional[requests.Session] = None
 model_fallbacks: Optional[List] = None
 model_cost_map_url: str = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
+num_retries: Optional[int] = None
 #############################################
 
 def get_model_cost_map(url: str):
