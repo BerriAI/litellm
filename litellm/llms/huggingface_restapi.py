@@ -418,7 +418,6 @@ def embedding(
         raise HuggingfaceError(status_code=500, message=embeddings['error'])
     
     output_data = []
-    print(f"embeddings: {embeddings}")
     if "similarities" in embeddings: 
         for idx, embedding in embeddings["similarities"]:
             output_data.append(
