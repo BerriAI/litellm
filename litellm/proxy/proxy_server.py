@@ -1,7 +1,7 @@
 import sys, os, platform, time, copy
 import threading, ast
 import shutil, random, traceback, requests
-
+from typing import Optional
 messages: list = []
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -14,6 +14,7 @@ try:
     import appdirs
     import tomli_w
     import backoff
+    import yaml
 except ImportError:
     import subprocess
     import sys
@@ -37,11 +38,6 @@ except ImportError:
     import tomli as tomllib
     import appdirs
     import tomli_w
-
-try:
-    from .llm import litellm_completion
-except ImportError as e:
-    from llm import litellm_completion  # type: ignore
 
 import random
 
@@ -120,13 +116,16 @@ user_telemetry = True
 user_config = None
 user_headers = None
 local_logging = True # writes logs to a local api_log.json file for debugging
-model_router = litellm.Router()
 config_filename = "litellm.secrets.toml"
 config_dir = os.getcwd()
 config_dir = appdirs.user_config_dir("litellm")
 user_config_path = os.getenv(
     "LITELLM_CONFIG_PATH", os.path.join(config_dir, config_filename)
 )
+#### GLOBAL VARIABLES ####
+llm_router: Optional[litellm.Router] = None
+llm_model_list: Optional[list] = None
+server_settings: Optional[dict] = None
 log_file = "api_log.json"
 
 
@@ -135,13 +134,6 @@ def print_verbose(print_statement):
     global user_debug
     if user_debug:
         print(print_statement)
-
-
-def find_avatar_url(role):
-    role = role.replace(" ", "%20")
-    avatar_filename = f"avatars/{role}.png"
-    avatar_url = f"/static/{avatar_filename}"
-    return avatar_url
 
 
 def usage_telemetry(
@@ -205,102 +197,141 @@ def save_params_to_config(data: dict):
         tomli_w.dump(config, f)
 
 
+def load_router_config(router: Optional[litellm.Router], config_file_path: Optional[str]):
+    config = {}
+    server_settings  = {} 
+    try: 
+        if os.path.exists(config_file_path):
+            with open(config_file_path, 'r') as file:
+                config = yaml.safe_load(file)
+        else:
+            pass
+    except:
+        pass
+
+    ## SERVER SETTINGS (e.g. default completion model = 'ollama/mistral')
+    server_settings = config.get("server_settings", None)
+    if server_settings: 
+        server_settings = server_settings
+
+    ## LITELLM MODULE SETTINGS (e.g. litellm.drop_params=True,..)
+    litellm_settings = config.get('litellm_settings', None)
+    if litellm_settings: 
+        for key, value in litellm_settings.items(): 
+            setattr(litellm, key, value)
+
+    ## MODEL LIST
+    model_list = config.get('model_list', None)
+    if model_list: 
+        router = litellm.Router(model_list=model_list)
+    
+    ## ENVIRONMENT VARIABLES
+    environment_variables = config.get('environment_variables', None)
+    if environment_variables: 
+        for key, value in environment_variables.items(): 
+            os.environ[key] = value
+
+    return router, model_list, server_settings
+
 def load_config():
+    #### DEPRECATED #### 
     try:
-        global user_config, user_api_base, user_max_tokens, user_temperature, user_model, local_logging
-        # As the .env file is typically much simpler in structure, we use load_dotenv here directly
-        with open(user_config_path, "rb") as f:
-            user_config = tomllib.load(f)
+        global user_config, user_api_base, user_max_tokens, user_temperature, user_model, local_logging, llm_model_list, llm_router, server_settings
+        
+        # Get the file extension
+        file_extension = os.path.splitext(user_config_path)[1]
+        if file_extension.lower() == ".toml":
+            # As the .env file is typically much simpler in structure, we use load_dotenv here directly
+            with open(user_config_path, "rb") as f:
+                user_config = tomllib.load(f)
 
-        ## load keys
-        if "keys" in user_config:
-            for key in user_config["keys"]:
-                os.environ[key] = user_config["keys"][
-                    key
-                ]  # litellm can read keys from the environment
-        ## settings
-        if "general" in user_config:
-            litellm.add_function_to_prompt = user_config["general"].get(
-                "add_function_to_prompt", True
-            )  # by default add function to prompt if unsupported by provider
-            litellm.drop_params = user_config["general"].get(
-                "drop_params", True
-            )  # by default drop params if unsupported by provider
-            litellm.model_fallbacks = user_config["general"].get(
-                "fallbacks", None
-            )  # fallback models in case initial completion call fails
-            default_model = user_config["general"].get(
-                "default_model", None
-            )  # route all requests to this model.
+            ## load keys
+            if "keys" in user_config:
+                for key in user_config["keys"]:
+                    os.environ[key] = user_config["keys"][
+                        key
+                    ]  # litellm can read keys from the environment
+            ## settings
+            if "general" in user_config:
+                litellm.add_function_to_prompt = user_config["general"].get(
+                    "add_function_to_prompt", True
+                )  # by default add function to prompt if unsupported by provider
+                litellm.drop_params = user_config["general"].get(
+                    "drop_params", True
+                )  # by default drop params if unsupported by provider
+                litellm.model_fallbacks = user_config["general"].get(
+                    "fallbacks", None
+                )  # fallback models in case initial completion call fails
+                default_model = user_config["general"].get(
+                    "default_model", None
+                )  # route all requests to this model.
 
-            local_logging = user_config["general"].get("local_logging", True)
+                local_logging = user_config["general"].get("local_logging", True)
 
-            if user_model is None:  # `litellm --model <model-name>`` > default_model.
-                user_model = default_model
+                if user_model is None:  # `litellm --model <model-name>`` > default_model.
+                    user_model = default_model
 
-        ## load model config - to set this run `litellm --config`
-        model_config = None
-        if "model" in user_config:
-            if user_model in user_config["model"]:
-                model_config = user_config["model"][user_model]
-            model_list = []
-            for model in user_config["model"]:
-                if "model_list" in user_config["model"][model]:
-                    model_list.extend(user_config["model"][model]["model_list"])
-            if len(model_list) > 0:
-                model_router.set_model_list(model_list=model_list)
+            ## load model config - to set this run `litellm --config`
+            model_config = None
+            if "model" in user_config:
+                if user_model in user_config["model"]:
+                    model_config = user_config["model"][user_model]
+                model_list = []
+                for model in user_config["model"]:
+                    if "model_list" in user_config["model"][model]:
+                        model_list.extend(user_config["model"][model]["model_list"])
 
-        print_verbose(f"user_config: {user_config}")
-        print_verbose(f"model_config: {model_config}")
-        print_verbose(f"user_model: {user_model}")
-        if model_config is None:
-            return
+            print_verbose(f"user_config: {user_config}")
+            print_verbose(f"model_config: {model_config}")
+            print_verbose(f"user_model: {user_model}")
+            if model_config is None:
+                return
 
-        user_max_tokens = model_config.get("max_tokens", None)
-        user_temperature = model_config.get("temperature", None)
-        user_api_base = model_config.get("api_base", None)
+            user_max_tokens = model_config.get("max_tokens", None)
+            user_temperature = model_config.get("temperature", None)
+            user_api_base = model_config.get("api_base", None)
 
-        ## custom prompt template
-        if "prompt_template" in model_config:
-            model_prompt_template = model_config["prompt_template"]
-            if (
-                len(model_prompt_template.keys()) > 0
-            ):  # if user has initialized this at all
-                litellm.register_prompt_template(
-                    model=user_model,
-                    initial_prompt_value=model_prompt_template.get(
-                        "MODEL_PRE_PROMPT", ""
-                    ),
-                    roles={
-                        "system": {
-                            "pre_message": model_prompt_template.get(
-                                "MODEL_SYSTEM_MESSAGE_START_TOKEN", ""
-                            ),
-                            "post_message": model_prompt_template.get(
-                                "MODEL_SYSTEM_MESSAGE_END_TOKEN", ""
-                            ),
+            ## custom prompt template
+            if "prompt_template" in model_config:
+                model_prompt_template = model_config["prompt_template"]
+                if (
+                    len(model_prompt_template.keys()) > 0
+                ):  # if user has initialized this at all
+                    litellm.register_prompt_template(
+                        model=user_model,
+                        initial_prompt_value=model_prompt_template.get(
+                            "MODEL_PRE_PROMPT", ""
+                        ),
+                        roles={
+                            "system": {
+                                "pre_message": model_prompt_template.get(
+                                    "MODEL_SYSTEM_MESSAGE_START_TOKEN", ""
+                                ),
+                                "post_message": model_prompt_template.get(
+                                    "MODEL_SYSTEM_MESSAGE_END_TOKEN", ""
+                                ),
+                            },
+                            "user": {
+                                "pre_message": model_prompt_template.get(
+                                    "MODEL_USER_MESSAGE_START_TOKEN", ""
+                                ),
+                                "post_message": model_prompt_template.get(
+                                    "MODEL_USER_MESSAGE_END_TOKEN", ""
+                                ),
+                            },
+                            "assistant": {
+                                "pre_message": model_prompt_template.get(
+                                    "MODEL_ASSISTANT_MESSAGE_START_TOKEN", ""
+                                ),
+                                "post_message": model_prompt_template.get(
+                                    "MODEL_ASSISTANT_MESSAGE_END_TOKEN", ""
+                                ),
+                            },
                         },
-                        "user": {
-                            "pre_message": model_prompt_template.get(
-                                "MODEL_USER_MESSAGE_START_TOKEN", ""
-                            ),
-                            "post_message": model_prompt_template.get(
-                                "MODEL_USER_MESSAGE_END_TOKEN", ""
-                            ),
-                        },
-                        "assistant": {
-                            "pre_message": model_prompt_template.get(
-                                "MODEL_ASSISTANT_MESSAGE_START_TOKEN", ""
-                            ),
-                            "post_message": model_prompt_template.get(
-                                "MODEL_ASSISTANT_MESSAGE_END_TOKEN", ""
-                            ),
-                        },
-                    },
-                    final_prompt_value=model_prompt_template.get(
-                        "MODEL_POST_PROMPT", ""
-                    ),
-                )
+                        final_prompt_value=model_prompt_template.get(
+                            "MODEL_POST_PROMPT", ""
+                        ),
+                    )
     except:
         pass
 
@@ -320,12 +351,14 @@ def initialize(
     add_function_to_prompt,
     headers,
     save,
+    config
 ):
-    global user_model, user_api_base, user_debug, user_max_tokens, user_request_timeout, user_temperature, user_telemetry, user_headers
+    global user_model, user_api_base, user_debug, user_max_tokens, user_request_timeout, user_temperature, user_telemetry, user_headers, llm_model_list, llm_router, server_settings
     user_model = model
     user_debug = debug
-    load_config()
     dynamic_config = {"general": {}, user_model: {}}
+    if config:
+        llm_router, llm_model_list, server_settings = load_router_config(router=llm_router, config_file_path=config)
     if headers:  # model-specific param
         user_headers = headers
         dynamic_config[user_model]["headers"] = headers
@@ -470,17 +503,50 @@ litellm.input_callback = [logger]
 litellm.success_callback = [logger]
 litellm.failure_callback = [logger]
 
+# for streaming
+def data_generator(response):
+    print_verbose("inside generator")
+    for chunk in response:
+        print_verbose(f"returned chunk: {chunk}")
+        yield f"data: {json.dumps(chunk)}\n\n"
+
+
+def litellm_completion(*args, **kwargs):
+    global user_temperature, user_request_timeout, user_max_tokens, user_api_base
+    call_type = kwargs.pop("call_type")
+    # override with user settings
+    if user_temperature: 
+        kwargs["temperature"] = user_temperature
+    if user_request_timeout:
+        kwargs["request_timeout"] = user_request_timeout
+    if user_max_tokens: 
+        kwargs["max_tokens"] = user_max_tokens
+    if user_api_base: 
+        kwargs["api_base"] = user_api_base
+    ## CHECK CONFIG ## 
+    if llm_model_list and kwargs["model"] in [m["model_name"] for m in llm_model_list]:
+        for m in llm_model_list: 
+            if kwargs["model"] == m["model_name"]: 
+                for key, value in m["litellm_params"].items(): 
+                    kwargs[key] = value
+                break
+    print(f"call going to litellm: {kwargs}")
+    if call_type == "chat_completion":
+        response = litellm.completion(*args, **kwargs)
+    elif call_type == "text_completion":
+        response = litellm.text_completion(*args, **kwargs)
+    if 'stream' in kwargs and kwargs['stream'] == True: # use generate_responses to stream responses
+        return StreamingResponse(data_generator(response), media_type='text/event-stream')
+    return response
 
 #### API ENDPOINTS ####
 @router.get("/v1/models")
 @router.get("/models")  # if project requires model list
 def model_list():
-    # all_models = litellm.utils.get_valid_models()
-    # if llm_model_list: 
-    #     all_models += llm_model_list
-
-    
+    global llm_model_list    
     all_models = litellm.utils.get_valid_models()
+    if llm_model_list: 
+        all_models += llm_model_list
     if user_model is not None:
         all_models += user_model
     ### CHECK OLLAMA MODELS ### 
@@ -508,36 +574,35 @@ def model_list():
 @router.post("/completions")
 @router.post("/engines/{model:path}/completions")
 async def completion(request: Request):
+    body = await request.body()
+    body_str = body.decode()
     try:
-        body = await request.body()
-        body_str = body.decode()
-        try:
-            data = ast.literal_eval(body_str)
-        except:
-            data = json.loads(body_str)
-        return litellm_completion(data=data, type="completion", user_model=user_model, user_temperature=user_temperature,
-                                user_max_tokens=user_max_tokens, user_api_base=user_api_base, user_headers=user_headers,
-                                user_debug=user_debug, model_router=model_router, user_request_timeout=user_request_timeout)
-    except Exception as e:
-        print(e)
-        return
+        data = ast.literal_eval(body_str)
+    except: 
+        data = json.loads(body_str)
+    if user_model:
+        data["model"] = user_model
+    data["call_type"] = "text_completion"
+    return litellm_completion(
+        **data
+    )
+                              
 
 @router.post("/v1/chat/completions")
 @router.post("/chat/completions")
 async def chat_completion(request: Request):
+    body = await request.body()
+    body_str = body.decode()
     try:
-        body = await request.body()
-        body_str = body.decode()
-        try:
-            data = ast.literal_eval(body_str)
-        except:
-            data = json.loads(body_str)
-        return litellm_completion(data, type="chat_completion", user_model=user_model,
-                                user_temperature=user_temperature, user_max_tokens=user_max_tokens,
-                                user_api_base=user_api_base, user_headers=user_headers, user_debug=user_debug, model_router=model_router, user_request_timeout=user_request_timeout)
-    except Exception as e:
-        print(e)
-        return
+        data = ast.literal_eval(body_str)
+    except: 
+        data = json.loads(body_str)
+    if user_model:
+        data["model"] = user_model
+    data["call_type"] = "chat_completion"
+    return litellm_completion(
+        **data
+    )
 
 def print_cost_logs():
     with open("costs.json", "r") as f:

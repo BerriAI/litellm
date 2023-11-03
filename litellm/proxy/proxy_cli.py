@@ -6,7 +6,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 import operator
 
-config_filename = "litellm.secrets.toml"
+config_filename = "litellm.secrets"
 # Using appdirs to determine user-specific config path
 config_dir = appdirs.user_config_dir("litellm")
 user_config_path = os.getenv("LITELLM_CONFIG_PATH", os.path.join(config_dir, config_filename))
@@ -21,39 +21,6 @@ def run_ollama_serve():
     
     with open(os.devnull, 'w') as devnull:
         process = subprocess.Popen(command, stdout=devnull, stderr=devnull)
-
-def open_config(file_path=None):
-    # Create the .env file if it doesn't exist
-    if file_path: 
-        # Ensure the user-specific directory exists
-        os.makedirs(config_dir, exist_ok=True)
-        # Copying the file using shutil.copy
-        try:
-            shutil.copy(file_path, user_config_path)
-            with open(file_path) as f:
-                print(f"Source file: {file_path}")
-                print(f.read())
-
-            with open(user_config_path) as f:
-                print(f"Dest file: {user_config_path}")
-                print(f.read())
-            print("\033[1;32mDone successfully\033[0m")
-        except Exception as e:
-            print(f"Failed to copy {file_path}: {e}")
-    else: 
-        if os.path.exists(user_config_path):
-            if os.path.getsize(user_config_path) == 0:
-                print(f"{user_config_path} exists but is empty")
-                print(f"To create a config (save keys, modify model prompt), copy the template located here: https://docs.litellm.ai/docs/proxy_server")
-            else: 
-                with open(user_config_path) as f:
-                    print(f"Saved Config file: {user_config_path}")
-                    print(f.read())
-        else:
-            print(f"{user_config_path} hasn't been created yet.")
-            print(f"To create a config (save keys, modify model prompt), copy the template located here: https://docs.litellm.ai/docs/proxy_server")
-    print(f"LiteLLM: config location - {user_config_path}")
-
 
 def clone_subfolder(repo_url, subfolder, destination):
   # Clone the full repo
@@ -99,7 +66,7 @@ def is_port_in_use(port):
 @click.option('--drop_params', is_flag=True, help='Drop any unmapped params') 
 @click.option('--create_proxy', is_flag=True, help='Creates a local OpenAI-compatible server template') 
 @click.option('--add_function_to_prompt', is_flag=True, help='If function passed but unsupported, pass it as prompt') 
-@click.option('--config', '-c', is_flag=True, help='Configure Litellm')  
+@click.option('--config', '-c', help='Configure Litellm')  
 @click.option('--file', '-f', help='Path to config file')
 @click.option('--max_budget', default=None, type=float, help='Set max budget for API calls - works for hosted models like OpenAI, TogetherAI, Anthropic, etc.`') 
 @click.option('--telemetry', default=True, type=bool, help='Helps us know if people are using this feature. Turn this off by doing `--telemetry False`') 
@@ -125,12 +92,6 @@ def run_server(host, port, api_base, api_version, model, alias, add_key, headers
         destination = os.path.join(os.getcwd(), 'litellm-proxy')
 
         clone_subfolder(repo_url, subfolder, destination)
-        return
-    if config:
-        if file: 
-            open_config(file_path=file)
-        else: 
-            open_config()
         return
     if logs is not None:
         if logs == 0: # default to 1
@@ -202,7 +163,7 @@ def run_server(host, port, api_base, api_version, model, alias, add_key, headers
     else:
         if headers:
             headers = json.loads(headers)
-        initialize(model=model, alias=alias, api_base=api_base, api_version=api_version, debug=debug, temperature=temperature, max_tokens=max_tokens, request_timeout=request_timeout, max_budget=max_budget, telemetry=telemetry, drop_params=drop_params, add_function_to_prompt=add_function_to_prompt, headers=headers, save=save)
+        initialize(model=model, alias=alias, api_base=api_base, api_version=api_version, debug=debug, temperature=temperature, max_tokens=max_tokens, request_timeout=request_timeout, max_budget=max_budget, telemetry=telemetry, drop_params=drop_params, add_function_to_prompt=add_function_to_prompt, headers=headers, save=save, config=config)
         try:
             import uvicorn
         except:
