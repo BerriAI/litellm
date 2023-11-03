@@ -99,7 +99,7 @@ def completion(
         if k not in optional_params: # completion(top_k=3) > togetherai_config(top_k=3) <- allows for dynamic variables to be passed in
             optional_params[k] = v
 
-    print(f"CUSTOM PROMPT DICT: {custom_prompt_dict}; model: {model}")
+    print_verbose(f"CUSTOM PROMPT DICT: {custom_prompt_dict}; model: {model}")
     if model in custom_prompt_dict:
         # check if the model has a registered custom prompt
         model_prompt_details = custom_prompt_dict[model]
