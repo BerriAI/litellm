@@ -846,7 +846,7 @@ def test_customprompt_together_ai():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_customprompt_together_ai()
+# test_customprompt_together_ai()
 
 def test_completion_sagemaker():
     try:
@@ -1113,14 +1113,15 @@ def test_completion_bedrock_claude_completion_auth():
 # test_vertex_ai()
 
 # def test_vertex_ai_stream():
-#     litellm.vertex_project = "hardy-device-386718"
-#     litellm.vertex_location = "us-central1"
+#     litellm.set_verbose=False
 #     test_models = litellm.vertex_chat_models + litellm.vertex_code_chat_models + litellm.vertex_text_models + litellm.vertex_code_text_models
 #     for model in test_models:
 #         try:
+#             if model in ["code-gecko@001", "code-gecko@latest"]:
+#                 # our account does not have access to this model
+#                 continue
 #             print("making request", model)
-#             response = completion(model=model, messages=[{"role": "user", "content": "write code for saying hi"}], stream=True)
-#             print(response)
+#             response = completion(model=model, messages=[{"role": "user", "content": "write 100 line code code for saying hi"}], stream=True)
 #             for chunk in response:
 #                 print(chunk)
 #                 # pass
