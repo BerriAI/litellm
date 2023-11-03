@@ -4,7 +4,7 @@ import TabItem from '@theme/TabItem';
 
 # 💥 Evaluate LLMs - OpenAI Compatible Server
 
-LiteLLM Server, is a simple, fast, and lightweight **OpenAI-compatible server** to call 100+ LLM APIs in the OpenAI Input/Output format
+A simple, fast, and lightweight **OpenAI-compatible server** to call 100+ LLM APIs.
 
 LiteLLM Server supports:
 
@@ -149,7 +149,7 @@ $ litellm --model command-nightly
 
 [**Jump to Code**](https://github.com/BerriAI/litellm/blob/fef4146396d5d87006259e00095a62e3900d6bb4/litellm/proxy.py#L36)
 
-# LM-Evaluation Harness with TGI
+# [TUTORIAL] LM-Evaluation Harness with TGI
 
 Evaluate LLMs 20x faster with TGI via litellm proxy's `/completions` endpoint. 
 
@@ -207,6 +207,46 @@ model_list:
 
 ```shell
 $ litellm --config /path/to/config.yaml
+```
+
+## Multiple Models 
+
+Evaluate between multiple models. 
+
+If you have 1 model running on a local GPU and another that's hosted (e.g. on Runpod), you can call both via the same litellm server by listing them in your `config.yaml`. 
+
+```yaml
+model_list:
+  - model_name: zephyr-alpha
+    litellm_params: # params for litellm.completion() - https://docs.litellm.ai/docs/completion/input#input---request-body
+      model: huggingface/HuggingFaceH4/zephyr-7b-alpha
+      api_base: http://0.0.0.0:8001
+  - model_name: zephyr-beta
+    litellm_params:
+      model: huggingface/HuggingFaceH4/zephyr-7b-beta
+      api_base: https://<my-hosted-endpoint>
+```
+
+### Evaluate model
+
+If you're repo let's you set model name, you can call the specific model by just passing in that model's name - 
+
+```python
+import openai 
+openai.api_base = "http://0.0.0.0:8000" 
+
+completion = openai.ChatCompletion.create(model="zephyr-alpha", messages=[{"role": "user", "content": "Hello world"}])
+print(completion.choices[0].message.content)
+```
+
+If you're repo only let's you specify api base, then you can add the model name to the api base passed in - 
+
+```python
+import openai 
+openai.api_base = "http://0.0.0.0:8000/openai/deployments/zephyr-alpha/chat/completions" # zephyr-alpha will be used 
+
+completion = openai.ChatCompletion.create(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hello world"}])
+print(completion.choices[0].message.content)
 ```
 
 ## Save Model-specific params (API Base, API Keys, Temperature, etc.)
