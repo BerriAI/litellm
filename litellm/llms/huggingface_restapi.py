@@ -285,6 +285,7 @@ def completion(
                 try:
                     completion_response = response.json()
                 except:
+                    import traceback
                     raise HuggingfaceError(
                         message=f"Original Response received: {response.text}; Stacktrace: {traceback.format_exc()}", status_code=response.status_code
                     )
