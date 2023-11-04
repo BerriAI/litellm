@@ -1151,7 +1151,7 @@ def test_mistral_anyscale_stream():
     litellm.set_verbose=False
     response = completion(
         model = 'anyscale/mistralai/Mistral-7B-Instruct-v0.1', 
-        messages = [{ "content": "what llm are you - how fast are y","role": "user"}],
+        messages = [{ "content": "hello, good morning","role": "user"}],
         stream=True,
     )
     for chunk in response:
