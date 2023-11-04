@@ -1961,8 +1961,7 @@ def moderation(input: str, api_key: Optional[str]=None):
 ## Set verbose to true -> ```litellm.set_verbose = True```
 def print_verbose(print_statement):
     if litellm.set_verbose:
-        import logging
-        logging.info(f"LiteLLM: {print_statement}")
+        print(print_statement) # noqa
 
 def config_completion(**kwargs):
     if litellm.config_path != None:
