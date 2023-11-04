@@ -1146,6 +1146,18 @@ def test_completion_anyscale_2():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+def test_mistral_anyscale_stream():
+    litellm.set_verbose=False
+    response = completion(
+        model = 'anyscale/mistralai/Mistral-7B-Instruct-v0.1', 
+        messages = [{ "content": "what llm are you - how fast are y","role": "user"}],
+        stream=True,
+    )
+    for chunk in response:
+        # print(chunk)
+        print(chunk["choices"][0]["delta"].get("content", ""), end="")
+# test_mistral_anyscale_stream()
 # test_completion_anyscale_2()
 # def test_completion_with_fallbacks_multiple_keys():
 #     print(f"backup key 1: {os.getenv('BACKUP_OPENAI_API_KEY_1')}")
