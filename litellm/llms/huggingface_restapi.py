@@ -255,7 +255,7 @@ def completion(
 
         ## Some servers might return streaming responses even though stream was not set to true. (e.g. Baseten)
         is_streamed = False 
-        if response.__dict__['headers']["Content-Type"] == "text/event-stream":
+        if response.__dict__['headers'].get("Content-Type", "") == "text/event-stream":
             is_streamed = True
         
         # iterate over the complete streamed response, and return the final answer
