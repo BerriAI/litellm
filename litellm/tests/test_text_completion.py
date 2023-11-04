@@ -70,3 +70,19 @@ def test_completion_hf_prompt_array():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 # test_completion_hf_prompt_array()
+
+
+def test_completion_text_003_prompt_array():
+    try:
+        litellm.set_verbose=False
+        response = text_completion(
+            model="text-davinci-003", 
+            prompt=token_prompt, # token prompt is a 2d list
+        )
+        print("\n\n response")
+
+        print(response)
+        # response_str = response["choices"][0]["text"]
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+# test_completion_text_003_prompt_array()
