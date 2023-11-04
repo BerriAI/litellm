@@ -4416,7 +4416,7 @@ def trim_messages(
 
         return final_messages
     except Exception as e: # [NON-Blocking, if error occurs just return final_messages
-        print_verbose("Got exception while token trimming", e)
+        print_verbose(f"Got exception while token trimming{e}")
         return messages
 
 def get_valid_models():
