@@ -11,3 +11,9 @@ print(get_max_tokens("gpt-3.5-turbo"))
 
 print(model_cost)
 print(open_ai_chat_completion_models)
+# print("\n")
+# print(model_cost)
+# print("\n")
+
+# # 🦄🦄🦄🦄🦄🦄🦄🦄
+# print(get_max_tokens("palm/chat-bison"))
