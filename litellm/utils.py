@@ -2939,7 +2939,14 @@ def exception_type(
                     model=model
                 )
             elif custom_llm_provider == "bedrock":
-                if "Unable to locate credentials" in error_str:
+                if "too many tokens" in error_str or "expected maxLength:" in error_str or "Input is too long" in error_str or "Too many input tokens" in error_str: 
+                    exception_mapping_worked = True
+                    raise ContextWindowExceededError(
+                        message=f"BedrockException: Context Window Error - {error_str}",
+                        model=model, 
+                        llm_provider="bedrock"
+                    )
+                if "Unable to locate credentials" in error_str or "Malformed input request" in error_str:
                     exception_mapping_worked = True
                     raise InvalidRequestError(
                         message=f"BedrockException - {error_str}", 
@@ -2953,13 +2960,21 @@ def exception_type(
                             model=model, 
                             llm_provider="bedrock"
                     )
-                if "throttlingException" in error_str:
+                if "throttlingException" in error_str or "ThrottlingException" in error_str:
                     exception_mapping_worked = True
                     raise RateLimitError(
                             message=f"BedrockException: Rate Limit Error - {error_str}",
                             model=model, 
                             llm_provider="bedrock"
                     )
+                if hasattr(original_exception, "status_code"):
+                    if original_exception.status_code == 500:
+                        exception_mapping_worked = True
+                        raise ServiceUnavailableError(
+                            message=f"BedrockException - {original_exception.message}",
+                            llm_provider="bedrock",
+                            model=model
+                        )
             elif custom_llm_provider == "sagemaker": 
                 if "Unable to locate credentials" in error_str:
                     exception_mapping_worked = True

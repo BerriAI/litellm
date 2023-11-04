@@ -364,12 +364,16 @@ def completion(
         response = response.get('body')
         return response
 
-    response = client.invoke_model(
-        body=data,
-        modelId=model,
-        accept=accept,
-        contentType=contentType
-    )
+    try: 
+        response = client.invoke_model(
+            body=data,
+            modelId=model,
+            accept=accept,
+            contentType=contentType
+        )
+    except Exception as e: 
+        raise BedrockError(status_code=500, message=str(e))
+    
     response_body = json.loads(response.get('body').read())
 
     ## LOGGING
@@ -391,11 +395,20 @@ def completion(
         outputText = response_body["generations"][0]["text"]
     else:  # amazon titan
         outputText = response_body.get('results')[0].get('outputText')
-    try:
-        if len(outputText) > 0:
-            model_response["choices"][0]["message"]["content"] = outputText
-    except:
-        raise BedrockError(message=json.dumps(outputText), status_code=response.status_code)
+
+    response_metadata = response.get("ResponseMetadata", {})
+
+    if response_metadata.get("HTTPStatusCode", 500) >= 400:
+        raise BedrockError(
+            message=outputText,
+            status_code=response.get("HTTPStatusCode", 500),
+        )
+    else:
+        try:
+            if len(outputText) > 0:
+                model_response["choices"][0]["message"]["content"] = outputText
+        except:
+            raise BedrockError(message=json.dumps(outputText), status_code=response.status_code)
 
     ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here. 
     prompt_tokens = len(
