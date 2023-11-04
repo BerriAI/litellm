@@ -2757,10 +2757,11 @@ def exception_type(
     ):
     global user_logger_fn, liteDebuggerClient
     exception_mapping_worked = False
-    print()
-    print("\033[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new\033[0m")
-    print("LiteLLM.Info: If you need to debug this error, use `litellm.set_verbose=True'.")
-    print()
+    if litellm.suppress_debug_info is False:
+        print()
+        print("\033[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new\033[0m")
+        print("LiteLLM.Info: If you need to debug this error, use `litellm.set_verbose=True'.")
+        print()
     try:
         if isinstance(original_exception, OriginalError):
             # Handle the OpenAIError

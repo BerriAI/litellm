@@ -87,6 +87,7 @@ print("\033[1;34mDocs: https://docs.litellm.ai/docs/proxy_server\033[0m")
 print()
 
 import litellm
+litellm.suppress_debug_info = True
 from fastapi import FastAPI, Request
 from fastapi.routing import APIRouter
 from fastapi.encoders import jsonable_encoder
@@ -576,24 +577,29 @@ def model_list():
 @router.post("/completions")
 @router.post("/engines/{model:path}/completions")
 async def completion(request: Request, model: Optional[str] = None):
-    body = await request.body()
-    body_str = body.decode()
-    try:
-        data = ast.literal_eval(body_str)
-    except: 
-        data = json.loads(body_str)
-    data["model"] = (
-        server_settings.get("completion_model", None) # server default
-        or user_model # model name passed via cli args
-        or model # for azure deployments
-        or data["model"] # default passed in http request
-    )
-    if user_model:
-        data["model"] = user_model
-    data["call_type"] = "text_completion"
-    return litellm_completion(
-        **data
-    )
+    try: 
+        body = await request.body()
+        body_str = body.decode()
+        try:
+            data = ast.literal_eval(body_str)
+        except: 
+            data = json.loads(body_str)
+        data["model"] = (
+            server_settings.get("completion_model", None) # server default
+            or user_model # model name passed via cli args
+            or model # for azure deployments
+            or data["model"] # default passed in http request
+        )
+        if user_model:
+            data["model"] = user_model
+        data["call_type"] = "text_completion"
+        return litellm_completion(
+            **data
+        )
+    except Exception as e: 
+        error_traceback = traceback.format_exc()
+        error_msg = f"{str(e)}\n\n{error_traceback}"
+        return {"error": error_msg}
                               
 
 @router.post("/v1/chat/completions")
@@ -601,22 +607,28 @@ async def completion(request: Request, model: Optional[str] = None):
 @router.post("/openai/deployments/{model:path}/chat/completions") # azure compatible endpoint
 async def chat_completion(request: Request, model: Optional[str] = None):
     global server_settings
-    body = await request.body()
-    body_str = body.decode()
-    try:
-        data = ast.literal_eval(body_str)
-    except: 
-        data = json.loads(body_str)
-    data["model"] = (
-        server_settings.get("completion_model", None) # server default
-        or user_model # model name passed via cli args
-        or model # for azure deployments
-        or data["model"] # default passed in http request
-    )
-    data["call_type"] = "chat_completion"
-    return litellm_completion(
-        **data
-    )
+    try: 
+        body = await request.body()
+        body_str = body.decode()
+        try:
+            data = ast.literal_eval(body_str)
+        except: 
+            data = json.loads(body_str)
+        data["model"] = (
+            server_settings.get("completion_model", None) # server default
+            or user_model # model name passed via cli args
+            or model # for azure deployments
+            or data["model"] # default passed in http request
+        )
+        data["call_type"] = "chat_completion"
+        return litellm_completion(
+            **data
+        )
+    except Exception as e: 
+        print(f"\033[1;31mAn error occurred: {e}\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`")
+        error_traceback = traceback.format_exc()
+        error_msg = f"{str(e)}\n\n{error_traceback}"
+        return {"error": error_msg}
 
 def print_cost_logs():
     with open("costs.json", "r") as f:
