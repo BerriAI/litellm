@@ -1624,13 +1624,9 @@ def batch_completion_models_all_responses(*args, **kwargs):
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(models)) as executor:
         for idx, model in enumerate(models):
-            print(f"{GREEN}LiteLLM: Making request to model: {model}{RESET}")
             future = executor.submit(completion, *args, model=model, **kwargs)
             if future.result() is not None:
                 responses.append(future.result())
-                print(f"{GREEN}LiteLLM: Model {model} returned response{RESET}")
-            else:
-                print(f"{RED}LiteLLM: Model {model } did not return a response{RESET}")
 
     return responses
 
@@ -1863,6 +1859,7 @@ def embedding(
 
 ###### Text Completion ################
 def text_completion(*args, **kwargs):
+    global print_verbose
     import copy
     """
     This maps to the Openai.Completion.create format, which has a different I/O (accepts prompt, returning ["choices"]["text"].
@@ -1930,7 +1927,7 @@ def text_completion(*args, **kwargs):
             raw_response = response._hidden_params.get("original_response", None)
             transformed_logprobs = litellm.utils.transform_logprobs(raw_response)
         except Exception as e:
-            print("LiteLLM non blocking exception", e)
+            print_verbose("LiteLLM non blocking exception", e)
         text_completion_response["id"] = response["id"]
         text_completion_response["object"] = "text_completion"
         text_completion_response["created"] = response["created"]
@@ -1964,7 +1961,8 @@ def moderation(input: str, api_key: Optional[str]=None):
 ## Set verbose to true -> ```litellm.set_verbose = True```
 def print_verbose(print_statement):
     if litellm.set_verbose:
-        print(f"LiteLLM: {print_statement}")
+        import logging
+        logging.info(f"LiteLLM: {print_statement}")
 
 def config_completion(**kwargs):
     if litellm.config_path != None:

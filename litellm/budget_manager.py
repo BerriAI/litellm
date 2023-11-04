@@ -14,7 +14,8 @@ class BudgetManager:
     
     def print_verbose(self, print_statement):
         if litellm.set_verbose:
-            print(print_statement)
+            import logging
+            logging.info(print_statement)
     
     def load_data(self):
         if self.client_type == "local":
@@ -149,8 +150,6 @@ class BudgetManager:
                 'project_name' : self.project_name, 
                 "user_dict": self.user_dict
             }
-            print(f"data: {data}")
             response = requests.post(url, headers=headers, json=data)
-            print(f"response: {response.text}")
             response = response.json()
             return response

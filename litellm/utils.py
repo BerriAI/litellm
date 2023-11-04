@@ -285,7 +285,8 @@ class TextCompletionResponse(OpenAIObject):
 ############################################################
 def print_verbose(print_statement):
     if litellm.set_verbose:
-        print(f"LiteLLM: {print_statement}")
+        import logging
+        logging.info(f"LiteLLM: {print_statement}")
 
 ####### LOGGING ###################
 from enum import Enum
@@ -538,8 +539,6 @@ class Logging:
                         print_verbose("reaches api manager for updating model cost")
                         litellm.apiManager.update_cost(completion_obj=result, user=self.user)
                     if callback == "cache":
-                        # print("entering logger first time")
-                        # print(self.litellm_params["stream_response"])
                         if litellm.cache != None and self.model_call_details.get('optional_params', {}).get('stream', False) == True:
                             litellm_call_id = self.litellm_params["litellm_call_id"]
                             if litellm_call_id in self.litellm_params["stream_response"]:
@@ -550,10 +549,7 @@ class Logging:
                                     self.litellm_params["stream_response"][litellm_call_id]["choices"][0]["message"]["content"] += result["content"]
                             else: # init a streaming response for this call id
                                 new_model_response = ModelResponse(choices=[Choices(message=Message(content="default"))])
-                                #print("creating new model response")
-                                #print(new_model_response)
                                 self.litellm_params["stream_response"][litellm_call_id] = new_model_response
-                            #print("adding to cache for", litellm_call_id)                              
                             litellm.cache.add_cache(self.litellm_params["stream_response"][litellm_call_id], **self.model_call_details)
                     if callback == "promptlayer":
                         print_verbose("reaches promptlayer for logging!")
@@ -576,7 +572,6 @@ class Logging:
                                 print_verbose("reaches supabase for streaming logging!")
                                 result = kwargs["complete_streaming_response"]
       
-                        # print(kwargs)
                         model = kwargs["model"]
                         messages = kwargs["messages"]
                         optional_params = kwargs.get("optional_params", {})
@@ -732,11 +727,11 @@ def exception_logging(
                     model_call_details
                 )  # Expectation: any logger function passed in by the user should accept a dict object
             except Exception as e:
-                print(
+                print_verbose(
                     f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {traceback.format_exc()}"
                 )
     except Exception as e:
-        print(
+        print_verbose(
             f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {traceback.format_exc()}"
         )
         pass
@@ -799,7 +794,6 @@ def client(original_function):
             return logging_obj
         except Exception as e:  # DO NOT BLOCK running the function because of this
             print_verbose(f"[Non-Blocking] {traceback.format_exc()}; args - {args}; kwargs - {kwargs}")
-            print(e)
         pass
     
     def crash_reporting(*args, **kwargs):
@@ -1776,9 +1770,9 @@ def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None, api_
             custom_llm_provider = "bedrock"
 
         if custom_llm_provider is None or custom_llm_provider=="":
-            print()
-            print("\033[1;31mProvider List: https://docs.litellm.ai/docs/providers\033[0m")
-            print()
+            print() # noqa
+            print("\033[1;31mProvider List: https://docs.litellm.ai/docs/providers\033[0m") # noqa
+            print() # noqa
             raise ValueError(f"LLM Provider NOT provided. Pass in the LLM provider you are trying to call. E.g. For 'Huggingface' inference endpoints pass in `completion(model='huggingface/{model}',..)` Learn more: https://docs.litellm.ai/docs/providers")
         return model, custom_llm_provider, dynamic_api_key, api_base
     except Exception as e: 
@@ -2772,7 +2766,7 @@ def get_all_keys(llm_provider=None):
 
 
 def get_model_list():
-    global last_fetched_at
+    global last_fetched_at, print_verbose
     try:
         # if user is using hosted product -> get their updated model list
         user_email = (
@@ -2784,7 +2778,7 @@ def get_model_list():
         if user_email:
             # make the api call
             last_fetched_at = time.time()
-            print(f"last_fetched_at: {last_fetched_at}")
+            print_verbose(f"last_fetched_at: {last_fetched_at}")
             response = requests.post(
                 url="http://api.litellm.ai/get_model_list",
                 headers={"content-type": "application/json"},
@@ -2820,10 +2814,10 @@ def exception_type(
     global user_logger_fn, liteDebuggerClient
     exception_mapping_worked = False
     if litellm.suppress_debug_info is False:
-        print()
-        print("\033[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new\033[0m")
-        print("LiteLLM.Info: If you need to debug this error, use `litellm.set_verbose=True'.")
-        print()
+        print() # noqa
+        print("\033[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new\033[0m") # noqa
+        print("LiteLLM.Info: If you need to debug this error, use `litellm.set_verbose=True'.") # noqa
+        print() # noqa
     try:
         if isinstance(original_exception, OriginalError):
             # Handle the OpenAIError
@@ -3401,7 +3395,7 @@ def exception_type(
                         model=model
                     )
                 elif hasattr(original_exception, "status_code"):
-                    print(f"status code: {original_exception.status_code}")
+                    print_verbose(f"status code: {original_exception.status_code}")
                     if original_exception.status_code == 401:
                         exception_mapping_worked = True
                         raise AuthenticationError(
@@ -4267,12 +4261,11 @@ def completion_with_fallbacks(**kwargs):
                     return response
 
             except Exception as e:
-                print(e)
+                print_verbose(e)
                 rate_limited_models.add(model)
                 model_expiration_times[model] = (
                     time.time() + 60
                 )  # cool down this selected model
-                # print(f"rate_limited_models {rate_limited_models}")
                 pass
     return response
 
@@ -4417,7 +4410,7 @@ def trim_messages(
 
         return final_messages
     except Exception as e: # [NON-Blocking, if error occurs just return final_messages
-        print("Got exception while token trimming", e)
+        print_verbose("Got exception while token trimming", e)
         return messages
 
 def get_valid_models():
