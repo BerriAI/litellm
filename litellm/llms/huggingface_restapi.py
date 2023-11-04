@@ -141,6 +141,7 @@ def completion(
     litellm_params=None,
     logger_fn=None,
 ):
+    exception_mapping_worked = False
     try:
         headers = validate_environment(api_key, headers)
         task = get_hf_task_for_model(model)
@@ -365,10 +366,14 @@ def completion(
             model_response._hidden_params["original_response"] = completion_response
             return model_response
     except HuggingfaceError as e: 
+        exception_mapping_worked = True
         raise e
     except Exception as e: 
-        import traceback
-        raise HuggingfaceError(status_code=500, message=traceback.format_exc())
+        if exception_mapping_worked: 
+            raise e
+        else: 
+            import traceback
+            raise HuggingfaceError(status_code=500, message=traceback.format_exc())
 
 
 def embedding(
