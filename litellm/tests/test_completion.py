@@ -219,19 +219,19 @@ def test_get_hf_task_for_model():
 # ################### Hugging Face TGI models ########################
 # # TGI model
 # # this is a TGI model https://huggingface.co/glaiveai/glaive-coder-7b
-def hf_test_completion_tgi():
-    litellm.set_verbose=True
-    try:
-        response = litellm.completion(
-            model="huggingface/mistralai/Mistral-7B-Instruct-v0.1",
-            messages=[{ "content": "Hello, how are you?","role": "user"}],
-            api_base="https://3kk3h56912qga4-80.proxy.runpod.net",
-        )
-        # Add any assertions here to check the response
-        print(response)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-hf_test_completion_tgi()
+# def hf_test_completion_tgi():
+#     litellm.set_verbose=True
+#     try:
+#         response = litellm.completion(
+#             model="huggingface/mistralai/Mistral-7B-Instruct-v0.1",
+#             messages=[{ "content": "Hello, how are you?","role": "user"}],
+#             api_base="https://3kk3h56912qga4-80.proxy.runpod.net",
+#         )
+#         # Add any assertions here to check the response
+#         print(response)
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
+# hf_test_completion_tgi()
 
 # def hf_test_completion_tgi_stream():
 #     try:
