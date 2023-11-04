@@ -220,6 +220,68 @@ class EmbeddingResponse(OpenAIObject):
         d = super().to_dict_recursive()
         return d
 
+class TextChoices(OpenAIObject):
+    def __init__(self, finish_reason=None, index=0, text=None, logprobs=None, **params):
+        super(TextChoices, self).__init__(**params)
+        if finish_reason:
+            self.finish_reason = map_finish_reason(finish_reason)
+        else:
+            self.finish_reason = "stop"
+        self.index = index
+        if text:
+            self.text = text
+        else:
+            self.text = None
+        if logprobs:
+            self.logprobs = []
+        else:
+            self.logprobs = logprobs
+
+class TextCompletionResponse(OpenAIObject):
+    """
+    {
+        "id": response["id"],
+        "object": "text_completion",
+        "created": response["created"],
+        "model": response["model"],
+        "choices": [
+        {
+            "text": response["choices"][0]["message"]["content"],
+            "index": response["choices"][0]["index"],
+            "logprobs": transformed_logprobs,
+            "finish_reason": response["choices"][0]["finish_reason"]
+        }
+        ],
+        "usage": response["usage"]
+    }
+    """
+    def __init__(self, id=None, choices=None, created=None, model=None, usage=None, stream=False, response_ms=None, **params):
+        if stream:
+            self.object = "text_completion.chunk"
+            self.choices = [StreamingChoices()]
+        else:
+            self.object = "text_completion"
+            self.choices = [TextChoices()]
+        if id is None:
+            self.id = _generate_id()
+        else:
+            self.id = id
+        if created is None:
+            self.created = int(time.time())
+        else:
+            self.created = created
+        if response_ms:
+            self._response_ms = response_ms
+        else:
+            self._response_ms = None
+        self.model = model
+        if usage:
+            self.usage = usage
+        else:
+            self.usage = Usage()
+        self._hidden_params = {} # used in case users want to access the original model response
+        super(TextCompletionResponse, self).__init__(**params)
+
 ############################################################
 def print_verbose(print_statement):
     if litellm.set_verbose:
