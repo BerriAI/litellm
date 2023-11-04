@@ -26,9 +26,12 @@ def test_completion_openai_prompt():
         )
         print(response)
         response_str = response["choices"][0]["text"]
+        print(response.choices)
+        print(response.choices[0])
+        #print(response.choices[0].text)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_completion_openai_prompt()
+test_completion_openai_prompt()
 
 
 def test_completion_openai_prompt_array():
@@ -38,23 +41,13 @@ def test_completion_openai_prompt_array():
             model="text-davinci-003", prompt="good morning", max_tokens=10, logprobs=10, echo=True
         )
         print(response)
+        print(response.choices)
+        print(response.choices[0])
+        #print(response.choices[0].text)
         response_str = response["choices"][0]["text"]
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_completion_openai_prompt_array()
-
-# def test_completion_hf_small_array():
-#     try:
-#         litellm.set_verbose=False
-#         response = text_completion(
-#             model="huggingface/bigcode/starcoder", 
-#             prompt= ["hi", "hello"]
-#         )
-#         print(response)
-        
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
-# test_completion_hf_small_array()
+test_completion_openai_prompt_array()
 
 def test_completion_hf_prompt_array():
     try:
@@ -66,10 +59,12 @@ def test_completion_hf_prompt_array():
         print("\n\n response")
 
         print(response)
+        print(response.choices)
+        assert(len(response.choices)==2)
         # response_str = response["choices"][0]["text"]
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_completion_hf_prompt_array()
+test_completion_hf_prompt_array()
 
 
 def test_completion_text_003_prompt_array():
@@ -85,4 +80,4 @@ def test_completion_text_003_prompt_array():
         # response_str = response["choices"][0]["text"]
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_completion_text_003_prompt_array()
+test_completion_text_003_prompt_array()
