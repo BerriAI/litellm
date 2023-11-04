@@ -1927,7 +1927,7 @@ def text_completion(*args, **kwargs):
             raw_response = response._hidden_params.get("original_response", None)
             transformed_logprobs = litellm.utils.transform_logprobs(raw_response)
         except Exception as e:
-            print_verbose("LiteLLM non blocking exception", e)
+            print_verbose(f"LiteLLM non blocking exception: {e}")
         text_completion_response["id"] = response["id"]
         text_completion_response["object"] = "text_completion"
         text_completion_response["created"] = response["created"]
