@@ -2946,14 +2946,14 @@ def exception_type(
                         model=model, 
                         llm_provider="bedrock"
                     )
-                if "Unable to locate credentials" in error_str or "Malformed input request" in error_str:
+                if "Malformed input request" in error_str:
                     exception_mapping_worked = True
                     raise InvalidRequestError(
                         message=f"BedrockException - {error_str}", 
                         model=model, 
                         llm_provider="bedrock"
                     )
-                if "The security token included in the request is invalid" in error_str:
+                if "Unable to locate credentials" in error_str or "The security token included in the request is invalid" in error_str:
                     exception_mapping_worked = True
                     raise AuthenticationError(
                             message=f"BedrockException Invalid Authentication - {error_str}",
@@ -2971,6 +2971,13 @@ def exception_type(
                     if original_exception.status_code == 500:
                         exception_mapping_worked = True
                         raise ServiceUnavailableError(
+                            message=f"BedrockException - {original_exception.message}",
+                            llm_provider="bedrock",
+                            model=model
+                        )
+                    elif original_exception.status_code == 401:
+                        exception_mapping_worked = True
+                        raise AuthenticationError(
                             message=f"BedrockException - {original_exception.message}",
                             llm_provider="bedrock",
                             model=model
