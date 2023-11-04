@@ -233,6 +233,48 @@
         "litellm_provider": "vertex_ai-code-chat-models",
         "mode": "chat"
     },
+    "palm/chat-bison": {
+        "max_tokens": 4096,
+        "input_cost_per_token": 0.000000125,
+        "output_cost_per_token": 0.000000125,
+        "litellm_provider": "palm",
+        "mode": "chat"
+    },
+    "palm/chat-bison-001": {
+        "max_tokens": 4096,
+        "input_cost_per_token": 0.000000125,
+        "output_cost_per_token": 0.000000125,
+        "litellm_provider": "palm",
+        "mode": "chat"
+    },
+    "palm/text-bison": {
+        "max_tokens": 8196,
+        "input_cost_per_token": 0.000000125,
+        "output_cost_per_token": 0.000000125,
+        "litellm_provider": "palm",
+        "mode": "completion"
+    },
+    "palm/text-bison-001": {
+        "max_tokens": 8196,
+        "input_cost_per_token": 0.000000125,
+        "output_cost_per_token": 0.000000125,
+        "litellm_provider": "palm",
+        "mode": "completion"
+    },
+    "palm/text-bison-safety-off": {
+        "max_tokens": 8196,
+        "input_cost_per_token": 0.000000125,
+        "output_cost_per_token": 0.000000125,
+        "litellm_provider": "palm",
+        "mode": "completion"
+    },
+    "palm/text-bison-safety-recitation-off": {
+        "max_tokens": 8196,
+        "input_cost_per_token": 0.000000125,
+        "output_cost_per_token": 0.000000125,
+        "litellm_provider": "palm",
+        "mode": "completion"
+    },
     "command-nightly": {
         "max_tokens": 4096,
         "input_cost_per_token": 0.000015,
