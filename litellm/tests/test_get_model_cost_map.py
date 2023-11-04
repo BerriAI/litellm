@@ -9,11 +9,15 @@ from litellm import get_max_tokens, model_cost, open_ai_chat_completion_models
 
 print(get_max_tokens("gpt-3.5-turbo"))
 
-print(model_cost)
-print(open_ai_chat_completion_models)
-# print("\n")
-# print(model_cost)
-# print("\n")
+def test_get_gpt3_tokens():
+    max_tokens = get_max_tokens("gpt-3.5-turbo")
+    results = max_tokens['max_tokens']
+    print(results)
+# test_get_gpt3_tokens()
 
-# # 🦄🦄🦄🦄🦄🦄🦄🦄
-# print(get_max_tokens("palm/chat-bison"))
+def test_get_palm_tokens():
+    # # 🦄🦄🦄🦄🦄🦄🦄🦄
+    max_tokens = get_max_tokens("palm/chat-bison")
+    results = max_tokens['max_tokens']
+    print(results)
+# test_get_palm_tokens()
