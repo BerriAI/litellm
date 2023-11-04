@@ -3800,7 +3800,13 @@ class CustomStreamWrapper:
             text = "" 
             is_finished = False
             finish_reason = None
-            if str_line.startswith("data:"):
+            if str_line == "data: [DONE]":
+                # anyscale returns a [DONE] special char for streaming, this cannot be json loaded. This is the end of stream
+                text = ""
+                is_finished = True
+                finish_reason = "stop"
+                return {"text": text, "is_finished": is_finished, "finish_reason": finish_reason}
+            elif str_line.startswith("data:"):
                 data_json = json.loads(str_line[5:])
                 print_verbose(f"delta content: {data_json['choices'][0]['delta']}")
                 text = data_json["choices"][0]["delta"].get("content", "") 
