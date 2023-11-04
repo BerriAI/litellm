@@ -333,15 +333,25 @@ def completion(
                         "content"
                     ] = completion_response[0]["generated_text"]   
         ## CALCULATING USAGE
-        prompt_tokens = len(
-            encoding.encode(input_text)
-        )  ##[TODO] use the llama2 tokenizer here
+        prompt_tokens = 0
+        try:
+            prompt_tokens = len(
+                encoding.encode(input_text)
+            )  ##[TODO] use the llama2 tokenizer here
+        except:
+            # this should remain non blocking we should not block a response returning if calculating usage fails
+            pass
         print_verbose(f'output: {model_response["choices"][0]["message"]}')
         output_text = model_response["choices"][0]["message"].get("content", "")
         if output_text is not None and len(output_text) > 0:
-            completion_tokens = len(
-                encoding.encode(model_response["choices"][0]["message"].get("content", ""))
-            )  ##[TODO] use the llama2 tokenizer here
+            completion_tokens = 0
+            try:
+                completion_tokens = len(
+                    encoding.encode(model_response["choices"][0]["message"].get("content", ""))
+                )  ##[TODO] use the llama2 tokenizer here
+            except:
+                # this should remain non blocking we should not block a response returning if calculating usage fails
+                pass
         else: 
             completion_tokens = 0
 
