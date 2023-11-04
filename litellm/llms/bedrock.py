@@ -397,7 +397,6 @@ def completion(
         outputText = response_body.get('results')[0].get('outputText')
 
     response_metadata = response.get("ResponseMetadata", {})
-    print(f"response_metadata: {response_metadata}")
     if response_metadata.get("HTTPStatusCode", 500) >= 400:
         raise BedrockError(
             message=outputText,
