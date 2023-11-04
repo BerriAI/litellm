@@ -37,7 +37,7 @@ In addition, liteLLM allows you to pass in the following **Optional** liteLLM ar
     
     - `function_call`: *string or object (optional)* - Controls how the model responds to function calls.
 
-- `temperature`: *number or null (optional)* - The sampling temperature to be used, between 0 and 2. Higher values like 0.8 produce more random outputs, while lower values like 0.2 make outputs more focused and deterministic. 
+- `temperature`: *number or null (optional)* - The sampling temperature to be used, between 0 and 1. Higher values like 0.8 produce more random outputs, while lower values like 0.2 make outputs more focused and deterministic. 
 
 - `top_p`: *number or null (optional)* - An alternative to sampling with temperature. It instructs the model to consider the results of the tokens with top_p probability. For example, 0.1 means only the tokens comprising the top 10% probability mass are considered.
 
