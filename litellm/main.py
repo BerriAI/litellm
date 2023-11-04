@@ -60,6 +60,8 @@ from litellm.utils import (
     get_secret,
     CustomStreamWrapper,
     ModelResponse,
+    TextCompletionResponse,
+    TextChoices,
     EmbeddingResponse,
     read_config_args,
     Choices, 
@@ -1873,6 +1875,7 @@ def text_completion(*args, **kwargs):
     if "prompt" not in kwargs:
         raise ValueError("please pass prompt into the `text_completion` endpoint - `text_completion(model, prompt='hello world')`")
 
+    text_completion_response = TextCompletionResponse()
     model = kwargs["model"]
     prompt = kwargs["prompt"]
     # get custom_llm_provider
@@ -1906,15 +1909,15 @@ def text_completion(*args, **kwargs):
                 new_kwargs["prompt"] = decoded_prompt
                 response = text_completion(**new_kwargs)
                 responses[i] = response["choices"][0]
-            formatted_response_obj = {
-                "id": response["id"],
-                "object": "text_completion",
-                "created": response["created"],
-                "model": response["model"],
-                "choices": responses,
-                "usage": response["usage"]
-            }
-            return formatted_response_obj
+
+            text_completion_response["id"] = response["id"]
+            text_completion_response["object"] = "text_completion"
+            text_completion_response["created"] = response["created"]
+            text_completion_response["model"] = response["model"]
+            text_completion_response["choices"] = responses
+            text_completion_response["usage"] = response["usage"]
+
+            return text_completion_response
     else:
         messages = [{"role": "system", "content": kwargs["prompt"]}]
         kwargs["messages"] = messages
@@ -1928,22 +1931,18 @@ def text_completion(*args, **kwargs):
             transformed_logprobs = litellm.utils.transform_logprobs(raw_response)
         except Exception as e:
             print("LiteLLM non blocking exception", e)
-        formatted_response_obj = {
-            "id": response["id"],
-            "object": "text_completion",
-            "created": response["created"],
-            "model": response["model"],
-            "choices": [
-            {
-                "text": response["choices"][0]["message"]["content"],
-                "index": response["choices"][0]["index"],
-                "logprobs": transformed_logprobs,
-                "finish_reason": response["choices"][0]["finish_reason"]
-            }
-            ],
-            "usage": response["usage"]
-        }
-        return formatted_response_obj
+        text_completion_response["id"] = response["id"]
+        text_completion_response["object"] = "text_completion"
+        text_completion_response["created"] = response["created"]
+        text_completion_response["model"] = response["model"]
+        text_choices = TextChoices()
+        text_choices["text"] = response["choices"][0]["message"]["content"]
+        text_choices["index"] = response["choices"][0]["index"]
+        text_choices["logprobs"] = transformed_logprobs
+        text_choices["finish_reason"] = response["choices"][0]["finish_reason"]
+        text_completion_response["choices"] = [text_choices]
+        text_completion_response["usage"] = response["usage"]
+        return text_completion_response
 
 ##### Moderation #######################
 def moderation(input: str, api_key: Optional[str]=None):
