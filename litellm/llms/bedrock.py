@@ -190,7 +190,7 @@ def init_bedrock_client(
     elif standard_aws_region_name:
         region_name = standard_aws_region_name
     else:
-        raise BedrockError(message="AWS region not set: set AWS_REGION_NAME or AWS_REGION env variable or in .env file")
+        raise BedrockError(message="AWS region not set: set AWS_REGION_NAME or AWS_REGION env variable or in .env file", status_code=401)
 
     # check for custom AWS_BEDROCK_RUNTIME_ENDPOINT and use it if not passed to init_bedrock_client
     env_aws_bedrock_runtime_endpoint = get_secret("AWS_BEDROCK_RUNTIME_ENDPOINT")
@@ -397,18 +397,18 @@ def completion(
         outputText = response_body.get('results')[0].get('outputText')
 
     response_metadata = response.get("ResponseMetadata", {})
-
+    print(f"response_metadata: {response_metadata}")
     if response_metadata.get("HTTPStatusCode", 500) >= 400:
         raise BedrockError(
             message=outputText,
-            status_code=response.get("HTTPStatusCode", 500),
+            status_code=response_metadata.get("HTTPStatusCode", 500),
         )
     else:
         try:
             if len(outputText) > 0:
                 model_response["choices"][0]["message"]["content"] = outputText
         except:
-            raise BedrockError(message=json.dumps(outputText), status_code=response.status_code)
+            raise BedrockError(message=json.dumps(outputText), status_code=response_metadata.get("HTTPStatusCode", 500))
 
     ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here. 
     prompt_tokens = len(
