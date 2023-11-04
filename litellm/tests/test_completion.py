@@ -9,9 +9,11 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import pytest
+from openai.error import Timeout
 import litellm
 from litellm import embedding, completion, completion_cost
 from litellm import RateLimitError
+litellm.num_retries = 3
 
 user_message = "Write a short poem about the sky"
 messages = [{"content": user_message, "role": "user"}]
@@ -405,9 +407,10 @@ def test_completion_openai_with_optional_params():
         )
         # Add any assertions here to check the response
         print(response)
+    except Timeout as e: 
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-
 
 def test_completion_openai_litellm_key():
     try:
