@@ -17,7 +17,7 @@ from concurrent import futures
 from inspect import iscoroutinefunction
 from functools import wraps
 from threading import Thread
-from litellm.error import Timeout
+from openai.error import Timeout
 
 
 def timeout(timeout_duration: float = 0.0, exception_to_raise=Timeout):
