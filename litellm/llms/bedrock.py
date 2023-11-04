@@ -391,17 +391,11 @@ def completion(
         outputText = response_body["generations"][0]["text"]
     else:  # amazon titan
         outputText = response_body.get('results')[0].get('outputText')
-    if "error" in outputText:
-        raise BedrockError(
-            message=outputText,
-            status_code=response.status_code,
-        )
-    else:
-        try:
-            if len(outputText) > 0:
-                model_response["choices"][0]["message"]["content"] = outputText
-        except:
-            raise BedrockError(message=json.dumps(outputText), status_code=response.status_code)
+    try:
+        if len(outputText) > 0:
+            model_response["choices"][0]["message"]["content"] = outputText
+    except:
+        raise BedrockError(message=json.dumps(outputText), status_code=response.status_code)
 
     ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here. 
     prompt_tokens = len(
