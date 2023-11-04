@@ -129,11 +129,12 @@ llm_router: Optional[litellm.Router] = None
 llm_model_list: Optional[list] = None
 server_settings: dict = {}
 log_file = "api_log.json"
-
+worker_config = None
 
 #### HELPER FUNCTIONS ####
 def print_verbose(print_statement):
     global user_debug
+    print(f"user debug value: {user_debug}")
     if user_debug:
         print(print_statement)
 
@@ -337,6 +338,9 @@ def load_config():
     except:
         pass
 
+def save_worker_config(**data): 
+    import json
+    os.environ["WORKER_CONFIG"] = json.dumps(data)
 
 def initialize(
     model,
@@ -532,6 +536,7 @@ def litellm_completion(*args, **kwargs):
                 for key, value in m["litellm_params"].items(): 
                     kwargs[key] = value
                 break
+    print(f"litellm set verbose pre-call: {litellm.set_verbose}")
     if call_type == "chat_completion":
         response = litellm.completion(*args, **kwargs)
     elif call_type == "text_completion":
@@ -539,6 +544,14 @@ def litellm_completion(*args, **kwargs):
     if 'stream' in kwargs and kwargs['stream'] == True: # use generate_responses to stream responses
         return StreamingResponse(data_generator(response), media_type='text/event-stream')
     return response
+
+
+@app.on_event("startup")
+def startup_event():
+    import json
+    worker_config = json.loads(os.getenv("WORKER_CONFIG"))
+    initialize(**worker_config)
+    print(f"\033[32mWorker Initialized\033[0m\n")
 
 #### API ENDPOINTS ####
 @router.get("/v1/models")
