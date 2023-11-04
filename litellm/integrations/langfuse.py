@@ -36,10 +36,6 @@ class LangFuseLogger:
             print_verbose(
                 f"Langfuse Logging - Enters logging function for model {kwargs}"
             )
-            # print(response_obj)
-            # print(response_obj['choices'][0]['message']['content'])
-            # print(response_obj['usage']['prompt_tokens'])
-            # print(response_obj['usage']['completion_tokens'])
             metadata = kwargs.get("metadata", {})
             prompt = [kwargs['messages']]
 
