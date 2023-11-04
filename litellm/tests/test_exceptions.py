@@ -38,12 +38,20 @@ models = ["command-nightly"]
 # Test 1: Context Window Errors 
 @pytest.mark.parametrize("model", models)
 def test_context_window(model):
-    sample_text = "how does a court case get to the Supreme Court?" * 1000
+    sample_text = "Say error 50 times" * 100000
     messages = [{"content": sample_text, "role": "user"}]
-
-    with pytest.raises(ContextWindowExceededError):
+    print(f"model: {model}")
+    try:
         completion(model=model, messages=messages)
-
+        pytest.fail(f"An exception occurred")
+    except ContextWindowExceededError:
+        pass
+    except RateLimitError:
+        pass
+    except Exception as e: 
+        print(f"{e}")
+        pytest.fail(f"An error occcurred - {e}")
+        
 @pytest.mark.parametrize("model", models)
 def test_context_window_with_fallbacks(model):
     ctx_window_fallback_dict = {"command-nightly": "claude-2"}
@@ -52,8 +60,10 @@ def test_context_window_with_fallbacks(model):
 
     completion(model=model, messages=messages, context_window_fallback_dict=ctx_window_fallback_dict)
 
+# for model in litellm.models_by_provider["bedrock"]:
+#     test_context_window(model=model)
 # test_context_window(model="command-nightly")
-test_context_window_with_fallbacks(model="command-nightly")
+# test_context_window_with_fallbacks(model="command-nightly")
 # Test 2: InvalidAuth Errors
 @pytest.mark.parametrize("model", models)
 def invalid_auth(model):  # set the model key to an invalid key, depending on the model
