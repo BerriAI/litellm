@@ -6,6 +6,7 @@ from litellm.caching import Cache
 input_callback: List[Union[str, Callable]] = []
 success_callback: List[Union[str, Callable]] = []
 failure_callback: List[Union[str, Callable]] = []
+callbacks: List[Callable] = []
 set_verbose = False
 email: Optional[
     str
