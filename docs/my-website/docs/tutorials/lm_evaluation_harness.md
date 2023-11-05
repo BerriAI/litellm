@@ -21,9 +21,14 @@ $ litellm --model huggingface/tinyllama --api_base https://k58ory32yinf1ly0.us-e
 
 OpenAI Compatible Endpoint at http://0.0.0.0:8000
 
-**Step 2: Set OpenAI API Base**
+**Step 2: Set OpenAI API Base & Key**
 ```shell
 $ export OPENAI_API_BASE=http://0.0.0.0:8000
+```
+
+LM Harness requires you to set an OpenAI API key `OPENAI_API_SECRET_KEY` for running benchmarks
+```shell
+export OPENAI_API_SECRET_KEY=anything
 ```
 
 **Step 3: Run LM-Eval-Harness**
@@ -34,4 +39,12 @@ python3 -m lm_eval \
   --model_args engine=davinci \
   --task crows_pairs_english_age
 
+```
+
+## Debugging 
+
+### Making a test request to your proxy
+This command makes a test Completion, ChatCompletion request to your proxy server
+```shell
+litellm --test
 ```
