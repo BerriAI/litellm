@@ -13,8 +13,8 @@ class LangFuseLogger:
     def __init__(self):
         try:
             from langfuse import Langfuse
-        except:
-            raise Exception("\033[91mLangfuse not installed, try running 'pip install langfuse' to fix this error\033[0m")
+        except Exception as e:
+            raise Exception("\033[91mLangfuse not installed, try running 'pip install langfuse' to fix this error\033[0m", e)
         # Instance variables
         self.secret_key = os.getenv("LANGFUSE_SECRET_KEY")
         self.public_key = os.getenv("LANGFUSE_PUBLIC_KEY")
@@ -36,10 +36,6 @@ class LangFuseLogger:
             print_verbose(
                 f"Langfuse Logging - Enters logging function for model {kwargs}"
             )
-            # print(response_obj)
-            # print(response_obj['choices'][0]['message']['content'])
-            # print(response_obj['usage']['prompt_tokens'])
-            # print(response_obj['usage']['completion_tokens'])
             metadata = kwargs.get("metadata", {})
             prompt = [kwargs['messages']]
 

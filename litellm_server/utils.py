@@ -1,5 +1,12 @@
 import os, litellm
 import pkg_resources
+import dotenv
+dotenv.load_dotenv() # load env variables
+
+def print_verbose(print_statement): 
+    print(f"SET_VERBOSE value: {os.environ['SET_VERBOSE']}")
+    if os.environ["SET_VERBOSE"] == "True":
+        print(print_statement)
 
 def get_package_version(package_name):
     try:
@@ -36,25 +43,36 @@ def set_callbacks():
     
     ## CACHING 
     ### REDIS
-    if len(os.getenv("REDIS_HOST", "")) >  0 and len(os.getenv("REDIS_PORT", "")) > 0 and len(os.getenv("REDIS_PASSWORD", "")) > 0: 
-        from litellm.caching import Cache
-        litellm.cache = Cache(type="redis", host=os.getenv("REDIS_HOST"), port=os.getenv("REDIS_PORT"), password=os.getenv("REDIS_PASSWORD"))
-        print("\033[92mLiteLLM: Switched on Redis caching\033[0m")
+    # if len(os.getenv("REDIS_HOST", "")) >  0 and len(os.getenv("REDIS_PORT", "")) > 0 and len(os.getenv("REDIS_PASSWORD", "")) > 0: 
+    #     print(f"redis host: {os.getenv('REDIS_HOST')}; redis port: {os.getenv('REDIS_PORT')}; password: {os.getenv('REDIS_PASSWORD')}")
+    #     from litellm.caching import Cache
+    #     litellm.cache = Cache(type="redis", host=os.getenv("REDIS_HOST"), port=os.getenv("REDIS_PORT"), password=os.getenv("REDIS_PASSWORD"))
+    #     print("\033[92mLiteLLM: Switched on Redis caching\033[0m")
 
 
 
-def load_router_config(router: Optional[litellm.Router]):
+def load_router_config(router: Optional[litellm.Router], config_file_path: Optional[str]='/app/config.yaml'):
     config = {}
-    config_file = '/app/config.yaml'
-
+    server_settings  = {} 
     try: 
-        if os.path.exists(config_file):
-            with open(config_file, 'r') as file:
+        if os.path.exists(config_file_path):
+            with open(config_file_path, 'r') as file:
                 config = yaml.safe_load(file)
         else:
             pass
     except:
         pass
+
+    ## SERVER SETTINGS (e.g. default completion model = 'ollama/mistral')
+    server_settings = config.get("server_settings", None)
+    if server_settings: 
+        server_settings = server_settings
+
+    ## LITELLM MODULE SETTINGS (e.g. litellm.drop_params=True,..)
+    litellm_settings = config.get('litellm_settings', None)
+    if litellm_settings: 
+        for key, value in litellm_settings.items(): 
+            setattr(litellm, key, value)
 
     ## MODEL LIST
     model_list = config.get('model_list', None)
@@ -67,4 +85,4 @@ def load_router_config(router: Optional[litellm.Router]):
         for key, value in environment_variables.items(): 
             os.environ[key] = value
 
-    return router
+    return router, model_list, server_settings

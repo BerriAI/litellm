@@ -89,8 +89,8 @@ For Ollama LiteLLM Provides a Docker Image for an OpenAI API compatible server f
 
 ### Quick Start:
 Docker Hub: 
-https://hub.docker.com/repository/docker/litellm/ollama/general
-
+For ARM Processors: https://hub.docker.com/repository/docker/litellm/ollama/general
+For Intel/AMD Processors: to be added
 ```shell
 docker pull litellm/ollama
 ```
