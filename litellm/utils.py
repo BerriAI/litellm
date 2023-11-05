@@ -398,6 +398,12 @@ class Logging:
                             message=f"Model Call Details pre-call: {self.model_call_details}",
                             level="info",
                         )
+                    elif isinstance(callback, CustomLogger): # custom logger class 
+                        callback.log_pre_api_call(
+                            model=self.model,
+                            messages=self.messages,
+                            kwargs=self.model_call_details,
+                        )
                     elif callable(callback): # custom logger functions
                         customLogger.log_input_event(
                             model=self.model,
@@ -470,6 +476,12 @@ class Logging:
                             category="litellm.llm_call",
                             message=f"Model Call Details post-call: {self.model_call_details}",
                             level="info",
+                        )
+                    elif isinstance(callback, CustomLogger): # custom logger class 
+                        callback.log_post_api_call(
+                            model=self.model,
+                            messages=self.messages,
+                            kwargs=self.model_call_details,
                         )
                 except:
                     print_verbose(
@@ -603,6 +615,23 @@ class Logging:
                             end_time=end_time,
                             print_verbose=print_verbose,
                         )
+                    if isinstance(callback, CustomLogger): # custom logger class 
+                        if self.stream and complete_streaming_response is None:
+                            callback.log_stream_event(
+                                kwargs=self.model_call_details,
+                                response_obj=result,
+                                start_time=start_time,
+                                end_time=end_time
+                                )
+                        else:
+                            if self.stream and complete_streaming_response:
+                                self.model_call_details["complete_response"] = self.model_call_details.pop("complete_streaming_response", complete_streaming_response)
+                            callback.log_success_event(
+                                kwargs=self.model_call_details,
+                                response_obj=result,
+                                start_time=start_time,
+                                end_time=end_time,
+                            )
                     if callable(callback): # custom logger functions
                         customLogger.log_event(
                             kwargs=self.model_call_details,
@@ -690,6 +719,12 @@ class Logging:
                             print_verbose=print_verbose,
                             callback_func=callback
                         )
+                    elif isinstance(callback, CustomLogger): # custom logger class 
+                        callback.log_failure_event(
+                            model=self.model,
+                            messages=self.messages,
+                            kwargs=self.model_call_details,
+                        )
                 except Exception as e:
                     print_verbose(
                         f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while failure logging with integrations {traceback.format_exc()}"
@@ -755,6 +790,14 @@ def client(original_function):
                     litellm.success_callback.append("lite_debugger")
                 if "lite_debugger" not in litellm.failure_callback:
                     litellm.failure_callback.append("lite_debugger")
+            if len(litellm.callbacks) > 0: 
+                for callback in litellm.callbacks: 
+                    if callback not in litellm.input_callback:
+                        litellm.input_callback.append(callback)
+                    if callback not in litellm.success_callback:
+                        litellm.success_callback.append(callback)
+                    if callback not in litellm.failure_callback:
+                        litellm.failure_callback.append(callback)
             if (
                 len(litellm.input_callback) > 0
                 or len(litellm.success_callback) > 0
