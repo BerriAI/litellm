@@ -1,3 +1,6 @@
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # LM-Evaluation Harness with TGI
 
 Evaluate LLMs 20x faster with TGI via litellm proxy's `/completions` endpoint. 
@@ -7,6 +10,13 @@ This tutorial assumes you're using the `big-refactor` branch of [lm-evaluation-h
 **Step 1: Start the local proxy**
 ```shell
 $ litellm --model huggingface/bigcode/starcoder
+```
+
+Using a custom api base
+
+```shell
+$ export HUGGINGFACE_API_KEY=my-api-key #[OPTIONAL]
+$ litellm --model huggingface/tinyllama --api_base https://k58ory32yinf1ly0.us-east-1.aws.endpoints.huggingface.cloud
 ```
 
 OpenAI Compatible Endpoint at http://0.0.0.0:8000
