@@ -1481,6 +1481,7 @@ def embedding(
     api_type: Optional[str] = None,
     caching: bool=False,
     custom_llm_provider=None,
+    **kwargs,
 ):
     """
     Embedding function that calls an API to generate embeddings for the given input.
@@ -1631,6 +1632,26 @@ def embedding(
                 api_base=api_base,
                 logging_obj=logging,
                 model_response= EmbeddingResponse()
+            )
+        elif custom_llm_provider == "bedrock":
+            # boto3 reads keys from .env, but pass keys if provided to embedding function
+            aws_access_key_id = kwargs.pop("aws_access_key_id", None)
+            aws_secret_access_key = kwargs.pop("aws_secret_access_key", None)
+            aws_region_name = kwargs.pop("aws_region_name", None)
+            optional_params = {}
+            if aws_access_key_id:
+                optional_params["aws_access_key_id"] = aws_access_key_id
+            if aws_secret_access_key:
+                optional_params["aws_secret_access_key"] = aws_secret_access_key
+            if aws_region_name:
+                optional_params["aws_region_name"] = aws_region_name
+            response = bedrock.embedding(
+                model=model,
+                input=input,
+                encoding=encoding,
+                optional_params=optional_params,
+                logging_obj=logging,
+                model_response= EmbeddingResponse(),
             )
         else:
             args = locals()

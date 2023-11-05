@@ -190,7 +190,7 @@ def init_bedrock_client(
     elif standard_aws_region_name:
         region_name = standard_aws_region_name
     else:
-        raise BedrockError(message="AWS region not set: set AWS_REGION_NAME or AWS_REGION env variable or in .env file")
+        raise BedrockError(message="AWS region not set: set AWS_REGION_NAME or AWS_REGION env variable or in .env file", status_code=401)
 
     # check for custom AWS_BEDROCK_RUNTIME_ENDPOINT and use it if not passed to init_bedrock_client
     env_aws_bedrock_runtime_endpoint = get_secret("AWS_BEDROCK_RUNTIME_ENDPOINT")
@@ -417,6 +417,69 @@ def completion(
     return model_response
 
 
-def embedding():
-    # logic for parsing in - calling - parsing out model embedding calls
-    pass
+def _embedding_func_single(
+        model: str,
+        input: str,
+        optional_params=None,
+        encoding=None,
+):
+    # pop aws_secret_access_key, aws_access_key_id, aws_region_name from kwargs, since completion calls fail with them
+    aws_secret_access_key = optional_params.pop("aws_secret_access_key", None)
+    aws_access_key_id = optional_params.pop("aws_access_key_id", None)
+    aws_region_name = optional_params.pop("aws_region_name", None)
+
+    # use passed in BedrockRuntime.Client if provided, otherwise create a new one
+    client = optional_params.pop(
+        "aws_bedrock_client",
+        # only pass variables that are not None
+        init_bedrock_client(
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            aws_region_name=aws_region_name,
+        ),
+    )
+
+    input = input.replace(os.linesep, " ")
+    body = json.dumps({"inputText": input})
+    try:
+        response = client.invoke_model(
+            body=body,
+            modelId=model,
+            accept="application/json",
+            contentType="application/json",
+        )
+        response_body = json.loads(response.get("body").read())
+        return response_body.get("embedding")
+    except Exception as e:
+        raise BedrockError(message=f"Embedding Error with model {model}: {e}", status_code=500)
+
+def embedding(
+        model: str,
+        input: list,
+        optional_params=None,
+        logging_obj=None,
+        model_response=None,
+        encoding=None,
+):
+    embeddings = [_embedding_func_single(model, i, optional_params) for i in input]
+    output_data = []
+    for idx, embedding in enumerate(embeddings):
+        output_data.append(
+            {
+                "object": "embedding",
+                "index": idx,
+                "embedding": embedding,
+            }
+        )
+    model_response["object"] = "list"
+    model_response["data"] = output_data
+    model_response["model"] = model
+    input_tokens = 0
+    for text in input:
+        input_tokens += len(encoding.encode(text))
+
+    model_response["usage"] = {
+        "prompt_tokens": input_tokens,
+        "total_tokens": input_tokens,
+    }
+    return model_response
