@@ -456,11 +456,21 @@ def _embedding_func_single(
 def embedding(
         model: str,
         input: list,
+        api_key: Optional[str] = None,
         optional_params=None,
         logging_obj=None,
         model_response=None,
         encoding=None,
 ):
+    ## LOGGING
+    logging_obj.pre_call(
+        input=input,
+        api_key=api_key,
+        additional_args={"complete_input_dict": {"model": model,
+                                                 "texts": input}},
+    )
+
+    ## Embedding Call
     embeddings = [_embedding_func_single(model, i, optional_params) for i in input]
     output_data = []
     for idx, embedding in enumerate(embeddings):
@@ -471,6 +481,17 @@ def embedding(
                 "embedding": embedding,
             }
         )
+
+    ## LOGGING
+    logging_obj.post_call(
+            input=input,
+            api_key=api_key,
+            additional_args={"complete_input_dict": {"model": model,
+                                                     "texts": input}},
+            original_response=embeddings,
+    )
+
+    ## Generate OpenAI Compatible Response
     model_response["object"] = "list"
     model_response["data"] = output_data
     model_response["model"] = model

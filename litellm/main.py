@@ -1635,21 +1635,11 @@ def embedding(
             )
         elif custom_llm_provider == "bedrock":
             # boto3 reads keys from .env, but pass keys if provided to embedding function
-            aws_access_key_id = kwargs.pop("aws_access_key_id", None)
-            aws_secret_access_key = kwargs.pop("aws_secret_access_key", None)
-            aws_region_name = kwargs.pop("aws_region_name", None)
-            optional_params = {}
-            if aws_access_key_id:
-                optional_params["aws_access_key_id"] = aws_access_key_id
-            if aws_secret_access_key:
-                optional_params["aws_secret_access_key"] = aws_secret_access_key
-            if aws_region_name:
-                optional_params["aws_region_name"] = aws_region_name
             response = bedrock.embedding(
                 model=model,
                 input=input,
                 encoding=encoding,
-                optional_params=optional_params,
+                optional_params=kwargs,
                 logging_obj=logging,
                 model_response= EmbeddingResponse(),
             )
