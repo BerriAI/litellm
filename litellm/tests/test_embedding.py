@@ -69,6 +69,7 @@ def test_openai_azure_embedding():
 
 def test_cohere_embedding():
     try:
+        # litellm.set_verbose=True
         response = embedding(
             model="embed-english-v2.0", input=["good morning from litellm", "this is another item"]
         )
@@ -78,17 +79,40 @@ def test_cohere_embedding():
 
 # test_cohere_embedding()
 
+def test_cohere_embedding3():
+    try:
+        litellm.set_verbose=True
+        response = embedding(
+            model="embed-english-v3.0", 
+            input=["good morning from litellm", "this is another item"], 
+        )
+        print(f"response:", response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+# test_cohere_embedding3()
+
+def test_bedrock_embedding():
+    try:
+        response = embedding(
+            model="amazon.titan-embed-text-v1", input=["good morning from litellm, attempting to embed data"]
+        )
+        print(f"response:", response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+# test_bedrock_embedding()
+
 # comment out hf tests - since hf endpoints are unstable
-# def test_hf_embedding():
-#     try:
-#         # huggingface/microsoft/codebert-base
-#         # huggingface/facebook/bart-large
-#         response = embedding(
-#             model="huggingface/BAAI/bge-large-zh", input=["good morning from litellm", "this is another item"]
-#         )
-#         print(f"response:", response)
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
+def test_hf_embedding():
+    try:
+        # huggingface/microsoft/codebert-base
+        # huggingface/facebook/bart-large
+        response = embedding(
+            model="huggingface/sentence-transformers/all-MiniLM-L6-v2", input=["good morning from litellm", "this is another item"]
+        )
+        print(f"response:", response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 # test_hf_embedding()
 
 # test async embeddings

@@ -1,26 +1,28 @@
+# Global settings for the litellm module
+litellm_settings:
+  drop_params: True
+  # failure_callbacks: ["sentry"]
+
+# Model-specific settings
 model_list: # refer to https://docs.litellm.ai/docs/routing
   - model_name: gpt-3.5-turbo
-    litellm_params:
+    litellm_params:  # parameters for litellm.completion() 
       model: azure/chatgpt-v-2 # azure/<your-deployment-name>
       api_key: your_azure_api_key
       api_version: your_azure_api_version
       api_base: your_azure_api_base
-    tpm: 240000 # REPLACE with your azure deployment tpm
-    rpm: 1800 # REPLACE with your azure deployment rpm
-  - model_name: gpt-3.5-turbo
+    tpm: 240000 # [OPTIONAL] To load balance between multiple deployments
+    rpm: 1800 # [OPTIONAL] To load balance between multiple deployments
+  - model_name: mistral
     litellm_params:
-      model: azure/chatgpt-functioncalling
-      api_key: your_azure_api_key
-      api_version: your_azure_api_version
-      api_base: your_azure_api_base
-    tpm: 240000
-    rpm: 1800
+      model: ollama/mistral
+      api_base: my_ollama_api_base
   - model_name: gpt-3.5-turbo
     litellm_params:
       model: gpt-3.5-turbo
       api_key: your_openai_api_key
-    tpm: 1000000 # REPLACE with your openai tpm
-    rpm: 9000 # REPLACE with your openai rpm
+    tpm: 1000000 # [OPTIONAL] REPLACE with your openai tpm
+    rpm: 9000 # [OPTIONAL] REPLACE with your openai rpm
 
 environment_variables:
   REDIS_HOST: your_redis_host

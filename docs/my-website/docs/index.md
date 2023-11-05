@@ -395,9 +395,6 @@ response = completion(
 )
 ```
 
-Need a dedicated key? Email us @ krrish@berri.ai
-
-
 ## More details
 * [exception mapping](./exception_mapping.md)
 * [retries + model fallbacks for completion()](./completion/reliable_completions.md)

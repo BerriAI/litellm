@@ -78,6 +78,14 @@ litellm.api_base = "https://hosted-llm-api.co"
 response = litellm.completion(messages=messages, model="gpt-3.5-turbo")
 ```
 
+### litellm.api_version
+
+```python
+import litellm
+litellm.api_version = "2023-05-15"
+response = litellm.completion(messages=messages, model="gpt-3.5-turbo")
+```
+
 ### litellm.organization
 ```python
 import litellm
@@ -124,7 +132,7 @@ response = completion("command-nightly", messages, api_version="2023-02-15")
 
 Check if a user submitted a valid key for the model they're trying to call. 
 
-```
+```python
 key = "bad-key"
 response = check_valid_key(model="gpt-3.5-turbo", api_key=key)
 assert(response == False)
@@ -134,7 +142,7 @@ assert(response == False)
 
 This helper reads the .env and returns a list of supported llms for user
 
-```
+```python
 old_environ = os.environ
 os.environ = {'OPENAI_API_KEY': 'temp'} # mock set only openai key in environ
 
