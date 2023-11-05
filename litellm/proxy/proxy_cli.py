@@ -5,6 +5,7 @@ import random, appdirs
 from datetime import datetime
 from dotenv import load_dotenv
 import operator
+sys.path.append(os.getcwd())
 
 config_filename = "litellm.secrets"
 # Using appdirs to determine user-specific config path
