@@ -35,6 +35,7 @@ def test_stream_chunk_builder():
     chunks = []
 
     for chunk in response:
+        print(chunk)
         chunks.append(chunk)
 
     try:
@@ -51,8 +52,9 @@ def test_stream_chunk_builder():
         message = choices["message"]
         role = message["role"]
         content = message["content"]
-        finnish_reason = choices["finish_reason"]
-    except:
-        raise Exception("stream_chunk_builder failed to rebuild response")
-# test_stream_chunk_builder()
+        finish_reason = choices["finish_reason"]
+        print(role, content, finish_reason)
+    except Exception as e:
+        raise Exception("stream_chunk_builder failed to rebuild response", e)
+test_stream_chunk_builder()
 

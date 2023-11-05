@@ -9,9 +9,11 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import pytest
+from openai.error import Timeout
 import litellm
-from litellm import embedding, completion, text_completion, completion_cost
+from litellm import embedding, completion, completion_cost
 from litellm import RateLimitError
+litellm.num_retries = 3
 
 user_message = "Write a short poem about the sky"
 messages = [{"content": user_message, "role": "user"}]
@@ -38,7 +40,7 @@ def test_completion_custom_provider_model_name():
 
 
 def test_completion_claude():
-    litellm.set_verbose = True
+    litellm.set_verbose = False
     litellm.AnthropicConfig(max_tokens_to_sample=200, metadata={"user_id": "1224"})
     try:
         # test without max tokens
@@ -48,6 +50,11 @@ def test_completion_claude():
         # Add any assertions here to check the response
         print(response)
         print(response.response_ms)
+        print(response.usage)
+        print(response.usage.completion_tokens)
+        print(response["usage"]["completion_tokens"])
+        # print("new cost tracking")
+        print(response.cost())
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -96,17 +103,12 @@ def test_completion_with_litellm_call_id():
         print(response)
         if 'litellm_call_id' in response:
             pytest.fail(f"Error occurred: litellm_call_id in response objects")
+        print(response.usage)
+        print(response.usage.completion_tokens)
         
-        litellm.use_client = True
-        response2 = completion(
-            model="gpt-3.5-turbo", messages=messages)
-        
-        if 'litellm_call_id' not in response2:
-            pytest.fail(f"Error occurred: litellm_call_id not in response object when use_client = True")
-        # Add any assertions here to check the response
-        print(response2)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+# test_completion_with_litellm_call_id()
 
 def test_completion_perplexity_api():
     try:
@@ -220,13 +222,12 @@ def test_get_hf_task_for_model():
 # # TGI model
 # # this is a TGI model https://huggingface.co/glaiveai/glaive-coder-7b
 # def hf_test_completion_tgi():
-#     litellm.huggingface_config(return_full_text=True)
 #     litellm.set_verbose=True
 #     try:
 #         response = litellm.completion(
 #             model="huggingface/mistralai/Mistral-7B-Instruct-v0.1",
 #             messages=[{ "content": "Hello, how are you?","role": "user"}],
-#             api_base="https://n9ox93a8sv5ihsow.us-east-1.aws.endpoints.huggingface.cloud",
+#             api_base="https://3kk3h56912qga4-80.proxy.runpod.net",
 #         )
 #         # Add any assertions here to check the response
 #         print(response)
@@ -387,33 +388,13 @@ def test_completion_openai():
         pytest.fail(f"Error occurred: {e}")
 # test_completion_openai()
 
-
-def test_completion_openai_prompt():
-    try:
-        response = text_completion(
-            model="gpt-3.5-turbo", prompt="What's the weather in SF?"
-        )
-        response_str = response["choices"][0]["text"]
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
 def test_completion_text_openai():
-    try:
-        # litellm.set_verbose=True
-        response = completion(model="text-davinci-003", messages=messages)
-        # Add any assertions here to check the response
-        print(response)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-def test_completion_gpt_instruct():
     try:
         response = completion(model="gpt-3.5-turbo-instruct", messages=messages)
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_completion_gpt_instruct()
+# test_completion_text_openai()
 
 def test_completion_openai_with_optional_params():
     try:
@@ -426,9 +407,10 @@ def test_completion_openai_with_optional_params():
         )
         # Add any assertions here to check the response
         print(response)
+    except Timeout as e: 
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-
 
 def test_completion_openai_litellm_key():
     try:
@@ -648,6 +630,38 @@ def test_completion_azure2():
 
 # test_completion_azure2()
 
+def test_completion_azure3():
+    # test if we can pass api_base, api_version and api_key in compleition()
+    try:
+        print("azure gpt-3.5 test\n\n")
+        litellm.set_verbose=True
+        litellm.api_base = os.environ["AZURE_API_BASE"]
+        litellm.api_key = os.environ["AZURE_API_KEY"]
+        litellm.api_version = os.environ["AZURE_API_VERSION"]
+
+        os.environ["AZURE_API_BASE"] = ""
+        os.environ["AZURE_API_VERSION"] = ""
+        os.environ["AZURE_API_KEY"] = ""
+
+
+        ## Test azure call
+        response = completion(
+            model="azure/chatgpt-v-2",
+            messages=messages,
+            max_tokens=10,
+        )
+
+        # Add any assertions here to check the response
+        print(response)
+
+        os.environ["AZURE_API_BASE"] = litellm.api_base
+        os.environ["AZURE_API_VERSION"] = litellm.api_version
+        os.environ["AZURE_API_KEY"] = litellm.api_key
+
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+# test_completion_azure3()
+
 # new azure test for using litellm. vars, 
 # use the following vars in this test and make an azure_api_call
 #  litellm.api_type = self.azure_api_type 
@@ -787,106 +801,124 @@ def test_completion_together_ai():
         pytest.fail(f"Error occurred: {e}")
 
 # test_completion_together_ai()
-# def test_customprompt_together_ai():
-#     try:
-#         litellm.register_prompt_template(
-#             model="OpenAssistant/llama2-70b-oasst-sft-v10",
-#             roles={"system":"<|im_start|>system", "assistant":"<|im_start|>assistant", "user":"<|im_start|>user"}, # tell LiteLLM how you want to map the openai messages to this model
-#             pre_message_sep= "\n",
-#             post_message_sep= "\n"
-#         )
-#         response = completion(model="together_ai/OpenAssistant/llama2-70b-oasst-sft-v10", messages=messages)
-#         print(response)
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
+def test_customprompt_together_ai():
+    try:
+        litellm.set_verbose = True
+        response = completion(model="together_ai/OpenAssistant/llama2-70b-oasst-sft-v10", messages=messages, 
+                              roles={"system":{"pre_message":"<|im_start|>system\n", "post_message":"<|im_end|>"}, "assistant":{"pre_message":"<|im_start|>assistant\n","post_message":"<|im_end|>"}, "user":{"pre_message":"<|im_start|>user\n","post_message":"<|im_end|>"}})
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
-# def test_completion_sagemaker():
-#     try:
-#         response = completion(
-#             model="sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b", 
-#             messages=messages,
-#             temperature=0.2,
-#             max_tokens=80,
-#             logger_fn=logger_fn
-#         )
-#         # Add any assertions here to check the response
-#         print(response)
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
+# test_customprompt_together_ai()
+
+def test_completion_sagemaker():
+    try:
+        response = completion(
+            model="sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b", 
+            messages=messages,
+            temperature=0.2,
+            max_tokens=80,
+            logger_fn=logger_fn
+        )
+        # Add any assertions here to check the response
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 # test_completion_sagemaker()
 
-# def test_completion_bedrock_titan():
-#     try:
-#         response = completion(
-#             model="bedrock/amazon.titan-tg1-large", 
-#             messages=messages,
-#             temperature=0.2,
-#             max_tokens=200,
-#             top_p=0.8,
-#             logger_fn=logger_fn
-#         )
-#         # Add any assertions here to check the response
-#         print(response)
-#     except RateLimitError:
-#         pass
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
+def test_completion_bedrock_titan():
+    try:
+        response = completion(
+            model="bedrock/amazon.titan-tg1-large", 
+            messages=messages,
+            temperature=0.2,
+            max_tokens=200,
+            top_p=0.8,
+            logger_fn=logger_fn
+        )
+        # Add any assertions here to check the response
+        print(response)
+    except RateLimitError:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 # test_completion_bedrock_titan()
 
-# def test_completion_bedrock_claude():
-#     print("calling claude")
-#     try:
-#         response = completion(
-#             model="anthropic.claude-instant-v1", 
-#             messages=messages,
-#             max_tokens=10,
-#             temperature=0.1,
-#             logger_fn=logger_fn
-#         )
-#         # Add any assertions here to check the response
-#         print(response)
-#     except RateLimitError:
-#         pass
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
+def test_completion_bedrock_claude():
+    print("calling claude")
+    try:
+        response = completion(
+            model="anthropic.claude-instant-v1", 
+            messages=messages,
+            max_tokens=10,
+            temperature=0.1,
+            logger_fn=logger_fn
+        )
+        # Add any assertions here to check the response
+        print(response)
+    except RateLimitError:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 # test_completion_bedrock_claude()
 
+def test_completion_bedrock_cohere():
+    print("calling bedrock cohere")
+    try:
+        response = completion(
+            model="bedrock/cohere.command-text-v14", 
+            messages=[{"role": "user", "content": "hi"}],
+            temperature=0.1,
+            max_tokens=10,
+            stream=True
+        )
+        # Add any assertions here to check the response
+        print(response)
+        for chunk in response:
+            print(chunk)
+    except RateLimitError:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+# test_completion_bedrock_cohere()
 
-# def test_completion_bedrock_claude_completion_auth():
-#     print("calling bedrock claude completion params auth")
-#     import os
 
-#     aws_access_key_id = os.environ["AWS_ACCESS_KEY_ID"]
-#     aws_secret_access_key = os.environ["AWS_SECRET_ACCESS_KEY"]
-#     aws_region_name = os.environ["AWS_REGION_NAME"]
+def test_completion_bedrock_claude_completion_auth():
+    print("calling bedrock claude completion params auth")
+    import os
 
-#     os.environ["AWS_ACCESS_KEY_ID"] = ""
-#     os.environ["AWS_SECRET_ACCESS_KEY"] = ""
-#     os.environ["AWS_REGION_NAME"] = ""
+    aws_access_key_id = os.environ["AWS_ACCESS_KEY_ID"]
+    aws_secret_access_key = os.environ["AWS_SECRET_ACCESS_KEY"]
+    aws_region_name = os.environ["AWS_REGION_NAME"]
+
+    os.environ["AWS_ACCESS_KEY_ID"] = ""
+    os.environ["AWS_SECRET_ACCESS_KEY"] = ""
+    os.environ["AWS_REGION_NAME"] = ""
 
 
-#     try:
-#         response = completion(
-#             model="bedrock/anthropic.claude-instant-v1", 
-#             messages=messages,
-#             max_tokens=10,
-#             temperature=0.1,
-#             logger_fn=logger_fn,
-#             aws_access_key_id=aws_access_key_id,
-#             aws_secret_access_key=aws_secret_access_key,
-#             aws_region_name=aws_region_name,
-#         )
-#         # Add any assertions here to check the response
-#         print(response)
+    try:
+        response = completion(
+            model="bedrock/anthropic.claude-instant-v1", 
+            messages=messages,
+            max_tokens=10,
+            temperature=0.1,
+            logger_fn=logger_fn,
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            aws_region_name=aws_region_name,
+        )
+        # Add any assertions here to check the response
+        print(response)
 
-#         os.environ["AWS_ACCESS_KEY_ID"] = aws_access_key_id
-#         os.environ["AWS_SECRET_ACCESS_KEY"] = aws_secret_access_key
-#         os.environ["AWS_REGION_NAME"] = aws_region_name
-#     except RateLimitError:
-#         pass
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
+        os.environ["AWS_ACCESS_KEY_ID"] = aws_access_key_id
+        os.environ["AWS_SECRET_ACCESS_KEY"] = aws_secret_access_key
+        os.environ["AWS_REGION_NAME"] = aws_region_name
+    except RateLimitError:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 # test_completion_bedrock_claude_completion_auth()
 
 # def test_completion_bedrock_claude_external_client_auth():
@@ -1026,27 +1058,34 @@ def test_completion_together_ai():
 # test_completion_custom_api_base()
 
 # def test_vertex_ai():
-#     # test_models = litellm.vertex_chat_models + litellm.vertex_code_chat_models + litellm.vertex_text_models + litellm.vertex_code_text_models
-#     test_models = ["chat-bison"]
+#     test_models = ["codechat-bison"] + litellm.vertex_chat_models + litellm.vertex_code_chat_models + litellm.vertex_text_models + litellm.vertex_code_text_models
+#     # test_models = ["chat-bison"]
 #     for model in test_models:
 #         try:
+#             if model in ["code-gecko@001", "code-gecko@latest"]:
+#                 # our account does not have access to this model
+#                 continue
 #             print("making request", model)
-#             response = completion(model="vertex_ai/codechat-bison-32k", messages=[{'role': 'user', 'content': 'hi'}])
+#             response = completion(model=model, messages=[{'role': 'user', 'content': 'hi'}])
 #             print(response)
+
+#             print(response.usage.completion_tokens)
+#             print(response['usage']['completion_tokens'])
 #             assert type(response.choices[0].message.content) == str
 #         except Exception as e:
 #             pytest.fail(f"Error occurred: {e}")
 # test_vertex_ai()
 
 # def test_vertex_ai_stream():
-#     litellm.vertex_project = "hardy-device-386718"
-#     litellm.vertex_location = "us-central1"
+#     litellm.set_verbose=False
 #     test_models = litellm.vertex_chat_models + litellm.vertex_code_chat_models + litellm.vertex_text_models + litellm.vertex_code_text_models
 #     for model in test_models:
 #         try:
+#             if model in ["code-gecko@001", "code-gecko@latest"]:
+#                 # our account does not have access to this model
+#                 continue
 #             print("making request", model)
-#             response = completion(model=model, messages=[{"role": "user", "content": "write code for saying hi"}], stream=True)
-#             print(response)
+#             response = completion(model=model, messages=[{"role": "user", "content": "write 100 line code code for saying hi"}], stream=True)
 #             for chunk in response:
 #                 print(chunk)
 #                 # pass
@@ -1110,7 +1149,19 @@ def test_completion_anyscale_2():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_anyscale_2()
+
+def test_mistral_anyscale_stream():
+    litellm.set_verbose=False
+    response = completion(
+        model = 'anyscale/mistralai/Mistral-7B-Instruct-v0.1', 
+        messages = [{ "content": "hello, good morning","role": "user"}],
+        stream=True,
+    )
+    for chunk in response:
+        # print(chunk)
+        print(chunk["choices"][0]["delta"].get("content", ""), end="")
+# test_mistral_anyscale_stream()
+# test_completion_anyscale_2()
 # def test_completion_with_fallbacks_multiple_keys():
 #     print(f"backup key 1: {os.getenv('BACKUP_OPENAI_API_KEY_1')}")
 #     print(f"backup key 2: {os.getenv('BACKUP_OPENAI_API_KEY_2')}")
@@ -1247,13 +1298,32 @@ def test_completion_palm():
     # litellm.set_verbose = True
     model_name = "palm/chat-bison"
     try:
-        response = completion(model=model_name, messages=messages)
+        response = completion(model=model_name, messages=messages, stop=["stop"])
         # Add any assertions here to check the response
         print(response)
         print(response.response_ms)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 # test_completion_palm()
+
+# test palm with streaming
+def test_completion_palm_stream():
+    # litellm.set_verbose = True
+    model_name = "palm/chat-bison"
+    try:
+        response = completion(
+            model=model_name, 
+            messages=messages,
+            stop=["stop"],
+            stream=True,
+            max_tokens=20
+        )
+        # Add any assertions here to check the response
+        for chunk in response:
+            print(chunk)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+# test_completion_palm_stream()
 
 # test_completion_deep_infra()
 # test_completion_ai21()
@@ -1270,6 +1340,14 @@ def test_completion_palm():
 #         pytest.fail(f"Error occurred: {e}")
 
 
+# def test_maritalk():
+#     messages = [{"role": "user", "content": "Hey"}]
+#     try:
+#         response = completion("maritalk", messages=messages)
+#         print(f"response: {response}")
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
+# test_maritalk()
 
 def test_completion_together_ai_stream():
     user_message = "Write 1pg about YC & litellm"

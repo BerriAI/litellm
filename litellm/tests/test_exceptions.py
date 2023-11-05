@@ -38,13 +38,32 @@ models = ["command-nightly"]
 # Test 1: Context Window Errors 
 @pytest.mark.parametrize("model", models)
 def test_context_window(model):
+    sample_text = "Say error 50 times" * 100000
+    messages = [{"content": sample_text, "role": "user"}]
+    print(f"model: {model}")
+    try:
+        completion(model=model, messages=messages)
+        pytest.fail(f"An exception occurred")
+    except ContextWindowExceededError:
+        pass
+    except RateLimitError:
+        pass
+    except Exception as e: 
+        print(f"{e}")
+        pytest.fail(f"An error occcurred - {e}")
+        
+@pytest.mark.parametrize("model", models)
+def test_context_window_with_fallbacks(model):
+    ctx_window_fallback_dict = {"command-nightly": "claude-2"}
     sample_text = "how does a court case get to the Supreme Court?" * 1000
     messages = [{"content": sample_text, "role": "user"}]
 
-    with pytest.raises(ContextWindowExceededError):
-        completion(model=model, messages=messages)
+    completion(model=model, messages=messages, context_window_fallback_dict=ctx_window_fallback_dict)
 
+# for model in litellm.models_by_provider["bedrock"]:
+#     test_context_window(model=model)
 # test_context_window(model="command-nightly")
+# test_context_window_with_fallbacks(model="command-nightly")
 # Test 2: InvalidAuth Errors
 @pytest.mark.parametrize("model", models)
 def invalid_auth(model):  # set the model key to an invalid key, depending on the model
@@ -54,6 +73,13 @@ def invalid_auth(model):  # set the model key to an invalid key, depending on th
         if model == "gpt-3.5-turbo":
             temporary_key = os.environ["OPENAI_API_KEY"]
             os.environ["OPENAI_API_KEY"] = "bad-key"
+        elif model == "bedrock/anthropic.claude-v2":
+            temporary_aws_access_key = os.environ["AWS_ACCESS_KEY_ID"]
+            os.environ["AWS_ACCESS_KEY_ID"] = "bad-key"
+            temporary_aws_region_name = os.environ["AWS_REGION_NAME"]
+            os.environ["AWS_REGION_NAME"] = "bad-key"
+            temporary_secret_key = os.environ["AWS_SECRET_ACCESS_KEY"]
+            os.environ["AWS_SECRET_ACCESS_KEY"] = "bad-key"
         elif model == "chatgpt-test":
             temporary_key = os.environ["AZURE_API_KEY"]
             os.environ["AZURE_API_KEY"] = "bad-key"
@@ -90,10 +116,10 @@ def invalid_auth(model):  # set the model key to an invalid key, depending on th
         )
         print(f"response: {response}")
     except AuthenticationError as e:
-        print(f"AuthenticationError Caught Exception - {e.llm_provider}")
+        print(f"AuthenticationError Caught Exception - {str(e)}")
     except (
         OpenAIError
-    ):  # is at least an openai error -> in case of random model errors - e.g. overloaded server
+    ) as e:  # is at least an openai error -> in case of random model errors - e.g. overloaded server
         print(f"OpenAIError Caught Exception - {e}")
     except Exception as e:
         print(type(e))
@@ -124,7 +150,14 @@ def invalid_auth(model):  # set the model key to an invalid key, depending on th
             os.environ["ALEPH_ALPHA_API_KEY"] = temporary_key
         elif model in litellm.nlp_cloud_models:
             os.environ["NLP_CLOUD_API_KEY"] = temporary_key
+        elif "bedrock" in model: 
+            os.environ["AWS_ACCESS_KEY_ID"] = temporary_aws_access_key
+            os.environ["AWS_REGION_NAME"] = temporary_aws_region_name
+            os.environ["AWS_SECRET_ACCESS_KEY"] = temporary_secret_key
     return
+
+for model in litellm.models_by_provider["bedrock"]:
+    invalid_auth(model=model)
 
 # Test 3: Invalid Request Error 
 @pytest.mark.parametrize("model", models)

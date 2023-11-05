@@ -147,7 +147,6 @@ def get_ollama_response_stream(
                                 yield completion_obj
                 except Exception as e:
                     traceback.print_exc()
-                    print(f"Error decoding JSON: {e}")
     session.close()
 
 if async_generator_imported:
@@ -198,5 +197,6 @@ if async_generator_imported:
                                     completion_obj["content"] = j["response"]
                                     await yield_({"choices": [{"delta": completion_obj}]})
                     except Exception as e:
-                        print(f"Error decoding JSON: {e}")
+                        import logging
+                        logging.debug(f"Error decoding JSON: {e}")
         session.close()

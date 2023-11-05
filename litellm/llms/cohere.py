@@ -137,6 +137,10 @@ def completion(
     response = requests.post(
         completion_url, headers=headers, data=json.dumps(data), stream=optional_params["stream"] if "stream" in optional_params else False
     )
+    ## error handling for cohere calls
+    if response.status_code!=200:
+        raise CohereError(message=response.text, status_code=response.status_code)
+
     if "stream" in optional_params and optional_params["stream"] == True:
         return response.iter_lines()
     else:
@@ -179,11 +183,9 @@ def completion(
 
         model_response["created"] = time.time()
         model_response["model"] = model
-        model_response["usage"] = {
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-            "total_tokens": prompt_tokens + completion_tokens,
-        }
+        model_response.usage.completion_tokens = completion_tokens
+        model_response.usage.prompt_tokens = prompt_tokens
+        model_response.usage.total_tokens = prompt_tokens + completion_tokens
         return model_response
 
 def embedding(
@@ -193,6 +195,7 @@ def embedding(
     logging_obj=None,
     model_response=None,
     encoding=None,
+    optional_params=None,
 ):
     headers = validate_environment(api_key)
     embed_url = "https://api.cohere.ai/v1/embed"
@@ -200,7 +203,12 @@ def embedding(
     data = {
         "model": model,
         "texts": input,
+        **optional_params
     }
+
+    if "3" in model and "input_type" not in data:
+        # cohere v3 embedding models require input_type, if no input_type is provided, default to "search_document"
+        data["input_type"] = "search_document"
 
     ## LOGGING
     logging_obj.pre_call(
@@ -212,7 +220,6 @@ def embedding(
     response = requests.post(
         embed_url, headers=headers, data=json.dumps(data)
     )
-
     ## LOGGING
     logging_obj.post_call(
             input=input,
@@ -220,7 +227,6 @@ def embedding(
             additional_args={"complete_input_dict": data},
             original_response=response,
         )
-    # print(response.json())
     """
         response 
         {
@@ -232,6 +238,8 @@ def embedding(
             'usage'
         }
     """
+    if response.status_code!=200:
+        raise CohereError(message=response.text, status_code=response.status_code)
     embeddings = response.json()['embeddings']
     output_data = []
     for idx, embedding in enumerate(embeddings):
