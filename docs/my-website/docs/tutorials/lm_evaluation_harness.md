@@ -23,7 +23,7 @@ OpenAI Compatible Endpoint at http://0.0.0.0:8000
 
 **Step 2: Set OpenAI API Base**
 ```shell
-$ export OPENAI_API_BASE="http://0.0.0.0:8000"
+$ export OPENAI_API_BASE=http://0.0.0.0:8000
 ```
 
 **Step 3: Run LM-Eval-Harness**
