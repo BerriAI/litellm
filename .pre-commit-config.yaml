@@ -1,0 +1,8 @@
+repos:
+-   repo: https://github.com/pycqa/flake8
+    rev: 3.8.4  # The version of flake8 to use
+    hooks:
+    -  id: flake8
+       exclude: ^litellm/tests/|^litellm/proxy/|^litellm/integrations/
+       additional_dependencies: [flake8-print]
+       files: litellm/.*\.py

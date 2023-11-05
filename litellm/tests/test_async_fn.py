@@ -9,17 +9,29 @@ import asyncio
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-from litellm import acompletion, acreate
+import litellm
+from litellm import completion, acompletion, acreate
+
+def test_sync_response():
+    litellm.set_verbose = True
+    user_message = "Hello, how are you?"
+    messages = [{"content": user_message, "role": "user"}]
+    try:
+        response = completion(model="gpt-3.5-turbo", messages=messages, api_key=os.environ["OPENAI_API_KEY"])
+    except Exception as e:
+        pytest.fail(f"An exception occurred: {e}")
+
 
 def test_async_response():
     import asyncio
     async def test_get_response():
+        litellm.set_verbose = True
         user_message = "Hello, how are you?"
         messages = [{"content": user_message, "role": "user"}]
         try:
             response = await acompletion(model="gpt-3.5-turbo", messages=messages)
         except Exception as e:
-            pass
+            pytest.fail(f"An exception occurred: {e}")
 
     response = asyncio.run(test_get_response())
 # print(response)
@@ -51,7 +63,7 @@ def test_get_response_streaming():
             assert len(output) > 0, "Length of output needs to be greater than 0."
 
         except Exception as e:
-            pass
+            pytest.fail(f"An exception occurred: {e}")
         return response
     asyncio.run(test_async_call())
 

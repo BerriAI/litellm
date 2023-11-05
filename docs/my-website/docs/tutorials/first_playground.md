@@ -184,6 +184,4 @@ This is what you should see:
 You've created your first LLM Playground - with the ability to call 50+ LLM APIs. 
 
 Next Steps: 
-* [Check out the full list of LLM Providers you can now add](../completion/supported)
-* [Deploy your server using Render](https://render.com/docs/deploy-flask)
-* [Deploy your playground using Streamlit](https://docs.streamlit.io/streamlit-community-cloud/deploy-your-app)
+* [Check out the full list of LLM Providers you can now add](https://docs.litellm.ai/docs/providers)

@@ -17,18 +17,25 @@ class PromptLayerLogger:
     def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
         # Method definition
         try:
-            if 'litellm_logging_obj' in kwargs:
-                kwargs.pop('litellm_logging_obj')
+            new_kwargs = {}
+            new_kwargs['model'] = kwargs['model']
+            new_kwargs['messages'] = kwargs['messages']
+
+            # add kwargs["optional_params"] to new_kwargs
+            for optional_param in kwargs["optional_params"]:
+                new_kwargs[optional_param] = kwargs["optional_params"][optional_param]
+
 
             print_verbose(
-                f"Prompt Layer Logging - Enters logging function for model kwargs: {kwargs}\n, response: {response_obj}"
+                f"Prompt Layer Logging - Enters logging function for model kwargs: {new_kwargs}\n, response: {response_obj}"
             )
+
 
             request_response = requests.post(
                 "https://api.promptlayer.com/rest/track-request",
                 json={
                     "function_name": "openai.ChatCompletion.create",
-                    "kwargs": kwargs,
+                    "kwargs": new_kwargs,
                     "tags": ["hello", "world"],
                     "request_response": dict(response_obj),
                     "request_start_time": int(start_time.timestamp()),

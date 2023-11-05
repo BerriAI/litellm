@@ -46,12 +46,13 @@ def test_promptlayer_logging_with_metadata():
         old_stdout = sys.stdout
         sys.stdout = new_stdout = io.StringIO()
 
-
-        response = completion(model="j2-light",
+        response = completion(model="gpt-3.5-turbo",
                               messages=[{
                                   "role": "user",
                                   "content": "Hi 👋 - i'm ai21"
                               }], 
+                              temperature=0.2,
+                              max_tokens=20,
                               metadata={"model": "ai21"})
 
         # Restore stdout
@@ -65,7 +66,7 @@ def test_promptlayer_logging_with_metadata():
     except Exception as e:
         print(e)
 
-# test_promptlayer_logging_with_metadata()
+test_promptlayer_logging_with_metadata()
 
 
 

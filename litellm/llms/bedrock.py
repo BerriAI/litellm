@@ -1,4 +1,5 @@
 import json, copy, types
+import os
 from enum import Enum
 import time
 from typing import Callable, Optional
@@ -174,7 +175,31 @@ def init_bedrock_client(
         aws_access_key_id = None,
         aws_secret_access_key = None,
         aws_region_name=None,
+        aws_bedrock_runtime_endpoint=None,
     ):
+
+    # check for custom AWS_REGION_NAME and use it if not passed to init_bedrock_client
+    litellm_aws_region_name = get_secret("AWS_REGION_NAME")
+    standard_aws_region_name = get_secret("AWS_REGION")
+    if region_name:
+        pass
+    elif aws_region_name:
+        region_name = aws_region_name
+    elif litellm_aws_region_name:
+        region_name = litellm_aws_region_name
+    elif standard_aws_region_name:
+        region_name = standard_aws_region_name
+    else:
+        raise BedrockError(message="AWS region not set: set AWS_REGION_NAME or AWS_REGION env variable or in .env file", status_code=401)
+
+    # check for custom AWS_BEDROCK_RUNTIME_ENDPOINT and use it if not passed to init_bedrock_client
+    env_aws_bedrock_runtime_endpoint = get_secret("AWS_BEDROCK_RUNTIME_ENDPOINT")
+    if aws_bedrock_runtime_endpoint:
+        endpoint_url = aws_bedrock_runtime_endpoint
+    elif env_aws_bedrock_runtime_endpoint:
+        endpoint_url = env_aws_bedrock_runtime_endpoint
+    else:
+        endpoint_url = f'https://bedrock-runtime.{region_name}.amazonaws.com'
 
     import boto3
     if aws_access_key_id != None:
@@ -185,23 +210,17 @@ def init_bedrock_client(
             service_name="bedrock-runtime",
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
-            region_name=aws_region_name,
-            endpoint_url=f'https://bedrock-runtime.{aws_region_name}.amazonaws.com'
+            region_name=region_name,
+            endpoint_url=endpoint_url,
         )
     else:
         # aws_access_key_id is None, assume user is trying to auth using env variables 
-        # boto3 automaticaly reads env variables
+        # boto3 automatically reads env variables
 
-        # we need to read region name from env
-        # I assume majority of users use .env for auth 
-        region_name = (
-            get_secret("AWS_REGION_NAME") or
-            "us-west-2"  # default to us-west-2 if user not specified
-        )
         client = boto3.client(
             service_name="bedrock-runtime",
             region_name=region_name,
-            endpoint_url=f'https://bedrock-runtime.{region_name}.amazonaws.com'
+            endpoint_url=endpoint_url,
         )
 
     return client
@@ -259,6 +278,174 @@ def completion(
         litellm_params=None,
         logger_fn=None,
 ):
+    exception_mapping_worked = False
+    try:
+        # pop aws_secret_access_key, aws_access_key_id, aws_region_name from kwargs, since completion calls fail with them
+        aws_secret_access_key = optional_params.pop("aws_secret_access_key", None)
+        aws_access_key_id = optional_params.pop("aws_access_key_id", None)
+        aws_region_name = optional_params.pop("aws_region_name", None)
+
+        # use passed in BedrockRuntime.Client if provided, otherwise create a new one
+        client = optional_params.pop(
+            "aws_bedrock_client",
+            # only pass variables that are not None
+            init_bedrock_client(
+                aws_access_key_id=aws_access_key_id,
+                aws_secret_access_key=aws_secret_access_key,
+                aws_region_name=aws_region_name,
+            ),
+        )
+
+        model = model
+        provider = model.split(".")[0]
+        prompt = convert_messages_to_prompt(model, messages, provider, custom_prompt_dict)
+        inference_params = copy.deepcopy(optional_params)
+        stream = inference_params.pop("stream", False)
+        if provider == "anthropic":
+            ## LOAD CONFIG
+            config = litellm.AmazonAnthropicConfig.get_config() 
+            for k, v in config.items(): 
+                if k not in inference_params: # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
+                    inference_params[k] = v
+            data = json.dumps({
+                "prompt": prompt,
+                **inference_params
+            })
+        elif provider == "ai21":
+            ## LOAD CONFIG
+            config = litellm.AmazonAI21Config.get_config() 
+            for k, v in config.items(): 
+                if k not in inference_params: # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
+                    inference_params[k] = v
+
+            data = json.dumps({
+                "prompt": prompt,
+                **inference_params
+            })
+        elif provider == "cohere":
+            ## LOAD CONFIG
+            config = litellm.AmazonCohereConfig.get_config() 
+            for k, v in config.items(): 
+                if k not in inference_params: # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
+                    inference_params[k] = v
+            if optional_params.get("stream", False) == True:
+                inference_params["stream"] = True # cohere requires stream = True in inference params
+            data = json.dumps({
+                "prompt": prompt,
+                **inference_params
+            })
+        elif provider == "amazon":  # amazon titan
+            ## LOAD CONFIG
+            config = litellm.AmazonTitanConfig.get_config() 
+            for k, v in config.items(): 
+                if k not in inference_params: # completion(top_k=3) > amazon_config(top_k=3) <- allows for dynamic variables to be passed in
+                    inference_params[k] = v
+
+            data = json.dumps({
+                "inputText": prompt,
+                "textGenerationConfig": inference_params,
+            })
+        
+        ## LOGGING
+        logging_obj.pre_call(
+            input=prompt,
+            api_key="",
+            additional_args={"complete_input_dict": data},
+        )
+
+        ## COMPLETION CALL
+        accept = 'application/json'
+        contentType = 'application/json'
+        if stream == True:
+            response = client.invoke_model_with_response_stream(
+                body=data,
+                modelId=model,
+                accept=accept,
+                contentType=contentType
+            )
+            response = response.get('body')
+            return response
+
+        try: 
+            response = client.invoke_model(
+                body=data,
+                modelId=model,
+                accept=accept,
+                contentType=contentType
+            )
+        except Exception as e: 
+            raise BedrockError(status_code=500, message=str(e))
+        
+        response_body = json.loads(response.get('body').read())
+
+        ## LOGGING
+        logging_obj.post_call(
+            input=prompt,
+            api_key="",
+            original_response=response_body,
+            additional_args={"complete_input_dict": data},
+        )
+        print_verbose(f"raw model_response: {response}")
+        ## RESPONSE OBJECT
+        outputText = "default"
+        if provider == "ai21":
+            outputText = response_body.get('completions')[0].get('data').get('text')
+        elif provider == "anthropic":
+            outputText = response_body['completion']
+            model_response["finish_reason"] = response_body["stop_reason"]
+        elif provider == "cohere": 
+            outputText = response_body["generations"][0]["text"]
+        else:  # amazon titan
+            outputText = response_body.get('results')[0].get('outputText')
+
+        response_metadata = response.get("ResponseMetadata", {})
+        if response_metadata.get("HTTPStatusCode", 500) >= 400:
+            raise BedrockError(
+                message=outputText,
+                status_code=response_metadata.get("HTTPStatusCode", 500),
+            )
+        else:
+            try:
+                if len(outputText) > 0:
+                    model_response["choices"][0]["message"]["content"] = outputText
+            except:
+                raise BedrockError(message=json.dumps(outputText), status_code=response_metadata.get("HTTPStatusCode", 500))
+
+        ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here. 
+        prompt_tokens = len(
+            encoding.encode(prompt)
+        )
+        completion_tokens = len(
+            encoding.encode(model_response["choices"][0]["message"].get("content", ""))
+        )
+
+        model_response["created"] = time.time()
+        model_response["model"] = model
+        model_response.usage.completion_tokens = completion_tokens
+        model_response.usage.prompt_tokens = prompt_tokens
+        model_response.usage.total_tokens = prompt_tokens + completion_tokens
+        return model_response
+    except BedrockError as e:
+        exception_mapping_worked = True
+        raise e
+    except Exception as e: 
+        if exception_mapping_worked:
+            raise e
+        else: 
+            import traceback
+            raise BedrockError(status_code=500, message=traceback.format_exc())
+
+
+
+def embedding(
+    model: str,
+    input: list,
+    logging_obj=None,
+    model_response=None,
+    optional_params=None,
+    encoding=None,
+):
+    # logic for parsing in - calling - parsing out model embedding calls
     # pop aws_secret_access_key, aws_access_key_id, aws_region_name from kwargs, since completion calls fail with them
     aws_secret_access_key = optional_params.pop("aws_secret_access_key", None)
     aws_access_key_id = optional_params.pop("aws_access_key_id", None)
@@ -274,132 +461,39 @@ def completion(
             aws_region_name=aws_region_name,
         ),
     )
-
-    model = model
-    provider = model.split(".")[0]
-    prompt = convert_messages_to_prompt(model, messages, provider, custom_prompt_dict)
-    inference_params = copy.deepcopy(optional_params)
-    stream = inference_params.pop("stream", False)
-    if provider == "anthropic":
-        ## LOAD CONFIG
-        config = litellm.AmazonAnthropicConfig.get_config() 
-        for k, v in config.items(): 
-            if k not in inference_params: # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
-                inference_params[k] = v
-        data = json.dumps({
-            "prompt": prompt,
-            **inference_params
-        })
-    elif provider == "ai21":
-        ## LOAD CONFIG
-        config = litellm.AmazonAI21Config.get_config() 
-        for k, v in config.items(): 
-            if k not in inference_params: # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
-                inference_params[k] = v
-
-        data = json.dumps({
-            "prompt": prompt,
-            **inference_params
-        })
-    elif provider == "cohere":
-        ## LOAD CONFIG
-        config = litellm.AmazonCohereConfig.get_config() 
-        for k, v in config.items(): 
-            if k not in inference_params: # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
-                inference_params[k] = v
-        data = json.dumps({
-            "prompt": prompt,
-            **inference_params
-        })
-    elif provider == "amazon":  # amazon titan
-        ## LOAD CONFIG
-        config = litellm.AmazonTitanConfig.get_config() 
-        for k, v in config.items(): 
-            if k not in inference_params: # completion(top_k=3) > amazon_config(top_k=3) <- allows for dynamic variables to be passed in
-                inference_params[k] = v
-
-        data = json.dumps({
-            "inputText": prompt,
-            "textGenerationConfig": inference_params,
-        })
     
-    ## LOGGING
-    logging_obj.pre_call(
-        input=prompt,
-        api_key="",
-        additional_args={"complete_input_dict": data},
-    )
-
-    ## COMPLETION CALL
-    accept = 'application/json'
-    contentType = 'application/json'
-    if stream == True:
-        response = client.invoke_model_with_response_stream(
-            body=data,
-            modelId=model,
-            accept=accept,
-            contentType=contentType
-        )
-        response = response.get('body')
-        return response
+    # translate to bedrock
+    # bedrock only accepts (str) for inputText
+    if type(input) == list:
+        if len(input) > 1: # input is a list with more than 1 elem, raise Exception, Bedrock only supports one element 
+            raise BedrockError(message="Bedrock cannot embed() more than one string - len(input) must always ==  1, input = ['hi from litellm']", status_code=400)
+        input_str = "".join(input)
 
     response = client.invoke_model(
-        body=data,
+        body=json.dumps({
+            "inputText": input_str
+        }),
         modelId=model,
-        accept=accept,
-        contentType=contentType
+        accept="*/*",
+        contentType="application/json"
     )
+
     response_body = json.loads(response.get('body').read())
 
-    ## LOGGING
-    logging_obj.post_call(
-        input=prompt,
-        api_key="",
-        original_response=response_body,
-        additional_args={"complete_input_dict": data},
-    )
-    print_verbose(f"raw model_response: {response}")
-    ## RESPONSE OBJECT
-    outputText = "default"
-    if provider == "ai21":
-        outputText = response_body.get('completions')[0].get('data').get('text')
-    elif provider == "anthropic":
-        outputText = response_body['completion']
-        model_response["finish_reason"] = response_body["stop_reason"]
-    elif provider == "cohere": 
-        outputText = response_body["generations"][0]["text"]
-    else:  # amazon titan
-        outputText = response_body.get('results')[0].get('outputText')
-    if "error" in outputText:
-        raise BedrockError(
-            message=outputText,
-            status_code=response.status_code,
-        )
-    else:
-        try:
-            if len(outputText) > 0:
-                model_response["choices"][0]["message"]["content"] = outputText
-        except:
-            raise BedrockError(message=json.dumps(outputText), status_code=response.status_code)
+    embedding_response = response_body["embedding"]
 
-    ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here. 
-    prompt_tokens = len(
-        encoding.encode(prompt)
-    )
-    completion_tokens = len(
-        encoding.encode(model_response["choices"][0]["message"].get("content", ""))
-    )
-
-    model_response["created"] = time.time()
+    model_response["object"] = "list"
+    model_response["data"] = embedding_response
     model_response["model"] = model
-    model_response["usage"] = {
-        "prompt_tokens": prompt_tokens,
-        "completion_tokens": completion_tokens,
-        "total_tokens": prompt_tokens + completion_tokens,
+    input_tokens = 0
+
+    input_tokens+=len(encoding.encode(input_str)) 
+
+    model_response["usage"] = { 
+        "prompt_tokens": input_tokens, 
+        "total_tokens": input_tokens,
     }
+
+
+
     return model_response
-
-
-def embedding():
-    # logic for parsing in - calling - parsing out model embedding calls
-    pass
