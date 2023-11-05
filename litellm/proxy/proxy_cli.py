@@ -176,6 +176,7 @@ def run_server(host, port, api_base, api_version, model, alias, add_key, headers
         
         if port == 8000 and is_port_in_use(port):
             port = random.randint(1024, 49152)
+        print(os.listdir(os.getcwd()))
         uvicorn.run("proxy_server:app", host=host, port=port, workers=num_workers)
 
 
