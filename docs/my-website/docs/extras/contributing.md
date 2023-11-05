@@ -1,5 +1,7 @@
 # Contributing to Documentation
 
+This website is built using [Docusaurus 2](https://docusaurus.io/), a modern static website generator.
+
 Clone litellm 
 ```
 git clone https://github.com/BerriAI/litellm.git
@@ -9,16 +11,28 @@ git clone https://github.com/BerriAI/litellm.git
 
 #### Installation
 ```
-pip install mkdocs
+npm install --global yarn
 ```
 
-#### Locally Serving Docs
+
+### Local Development
+
 ```
-mkdocs serve
+cd docs/my-website
 ```
-If you see `command not found: mkdocs` try running the following
+
+Let's Install requirement
+
 ```
-python3 -m mkdocs serve
+yarn
+```
+Run website
+
+```
+yarn start
+```
+Open docs here: [http://localhost:3000/](http://localhost:3000/)
+
 ```
 
 This command builds your Markdown files into HTML and starts a development server to browse your documentation. Open up [http://127.0.0.1:8000/](http://127.0.0.1:8000/) in your web browser to see your documentation. You can make changes to your Markdown files and your docs will automatically rebuild.

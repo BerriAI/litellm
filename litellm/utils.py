@@ -146,6 +146,16 @@ class Choices(OpenAIObject):
         else:
             self.message = message
 
+class Usage(OpenAIObject):
+    def __init__(self, prompt_tokens=None, completion_tokens=None, total_tokens=None, **params):
+        super(Usage, self).__init__(**params)
+        if prompt_tokens:
+            self.prompt_tokens = prompt_tokens
+        if completion_tokens:
+            self.completion_tokens = completion_tokens
+        if total_tokens:
+            self.total_tokens = total_tokens
+
 class StreamingChoices(OpenAIObject):
     def __init__(self, finish_reason=None, index=0, delta: Optional[Delta]=None, **params):
         super(StreamingChoices, self).__init__(**params)
@@ -180,21 +190,21 @@ class ModelResponse(OpenAIObject):
         else:
             self._response_ms = None
         self.model = model
-        self.usage = (
-            usage
-            if usage
-            else {
-                "prompt_tokens": None,
-                "completion_tokens": None,
-                "total_tokens": None,
-            }
-        )
+        if usage:
+            self.usage = usage
+        else:
+            self.usage = Usage()
+        self._hidden_params = {} # used in case users want to access the original model response
         super(ModelResponse, self).__init__(**params)
 
     def to_dict_recursive(self):
         d = super().to_dict_recursive()
         d["choices"] = [choice.to_dict_recursive() for choice in self.choices]
         return d
+
+    def cost(self):
+        # for non streaming responses
+        return completion_cost(completion_response=self)
 
 class EmbeddingResponse(OpenAIObject):
     def __init__(self, id=None, choices=None, created=None, model=None, usage=None, stream=False, response_ms=None, **params):
@@ -210,10 +220,72 @@ class EmbeddingResponse(OpenAIObject):
         d = super().to_dict_recursive()
         return d
 
+class TextChoices(OpenAIObject):
+    def __init__(self, finish_reason=None, index=0, text=None, logprobs=None, **params):
+        super(TextChoices, self).__init__(**params)
+        if finish_reason:
+            self.finish_reason = map_finish_reason(finish_reason)
+        else:
+            self.finish_reason = "stop"
+        self.index = index
+        if text:
+            self.text = text
+        else:
+            self.text = None
+        if logprobs:
+            self.logprobs = []
+        else:
+            self.logprobs = logprobs
+
+class TextCompletionResponse(OpenAIObject):
+    """
+    {
+        "id": response["id"],
+        "object": "text_completion",
+        "created": response["created"],
+        "model": response["model"],
+        "choices": [
+        {
+            "text": response["choices"][0]["message"]["content"],
+            "index": response["choices"][0]["index"],
+            "logprobs": transformed_logprobs,
+            "finish_reason": response["choices"][0]["finish_reason"]
+        }
+        ],
+        "usage": response["usage"]
+    }
+    """
+    def __init__(self, id=None, choices=None, created=None, model=None, usage=None, stream=False, response_ms=None, **params):
+        if stream:
+            self.object = "text_completion.chunk"
+            self.choices = [StreamingChoices()]
+        else:
+            self.object = "text_completion"
+            self.choices = [TextChoices()]
+        if id is None:
+            self.id = _generate_id()
+        else:
+            self.id = id
+        if created is None:
+            self.created = int(time.time())
+        else:
+            self.created = created
+        if response_ms:
+            self._response_ms = response_ms
+        else:
+            self._response_ms = None
+        self.model = model
+        if usage:
+            self.usage = usage
+        else:
+            self.usage = Usage()
+        self._hidden_params = {} # used in case users want to access the original model response
+        super(TextCompletionResponse, self).__init__(**params)
+
 ############################################################
 def print_verbose(print_statement):
     if litellm.set_verbose:
-        print(f"LiteLLM: {print_statement}")
+        print(print_statement) # noqa
 
 ####### LOGGING ###################
 from enum import Enum
@@ -270,7 +342,7 @@ class Logging:
                 self.model_call_details["model"] = model
 
             # User Logging -> if you pass in a custom logging function
-            print_verbose(f"model call details: {self.model_call_details}")
+            print_verbose(f"MODEL CALL INPUT: {self.model_call_details}\n\n")
             if self.logger_fn and callable(self.logger_fn):
                 try:
                     self.logger_fn(
@@ -326,6 +398,12 @@ class Logging:
                             message=f"Model Call Details pre-call: {self.model_call_details}",
                             level="info",
                         )
+                    elif isinstance(callback, CustomLogger): # custom logger class 
+                        callback.log_pre_api_call(
+                            model=self.model,
+                            messages=self.messages,
+                            kwargs=self.model_call_details,
+                        )
                     elif callable(callback): # custom logger functions
                         customLogger.log_input_event(
                             model=self.model,
@@ -365,7 +443,7 @@ class Logging:
             self.model_call_details["log_event_type"] = "post_api_call"
 
             # User Logging -> if you pass in a custom logging function
-            print_verbose(f"model call details: {self.model_call_details}")
+            print_verbose(f"RAW RESPONSE: {self.model_call_details}\n\n")
             print_verbose(
                 f"Logging Details Post-API Call: logger_fn - {self.logger_fn} | callable(logger_fn) - {callable(self.logger_fn)}"
             )
@@ -398,6 +476,12 @@ class Logging:
                             category="litellm.llm_call",
                             message=f"Model Call Details post-call: {self.model_call_details}",
                             level="info",
+                        )
+                    elif isinstance(callback, CustomLogger): # custom logger class 
+                        callback.log_post_api_call(
+                            model=self.model,
+                            messages=self.messages,
+                            kwargs=self.model_call_details,
                         )
                 except:
                     print_verbose(
@@ -466,8 +550,6 @@ class Logging:
                         print_verbose("reaches api manager for updating model cost")
                         litellm.apiManager.update_cost(completion_obj=result, user=self.user)
                     if callback == "cache":
-                        # print("entering logger first time")
-                        # print(self.litellm_params["stream_response"])
                         if litellm.cache != None and self.model_call_details.get('optional_params', {}).get('stream', False) == True:
                             litellm_call_id = self.litellm_params["litellm_call_id"]
                             if litellm_call_id in self.litellm_params["stream_response"]:
@@ -478,10 +560,7 @@ class Logging:
                                     self.litellm_params["stream_response"][litellm_call_id]["choices"][0]["message"]["content"] += result["content"]
                             else: # init a streaming response for this call id
                                 new_model_response = ModelResponse(choices=[Choices(message=Message(content="default"))])
-                                #print("creating new model response")
-                                #print(new_model_response)
                                 self.litellm_params["stream_response"][litellm_call_id] = new_model_response
-                            #print("adding to cache for", litellm_call_id)                              
                             litellm.cache.add_cache(self.litellm_params["stream_response"][litellm_call_id], **self.model_call_details)
                     if callback == "promptlayer":
                         print_verbose("reaches promptlayer for logging!")
@@ -504,7 +583,6 @@ class Logging:
                                 print_verbose("reaches supabase for streaming logging!")
                                 result = kwargs["complete_streaming_response"]
       
-                        # print(kwargs)
                         model = kwargs["model"]
                         messages = kwargs["messages"]
                         optional_params = kwargs.get("optional_params", {})
@@ -537,6 +615,23 @@ class Logging:
                             end_time=end_time,
                             print_verbose=print_verbose,
                         )
+                    if isinstance(callback, CustomLogger): # custom logger class 
+                        if self.stream and complete_streaming_response is None:
+                            callback.log_stream_event(
+                                kwargs=self.model_call_details,
+                                response_obj=result,
+                                start_time=start_time,
+                                end_time=end_time
+                                )
+                        else:
+                            if self.stream and complete_streaming_response:
+                                self.model_call_details["complete_response"] = self.model_call_details.pop("complete_streaming_response", complete_streaming_response)
+                            callback.log_success_event(
+                                kwargs=self.model_call_details,
+                                response_obj=result,
+                                start_time=start_time,
+                                end_time=end_time,
+                            )
                     if callable(callback): # custom logger functions
                         customLogger.log_event(
                             kwargs=self.model_call_details,
@@ -624,6 +719,12 @@ class Logging:
                             print_verbose=print_verbose,
                             callback_func=callback
                         )
+                    elif isinstance(callback, CustomLogger): # custom logger class 
+                        callback.log_failure_event(
+                            model=self.model,
+                            messages=self.messages,
+                            kwargs=self.model_call_details,
+                        )
                 except Exception as e:
                     print_verbose(
                         f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while failure logging with integrations {traceback.format_exc()}"
@@ -660,11 +761,11 @@ def exception_logging(
                     model_call_details
                 )  # Expectation: any logger function passed in by the user should accept a dict object
             except Exception as e:
-                print(
+                print_verbose(
                     f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {traceback.format_exc()}"
                 )
     except Exception as e:
-        print(
+        print_verbose(
             f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {traceback.format_exc()}"
         )
         pass
@@ -689,6 +790,14 @@ def client(original_function):
                     litellm.success_callback.append("lite_debugger")
                 if "lite_debugger" not in litellm.failure_callback:
                     litellm.failure_callback.append("lite_debugger")
+            if len(litellm.callbacks) > 0: 
+                for callback in litellm.callbacks: 
+                    if callback not in litellm.input_callback:
+                        litellm.input_callback.append(callback)
+                    if callback not in litellm.success_callback:
+                        litellm.success_callback.append(callback)
+                    if callback not in litellm.failure_callback:
+                        litellm.failure_callback.append(callback)
             if (
                 len(litellm.input_callback) > 0
                 or len(litellm.success_callback) > 0
@@ -727,7 +836,6 @@ def client(original_function):
             return logging_obj
         except Exception as e:  # DO NOT BLOCK running the function because of this
             print_verbose(f"[Non-Blocking] {traceback.format_exc()}; args - {args}; kwargs - {kwargs}")
-            print(e)
         pass
     
     def crash_reporting(*args, **kwargs):
@@ -752,8 +860,10 @@ def client(original_function):
     def wrapper(*args, **kwargs):
         start_time = datetime.datetime.now()
         result = None
-        litellm_call_id = str(uuid.uuid4())
-        kwargs["litellm_call_id"] = litellm_call_id
+
+        # only set litellm_call_id if its not in kwargs
+        if "litellm_call_id" not in kwargs:
+            kwargs["litellm_call_id"] = str(uuid.uuid4())
         try:
             model = args[0] if len(args) > 0 else kwargs["model"]
         except:
@@ -812,6 +922,28 @@ def client(original_function):
             result._response_ms = (end_time - start_time).total_seconds() * 1000 # return response latency in ms like openai
             return result
         except Exception as e:
+            call_type = original_function.__name__
+            if call_type == CallTypes.completion.value:
+                num_retries = (
+                    kwargs.get("num_retries", None)
+                    or litellm.num_retries
+                    or None
+                )
+                litellm.num_retries = None # set retries to None to prevent infinite loops 
+                context_window_fallback_dict = kwargs.get("context_window_fallback_dict", {})
+
+                if num_retries: 
+                    if (isinstance(e, openai.error.APIError) 
+                    or isinstance(e, openai.error.Timeout) 
+                    or isinstance(e, openai.error.ServiceUnavailableError)):
+                        kwargs["num_retries"] = num_retries
+                        return litellm.completion_with_retries(*args, **kwargs)
+                elif isinstance(e, litellm.exceptions.ContextWindowExceededError) and context_window_fallback_dict and model in context_window_fallback_dict:
+                    if len(args) > 0:
+                        args[0]  = context_window_fallback_dict[model]
+                    else:
+                        kwargs["model"] = context_window_fallback_dict[model]
+                    return original_function(*args, **kwargs)
             traceback_exception = traceback.format_exc()
             crash_reporting(*args, **kwargs, exception=traceback_exception)
             end_time = datetime.datetime.now()
@@ -900,6 +1032,16 @@ def _select_tokenizer(model: str):
         return {"type": "openai_tokenizer", "tokenizer": encoding}
 
 def encode(model: str, text: str): 
+    """
+    Encodes the given text using the specified model.
+
+    Args:
+        model (str): The name of the model to use for tokenization.
+        text (str): The text to be encoded.
+
+    Returns:
+        enc: The encoded text.
+    """
     tokenizer_json = _select_tokenizer(model=model)
     enc = tokenizer_json["tokenizer"].encode(text)
     return enc
@@ -1264,8 +1406,25 @@ def get_optional_params(  # use the openai defaults
             optional_params["presence_penalty"] = presence_penalty
         if stop:
             optional_params["stop_sequences"] = stop
-    elif custom_llm_provider == "perplexity":
-        optional_params[""]
+    elif custom_llm_provider == "maritalk":
+        ## check if unsupported param passed in 
+        supported_params = ["stream", "temperature", "max_tokens", "top_p", "presence_penalty", "stop"]
+        _check_valid_arg(supported_params=supported_params)
+        # handle cohere params
+        if stream:
+            optional_params["stream"] = stream
+        if temperature:
+            optional_params["temperature"] = temperature
+        if max_tokens:
+            optional_params["max_tokens"] = max_tokens
+        if logit_bias != {}:
+            optional_params["logit_bias"] = logit_bias
+        if top_p: 
+            optional_params["p"] = top_p
+        if presence_penalty: 
+            optional_params["repetition_penalty"] = presence_penalty
+        if stop:
+            optional_params["stopping_tokens"] = stop
     elif custom_llm_provider == "replicate":
         ## check if unsupported param passed in 
         supported_params = ["stream", "temperature", "max_tokens", "top_p", "stop", "seed"]
@@ -1309,6 +1468,10 @@ def get_optional_params(  # use the openai defaults
             optional_params["best_of"] = n
         if presence_penalty:
             optional_params["repetition_penalty"] = presence_penalty
+        if "echo" in special_params:
+            # https://huggingface.co/docs/huggingface_hub/main/en/package_reference/inference_client#huggingface_hub.InferenceClient.text_generation.decoder_input_details
+            #  Return the decoder input token logprobs and ids. You must set details=True as well for it to be taken into account. Defaults to False
+            optional_params["decoder_input_details"] = special_params["echo"]
     elif custom_llm_provider == "together_ai":
         ## check if unsupported param passed in 
         supported_params = ["stream", "temperature", "max_tokens", "top_p", "stop", "frequency_penalty"]
@@ -1361,7 +1524,7 @@ def get_optional_params(  # use the openai defaults
         if n: 
             optional_params["candidate_count"] = n
         if stop: 
-            optional_params["stopSequences"] = stop
+            optional_params["stop_sequences"] = stop
         if max_tokens: 
             optional_params["max_output_tokens"] = max_tokens
     elif (
@@ -1564,7 +1727,7 @@ def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None, api_
             return model, custom_llm_provider, dynamic_api_key, api_base
 
         # check if llm provider part of model name
-        if model.split("/",1)[0] in litellm.provider_list:
+        if model.split("/",1)[0] in litellm.provider_list and model.split("/",1)[0] not in litellm.model_list:
             custom_llm_provider = model.split("/", 1)[0]
             model = model.split("/", 1)[1]
             if custom_llm_provider == "perplexity":
@@ -1610,8 +1773,16 @@ def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None, api_
         ## openrouter
         elif model in litellm.openrouter_models:
             custom_llm_provider = "openrouter"
+        ## openrouter
+        elif model in litellm.maritalk_models:
+            custom_llm_provider = "maritalk"
         ## vertex - text + chat models
-        elif model in litellm.vertex_chat_models or model in litellm.vertex_text_models:
+        elif(
+            model in litellm.vertex_chat_models or 
+            model in litellm.vertex_code_chat_models or
+            model in litellm.vertex_text_models or
+            model in litellm.vertex_code_text_models
+        ):
             custom_llm_provider = "vertex_ai"
         ## ai21 
         elif model in litellm.ai21_models:
@@ -1637,11 +1808,13 @@ def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None, api_
         # cohere embeddings
         elif model in litellm.cohere_embedding_models:
             custom_llm_provider = "cohere"
+        elif model in litellm.bedrock_embedding_models:
+            custom_llm_provider = "bedrock"
 
         if custom_llm_provider is None or custom_llm_provider=="":
-            print()
-            print("\033[1;31mProvider List: https://docs.litellm.ai/docs/providers\033[0m")
-            print()
+            print() # noqa
+            print("\033[1;31mProvider List: https://docs.litellm.ai/docs/providers\033[0m") # noqa
+            print() # noqa
             raise ValueError(f"LLM Provider NOT provided. Pass in the LLM provider you are trying to call. E.g. For 'Huggingface' inference endpoints pass in `completion(model='huggingface/{model}',..)` Learn more: https://docs.litellm.ai/docs/providers")
         return model, custom_llm_provider, dynamic_api_key, api_base
     except Exception as e: 
@@ -1915,18 +2088,32 @@ def load_test_model(
         }
 
 def validate_environment(model: Optional[str]=None) -> dict:
+    """
+    Checks if the environment variables are valid for the given model.
+    
+    Args:
+        model (Optional[str]): The name of the model. Defaults to None.
+        
+    Returns:
+        dict: A dictionary containing the following keys:
+            - keys_in_environment (bool): True if all the required keys are present in the environment, False otherwise.
+            - missing_keys (List[str]): A list of missing keys in the environment.
+    """
     keys_in_environment = False
     missing_keys: List[str] = []
 
     if model is None:
         return {"keys_in_environment": keys_in_environment, "missing_keys": missing_keys} 
     ## EXTRACT LLM PROVIDER - if model name provided
-    custom_llm_provider = None
-    # check if llm provider part of model name
-    if model.split("/",1)[0] in litellm.provider_list:
-        custom_llm_provider = model.split("/", 1)[0]
-        model = model.split("/", 1)[1]
-        custom_llm_provider_passed_in = True
+    try:
+        custom_llm_provider = get_llm_provider(model=model)
+    except:
+        custom_llm_provider = None
+    # # check if llm provider part of model name
+    # if model.split("/",1)[0] in litellm.provider_list:
+    #     custom_llm_provider = model.split("/", 1)[0]
+    #     model = model.split("/", 1)[1]
+    #     custom_llm_provider_passed_in = True
     
     if custom_llm_provider:
         if custom_llm_provider == "openai":
@@ -1997,6 +2184,12 @@ def validate_environment(model: Optional[str]=None) -> dict:
                 keys_in_environment = True
             else:
                 missing_keys.append("NLP_CLOUD_API_KEY")
+        elif custom_llm_provider == "bedrock": 
+            if "AWS_ACCESS_KEY_ID" in os.environ and "AWS_SECRET_ACCESS_KEY" in os.environ: 
+                keys_in_environment = True
+            else:
+                missing_keys.append("AWS_ACCESS_KEY_ID")
+                missing_keys.append("AWS_SECRET_ACCESS_KEY")
     else:
         ## openai - chatcompletion + text completion
         if model in litellm.open_ai_chat_completion_models or litellm.open_ai_text_completion_models:
@@ -2094,7 +2287,7 @@ def set_callbacks(callback_list, function_id=None):
                     else "1.0"
                 )
                 sentry_sdk_instance.init(
-                    dsn=os.environ.get("SENTRY_API_URL"),
+                    dsn=os.environ.get("SENTRY_DSN"),
                     traces_sample_rate=float(sentry_trace_rate),
                 )
                 capture_exception = sentry_sdk_instance.capture_exception
@@ -2491,10 +2684,17 @@ def valid_model(model):
     except:
         raise InvalidRequestError(message="", model=model, llm_provider="")
 
-# check valid api key 
 def check_valid_key(model: str, api_key: str):
-    # returns True if key is valid for the model
-    # returns False if key is invalid for the model
+    """
+    Checks if a given API key is valid for a specific model by making a litellm.completion call with max_tokens=10
+
+    Args:
+        model (str): The name of the model to check the API key against.
+        api_key (str): The API key to be checked.
+
+    Returns:
+        bool: True if the API key is valid for the model, False otherwise.
+    """
     messages = [{"role": "user", "content": "Hey, how's it going?"}]
     try:
         litellm.completion(model=model, messages=messages, api_key=api_key, max_tokens=10)
@@ -2608,7 +2808,7 @@ def get_all_keys(llm_provider=None):
 
 
 def get_model_list():
-    global last_fetched_at
+    global last_fetched_at, print_verbose
     try:
         # if user is using hosted product -> get their updated model list
         user_email = (
@@ -2620,7 +2820,7 @@ def get_model_list():
         if user_email:
             # make the api call
             last_fetched_at = time.time()
-            print(f"last_fetched_at: {last_fetched_at}")
+            print_verbose(f"last_fetched_at: {last_fetched_at}")
             response = requests.post(
                 url="http://api.litellm.ai/get_model_list",
                 headers={"content-type": "application/json"},
@@ -2655,10 +2855,11 @@ def exception_type(
     ):
     global user_logger_fn, liteDebuggerClient
     exception_mapping_worked = False
-    print()
-    print("\033[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new\033[0m")
-    print("LiteLLM.Info: If you need to debug this error, use `litellm.set_verbose=True'.")
-    print()
+    if litellm.suppress_debug_info is False:
+        print() # noqa
+        print("\033[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new\033[0m") # noqa
+        print("LiteLLM.Info: If you need to debug this error, use `litellm.set_verbose=True'.") # noqa
+        print() # noqa
     try:
         if isinstance(original_exception, OriginalError):
             # Handle the OpenAIError
@@ -2836,27 +3037,49 @@ def exception_type(
                     model=model
                 )
             elif custom_llm_provider == "bedrock":
-                if "Unable to locate credentials" in error_str:
+                if "too many tokens" in error_str or "expected maxLength:" in error_str or "Input is too long" in error_str or "Too many input tokens" in error_str: 
+                    exception_mapping_worked = True
+                    raise ContextWindowExceededError(
+                        message=f"BedrockException: Context Window Error - {error_str}",
+                        model=model, 
+                        llm_provider="bedrock"
+                    )
+                if "Malformed input request" in error_str:
                     exception_mapping_worked = True
                     raise InvalidRequestError(
                         message=f"BedrockException - {error_str}", 
                         model=model, 
                         llm_provider="bedrock"
                     )
-                if "The security token included in the request is invalid" in error_str:
+                if "Unable to locate credentials" in error_str or "The security token included in the request is invalid" in error_str:
                     exception_mapping_worked = True
                     raise AuthenticationError(
                             message=f"BedrockException Invalid Authentication - {error_str}",
                             model=model, 
                             llm_provider="bedrock"
                     )
-                if "throttlingException" in error_str:
+                if "throttlingException" in error_str or "ThrottlingException" in error_str:
                     exception_mapping_worked = True
                     raise RateLimitError(
                             message=f"BedrockException: Rate Limit Error - {error_str}",
                             model=model, 
                             llm_provider="bedrock"
                     )
+                if hasattr(original_exception, "status_code"):
+                    if original_exception.status_code == 500:
+                        exception_mapping_worked = True
+                        raise ServiceUnavailableError(
+                            message=f"BedrockException - {original_exception.message}",
+                            llm_provider="bedrock",
+                            model=model
+                        )
+                    elif original_exception.status_code == 401:
+                        exception_mapping_worked = True
+                        raise AuthenticationError(
+                            message=f"BedrockException - {original_exception.message}",
+                            llm_provider="bedrock",
+                            model=model
+                        )
             elif custom_llm_provider == "sagemaker": 
                 if "Unable to locate credentials" in error_str:
                     exception_mapping_worked = True
@@ -3214,7 +3437,7 @@ def exception_type(
                         model=model
                     )
                 elif hasattr(original_exception, "status_code"):
-                    print(f"status code: {original_exception.status_code}")
+                    print_verbose(f"status code: {original_exception.status_code}")
                     if original_exception.status_code == 401:
                         exception_mapping_worked = True
                         raise AuthenticationError(
@@ -3283,7 +3506,7 @@ def exception_type(
             elif custom_llm_provider == "ollama":
                 if "no attribute 'async_get_ollama_response_stream" in error_str:
                     raise ImportError("Import error - trying to use async for ollama. import async_generator failed. Try 'pip install async_generator'")
-            elif custom_llm_provider == "custom_openai":
+            elif custom_llm_provider == "custom_openai" or custom_llm_provider == "maritalk":
                 if hasattr(original_exception, "status_code"):
                     exception_mapping_worked = True
                     if original_exception.status_code == 401:
@@ -3418,7 +3641,7 @@ def litellm_telemetry(data):
         }
         # Make the POST request to litellm logging api
         response = requests.post(
-            "https://litellm.berri.ai/logging",
+            "https://litellm-logging.onrender.com/logging",
             headers={"Content-Type": "application/json"},
             json=payload,
         )
@@ -3545,6 +3768,17 @@ class CustomStreamWrapper:
         except:
             raise ValueError(f"Unable to parse response. Original response: {chunk}")
     
+    def handle_maritalk_chunk(self, chunk): # fake streaming
+        chunk = chunk.decode("utf-8")
+        data_json = json.loads(chunk)
+        try:
+            text = data_json["answer"]
+            is_finished = True
+            finish_reason = "stop"
+            return {"text": text, "is_finished": is_finished, "finish_reason": finish_reason}
+        except:
+            raise ValueError(f"Unable to parse response. Original response: {chunk}")
+    
     def handle_nlp_cloud_chunk(self, chunk):
         chunk = chunk.decode("utf-8")
         data_json = json.loads(chunk)
@@ -3608,9 +3842,15 @@ class CustomStreamWrapper:
             text = "" 
             is_finished = False
             finish_reason = None
-            if str_line.startswith("data:"):
+            if str_line == "data: [DONE]":
+                # anyscale returns a [DONE] special char for streaming, this cannot be json loaded. This is the end of stream
+                text = ""
+                is_finished = True
+                finish_reason = "stop"
+                return {"text": text, "is_finished": is_finished, "finish_reason": finish_reason}
+            elif str_line.startswith("data:"):
                 data_json = json.loads(str_line[5:])
-                print(f"delta content: {data_json['choices'][0]['delta']}")
+                print_verbose(f"delta content: {data_json['choices'][0]['delta']}")
                 text = data_json["choices"][0]["delta"].get("content", "") 
                 if data_json["choices"][0].get("finish_reason", None): 
                     is_finished = True
@@ -3682,6 +3922,14 @@ class CustomStreamWrapper:
                 if stop_reason != None:
                     is_finished = True
                     finish_reason = stop_reason
+            ######## bedrock.cohere mappings ###############
+            # cohere mapping
+            elif "text" in chunk_data:
+                text = chunk_data["text"] # bedrock.cohere
+            # cohere mapping for finish reason
+            elif "finish_reason" in chunk_data:
+                finish_reason = chunk_data["finish_reason"]
+                is_finished = True
             elif chunk_data.get("completionReason", None): 
                 is_finished = True
                 finish_reason = chunk_data["completionReason"]
@@ -3728,6 +3976,12 @@ class CustomStreamWrapper:
                 elif self.custom_llm_provider and self.custom_llm_provider == "ai21": #ai21 doesn't provide streaming
                     chunk = next(self.completion_stream)
                     response_obj = self.handle_ai21_chunk(chunk)
+                    completion_obj["content"] = response_obj["text"]
+                    if response_obj["is_finished"]: 
+                        model_response.choices[0].finish_reason = response_obj["finish_reason"]
+                elif self.custom_llm_provider and self.custom_llm_provider == "maritalk":
+                    chunk = next(self.completion_stream)
+                    response_obj = self.handle_maritalk_chunk(chunk)
                     completion_obj["content"] = response_obj["text"]
                     if response_obj["is_finished"]: 
                         model_response.choices[0].finish_reason = response_obj["finish_reason"]
@@ -3826,7 +4080,7 @@ class CustomStreamWrapper:
                     chunk = next(self.completion_stream)
                     response_obj = self.handle_custom_openai_chat_completion_chunk(chunk)
                     completion_obj["content"] = response_obj["text"]
-                    print(f"completion obj content: {completion_obj['content']}")
+                    print_verbose(f"completion obj content: {completion_obj['content']}")
                     if response_obj["is_finished"]: 
                         model_response.choices[0].finish_reason = response_obj["finish_reason"]
                 else: # openai chat/azure models
@@ -3889,6 +4143,34 @@ def read_config_args(config_path) -> dict:
 ########## experimental completion variants ############################
 
 def completion_with_config(config: Union[dict, str], **kwargs):
+    """
+    Generate a litellm.completion() using a config dict and all supported completion args 
+
+    Example config;
+    config = {
+        "default_fallback_models": # [Optional] List of model names to try if a call fails
+        "available_models": # [Optional] List of all possible models you could call 
+        "adapt_to_prompt_size": # [Optional] True/False - if you want to select model based on prompt size (will pick from available_models)
+        "model": {
+            "model-name": {
+                "needs_moderation": # [Optional] True/False - if you want to call openai moderations endpoint before making completion call. Will raise exception, if flagged. 
+                "error_handling": {
+                    "error-type": { # One of the errors listed here - https://docs.litellm.ai/docs/exception_mapping#custom-mapping-list
+                        "fallback_model": "" # str, name of the model it should try instead, when that error occurs 
+                    }
+                }
+            }
+        }
+    }
+
+    Parameters:
+        config (Union[dict, str]): A configuration for litellm
+        **kwargs: Additional keyword arguments for litellm.completion
+
+    Returns:
+        litellm.ModelResponse: A ModelResponse with the generated completion
+
+    """
     if config is not None:
         if isinstance(config, str):
             config = read_config_args(config)
@@ -3979,77 +4261,7 @@ def completion_with_config(config: Union[dict, str], **kwargs):
             return completion_with_fallbacks(model=model, messages=messages, fallbacks=fallback_models)
         raise e
 
-
-
-def get_model_split_test(models, completion_call_id):
-    global last_fetched_at
-    try:
-        # make the api call
-        last_fetched_at = time.time()
-        response = requests.post(
-            #http://api.litellm.ai
-            url="http://api.litellm.ai/get_model_split_test", # get the updated dict from table or update the table with the dict
-            headers={"content-type": "application/json"},
-            data=json.dumps({"completion_call_id": completion_call_id, "models": models}),
-        )
-        print_verbose(f"get_model_list response: {response.text}")
-        data = response.json()
-        # update model list
-        split_test_models = data["split_test_models"]
-        model_configs = data.get("model_configs", {})
-        # update environment - if required
-        threading.Thread(target=get_all_keys, args=()).start()
-        return split_test_models, model_configs
-    except:
-        print_verbose(
-            f"[Non-Blocking Error] get_all_keys error - {traceback.format_exc()}"
-        )
-
-
-def completion_with_split_tests(models={}, messages=[], use_client=False, override_client=False, **kwargs):
-    """
-    Example Usage: 
-
-    models =  {
-	    "gpt-4": 0.7, 
-	    "huggingface/wizard-coder": 0.3
-    }
-    messages = [{ "content": "Hello, how are you?","role": "user"}]
-    completion_with_split_tests(models=models, messages=messages)
-    """
-    import random
-    model_configs = {}
-    if use_client and not override_client:
-        if "id" not in kwargs or kwargs["id"] is None:
-            kwargs["id"] = str(uuid.uuid4())
-            #raise ValueError("Please tag this completion call, if you'd like to update it's split test values through the UI. - eg. `completion_with_split_tests(.., id=1234)`.")
-        # get the most recent model split list from server 
-        models, model_configs = get_model_split_test(models=models, completion_call_id=kwargs["id"])
-
-    try:
-        selected_llm = random.choices(list(models.keys()), weights=list(models.values()))[0]
-    except:
-        traceback.print_exc()
-        raise ValueError("""models does not follow the required format - {'model_name': 'split_percentage'}, e.g. {'gpt-4': 0.7, 'huggingface/wizard-coder': 0.3}""")
-    
-    # use dynamic model configs if users set 
-    if model_configs!={}:
-        selected_model_configs = model_configs.get(selected_llm, {})
-        if "prompt" in selected_model_configs: # special case, add this to messages as system prompt
-            messages.append({"role": "system", "content": selected_model_configs["prompt"]})
-            selected_model_configs.pop("prompt")
-        for param_name in selected_model_configs:
-            if param_name == "temperature":
-                kwargs[param_name] = float(selected_model_configs[param_name])
-            elif param_name == "max_tokens":
-                kwargs[param_name] = int(selected_model_configs[param_name])
-            else:
-                kwargs[param_name] = selected_model_configs[param_name]
-
-    return litellm.completion(model=selected_llm, messages=messages, use_client=use_client, **kwargs)
-
 def completion_with_fallbacks(**kwargs):
-    print(f"kwargs inside completion_with_fallbacks: {kwargs}")
     nested_kwargs = kwargs.pop("kwargs", {})
     response = None
     rate_limited_models = set()
@@ -4059,7 +4271,9 @@ def completion_with_fallbacks(**kwargs):
     fallbacks = [kwargs["model"]] + nested_kwargs.get("fallbacks", [])
     if "fallbacks" in nested_kwargs:
         del nested_kwargs["fallbacks"]  # remove fallbacks so it's not recursive
+    litellm_call_id = str(uuid.uuid4())
 
+    # max time to process a request with fallbacks: default 45s
     while response == None and time.time() - start_time < 45:
         for model in fallbacks:
             # loop thru all models
@@ -4068,8 +4282,7 @@ def completion_with_fallbacks(**kwargs):
                 if isinstance(model, dict): # completion(model="gpt-4", fallbacks=[{"api_key": "", "api_base": ""}, {"api_key": "", "api_base": ""}])
                     kwargs["api_key"] = model.get("api_key", None)
                     kwargs["api_base"] = model.get("api_base", None)
-                    model = original_model
-                    print(f"switched api keys")
+                    model = model.get("model", original_model)
                 elif (
                     model in rate_limited_models
                 ):  # check if model is currently cooling down
@@ -4087,20 +4300,20 @@ def completion_with_fallbacks(**kwargs):
                 if kwargs.get("model"):
                     del kwargs["model"]
 
-                print(f"trying to make completion call with model: {model}")
+                print_verbose(f"trying to make completion call with model: {model}")
+                kwargs["litellm_call_id"] = litellm_call_id
                 kwargs = {**kwargs, **nested_kwargs} # combine the openai + litellm params at the same level
                 response = litellm.completion(**kwargs, model=model)
-                print(f"response: {response}")
+                print_verbose(f"response: {response}")
                 if response != None:
                     return response
 
             except Exception as e:
-                print(e)
+                print_verbose(e)
                 rate_limited_models.add(model)
                 model_expiration_times[model] = (
                     time.time() + 60
                 )  # cool down this selected model
-                # print(f"rate_limited_models {rate_limited_models}")
                 pass
     return response
 
@@ -4197,7 +4410,6 @@ def trim_messages(
     Args:
         messages: Input messages to be trimmed. Each message is a dictionary with 'role' and 'content'.
         model: The LiteLLM model being used (determines the token limit).
-        system_message: Optional system message to preserve at the start of the conversation.
         trim_ratio: Target ratio of tokens to use after trimming. Default is 0.75, meaning it will trim messages so they use about 75% of the model's token limit.
         return_response_tokens: If True, also return the number of tokens left available for the response after trimming.
         max_tokens: Instead of specifying a model or trim_ratio, you can specify this directly.
@@ -4246,11 +4458,19 @@ def trim_messages(
 
         return final_messages
     except Exception as e: # [NON-Blocking, if error occurs just return final_messages
-        print("Got exception while token trimming", e)
+        print_verbose(f"Got exception while token trimming{e}")
         return messages
 
-# this helper reads the .env and returns a list of supported llms for user
 def get_valid_models():
+    """
+    Returns a list of valid LLMs based on the set environment variables
+    
+    Args:
+        None
+
+    Returns:
+        A list of valid LLMs
+    """
     try:
         # get keys set in .env
         environ_keys = os.environ.keys()
@@ -4279,435 +4499,70 @@ def get_valid_models():
     except:
         return [] # NON-Blocking
 
+# used for litellm.text_completion() to transform HF logprobs to OpenAI.Completion() format
+def transform_logprobs(hf_response):
+    # Initialize an empty list for the transformed logprobs
+    transformed_logprobs = []
 
-############################# BATCH COMPLETION with Rate Limit Throttling #######################
-@dataclass
-class StatusTracker:
-    """Stores metadata about the script's progress. Only one instance is created."""
+    # For each Hugging Face response, transform the logprobs
+    for response in hf_response:
+        # Extract the relevant information from the response
+        response_details = response['details']
+        top_tokens = response_details.get("top_tokens", {})
 
-    num_tasks_started: int = 0
-    num_tasks_in_progress: int = 0  # script ends when this reaches 0
-    num_tasks_succeeded: int = 0
-    num_tasks_failed: int = 0
-    num_rate_limit_errors: int = 0
-    num_api_errors: int = 0  # excluding rate limit errors, counted above
-    num_other_errors: int = 0
-    time_of_last_rate_limit_error: int = 0  # used to cool off after hitting rate limits
+        # Initialize an empty list for the token information
+        token_info = {
+            'tokens': [],
+            'token_logprobs': [],
+            'text_offset': [],
+            'top_logprobs': [],
+        }
 
+        for i, token in enumerate(response_details['prefill']):
+            # Extract the text of the token
+            token_text = token['text']
 
-@dataclass
-class APIRequest:
-    """Stores an API request's inputs, outputs, and other metadata. Contains a method to make an API call."""
+            # Extract the logprob of the token
+            token_logprob = token['logprob']
 
-    task_id: int
-    request_json: dict
-    token_consumption: int
-    attempts_left: int
-    metadata: dict
-    result: list = field(default_factory=list)
+            # Add the token information to the 'token_info' list
+            token_info['tokens'].append(token_text)
+            token_info['token_logprobs'].append(token_logprob)
 
-    async def call_api(
-        self,
-        request_header: dict,
-        retry_queue: asyncio.Queue,
-        status_tracker: StatusTracker,
-        save_filepath: str = "",
-    ):
-        """Calls the OpenAI API and saves results."""
-        logging.info(f"Making API Call for request #{self.task_id} {self.request_json}")
-        error = None
-        try:
-            response = await litellm.acompletion(
-                **self.request_json
-            )
-            logging.info(f"Completed request #{self.task_id}")
-            if save_filepath == "": # return respons
-                return response
-            # else this gets written to save_filepath
-        except Exception as e:
-            logging.warning(
-                f"Request {self.task_id} failed with error {e}"
-            )
-            status_tracker.num_api_errors += 1
-            error = e
-            print(f"got exception {e}")
-            if "Rate limit" in str(e):
-                status_tracker.time_of_last_rate_limit_error = int(time.time())
-                status_tracker.num_rate_limit_errors += 1
-                status_tracker.num_api_errors -= (
-                    1  # rate limit errors are counted separately
-                )
+            # stub this to work with llm eval harness
+            top_alt_tokens = { "": -1, "": -2, "": -3 }
+            token_info['top_logprobs'].append(top_alt_tokens)
 
-        if error:
-            self.result.append(error)
-            if self.attempts_left:
-                retry_queue.put_nowait(self)
-            else:
-                logging.error(
-                    f"Request {self.request_json} failed after all attempts. Saving errors: {self.result}"
-                )
-                data = (
-                    [self.request_json, [str(e) for e in self.result], self.metadata]
-                    if self.metadata
-                    else [self.request_json, [str(e) for e in self.result]]
-                )
-                self.append_to_jsonl(data, save_filepath)
-                status_tracker.num_tasks_in_progress -= 1
-                status_tracker.num_tasks_failed += 1
-        else:
-            data = (
-                [self.request_json, response, self.metadata]
-                if self.metadata
-                else [self.request_json, response]
-            )
-            self.append_to_jsonl(data, save_filepath)
-            status_tracker.num_tasks_in_progress -= 1
-            status_tracker.num_tasks_succeeded += 1
-            logging.debug(f"Request {self.task_id} saved to {save_filepath}")
-        
+        # For each element in the 'tokens' list, extract the relevant information
+        for i, token in enumerate(response_details['tokens']):
 
-    def append_to_jsonl(self, data, filename: str) -> None:
-        """Append a json payload to the end of a jsonl file."""
-        json_string = json.dumps(data)
-        with open(filename, "a") as f:
-            f.write(json_string + "\n")
+            # Extract the text of the token
+            token_text = token['text']
 
+            # Extract the logprob of the token
+            token_logprob = token['logprob']
 
-class RateLimitManager():
-    import uuid
-    def __init__(self, max_tokens_per_minute, max_requests_per_minute):
-        self.max_tokens_per_minute = max_tokens_per_minute
-        self.max_requests_per_minute = max_requests_per_minute
-        # print("init rate limit handler")
-        self.status_tracker = StatusTracker()
-        self.last_update_time = time.time()
-        self.available_request_capacity = max_requests_per_minute
-        self.available_token_capacity = max_tokens_per_minute
-        self.queue_of_requests_to_retry = asyncio.Queue() # type: ignore
-        self.task = 0 # for tracking ids for tasks
-        self.cooldown_time = 10 # time to cooldown between retries in seconds
+            top_alt_tokens = {}
+            temp_top_logprobs = []
+            if top_tokens != {}:
+                temp_top_logprobs = top_tokens[i]
 
-    async def acompletion(self, max_attempts=5, **kwargs):
-        # Initialize logging
-        logging.basicConfig(level=logging.INFO)
+            # top_alt_tokens should look like this: { "alternative_1": -1, "alternative_2": -2, "alternative_3": -3 }
+            for elem in temp_top_logprobs:
+                text = elem["text"]
+                logprob = elem["logprob"]
+                top_alt_tokens[text] = logprob
 
-        # Initialize request
-        logging.info(f"Initializing API request for request id:{self.task}")
-        request = APIRequest(
-            task_id=self.task,
-            request_json=kwargs,
-            token_consumption=self.num_tokens_consumed_from_request(request_json=kwargs, token_encoding_name="cl100k_base"),
-            attempts_left=max_attempts,
-            metadata=kwargs.pop("metadata", None),
-        )
-        self.task+=1 # added a new task to execute
+            # Add the token information to the 'token_info' list
+            token_info['tokens'].append(token_text)
+            token_info['token_logprobs'].append(token_logprob)
+            token_info['top_logprobs'].append(top_alt_tokens)
 
-        # Check and update current capacity for model
-        current_time = time.time()
-        seconds_since_update = current_time - self.last_update_time
-        
-        self.available_request_capacity = min(
-            self.available_request_capacity + self.max_requests_per_minute * seconds_since_update / 60.0,
-            self.max_requests_per_minute,
-        )
+            # Add the text offset of the token
+            # This is computed as the sum of the lengths of all previous tokens
+            token_info['text_offset'].append(sum(len(t['text']) for t in response_details['tokens'][:i]))
 
-        self.available_token_capacity = min(
-            self.available_token_capacity + self.max_tokens_per_minute * seconds_since_update / 60.0,
-            self.max_tokens_per_minute,
-        )
+        # Add the 'token_info' list to the 'transformed_logprobs' list
+        transformed_logprobs = token_info
 
-        self.last_update_time = current_time
-
-        request_tokens = request.token_consumption
-        logging.debug("Request tokens: " + str(request_tokens))
-
-        queue_of_requests_to_retry = asyncio.Queue() 
-
-        if (self.available_request_capacity >= 1 and self.available_token_capacity >= request_tokens):
-
-            # Update counters
-            self.available_request_capacity -= 1
-            self.available_token_capacity -= request_tokens
-            request.attempts_left -= 1
-
-            # Call API and log final status
-            logging.info(f"""Running Request {request.task_id}, using tokens: {request.token_consumption}. Remaining available tokens: {self.available_token_capacity}""")
-            
-            result = await request.call_api(
-                request_header={},
-                retry_queue=queue_of_requests_to_retry,
-                save_filepath="",
-                status_tracker=self.status_tracker,
-            )
-            return result
-        else:
-            logging.info(f"OVER CAPACITY for {request.task_id}. retrying {request.attempts_left} times")
-            while request.attempts_left >= 0:
-                # Sleep for a minute to allow for capacity
-                logging.info(f"OVER CAPACITY for {request.task_id}. Cooling down for 60 seconds, retrying {request.attempts_left} times")
-                await asyncio.sleep(self.cooldown_time)
-
-                # Check capacity
-                current_time = time.time()
-                seconds_since_update = current_time - self.last_update_time
-                
-                self.available_request_capacity = min(
-                    self.available_request_capacity + self.max_requests_per_minute * seconds_since_update / 60.0,
-                    self.max_requests_per_minute,
-                )
-
-                self.available_token_capacity = min(
-                    self.available_token_capacity + self.max_tokens_per_minute * seconds_since_update / 60.0,
-                    self.max_tokens_per_minute,
-                )
-
-                self.last_update_time = current_time
-
-                request_tokens = request.token_consumption
-
-                if self.available_request_capacity >= 1 and self.available_token_capacity >= request_tokens:
-                    logging.info("Available token capacity available.")
-
-                    # Update counters
-                    self.available_request_capacity -= 1
-                    self.available_token_capacity -= request_tokens
-                    request.attempts_left -= 1
-
-                    # Call API and log final status
-                    logging.info(f"""Running Request {request.task_id}, using tokens: {request.token_consumption}. Remaining available tokens: {self.available_token_capacity}""")
-
-                    result = await request.call_api(
-                        request_header={},
-                        retry_queue=queue_of_requests_to_retry,
-                        save_filepath="",
-                        status_tracker=self.status_tracker,
-                    )
-                    return result
-                
-                logging.warning(f"Request {request.task_id} is still over capacity. Number of retry attempts left: {request.attempts_left}")
-                request.attempts_left -=1
-
-    async def batch_completion(
-        self,
-        requests_filepath: str = "",
-        jobs: list = [],
-        save_filepath: Optional[str] = None,
-        api_key: Optional[str] = os.getenv("OPENAI_API_KEY"),
-        max_requests_per_minute: float = 3_000 * 0.5,
-        max_tokens_per_minute: float = 250_000 * 0.5,
-        token_encoding_name: str = "cl100k_base",
-        max_attempts: int = 5,
-        logging_level: int = logging.INFO,
-        ):
-
-        if save_filepath == None:
-            save_filepath = "litellm_results.jsonl"
-        print("running batch completion")
-
-        # constants
-        seconds_to_pause_after_rate_limit_error = 15
-        seconds_to_sleep_each_loop = (
-            0.001  # 1 ms limits max throughput to 1,000 requests per second
-        )
-
-        # initialize logging
-        logging.basicConfig(level=logging_level)
-        logging.debug(f"Logging initialized at level {logging_level}")
-
-        # infer API endpoint and construct request header
-
-        request_header = {"Authorization": f"Bearer {api_key}"}
-
-        # initialize trackers
-        queue_of_requests_to_retry = asyncio.Queue() # type: ignore
-        task_id_generator = (
-            self.task_id_generator_function()
-        )  # generates integer IDs of 1, 2, 3, ...
-        status_tracker = (
-            StatusTracker()
-        )  # single instance to track a collection of variables
-        next_request = None  # variable to hold the next request to call
-
-        # initialize available capacity counts
-        available_request_capacity = max_requests_per_minute
-        available_token_capacity = max_tokens_per_minute
-        last_update_time = time.time()
-
-        # initialize flags
-        file_not_finished = True  # after file is empty, we'll skip reading it
-        logging.debug(f"Initialization complete.")
-
-        requests = iter(jobs)
-
-        while True:
-            # get next request (if one is not already waiting for capacity)
-            if next_request is None:
-                if not queue_of_requests_to_retry.empty():
-                    next_request = queue_of_requests_to_retry.get_nowait()
-                    logging.debug(
-                        f"Retrying request {next_request.task_id}: {next_request}"
-                    )
-                elif file_not_finished:
-                    try:
-                        # get new request
-                        request_json = next(requests)
-                        if "api_key" not in request_json:
-                            request_json["api_key"] = api_key
-                        # print("CREATING API REQUEST")
-                        next_request = APIRequest(
-                            task_id=next(task_id_generator),
-                            request_json=request_json,
-                            token_consumption=self.num_tokens_consumed_from_request(
-                                request_json, token_encoding_name
-                            ),
-                            attempts_left=max_attempts,
-                            metadata=request_json.pop("metadata", None),
-                        )
-                        # print("AFTER INIT API REQUEST")
-                        status_tracker.num_tasks_started += 1
-                        status_tracker.num_tasks_in_progress += 1
-                        logging.debug(
-                            f"Reading request {next_request.task_id}: {next_request}"
-                        )
-                    except:
-                        logging.debug("Jobs finished")
-                        file_not_finished = False
-
-                # update available capacity
-                current_time = time.time()
-                seconds_since_update = current_time - last_update_time
-                available_request_capacity = min(
-                    available_request_capacity
-                    + max_requests_per_minute * seconds_since_update / 60.0,
-                    max_requests_per_minute,
-                )
-                available_token_capacity = min(
-                    available_token_capacity
-                    + max_tokens_per_minute * seconds_since_update / 60.0,
-                    max_tokens_per_minute,
-                )
-                last_update_time = current_time
-
-                # if enough capacity available, call API
-                if next_request:
-                    next_request_tokens = next_request.token_consumption
-                    if (
-                        available_request_capacity >= 1
-                        and available_token_capacity >= next_request_tokens
-                    ):
-                        # update counters
-                        available_request_capacity -= 1
-                        available_token_capacity -= next_request_tokens
-                        next_request.attempts_left -= 1
-
-                        # call API
-                        # after finishing, log final status
-                        logging.info(
-                            f"""Running Request {next_request.task_id}, using tokens: {next_request.token_consumption} remaining available tokens: {available_token_capacity}"""
-                        )
-                        next_request.task_id
-        
-                        asyncio.create_task(
-                            next_request.call_api(
-                                request_header=request_header,
-                                retry_queue=queue_of_requests_to_retry,
-                                save_filepath=save_filepath,
-                                status_tracker=status_tracker,
-                            )
-                        )
-                        next_request = None  # reset next_request to empty
-
-                # if all tasks are finished, break
-                if status_tracker.num_tasks_in_progress == 0:
-                    break
-
-                # main loop sleeps briefly so concurrent tasks can run
-                await asyncio.sleep(seconds_to_sleep_each_loop)
-
-                # if a rate limit error was hit recently, pause to cool down
-                seconds_since_rate_limit_error = (
-                    time.time() - status_tracker.time_of_last_rate_limit_error
-                )
-                if (
-                    seconds_since_rate_limit_error
-                    < seconds_to_pause_after_rate_limit_error
-                ):
-                    remaining_seconds_to_pause = (
-                        seconds_to_pause_after_rate_limit_error
-                        - seconds_since_rate_limit_error
-                    )
-                    await asyncio.sleep(remaining_seconds_to_pause)
-                    # ^e.g., if pause is 15 seconds and final limit was hit 5 seconds ago
-                    logging.warn(
-                        f"Pausing to cool down until {time.ctime(status_tracker.time_of_last_rate_limit_error + seconds_to_pause_after_rate_limit_error)}"
-                    )
-
-        # after finishing, log final status
-        logging.info(
-            f"""Parallel processing complete. Results saved to {save_filepath}"""
-        )
-        if status_tracker.num_tasks_failed > 0:
-            logging.warning(
-                f"{status_tracker.num_tasks_failed} / {status_tracker.num_tasks_started} requests failed. Errors logged to {save_filepath}."
-            )
-        if status_tracker.num_rate_limit_errors > 0:
-            logging.warning(
-                f"{status_tracker.num_rate_limit_errors} rate limit errors received. Consider running at a lower rate."
-            )
-
-
-    # dataclasses
-
-
-    
-
-
-    def num_tokens_consumed_from_request(
-        self,
-        request_json: dict,
-        token_encoding_name: str,
-    ):
-        """Count the number of tokens in the request. Only supports completion and embedding requests."""
-        encoding = tiktoken.get_encoding(token_encoding_name)
-        # if completions request, tokens = prompt + n * max_tokens
-        
-        max_tokens = request_json.get("max_tokens", 15)
-        n = request_json.get("n", 1)
-        completion_tokens = n * max_tokens
-
-
-        num_tokens = 0
-        for message in request_json["messages"]:
-            num_tokens += 4  # every message follows <im_start>{role/name}\n{content}<im_end>\n
-            for key, value in message.items():
-                num_tokens += len(encoding.encode(value))
-                if key == "name":  # if there's a name, the role is omitted
-                    num_tokens -= 1  # role is always required and always 1 token
-        num_tokens += 2  # every reply is primed with <im_start>assistant
-        return num_tokens + completion_tokens
-
-    def task_id_generator_function(self):
-        """Generate integers 0, 1, 2, and so on."""
-        task_id = 0
-        while True:
-            yield task_id
-            task_id += 1
-
-
-###### USAGE ################
-# jobs = [
-#     {"model": "gpt-4", "messages": [{"content": "Please provide a summary of the latest scientific discoveries."*500, "role": "user"}]},
-#     {"model": "gpt-4", "messages": [{"content": "Please provide a summary of the latest scientific discoveries."*800, "role": "user"}]},
-#     {"model": "gpt-4", "messages": [{"content": "Please provide a summary of the latest scientific discoveries."*900, "role": "user"}]},
-#     {"model": "gpt-4", "messages": [{"content": "Please provide a summary of the latest scientific discoveries."*900, "role": "user"}]},
-#     {"model": "gpt-4", "messages": [{"content": "Please provide a summary of the latest scientific discoveries."*900, "role": "user"}]}
-# ]
-
-# asyncio.run(
-#         batch_completion_rate_limits(
-#             jobs = jobs,
-#             api_key="",
-#             max_requests_per_minute=60,
-#             max_tokens_per_minute=40000
-#         )
-# )
+    return transformed_logprobs

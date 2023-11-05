@@ -12,7 +12,25 @@ class CustomLogger:
     # Class variables or attributes
     def __init__(self):
         pass
+
+    def log_pre_api_call(self, model, messages, kwargs): 
+        pass
+
+    def log_post_api_call(self, kwargs, response_obj, start_time, end_time): 
+        pass
     
+    def log_stream_event(self, kwargs, response_obj, start_time, end_time):
+        pass
+
+    def log_success_event(self, kwargs, response_obj, start_time, end_time): 
+        pass
+
+    def log_failure_event(self, kwargs, response_obj, start_time, end_time): 
+        pass
+
+
+    #### DEPRECATED ####
+
     def log_input_event(self, model, messages, kwargs, print_verbose, callback_func):
         try: 
             print_verbose(

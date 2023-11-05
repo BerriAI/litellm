@@ -1,7 +1,7 @@
 # Function Calling 
-LiteLLM only supports: OpenAI gpt-4-0613 and gpt-3.5-turbo-0613 for function calling 
+
 ## Quick Start 
-This is exactly how OpenAI supports function calling for gpt-4-0613 and gpt-3.5-turbo-0613
+
 ```python
 import os, litellm
 from litellm import completion
@@ -128,7 +128,6 @@ print(response)
 ```
 
 ## Function calling for Non-OpenAI LLMs
-**For Non OpenAI LLMs - LiteLLM raises an exception if you try using it for function calling**
 
 ### Adding Function to prompt
 For Non OpenAI LLMs LiteLLM allows you to add the function to the prompt set: `litellm.add_function_to_prompt = True`
