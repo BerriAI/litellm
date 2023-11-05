@@ -1,15 +1,19 @@
-import litellm, os, traceback
+import os, traceback
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.routing import APIRouter
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
-import json
-import os
+import json, sys
 from typing import Optional
+sys.path.insert(
+    0, os.path.abspath("../")
+)  # Adds the parent directory to the system path - for litellm local dev
+import litellm
+print(f"litellm: {litellm}")
 try:
-    from utils import set_callbacks, load_router_config
+    from utils import set_callbacks, load_router_config, print_verbose
 except ImportError:
-    from litellm_server.utils import set_callbacks, load_router_config
+    from litellm_server.utils import set_callbacks, load_router_config, print_verbose
 import dotenv
 dotenv.load_dotenv() # load env variables
 
@@ -26,14 +30,23 @@ app.add_middleware(
 )
 #### GLOBAL VARIABLES ####
 llm_router: Optional[litellm.Router] = None
+llm_model_list: Optional[list] = None
+server_settings: Optional[dict] = None
 
 set_callbacks() # sets litellm callbacks for logging if they exist in the environment 
-llm_router = load_router_config(router=llm_router)
+
+if "CONFIG_FILE_PATH" in os.environ:
+    print(f"CONFIG FILE DETECTED")
+    llm_router, llm_model_list, server_settings = load_router_config(router=llm_router, config_file_path=os.getenv("CONFIG_FILE_PATH"))
+else:
+    llm_router, llm_model_list, server_settings = load_router_config(router=llm_router)
 #### API ENDPOINTS ####
-@router.post("/v1/models")
+@router.get("/v1/models")
 @router.get("/models")  # if project requires model list
 def model_list():
     all_models = litellm.utils.get_valid_models()
+    if llm_model_list: 
+        all_models += llm_model_list
     return dict(
         data=[
             {
@@ -72,7 +85,7 @@ async def embedding(request: Request):
         # default to always using the "ENV" variables, only if AUTH_STRATEGY==DYNAMIC then reads headers
         if os.getenv("AUTH_STRATEGY", None) == "DYNAMIC" and "authorization" in request.headers: # if users pass LLM api keys as part of header
             api_key = request.headers.get("authorization")
-            api_key = api_key.replace("Bearer", "").strip() 
+            api_key = api_key.replace("Bearer", "").strip()
             if len(api_key.strip()) > 0:
                 api_key = api_key
                 data["api_key"] = api_key
@@ -87,27 +100,53 @@ async def embedding(request: Request):
 
 @router.post("/v1/chat/completions")
 @router.post("/chat/completions")
-async def chat_completion(request: Request):
+@router.post("/openai/deployments/{model:path}/chat/completions") # azure compatible endpoint
+async def chat_completion(request: Request, model: Optional[str] = None):
+    global llm_model_list, server_settings
     try:
         data = await request.json()
+        print(f"data: {data}")
+        data["model"] = (
+            server_settings.get("completion_model", None) # server default
+            or model # model passed in url 
+            or data["model"] # default passed in
+        )
+        ## CHECK KEYS ## 
         # default to always using the "ENV" variables, only if AUTH_STRATEGY==DYNAMIC then reads headers
-        if os.getenv("AUTH_STRATEGY", None) == "DYNAMIC" and "authorization" in request.headers: # if users pass LLM api keys as part of header
-            api_key = request.headers.get("authorization")
-            api_key = api_key.replace("Bearer", "").strip() 
-            if len(api_key.strip()) > 0:
-                api_key = api_key
-                data["api_key"] = api_key
+        # env_validation = litellm.validate_environment(model=data["model"])
+        # if (env_validation['keys_in_environment'] is False or os.getenv("AUTH_STRATEGY", None) == "DYNAMIC") and ("authorization" in request.headers or "api-key" in request.headers): # if users pass LLM api keys as part of header
+        #     if "authorization" in request.headers:
+        #         api_key = request.headers.get("authorization")
+        #     elif "api-key" in request.headers: 
+        #         api_key = request.headers.get("api-key")
+        #     print(f"api_key in headers: {api_key}")
+        #     if " " in api_key:
+        #         api_key = api_key.split(" ")[1]
+        #     print(f"api_key split: {api_key}")
+        #     if len(api_key) > 0:
+        #         api_key = api_key
+        #         data["api_key"] = api_key
+        #         print(f"api_key in data: {api_key}")
+        ## CHECK CONFIG ## 
+        if llm_model_list and data["model"] in [m["model_name"] for m in llm_model_list]:
+            for m in llm_model_list: 
+                if data["model"] == m["model_name"]: 
+                    for key, value in m["litellm_params"].items(): 
+                        data[key] = value
+                    break
         response = litellm.completion(
             **data
         )
         if 'stream' in data and data['stream'] == True: # use generate_responses to stream responses
                 return StreamingResponse(data_generator(response), media_type='text/event-stream')
+        print(f"response: {response}")
         return response
     except Exception as e:
         error_traceback = traceback.format_exc()
+        print(f"{error_traceback}")
         error_msg = f"{str(e)}\n\n{error_traceback}"
-        return {"error": error_msg}
-        # raise HTTPException(status_code=500, detail=error_msg)
+        # return {"error": error_msg}
+        raise HTTPException(status_code=500, detail=error_msg)
 
 @router.post("/router/completions")
 async def router_completion(request: Request):

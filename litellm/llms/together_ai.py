@@ -99,15 +99,18 @@ def completion(
         if k not in optional_params: # completion(top_k=3) > togetherai_config(top_k=3) <- allows for dynamic variables to be passed in
             optional_params[k] = v
 
+    print_verbose(f"CUSTOM PROMPT DICT: {custom_prompt_dict}; model: {model}")
     if model in custom_prompt_dict:
         # check if the model has a registered custom prompt
         model_prompt_details = custom_prompt_dict[model]
         prompt = custom_prompt(
-            role_dict=model_prompt_details["roles"], 
-            initial_prompt_value=model_prompt_details["initial_prompt_value"],  
-            final_prompt_value=model_prompt_details["final_prompt_value"], 
-            messages=messages
-        )
+                role_dict=model_prompt_details.get("roles", {}), 
+                initial_prompt_value=model_prompt_details.get("initial_prompt_value", ""),  
+                final_prompt_value=model_prompt_details.get("final_prompt_value", ""), 
+                bos_token=model_prompt_details.get("bos_token", ""),
+                eos_token=model_prompt_details.get("eos_token", ""),
+                messages=messages,
+            )
     else:
         prompt = prompt_factory(model=model, messages=messages)
 
@@ -175,11 +178,9 @@ def completion(
             model_response.choices[0].finish_reason = completion_response["output"]["choices"][0]["finish_reason"]
         model_response["created"] = time.time()
         model_response["model"] = model
-        model_response["usage"] = {
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-            "total_tokens": prompt_tokens + completion_tokens,
-        }
+        model_response.usage.completion_tokens = completion_tokens
+        model_response.usage.prompt_tokens = prompt_tokens
+        model_response.usage.total_tokens = prompt_tokens + completion_tokens
         return model_response
 
 def embedding():
