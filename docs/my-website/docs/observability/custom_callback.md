@@ -1,4 +1,39 @@
-# Custom Callback Functions for Completion()
+# Custom Callbacks
+
+## Callback Class
+You can create a custom callback class to precisely log events as they occur in litellm. 
+
+```python
+from litellm.integrations.custom_logger import CustomLogger
+
+class MyCustomHandler(CustomLogger):
+    def log_pre_api_call(self, model, messages, kwargs): 
+        print(f"Pre-API Call")
+    
+    def log_post_api_call(self, kwargs, response_obj, start_time, end_time): 
+        print(f"Post-API Call")
+    
+    def log_stream_event(self, kwargs, response_obj, start_time, end_time):
+        print(f"On Stream")
+        
+    def log_success_event(self, kwargs, response_obj, start_time, end_time): 
+        print(f"On Success")
+
+    def log_failure_event(self, kwargs, response_obj, start_time, end_time): 
+        print(f"On Failure")
+
+customHandler = MyCustomHandler()
+
+litellm.callbacks = [customHandler]
+response = completion(model="gpt-3.5-turbo", messages=[{ "role": "user", "content": "Hi 👋 - i'm openai"}],
+                              stream=True)
+for chunk in response: 
+    continue
+```
+
+## Callback Functions
+If you just want to log on a specific event (e.g. on input) - you can use callback functions. 
+
 You can set custom callbacks to trigger for:
 - `litellm.input_callback`   - Track inputs/transformed inputs before making the LLM API call
 - `litellm.success_callback` - Track inputs/outputs after making LLM API call
