@@ -31,10 +31,10 @@ def test_completion_openai_prompt():
         #print(response.choices[0].text)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_openai_prompt()
+# test_completion_openai_prompt()
 
 
-def test_completion_openai_prompt():
+def test_completion_chatgpt_prompt():
     try:
         print("\n gpt3.5 test\n")
         response = text_completion(
@@ -47,7 +47,7 @@ def test_completion_openai_prompt():
         #print(response.choices[0].text)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_openai_prompt()
+# test_completion_chatgpt_prompt()
 
 
 def test_text_completion_basic():
@@ -64,11 +64,11 @@ def test_text_completion_basic():
         response_str = response["choices"][0]["text"]
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_text_completion_basic()
+# test_text_completion_basic()
 
 # def test_completion_hf_prompt_array():
 #     try:
-#         litellm.set_verbose=True
+#         litellm.set_verbose=False
 #         print("\n testing hf mistral\n")
 #         response = text_completion(
 #             model="huggingface/mistralai/Mistral-7B-v0.1", 
