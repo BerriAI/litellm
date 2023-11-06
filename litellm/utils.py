@@ -1458,23 +1458,23 @@ def get_optional_params(  # use the openai defaults
         ## check if unsupported param passed in 
         supported_params = ["stream", "temperature", "max_tokens", "top_p", "stop", "n"]
         _check_valid_arg(supported_params=supported_params)
-        
-        if temperature:
+        # temperature, top_p, n, stream, stop, max_tokens, n, presence_penalty default to None
+        if temperature is not None:
             optional_params["temperature"] = temperature
-        if top_p:
+        if top_p is not None:
             optional_params["top_p"] = top_p
-        if n:
+        if n is not None:
             optional_params["best_of"] = n
-            optional_params["do_sample"] = True # need to sample if you want best of for hf inference endpoints
-        if stream:
+            optional_params["do_sample"] = True  # Need to sample if you want best of for hf inference endpoints
+        if stream is not None:
             optional_params["stream"] = stream
-        if stop:
+        if stop is not None:
             optional_params["stop"] = stop
-        if max_tokens:
+        if max_tokens is not None:
             optional_params["max_new_tokens"] = max_tokens
-        if n: 
+        if n is not None: 
             optional_params["best_of"] = n
-        if presence_penalty:
+        if presence_penalty is not None:
             optional_params["repetition_penalty"] = presence_penalty
         if "echo" in special_params:
             # https://huggingface.co/docs/huggingface_hub/main/en/package_reference/inference_client#huggingface_hub.InferenceClient.text_generation.decoder_input_details

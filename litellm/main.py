@@ -1923,6 +1923,7 @@ def text_completion(
     text_completion_response = TextCompletionResponse()
 
     optional_params: Dict[str, Any] = {}
+    # default values for all optional params are none, litellm only passes them to the llm when they are set to non None values
     if best_of is not None:
         optional_params["best_of"] = best_of
     if echo is not None:
