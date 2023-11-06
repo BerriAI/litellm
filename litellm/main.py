@@ -1994,12 +1994,12 @@ def text_completion(
             responses = [None for x in prompt] # init responses 
             for i, individual_prompt in enumerate(prompt):
                 decoded_prompt = tokenizer.decode(individual_prompt) # type: ignore
+                all_params = {**kwargs, **optional_params} # combine optional params and kwargs
                 response = text_completion(
-                    model = model,
-                    prompt=decoded_prompt,
+                    model = model,              # type: ignore
+                    prompt = decoded_prompt,    # type: ignore
                     *args,
- 
-                    **optional_params
+                    **all_params,
                 )
                 responses[i] = response["choices"][0]
 
