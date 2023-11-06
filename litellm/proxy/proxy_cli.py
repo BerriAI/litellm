@@ -75,18 +75,17 @@ def is_port_in_use(port):
 @click.option('--logs', flag_value=False, type=int, help='Gets the "n" most recent logs. By default gets most recent log.') 
 @click.option('--test', flag_value=True, help='proxy chat completions url to make a test request to')
 @click.option('--local', is_flag=True, default=False, help='for local debugging')
-@click.option('--cost', is_flag=True, default=False, help='for viewing cost logs')
-def run_server(host, port, api_base, api_version, model, alias, add_key, headers, save, debug, temperature, max_tokens, request_timeout, drop_params, create_proxy, add_function_to_prompt, config, file, max_budget, telemetry, logs, test, local, cost, num_workers):
+def run_server(host, port, api_base, api_version, model, alias, add_key, headers, save, debug, temperature, max_tokens, request_timeout, drop_params, create_proxy, add_function_to_prompt, config, file, max_budget, telemetry, logs, test, local, num_workers):
     global feature_telemetry
     args = locals()
     if local:
-        from proxy_server import app, save_worker_config, print_cost_logs, usage_telemetry, add_keys_to_config
+        from proxy_server import app, save_worker_config, usage_telemetry, add_keys_to_config
         debug = True
     else:
         try:
-            from .proxy_server import app, save_worker_config, print_cost_logs, usage_telemetry, add_keys_to_config
+            from .proxy_server import app, save_worker_config, usage_telemetry, add_keys_to_config
         except ImportError as e: 
-            from proxy_server import app, save_worker_config, print_cost_logs, usage_telemetry, add_keys_to_config
+            from proxy_server import app, save_worker_config, usage_telemetry, add_keys_to_config
     feature_telemetry = usage_telemetry
     if create_proxy == True: 
         repo_url = 'https://github.com/BerriAI/litellm'
@@ -125,9 +124,6 @@ def run_server(host, port, api_base, api_version, model, alias, add_key, headers
     if model and "ollama" in model: 
         print(f"ollama called")
         run_ollama_serve()
-    if cost == True:
-        print_cost_logs()
-        return
     if test != False:
         click.echo('LiteLLM: Making a test ChatCompletions request to your proxy')
         import openai
