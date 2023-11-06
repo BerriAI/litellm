@@ -1357,9 +1357,9 @@ def get_optional_params(  # use the openai defaults
                 raise UnsupportedParamsError(status_code=500, message=f"Function calling is not supported by {custom_llm_provider}. To add it to the prompt, set `litellm.add_function_to_prompt = True`.")
 
     def _check_valid_arg(supported_params): 
-        print_verbose(f"checking params for {model}")
-        print_verbose(f"params passed in {passed_params}")
-        print_verbose(f"non-default params passed in {non_default_params}")
+        print_verbose(f"\nLiteLLM completion() model= {model}")
+        print_verbose(f"\nLiteLLM: Params passed to completion() {passed_params}")
+        print_verbose(f"\nLiteLLM: Non-Default params passed to completion() {non_default_params}")
         unsupported_params = {}
         for k in non_default_params.keys():
             if k not in supported_params:
