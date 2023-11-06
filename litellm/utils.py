@@ -835,8 +835,9 @@ def client(original_function):
             logging_obj = Logging(model=model, messages=messages, stream=stream, litellm_call_id=kwargs["litellm_call_id"], function_id=function_id, call_type=call_type, start_time=start_time)
             return logging_obj
         except Exception as e:  # DO NOT BLOCK running the function because of this
-            print_verbose(f"[Non-Blocking] {traceback.format_exc()}; args - {args}; kwargs - {kwargs}")
-        pass
+            import logging
+            logging.debug(f"[Non-Blocking] {traceback.format_exc()}; args - {args}; kwargs - {kwargs}")
+            raise e
     
     def crash_reporting(*args, **kwargs):
         if litellm.telemetry:
@@ -860,6 +861,7 @@ def client(original_function):
     def wrapper(*args, **kwargs):
         start_time = datetime.datetime.now()
         result = None
+        logging_obj = None
 
         # only set litellm_call_id if its not in kwargs
         if "litellm_call_id" not in kwargs:
@@ -948,17 +950,18 @@ def client(original_function):
             crash_reporting(*args, **kwargs, exception=traceback_exception)
             end_time = datetime.datetime.now()
             # LOG FAILURE - handle streaming failure logging in the _next_ object, remove `handle_failure` once it's deprecated
-            threading.Thread(target=logging_obj.failure_handler, args=(e, traceback_exception, start_time, end_time)).start()
-            my_thread = threading.Thread(
-                target=handle_failure,
-                args=(e, traceback_exception, start_time, end_time, args, kwargs),
-            )  # don't interrupt execution of main thread
-            my_thread.start()
-            if hasattr(e, "message"):
-                if (
-                    liteDebuggerClient and liteDebuggerClient.dashboard_url != None
-                ):  # make it easy to get to the debugger logs if you've initialized it
-                    e.message += f"\n Check the log in your dashboard - {liteDebuggerClient.dashboard_url}"
+            if logging_obj:
+                threading.Thread(target=logging_obj.failure_handler, args=(e, traceback_exception, start_time, end_time)).start()
+                my_thread = threading.Thread(
+                    target=handle_failure,
+                    args=(e, traceback_exception, start_time, end_time, args, kwargs),
+                )  # don't interrupt execution of main thread
+                my_thread.start()
+                if hasattr(e, "message"):
+                    if (
+                        liteDebuggerClient and liteDebuggerClient.dashboard_url != None
+                    ):  # make it easy to get to the debugger logs if you've initialized it
+                        e.message += f"\n Check the log in your dashboard - {liteDebuggerClient.dashboard_url}"
             raise e
     return wrapper
 
