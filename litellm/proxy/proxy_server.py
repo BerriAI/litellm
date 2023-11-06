@@ -130,7 +130,6 @@ worker_config = None
 #### HELPER FUNCTIONS ####
 def print_verbose(print_statement):
     global user_debug
-    print(f"user debug value: {user_debug}")
     if user_debug:
         print(print_statement)
 
@@ -533,7 +532,6 @@ def litellm_completion(*args, **kwargs):
                 for key, value in m["litellm_params"].items(): 
                     kwargs[key] = value
                 break
-    print(f"litellm set verbose pre-call: {litellm.set_verbose}")
     if call_type == "chat_completion":
         response = litellm.completion(*args, **kwargs)
     elif call_type == "text_completion":
