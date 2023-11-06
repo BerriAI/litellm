@@ -36,7 +36,7 @@ def test_completion_custom_provider_model_name():
         pytest.fail(f"Error occurred: {e}")
 
 
-# test_completion_custom_provider_model_name()
+test_completion_custom_provider_model_name()
 
 
 def test_completion_claude():
