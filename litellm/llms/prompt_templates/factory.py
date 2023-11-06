@@ -229,9 +229,81 @@ def anthropic_pt(messages: list): # format - https://docs.anthropic.com/claude/r
 
 # Function call template 
 def function_call_prompt(messages: list, functions: list):
-    function_prompt = "The following functions are available to you:"
-    for function in functions: 
-        function_prompt += f"""\n{function}\n"""
+    function_prompt = """
+Your primary goal is to determine whether to invoke the provided functions based on the input. If a function fits the context, utilize it. Otherwise, provide direct answers in the specified JSON format. The response structure comprises `name`, `arguments`, and `prompt`. The `prompt` section contains explanations or instructions.
+
+For instance:
+-------------------
+functions = [
+    {
+    "name": "get_author_of_book",
+    "description": "Determine the author of a given book",
+    "parameters": {
+        "type": "object",
+        "properties": {
+        "book_title": {
+            "type": "string",
+            "description": "The title of the book, e.g. 'Pride and Prejudice'"
+        }
+        },
+        "required": ["book_title"]
+    }
+    },
+    {
+    "name": "calculate_sum",
+    "description": "Calculate the sum of two numbers",
+    "parameters": {
+        "type": "object",
+        "properties": {
+        "number1": {
+            "type": "integer",
+            "description": "First number"
+        },
+        "number2": {
+            "type": "integer",
+            "description": "Second number"
+        }
+        },
+        "required": ["number1", "number2"]
+    }
+    }
+]
+
+input1 = "Who wrote the novel 'Pride and Prejudice'?"
+Your response:
+{
+    "name": "get_author_of_book",
+    "arguments": {
+        "book_title": "Pride and Prejudice",
+    },
+    "prompt": "Your question is 'Who wrote the novel 'Pride and Prejudice'?'. It was written by Jane Austen."
+}
+
+input2 = "What's 5 plus 7?"
+Your response:
+{
+    "name": "calculate_sum",
+    "arguments": {
+        "number1": 5,
+        "number2": 7
+    },
+    "prompt": "You asked for the sum of 5 and 7. I will calculate it for you."
+}
+
+input3 = "What's the capital of France?"
+Your response:
+{
+    "name": "",
+    "arguments": {},
+    "prompt": "Your question is 'What's the capital of France?'. The capital of France is Paris."
+}
+
+-------------------
+Note: Available functions are provided below:
+""" + f"\nfunctions = {functions}\n"
+    
+    # for function in functions: 
+        # function_prompt += f"""\n{function}\n"""
     
     function_added_to_prompt = False
     for message in messages: 

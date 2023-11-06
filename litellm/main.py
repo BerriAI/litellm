@@ -8,6 +8,7 @@
 #  Thank you ! We ❤️ you! - Krrish & Ishaan
 
 import os, openai, sys, json, inspect
+import re
 from typing import Any
 from functools import partial
 import dotenv, traceback, random, asyncio, time, contextvars
@@ -174,6 +175,68 @@ def mock_completion(model: str, messages: List, stream: Optional[bool] = False, 
         traceback.print_exc()
         raise Exception("Mock completion response failed")
 
+def completion_result_wrapper(func):
+    """ 
+    If add_function_to_prompt is True, ensure the function call response matches the GPT format. 
+    """
+    def wrapper(*args, **kwargs):
+        result = func(*args, **kwargs)
+     
+        if litellm.add_function_to_prompt is False:
+            return result
+        
+        new_choices = []
+        pattern = (
+            r'\{\s*"name"\s*:\s*".*?"\s*,'
+            r'\s*"arguments"\s*:\s*\{.*?\}\s*,'
+            r'\s*"prompt"\s*:\s*".*?"\s*\}'
+        )
+
+        for choice in result["choices"]:
+            message = choice["message"]
+            content = message.get("content", "")
+
+            if content is None or "function_call" in message:
+                new_choices.append(choice)
+                continue
+
+            try:
+                matches = re.findall(pattern, content, re.DOTALL)
+                json_text = matches[0]
+                content_dict = json.loads(json_text)
+                func_call_name = content_dict["name"]
+                func_call_args = content_dict["arguments"]
+                func_prompt = content_dict["prompt"]
+
+                if func_call_name == "":
+                    new_message_content = {
+                        "content": func_prompt,
+                        "role": message["role"],
+                    }
+                else:
+                    new_message_content = {
+                        "content": func_prompt,
+                        "role": message["role"],
+                        "function_call": {
+                            "name": func_call_name,
+                            "arguments": json.dumps(func_call_args)
+                        }
+                    }
+                
+                choice["message"] = new_message_content
+                new_choices.append(choice)
+
+            except Exception:
+                new_choices.append(choice)
+                print(f">>>litellm/main.py|{inspect.currentframe().f_lineno}|Exception: {traceback.format_exc()}")
+                print(f">>>litellm/main.py|{inspect.currentframe().f_lineno}|Original Content: {content}")
+
+        result["choices"] = new_choices
+        return result
+    
+    return wrapper
+
+@completion_result_wrapper
 @client
 @timeout(  # type: ignore
     600
