@@ -2,22 +2,26 @@
 
 LiteLLM allows you to call your custom endpoint in the OpenAI ChatCompletion format
 
-### API KEYS
+## API KEYS
 No api keys required
 
-### Example Usage
+## Set up your Custom API Server
+Your server should have the following Endpoints:
 
-#### Pre-Requisites
-Ensure your proxy server has the following route
 Here's an example OpenAI proxy server with routes: https://replit.com/@BerriAI/openai-proxy#main.py
 
-```python
-@app.route('/chat/completions', methods=["POST"])
-def chat_completion():
-  print("got request for chat completion")
+### Required Endpoints
+- POST `/chat/completions` - chat completions endpoint 
 
-```
+### Optional Endpoints
+- POST `/completions` - completions endpoint 
+- Get `/models` - available models on server
+- POST `/embeddings` - creates an embedding vector representing the input text.
 
+
+## Example Usage
+
+### Call `/chat/completions`
 In order to use your custom OpenAI Chat Completion proxy with LiteLLM, ensure you set
 
 * `api_base` to your proxy url, example "https://openai-proxy.berriai.repl.co"
@@ -28,7 +32,7 @@ import os
 from litellm import completion
 
 ## set ENV variables
-os.environ["OPENAI_API_KEY"] = "set anything here - key is not used for proxy"
+os.environ["OPENAI_API_KEY"] = "anything" #key is not used for proxy
 
 messages = [{ "content": "Hello, how are you?","role": "user"}]
 
