@@ -475,6 +475,7 @@ def completion(
             ## COMPLETION CALL
             try:
                 if custom_llm_provider == "custom_openai": 
+                    print("making call using openai custom chat completion")
                     response = openai_proxy_chat_completions.completion(
                         model=model,
                         messages=messages,
@@ -2002,12 +2003,12 @@ def text_completion(
                 )
                 responses[i] = response["choices"][0]
 
-            text_completion_response["id"] = response["id"]
+            text_completion_response["id"] = response.get("id", None)
             text_completion_response["object"] = "text_completion"
-            text_completion_response["created"] = response["created"]
-            text_completion_response["model"] = response["model"]
+            text_completion_response["created"] = response.get("created", None)
+            text_completion_response["model"] = response.get("model", None)
             text_completion_response["choices"] = responses
-            text_completion_response["usage"] = response["usage"]
+            text_completion_response["usage"] = response.get("usage", None)
 
             return text_completion_response
     else:
@@ -2032,17 +2033,17 @@ def text_completion(
             transformed_logprobs = litellm.utils.transform_logprobs(raw_response)
         except Exception as e:
             print_verbose(f"LiteLLM non blocking exception: {e}")
-        text_completion_response["id"] = response["id"]
+        text_completion_response["id"] = response.get("id", None)
         text_completion_response["object"] = "text_completion"
-        text_completion_response["created"] = response["created"]
-        text_completion_response["model"] = response["model"]
+        text_completion_response["created"] = response.get("created", None)
+        text_completion_response["model"] = response.get("model", None)
         text_choices = TextChoices()
         text_choices["text"] = response["choices"][0]["message"]["content"]
         text_choices["index"] = response["choices"][0]["index"]
         text_choices["logprobs"] = transformed_logprobs
         text_choices["finish_reason"] = response["choices"][0]["finish_reason"]
         text_completion_response["choices"] = [text_choices]
-        text_completion_response["usage"] = response["usage"]
+        text_completion_response["usage"] = response.get("usage", None)
         return text_completion_response
 
 ##### Moderation #######################
