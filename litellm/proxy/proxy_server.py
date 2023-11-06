@@ -74,17 +74,13 @@ def generate_feedback_box():
     print(" Thank you for using LiteLLM! - Krrish & Ishaan")
     print()
     print()
-
-
-generate_feedback_box()
-
-print()
-print(
-    "\033[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new\033[0m"
-)
-print()
-print("\033[1;34mDocs: https://docs.litellm.ai/docs/proxy_server\033[0m")
-print()
+    print()
+    print(
+        "\033[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new\033[0m"
+    )
+    print()
+    print("\033[1;34mDocs: https://docs.litellm.ai/docs/proxy_server\033[0m")
+    print()
 
 import litellm
 litellm.suppress_debug_info = True
@@ -360,6 +356,7 @@ def initialize(
     config
 ):
     global user_model, user_api_base, user_debug, user_max_tokens, user_request_timeout, user_temperature, user_telemetry, user_headers, llm_model_list, llm_router, server_settings
+    generate_feedback_box()
     user_model = model
     user_debug = debug
     dynamic_config = {"general": {}, user_model: {}}
