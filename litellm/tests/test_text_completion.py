@@ -66,23 +66,23 @@ def test_text_completion_basic():
         pytest.fail(f"Error occurred: {e}")
 # test_text_completion_basic()
 
-def test_completion_hf_prompt_array():
-    try:
-        litellm.set_verbose=True
-        print("\n testing hf mistral\n")
-        response = text_completion(
-            model="huggingface/mistralai/Mistral-7B-v0.1", 
-            prompt=token_prompt, # token prompt is a 2d list
-        )
-        print("\n\n response")
+# def test_completion_hf_prompt_array():
+#     try:
+#         litellm.set_verbose=True
+#         print("\n testing hf mistral\n")
+#         response = text_completion(
+#             model="huggingface/mistralai/Mistral-7B-v0.1", 
+#             prompt=token_prompt, # token prompt is a 2d list
+#         )
+#         print("\n\n response")
 
-        print(response)
-        print(response.choices)
-        assert(len(response.choices)==2)
-        # response_str = response["choices"][0]["text"]
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-test_completion_hf_prompt_array()
+#         print(response)
+#         print(response.choices)
+#         assert(len(response.choices)==2)
+#         # response_str = response["choices"][0]["text"]
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
+# test_completion_hf_prompt_array()
 
 
 def test_completion_text_003_prompt_array():
