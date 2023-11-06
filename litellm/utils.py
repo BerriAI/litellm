@@ -1460,6 +1460,10 @@ def get_optional_params(  # use the openai defaults
         _check_valid_arg(supported_params=supported_params)
         # temperature, top_p, n, stream, stop, max_tokens, n, presence_penalty default to None
         if temperature is not None:
+            if temperature == 0.0 or temperature == 0:
+                # hugging face exception raised when temp==0
+                # Failed: Error occurred: HuggingfaceException - Input validation error: `temperature` must be strictly positive
+                temperature = 0.0001
             optional_params["temperature"] = temperature
         if top_p is not None:
             optional_params["top_p"] = top_p
@@ -1471,6 +1475,10 @@ def get_optional_params(  # use the openai defaults
         if stop is not None:
             optional_params["stop"] = stop
         if max_tokens is not None:
+            # HF TGI raises the following exception when max_new_tokens==0
+            # Failed: Error occurred: HuggingfaceException - Input validation error: `max_new_tokens` must be strictly positive
+            if max_tokens == 0:
+                max_tokens = 1
             optional_params["max_new_tokens"] = max_tokens
         if n is not None: 
             optional_params["best_of"] = n
