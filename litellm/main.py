@@ -1992,13 +1992,13 @@ def text_completion(
         ## if it's a 2d list - each element in the list is a text_completion() request
         if len(prompt) > 0 and type(prompt[0]) == list:
             responses = [None for x in prompt] # init responses 
-            for i, request in enumerate(prompt):
-                decoded_prompt = tokenizer.decode(request)
+            for i, individual_prompt in enumerate(prompt):
+                decoded_prompt = tokenizer.decode(individual_prompt) # type: ignore
                 response = text_completion(
                     model = model,
                     prompt=decoded_prompt,
                     *args,
-                    **kwargs,
+ 
                     **optional_params
                 )
                 responses[i] = response["choices"][0]
