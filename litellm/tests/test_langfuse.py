@@ -14,9 +14,9 @@ import time
 
 def test_langfuse_logging_async(): 
     async def _test_langfuse():
-        await litellm.acompletion(
+        return await litellm.acompletion(
             model="gpt-3.5-turbo",
-            prompt="This is a test",
+            messages=[{"role": "user", "content":"This is a test"}],
             max_tokens=1000,
             temperature=0.7,
         )
