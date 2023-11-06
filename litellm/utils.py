@@ -828,7 +828,12 @@ def client(original_function):
             model = args[0] if len(args) > 0 else kwargs["model"]
             call_type = original_function.__name__
             if call_type == CallTypes.completion.value:
-                messages = args[1] if len(args) > 1 else kwargs["messages"]
+                if len(args) > 1:
+                    messages = args[1] 
+                elif kwargs.get("messages", None):
+                    messages = kwargs["messages"]
+                elif kwargs.get("prompt", None):
+                    messages = kwargs["prompt"]
             elif call_type == CallTypes.embedding.value:
                 messages = args[1] if len(args) > 1 else kwargs["input"]
             stream = True if "stream" in kwargs and kwargs["stream"] == True else False
