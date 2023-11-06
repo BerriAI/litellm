@@ -72,7 +72,8 @@ def test_text_completion_basic():
 #         print("\n testing hf mistral\n")
 #         response = text_completion(
 #             model="huggingface/mistralai/Mistral-7B-v0.1", 
-#             prompt=token_prompt, # token prompt is a 2d list
+#             prompt=token_prompt, # token prompt is a 2d list,
+#             max_tokens=0.0
 #         )
 #         print("\n\n response")
 
@@ -98,7 +99,7 @@ def test_completion_text_003_prompt_array():
         # response_str = response["choices"][0]["text"]
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_text_003_prompt_array()
+# test_completion_text_003_prompt_array()
 
 
 # not including this in our ci cd pipeline, since we don't want to fail tests due to an unstable replit
