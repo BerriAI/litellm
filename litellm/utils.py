@@ -1463,7 +1463,7 @@ def get_optional_params(  # use the openai defaults
             if temperature == 0.0 or temperature == 0:
                 # hugging face exception raised when temp==0
                 # Failed: Error occurred: HuggingfaceException - Input validation error: `temperature` must be strictly positive
-                temperature = 0.0001
+                temperature = 0.01
             optional_params["temperature"] = temperature
         if top_p is not None:
             optional_params["top_p"] = top_p
