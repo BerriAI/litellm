@@ -1922,7 +1922,7 @@ def text_completion(
 
     text_completion_response = TextCompletionResponse()
 
-    optional_params = {}
+    optional_params: Dict[str, Any] = {}
     if best_of is not None:
         optional_params["best_of"] = best_of
     if echo is not None:
