@@ -111,7 +111,7 @@ def test_completion_hf_prompt_array():
             model="huggingface/mistralai/Mistral-7B-v0.1", 
             prompt=token_prompt, # token prompt is a 2d list,
             max_tokens=0,
-            temperature=0.0
+            temperature=0.0,
             echo=True,
         )
         print("\n\n response")
