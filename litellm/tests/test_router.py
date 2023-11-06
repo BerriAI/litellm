@@ -11,8 +11,50 @@ import litellm
 from litellm import Router
 from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
+# import logging
+# logging.basicConfig(level=logging.DEBUG)
 
 load_dotenv()
+
+# def test_openai_only(): 
+# 	from litellm import completion
+# 	import time
+# 	completions = []
+# 	max_workers = 1000 # Adjust as needed
+# 	start_time = time.time()
+# 	print(f"Started test: {start_time}")
+# 	with ThreadPoolExecutor(max_workers=max_workers) as executor:
+# 		kwargs = {
+# 			"model": "gpt-3.5-turbo",
+# 			"messages": [{"role": "user", "content": """Context:
+
+# In the historical era of Ancient Greece, a multitude of significant individuals lived, contributing immensely to various disciplines like science, politics, philosophy, and literature. For instance, Socrates, a renowned philosopher, primarily focused on ethics. His notable method, the Socratic Method, involved acknowledging one's own ignorance to stimulate critical thinking and illuminate ideas. His student, Plato, another prominent figure, founded the Academy in Athens. He proposed theories on justice, beauty, and equality, and also introduced the theory of forms, which is pivotal to understanding his philosophical insights. Another student of Socrates, Xenophon, distinguished himself more in the domain of history and military affairs.
+
+# Aristotle, who studied under Plato, led an equally remarkable life. His extensive works have been influential across various domains, including science, logic, metaphysics, ethics, and politics. Perhaps most notably, a substantial portion of the Western intellectual tradition traces back to his writings. He later tutored Alexander the Great who went on to create one of the most vast empires in the world.
+
+# In the domain of mathematics, Pythagoras and Euclid made significant contributions. Pythagoras is best known for the Pythagorean theorem, a fundamental principle in geometry, while Euclid, often regarded as the father of geometry, wrote "The Elements", a collection of definitions, axioms, theorems, and proofs. 
+
+# Apart from these luminaries, the period also saw a number of influential political figures. Pericles, a prominent and influential Greek statesman, orator, and general of Athens during the Golden Age, specifically between the Persian and Peloponnesian wars, played a significant role in developing the Athenian democracy.
+
+# The Ancient Greek era also witnessed extraordinary advancements in arts and literature. Homer, credited with the creation of the epic poems 'The Iliad' and 'The Odyssey,' is considered one of the greatest poets in history. The tragedies of Sophocles, Aeschylus, and Euripides left an indelible mark on the field of drama, and the comedies of Aristophanes remain influential even today.
+
+# ---
+# Question: 
+
+# Who among the mentioned figures from Ancient Greece contributed to the domain of mathematics and what are their significant contributions?"""}],
+# 		}
+# 		for _ in range(10000):
+# 			future = executor.submit(completion, **kwargs)
+# 			completions.append(future)
+
+# 	# Retrieve the results from the futures
+# 	results = [future.result() for future in completions]
+# 	end_time = time.time()
+
+# 	print(f"Total Duration: {end_time-start_time}")
+
+# test_openai_only()
+
 
 def test_multiple_deployments(): 
 	model_list = [{ # list of model deployments 
