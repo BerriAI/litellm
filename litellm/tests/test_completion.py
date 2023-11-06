@@ -110,6 +110,18 @@ def test_completion_with_litellm_call_id():
         pytest.fail(f"Error occurred: {e}")
 # test_completion_with_litellm_call_id()
 
+def test_completion_gpt4_turbo():
+    try:
+        response = completion(
+            model="gpt-4-1106-preview", 
+            messages=messages,
+            max_tokens=10,
+        )
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+# test_completion_gpt4_turbo()
+
 def test_completion_perplexity_api():
     try:
         # litellm.set_verbose=True
