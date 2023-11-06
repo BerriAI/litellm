@@ -31,7 +31,7 @@ def test_completion_openai_prompt():
         #print(response.choices[0].text)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_completion_openai_prompt()
+test_completion_openai_prompt()
 
 
 def test_completion_openai_prompt():
@@ -47,7 +47,7 @@ def test_completion_openai_prompt():
         #print(response.choices[0].text)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_completion_openai_prompt()
+test_completion_openai_prompt()
 
 
 def test_text_completion_basic():
@@ -64,7 +64,7 @@ def test_text_completion_basic():
         response_str = response["choices"][0]["text"]
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_text_completion_basic()
+test_text_completion_basic()
 
 # def test_completion_hf_prompt_array():
 #     try:
@@ -101,14 +101,15 @@ def test_completion_text_003_prompt_array():
 test_completion_text_003_prompt_array()
 
 
+# not including this in our ci cd pipeline, since we don't want to fail tests due to an unstable replit
 # def test_text_completion_with_proxy():
 #     try:
 #         litellm.set_verbose=True
 #         response = text_completion(
 #             model="facebook/opt-125m",
 #             prompt='Write a tagline for a traditional bavarian tavern',
-#             api_base="https://openai-proxy.berriai.repl.co//v1",
-#             custom_llm_provider="custom_openai",
+#             api_base="https://openai-proxy.berriai.repl.co/v1",
+#             custom_llm_provider="openai",
 #             temperature=0,
 #             max_tokens=10,
 #         )
