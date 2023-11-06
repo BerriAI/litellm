@@ -401,110 +401,6 @@ def initialize(
     user_telemetry = telemetry
     usage_telemetry(feature="local_proxy_server")
 
-
-def track_cost_callback(
-    kwargs,  # kwargs to completion
-    completion_response,  # response from completion
-    start_time,
-    end_time,  # start/end time
-):
-    # track cost like this
-    # {
-    #     "Oct12": {
-    #         "gpt-4": 10,
-    #         "claude-2": 12.01,
-    #     },
-    #     "Oct 15": {
-    #         "ollama/llama2": 0.0,
-    #         "gpt2": 1.2
-    #     }
-    # }
-    try:
-        # for streaming responses
-        if "complete_streaming_response" in kwargs:
-            # for tracking streaming cost we pass the "messages" and the output_text to litellm.completion_cost
-            completion_response = kwargs["complete_streaming_response"]
-            input_text = kwargs["messages"]
-            output_text = completion_response["choices"][0]["message"]["content"]
-            response_cost = litellm.completion_cost(
-                model=kwargs["model"], messages=input_text, completion=output_text
-            )
-            model = kwargs["model"]
-
-        # for non streaming responses
-        else:
-            # we pass the completion_response obj
-            if kwargs["stream"] != True:
-                response_cost = litellm.completion_cost(
-                    completion_response=completion_response
-                )
-                model = completion_response["model"]
-
-        # read/write from json for storing daily model costs
-        cost_data = {}
-        try:
-            with open("costs.json") as f:
-                cost_data = json.load(f)
-        except FileNotFoundError:
-            cost_data = {}
-        import datetime
-
-        date = datetime.datetime.now().strftime("%b-%d-%Y")
-        if date not in cost_data:
-            cost_data[date] = {}
-
-        if kwargs["model"] in cost_data[date]:
-            cost_data[date][kwargs["model"]]["cost"] += response_cost
-            cost_data[date][kwargs["model"]]["num_requests"] += 1
-        else:
-            cost_data[date][kwargs["model"]] = {
-                "cost": response_cost,
-                "num_requests": 1,
-            }
-
-        with open("costs.json", "w") as f:
-            json.dump(cost_data, f, indent=2)
-
-    except:
-        pass
-
-
-def logger(
-    kwargs,  # kwargs to completion
-    completion_response=None,  # response from completion
-    start_time=None,
-    end_time=None,  # start/end time
-):
-    log_event_type = kwargs["log_event_type"]
-    try:
-        if log_event_type == "pre_api_call":
-            inference_params = copy.deepcopy(kwargs)
-            timestamp = inference_params.pop("start_time")
-            dt_key = timestamp.strftime("%Y%m%d%H%M%S%f")[:23]
-            log_data = {dt_key: {"pre_api_call": inference_params}}
-
-            try:
-                with open(log_file, "r") as f:
-                    existing_data = json.load(f)
-            except FileNotFoundError:
-                existing_data = {}
-
-            existing_data.update(log_data)
-
-            def write_to_log():
-                with open(log_file, "w") as f:
-                    json.dump(existing_data, f, indent=2)
-
-            thread = threading.Thread(target=write_to_log, daemon=True)
-            thread.start()
-    except:
-        pass
-
-
-litellm.input_callback = [logger]
-litellm.success_callback = [logger]
-litellm.failure_callback = [logger]
-
 # for streaming
 def data_generator(response):
     print_verbose("inside generator")
@@ -605,6 +501,7 @@ async def completion(request: Request, model: Optional[str] = None):
             **data
         )
     except Exception as e: 
+        print(f"\033[1;31mAn error occurred: {e}\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`")
         error_traceback = traceback.format_exc()
         error_msg = f"{str(e)}\n\n{error_traceback}"
         return {"error": error_msg}
@@ -637,14 +534,6 @@ async def chat_completion(request: Request, model: Optional[str] = None):
         error_traceback = traceback.format_exc()
         error_msg = f"{str(e)}\n\n{error_traceback}"
         return {"error": error_msg}
-
-def print_cost_logs():
-    with open("costs.json", "r") as f:
-        # print this in green
-        print("\033[1;32m")
-        print(f.read())
-        print("\033[0m")
-    return
 
 
 @router.get("/ollama_logs")
