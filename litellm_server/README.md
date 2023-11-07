@@ -1,6 +1,6 @@
 # litellm-server [experimental]
 
-Loadbalancer for multiple API Deployments
+Load balancer for multiple API Deployments (eg. Azure/OpenAI)
 
 LiteLLM Server supports: 
 - LLM API Calls in the OpenAI ChatCompletions format 
