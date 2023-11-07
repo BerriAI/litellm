@@ -393,7 +393,7 @@ model_list:
 $ litellm --config /path/to/config.yaml
 ```
 
-### Multiple Models 
+### Using Multiple Models 
 
 If you have 1 model running on a local GPU and another that's hosted (e.g. on Runpod), you can call both via the same litellm server by listing them in your `config.yaml`. 
 
