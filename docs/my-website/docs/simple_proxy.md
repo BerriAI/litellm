@@ -180,7 +180,15 @@ $ litellm --model command-nightly
 
 </Tabs>
 
-# [TUTORIAL] LM-Evaluation Harness with TGI
+### Server Endpoints
+- POST `/chat/completions` - chat completions endpoint to call 100+ LLMs
+- POST `/completions` - completions endpoint
+- POST `/embeddings` - embedding endpoint for Azure, OpenAI, Huggingface endpoints
+- GET `/models` - available models on server
+
+## Advanced
+
+### [TUTORIAL] LM-Evaluation Harness with TGI
 
 Evaluate LLMs 20x faster with TGI via litellm proxy's `/completions` endpoint. 
 
@@ -208,12 +216,33 @@ $ python3 main.py \
 ```
 
 
-## Endpoints:
-- `/chat/completions` - chat completions endpoint to call 100+ LLMs
-- `/embeddings` - embedding endpoint for Azure, OpenAI, Huggingface endpoints
-- `/models` - available models on server
+### Caching
+#### Control caching per completion request
+Caching can be switched on/off per /chat/completions request
+- Caching on for completion - pass `caching=True`:
+  ```shell
+  curl http://0.0.0.0:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+     "model": "gpt-3.5-turbo",
+     "messages": [{"role": "user", "content": "write a poem about litellm!"}],
+     "temperature": 0.7,
+     "caching": true
+   }'
+  ```
+- Caching off for completion - pass `caching=False`:
+  ```shell
+  curl http://0.0.0.0:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+     "model": "gpt-3.5-turbo",
+     "messages": [{"role": "user", "content": "write a poem about litellm!"}],
+     "temperature": 0.7,
+     "caching": false
+   }'
+  ```
 
-## Set Custom Prompt Templates
+### Set Custom Prompt Templates
 
 LiteLLM by default checks if a model has a [prompt template and applies it](./completion/prompt_formatting.md) (e.g. if a huggingface model has a saved chat template in it's tokenizer_config.json). However, you can also set a custom prompt template on your proxy in the `config.yaml`: 
 
@@ -240,7 +269,7 @@ model_list:
 $ litellm --config /path/to/config.yaml
 ```
 
-## Multiple Models 
+### Multiple Models 
 
 If you have 1 model running on a local GPU and another that's hosted (e.g. on Runpod), you can call both via the same litellm server by listing them in your `config.yaml`. 
 
@@ -282,7 +311,7 @@ completion = openai.ChatCompletion.create(model="gpt-3.5-turbo", messages=[{"rol
 print(completion.choices[0].message.content)
 ```
 
-## Save Model-specific params (API Base, API Keys, Temperature, etc.)
+### Save Model-specific params (API Base, API Keys, Temperature, etc.)
 Use the [router_config_template.yaml](https://github.com/BerriAI/litellm/blob/main/router_config_template.yaml) to save model-specific information like api_base, api_key, temperature, max_tokens, etc. 
 
 **Step 1**: Create a `config.yaml` file
@@ -305,7 +334,7 @@ model_list:
 ```shell
 $ litellm --config /path/to/config.yaml
 ```
-## Model Alias 
+### Model Alias 
 
 Set a model alias for your deployments. 
 
@@ -321,32 +350,6 @@ model_list:
       api_key: your_huggingface_api_key # [OPTIONAL] if deployed on huggingface inference endpoints
       api_base: your_api_base # url where model is deployed 
 ```
-## Advanced
-### Caching
-#### Control caching per completion request
-Caching can be switched on/off per /chat/completions request
-- Caching on for completion - pass `caching=True`:
-  ```shell
-  curl http://0.0.0.0:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-     "model": "gpt-3.5-turbo",
-     "messages": [{"role": "user", "content": "write a poem about litellm!"}],
-     "temperature": 0.7,
-     "caching": true
-   }'
-  ```
-- Caching off for completion - pass `caching=False`:
-  ```shell
-  curl http://0.0.0.0:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-     "model": "gpt-3.5-turbo",
-     "messages": [{"role": "user", "content": "write a poem about litellm!"}],
-     "temperature": 0.7,
-     "caching": false
-   }'
-  ```
 
 
 
