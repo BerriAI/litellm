@@ -29,7 +29,7 @@ curl http://0.0.0.0:8000/v1/chat/completions \
 This will now automatically route any requests for gpt-3.5-turbo to bigcode starcoder, hosted on huggingface inference endpoints. 
 
 
-#### Other supported models:
+### Supported LLMs:
 <Tabs>
 <TabItem value="bedrock" label="Bedrock">
 
@@ -42,6 +42,26 @@ $ export AWS_SECRET_ACCESS_KEY=""
 ```shell
 $ litellm --model bedrock/anthropic.claude-v2
 ```
+</TabItem>
+<TabItem value="huggingface" label="Huggingface (TGI)">
+
+```shell
+$ export HUGGINGFACE_API_KEY=my-api-key #[OPTIONAL]
+```
+```shell
+$ litellm --model huggingface/<huggingface-model-name> --api_base https://<your-hf-endpoint># e.g. huggingface/mistralai/Mistral-7B-v0.1
+```
+
+</TabItem>
+<TabItem value="anthropic" label="Anthropic">
+
+```shell
+$ export ANTHROPIC_API_KEY=my-api-key
+```
+```shell
+$ litellm --model claude-instant-1
+```
+
 </TabItem>
 <TabItem value="vllm-local" label="VLLM">
 Assuming you're running vllm locally
@@ -56,27 +76,12 @@ $ litellm --model vllm/facebook/opt-125m
 $ litellm --model openai/<model_name> --api_base <your-api-base>
 ```
 </TabItem>
-<TabItem value="huggingface" label="Huggingface (TGI)">
-
-```shell
-$ export HUGGINGFACE_API_KEY=my-api-key #[OPTIONAL]
-$ litellm --model huggingface/<huggingface-model-name> --api_base https://<your-hf-endpoint># e.g. huggingface/mistralai/Mistral-7B-v0.1
-```
-
-</TabItem>
-<TabItem value="anthropic" label="Anthropic">
-
-```shell
-$ export ANTHROPIC_API_KEY=my-api-key
-$ litellm --model claude-instant-1
-```
-
-</TabItem>
-
 <TabItem value="together_ai" label="TogetherAI">
 
 ```shell
 $ export TOGETHERAI_API_KEY=my-api-key
+```
+```shell
 $ litellm --model together_ai/lmsys/vicuna-13b-v1.5-16k
 ```
 
@@ -86,6 +91,8 @@ $ litellm --model together_ai/lmsys/vicuna-13b-v1.5-16k
 
 ```shell
 $ export REPLICATE_API_KEY=my-api-key
+```
+```shell
 $ litellm \
   --model replicate/meta/llama-2-70b-chat:02e509c789964a7ea8736978a43525956ef40397be9033abf9fd2badfe68c9e3
 ```
@@ -104,6 +111,8 @@ $ litellm --model petals/meta-llama/Llama-2-70b-chat-hf
 
 ```shell
 $ export PALM_API_KEY=my-palm-key
+```
+```shell
 $ litellm --model palm/chat-bison
 ```
 
@@ -114,7 +123,8 @@ $ litellm --model palm/chat-bison
 ```shell
 $ export AZURE_API_KEY=my-api-key
 $ export AZURE_API_BASE=my-api-base
-
+```
+```
 $ litellm --model azure/my-deployment-name
 ```
 
@@ -124,6 +134,9 @@ $ litellm --model azure/my-deployment-name
 
 ```shell
 $ export AI21_API_KEY=my-api-key
+```
+
+```shell
 $ litellm --model j2-light
 ```
 
@@ -133,14 +146,15 @@ $ litellm --model j2-light
 
 ```shell
 $ export COHERE_API_KEY=my-api-key
+```
+
+```shell
 $ litellm --model command-nightly
 ```
 
 </TabItem>
 
 </Tabs>
-
-[**Jump to Code**](https://github.com/BerriAI/litellm/blob/fef4146396d5d87006259e00095a62e3900d6bb4/litellm/proxy.py#L36)
 
 # [TUTORIAL] LM-Evaluation Harness with TGI
 
