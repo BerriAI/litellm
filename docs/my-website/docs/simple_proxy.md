@@ -13,17 +13,14 @@ LiteLLM Server manages:
 
 ```shell
 $ litellm --model huggingface/bigcode/starcoder
+
 #INFO: Proxy running on http://0.0.0.0:8000
 ```
 
+### Test
+In a new shell, run, this will make an `openai.ChatCompletion` request
 ```shell
-curl http://0.0.0.0:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-     "model": "gpt-3.5-turbo",
-     "messages": [{"role": "user", "content": "Say this is a test!"}],
-     "temperature": 0.7
-   }'
+litellm --test
 ```
 
 This will now automatically route any requests for gpt-3.5-turbo to bigcode starcoder, hosted on huggingface inference endpoints. 
