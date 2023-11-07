@@ -325,19 +325,6 @@ Docker command:
 docker run -e LANGFUSE_PUBLIC_KEY=<your-public-key> -e LANGFUSE_SECRET_KEY=<your-secret-key> -e LANGFUSE_HOST=<your-langfuse-host> -e PORT=8000 -p 8000:8000 ghcr.io/berriai/litellm:latest
 ```
 
-## Local Usage 
-
-```shell 
-$ git clone https://github.com/BerriAI/litellm.git
-```
-```shell
-$ cd ./litellm/litellm_server
-```
-
-```shell
-$ uvicorn main:app --host 0.0.0.0 --port 8000
-```
-
 ## Advanced
 ### Caching - Completion() and Embedding() Responses
 

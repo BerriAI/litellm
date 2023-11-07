@@ -105,7 +105,7 @@ const sidebars = {
         'tutorials/finetuned_chat_gpt',
         'tutorials/sagemaker_llms',
         'tutorials/text_completion',
-        'tutorials/litellm_Test_Multiple_Providers',
+        // 'tutorials/litellm_Test_Multiple_Providers',
         "tutorials/first_playground",
         'tutorials/compare_llms',
         "tutorials/model_fallbacks",
