@@ -2,6 +2,8 @@
 
 Load balancer for multiple API Deployments (eg. Azure/OpenAI)
 
+<img width="1036" alt="Screenshot 2023-11-06 at 6 54 16 PM" src="https://github.com/BerriAI/litellm/assets/17561003/d32da338-1d72-45bb-bca8-ac70f1d3e980">
+
 LiteLLM Server supports: 
 - LLM API Calls in the OpenAI ChatCompletions format 
 - Caching + Logging capabilities (Redis and Langfuse, respectively)
