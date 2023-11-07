@@ -2,22 +2,9 @@ import Image from '@theme/IdealImage';
 
 # Reliability - Fallbacks, Azure Deployments, etc.
 
+Prevent failed calls and slow response times with multiple deployments for API calls (E.g. multiple azure-openai deployments).
 
-<Image img={require('../img/multiple_deployment.png')} alt="HF_Dashboard" style={{ maxWidth: '100%', height: 'auto' }}/>
-
-# Reliability
-
-LiteLLM helps prevent failed requests in 3 ways: 
-- Retries
-- Fallbacks: Context Window + General
-- RateLimitManager
-
-## Helper utils 
-LiteLLM supports the following functions for reliability:
-* `litellm.longer_context_model_fallback_dict`: Dictionary which has a mapping for those models which have larger equivalents  
-* `num_retries`: use tenacity retries
-* `completion()` with fallbacks: switch between models/keys/api bases in case of errors. 
-* `router()`: An abstraction on top of completion + embeddings to route the request to a deployment with capacity (available tpm/rpm).
+<Image img={require('../img/multiple_deployments.png')} alt="HF_Dashboard" style={{ maxWidth: '100%', height: 'auto' }}/>
 
 ## Manage Multiple Deployments
 
@@ -134,6 +121,13 @@ response = completion(
 ```
 
 ## Fallbacks 
+
+## Helper utils 
+LiteLLM supports the following functions for reliability:
+* `litellm.longer_context_model_fallback_dict`: Dictionary which has a mapping for those models which have larger equivalents  
+* `num_retries`: use tenacity retries
+* `completion()` with fallbacks: switch between models/keys/api bases in case of errors. 
+
 
 ### Context Window Fallbacks
 ```python 
