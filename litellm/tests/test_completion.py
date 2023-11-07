@@ -1116,7 +1116,7 @@ def test_completion_with_fallbacks():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-# test_completion_with_fallbacks()
+# test_completion_with_fallbacks() 
 def test_completion_anyscale_api():
     try:
         # litellm.set_verbose=True
