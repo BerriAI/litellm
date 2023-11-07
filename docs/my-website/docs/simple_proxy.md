@@ -13,8 +13,8 @@ LiteLLM Server manages:
 
 ```shell
 $ litellm --model huggingface/bigcode/starcoder
+#INFO: Proxy running on http://0.0.0.0:8000
 ```
-OpenAI Proxy running on http://0.0.0.0:8000
 
 ```shell
 curl http://0.0.0.0:8000/v1/chat/completions \
