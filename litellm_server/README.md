@@ -1,6 +1,6 @@
 # litellm-server [experimental]
 
-A simple, fast, and lightweight **OpenAI-compatible server** to call 100+ LLM APIs.
+Loadbalancer for multiple API Deployments
 
 LiteLLM Server supports: 
 - LLM API Calls in the OpenAI ChatCompletions format 
