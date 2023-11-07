@@ -8,7 +8,6 @@ LiteLLM Server supports:
 
 * Call Call 100+ LLMs [Huggingface/Bedrock/TogetherAI/etc.](#other-supported-models) in the OpenAI `ChatCompletions` & `Completions` format
 * Set custom prompt templates + model-specific configs (`temperature`, `max_tokens`, etc.)
-* Caching Responses
 
 ## Quick Start 
 
@@ -38,6 +37,9 @@ This will now automatically route any requests for gpt-3.5-turbo to bigcode star
 $ export AWS_ACCESS_KEY_ID=""
 $ export AWS_REGION_NAME="" # e.g. us-west-2
 $ export AWS_SECRET_ACCESS_KEY=""
+```
+
+```shell
 $ litellm --model bedrock/anthropic.claude-v2
 ```
 </TabItem>
