@@ -109,7 +109,7 @@ def test_completion_with_litellm_call_id():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 # test_completion_with_litellm_call_id()
-
+import openai
 def test_completion_gpt4_turbo():
     try:
         response = completion(
@@ -118,9 +118,12 @@ def test_completion_gpt4_turbo():
             max_tokens=10,
         )
         print(response)
+    except openai.error.RateLimitError:
+        print("got a rate liimt error")
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_completion_gpt4_turbo()
+test_completion_gpt4_turbo()
 
 def test_completion_perplexity_api():
     try:
