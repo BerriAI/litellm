@@ -32,7 +32,7 @@ class Router:
                  cache_responses: bool = False) -> None:
         if model_list:
             self.set_model_list(model_list)
-            self.healthy_deployments = []
+            self.healthy_deployments: List = []
         ### HEALTH CHECK THREAD ### - commenting out as further testing required
         self._start_health_check_thread()
 
@@ -168,7 +168,7 @@ class Router:
 
         data = deployment["litellm_params"]
         # call via litellm.completion()
-        return litellm.text_completion(**{**data, "prompt": prompt, "caching": self.cache_responses, **kwargs})
+        return litellm.text_completion(**{**data, "prompt": prompt, "caching": self.cache_responses, **kwargs}) # type: ignore
 
     def embedding(self,
                   model: str,
