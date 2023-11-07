@@ -2,11 +2,11 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# 💥 Evaluate LLMs - OpenAI Proxy Server
+# 💥 OpenAI Proxy Server
 
-LiteLLM Server supports:
+LiteLLM Server manages:
 
-* Call Call 100+ LLMs [Huggingface/Bedrock/TogetherAI/etc.](#other-supported-models) in the OpenAI `ChatCompletions` & `Completions` format
+* Calling 100+ LLMs [Huggingface/Bedrock/TogetherAI/etc.](#other-supported-models) in the OpenAI `ChatCompletions` & `Completions` format
 * Set custom prompt templates + model-specific configs (`temperature`, `max_tokens`, etc.)
 
 ## Quick Start 
@@ -28,8 +28,32 @@ curl http://0.0.0.0:8000/v1/chat/completions \
 
 This will now automatically route any requests for gpt-3.5-turbo to bigcode starcoder, hosted on huggingface inference endpoints. 
 
+#### Output
+```json
+{
+  "object": "chat.completion",
+  "choices": [
+    {
+      "finish_reason": "length",
+      "index": 0,
+      "message": {
+        "content": ", and create a new test page.\n\n### Test data\n\n- A user named",
+        "role": "assistant"
+      }
+    }
+  ],
+  "id": "chatcmpl-56634359-d4ce-4dbc-972c-86a640e3a5d8",
+  "created": 1699308314.054251,
+  "model": "huggingface/bigcode/starcoder",
+  "usage": {
+    "completion_tokens": 16,
+    "prompt_tokens": 10,
+    "total_tokens": 26
+  }
+}
+```
 
-### Supported LLMs:
+### Supported LLMs
 <Tabs>
 <TabItem value="bedrock" label="Bedrock">
 
@@ -297,81 +321,8 @@ model_list:
       api_key: your_huggingface_api_key # [OPTIONAL] if deployed on huggingface inference endpoints
       api_base: your_api_base # url where model is deployed 
 ```
-
-## Caching 
-
-Add Redis Caching to your server via environment variables  
-
-```env
-### REDIS
-REDIS_HOST = "" 
-REDIS_PORT = "" 
-REDIS_PASSWORD = "" 
-```
-
-Docker command: 
-
-```shell
-docker run -e REDIST_HOST=<your-redis-host> -e REDIS_PORT=<your-redis-port> -e REDIS_PASSWORD=<your-redis-password> -e PORT=8000 -p 8000:8000 ghcr.io/berriai/litellm:latest
-```
-
-## Logging 
-
-1. Debug Logs
-Print the input/output params by setting `SET_VERBOSE = "True"`.
-
-Docker command:
-
-```shell
-docker run -e SET_VERBOSE="True" -e PORT=8000 -p 8000:8000 ghcr.io/berriai/litellm:latest
-```
-2. Add Langfuse Logging to your server via environment variables  
-
-```env
-### LANGFUSE
-LANGFUSE_PUBLIC_KEY = ""
-LANGFUSE_SECRET_KEY = ""
-# Optional, defaults to https://cloud.langfuse.com
-LANGFUSE_HOST = "" # optional
-```
-
-Docker command: 
-
-```shell
-docker run -e LANGFUSE_PUBLIC_KEY=<your-public-key> -e LANGFUSE_SECRET_KEY=<your-secret-key> -e LANGFUSE_HOST=<your-langfuse-host> -e PORT=8000 -p 8000:8000 ghcr.io/berriai/litellm:latest
-```
-
 ## Advanced
-### Caching - Completion() and Embedding() Responses
-
-Enable caching by adding the following credentials to your server environment
-
-  ```
-  REDIS_HOST = ""       # REDIS_HOST='redis-18841.c274.us-east-1-3.ec2.cloud.redislabs.com'
-  REDIS_PORT = ""       # REDIS_PORT='18841'
-  REDIS_PASSWORD = ""   # REDIS_PASSWORD='liteLlmIsAmazing'
-  ```
-
-#### Test Caching 
-Send the same request twice:
-```shell
-curl http://0.0.0.0:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-     "model": "gpt-3.5-turbo",
-     "messages": [{"role": "user", "content": "write a poem about litellm!"}],
-     "temperature": 0.7
-   }'
-
-curl http://0.0.0.0:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-     "model": "gpt-3.5-turbo",
-     "messages": [{"role": "user", "content": "write a poem about litellm!"}],
-     "temperature": 0.7
-   }'
-```
-
+### Caching
 #### Control caching per completion request
 Caching can be switched on/off per /chat/completions request
 - Caching on for completion - pass `caching=True`:
@@ -401,7 +352,7 @@ Caching can be switched on/off per /chat/completions request
 
 
 
-
+<!-- 
 ## Tutorials (Chat-UI, NeMO-Guardrails, PromptTools, Phoenix ArizeAI, Langchain, ragas, LlamaIndex, etc.)
 
 **Start server:**
@@ -617,5 +568,5 @@ response = OpenAI(model="claude-2", api_key="your-anthropic-key",api_base="http:
 print(response)
 ```
 </TabItem>
-</Tabs>
+</Tabs> -->
 
