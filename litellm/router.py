@@ -34,7 +34,7 @@ class Router:
             self.set_model_list(model_list)
             self.healthy_deployments = []
         ### HEALTH CHECK THREAD ### - commenting out as further testing required
-        # self._start_health_check_thread()
+        self._start_health_check_thread()
 
         ### CACHING ###
         if redis_host is not None and redis_port is not None and redis_password is not None:
@@ -105,19 +105,18 @@ class Router:
         Returns the deployment with the shortest queue 
         """
         ### COMMENTING OUT AS IT NEEDS FURTHER TESTING
-        # logging.debug(f"self.healthy_deployments: {self.healthy_deployments}")
-        # if len(self.healthy_deployments) > 0:
-        #     for item in self.healthy_deployments:
-        #         print(f"item: {item}")
-        #         if item[0]["model_name"] == model: # first one in queue will be the one with the most availability
-        #             return item
-        # else: 
-        potential_deployments = []
-        for item in self.model_list:
-            if item["model_name"] == model:
-                potential_deployments.append(item)
-        item = random.choice(potential_deployments)
-        return item
+        logging.debug(f"self.healthy_deployments: {self.healthy_deployments}")
+        if len(self.healthy_deployments) > 0:
+            for item in self.healthy_deployments:
+                if item[0]["model_name"] == model: # first one in queue will be the one with the most availability
+                    return item
+        else: 
+            potential_deployments = []
+            for item in self.model_list:
+                if item["model_name"] == model:
+                    potential_deployments.append(item)
+            item = random.choice(potential_deployments)
+            return item
         
         raise ValueError("No models available.")
 
