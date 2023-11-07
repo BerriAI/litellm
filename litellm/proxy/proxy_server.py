@@ -504,6 +504,7 @@ async def completion(request: Request, model: Optional[str] = None):
         print(f"\033[1;31mAn error occurred: {e}\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`")
         error_traceback = traceback.format_exc()
         error_msg = f"{str(e)}\n\n{error_traceback}"
+        print(error_msg)
         return {"error": error_msg}
                               
 
