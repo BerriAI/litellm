@@ -38,7 +38,7 @@ def test_embedding_openai():
         print(e)
 
 
-# test_chat_openai()
+test_chat_openai()
 # test_embedding_openai()
 
 

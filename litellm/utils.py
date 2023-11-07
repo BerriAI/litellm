@@ -296,7 +296,7 @@ class CallTypes(Enum):
 
 # Logging function -> log the exact model details + what's being sent | Non-Blocking
 class Logging:
-    global supabaseClient, liteDebuggerClient, promptLayerLogger, weightsBiasesLogger, langsmithLogger, capture_exception, add_breadcrumb
+    global supabaseClient, liteDebuggerClient, promptLayerLogger, weightsBiasesLogger, langsmithLogger, capture_exception, add_breadcrumb, llmonitorLogger
 
     def __init__(self, model, messages, stream, call_type, start_time, litellm_call_id, function_id):
         if call_type not in [item.value for item in CallTypes]:
@@ -615,6 +615,27 @@ class Logging:
                             end_time=end_time,
                             print_verbose=print_verbose,
                         )
+                    if callback == "llmonitor":
+                        print_verbose("reaches llmonitor for logging!")
+                        model = self.model
+
+                        input = self.model_call_details.get("messages", self.model_call_details.get("input", None))
+
+                        # if contains input, it's 'embedding', otherwise 'llm'
+                        type = "embed" if self.call_type == CallTypes.embedding.value else "llm"
+
+                        llmonitorLogger.log_event(
+                            type=type,
+                            event="end",
+                            model=model,
+                            input=input,
+                            user_id=self.model_call_details.get("user", "default"),
+                            response_obj=result,
+                            start_time=start_time,
+                            end_time=end_time,
+                            run_id=self.litellm_call_id,
+                            print_verbose=print_verbose,
+                        )
                     if isinstance(callback, CustomLogger): # custom logger class 
                         if self.stream and complete_streaming_response is None:
                             callback.log_stream_event(
@@ -704,6 +725,27 @@ class Logging:
                                 call_type = self.call_type, 
                                 stream = self.stream,
                             )
+                    elif callback == "llmonitor":
+                        print_verbose("reaches llmonitor for logging error!")
+
+                        model = self.model
+
+                        input = self.model_call_details["input"]
+                        
+                        type = "embed" if self.call_type == CallTypes.embedding.value else "llm"
+
+                        llmonitorLogger.log_event(
+                            type=type,
+                            event="error",
+                            user_id=self.model_call_details.get("user", "default"),
+                            model=model,
+                            input=input,
+                            error=traceback_exception,
+                            run_id=self.litellm_call_id,
+                            start_time=start_time,
+                            end_time=end_time,
+                            print_verbose=print_verbose,
+                        )
                     elif callback == "sentry":
                         print_verbose("sending exception to sentry")
                         if capture_exception:
@@ -2471,31 +2513,6 @@ def handle_failure(exception, traceback_exception, start_time, end_time, args, k
                         end_time=end_time,
                         print_verbose=print_verbose,
                     )
-                elif callback == "llmonitor":
-                    print_verbose("reaches llmonitor for logging error!")
-
-                    model = args[0] if len(args) > 0 else kwargs["model"]
-
-                    input = (
-                        args[1]
-                        if len(args) > 1
-                        else kwargs.get("messages", kwargs.get("input", None))
-                    )
-
-                    type = "embed" if "input" in kwargs else "llm"
-
-                    llmonitorLogger.log_event(
-                        type=type,
-                        event="error",
-                        user_id=kwargs.get("user", "default"),
-                        model=model,
-                        input=input,
-                        error=traceback_exception,
-                        run_id=kwargs["litellm_call_id"],
-                        start_time=start_time,
-                        end_time=end_time,
-                        print_verbose=print_verbose,
-                    )
                 elif callback == "supabase":
                     print_verbose("reaches supabase for logging!")
                     print_verbose(f"supabaseClient: {supabaseClient}")
@@ -2588,31 +2605,6 @@ def handle_success(args, kwargs, result, start_time, end_time):
                         response_obj=result,
                         start_time=start_time,
                         end_time=end_time,
-                        print_verbose=print_verbose,
-                    )
-                elif callback == "llmonitor":
-                    print_verbose("reaches llmonitor for logging!")
-                    model = args[0] if len(args) > 0 else kwargs["model"]
-
-                    input = (
-                        args[1]
-                        if len(args) > 1
-                        else kwargs.get("messages", kwargs.get("input", None))
-                    )
-
-                    # if contains input, it's 'embedding', otherwise 'llm'
-                    type = "embed" if "input" in kwargs else "llm"
-
-                    llmonitorLogger.log_event(
-                        type=type,
-                        event="end",
-                        model=model,
-                        input=input,
-                        user_id=kwargs.get("user", "default"),
-                        response_obj=result,
-                        start_time=start_time,
-                        end_time=end_time,
-                        run_id=kwargs["litellm_call_id"],
                         print_verbose=print_verbose,
                     )
                 elif callback == "langfuse":
