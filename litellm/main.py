@@ -1412,8 +1412,8 @@ def completion_with_retries(*args, **kwargs):
     """
     try:
         import tenacity
-    except:
-        raise Exception("tenacity import failed please run `pip install tenacity`")
+    except Exception as e:
+        raise Exception(f"tenacity import failed please run `pip install tenacity`. Error{e}")
     
     num_retries = kwargs.pop("num_retries", 3)
     retryer = tenacity.Retrying(stop=tenacity.stop_after_attempt(num_retries), reraise=True)
@@ -1989,27 +1989,32 @@ def text_completion(
 
     # processing prompt - users can pass raw tokens to OpenAI Completion()
     if type(prompt) == list:
+        import concurrent.futures
         tokenizer = tiktoken.encoding_for_model("text-davinci-003")
         ## if it's a 2d list - each element in the list is a text_completion() request
         if len(prompt) > 0 and type(prompt[0]) == list:
             responses = [None for x in prompt] # init responses 
-            for i, individual_prompt in enumerate(prompt):
-                decoded_prompt = tokenizer.decode(individual_prompt) # type: ignore
-                all_params = {**kwargs, **optional_params} # combine optional params and kwargs
+            def process_prompt(i, individual_prompt):
+                decoded_prompt = tokenizer.decode(individual_prompt)
+                all_params = {**kwargs, **optional_params}
                 response = text_completion(
-                    model = model,              # type: ignore
-                    prompt = decoded_prompt,    # type: ignore
+                    model=model,
+                    prompt=decoded_prompt,
+                    num_retries=3,# ensure this does not fail for the batch
                     *args,
                     **all_params,
                 )
-                responses[i] = response["choices"][0]
-
-            text_completion_response["id"] = response.get("id", None)
-            text_completion_response["object"] = "text_completion"
-            text_completion_response["created"] = response.get("created", None)
-            text_completion_response["model"] = response.get("model", None)
-            text_completion_response["choices"] = responses
-            text_completion_response["usage"] = response.get("usage", None)
+                #print(response)
+                text_completion_response["id"] = response.get("id", None)
+                text_completion_response["object"] = "text_completion"
+                text_completion_response["created"] = response.get("created", None)
+                text_completion_response["model"] = response.get("model", None)
+                return response["choices"][0]
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                futures = [executor.submit(process_prompt, i, individual_prompt) for i, individual_prompt in enumerate(prompt)]
+                for i, future in enumerate(concurrent.futures.as_completed(futures)):
+                    responses[i] = future.result()
+                text_completion_response["choices"] = responses
 
             return text_completion_response
     else:
