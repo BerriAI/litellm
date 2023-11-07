@@ -185,6 +185,225 @@ $ litellm --model command-nightly
 
 ## Advanced
 
+### Tutorial: Use with Multiple LLMs + Aider/AutoGen/Langroid/etc.
+<Tabs>
+<TabItem value="multiple-LLMs" label="Multiple LLMs">
+
+```shell 
+$ litellm
+
+#INFO: litellm proxy running on http://0.0.0.0:8000
+```
+
+#### Send a request to your proxy
+```python
+import openai 
+
+openai.api_key = "any-string-here"
+openai.api_base = "http://0.0.0.0:8080" # your proxy url
+
+# call gpt-3.5-turbo
+response = openai.ChatCompletion.create(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hey"}])
+
+print(response)
+
+# call ollama/llama2
+response = openai.ChatCompletion.create(model="ollama/llama2", messages=[{"role": "user", "content": "Hey"}])
+
+print(response)
+```
+
+</TabItem>
+<TabItem value="continue-dev" label="ContinueDev">
+
+Continue-Dev brings ChatGPT to VSCode. See how to [install it here](https://continue.dev/docs/quickstart).
+
+In the [config.py](https://continue.dev/docs/reference/Models/openai) set this as your default model.
+```python
+  default=OpenAI(
+      api_key="IGNORED",
+      model="fake-model-name",
+      context_length=2048, # customize if needed for your model
+      api_base="http://localhost:8000" # your proxy server url
+  ),
+```
+
+Credits [@vividfog](https://github.com/jmorganca/ollama/issues/305#issuecomment-1751848077) for this tutorial. 
+</TabItem>
+<TabItem value="aider" label="Aider">
+
+```shell
+$ pip install aider 
+
+$ aider --openai-api-base http://0.0.0.0:8000 --openai-api-key fake-key
+```
+</TabItem>
+<TabItem value="autogen" label="AutoGen">
+
+```python
+pip install pyautogen
+```
+
+```python
+from autogen import AssistantAgent, UserProxyAgent, oai
+config_list=[
+    {
+        "model": "my-fake-model",
+        "api_base": "http://localhost:8000",  #litellm compatible endpoint
+        "api_type": "open_ai",
+        "api_key": "NULL", # just a placeholder
+    }
+]
+
+response = oai.Completion.create(config_list=config_list, prompt="Hi")
+print(response) # works fine
+
+llm_config={
+    "config_list": config_list,
+}
+
+assistant = AssistantAgent("assistant", llm_config=llm_config)
+user_proxy = UserProxyAgent("user_proxy")
+user_proxy.initiate_chat(assistant, message="Plot a chart of META and TESLA stock price change YTD.", config_list=config_list)
+```
+
+Credits [@victordibia](https://github.com/microsoft/autogen/issues/45#issuecomment-1749921972) for this tutorial.
+</TabItem>
+<TabItem value="multi-LLM AutoGen" label="AutoGen Multi-LLM">
+
+
+```python
+from autogen import AssistantAgent, GroupChatManager, UserProxyAgent
+from autogen.agentchat import GroupChat
+config_list = [
+    {
+        "model": "ollama/mistralorca",
+        "api_base": "http://localhost:8000",  # litellm compatible endpoint
+        "api_type": "open_ai",
+        "api_key": "NULL",  # just a placeholder
+    }
+]
+llm_config = {"config_list": config_list, "seed": 42}
+
+code_config_list = [
+    {
+        "model": "ollama/phind-code",
+        "api_base": "http://localhost:8000",  # litellm compatible endpoint
+        "api_type": "open_ai",
+        "api_key": "NULL",  # just a placeholder
+    }
+]
+
+code_config = {"config_list": code_config_list, "seed": 42}
+
+admin = UserProxyAgent(
+    name="Admin",
+    system_message="A human admin. Interact with the planner to discuss the plan. Plan execution needs to be approved by this admin.",
+    llm_config=llm_config,
+    code_execution_config=False,
+)
+
+
+engineer = AssistantAgent(
+    name="Engineer",
+    llm_config=code_config,
+    system_message="""Engineer. You follow an approved plan. You write python/shell code to solve tasks. Wrap the code in a code block that specifies the script type. The user can't modify your code. So do not suggest incomplete code which requires others to modify. Don't use a code block if it's not intended to be executed by the executor.
+Don't include multiple code blocks in one response. Do not ask others to copy and paste the result. Check the execution result returned by the executor.
+If the result indicates there is an error, fix the error and output the code again. Suggest the full code instead of partial code or code changes. If the error can't be fixed or if the task is not solved even after the code is executed successfully, analyze the problem, revisit your assumption, collect additional info you need, and think of a different approach to try.
+""",
+)
+planner = AssistantAgent(
+    name="Planner",
+    system_message="""Planner. Suggest a plan. Revise the plan based on feedback from admin and critic, until admin approval.
+The plan may involve an engineer who can write code and a scientist who doesn't write code.
+Explain the plan first. Be clear which step is performed by an engineer, and which step is performed by a scientist.
+""",
+    llm_config=llm_config,
+)
+executor = UserProxyAgent(
+    name="Executor",
+    system_message="Executor. Execute the code written by the engineer and report the result.",
+    human_input_mode="NEVER",
+    llm_config=llm_config,
+    code_execution_config={"last_n_messages": 3, "work_dir": "paper"},
+)
+critic = AssistantAgent(
+    name="Critic",
+    system_message="Critic. Double check plan, claims, code from other agents and provide feedback. Check whether the plan includes adding verifiable info such as source URL.",
+    llm_config=llm_config,
+)
+groupchat = GroupChat(
+    agents=[admin, engineer, planner, executor, critic],
+    messages=[],
+    max_round=50,
+)
+manager = GroupChatManager(groupchat=groupchat, llm_config=llm_config)
+
+
+admin.initiate_chat(
+    manager,
+    message="""
+""",
+)
+```
+
+Credits [@Nathan](https://gist.github.com/CUexter) for this tutorial.
+</TabItem>
+
+
+<TabItem value="gpt-pilot" label="GPT-Pilot">
+GPT-Pilot helps you build apps with AI Agents. [For more](https://github.com/Pythagora-io/gpt-pilot)
+
+In your .env set the openai endpoint to your local server. 
+
+```
+OPENAI_ENDPOINT=http://0.0.0.0:8000
+OPENAI_API_KEY=my-fake-key
+```
+</TabItem>
+<TabItem value="guidance" label="guidance">
+A guidance language for controlling large language models.
+https://github.com/guidance-ai/guidance
+
+**NOTE:** Guidance sends additional params like `stop_sequences` which can cause some models to fail if they don't support it. 
+
+**Fix**: Start your proxy using the `--drop_params` flag
+
+```shell
+litellm --model ollama/codellama --temperature 0.3 --max_tokens 2048 --drop_params
+```
+
+```python
+import guidance
+
+# set api_base to your proxy
+# set api_key to anything
+gpt4 = guidance.llms.OpenAI("gpt-4", api_base="http://0.0.0.0:8000", api_key="anything")
+
+experts = guidance('''
+{{#system~}}
+You are a helpful and terse assistant.
+{{~/system}}
+
+{{#user~}}
+I want a response to the following question:
+{{query}}
+Name 3 world-class experts (past or present) who would be great at answering this?
+Don't answer the question yet.
+{{~/user}}
+
+{{#assistant~}}
+{{gen 'expert_names' temperature=0 max_tokens=300}}
+{{~/assistant}}
+''', llm=gpt4)
+
+result = experts(query='How can I be more productive?')
+print(result)
+```
+</TabItem>
+</Tabs>
+
+
 ### [TUTORIAL] LM-Evaluation Harness with TGI
 
 Evaluate LLMs 20x faster with TGI via litellm proxy's `/completions` endpoint. 
