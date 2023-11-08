@@ -123,24 +123,3 @@ def test_completion_hf_prompt_array():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 test_completion_hf_prompt_array()
-
-def test_completion_hf_prompt_array():
-    try:
-        litellm.set_verbose=False
-        print("\n testing hf mistral\n")
-        response = text_completion(
-            model="huggingface/mistralai/Mistral-7B-v0.1", 
-            prompt=token_prompt, # token prompt is a 2d list,
-            max_tokens=0,
-            temperature=0.0,
-            echo=True,
-        )
-        print("\n\n response")
-
-        print(response)
-        print(response.choices)
-        assert(len(response.choices)==2)
-        # response_str = response["choices"][0]["text"]
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-test_completion_hf_prompt_array()
