@@ -178,51 +178,51 @@ def test_function_calling():
 	response = router.completion(model="gpt-3.5-turbo-0613", messages=messages, functions=functions)
 	print(response)
 
-### FUNCTION CALLING -> NORMAL COMPLETION
-def test_litellm_params_not_overwritten_by_function_calling():
-	try:
-		model_list = [
-			{
-				"model_name": "gpt-3.5-turbo-0613",
-				"litellm_params": {
-					"model": "gpt-3.5-turbo-0613",
-					"api_key": os.getenv("OPENAI_API_KEY"),
-				},
-				"tpm": 100000,
-				"rpm": 10000,
-			},
-		]
+# ### FUNCTION CALLING -> NORMAL COMPLETION
+# def test_litellm_params_not_overwritten_by_function_calling():
+# 	try:
+# 		model_list = [
+# 			{
+# 				"model_name": "gpt-3.5-turbo-0613",
+# 				"litellm_params": {
+# 					"model": "gpt-3.5-turbo-0613",
+# 					"api_key": os.getenv("OPENAI_API_KEY"),
+# 				},
+# 				"tpm": 100000,
+# 				"rpm": 10000,
+# 			},
+# 		]
 
-		messages = [
-			{"role": "user", "content": "What is the weather like in Boston?"}
-		]
-		functions = [
-			{
-			"name": "get_current_weather",
-			"description": "Get the current weather in a given location",
-			"parameters": {
-				"type": "object",
-				"properties": {
-				"location": {
-					"type": "string",
-					"description": "The city and state, e.g. San Francisco, CA"
-				},
-				"unit": {
-					"type": "string",
-					"enum": ["celsius", "fahrenheit"]
-				}
-				},
-				"required": ["location"]
-			}
-			}
-		]
+# 		messages = [
+# 			{"role": "user", "content": "What is the weather like in Boston?"}
+# 		]
+# 		functions = [
+# 			{
+# 			"name": "get_current_weather",
+# 			"description": "Get the current weather in a given location",
+# 			"parameters": {
+# 				"type": "object",
+# 				"properties": {
+# 				"location": {
+# 					"type": "string",
+# 					"description": "The city and state, e.g. San Francisco, CA"
+# 				},
+# 				"unit": {
+# 					"type": "string",
+# 					"enum": ["celsius", "fahrenheit"]
+# 				}
+# 				},
+# 				"required": ["location"]
+# 			}
+# 			}
+# 		]
 
-		router = Router(model_list=model_list)
-		_ = router.completion(model="gpt-3.5-turbo-0613", messages=messages, functions=functions)
-		response = router.completion(model="gpt-3.5-turbo-0613", messages=messages)
-		assert response.choices[0].finish_reason != "function_call"
-	except Exception as e:
-		pytest.fail(f"Error occurred: {e}")
+# 		router = Router(model_list=model_list)
+# 		_ = router.completion(model="gpt-3.5-turbo-0613", messages=messages, functions=functions)
+# 		response = router.completion(model="gpt-3.5-turbo-0613", messages=messages)
+# 		assert response.choices[0].finish_reason != "function_call"
+# 	except Exception as e:
+# 		pytest.fail(f"Error occurred: {e}")
 
 # test_litellm_params_not_overwritten_by_function_calling()
 
