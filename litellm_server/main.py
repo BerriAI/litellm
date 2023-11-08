@@ -106,11 +106,8 @@ async def chat_completion(request: Request, model: Optional[str] = None):
     try:
         data = await request.json()
         print(f"data: {data}")
-        data["model"] = (
-            server_settings.get("completion_model", None) # server default
-            or model # model passed in url 
-            or data["model"] # default passed in
-        )
+        server_model = server_settings.get("completion_model", None) if server_settings else None
+        data["model"] = server_model or model or data["model"]
         ## CHECK KEYS ## 
         # default to always using the "ENV" variables, only if AUTH_STRATEGY==DYNAMIC then reads headers
         # env_validation = litellm.validate_environment(model=data["model"])
