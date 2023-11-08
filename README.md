@@ -93,8 +93,8 @@ litellm.success_callback = ["promptlayer", "llmonitor"] # log input/output to pr
 response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])
 ```
 
-## OpenAI Proxy 
-Use LiteLLM in any OpenAI API compatible project. Calling 100+ LLMs Huggingface/Bedrock/TogetherAI/etc. in the OpenAI ChatCompletions & Completions format
+## OpenAI Proxy - ([Docs](https://docs.litellm.ai/docs/simple_proxy))
+Use LiteLLM in any OpenAI API compatible project. Call 100+ LLMs Huggingface/Bedrock/TogetherAI/etc in the OpenAI ChatCompletions & Completions format
 
 ### Step 1: Start litellm proxy
 ```shell
