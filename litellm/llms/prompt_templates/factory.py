@@ -279,9 +279,8 @@ def prompt_factory(model: str, messages: list, custom_llm_provider: Optional[str
         return anthropic_pt(messages=messages)
     
     try:
-        if "meta-llama/llama-2" in model:
-            if "chat" in model:
-                return llama_2_chat_pt(messages=messages)
+        if "meta-llama/llama-2" in model and "chat" in model:
+            return llama_2_chat_pt(messages=messages)
         elif "tiiuae/falcon" in model: # Note: for the instruct models, it's best to use a User: .., Assistant:.. approach in your prompt template.
             if model == "tiiuae/falcon-180B-chat":
                 return falcon_chat_pt(messages=messages)
