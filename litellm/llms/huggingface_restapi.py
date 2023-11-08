@@ -270,7 +270,7 @@ def completion(
                 headers=headers, 
                 data=json.dumps(data)
             )
-            print(response.text)
+
 
             ## Some servers might return streaming responses even though stream was not set to true. (e.g. Baseten)
             is_streamed = False 
