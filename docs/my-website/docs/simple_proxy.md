@@ -25,29 +25,14 @@ litellm --test
 
 This will now automatically route any requests for gpt-3.5-turbo to bigcode starcoder, hosted on huggingface inference endpoints. 
 
-#### Output
-```json
-{
-  "object": "chat.completion",
-  "choices": [
-    {
-      "finish_reason": "length",
-      "index": 0,
-      "message": {
-        "content": ", and create a new test page.\n\n### Test data\n\n- A user named",
-        "role": "assistant"
-      }
-    }
-  ],
-  "id": "chatcmpl-56634359-d4ce-4dbc-972c-86a640e3a5d8",
-  "created": 1699308314.054251,
-  "model": "huggingface/bigcode/starcoder",
-  "usage": {
-    "completion_tokens": 16,
-    "prompt_tokens": 10,
-    "total_tokens": 26
-  }
-}
+### Replace openai base
+
+```python
+import openai 
+
+openai.api_base = "http://0.0.0.0:8000"
+
+print(openai.ChatCompletion.create(model="test", messages=[{"role":"user", "content":"Hey!"}]))
 ```
 
 ### Supported LLMs
