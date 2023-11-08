@@ -8,6 +8,33 @@ os.environ['OPENAI_API_KEY'] = ""
 response = embedding('text-embedding-ada-002', input=["good morning from litellm"])
 ```
 
+### Expected Output from litellm.embedding()
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "object": "embedding",
+      "index": 0,
+      "embedding": [
+        -0.0022326677571982145,
+        0.010749882087111473,
+        ...
+        ...
+        ...
+   
+      ]
+    }
+  ],
+  "model": "text-embedding-ada-002-v2",
+  "usage": {
+    "prompt_tokens": 10,
+    "total_tokens": 10
+  }
+}
+```
+
 ## OpenAI Embedding Models
 
 ### Usage
@@ -123,4 +150,3 @@ response = embedding(
 | microsoft/codebert-base    | `embedding('huggingface/microsoft/codebert-base', input=input)`               | `os.environ['HUGGINGFACE_API_KEY']`                                             |
 | BAAI/bge-large-zh | `embedding('huggingface/BAAI/bge-large-zh', input=input)`         | `os.environ['HUGGINGFACE_API_KEY']`                                             |
 | any-hf-embedding-model | `embedding('huggingface/hf-embedding-model', input=input)`         | `os.environ['HUGGINGFACE_API_KEY']`                                             |
-
