@@ -55,7 +55,7 @@ $ litellm --model bedrock/anthropic.claude-v2
 $ export HUGGINGFACE_API_KEY=my-api-key #[OPTIONAL]
 ```
 ```shell
-$ litellm --model huggingface/<huggingface-model-name> --api_base https://<your-hf-endpoint># e.g. huggingface/mistralai/Mistral-7B-v0.1
+$ litellm --model huggingface/<your model name> --api_base https://k58ory32yinf1ly0.us-east-1.aws.endpoints.huggingface.cloud
 ```
 
 </TabItem>
