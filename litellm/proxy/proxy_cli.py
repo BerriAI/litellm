@@ -157,11 +157,7 @@ def run_server(host, port, api_base, api_version, model, alias, add_key, headers
         )
         for chunk in response:
             click.echo(f'LiteLLM: streaming response from proxy {chunk}')
-        
-        # response = openai.Completion.create(model="gpt-3.5-turbo", prompt='this is a test request, write a short poem', stream=True)
 
-        for chunk in response:
-            click.echo(f'LiteLLM: streaming response from proxy {chunk}')
         return
     else:
         if headers:
