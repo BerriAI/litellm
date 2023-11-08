@@ -258,7 +258,7 @@ class TextCompletionResponse(OpenAIObject):
     def __init__(self, id=None, choices=None, created=None, model=None, usage=None, stream=False, response_ms=None, **params):
         if stream:
             self.object = "text_completion.chunk"
-            self.choices = [StreamingChoices()]
+            self.choices = [TextChoices()]
         else:
             self.object = "text_completion"
             self.choices = [TextChoices()]
@@ -1526,10 +1526,11 @@ def get_optional_params(  # use the openai defaults
             optional_params["best_of"] = n
         if presence_penalty is not None:
             optional_params["repetition_penalty"] = presence_penalty
-        if "echo" in special_params:
+        if "echo" in passed_params:
             # https://huggingface.co/docs/huggingface_hub/main/en/package_reference/inference_client#huggingface_hub.InferenceClient.text_generation.decoder_input_details
             #  Return the decoder input token logprobs and ids. You must set details=True as well for it to be taken into account. Defaults to False
             optional_params["decoder_input_details"] = special_params["echo"]
+            passed_params.pop("echo", None) # since we handle translating echo, we should not send it to TGI request
     elif custom_llm_provider == "together_ai":
         ## check if unsupported param passed in 
         supported_params = ["stream", "temperature", "max_tokens", "top_p", "stop", "frequency_penalty"]
