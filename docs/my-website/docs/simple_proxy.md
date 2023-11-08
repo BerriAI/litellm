@@ -10,6 +10,7 @@ LiteLLM Server manages:
 * Set custom prompt templates + model-specific configs (`temperature`, `max_tokens`, etc.)
 
 ## Quick Start 
+View all the supported args for the Proxy CLI [here](https://docs.litellm.ai/docs/simple_proxy#proxy-cli-arguments)
 
 ```shell
 $ litellm --model huggingface/bigcode/starcoder
@@ -450,7 +451,7 @@ model_list:
 ```
 
 
-## Proxy CLI Args
+## Proxy CLI Arguments
 
 #### --host
    - **Default:** `'0.0.0.0'`
