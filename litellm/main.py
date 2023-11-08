@@ -59,6 +59,7 @@ encoding = tiktoken.get_encoding("cl100k_base")
 from litellm.utils import (
     get_secret,
     CustomStreamWrapper,
+    TextCompletionStreamWrapper,
     ModelResponse,
     TextCompletionResponse,
     TextChoices,
@@ -2031,6 +2032,9 @@ def text_completion(
             **kwargs,
             **optional_params,
         )
+        if stream == True or kwargs.get("stream", False) == True:
+            response = TextCompletionStreamWrapper(completion_stream=response, model=model)
+            return response
 
         transformed_logprobs = None
         # only supported for TGI models
