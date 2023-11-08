@@ -75,7 +75,7 @@ for chunk in result:
   print(chunk['choices'][0]['delta'])
 ```
 
-## Logging Observability - Log LLM Input/Output ([Docs](https://docs.litellm.ai/docs/observability/callbacks))
+## Logging Observability ([Docs](https://docs.litellm.ai/docs/observability/callbacks))
 LiteLLM exposes pre defined callbacks to send data to LLMonitor, Langfuse, Helicone, Promptlayer, Traceloop, Slack
 ```python
 from litellm import completion
