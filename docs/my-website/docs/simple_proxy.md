@@ -450,7 +450,7 @@ model_list:
 ```
 
 
-# Proxy CLI Args
+## Proxy CLI Args
 
 #### --host
    - **Default:** `'0.0.0.0'`
