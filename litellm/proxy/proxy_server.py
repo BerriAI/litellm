@@ -120,6 +120,7 @@ config_dir = appdirs.user_config_dir("litellm")
 user_config_path = os.getenv(
     "LITELLM_CONFIG_PATH", os.path.join(config_dir, config_filename)
 )
+experimental = False
 #### GLOBAL VARIABLES ####
 llm_router: Optional[litellm.Router] = None
 llm_model_list: Optional[list] = None
@@ -354,7 +355,7 @@ def initialize(
     save,
     config
 ):
-    global user_model, user_api_base, user_debug, user_max_tokens, user_request_timeout, user_temperature, user_telemetry, user_headers, llm_model_list, llm_router, server_settings
+    global user_model, user_api_base, user_debug, user_max_tokens, user_request_timeout, user_temperature, user_telemetry, user_headers, experimental, llm_model_list, llm_router, server_settings
     generate_feedback_box()
     user_model = model
     user_debug = debug
@@ -393,6 +394,8 @@ def initialize(
         dynamic_config["general"]["max_budget"] = max_budget
     if debug:  # litellm-specific param
         litellm.set_verbose = True
+    if experimental: 
+        pass
     if save:
         save_params_to_config(dynamic_config)
         with open(user_config_path) as f:
@@ -536,6 +539,22 @@ async def chat_completion(request: Request, model: Optional[str] = None):
         error_msg = f"{str(e)}\n\n{error_traceback}"
         return {"error": error_msg}
 
+
+@router.post("/router/chat/completions")
+async def router_completion(request: Request):
+    try: 
+        body = await request.body()
+        body_str = body.decode()
+        try:
+            data = ast.literal_eval(body_str)
+        except: 
+            data = json.loads(body_str)
+        return {"data": data}
+    except Exception as e: 
+        print(f"\033[1;31mAn error occurred: {e}\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`")
+        error_traceback = traceback.format_exc()
+        error_msg = f"{str(e)}\n\n{error_traceback}"
+        return {"error": error_msg}
 
 @router.get("/ollama_logs")
 async def retrieve_server_log(request: Request):
