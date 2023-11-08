@@ -170,16 +170,6 @@ $ litellm --model command-nightly
 
 ## Usage
 
-#### Replace openai base
-
-```python
-import openai 
-
-openai.api_base = "http://0.0.0.0:8000"
-
-print(openai.ChatCompletion.create(model="test", messages=[{"role":"user", "content":"Hey!"}]))
-```
-
 ### Using with OpenAI compatible projects
 LiteLLM allows you to set `openai.api_base` to the proxy server and use all LiteLLM supported LLMs in any OpenAI supported project
 
