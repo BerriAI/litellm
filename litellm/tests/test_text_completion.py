@@ -122,4 +122,14 @@ def test_completion_hf_prompt_array():
         # response_str = response["choices"][0]["text"]
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_hf_prompt_array()
+# test_completion_hf_prompt_array()
+
+def test_text_completion_stream():
+    response = text_completion(
+            model="huggingface/mistralai/Mistral-7B-v0.1", 
+            prompt="good morning",
+            stream=True
+        )
+    for chunk in response:
+        print(chunk)
+test_text_completion_stream()
