@@ -74,17 +74,23 @@ result = completion('claude-2', messages, stream=True)
 for chunk in result:
   print(chunk['choices'][0]['delta'])
 ```
+## OpenAI Proxy 
+Use LiteLLM in any OpenAI API compatible project
 
-## Reliability - Fallback LLMs
-Never fail a request using LiteLLM
+```shell
+$ litellm --model huggingface/bigcode/starcoder
+
+#INFO: Proxy running on http://0.0.0.0:8000
+```
+
+### Replace openai base
 
 ```python
-from litellm import completion
-# if gpt-4 fails, retry the request with gpt-3.5-turbo->command-nightly->claude-instant-1
-response = completion(model="gpt-4",messages=messages, fallbacks=["gpt-3.5-turbo", "command-nightly", "claude-instant-1"])
+import openai 
 
-# if azure/gpt-4 fails, retry the request with fallback api_keys/api_base
-response = completion(model="azure/gpt-4", messages=messages, api_key=api_key, fallbacks=[{"api_key": "good-key-1"}, {"api_key": "good-key-2", "api_base": "good-api-base-2"}])
+openai.api_base = "http://0.0.0.0:8000"
+
+print(openai.ChatCompletion.create(model="test", messages=[{"role":"user", "content":"Hey!"}]))
 ```
 
 ## Logging Observability - Log LLM Input/Output ([Docs](https://docs.litellm.ai/docs/observability/callbacks))
