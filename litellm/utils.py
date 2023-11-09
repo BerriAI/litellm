@@ -949,16 +949,18 @@ def client(original_function):
             end_time = datetime.datetime.now()
             if "stream" in kwargs and kwargs["stream"] == True:
                 # TODO: Add to cache for streaming
-                return result
+                if "complete_response" in kwargs and kwargs["complete_response"] == True: 
+                    chunks = []
+                    for idx, chunk in enumerate(result):
+                        chunks.append(chunk)
+                    return litellm.stream_chunk_builder(chunks)
+                else: 
+                    return result
         
 
             # [OPTIONAL] ADD TO CACHE
             if litellm.caching or litellm.caching_with_models or litellm.cache != None: # user init a cache object
                 litellm.cache.add_cache(result, *args, **kwargs)
-            
-            # [OPTIONAL] Return LiteLLM call_id
-            if litellm.use_client == True:
-                result['litellm_call_id'] = litellm_call_id
 
             # LOG SUCCESS - handle streaming success logging in the _next_ object, remove `handle_success` once it's deprecated
             logging_obj.success_handler(result, start_time, end_time)
