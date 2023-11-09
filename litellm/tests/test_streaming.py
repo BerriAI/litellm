@@ -768,22 +768,6 @@ def test_completion_replicate_stream_bad_key():
 #         pytest.fail(f"error occurred: {traceback.format_exc()}")
 # test_maritalk_streaming()
 # test on openai completion call
-def test_openai_text_completion_call():
-    try:
-        response = completion(
-            model="text-davinci-003", messages=messages, stream=True, logger_fn=logger_fn
-        )
-        complete_response = ""
-        start_time = time.time()
-        for idx, chunk in enumerate(response):
-            chunk, finished = streaming_format_tests(idx, chunk)
-            if finished:
-                break
-            complete_response += chunk
-        if complete_response.strip() == "": 
-            raise Exception("Empty response received")
-    except:
-        pytest.fail(f"error occurred: {traceback.format_exc()}")
 
 # # test on ai21 completion call
 def ai21_completion_call():
@@ -939,8 +923,6 @@ def test_openai_text_completion_call():
     except:
         print(f"error occurred: {traceback.format_exc()}")
         pass
-
-test_openai_text_completion_call()
 
 # # test on together ai completion call - starcoder
 def test_together_ai_completion_call_starcoder():
