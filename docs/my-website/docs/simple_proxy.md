@@ -418,7 +418,7 @@ model_list:
 $ litellm --config /path/to/config.yaml
 ```
 
-### Evaluate model
+### Call specific model
 
 If you're repo let's you set model name, you can call the specific model by just passing in that model's name - 
 
