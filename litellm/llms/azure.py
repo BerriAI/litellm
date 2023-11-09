@@ -4,9 +4,7 @@ from .base import BaseLLM
 from litellm.utils import ModelResponse, Choices, Message
 from typing import Callable, Optional
 from litellm import OpenAIConfig
-
-# This file just has the openai config classes. 
-# For implementation check out completion() in main.py
+import aiohttp
 
 class AzureOpenAIError(Exception):
     def __init__(self, status_code, message):
@@ -116,6 +114,7 @@ class AzureChatCompletion(BaseLLM):
                optional_params,
                litellm_params,
                logger_fn,
+               acompletion: bool = False,
                headers: Optional[dict]=None):
         super().completion()
         exception_mapping_worked = False
@@ -157,6 +156,8 @@ class AzureChatCompletion(BaseLLM):
                     
                 ## RESPONSE OBJECT
                 return response.iter_lines()
+            elif acompletion is True: 
+                return self.acompletion(api_base=api_base, data=data, headers=headers, model_response=model_response)
             else:
                 response = self._client_session.post(
                     url=api_base,
@@ -178,6 +179,18 @@ class AzureChatCompletion(BaseLLM):
                 import traceback
                 raise AzureOpenAIError(status_code=500, message=traceback.format_exc())
     
+    async def acompletion(self, api_base: str, data: dict, headers: dict, model_response: ModelResponse): 
+        async with aiohttp.ClientSession() as session:
+            async with session.post(api_base, json=data, headers=headers) as response:
+                response_json = await response.json()
+                if response.status != 200:
+                    raise AzureOpenAIError(status_code=response.status, message=response.text)
+                
+
+                ## RESPONSE OBJECT
+                return self.convert_to_model_response_object(response_object=response_json, model_response_object=model_response)
+
+
     def embedding(self,
                 model: str,
                 input: list,
