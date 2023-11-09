@@ -4477,7 +4477,7 @@ def completion_with_config(config: Union[dict, str], **kwargs):
                 except:
                     continue
         if prompt_larger_than_model:
-            messages = trim_messages(messages_copy=messages, model=max_model)
+            messages = trim_messages(messages=messages, model=max_model)
             kwargs["messages"] = messages
 
     kwargs["model"] = model
@@ -4666,7 +4666,7 @@ def shorten_message_to_fit_limit(
 # this code is borrowed from https://github.com/KillianLucas/tokentrim/blob/main/tokentrim/tokentrim.py
 # Credits for this code go to Killian Lucas
 def trim_messages(
-    messages_copy,
+    messages,
     model: Optional[str] = None,
     trim_ratio: float = 0.75,
     return_response_tokens: bool = False,
@@ -4687,7 +4687,7 @@ def trim_messages(
     """
     # Initialize max_tokens
     # if users pass in max tokens, trim to this amount
-    messages_copy = copy.deepcopy(messages_copy)
+    messages_copy = copy.deepcopy(messages)
     try:
         print_verbose(f"trimming messages")
         if max_tokens == None:
