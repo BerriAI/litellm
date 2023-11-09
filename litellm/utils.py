@@ -2890,19 +2890,19 @@ def exception_type(
                 exception_type = type(original_exception).__name__
             else:
                 exception_type = ""
-            if custom_llm_provider == "openai":
+            if custom_llm_provider == "openai" or custom_llm_provider == "text-completion-openai":
                 if "This model's maximum context length is" in error_str:
                     exception_mapping_worked = True
                     raise ContextWindowExceededError(
-                        message=f"AzureException - {original_exception.message}",
-                        llm_provider="azure",
+                        message=f"OpenAIException - {original_exception.message}",
+                        llm_provider="openai",
                         model=model
                     )
                 elif "invalid_request_error" in error_str:
                     exception_mapping_worked = True
                     raise InvalidRequestError(
-                        message=f"AzureException - {original_exception.message}",
-                        llm_provider="azure",
+                        message=f"OpenAIException - {original_exception.message}",
+                        llm_provider="openai",
                         model=model
                     )
                 elif hasattr(original_exception, "status_code"):
@@ -4013,16 +4013,33 @@ class CustomStreamWrapper:
             else:
                 return {"text": text, "is_finished": is_finished, "finish_reason": finish_reason}
 
-        except:
+        except Exception as e:
             traceback.print_exc()
-            pass
+            raise e
 
 
     def handle_openai_text_completion_chunk(self, chunk):
-        try:
-            return chunk["choices"][0]["text"]
-        except:
-            raise ValueError(f"Unable to parse response. Original response: {chunk}")
+        try: 
+            str_line = chunk.decode("utf-8")  # Convert bytes to string
+            text = "" 
+            is_finished = False
+            finish_reason = None
+            if str_line.startswith("data:"):
+                data_json = json.loads(str_line[5:])
+                print_verbose(f"delta content: {data_json['choices'][0]['text']}")
+                text = data_json["choices"][0].get("text", "") 
+                if data_json["choices"][0].get("finish_reason", None): 
+                    is_finished = True
+                    finish_reason = data_json["choices"][0]["finish_reason"]
+                return {"text": text, "is_finished": is_finished, "finish_reason": finish_reason}
+            elif "error" in str_line:
+                raise ValueError(f"Unable to parse response. Original response: {str_line}")
+            else:
+                return {"text": text, "is_finished": is_finished, "finish_reason": finish_reason}
+
+        except Exception as e:
+            traceback.print_exc()
+            raise e
 
     def handle_baseten_chunk(self, chunk):
         try:
@@ -4146,9 +4163,6 @@ class CustomStreamWrapper:
                     completion_obj["content"] = response_obj["text"]
                     if response_obj["is_finished"]: 
                         model_response.choices[0].finish_reason = response_obj["finish_reason"]
-                elif self.custom_llm_provider and self.custom_llm_provider == "text-completion-openai":
-                    chunk = next(self.completion_stream)
-                    completion_obj["content"] = self.handle_openai_text_completion_chunk(chunk)
                 elif self.model in litellm.nlp_cloud_models or self.custom_llm_provider == "nlp_cloud":
                     try: 
                         chunk = next(self.completion_stream)
@@ -4235,12 +4249,15 @@ class CustomStreamWrapper:
                     print_verbose(f"completion obj content: {completion_obj['content']}")
                     if response_obj["is_finished"]: 
                         model_response.choices[0].finish_reason = response_obj["finish_reason"]
-                else: # openai chat/azure models
+                elif self.custom_llm_provider == "text-completion-openai":
                     chunk = next(self.completion_stream)
-                    model_response = chunk
-                    # LOGGING
-                    threading.Thread(target=self.logging_obj.success_handler, args=(model_response,)).start()
-                    return model_response
+                    response_obj = self.handle_openai_text_completion_chunk(chunk)
+                    completion_obj["content"] = response_obj["text"]
+                    print_verbose(f"completion obj content: {completion_obj['content']}")
+                    if response_obj["is_finished"]: 
+                        model_response.choices[0].finish_reason = response_obj["finish_reason"]
+                else: # openai chat/azure models
+                    raise Exception("Unmapped Model Error")
                 
                 model_response.model = self.model
                 if len(completion_obj["content"]) > 0: # cannot set content of an OpenAI Object to be an empty string

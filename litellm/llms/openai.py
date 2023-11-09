@@ -269,3 +269,132 @@ class OpenAIChatCompletion(BaseLLM):
             else: 
                 import traceback
                 raise OpenAIError(status_code=500, message=traceback.format_exc())
+
+
+class OpenAITextCompletion(BaseLLM):
+    _client_session: requests.Session
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._client_session = self.create_client_session()
+    
+    def validate_environment(self, api_key):
+        headers = {
+            "content-type": "application/json",
+        }
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        return headers
+    
+    def convert_to_model_response_object(self, response_object: Optional[dict]=None, model_response_object: Optional[ModelResponse]=None):
+        try: 
+            ## RESPONSE OBJECT
+            if response_object is None or model_response_object is None:
+                raise OpenAIError(status_code=500, message="Error in response object format")
+            choice_list=[]
+            for idx, choice in enumerate(response_object["choices"]): 
+                message = Message(content=choice["text"], role="assistant")
+                choice = Choices(finish_reason=choice["finish_reason"], index=idx, message=message)
+                choice_list.append(choice)
+            model_response_object.choices = choice_list
+
+            if "usage" in response_object: 
+                model_response_object.usage = response_object["usage"]
+            
+            if "id" in response_object: 
+                model_response_object.id = response_object["id"]
+            
+            if "model" in response_object: 
+                model_response_object.model = response_object["model"]
+            
+            model_response_object._hidden_params["original_response"] = response_object # track original response, if users make a litellm.text_completion() request, we can return the original response
+            return model_response_object
+        except: 
+            OpenAIError(status_code=500, message="Invalid response object.")
+
+    def completion(self, 
+               model: Optional[str]=None,
+               messages: Optional[list]=None,
+               model_response: Optional[ModelResponse]=None,
+               print_verbose: Optional[Callable]=None,
+               api_key: Optional[str]=None,
+               api_base: Optional[str]=None,
+               logging_obj=None,
+               optional_params=None,
+               litellm_params=None,
+               logger_fn=None,
+               headers: Optional[dict]=None):
+        super().completion()
+        exception_mapping_worked = False
+        try: 
+            if headers is None:
+                headers = self.validate_environment(api_key=api_key)
+            if model is None or messages is None:
+                raise OpenAIError(status_code=422, message=f"Missing model or messages")
+            
+            api_base = f"{api_base}/completions"
+
+            if len(messages)>0 and "content" in messages[0] and type(messages[0]["content"]) == list: 
+                # Note: internal logic - for enabling litellm.text_completion()
+                # text-davinci-003 can accept a string or array, if it's an array, assume the array is set in messages[0]['content']
+                # https://platform.openai.com/docs/api-reference/completions/create
+                prompt = messages[0]["content"]
+            else:
+                prompt = " ".join([message["content"] for message in messages]) # type: ignore
+
+            data = {
+                "model": model,
+                "prompt": prompt, 
+                **optional_params
+            }
+            
+            ## LOGGING
+            logging_obj.pre_call(
+                input=messages,
+                api_key=api_key,
+                additional_args={"headers": headers, "api_base": api_base, "data": data},
+            )
+
+            if "stream" in optional_params and optional_params["stream"] == True:
+                response = self._client_session.post(
+                    url=f"{api_base}",
+                    json=data,
+                    headers=headers,
+                    stream=optional_params["stream"]
+                )
+                if response.status_code != 200:
+                    raise OpenAIError(status_code=response.status_code, message=response.text)
+                    
+                ## RESPONSE OBJECT
+                return response.iter_lines()
+            else:
+                response = self._client_session.post(
+                    url=f"{api_base}",
+                    json=data,
+                    headers=headers,
+                )
+                if response.status_code != 200:
+                    raise OpenAIError(status_code=response.status_code, message=response.text)
+                
+                ## LOGGING
+                logging_obj.post_call(
+                    input=prompt,
+                    api_key=api_key,
+                    original_response=response,
+                    additional_args={
+                        "headers": headers,
+                        "api_base": api_base,
+                    },
+                )
+
+                ## RESPONSE OBJECT
+                return self.convert_to_model_response_object(response_object=response.json(), model_response_object=model_response)
+        except OpenAIError as e: 
+            exception_mapping_worked = True
+            raise e
+        except Exception as e: 
+            if exception_mapping_worked: 
+                raise e
+            else: 
+                import traceback
+                raise OpenAIError(status_code=500, message=traceback.format_exc())
