@@ -16,10 +16,14 @@ class BaseLLM:
 
     def completion(
         self,
+        *args, 
+        **kwargs
     ):  # logic for parsing in - calling - parsing out model completion calls
         pass
 
     def embedding(
         self,
+        *args, 
+        **kwargs
     ):  # logic for parsing in - calling - parsing out model embedding calls
         pass
