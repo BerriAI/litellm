@@ -426,12 +426,20 @@ def litellm_completion(*args, **kwargs):
     if user_api_base: 
         kwargs["api_base"] = user_api_base
     ## CHECK CONFIG ## 
-    if llm_model_list and kwargs["model"] in [m["model_name"] for m in llm_model_list]:
-        for m in llm_model_list: 
-            if kwargs["model"] == m["model_name"]: # if user has specified a config, this will use the config
-                for key, value in m["litellm_params"].items(): 
-                    kwargs[key] = value
-                break
+    if llm_model_list != None:
+        llm_models = [m["model_name"] for m in llm_model_list]
+        if kwargs["model"] in llm_models:
+            for m in llm_model_list: 
+                if kwargs["model"] == m["model_name"]: # if user has specified a config, this will use the config
+                    for key, value in m["litellm_params"].items(): 
+                        kwargs[key] = value
+                    break
+        else:
+            print_verbose("user sent model not in config, using default config model")
+            default_model = llm_model_list[0]
+            litellm_params = default_model.get('litellm_params', None)
+            for key, value in litellm_params.items():
+                kwargs[key] = value
     if call_type == "chat_completion":
         response = litellm.completion(*args, **kwargs)
     elif call_type == "text_completion":
