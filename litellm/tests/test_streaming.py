@@ -902,6 +902,17 @@ def test_openai_chat_completion_call():
 
 # test_openai_chat_completion_call()
 
+def test_openai_chat_completion_complete_response_call():
+    try:
+        complete_response = completion(
+            model="gpt-3.5-turbo", messages=messages, stream=True, complete_response=True
+        )
+        print(f"complete response: {complete_response}")
+    except:
+        print(f"error occurred: {traceback.format_exc()}")
+        pass
+
+test_openai_chat_completion_complete_response_call()
 
 def test_openai_text_completion_call():
     try:
