@@ -344,33 +344,6 @@ print(result)
 ## Advanced
 
 
-
-### Caching
-#### Control caching per completion request
-Caching can be switched on/off per /chat/completions request
-- Caching on for completion - pass `caching=True`:
-  ```shell
-  curl http://0.0.0.0:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-     "model": "gpt-3.5-turbo",
-     "messages": [{"role": "user", "content": "write a poem about litellm!"}],
-     "temperature": 0.7,
-     "caching": true
-   }'
-  ```
-- Caching off for completion - pass `caching=False`:
-  ```shell
-  curl http://0.0.0.0:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-     "model": "gpt-3.5-turbo",
-     "messages": [{"role": "user", "content": "write a poem about litellm!"}],
-     "temperature": 0.7,
-     "caching": false
-   }'
-  ```
-
 ### Set Custom Prompt Templates
 
 LiteLLM by default checks if a model has a [prompt template and applies it](./completion/prompt_formatting.md) (e.g. if a huggingface model has a saved chat template in it's tokenizer_config.json). However, you can also set a custom prompt template on your proxy in the `config.yaml`: 
@@ -479,7 +452,6 @@ model_list:
       api_key: your_huggingface_api_key # [OPTIONAL] if deployed on huggingface inference endpoints
       api_base: your_api_base # url where model is deployed 
 ```
-
 
 ## Proxy CLI Arguments
 
