@@ -50,6 +50,7 @@ from .llms import (
     vertex_ai,
     maritalk)
 from .llms.openai import OpenAIChatCompletion
+from .llms.azure import AzureChatCompletion
 from .llms.prompt_templates.factory import prompt_factory, custom_prompt, function_call_prompt
 import tiktoken
 from concurrent.futures import ThreadPoolExecutor
@@ -71,7 +72,8 @@ from litellm.utils import (
 
 ####### ENVIRONMENT VARIABLES ###################
 dotenv.load_dotenv()  # Loading env variables using dotenv
-openai_proxy_chat_completions = OpenAIChatCompletion()
+openai_chat_completions = OpenAIChatCompletion()
+azure_chat_completions = AzureChatCompletion()
 ####### COMPLETION ENDPOINTS ################
 
 async def acompletion(*args, **kwargs):
@@ -393,29 +395,24 @@ def completion(
                 if k not in optional_params: # completion(top_k=3) > azure_config(top_k=3) <- allows for dynamic variables to be passed in
                     optional_params[k] = v
 
-            ## LOGGING
-            logging.pre_call(
-                input=messages,
-                api_key=api_key,
-                additional_args={
-                    "headers": headers,
-                    "api_version": api_version,
-                    "api_base": api_base,
-                },
-            )
             ## COMPLETION CALL
-            response = openai.ChatCompletion.create(
-                engine=model,
+            response = azure_chat_completions.completion(
+                model=model,
                 messages=messages,
                 headers=headers,
                 api_key=api_key,
                 api_base=api_base,
                 api_version=api_version,
                 api_type=api_type,
-                **optional_params,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                logging_obj=logging, 
             )
             if "stream" in optional_params and optional_params["stream"] == True:
-                response = CustomStreamWrapper(response, model, custom_llm_provider="openai", logging_obj=logging)
+                response = CustomStreamWrapper(response, model, custom_llm_provider=custom_llm_provider, logging_obj=logging)
                 return response
             ## LOGGING
             logging.post_call(
@@ -476,8 +473,7 @@ def completion(
             ## COMPLETION CALL
             try:
                 if custom_llm_provider == "custom_openai": 
-                    print("making call using openai custom chat completion")
-                    response = openai_proxy_chat_completions.completion(
+                    response = openai_chat_completions.completion(
                         model=model,
                         messages=messages,
                         model_response=model_response,

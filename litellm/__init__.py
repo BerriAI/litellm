@@ -368,7 +368,8 @@ from .llms.sagemaker import SagemakerConfig
 from .llms.ollama import OllamaConfig
 from .llms.maritalk import MaritTalkConfig
 from .llms.bedrock import AmazonTitanConfig, AmazonAI21Config, AmazonAnthropicConfig, AmazonCohereConfig
-from .llms.openai import OpenAIConfig, OpenAITextCompletionConfig, AzureOpenAIConfig
+from .llms.openai import OpenAIConfig, OpenAITextCompletionConfig
+from .llms.azure import AzureOpenAIConfig
 from .main import *  # type: ignore
 from .integrations import *
 from .exceptions import (
