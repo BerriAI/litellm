@@ -181,9 +181,9 @@ class AzureChatCompletion(BaseLLM):
     def embedding(self,
                 model: str,
                 input: list,
-                api_key: Optional[str] = None,
-                api_base: Optional[str] = None,
-                api_version: Optional[str] = None,
+                api_key: str,
+                api_base: str,
+                api_version: str,
                 logging_obj=None,
                 model_response=None,
                 optional_params=None,):
