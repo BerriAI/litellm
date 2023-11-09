@@ -213,6 +213,36 @@ python3 -m lm_eval \
 
 
 </TabItem>
+
+<TabItem value="flask evals" label="FLASK Evals">
+FLASK - Fine-grained Language Model Evaluation 
+Use litellm to evaluate any LLM on FLASK https://github.com/kaistAI/FLASK 
+
+**Step 1: Start the local proxy**
+```shell
+$ litellm --model huggingface/bigcode/starcoder
+```
+
+**Step 2: Set OpenAI API Base & Key**
+```shell
+$ export OPENAI_API_BASE=http://0.0.0.0:8000
+```
+
+**Step 3 Run with FLASK** 
+
+```shell
+git clone https://github.com/kaistAI/FLASK
+```
+```shell
+cd FLASK/gpt_review
+```
+
+Run the eval 
+```shell
+python gpt4_eval.py -q '../evaluation_set/flask_evaluation.jsonl'
+```
+</TabItem>
+
 <TabItem value="continue-dev" label="ContinueDev">
 
 Continue-Dev brings ChatGPT to VSCode. See how to [install it here](https://continue.dev/docs/quickstart).
