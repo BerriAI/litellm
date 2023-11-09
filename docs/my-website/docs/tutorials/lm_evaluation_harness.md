@@ -1,8 +1,9 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# LM-Evaluation Harness with TGI
+# Benchmark LLMs - LM Harness, Flask
 
+## LM Harness Benchmarks
 Evaluate LLMs 20x faster with TGI via litellm proxy's `/completions` endpoint. 
 
 This tutorial assumes you're using the `big-refactor` branch of [lm-evaluation-harness](https://github.com/EleutherAI/lm-evaluation-harness/tree/big-refactor)
@@ -41,7 +42,7 @@ python3 -m lm_eval \
 
 ```
 
-## FLASK - Fine-grained Language Model Evaluation Based on Alignment Skill Sets
+## FLASK - Fine-grained Language Model Evaluation 
 Use litellm to evaluate any LLM on FLASK https://github.com/kaistAI/FLASK 
 
 **Step 1: Start the local proxy**
@@ -57,12 +58,14 @@ $ export OPENAI_API_BASE=http://0.0.0.0:8000
 **Step 3 Run with FLASK** 
 
 ```shell
-cd FLASK
-cd gpt_review
+git clone https://github.com/kaistAI/FLASK
+```
+```shell
+cd FLASK/gpt_review
 ```
 
 Run the eval 
-``shell
+```shell
 python gpt4_eval.py -q '../evaluation_set/flask_evaluation.jsonl'
 ```
 
