@@ -820,49 +820,6 @@ litellm --model ollama/llama2 \
 # OpenAI-compatible server running on http://0.0.0.0:8000
 ```
 
-**Across restarts**:  
-Create a file called `litellm_config.toml` and paste this in there:
-
-```shell
-[model."ollama/llama2"] # run via `litellm --model ollama/llama2`
-max_tokens = 250 # set max tokens for the model 
-temperature = 0.5 # set temperature for the model 
-api_base = "http://localhost:11434" # set a custom api base for the model
-```
-
-&nbsp;   
-
-Save it to the proxy with: 
-```shell
-$ litellm --config -f ./litellm_config.toml 
-```
-LiteLLM will save a copy of this file in it's package, so it can persist these settings across restarts.
-
-
-[**Complete Config File**](https://github.com/BerriAI/litellm/blob/main/secrets_template.toml)
-[**🔥 [Tutorial] modify a model prompt on the proxy**](./tutorials/model_config_proxy.md)
-
-
-### Track Costs
-By default litellm proxy writes cost logs to litellm/proxy/costs.json
-
-How can the proxy be better? Let us know [here](https://github.com/BerriAI/litellm/issues)
-```json
-{
-  "Oct-12-2023": {
-    "claude-2": {
-      "cost": 0.02365918,
-      "num_requests": 1
-    }
-  }
-}
-```
-
-You can view costs on the cli using 
-```shell
-litellm --cost
-```
-
 ### Performance
 
 We load-tested 500,000 HTTP connections on the FastAPI server for 1 minute, using [wrk](https://github.com/wg/wrk).
