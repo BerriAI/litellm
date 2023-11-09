@@ -342,8 +342,14 @@ print(result)
 </Tabs>
 
 ## Proxy Configs
-The Config allows you to set a `model_list` and define litellm specific params
-Supported params in the config
+The Config allows you to set the following params
+
+| Param Name           | Description                                                   |
+|----------------------|---------------------------------------------------------------|
+| `model_list`         | List of supported models on the server, with model-specific configs |
+| `litellm_settings`   | litellm Module settings, example `litellm.drop_params=True`, `litellm.set_verbose=True`, `litellm.api_base` |
+
+### Example Config
 ```yaml
 model_list:
   - model_name: zephyr-alpha
@@ -354,8 +360,11 @@ model_list:
     litellm_params:
       model: huggingface/HuggingFaceH4/zephyr-7b-beta
       api_base: https://<my-hosted-endpoint>
-```
 
+litellm_settings:
+  drop_params: True
+  set_verbose: True
+```
 
 ### Set Custom Prompt Templates
 
