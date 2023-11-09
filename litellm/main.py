@@ -1725,28 +1725,17 @@ def embedding(
             api_type = "openai"
             api_version = None
 
-            ## LOGGING
-            logging.pre_call(
-                input=input,
-                api_key=api_key,
-                additional_args={
-                    "api_type": api_type,
-                    "api_base": api_base,
-                    "api_version": api_version,
-                },
-            )
-            ## EMBEDDING CALL
-            response = openai.Embedding.create(
-                input=input, 
-                model=model,
-                api_key=api_key,
-                api_base=api_base,
-                api_version=api_version,
-                api_type=api_type,
-            )
 
-            ## LOGGING
-            logging.post_call(input=input, api_key=api_key, original_response=response)
+            ## EMBEDDING CALL
+            response = openai_chat_completions.embedding(
+                model=model,
+                input=input,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                model_response=EmbeddingResponse(), 
+                optional_params=kwargs
+            )
         elif model in litellm.cohere_embedding_models:
             cohere_key = (
                 api_key
