@@ -366,57 +366,39 @@ litellm_settings:
   set_verbose: True
 ```
 
-### Set Custom Prompt Templates
+### Quick Start - Config 
 
-LiteLLM by default checks if a model has a [prompt template and applies it](./completion/prompt_formatting.md) (e.g. if a huggingface model has a saved chat template in it's tokenizer_config.json). However, you can also set a custom prompt template on your proxy in the `config.yaml`: 
+Here's how you can use multiple llms with one proxy `config.yaml`. 
 
-**Step 1**: Save your prompt template in a `config.yaml`
-```yaml
-# Model-specific parameters
-model_list:
-  - model_name: mistral-7b # model alias
-    litellm_params: # actual params for litellm.completion()
-      model: "huggingface/mistralai/Mistral-7B-Instruct-v0.1" 
-      api_base: "<your-api-base>"
-      api_key: "<your-api-key>" # [OPTIONAL] for hf inference endpoints
-      initial_prompt_value: "\n"
-      roles: {"system":{"pre_message":"<|im_start|>system\n", "post_message":"<|im_end|>"}, "assistant":{"pre_message":"<|im_start|>assistant\n","post_message":"<|im_end|>"}, "user":{"pre_message":"<|im_start|>user\n","post_message":"<|im_end|>"}}
-      final_prompt_value: "\n"
-      bos_token: "<s>"
-      eos_token: "</s>"
-      max_tokens: 4096
-```
-
-**Step 2**: Start server with config
-
-```shell
-$ litellm --config /path/to/config.yaml
-```
-
-### Using Multiple Models 
-
-If you have 1 model running on a local GPU and another that's hosted (e.g. on Runpod), you can call both via the same litellm server by listing them in your `config.yaml`. 
-
+#### Step 1: Setup Config
 ```yaml
 model_list:
   - model_name: zephyr-alpha
     litellm_params: # params for litellm.completion() - https://docs.litellm.ai/docs/completion/input#input---request-body
       model: huggingface/HuggingFaceH4/zephyr-7b-alpha
       api_base: http://0.0.0.0:8001
-  - model_name: zephyr-beta
+  - model_name: gpt-4
     litellm_params:
-      model: huggingface/HuggingFaceH4/zephyr-7b-beta
-      api_base: https://<my-hosted-endpoint>
+      model: gpt-4
+      api_key: sk-1233
+  - model_name: claude-2
+    litellm_params:
+      model: claude-2
+      api_key: sk-claude
+    
 ```
+
+#### Step 2: Start Proxy with config
 
 ```shell
 $ litellm --config /path/to/config.yaml
 ```
 
-### Call specific model
+#### Step 3: Start Proxy with config
 
 If you're repo let's you set model name, you can call the specific model by just passing in that model's name - 
 
+**Setting model name**
 ```python
 import openai 
 openai.api_base = "http://0.0.0.0:8000" 
@@ -425,8 +407,8 @@ completion = openai.ChatCompletion.create(model="zephyr-alpha", messages=[{"role
 print(completion.choices[0].message.content)
 ```
 
+**Setting API Base with model name**
 If you're repo only let's you specify api base, then you can add the model name to the api base passed in - 
-
 ```python
 import openai 
 openai.api_base = "http://0.0.0.0:8000/openai/deployments/zephyr-alpha/chat/completions" # zephyr-alpha will be used 
@@ -436,10 +418,10 @@ print(completion.choices[0].message.content)
 ```
 
 ### Save Model-specific params (API Base, API Keys, Temperature, etc.)
-Use the [router_config_template.yaml](https://github.com/BerriAI/litellm/blob/main/router_config_template.yaml) to save model-specific information like api_base, api_key, temperature, max_tokens, etc. 
+You can use the config to save model-specific information like api_base, api_key, temperature, max_tokens, etc. 
 
 **Step 1**: Create a `config.yaml` file
-```shell
+```yaml
 model_list:
   - model_name: gpt-3.5-turbo
     litellm_params: # params for litellm.completion() - https://docs.litellm.ai/docs/completion/input#input---request-body
@@ -473,6 +455,33 @@ model_list:
       model: huggingface/mistralai/Mistral-7B-Instruct-v0.1 # ACTUAL NAME
       api_key: your_huggingface_api_key # [OPTIONAL] if deployed on huggingface inference endpoints
       api_base: your_api_base # url where model is deployed 
+```
+
+### Set Custom Prompt Templates
+
+LiteLLM by default checks if a model has a [prompt template and applies it](./completion/prompt_formatting.md) (e.g. if a huggingface model has a saved chat template in it's tokenizer_config.json). However, you can also set a custom prompt template on your proxy in the `config.yaml`: 
+
+**Step 1**: Save your prompt template in a `config.yaml`
+```yaml
+# Model-specific parameters
+model_list:
+  - model_name: mistral-7b # model alias
+    litellm_params: # actual params for litellm.completion()
+      model: "huggingface/mistralai/Mistral-7B-Instruct-v0.1" 
+      api_base: "<your-api-base>"
+      api_key: "<your-api-key>" # [OPTIONAL] for hf inference endpoints
+      initial_prompt_value: "\n"
+      roles: {"system":{"pre_message":"<|im_start|>system\n", "post_message":"<|im_end|>"}, "assistant":{"pre_message":"<|im_start|>assistant\n","post_message":"<|im_end|>"}, "user":{"pre_message":"<|im_start|>user\n","post_message":"<|im_end|>"}}
+      final_prompt_value: "\n"
+      bos_token: "<s>"
+      eos_token: "</s>"
+      max_tokens: 4096
+```
+
+**Step 2**: Start server with config
+
+```shell
+$ litellm --config /path/to/config.yaml
 ```
 
 ## Proxy CLI Arguments
