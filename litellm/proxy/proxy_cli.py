@@ -66,7 +66,6 @@ def is_port_in_use(port):
 @click.option('--max_tokens', default=None, type=int, help='Set max tokens for the model') 
 @click.option('--request_timeout', default=600, type=int, help='Set timeout in seconds for completion calls') 
 @click.option('--drop_params', is_flag=True, help='Drop any unmapped params') 
-@click.option('--create_proxy', is_flag=True, help='Creates a local OpenAI-compatible server template') 
 @click.option('--add_function_to_prompt', is_flag=True, help='If function passed but unsupported, pass it as prompt') 
 @click.option('--config', '-c', help='Configure Litellm')  
 @click.option('--file', '-f', help='Path to config file')
@@ -87,13 +86,6 @@ def run_server(host, port, api_base, api_version, model, alias, add_key, headers
         except ImportError as e: 
             from proxy_server import app, save_worker_config, usage_telemetry, add_keys_to_config
     feature_telemetry = usage_telemetry
-    if create_proxy == True: 
-        repo_url = 'https://github.com/BerriAI/litellm'
-        subfolder = 'litellm/proxy' 
-        destination = os.path.join(os.getcwd(), 'litellm-proxy')
-
-        clone_subfolder(repo_url, subfolder, destination)
-        return
     if logs is not None:
         if logs == 0: # default to 1
             logs = 1
