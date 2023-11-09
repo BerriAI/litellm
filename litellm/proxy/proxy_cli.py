@@ -79,7 +79,6 @@ def run_server(host, port, api_base, api_version, model, alias, add_key, headers
     args = locals()
     if local:
         from proxy_server import app, save_worker_config, usage_telemetry, add_keys_to_config
-        debug = True
     else:
         try:
             from .proxy_server import app, save_worker_config, usage_telemetry, add_keys_to_config
