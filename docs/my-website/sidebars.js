@@ -94,9 +94,10 @@ const sidebars = {
       label: 'Tutorials',
       items: [
         'tutorials/azure_openai',
+        "tutorials/lm_evaluation_harness",
+        "tutorials/eval_suites",
         'tutorials/oobabooga',
         "tutorials/gradio_integration",
-        "tutorials/lm_evaluation_harness",
         'tutorials/huggingface_codellama',
         'tutorials/huggingface_tutorial', 
         'tutorials/TogetherAI_liteLLM', 
