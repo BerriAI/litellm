@@ -159,7 +159,6 @@ def run_server(host, port, api_base, api_version, model, alias, add_key, headers
             import uvicorn
         except:
             raise ImportError("Uvicorn needs to be imported. Run - `pip install uvicorn`")
-        print(f"\033[32mLiteLLM: Test your local endpoint with: \"litellm --test\" [In a new terminal tab]\033[0m\n")
         if port == 8000 and is_port_in_use(port):
             port = random.randint(1024, 49152)
         uvicorn.run("litellm.proxy.proxy_server:app", host=host, port=port, workers=num_workers)
