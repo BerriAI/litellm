@@ -136,32 +136,6 @@ $ litellm --model command-nightly
 
 </Tabs>
 
-[**Jump to Code**](https://github.com/BerriAI/litellm/blob/fef4146396d5d87006259e00095a62e3900d6bb4/litellm/proxy.py#L36)
-
-## Docker
-
-Here's how to use our Docker image to go to production with OpenAI Proxy Server
-
-```shell
-git clone https://github.com/BerriAI/litellm.git
-```
-
-Add your API keys / LLM configs to `template_secrets.toml`.
-```shell
-[keys]
-OPENAI_API_KEY="sk-..."
-COHERE_API_KEY="Wa-..."
-```
-
-[All Configs](https://github.com/BerriAI/litellm/blob/main/secrets_template.toml)
-
-Run Docker image: 
-```shell
-docker build -t litellm . && docker run -p 8000:8000 litellm
-
-## INFO: OpenAI Proxy server running on http://0.0.0.0:8000
-```
-
 ### Tutorial: Use with Multiple LLMs + LibreChat/Chatbot-UI/Auto-Gen/ChatDev/Langroid,etc. 
 <Tabs>
 <TabItem value="multiple-LLMs" label="Multiple LLMs">
