@@ -763,7 +763,8 @@ class Logging:
                         )
                     elif isinstance(callback, CustomLogger): # custom logger class 
                         callback.log_failure_event(
-                            model=self.model,
+                            start_time=start_time,
+                            end_time=end_time,
                             messages=self.messages,
                             kwargs=self.model_call_details,
                         )
@@ -908,7 +909,7 @@ def client(original_function):
     def wrapper(*args, **kwargs):
         start_time = datetime.datetime.now()
         result = None
-        logging_obj = None
+        logging_obj = kwargs.get("litellm_logging_obj", None)
 
         # only set litellm_call_id if its not in kwargs
         if "litellm_call_id" not in kwargs:
@@ -919,7 +920,8 @@ def client(original_function):
             raise ValueError("model param not passed in.")
 
         try:
-            logging_obj = function_setup(start_time, *args, **kwargs)
+            if logging_obj is None:
+                logging_obj = function_setup(start_time, *args, **kwargs)
             kwargs["litellm_logging_obj"] = logging_obj
 
             # [OPTIONAL] CHECK BUDGET 
@@ -956,7 +958,8 @@ def client(original_function):
                     return litellm.stream_chunk_builder(chunks)
                 else: 
                     return result
-        
+            elif "acompletion" in kwargs and kwargs["acompletion"] == True: 
+                return result
 
             # [OPTIONAL] ADD TO CACHE
             if litellm.caching or litellm.caching_with_models or litellm.cache != None: # user init a cache object
@@ -1013,7 +1016,6 @@ def client(original_function):
                         e.message += f"\n Check the log in your dashboard - {liteDebuggerClient.dashboard_url}"
             raise e
     return wrapper
-
 
 ####### USAGE CALCULATOR ################
 
