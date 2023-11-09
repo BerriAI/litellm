@@ -95,20 +95,6 @@ def test_completion_claude():
 #         pytest.fail(f"Error occurred: {e}")
 # test_completion_aleph_alpha_control_models()
 
-def test_completion_with_litellm_call_id():
-    try:
-        litellm.use_client = False
-        response = completion(
-            model="gpt-3.5-turbo", messages=messages)
-        print(response)
-        if 'litellm_call_id' in response:
-            pytest.fail(f"Error occurred: litellm_call_id in response objects")
-        print(response.usage)
-        print(response.usage.completion_tokens)
-        
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-# test_completion_with_litellm_call_id()
 import openai
 def test_completion_gpt4_turbo():
     try:
@@ -381,6 +367,8 @@ def test_completion_cohere(): # commenting for now as the cohere endpoint is bei
 
 def test_completion_openai():
     try:
+        litellm.set_verbose=True
+        print(f"api key: {os.environ['OPENAI_API_KEY']}")
         litellm.api_key = os.environ['OPENAI_API_KEY']
         response = completion(model="gpt-3.5-turbo", messages=messages, max_tokens=10, request_timeout=10)
         print("This is the response object\n", response)

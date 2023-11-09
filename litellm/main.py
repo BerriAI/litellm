@@ -198,7 +198,6 @@ def completion(
     logit_bias: dict = {},
     user: str = "",
     deployment_id = None,
-    request_timeout: Optional[int] = None,
 
     # set api_base, api_version, api_key
     api_base: Optional[str] = None,
@@ -270,7 +269,7 @@ def completion(
     eos_token = kwargs.get("eos_token", None)
     ######## end of unpacking kwargs ###########
     openai_params = ["functions", "function_call", "temperature", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "request_timeout", "api_base", "api_version", "api_key"]
-    litellm_params = ["metadata", "acompletion", "caching", "return_async", "mock_response", "api_key", "api_version", "api_base", "force_timeout", "logger_fn", "verbose", "custom_llm_provider", "litellm_logging_obj", "litellm_call_id", "use_client", "id", "fallbacks", "azure", "headers", "model_list", "num_retries", "context_window_fallback_dict", "roles", "final_prompt_value", "bos_token", "eos_token"]
+    litellm_params = ["metadata", "acompletion", "caching", "return_async", "mock_response", "api_key", "api_version", "api_base", "force_timeout", "logger_fn", "verbose", "custom_llm_provider", "litellm_logging_obj", "litellm_call_id", "use_client", "id", "fallbacks", "azure", "headers", "model_list", "num_retries", "context_window_fallback_dict", "roles", "final_prompt_value", "bos_token", "eos_token", "request_timeout"]
     default_params = openai_params + litellm_params
     non_default_params = {k: v for k,v in kwargs.items() if k not in default_params} # model-specific params - pass them straight to the model/provider
     if mock_response:
@@ -334,7 +333,6 @@ def completion(
                 frequency_penalty=frequency_penalty,
                 logit_bias=logit_bias,
                 user=user,
-                request_timeout=request_timeout,
                 deployment_id=deployment_id,
                 # params to identify the model
                 model=model,
@@ -464,38 +462,20 @@ def completion(
                 if k not in optional_params: # completion(top_k=3) > openai_config(top_k=3) <- allows for dynamic variables to be passed in
                     optional_params[k] = v
 
-            ## LOGGING
-            logging.pre_call(
-                input=messages,
-                api_key=api_key,
-                additional_args={"headers": headers, "api_base": api_base},
-            )
             ## COMPLETION CALL
             try:
-                if custom_llm_provider == "custom_openai": 
-                    response = openai_chat_completions.completion(
-                        model=model,
-                        messages=messages,
-                        model_response=model_response,
-                        print_verbose=print_verbose,
-                        api_key=api_key,
-                        api_base=api_base,
-                        logging_obj=logging,
-                        optional_params=optional_params,
-                        litellm_params=litellm_params,
-                        logger_fn=logger_fn
-                    )
-                else:
-                    response = openai.ChatCompletion.create(
-                        model=model,
-                        messages=messages,
-                        headers=headers, # None by default
-                        api_base=api_base, # thread safe setting base, key, api_version
-                        api_key=api_key,
-                        api_type="openai",
-                        api_version=api_version, # default None
-                        **optional_params,
-                    )
+                response = openai_chat_completions.completion(
+                    model=model,
+                    messages=messages,
+                    model_response=model_response,
+                    print_verbose=print_verbose,
+                    api_key=api_key,
+                    api_base=api_base,
+                    logging_obj=logging,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    logger_fn=logger_fn
+                )
             except Exception as e:
                 ## LOGGING - log the original exception returned
                 logging.post_call(
