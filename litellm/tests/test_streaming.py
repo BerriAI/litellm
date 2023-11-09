@@ -916,7 +916,31 @@ def test_openai_chat_completion_call():
         print(f"error occurred: {traceback.format_exc()}")
         pass
 
-test_openai_chat_completion_call()
+# test_openai_chat_completion_call()
+
+
+def test_openai_text_completion_call():
+    try:
+        litellm.set_verbose = True
+        response = completion(
+            model="gpt-3.5-turbo-instruct", messages=messages, stream=True
+        )
+        complete_response = ""
+        start_time = time.time()
+        for idx, chunk in enumerate(response):
+            chunk, finished = streaming_format_tests(idx, chunk)
+            complete_response += chunk
+            if finished:
+                break
+            # print(f'complete_chunk: {complete_response}')
+        if complete_response.strip() == "": 
+            raise Exception("Empty response received")
+        print(f"complete response: {complete_response}")
+    except:
+        print(f"error occurred: {traceback.format_exc()}")
+        pass
+
+test_openai_text_completion_call()
 
 # # test on together ai completion call - starcoder
 def test_together_ai_completion_call_starcoder():
