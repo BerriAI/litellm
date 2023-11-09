@@ -62,7 +62,7 @@ def test_context_window_with_fallbacks(model):
 
 # for model in litellm.models_by_provider["bedrock"]:
 #     test_context_window(model=model)
-# test_context_window(model="command-nightly")
+# test_context_window(model="azure/chatgpt-v-2")
 # test_context_window_with_fallbacks(model="command-nightly")
 # Test 2: InvalidAuth Errors
 @pytest.mark.parametrize("model", models)
@@ -80,7 +80,7 @@ def invalid_auth(model):  # set the model key to an invalid key, depending on th
             os.environ["AWS_REGION_NAME"] = "bad-key"
             temporary_secret_key = os.environ["AWS_SECRET_ACCESS_KEY"]
             os.environ["AWS_SECRET_ACCESS_KEY"] = "bad-key"
-        elif model == "chatgpt-test":
+        elif model == "azure/chatgpt-v-2":
             temporary_key = os.environ["AZURE_API_KEY"]
             os.environ["AZURE_API_KEY"] = "bad-key"
         elif model == "claude-instant-1":
@@ -156,8 +156,9 @@ def invalid_auth(model):  # set the model key to an invalid key, depending on th
             os.environ["AWS_SECRET_ACCESS_KEY"] = temporary_secret_key
     return
 
-for model in litellm.models_by_provider["bedrock"]:
-    invalid_auth(model=model)
+# for model in litellm.models_by_provider["bedrock"]:
+#     invalid_auth(model=model)
+# invalid_auth(model="azure/chatgpt-v-2")
 
 # Test 3: Invalid Request Error 
 @pytest.mark.parametrize("model", models)
@@ -167,6 +168,7 @@ def test_invalid_request_error(model):
     with pytest.raises(InvalidRequestError):
         completion(model=model, messages=messages, max_tokens="hello world")
 
+test_invalid_request_error(model="azure/chatgpt-v-2")
 # Test 3: Rate Limit Errors
 # def test_model_call(model):
 #     try:
