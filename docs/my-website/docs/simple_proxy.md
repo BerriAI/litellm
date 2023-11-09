@@ -342,6 +342,19 @@ print(result)
 </Tabs>
 
 ## Proxy Configs
+The Config allows you to set a `model_list` and define litellm specific params
+Supported params in the config
+```yaml
+model_list:
+  - model_name: zephyr-alpha
+    litellm_params: # params for litellm.completion() - https://docs.litellm.ai/docs/completion/input#input---request-body
+      model: huggingface/HuggingFaceH4/zephyr-7b-alpha
+      api_base: http://0.0.0.0:8001
+  - model_name: zephyr-beta
+    litellm_params:
+      model: huggingface/HuggingFaceH4/zephyr-7b-beta
+      api_base: https://<my-hosted-endpoint>
+```
 
 
 ### Set Custom Prompt Templates
