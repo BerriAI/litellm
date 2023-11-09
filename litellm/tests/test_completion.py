@@ -772,7 +772,7 @@ def test_completion_replicate_vicuna():
 
 
 
-######## Test TogetherAI ########
+######## Test TogetherAI ######## 
 def test_completion_together_ai():
     model_name = "together_ai/togethercomputer/llama-2-70b-chat"
     try:
