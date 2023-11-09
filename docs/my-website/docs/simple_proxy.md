@@ -170,7 +170,7 @@ $ litellm --model command-nightly
 - GET `/models` - available models on server
 
 
-### Using with OpenAI compatible projects
+## Using with OpenAI compatible projects
 LiteLLM allows you to set `openai.api_base` to the proxy server and use all LiteLLM supported LLMs in any OpenAI supported project
 
 <Tabs>
@@ -341,7 +341,7 @@ print(result)
 </TabItem>
 </Tabs>
 
-## Advanced
+## Proxy Configs
 
 
 ### Set Custom Prompt Templates
