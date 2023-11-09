@@ -1358,7 +1358,6 @@ def get_optional_params(  # use the openai defaults
     frequency_penalty=0,
     logit_bias={},
     user="",
-    request_timeout=None,
     deployment_id=None,
     model=None,
     custom_llm_provider="",
@@ -1383,7 +1382,6 @@ def get_optional_params(  # use the openai defaults
         "logit_bias":{},
         "user":"",
         "deployment_id":None,
-        "request_timeout":None,
         "model":None,
         "custom_llm_provider":"",
     }
@@ -1408,8 +1406,6 @@ def get_optional_params(  # use the openai defaults
                 if k == "n" and n == 1: # langchain sends n=1 as a default value
                     pass
                 # Always keeps this in elif code blocks
-                elif k == "request_timeout": # litellm handles request time outs
-                    pass
                 else: 
                     unsupported_params[k] = non_default_params[k]
         if unsupported_params and not litellm.drop_params:
@@ -1761,7 +1757,7 @@ def get_optional_params(  # use the openai defaults
         if stream:
             optional_params["stream"] = stream
     elif custom_llm_provider == "deepinfra":
-        supported_params = ["temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "deployment_id", "request_timeout"]
+        supported_params = ["temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "deployment_id"]
         _check_valid_arg(supported_params=supported_params)
         optional_params = non_default_params
         if temperature != None:
@@ -1769,7 +1765,7 @@ def get_optional_params(  # use the openai defaults
                 temperature = 0.0001 # close to 0
             optional_params["temperature"] = temperature
     else:  # assume passing in params for openai/azure openai
-        supported_params = ["functions", "function_call", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "deployment_id", "request_timeout"]
+        supported_params = ["functions", "function_call", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "deployment_id"]
         _check_valid_arg(supported_params=supported_params)
         optional_params = non_default_params
     # if user passed in non-default kwargs for specific providers/models, pass them along 
@@ -2881,8 +2877,6 @@ def exception_type(
                         llm_provider="openrouter"
                     )
                 original_exception.llm_provider = "openrouter"
-            else:
-                original_exception.llm_provider = "openai"
             if "This model's maximum context length is" in original_exception._message:
                 raise ContextWindowExceededError(
                     message=str(original_exception),
@@ -2896,7 +2890,60 @@ def exception_type(
                 exception_type = type(original_exception).__name__
             else:
                 exception_type = ""
-            if custom_llm_provider == "anthropic":  # one of the anthropics
+            if custom_llm_provider == "openai":
+                if "This model's maximum context length is" in error_str:
+                    exception_mapping_worked = True
+                    raise ContextWindowExceededError(
+                        message=f"AzureException - {original_exception.message}",
+                        llm_provider="azure",
+                        model=model
+                    )
+                elif "invalid_request_error" in error_str:
+                    exception_mapping_worked = True
+                    raise InvalidRequestError(
+                        message=f"AzureException - {original_exception.message}",
+                        llm_provider="azure",
+                        model=model
+                    )
+                elif hasattr(original_exception, "status_code"):
+                    exception_mapping_worked = True
+                    if original_exception.status_code == 401:
+                        exception_mapping_worked = True
+                        raise AuthenticationError(
+                            message=f"OpenAIException - {original_exception.message}",
+                            llm_provider="openai",
+                            model=model
+                        )
+                    elif original_exception.status_code == 408:
+                        exception_mapping_worked = True
+                        raise Timeout(
+                            message=f"OpenAIException - {original_exception.message}",
+                            model=model,
+                            llm_provider="openai"
+                        )
+                    if original_exception.status_code == 422:
+                        exception_mapping_worked = True
+                        raise InvalidRequestError(
+                            message=f"OpenAIException - {original_exception.message}",
+                            model=model,
+                            llm_provider="openai",
+                        )
+                    elif original_exception.status_code == 429:
+                        exception_mapping_worked = True
+                        raise RateLimitError(
+                            message=f"OpenAIException - {original_exception.message}",
+                            model=model,
+                            llm_provider="openai",
+                        )
+                    else:
+                        exception_mapping_worked = True
+                        raise APIError(
+                            status_code=original_exception.status_code, 
+                            message=f"OpenAIException - {original_exception.message}",
+                            llm_provider="openai",
+                            model=model
+                        )
+            elif custom_llm_provider == "anthropic":  # one of the anthropics
                 if hasattr(original_exception, "message"):
                     if "prompt is too long" in original_exception.message:
                         exception_mapping_worked = True
@@ -3941,7 +3988,7 @@ class CustomStreamWrapper:
         except:
             raise ValueError(f"Unable to parse response. Original response: {chunk}")
     
-    def handle_custom_openai_chat_completion_chunk(self, chunk): 
+    def handle_openai_chat_completion_chunk(self, chunk): 
         try: 
             str_line = chunk.decode("utf-8")  # Convert bytes to string
             text = "" 
@@ -3976,12 +4023,6 @@ class CustomStreamWrapper:
             return chunk["choices"][0]["text"]
         except:
             raise ValueError(f"Unable to parse response. Original response: {chunk}")
-
-    def handle_openai_chat_completion_chunk(self, chunk):
-        try:
-            return chunk["choices"][0]["delta"]["content"]
-        except:
-            return ""
 
     def handle_baseten_chunk(self, chunk):
         try:
@@ -4187,9 +4228,9 @@ class CustomStreamWrapper:
                     if "error" in chunk:
                         exception_type(model=self.model, custom_llm_provider=self.custom_llm_provider, original_exception=chunk["error"])
                     completion_obj = chunk
-                elif self.custom_llm_provider == "custom_openai":
+                elif self.custom_llm_provider == "openai":
                     chunk = next(self.completion_stream)
-                    response_obj = self.handle_custom_openai_chat_completion_chunk(chunk)
+                    response_obj = self.handle_openai_chat_completion_chunk(chunk)
                     completion_obj["content"] = response_obj["text"]
                     print_verbose(f"completion obj content: {completion_obj['content']}")
                     if response_obj["is_finished"]: 
