@@ -1681,28 +1681,17 @@ def embedding(
                 litellm.azure_key or
                 get_secret("AZURE_API_KEY")
             )
-            ## LOGGING
-            logging.pre_call(
-                input=input,
-                api_key=openai.api_key,
-                additional_args={
-                    "api_type": openai.api_type,
-                    "api_base": openai.api_base,
-                    "api_version": openai.api_version,
-                },
-            )
             ## EMBEDDING CALL
-            response = openai.Embedding.create(
-                input=input, 
-                engine=model,
-                api_key=api_key,
+            response = azure_chat_completions.embedding(
+                model=model,
+                input=input,
                 api_base=api_base,
+                api_key=api_key,
                 api_version=api_version,
-                api_type=api_type,
+                logging_obj=logging,
+                model_response=EmbeddingResponse(), 
+                optional_params=kwargs
             )
-
-            ## LOGGING
-            logging.post_call(input=input, api_key=openai.api_key, original_response=response)
         elif model in litellm.open_ai_embedding_models:
             api_base = (
                 api_base
