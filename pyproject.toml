@@ -8,7 +8,7 @@ readme = "README.md"
 
 [tool.poetry.dependencies]
 python = "^3.8"
-openai = "^0.28.0 || ^0.27.0"
+openai = "*"
 python-dotenv = ">=0.2.0"
 tiktoken = ">=0.4.0"
 importlib-metadata = ">=6.8.0"
