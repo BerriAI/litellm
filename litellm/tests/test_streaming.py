@@ -897,8 +897,9 @@ def ai21_completion_call_bad_key():
 # test on openai completion call
 def test_openai_chat_completion_call():
     try:
+        litellm.set_verbose = True
         response = completion(
-            model="gpt-3.5-turbo", messages=messages, stream=True, logger_fn=logger_fn, max_tokens=10
+            model="gpt-3.5-turbo", messages=messages, stream=True
         )
         complete_response = ""
         start_time = time.time()
@@ -915,7 +916,7 @@ def test_openai_chat_completion_call():
         print(f"error occurred: {traceback.format_exc()}")
         pass
 
-# test_openai_chat_completion_call()
+test_openai_chat_completion_call()
 
 # # test on together ai completion call - starcoder
 def test_together_ai_completion_call_starcoder():
