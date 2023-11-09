@@ -25,16 +25,19 @@ def test_sync_response():
 def test_async_response():
     import asyncio
     async def test_get_response():
-        litellm.set_verbose = True
         user_message = "Hello, how are you?"
         messages = [{"content": user_message, "role": "user"}]
         try:
             response = await acompletion(model="gpt-3.5-turbo", messages=messages)
+            print(f"response: {response}")
+            response = await acompletion(model="azure/chatgpt-v-2", messages=messages)
+            print(f"response: {response}")
         except Exception as e:
             pytest.fail(f"An exception occurred: {e}")
 
     response = asyncio.run(test_get_response())
 # print(response)
+test_async_response()
 
 def test_get_response_streaming():
     import asyncio

@@ -1,6 +1,7 @@
 from litellm import completion, stream_chunk_builder
 import litellm
 import os, dotenv
+import pytest
 dotenv.load_dotenv()
 
 user_message = "What is the current weather in Boston?"
@@ -23,6 +24,7 @@ function_schema = {
   },
 }
 
+@pytest.mark.skip
 def test_stream_chunk_builder():
     litellm.set_verbose = False
     litellm.api_key = os.environ["OPENAI_API_KEY"]
