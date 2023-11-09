@@ -1,4 +1,4 @@
-# Anyscale AI
+# Anyscale
 https://app.endpoints.anyscale.com/
 
 ## API Key

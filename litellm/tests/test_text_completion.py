@@ -21,21 +21,38 @@ token_prompt = [[32, 2043, 32, 329, 4585, 262, 1644, 14, 34, 3705, 319, 616, 475
 
 def test_completion_openai_prompt():
     try:
+        print("\n text 003 test\n")
+        response = text_completion(
+            model="text-davinci-003", prompt="What's the weather in SF?"
+        )
+        print(response)
+        response_str = response["choices"][0]["text"]
+        # print(response.choices[0])
+        #print(response.choices[0].text)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+# test_completion_openai_prompt()
+
+
+def test_completion_chatgpt_prompt():
+    try:
+        print("\n gpt3.5 test\n")
         response = text_completion(
             model="gpt-3.5-turbo", prompt="What's the weather in SF?"
         )
         print(response)
         response_str = response["choices"][0]["text"]
-        print(response.choices)
-        print(response.choices[0])
+        print("\n", response.choices)
+        print("\n", response.choices[0])
         #print(response.choices[0].text)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_openai_prompt()
+# test_completion_chatgpt_prompt()
 
 
-def test_completion_openai_prompt_array():
+def test_text_completion_basic():
     try:
+        print("\n test 003 with echo and logprobs \n")
         litellm.set_verbose=False
         response = text_completion(
             model="text-davinci-003", prompt="good morning", max_tokens=10, logprobs=10, echo=True
@@ -47,24 +64,7 @@ def test_completion_openai_prompt_array():
         response_str = response["choices"][0]["text"]
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_openai_prompt_array()
-
-def test_completion_hf_prompt_array():
-    try:
-        litellm.set_verbose=False
-        response = text_completion(
-            model="huggingface/mistralai/Mistral-7B-v0.1", 
-            prompt=token_prompt, # token prompt is a 2d list
-        )
-        print("\n\n response")
-
-        print(response)
-        print(response.choices)
-        assert(len(response.choices)==2)
-        # response_str = response["choices"][0]["text"]
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-test_completion_hf_prompt_array()
+# test_text_completion_basic()
 
 
 def test_completion_text_003_prompt_array():
@@ -80,4 +80,56 @@ def test_completion_text_003_prompt_array():
         # response_str = response["choices"][0]["text"]
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_text_003_prompt_array()
+# test_completion_text_003_prompt_array()
+
+
+# not including this in our ci cd pipeline, since we don't want to fail tests due to an unstable replit
+# def test_text_completion_with_proxy():
+#     try:
+#         litellm.set_verbose=True
+#         response = text_completion(
+#             model="facebook/opt-125m",
+#             prompt='Write a tagline for a traditional bavarian tavern',
+#             api_base="https://openai-proxy.berriai.repl.co/v1",
+#             custom_llm_provider="openai",
+#             temperature=0,
+#             max_tokens=10,
+#         )
+#         print("\n\n response")
+
+#         print(response)
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
+# test_text_completion_with_proxy()
+
+##### hugging face tests
+def test_completion_hf_prompt_array():
+    try:
+        litellm.set_verbose=False
+        print("\n testing hf mistral\n")
+        response = text_completion(
+            model="huggingface/mistralai/Mistral-7B-v0.1", 
+            prompt=token_prompt, # token prompt is a 2d list,
+            max_tokens=0,
+            temperature=0.0,
+            echo=True,
+        )
+        print("\n\n response")
+
+        print(response)
+        print(response.choices)
+        assert(len(response.choices)==2)
+        # response_str = response["choices"][0]["text"]
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+# test_completion_hf_prompt_array()
+
+def test_text_completion_stream():
+    response = text_completion(
+            model="huggingface/mistralai/Mistral-7B-v0.1", 
+            prompt="good morning",
+            stream=True
+        )
+    for chunk in response:
+        print(chunk)
+test_text_completion_stream()

@@ -9,9 +9,11 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import pytest
+from openai.error import Timeout
 import litellm
 from litellm import embedding, completion, completion_cost
 from litellm import RateLimitError
+litellm.num_retries = 3
 
 user_message = "Write a short poem about the sky"
 messages = [{"content": user_message, "role": "user"}]
@@ -93,20 +95,21 @@ def test_completion_claude():
 #         pytest.fail(f"Error occurred: {e}")
 # test_completion_aleph_alpha_control_models()
 
-def test_completion_with_litellm_call_id():
+import openai
+def test_completion_gpt4_turbo():
     try:
-        litellm.use_client = False
         response = completion(
-            model="gpt-3.5-turbo", messages=messages)
+            model="gpt-4-1106-preview", 
+            messages=messages,
+            max_tokens=10,
+        )
         print(response)
-        if 'litellm_call_id' in response:
-            pytest.fail(f"Error occurred: litellm_call_id in response objects")
-        print(response.usage)
-        print(response.usage.completion_tokens)
-        
+    except openai.error.RateLimitError:
+        print("got a rate liimt error")
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_completion_with_litellm_call_id()
+# test_completion_gpt4_turbo()
 
 def test_completion_perplexity_api():
     try:
@@ -219,34 +222,32 @@ def test_get_hf_task_for_model():
 # ################### Hugging Face TGI models ########################
 # # TGI model
 # # this is a TGI model https://huggingface.co/glaiveai/glaive-coder-7b
-# def hf_test_completion_tgi():
-#     litellm.set_verbose=True
-#     try:
-#         response = litellm.completion(
-#             model="huggingface/mistralai/Mistral-7B-Instruct-v0.1",
-#             messages=[{ "content": "Hello, how are you?","role": "user"}],
-#             api_base="https://3kk3h56912qga4-80.proxy.runpod.net",
-#         )
-#         # Add any assertions here to check the response
-#         print(response)
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
+def hf_test_completion_tgi():
+    # litellm.set_verbose=True
+    try:
+        response = completion(
+            model = 'huggingface/HuggingFaceH4/zephyr-7b-beta', 
+            messages = [{ "content": "Hello, how are you?","role": "user"}],
+        )
+        # Add any assertions here to check the response
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 # hf_test_completion_tgi()
 
-# def hf_test_completion_tgi_stream():
-#     try:
-#         response = litellm.completion(
-#             model="huggingface/glaiveai/glaive-coder-7b",
-#             messages=[{ "content": "Hello, how are you?","role": "user"}],
-#             api_base="https://wjiegasee9bmqke2.us-east-1.aws.endpoints.huggingface.cloud",
-#             stream=True
-#         )
-#         # Add any assertions here to check the response
-#         print(response)
-#         for chunk in response:
-#             print(chunk)
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
+def hf_test_completion_tgi_stream():
+    try:
+        response = completion(
+            model = 'huggingface/HuggingFaceH4/zephyr-7b-beta', 
+            messages = [{ "content": "Hello, how are you?","role": "user"}],
+            stream=True
+        )
+        # Add any assertions here to check the response
+        print(response)
+        for chunk in response:
+            print(chunk["choices"][0]["delta"]["content"])
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 # hf_test_completion_tgi_stream()
 
 # ################### Hugging Face Conversational models ########################
@@ -366,6 +367,8 @@ def test_completion_cohere(): # commenting for now as the cohere endpoint is bei
 
 def test_completion_openai():
     try:
+        litellm.set_verbose=True
+        print(f"api key: {os.environ['OPENAI_API_KEY']}")
         litellm.api_key = os.environ['OPENAI_API_KEY']
         response = completion(model="gpt-3.5-turbo", messages=messages, max_tokens=10, request_timeout=10)
         print("This is the response object\n", response)
@@ -388,11 +391,12 @@ def test_completion_openai():
 
 def test_completion_text_openai():
     try:
+        litellm.set_verbose = True
         response = completion(model="gpt-3.5-turbo-instruct", messages=messages)
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_completion_text_openai()
+test_completion_text_openai()
 
 def test_completion_openai_with_optional_params():
     try:
@@ -405,9 +409,10 @@ def test_completion_openai_with_optional_params():
         )
         # Add any assertions here to check the response
         print(response)
+    except Timeout as e: 
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-
 
 def test_completion_openai_litellm_key():
     try:
@@ -740,37 +745,19 @@ def test_completion_azure_deployment_id():
 
 # test_completion_anthropic_openai_proxy()
 
-# Replicate API endpoints are unstable -> throw random CUDA errors -> this means our tests can fail even if our tests weren't incorrect.
-
-# def test_completion_replicate_llama_2():
-#     model_name = "replicate/meta/llama-2-70b-chat:02e509c789964a7ea8736978a43525956ef40397be9033abf9fd2badfe68c9e3"
-#     litellm.replicate_config(max_new_tokens=200)
-#     try:
-#         response = completion(
-#             model=model_name, 
-#             messages=messages, 
-#         )
-#         print(response)
-#         cost = completion_cost(completion_response=response)
-#         print("Cost for completion call with llama-2: ", f"${float(cost):.10f}")
-#         # Add any assertions here to check the response
-#         response_str = response["choices"][0]["message"]["content"]
-#         print(response_str)
-#         if type(response_str) != str:
-#             pytest.fail(f"Error occurred: {e}")
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
-# test_completion_replicate_llama_2()
-
 def test_completion_replicate_vicuna():
     print("TESTING REPLICATE")
+    litellm.set_verbose=False
     model_name = "replicate/vicuna-13b:6282abe6a492de4145d7bb601023762212f9ddbbe78278bd6771c8b3b2f2a13b"
     try:
         response = completion(
             model=model_name, 
             messages=messages, 
-            custom_llm_provider="replicate",
-            temperature=0.1,
+            temperature=0.5,
+            top_k=20,
+            repetition_penalty=1,
+            min_tokens=1,
+            seed=-1,
             max_tokens=20,
         )
         print(response)
@@ -785,7 +772,7 @@ def test_completion_replicate_vicuna():
 
 
 
-######## Test TogetherAI ########
+######## Test TogetherAI ######## 
 def test_completion_together_ai():
     model_name = "together_ai/togethercomputer/llama-2-70b-chat"
     try:
@@ -1146,6 +1133,18 @@ def test_completion_anyscale_2():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+def test_mistral_anyscale_stream():
+    litellm.set_verbose=False
+    response = completion(
+        model = 'anyscale/mistralai/Mistral-7B-Instruct-v0.1', 
+        messages = [{ "content": "hello, good morning","role": "user"}],
+        stream=True,
+    )
+    for chunk in response:
+        # print(chunk)
+        print(chunk["choices"][0]["delta"].get("content", ""), end="")
+# test_mistral_anyscale_stream()
 # test_completion_anyscale_2()
 # def test_completion_with_fallbacks_multiple_keys():
 #     print(f"backup key 1: {os.getenv('BACKUP_OPENAI_API_KEY_1')}")

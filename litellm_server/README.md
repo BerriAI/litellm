@@ -1,21 +1,8 @@
-# litellm-server
+# litellm-server [experimental]
 
-A simple, fast, and lightweight **OpenAI-compatible server** to call 100+ LLM APIs.
+Load balancer for multiple API Deployments (eg. Azure/OpenAI)
 
-<h4 align="center">
-        <a href="https://l.linklyhq.com/l/1uHsr" target="_blank" >
-                <img src="https://render.com/images/deploy-to-render-button.svg" width=200/>
-        </a>
-        <a href="https://railway.app/template/YTHiYS?referralCode=t3ukrU" target="_blank">
-                <img src="https://railway.app/button.svg" width=200 />
-        </a>
-        <a href="https://l.linklyhq.com/l/1uHtX" target="_blank">
-                <img src="https://deploy.cloud.run/button.svg" width=200 height=50/>
-        </a>
-        <a href="https://docs.litellm.ai/docs/simple_proxy#deploy-on-aws-apprunner" target="_blank">
-            <img src="https://github.com/BerriAI/litellm/blob/main/.github/deploy-to-aws.png"  height=40/>
-          </a>
-</h4>
+<img width="1036" alt="Screenshot 2023-11-06 at 6 54 16 PM" src="https://github.com/BerriAI/litellm/assets/17561003/d32da338-1d72-45bb-bca8-ac70f1d3e980">
 
 LiteLLM Server supports: 
 - LLM API Calls in the OpenAI ChatCompletions format 

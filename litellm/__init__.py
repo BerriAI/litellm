@@ -6,6 +6,7 @@ from litellm.caching import Cache
 input_callback: List[Union[str, Callable]] = []
 success_callback: List[Union[str, Callable]] = []
 failure_callback: List[Union[str, Callable]] = []
+callbacks: List[Callable] = []
 set_verbose = False
 email: Optional[
     str
@@ -367,7 +368,8 @@ from .llms.sagemaker import SagemakerConfig
 from .llms.ollama import OllamaConfig
 from .llms.maritalk import MaritTalkConfig
 from .llms.bedrock import AmazonTitanConfig, AmazonAI21Config, AmazonAnthropicConfig, AmazonCohereConfig
-from .llms.openai import OpenAIConfig, OpenAITextCompletionConfig, AzureOpenAIConfig
+from .llms.openai import OpenAIConfig, OpenAITextCompletionConfig
+from .llms.azure import AzureOpenAIConfig
 from .main import *  # type: ignore
 from .integrations import *
 from .exceptions import (
@@ -377,10 +379,8 @@ from .exceptions import (
     ServiceUnavailableError,
     OpenAIError,
     ContextWindowExceededError,
-    BudgetExceededError
-
+    BudgetExceededError, 
 )
 from .budget_manager import BudgetManager
 from .proxy.proxy_cli import run_server
 from .router import Router
-

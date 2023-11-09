@@ -1,8 +1,8 @@
 from datetime import datetime
 from typing import Dict, List, Optional, Union
-
+import random, threading, time
 import litellm
-
+import logging
 
 class Router:
     """
@@ -16,8 +16,6 @@ class Router:
             "api_version": <your-api-version>,
             "api_base": <your-api-base>
         },
-        "tpm": <your-model-tpm>, e.g. 240000
-        "rpm": <your-model-rpm>, e.g. 1800
     }]
 
     router = Router(model_list=model_list)
@@ -34,6 +32,11 @@ class Router:
                  cache_responses: bool = False) -> None:
         if model_list:
             self.set_model_list(model_list)
+            self.healthy_deployments: List = []
+        ### HEALTH CHECK THREAD ### - commenting out as further testing required
+        self._start_health_check_thread()
+
+        ### CACHING ###
         if redis_host is not None and redis_port is not None and redis_password is not None:
             cache_config = {
                     'type': 'redis',
@@ -45,11 +48,79 @@ class Router:
             cache_config = {
                 "type": "local"
             }
-        self.cache = litellm.Cache(cache_config) # use Redis for tracking load balancing
         if cache_responses:
             litellm.cache = litellm.Cache(**cache_config) # use Redis for caching completion requests
             self.cache_responses = cache_responses
-        litellm.success_callback = [self.deployment_callback]
+
+
+    def _start_health_check_thread(self):
+        """
+        Starts a separate thread to perform health checks periodically.
+        """
+        health_check_thread = threading.Thread(target=self._perform_health_checks, daemon=True)
+        health_check_thread.start()
+    
+    def _perform_health_checks(self):
+        """
+        Periodically performs health checks on the servers.
+        Updates the list of healthy servers accordingly.
+        """
+        while True:
+            self.healthy_deployments = self._health_check()
+            # Adjust the time interval based on your needs
+            time.sleep(15)
+        
+    def _health_check(self):
+        """
+        Performs a health check on the deployments
+        Returns the list of healthy deployments
+        """
+        healthy_deployments = []
+        for deployment in self.model_list: 
+            litellm_args = deployment["litellm_params"]
+            try: 
+                start_time = time.time()
+                litellm.completion(messages=[{"role": "user", "content": ""}], max_tokens=1, **litellm_args) # hit the server with a blank message to see how long it takes to respond
+                end_time = time.time() 
+                response_time = end_time - start_time
+                logging.debug(f"response_time: {response_time}")
+                healthy_deployments.append((deployment, response_time))
+                healthy_deployments.sort(key=lambda x: x[1])
+            except Exception as e: 
+                pass
+        return healthy_deployments
+
+    def set_model_list(self, model_list: list):
+        self.model_list = model_list
+        self.model_names = [m["model_name"] for m in model_list]
+
+    def get_model_names(self):
+        return self.model_names
+
+    def get_available_deployment(self,
+                               model: str,
+                               messages: Optional[List[Dict[str, str]]] = None,
+                               input: Optional[Union[str, List]] = None):
+        """
+        Returns the deployment with the shortest queue 
+        """
+        ### COMMENTING OUT AS IT NEEDS FURTHER TESTING
+        logging.debug(f"self.healthy_deployments: {self.healthy_deployments}")
+        if len(self.healthy_deployments) > 0:
+            for item in self.healthy_deployments:
+                if item[0]["model_name"] == model: # first one in queue will be the one with the most availability
+                    return item
+        else: 
+            potential_deployments = []
+            for item in self.model_list:
+                if item["model_name"] == model:
+                    potential_deployments.append(item)
+            item = random.choice(potential_deployments)
+            return item
+        
+        raise ValueError("No models available.")
+
+    ### COMPLETION + EMBEDDING FUNCTIONS
 
     def completion(self,
                    model: str,
@@ -66,7 +137,11 @@ class Router:
         deployment = self.get_available_deployment(model=model, messages=messages)
         data = deployment["litellm_params"]
         # call via litellm.completion()
+        # return litellm.completion(**{**data, "messages": messages, "caching": self.cache_responses, **kwargs})
+        # litellm.set_verbose = True
         return litellm.completion(**{**data, "messages": messages, "caching": self.cache_responses, **kwargs})
+
+
 
     async def acompletion(self,
                     model: str,
@@ -93,7 +168,7 @@ class Router:
 
         data = deployment["litellm_params"]
         # call via litellm.completion()
-        return litellm.text_completion(**{**data, "prompt": prompt, "caching": self.cache_responses, **kwargs})
+        return litellm.text_completion(**{**data, "prompt": prompt, "caching": self.cache_responses, **kwargs}) # type: ignore
 
     def embedding(self,
                   model: str,
@@ -117,127 +192,3 @@ class Router:
 
         data = deployment["litellm_params"]
         return await litellm.aembedding(**{**data, "input": input, "caching": self.cache_responses, **kwargs})
-
-    def set_model_list(self, model_list: list):
-        self.model_list = model_list
-        self.model_names = [m["model_name"] for m in model_list]
-
-    def get_model_names(self):
-        return self.model_names
-
-    def deployment_callback(
-        self,
-        kwargs,                 # kwargs to completion
-        completion_response,    # response from completion
-        start_time, end_time    # start/end time
-    ):
-        """
-        Function LiteLLM submits a callback to after a successful
-        completion. Purpose of this is ti update TPM/RPM usage per model
-        """
-        model_name = kwargs.get('model', None)  # i.e. gpt35turbo
-        custom_llm_provider = kwargs.get("litellm_params", {}).get('custom_llm_provider', None)  # i.e. azure
-        if custom_llm_provider:
-            model_name = f"{custom_llm_provider}/{model_name}"
-        total_tokens = completion_response['usage']['total_tokens']
-        self._set_deployment_usage(model_name, total_tokens)
-
-    def get_available_deployment(self,
-                               model: str,
-                               messages: Optional[List[Dict[str, str]]] = None,
-                               input: Optional[Union[str, List]] = None):
-        """
-        Returns a deployment with the lowest TPM/RPM usage.
-        """
-        # get list of potential deployments
-        potential_deployments = []
-        for item in self.model_list:
-            if item["model_name"] == model:
-                potential_deployments.append(item)
-
-        # set first model as current model to calculate token count
-        deployment = potential_deployments[0]
-
-        # get encoding
-        token_count = 0
-        if messages is not None:
-            token_count = litellm.token_counter(model=deployment["model_name"], messages=messages)
-        elif input is not None:
-            if isinstance(input, List):
-                input_text = "".join(text for text in input)
-            else:
-                input_text = input
-            token_count = litellm.token_counter(model=deployment["model_name"], text=input_text)
-
-        # -----------------------
-        # Find lowest used model
-        # ----------------------
-        lowest_tpm = float("inf")
-        deployment = None
-
-        # Go through all the models to get tpm, rpm
-        for item in potential_deployments:
-            item_tpm, item_rpm = self._get_deployment_usage(deployment_name=item["litellm_params"]["model"])
-
-            if item_tpm == 0:
-                return item
-            elif item_tpm + token_count > item["tpm"] or item_rpm + 1 >= item["rpm"]:
-                continue
-            elif item_tpm < lowest_tpm:
-                lowest_tpm = item_tpm
-                deployment = item
-
-        # if none, raise exception
-        if deployment is None:
-            raise ValueError("No models available.")
-
-        # return model
-        return deployment
-
-    def _get_deployment_usage(
-        self,
-        deployment_name: str
-    ):
-        # ------------
-        # Setup values
-        # ------------
-        current_minute = datetime.now().strftime("%H-%M")
-        tpm_key = f'{deployment_name}:tpm:{current_minute}'
-        rpm_key = f'{deployment_name}:rpm:{current_minute}'
-
-        # ------------
-        # Return usage
-        # ------------
-        tpm = self.cache.get_cache(cache_key=tpm_key) or 0
-        rpm = self.cache.get_cache(cache_key=rpm_key) or 0
-
-        return int(tpm), int(rpm)
-
-    def increment(self, key: str, increment_value: int):
-        # get value
-        cached_value = self.cache.get_cache(cache_key=key)
-        # update value
-        try:
-            cached_value = cached_value + increment_value
-        except:
-            cached_value = increment_value
-        # save updated value
-        self.cache.add_cache(result=cached_value, cache_key=key, ttl=self.default_cache_time_seconds)
-
-    def _set_deployment_usage(
-        self,
-        model_name: str,
-        total_tokens: int
-    ):
-        # ------------
-        # Setup values
-        # ------------
-        current_minute = datetime.now().strftime("%H-%M")
-        tpm_key = f'{model_name}:tpm:{current_minute}'
-        rpm_key = f'{model_name}:rpm:{current_minute}'
-
-        # ------------
-        # Update usage
-        # ------------
-        self.increment(tpm_key, total_tokens)
-        self.increment(rpm_key, 1)

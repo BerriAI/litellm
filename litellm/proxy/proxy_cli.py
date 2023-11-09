@@ -5,6 +5,7 @@ import random, appdirs
 from datetime import datetime
 from dotenv import load_dotenv
 import operator
+sys.path.append(os.getcwd())
 
 config_filename = "litellm.secrets"
 # Using appdirs to determine user-specific config path
@@ -52,6 +53,7 @@ def is_port_in_use(port):
 @click.command()
 @click.option('--host', default='0.0.0.0', help='Host for the server to listen on.')
 @click.option('--port', default=8000, help='Port to bind the server to.')
+@click.option('--num_workers', default=1, help='Number of uvicorn workers to spin up')
 @click.option('--api_base', default=None, help='API base URL.')
 @click.option('--api_version', default="2023-07-01-preview", help='For azure - pass in the api version.')
 @click.option('--model', '-m', default=None, help='The model name to pass to litellm expects') 
@@ -73,18 +75,17 @@ def is_port_in_use(port):
 @click.option('--logs', flag_value=False, type=int, help='Gets the "n" most recent logs. By default gets most recent log.') 
 @click.option('--test', flag_value=True, help='proxy chat completions url to make a test request to')
 @click.option('--local', is_flag=True, default=False, help='for local debugging')
-@click.option('--cost', is_flag=True, default=False, help='for viewing cost logs')
-def run_server(host, port, api_base, api_version, model, alias, add_key, headers, save, debug, temperature, max_tokens, request_timeout, drop_params, create_proxy, add_function_to_prompt, config, file, max_budget, telemetry, logs, test, local, cost):
+def run_server(host, port, api_base, api_version, model, alias, add_key, headers, save, debug, temperature, max_tokens, request_timeout, drop_params, create_proxy, add_function_to_prompt, config, file, max_budget, telemetry, logs, test, local, num_workers):
     global feature_telemetry
     args = locals()
     if local:
-        from proxy_server import app, initialize, print_cost_logs, usage_telemetry, add_keys_to_config
+        from proxy_server import app, save_worker_config, usage_telemetry, add_keys_to_config
         debug = True
     else:
         try:
-            from .proxy_server import app, initialize, print_cost_logs, usage_telemetry, add_keys_to_config
+            from .proxy_server import app, save_worker_config, usage_telemetry, add_keys_to_config
         except ImportError as e: 
-            from proxy_server import app, initialize, print_cost_logs, usage_telemetry, add_keys_to_config
+            from proxy_server import app, save_worker_config, usage_telemetry, add_keys_to_config
     feature_telemetry = usage_telemetry
     if create_proxy == True: 
         repo_url = 'https://github.com/BerriAI/litellm'
@@ -123,9 +124,6 @@ def run_server(host, port, api_base, api_version, model, alias, add_key, headers
     if model and "ollama" in model: 
         print(f"ollama called")
         run_ollama_serve()
-    if cost == True:
-        print_cost_logs()
-        return
     if test != False:
         click.echo('LiteLLM: Making a test ChatCompletions request to your proxy')
         import openai
@@ -159,22 +157,20 @@ def run_server(host, port, api_base, api_version, model, alias, add_key, headers
         )
         for chunk in response:
             click.echo(f'LiteLLM: streaming response from proxy {chunk}')
+
         return
     else:
         if headers:
             headers = json.loads(headers)
-        initialize(model=model, alias=alias, api_base=api_base, api_version=api_version, debug=debug, temperature=temperature, max_tokens=max_tokens, request_timeout=request_timeout, max_budget=max_budget, telemetry=telemetry, drop_params=drop_params, add_function_to_prompt=add_function_to_prompt, headers=headers, save=save, config=config)
+        save_worker_config(model=model, alias=alias, api_base=api_base, api_version=api_version, debug=debug, temperature=temperature, max_tokens=max_tokens, request_timeout=request_timeout, max_budget=max_budget, telemetry=telemetry, drop_params=drop_params, add_function_to_prompt=add_function_to_prompt, headers=headers, save=save, config=config)
         try:
             import uvicorn
         except:
             raise ImportError("Uvicorn needs to be imported. Run - `pip install uvicorn`")
         print(f"\033[32mLiteLLM: Test your local endpoint with: \"litellm --test\" [In a new terminal tab]\033[0m\n")
-        print(f"\033[32mLiteLLM: View available endpoints for this server on: http://{host}:{port}\033[0m\n")
-        print(f"\033[32mLiteLLM: Self-host your proxy using the following: https://docs.litellm.ai/docs/proxy_server#deploy-proxy \033[0m\n")
-        
         if port == 8000 and is_port_in_use(port):
             port = random.randint(1024, 49152)
-        uvicorn.run(app, host=host, port=port)
+        uvicorn.run("litellm.proxy.proxy_server:app", host=host, port=port, workers=num_workers)
 
 
 if __name__ == "__main__":

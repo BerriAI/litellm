@@ -5,7 +5,7 @@
         <p align="center">Call all LLM APIs using the OpenAI format [Bedrock, Huggingface, Cohere, TogetherAI, Azure, OpenAI, etc.]
         <br>
     </p>
-<h4 align="center"><a href="https://github.com/BerriAI/litellm/tree/main/litellm_server" target="_blank">Evaluate LLMs → OpenAI-Compatible Server</a></h4>
+<h4 align="center"><a href="https://github.com/BerriAI/litellm/tree/main/litellm/proxy" target="_blank">Evaluate LLMs → OpenAI-Compatible Server</a></h4>
 <h4 align="center">
     <a href="https://pypi.org/project/litellm/" target="_blank">
         <img src="https://img.shields.io/pypi/v/litellm.svg" alt="PyPI Version">
@@ -25,7 +25,7 @@
 </h4>
 
 LiteLLM manages
-- Translating inputs to the provider's completion and embedding endpoints
+- Translating inputs to the provider's `completion` and `embedding` endpoints
 - Guarantees [consistent output](https://docs.litellm.ai/docs/completion/output), text responses will always be available at `['choices'][0]['message']['content']`
 - Exception mapping - common exceptions across providers are mapped to the OpenAI exception types.
 
@@ -75,19 +75,7 @@ for chunk in result:
   print(chunk['choices'][0]['delta'])
 ```
 
-## Reliability - Fallback LLMs
-Never fail a request using LiteLLM
-
-```python
-from litellm import completion
-# if gpt-4 fails, retry the request with gpt-3.5-turbo->command-nightly->claude-instant-1
-response = completion(model="gpt-4",messages=messages, fallbacks=["gpt-3.5-turbo", "command-nightly", "claude-instant-1"])
-
-# if azure/gpt-4 fails, retry the request with fallback api_keys/api_base
-response = completion(model="azure/gpt-4", messages=messages, api_key=api_key, fallbacks=[{"api_key": "good-key-1"}, {"api_key": "good-key-2", "api_base": "good-api-base-2"}])
-```
-
-## Logging Observability - Log LLM Input/Output ([Docs](https://docs.litellm.ai/docs/observability/callbacks))
+## Logging Observability ([Docs](https://docs.litellm.ai/docs/observability/callbacks))
 LiteLLM exposes pre defined callbacks to send data to LLMonitor, Langfuse, Helicone, Promptlayer, Traceloop, Slack
 ```python
 from litellm import completion
@@ -105,6 +93,24 @@ litellm.success_callback = ["promptlayer", "llmonitor"] # log input/output to pr
 response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])
 ```
 
+## OpenAI Proxy - ([Docs](https://docs.litellm.ai/docs/simple_proxy))
+**If you don't want to make code changes to add the litellm package to your code base**, you can use litellm proxy. Create a server to call 100+ LLMs (Huggingface/Bedrock/TogetherAI/etc) in the OpenAI ChatCompletions & Completions format
+
+### Step 1: Start litellm proxy
+```shell
+$ litellm --model huggingface/bigcode/starcoder
+
+#INFO: Proxy running on http://0.0.0.0:8000
+```
+
+### Step 2: Replace openai base
+```python
+import openai 
+
+openai.api_base = "http://0.0.0.0:8000"
+
+print(openai.ChatCompletion.create(model="test", messages=[{"role":"user", "content":"Hey!"}]))
+```
 
 ## Supported Provider ([Docs](https://docs.litellm.ai/docs/providers))
 | Provider      | [Completion](https://docs.litellm.ai/docs/#basic-usage) | [Streaming](https://docs.litellm.ai/docs/completion/stream#streaming-responses)  | [Async Completion](https://docs.litellm.ai/docs/completion/stream#async-completion)  | [Async Streaming](https://docs.litellm.ai/docs/completion/stream#async-streaming)  |

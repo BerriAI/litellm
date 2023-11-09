@@ -74,17 +74,13 @@ def generate_feedback_box():
     print(" Thank you for using LiteLLM! - Krrish & Ishaan")
     print()
     print()
-
-
-generate_feedback_box()
-
-print()
-print(
-    "\033[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new\033[0m"
-)
-print()
-print("\033[1;34mDocs: https://docs.litellm.ai/docs/proxy_server\033[0m")
-print()
+    print()
+    print(
+        "\033[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new\033[0m"
+    )
+    print()
+    print("\033[1;34mDocs: https://docs.litellm.ai/docs/proxy_server\033[0m")
+    print()
 
 import litellm
 litellm.suppress_debug_info = True
@@ -124,12 +120,13 @@ config_dir = appdirs.user_config_dir("litellm")
 user_config_path = os.getenv(
     "LITELLM_CONFIG_PATH", os.path.join(config_dir, config_filename)
 )
+experimental = False
 #### GLOBAL VARIABLES ####
 llm_router: Optional[litellm.Router] = None
 llm_model_list: Optional[list] = None
 server_settings: dict = {}
 log_file = "api_log.json"
-
+worker_config = None
 
 #### HELPER FUNCTIONS ####
 def print_verbose(print_statement):
@@ -337,6 +334,9 @@ def load_config():
     except:
         pass
 
+def save_worker_config(**data): 
+    import json
+    os.environ["WORKER_CONFIG"] = json.dumps(data)
 
 def initialize(
     model,
@@ -355,7 +355,8 @@ def initialize(
     save,
     config
 ):
-    global user_model, user_api_base, user_debug, user_max_tokens, user_request_timeout, user_temperature, user_telemetry, user_headers, llm_model_list, llm_router, server_settings
+    global user_model, user_api_base, user_debug, user_max_tokens, user_request_timeout, user_temperature, user_telemetry, user_headers, experimental, llm_model_list, llm_router, server_settings
+    generate_feedback_box()
     user_model = model
     user_debug = debug
     dynamic_config = {"general": {}, user_model: {}}
@@ -393,6 +394,8 @@ def initialize(
         dynamic_config["general"]["max_budget"] = max_budget
     if debug:  # litellm-specific param
         litellm.set_verbose = True
+    if experimental: 
+        pass
     if save:
         save_params_to_config(dynamic_config)
         with open(user_config_path) as f:
@@ -400,110 +403,6 @@ def initialize(
         print("\033[1;32mDone successfully\033[0m")
     user_telemetry = telemetry
     usage_telemetry(feature="local_proxy_server")
-
-
-def track_cost_callback(
-    kwargs,  # kwargs to completion
-    completion_response,  # response from completion
-    start_time,
-    end_time,  # start/end time
-):
-    # track cost like this
-    # {
-    #     "Oct12": {
-    #         "gpt-4": 10,
-    #         "claude-2": 12.01,
-    #     },
-    #     "Oct 15": {
-    #         "ollama/llama2": 0.0,
-    #         "gpt2": 1.2
-    #     }
-    # }
-    try:
-        # for streaming responses
-        if "complete_streaming_response" in kwargs:
-            # for tracking streaming cost we pass the "messages" and the output_text to litellm.completion_cost
-            completion_response = kwargs["complete_streaming_response"]
-            input_text = kwargs["messages"]
-            output_text = completion_response["choices"][0]["message"]["content"]
-            response_cost = litellm.completion_cost(
-                model=kwargs["model"], messages=input_text, completion=output_text
-            )
-            model = kwargs["model"]
-
-        # for non streaming responses
-        else:
-            # we pass the completion_response obj
-            if kwargs["stream"] != True:
-                response_cost = litellm.completion_cost(
-                    completion_response=completion_response
-                )
-                model = completion_response["model"]
-
-        # read/write from json for storing daily model costs
-        cost_data = {}
-        try:
-            with open("costs.json") as f:
-                cost_data = json.load(f)
-        except FileNotFoundError:
-            cost_data = {}
-        import datetime
-
-        date = datetime.datetime.now().strftime("%b-%d-%Y")
-        if date not in cost_data:
-            cost_data[date] = {}
-
-        if kwargs["model"] in cost_data[date]:
-            cost_data[date][kwargs["model"]]["cost"] += response_cost
-            cost_data[date][kwargs["model"]]["num_requests"] += 1
-        else:
-            cost_data[date][kwargs["model"]] = {
-                "cost": response_cost,
-                "num_requests": 1,
-            }
-
-        with open("costs.json", "w") as f:
-            json.dump(cost_data, f, indent=2)
-
-    except:
-        pass
-
-
-def logger(
-    kwargs,  # kwargs to completion
-    completion_response=None,  # response from completion
-    start_time=None,
-    end_time=None,  # start/end time
-):
-    log_event_type = kwargs["log_event_type"]
-    try:
-        if log_event_type == "pre_api_call":
-            inference_params = copy.deepcopy(kwargs)
-            timestamp = inference_params.pop("start_time")
-            dt_key = timestamp.strftime("%Y%m%d%H%M%S%f")[:23]
-            log_data = {dt_key: {"pre_api_call": inference_params}}
-
-            try:
-                with open(log_file, "r") as f:
-                    existing_data = json.load(f)
-            except FileNotFoundError:
-                existing_data = {}
-
-            existing_data.update(log_data)
-
-            def write_to_log():
-                with open(log_file, "w") as f:
-                    json.dump(existing_data, f, indent=2)
-
-            thread = threading.Thread(target=write_to_log, daemon=True)
-            thread.start()
-    except:
-        pass
-
-
-litellm.input_callback = [logger]
-litellm.success_callback = [logger]
-litellm.failure_callback = [logger]
 
 # for streaming
 def data_generator(response):
@@ -539,6 +438,14 @@ def litellm_completion(*args, **kwargs):
     if 'stream' in kwargs and kwargs['stream'] == True: # use generate_responses to stream responses
         return StreamingResponse(data_generator(response), media_type='text/event-stream')
     return response
+
+
+@app.on_event("startup")
+def startup_event():
+    import json
+    worker_config = json.loads(os.getenv("WORKER_CONFIG"))
+    initialize(**worker_config)
+    print(f"\033[32mWorker Initialized\033[0m\n")
 
 #### API ENDPOINTS ####
 @router.get("/v1/models")
@@ -597,8 +504,10 @@ async def completion(request: Request, model: Optional[str] = None):
             **data
         )
     except Exception as e: 
+        print(f"\033[1;31mAn error occurred: {e}\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`")
         error_traceback = traceback.format_exc()
         error_msg = f"{str(e)}\n\n{error_traceback}"
+        print(error_msg)
         return {"error": error_msg}
                               
 
@@ -630,14 +539,22 @@ async def chat_completion(request: Request, model: Optional[str] = None):
         error_msg = f"{str(e)}\n\n{error_traceback}"
         return {"error": error_msg}
 
-def print_cost_logs():
-    with open("costs.json", "r") as f:
-        # print this in green
-        print("\033[1;32m")
-        print(f.read())
-        print("\033[0m")
-    return
 
+@router.post("/router/chat/completions")
+async def router_completion(request: Request):
+    try: 
+        body = await request.body()
+        body_str = body.decode()
+        try:
+            data = ast.literal_eval(body_str)
+        except: 
+            data = json.loads(body_str)
+        return {"data": data}
+    except Exception as e: 
+        print(f"\033[1;31mAn error occurred: {e}\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`")
+        error_traceback = traceback.format_exc()
+        error_msg = f"{str(e)}\n\n{error_traceback}"
+        return {"error": error_msg}
 
 @router.get("/ollama_logs")
 async def retrieve_server_log(request: Request):

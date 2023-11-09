@@ -50,16 +50,18 @@ from .llms import (
     palm,
     vertex_ai,
     maritalk)
-from .llms.openai import OpenAIChatCompletion
+from .llms.openai import OpenAIChatCompletion, OpenAITextCompletion
+from .llms.azure import AzureChatCompletion
 from .llms.prompt_templates.factory import prompt_factory, custom_prompt, function_call_prompt
 import tiktoken
 from concurrent.futures import ThreadPoolExecutor
-from typing import Callable, List, Optional, Dict
+from typing import Callable, List, Optional, Dict, Union
 
 encoding = tiktoken.get_encoding("cl100k_base")
 from litellm.utils import (
     get_secret,
     CustomStreamWrapper,
+    TextCompletionStreamWrapper,
     ModelResponse,
     TextCompletionResponse,
     TextChoices,
@@ -71,7 +73,9 @@ from litellm.utils import (
 
 ####### ENVIRONMENT VARIABLES ###################
 dotenv.load_dotenv()  # Loading env variables using dotenv
-openai_proxy_chat_completions = OpenAIChatCompletion()
+openai_chat_completions = OpenAIChatCompletion()
+openai_text_completions = OpenAITextCompletion()
+azure_chat_completions = AzureChatCompletion()
 ####### COMPLETION ENDPOINTS ################
 
 async def acompletion(*args, **kwargs):
@@ -258,7 +262,6 @@ def completion(
     logit_bias: dict = {},
     user: str = "",
     deployment_id = None,
-    request_timeout: Optional[int] = None,
 
     # set api_base, api_version, api_key
     api_base: Optional[str] = None,
@@ -330,7 +333,7 @@ def completion(
     eos_token = kwargs.get("eos_token", None)
     ######## end of unpacking kwargs ###########
     openai_params = ["functions", "function_call", "temperature", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "request_timeout", "api_base", "api_version", "api_key"]
-    litellm_params = ["metadata", "acompletion", "caching", "return_async", "mock_response", "api_key", "api_version", "api_base", "force_timeout", "logger_fn", "verbose", "custom_llm_provider", "litellm_logging_obj", "litellm_call_id", "use_client", "id", "fallbacks", "azure", "headers", "model_list", "num_retries", "context_window_fallback_dict", "roles", "final_prompt_value", "bos_token", "eos_token"]
+    litellm_params = ["metadata", "acompletion", "caching", "return_async", "mock_response", "api_key", "api_version", "api_base", "force_timeout", "logger_fn", "verbose", "custom_llm_provider", "litellm_logging_obj", "litellm_call_id", "use_client", "id", "fallbacks", "azure", "headers", "model_list", "num_retries", "context_window_fallback_dict", "roles", "final_prompt_value", "bos_token", "eos_token", "request_timeout"]
     default_params = openai_params + litellm_params
     non_default_params = {k: v for k,v in kwargs.items() if k not in default_params} # model-specific params - pass them straight to the model/provider
     if mock_response:
@@ -394,7 +397,6 @@ def completion(
                 frequency_penalty=frequency_penalty,
                 logit_bias=logit_bias,
                 user=user,
-                request_timeout=request_timeout,
                 deployment_id=deployment_id,
                 # params to identify the model
                 model=model,
@@ -455,29 +457,24 @@ def completion(
                 if k not in optional_params: # completion(top_k=3) > azure_config(top_k=3) <- allows for dynamic variables to be passed in
                     optional_params[k] = v
 
-            ## LOGGING
-            logging.pre_call(
-                input=messages,
-                api_key=api_key,
-                additional_args={
-                    "headers": headers,
-                    "api_version": api_version,
-                    "api_base": api_base,
-                },
-            )
             ## COMPLETION CALL
-            response = openai.ChatCompletion.create(
-                engine=model,
+            response = azure_chat_completions.completion(
+                model=model,
                 messages=messages,
                 headers=headers,
                 api_key=api_key,
                 api_base=api_base,
                 api_version=api_version,
                 api_type=api_type,
-                **optional_params,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                logging_obj=logging, 
             )
             if "stream" in optional_params and optional_params["stream"] == True:
-                response = CustomStreamWrapper(response, model, custom_llm_provider="openai", logging_obj=logging)
+                response = CustomStreamWrapper(response, model, custom_llm_provider=custom_llm_provider, logging_obj=logging)
                 return response
             ## LOGGING
             logging.post_call(
@@ -529,38 +526,20 @@ def completion(
                 if k not in optional_params: # completion(top_k=3) > openai_config(top_k=3) <- allows for dynamic variables to be passed in
                     optional_params[k] = v
 
-            ## LOGGING
-            logging.pre_call(
-                input=messages,
-                api_key=api_key,
-                additional_args={"headers": headers, "api_base": api_base},
-            )
             ## COMPLETION CALL
             try:
-                if custom_llm_provider == "custom_openai": 
-                    response = openai_proxy_chat_completions.completion(
-                        model=model,
-                        messages=messages,
-                        model_response=model_response,
-                        print_verbose=print_verbose,
-                        api_key=api_key,
-                        api_base=api_base,
-                        logging_obj=logging,
-                        optional_params=optional_params,
-                        litellm_params=litellm_params,
-                        logger_fn=logger_fn
-                    )
-                else:
-                    response = openai.ChatCompletion.create(
-                        model=model,
-                        messages=messages,
-                        headers=headers, # None by default
-                        api_base=api_base, # thread safe setting base, key, api_version
-                        api_key=api_key,
-                        api_type="openai",
-                        api_version=api_version, # default None
-                        **optional_params,
-                    )
+                response = openai_chat_completions.completion(
+                    model=model,
+                    messages=messages,
+                    model_response=model_response,
+                    print_verbose=print_verbose,
+                    api_key=api_key,
+                    api_base=api_base,
+                    logging_obj=logging,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    logger_fn=logger_fn
+                )
             except Exception as e:
                 ## LOGGING - log the original exception returned
                 logging.post_call(
@@ -583,14 +562,8 @@ def completion(
             )
         elif (
             custom_llm_provider == "text-completion-openai"
-            or model in litellm.open_ai_text_completion_models
             or "ft:babbage-002" in model
             or "ft:davinci-002" in model  # support for finetuned completion models
-            # NOTE: Do NOT add custom_llm_provider == "openai". 
-            # this will break hosted vllm/proxy calls. 
-            # see: https://docs.litellm.ai/docs/providers/vllm#calling-hosted-vllm-server. 
-            # VLLM expects requests to call openai.ChatCompletion we need those requests to always 
-            # call openai.ChatCompletion
         ):
             # print("calling custom openai provider")
             openai.api_type = "openai"
@@ -643,43 +616,22 @@ def completion(
                 },
             )
             ## COMPLETION CALL
-            response = openai.Completion.create(
-                model=model, 
-                prompt=prompt,
-                headers=headers,
-                api_key = api_key,
-                api_base=api_base,
-                **optional_params
-            )
-            if "stream" in optional_params and optional_params["stream"] == True:
-                response = CustomStreamWrapper(response, model, custom_llm_provider="text-completion-openai", logging_obj=logging)
-                return response
-            ## LOGGING
-            logging.post_call(
-                input=prompt,
+            model_response = openai_text_completions.completion(
+                model=model,
+                messages=messages,
+                model_response=model_response,
+                print_verbose=print_verbose,
                 api_key=api_key,
-                original_response=response,
-                additional_args={
-                    "openai_organization": litellm.organization,
-                    "headers": headers,
-                    "api_base": openai.api_base,
-                    "api_type": openai.api_type,
-                },
+                api_base=api_base,
+                logging_obj=logging,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn
             )
-            ## RESPONSE OBJECT
-            model_response._hidden_params["original_response"] = response # track original response, if users make a litellm.text_completion() request, we can return the original response
-            choices_list = []
-            for idx, item in enumerate(response["choices"]):
-                if len(item["text"]) > 0: 
-                    message_obj = Message(content=item["text"])
-                else: 
-                    message_obj = Message(content=None)
-                choice_obj = Choices(finish_reason=item["finish_reason"], index=idx+1, message=message_obj)
-                choices_list.append(choice_obj)
-            model_response["choices"] = choices_list
-            model_response["created"] = response.get("created", time.time())
-            model_response["model"] = model
-            model_response["usage"] = response.get("usage", 0)
+            
+            if "stream" in optional_params and optional_params["stream"] == True:
+                response = CustomStreamWrapper(model_response, model, custom_llm_provider="text-completion-openai", logging_obj=logging)
+                return response
             response = model_response
         elif (
             "replicate" in model or 
@@ -1474,8 +1426,8 @@ def completion_with_retries(*args, **kwargs):
     """
     try:
         import tenacity
-    except:
-        raise Exception("tenacity import failed please run `pip install tenacity`")
+    except Exception as e:
+        raise Exception(f"tenacity import failed please run `pip install tenacity`. Error{e}")
     
     num_retries = kwargs.pop("num_retries", 3)
     retryer = tenacity.Retrying(stop=tenacity.stop_after_attempt(num_retries), reraise=True)
@@ -1687,13 +1639,9 @@ def batch_completion_models_all_responses(*args, **kwargs):
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(models)) as executor:
         for idx, model in enumerate(models):
-            print(f"{GREEN}LiteLLM: Making request to model: {model}{RESET}")
             future = executor.submit(completion, *args, model=model, **kwargs)
             if future.result() is not None:
                 responses.append(future.result())
-                print(f"{GREEN}LiteLLM: Model {model} returned response{RESET}")
-            else:
-                print(f"{RED}LiteLLM: Model {model } did not return a response{RESET}")
 
     return responses
 
@@ -1796,28 +1744,17 @@ def embedding(
                 litellm.azure_key or
                 get_secret("AZURE_API_KEY")
             )
-            ## LOGGING
-            logging.pre_call(
-                input=input,
-                api_key=openai.api_key,
-                additional_args={
-                    "api_type": openai.api_type,
-                    "api_base": openai.api_base,
-                    "api_version": openai.api_version,
-                },
-            )
             ## EMBEDDING CALL
-            response = openai.Embedding.create(
-                input=input, 
-                engine=model,
-                api_key=api_key,
+            response = azure_chat_completions.embedding(
+                model=model,
+                input=input,
                 api_base=api_base,
+                api_key=api_key,
                 api_version=api_version,
-                api_type=api_type,
+                logging_obj=logging,
+                model_response=EmbeddingResponse(), 
+                optional_params=kwargs
             )
-
-            ## LOGGING
-            logging.post_call(input=input, api_key=openai.api_key, original_response=response)
         elif model in litellm.open_ai_embedding_models:
             api_base = (
                 api_base
@@ -1840,28 +1777,17 @@ def embedding(
             api_type = "openai"
             api_version = None
 
-            ## LOGGING
-            logging.pre_call(
-                input=input,
-                api_key=api_key,
-                additional_args={
-                    "api_type": api_type,
-                    "api_base": api_base,
-                    "api_version": api_version,
-                },
-            )
-            ## EMBEDDING CALL
-            response = openai.Embedding.create(
-                input=input, 
-                model=model,
-                api_key=api_key,
-                api_base=api_base,
-                api_version=api_version,
-                api_type=api_type,
-            )
 
-            ## LOGGING
-            logging.post_call(input=input, api_key=api_key, original_response=response)
+            ## EMBEDDING CALL
+            response = openai_chat_completions.embedding(
+                model=model,
+                input=input,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                model_response=EmbeddingResponse(), 
+                optional_params=kwargs
+            )
         elif model in litellm.cohere_embedding_models:
             cohere_key = (
                 api_key
@@ -1925,67 +1851,181 @@ def embedding(
 
 
 ###### Text Completion ################
-def text_completion(*args, **kwargs):
+def text_completion(
+    model: str,                   # Required: ID of the model to use.
+    prompt: Union[str, List[Union[str, List[Union[str, List[int]]]]]], # Required: The prompt(s) to generate completions for.
+    best_of: Optional[int] = None,   # Optional: Generates best_of completions server-side.
+    echo: Optional[bool] = None,  # Optional: Echo back the prompt in addition to the completion.
+    frequency_penalty: Optional[float] = None, # Optional: Penalize new tokens based on their existing frequency.
+    logit_bias: Optional[Dict[int, int]] = None, # Optional: Modify the likelihood of specified tokens.
+    logprobs: Optional[int] = None, # Optional: Include the log probabilities on the most likely tokens.
+    max_tokens: Optional[int] = None, # Optional: The maximum number of tokens to generate in the completion.
+    n: Optional[int] = None,         # Optional: How many completions to generate for each prompt.
+    presence_penalty: Optional[float] = None, # Optional: Penalize new tokens based on whether they appear in the text so far.
+    stop: Optional[Union[str, List[str]]] = None, # Optional: Sequences where the API will stop generating further tokens.
+    stream: Optional[bool] = None, # Optional: Whether to stream back partial progress.
+    suffix: Optional[str] = None,   # Optional: The suffix that comes after a completion of inserted text.
+    temperature: Optional[float] = None, # Optional: Sampling temperature to use.
+    top_p: Optional[float] = None,     # Optional: Nucleus sampling parameter.
+    user: Optional[str] = None,     # Optional: A unique identifier representing your end-user.
+
+    # set api_base, api_version, api_key
+    api_base: Optional[str] = None,
+    api_version: Optional[str] = None,
+    api_key: Optional[str] = None,
+    model_list: Optional[list] = None, # pass in a list of api_base,keys, etc. 
+
+    # Optional liteLLM function params
+    custom_llm_provider: Optional[str] = None,
+    *args, 
+    **kwargs
+):
+    global print_verbose
     import copy
     """
-    This maps to the Openai.Completion.create format, which has a different I/O (accepts prompt, returning ["choices"]["text"].
+    Generate text completions using the OpenAI API.
+
+    Args:
+        model (str): ID of the model to use.
+        prompt (Union[str, List[Union[str, List[Union[str, List[int]]]]]): The prompt(s) to generate completions for.
+        best_of (Optional[int], optional): Generates best_of completions server-side. Defaults to 1.
+        echo (Optional[bool], optional): Echo back the prompt in addition to the completion. Defaults to False.
+        frequency_penalty (Optional[float], optional): Penalize new tokens based on their existing frequency. Defaults to 0.
+        logit_bias (Optional[Dict[int, int]], optional): Modify the likelihood of specified tokens. Defaults to None.
+        logprobs (Optional[int], optional): Include the log probabilities on the most likely tokens. Defaults to None.
+        max_tokens (Optional[int], optional): The maximum number of tokens to generate in the completion. Defaults to 16.
+        n (Optional[int], optional): How many completions to generate for each prompt. Defaults to 1.
+        presence_penalty (Optional[float], optional): Penalize new tokens based on whether they appear in the text so far. Defaults to 0.
+        stop (Optional[Union[str, List[str]]], optional): Sequences where the API will stop generating further tokens. Defaults to None.
+        stream (Optional[bool], optional): Whether to stream back partial progress. Defaults to False.
+        suffix (Optional[str], optional): The suffix that comes after a completion of inserted text. Defaults to None.
+        temperature (Optional[float], optional): Sampling temperature to use. Defaults to 1.
+        top_p (Optional[float], optional): Nucleus sampling parameter. Defaults to 1.
+        user (Optional[str], optional): A unique identifier representing your end-user.
+    Returns:
+        TextCompletionResponse: A response object containing the generated completion and associated metadata.
+
+    Example:
+        Your example of how to use this function goes here.
     """
     if "engine" in  kwargs:
-        kwargs["model"] = kwargs["engine"]
+        model = kwargs["engine"]
         kwargs.pop("engine")
 
-    # input validation
-    if "prompt" not in kwargs:
-        raise ValueError("please pass prompt into the `text_completion` endpoint - `text_completion(model, prompt='hello world')`")
-
     text_completion_response = TextCompletionResponse()
-    model = kwargs["model"]
-    prompt = kwargs["prompt"]
+
+    optional_params: Dict[str, Any] = {}
+    # default values for all optional params are none, litellm only passes them to the llm when they are set to non None values
+    if best_of is not None:
+        optional_params["best_of"] = best_of
+    if echo is not None:
+        optional_params["echo"] = echo
+    if frequency_penalty is not None:
+        optional_params["frequency_penalty"] = frequency_penalty
+    if logit_bias is not None:
+        optional_params["logit_bias"] = logit_bias
+    if logprobs is not None:
+        optional_params["logprobs"] = logprobs
+    if max_tokens is not None:
+        optional_params["max_tokens"] = max_tokens
+    if n is not None:
+        optional_params["n"] = n
+    if presence_penalty is not None:
+        optional_params["presence_penalty"] = presence_penalty
+    if stop is not None:
+        optional_params["stop"] = stop
+    if stream is not None:
+        optional_params["stream"] = stream
+    if suffix is not None:
+        optional_params["suffix"] = suffix
+    if temperature is not None:
+        optional_params["temperature"] = temperature
+    if top_p is not None:
+        optional_params["top_p"] = top_p
+    if user is not None:
+        optional_params["user"] = user
+    if api_base is not None:
+        optional_params["api_base"] = api_base
+    if api_version is not None:
+        optional_params["api_version"] = api_version
+    if api_key is not None:
+        optional_params["api_key"] = api_key
+    if custom_llm_provider is not None:
+        optional_params["custom_llm_provider"] = custom_llm_provider
+
     # get custom_llm_provider
-    _, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(model=model)
-    
+    _, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base)
+
+
     if custom_llm_provider == "text-completion-openai":
         # text-davinci-003 and openai text completion models
-        messages = [{"role": "system", "content": kwargs["prompt"]}]
-        kwargs["messages"] = messages
-        kwargs.pop("prompt")
-        response = completion(*args, **kwargs) # assume the response is the openai response object 
+        messages = [{"role": "system", "content": prompt}]
+        kwargs.pop("prompt", None)
+        response = completion(
+            model = model,
+            messages=messages,
+            *args,
+            **kwargs,
+            **optional_params
+        )
+        # assume the response is the openai response object 
         # return raw response from openai
         return response._hidden_params.get("original_response", None)
 
     elif custom_llm_provider == "huggingface":
         # if echo == True, for TGI llms we need to set top_n_tokens to 3
-        if kwargs.get("echo", False) == True:
+        if echo == True:
             # for tgi llms
             if "top_n_tokens" not in kwargs:
                 kwargs["top_n_tokens"] = 3
 
     # processing prompt - users can pass raw tokens to OpenAI Completion()
     if type(prompt) == list:
+        import concurrent.futures
         tokenizer = tiktoken.encoding_for_model("text-davinci-003")
         ## if it's a 2d list - each element in the list is a text_completion() request
         if len(prompt) > 0 and type(prompt[0]) == list:
             responses = [None for x in prompt] # init responses 
-            for i, request in enumerate(prompt):
-                decoded_prompt = tokenizer.decode(request)
-                new_kwargs = copy.deepcopy(kwargs)
-                new_kwargs["prompt"] = decoded_prompt
-                response = text_completion(**new_kwargs)
-                responses[i] = response["choices"][0]
-
-            text_completion_response["id"] = response["id"]
-            text_completion_response["object"] = "text_completion"
-            text_completion_response["created"] = response["created"]
-            text_completion_response["model"] = response["model"]
-            text_completion_response["choices"] = responses
-            text_completion_response["usage"] = response["usage"]
+            def process_prompt(i, individual_prompt):
+                decoded_prompt = tokenizer.decode(individual_prompt)
+                all_params = {**kwargs, **optional_params}
+                response = text_completion(
+                    model=model,
+                    prompt=decoded_prompt,
+                    num_retries=3,# ensure this does not fail for the batch
+                    *args,
+                    **all_params,
+                )
+                #print(response)
+                text_completion_response["id"] = response.get("id", None)
+                text_completion_response["object"] = "text_completion"
+                text_completion_response["created"] = response.get("created", None)
+                text_completion_response["model"] = response.get("model", None)
+                return response["choices"][0]
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                futures = [executor.submit(process_prompt, i, individual_prompt) for i, individual_prompt in enumerate(prompt)]
+                for i, future in enumerate(concurrent.futures.as_completed(futures)):
+                    responses[i] = future.result()
+                text_completion_response["choices"] = responses
 
             return text_completion_response
     else:
-        messages = [{"role": "system", "content": kwargs["prompt"]}]
-        kwargs["messages"] = messages
-        kwargs.pop("prompt")
-        response = completion(*args, **kwargs) # assume the response is the openai response object 
+        # check if non default values passed in for best_of, echo, logprobs, suffix 
+        # these are the params supported by Completion() but not ChatCompletion
+        
+        # default case, non OpenAI requests go through here
+        messages = [{"role": "system", "content": prompt}]
+        kwargs.pop("prompt", None)
+        response = completion(
+            model = model,
+            messages=messages,
+            *args,
+            **kwargs,
+            **optional_params,
+        )
+        if stream == True or kwargs.get("stream", False) == True:
+            response = TextCompletionStreamWrapper(completion_stream=response, model=model)
+            return response
 
         transformed_logprobs = None
         # only supported for TGI models
@@ -1993,18 +2033,18 @@ def text_completion(*args, **kwargs):
             raw_response = response._hidden_params.get("original_response", None)
             transformed_logprobs = litellm.utils.transform_logprobs(raw_response)
         except Exception as e:
-            print("LiteLLM non blocking exception", e)
-        text_completion_response["id"] = response["id"]
+            print_verbose(f"LiteLLM non blocking exception: {e}")
+        text_completion_response["id"] = response.get("id", None)
         text_completion_response["object"] = "text_completion"
-        text_completion_response["created"] = response["created"]
-        text_completion_response["model"] = response["model"]
+        text_completion_response["created"] = response.get("created", None)
+        text_completion_response["model"] = response.get("model", None)
         text_choices = TextChoices()
         text_choices["text"] = response["choices"][0]["message"]["content"]
         text_choices["index"] = response["choices"][0]["index"]
         text_choices["logprobs"] = transformed_logprobs
         text_choices["finish_reason"] = response["choices"][0]["finish_reason"]
         text_completion_response["choices"] = [text_choices]
-        text_completion_response["usage"] = response["usage"]
+        text_completion_response["usage"] = response.get("usage", None)
         return text_completion_response
 
 ##### Moderation #######################
@@ -2027,7 +2067,7 @@ def moderation(input: str, api_key: Optional[str]=None):
 ## Set verbose to true -> ```litellm.set_verbose = True```
 def print_verbose(print_statement):
     if litellm.set_verbose:
-        print(f"LiteLLM: {print_statement}")
+        print(print_statement) # noqa
 
 def config_completion(**kwargs):
     if litellm.config_path != None:
