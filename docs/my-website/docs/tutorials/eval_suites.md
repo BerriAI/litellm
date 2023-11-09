@@ -14,11 +14,13 @@ pip install autoevals
 
 ### Quick Start
 ```python
+# auto evals imports 
 from autoevals.llm import *
-import autoevals
+import openai 
+###################
+import litellm
 
 # litellm completion call
-import litellm
 question = "which country has the highest population"
 response = litellm.completion(
     model = "gpt-3.5-turbo",
