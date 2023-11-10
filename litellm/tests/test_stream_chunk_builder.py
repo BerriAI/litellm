@@ -60,5 +60,4 @@ def test_stream_chunk_builder():
         print(role, content, finish_reason)
     except Exception as e:
         raise Exception("stream_chunk_builder failed to rebuild response", e)
-test_stream_chunk_builder()
 
