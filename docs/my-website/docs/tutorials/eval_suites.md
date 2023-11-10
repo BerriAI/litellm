@@ -13,6 +13,9 @@ pip install autoevals
 ```
 
 ### Quick Start
+In this code sample we use the `Factuality()` evaluator from `autoevals.llm` to test whether an output is factual, compared to an original (expected) value.
+See autoevals docs on the [supported evaluators](https://www.braintrustdata.com/docs/autoevals/python#autoevalsllm) - Translation, Summary, Security Evaluators etc
+
 ```python
 # auto evals imports 
 from autoevals.llm import *
