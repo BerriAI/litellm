@@ -3844,7 +3844,7 @@ class CustomStreamWrapper:
             elif len(curr_chunk) >= len(token):
                 if token in curr_chunk:
                     self.holding_chunk = curr_chunk.replace(token, "")
-                hold = True
+                    hold = True
             else: 
                 pass
         
