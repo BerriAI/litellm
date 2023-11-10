@@ -7,7 +7,7 @@ import TabItem from '@theme/TabItem';
 ## Using LiteLLM with ML Flow 
 MLflow provides an API `mlflow.evaluate()` to help evaluate your LLMs https://mlflow.org/docs/latest/llms/llm-evaluate/index.html
 
-## Pre Requisites
+### Pre Requisites
 ```shell
 pip install litellm
 ```
@@ -224,7 +224,7 @@ See evaluation table below:
 AutoEvals is a tool for quickly and easily evaluating AI model outputs using best practices.
 https://github.com/braintrustdata/autoevals
 
-## Pre Requisites
+### Pre Requisites
 ```shell
 pip install litellm
 ```
