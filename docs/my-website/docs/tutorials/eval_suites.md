@@ -239,7 +239,6 @@ See autoevals docs on the [supported evaluators](https://www.braintrustdata.com/
 ```python
 # auto evals imports 
 from autoevals.llm import *
-import openai 
 ###################
 import litellm
 
@@ -254,10 +253,9 @@ response = litellm.completion(
         }
     ],
 )
-
+print(response)
 # use the auto eval Factuality() evaluator
 evaluator = Factuality()
-openai.api_key = "" # set your openai api key for evaluator
 result = evaluator(
     output=response.choices[0]["message"]["content"],       # response from litellm.completion()
     expected="India",                                       # expected output
