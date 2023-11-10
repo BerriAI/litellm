@@ -907,6 +907,29 @@ def client(original_function):
                 # [Non-Blocking Error]
                 pass
 
+    def convert_to_model_response_object(response_object: Optional[dict]=None, model_response_object: Optional[ModelResponse]=None):
+        try: 
+            if response_object is None or model_response_object is None:
+                raise OpenAIError(status_code=500, message="Error in response object format")
+            choice_list=[]
+            for idx, choice in enumerate(response_object["choices"]): 
+                message = Message(content=choice["message"]["content"], role=choice["message"]["role"])
+                choice = Choices(finish_reason=choice["finish_reason"], index=idx, message=message)
+                choice_list.append(choice)
+            model_response_object.choices = choice_list
+
+            if "usage" in response_object: 
+                model_response_object.usage = response_object["usage"]
+            
+            if "id" in response_object: 
+                model_response_object.id = response_object["id"]
+            
+            if "model" in response_object: 
+                model_response_object.model = response_object["model"]
+            return model_response_object
+        except: 
+            OpenAIError(status_code=500, message="Invalid response object.")
+
     def wrapper(*args, **kwargs):
         start_time = datetime.datetime.now()
         result = None
@@ -932,7 +955,7 @@ def client(original_function):
 
             # [OPTIONAL] CHECK CACHE
             # remove this after deprecating litellm.caching
-            print_verbose(f"litellm.caching: {litellm.caching}; litellm.caching_with_models: {litellm.caching_with_models}")
+            print_verbose(f"litellm.caching: {litellm.caching}; litellm.caching_with_models: {litellm.caching_with_models}; litellm.cache: {litellm.cache}")
             if (litellm.caching or litellm.caching_with_models) and litellm.cache is None:
                 litellm.cache = Cache() 
 
@@ -945,7 +968,7 @@ def client(original_function):
                     cached_result = litellm.cache.get_cache(*args, **kwargs)
                     if cached_result != None:
                         print_verbose(f"Cache Hit!")
-                        return cached_result
+                        return convert_to_model_response_object(response_object=cached_result, model_response_object=ModelResponse())
 
             # MODEL CALL
             result = original_function(*args, **kwargs)

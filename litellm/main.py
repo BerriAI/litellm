@@ -144,7 +144,11 @@ async def acompletion(*args, **kwargs):
             response = completion(*args, **kwargs)
         else:
             # Await normally
-            response = await completion(*args, **kwargs)
+            init_response = completion(*args, **kwargs)
+            if isinstance(init_response, dict):
+                response = init_response
+            else:
+                response = await init_response
     else: 
         # Call the synchronous function using run_in_executor
         response =  await loop.run_in_executor(None, func_with_context)
