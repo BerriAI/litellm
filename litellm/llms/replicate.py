@@ -117,7 +117,7 @@ def handle_prediction_response(prediction_url, api_token, print_verbose):
     status = ""
     logs = ""
     while True and (status not in ["succeeded", "failed", "canceled"]):
-        print_verbose(f"replicate: polling endpoint{prediction_url}")
+        print_verbose(f"replicate: polling endpoint: {prediction_url}")
         time.sleep(0.5)
         response = requests.get(prediction_url, headers=headers)
         if response.status_code == 200:
