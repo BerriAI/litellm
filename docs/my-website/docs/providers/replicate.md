@@ -8,11 +8,9 @@ import os
 os.environ["REPLICATE_API_KEY"] = ""
 ```
 
-
 ### Example Call
 
 ```python
-# !pip install litellm
 from litellm import completion
 import os
 ## set ENV variables
@@ -22,6 +20,17 @@ os.environ["REPLICATE_API_KEY"] = "replicate key"
 response = completion(
     model="replicate/llama-2-70b-chat:2796ee9483c3fd7aa2e171d38f4ca12251a30609463dcfd4cd76703f22e96cdf", 
     messages = [{ "content": "Hello, how are you?","role": "user"}]
+)
+```
+
+### Example - Calling Replicate Deployments
+Calling a [deployed replicate LLM](https://replicate.com/deployments)
+Add the `replicate/deployments/` prefix to your model, so litellm will call the `deployments` endpoint. This will call `ishaan-jaff/ishaan-mistral` deployment on replicate
+
+```python
+response = completion(
+    model="replicate/deployments/ishaan-jaff/ishaan-mistral", 
+    messages= [{ "content": "Hello, how are you?","role": "user"}]
 )
 ```
 
