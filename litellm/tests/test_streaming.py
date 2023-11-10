@@ -15,6 +15,7 @@ from litellm import completion, acompletion, AuthenticationError, InvalidRequest
 
 litellm.logging = False
 litellm.set_verbose = False
+litellm.cache = None
 
 score = 0
 
