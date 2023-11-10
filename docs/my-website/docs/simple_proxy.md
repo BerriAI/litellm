@@ -512,6 +512,10 @@ model_list:
     litellm_params:
       model: ollama/mistral
       api_base: your_ollama_api_base
+      headers: {
+        "HTTP-Referer": "litellm.ai",  
+        "X-Title": "LiteLLM Server"
+      }
 ```
 
 **Step 2**: Start server with config
