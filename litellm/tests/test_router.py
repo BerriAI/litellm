@@ -257,10 +257,11 @@ def test_acompletion_on_router():
 		traceback.print_exc()
 		pytest.fail(f"Error occurred: {e}")
 
-test_acompletion_on_router() 
+# test_acompletion_on_router() 
 
 def test_function_calling_on_router(): 
 	try: 
+		litellm.set_verbose = True
 		model_list = [
             {
                 "model_name": "gpt-3.5-turbo",
@@ -293,22 +294,30 @@ def test_function_calling_on_router():
 			redis_password=os.getenv("REDIS_PASSWORD"),
 			redis_port=os.getenv("REDIS_PORT")
 		)
-		async def get_response(): 
-			messages=[
+		messages=[
                 {
                     "role": "user",
                     "content": "what's the weather in boston"
                 }
-            ],
-			response1 = await router.acompletion(model="gpt-3.5-turbo", messages=messages, functions=function1)
-			print(f"response1: {response1}")
-			return response
-		response = asyncio.run(get_response())
-		assert isinstance(response["choices"][0]["message"]["content"]["function_call"], str)
+            ]
+		response = router.completion(model="gpt-3.5-turbo", messages=messages, functions=function1)
+		print(f"final returned response: {response}")
+		# async def get_response(): 
+		# 	messages=[
+        #         {
+        #             "role": "user",
+        #             "content": "what's the weather in boston"
+        #         }
+        #     ],
+		# 	response1 = await router.acompletion(model="gpt-3.5-turbo", messages=messages, functions=function1)
+		# 	print(f"response1: {response1}")
+		# 	return response
+		# response = asyncio.run(get_response())
+		assert isinstance(response["choices"][0]["message"]["function_call"], dict)
 	except Exception as e: 
 		print(f"An exception occurred: {e}")
 
-# test_function_calling_on_router()
+test_function_calling_on_router()
 
 def test_aembedding_on_router():
 	try:

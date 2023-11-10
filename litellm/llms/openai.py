@@ -1,7 +1,7 @@
 from typing import Optional, Union
 import types, requests
 from .base import BaseLLM
-from litellm.utils import ModelResponse, Choices, Message, CustomStreamWrapper
+from litellm.utils import ModelResponse, Choices, Message, CustomStreamWrapper, convert_to_model_response_object
 from typing import Callable, Optional
 import aiohttp
 
@@ -157,29 +157,6 @@ class OpenAIChatCompletion(BaseLLM):
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         return headers
-    
-    def convert_to_model_response_object(self, response_object: Optional[dict]=None, model_response_object: Optional[ModelResponse]=None):
-        try: 
-            if response_object is None or model_response_object is None:
-                raise OpenAIError(status_code=500, message="Error in response object format")
-            choice_list=[]
-            for idx, choice in enumerate(response_object["choices"]): 
-                message = Message(content=choice["message"]["content"], role=choice["message"]["role"])
-                choice = Choices(finish_reason=choice["finish_reason"], index=idx, message=message)
-                choice_list.append(choice)
-            model_response_object.choices = choice_list
-
-            if "usage" in response_object: 
-                model_response_object.usage = response_object["usage"]
-            
-            if "id" in response_object: 
-                model_response_object.id = response_object["id"]
-            
-            if "model" in response_object: 
-                model_response_object.model = response_object["model"]
-            return model_response_object
-        except: 
-            OpenAIError(status_code=500, message="Invalid response object.")
 
     def completion(self, 
                 model_response: ModelResponse,
@@ -245,7 +222,7 @@ class OpenAIChatCompletion(BaseLLM):
                             raise OpenAIError(status_code=response.status_code, message=response.text)
                             
                         ## RESPONSE OBJECT
-                        return self.convert_to_model_response_object(response_object=response.json(), model_response_object=model_response)
+                        return convert_to_model_response_object(response_object=response.json(), model_response_object=model_response)
                 except Exception as e:
                     if "Conversation roles must alternate user/assistant" in str(e) or "user and assistant roles should be alternating" in str(e): 
                         # reformat messages to ensure user/assistant are alternating, if there's either 2 consecutive 'user' messages or 2 consecutive 'assistant' message, add a blank 'user' or 'assistant' message to ensure compatibility
@@ -287,7 +264,7 @@ class OpenAIChatCompletion(BaseLLM):
                 
 
                 ## RESPONSE OBJECT
-                return self.convert_to_model_response_object(response_object=response_json, model_response_object=model_response)
+                return convert_to_model_response_object(response_object=response_json, model_response_object=model_response)
 
     async def async_streaming(self, 
                           logging_obj,
