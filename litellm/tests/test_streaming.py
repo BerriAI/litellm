@@ -227,6 +227,7 @@ def streaming_format_tests(idx, chunk):
 
 def test_completion_cohere_stream_bad_key():
     try:
+        litellm.cache = None
         api_key = "bad-key"
         messages = [
             {"role": "system", "content": "You are a helpful assistant."},

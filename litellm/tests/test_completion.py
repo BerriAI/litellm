@@ -14,7 +14,7 @@ import litellm
 from litellm import embedding, completion, completion_cost
 from litellm import RateLimitError
 litellm.num_retries = 3
-
+litellm.cache = None
 user_message = "Write a short poem about the sky"
 messages = [{"content": user_message, "role": "user"}]
 
@@ -24,6 +24,7 @@ def logger_fn(user_model_dict):
 
 def test_completion_custom_provider_model_name():
     try:
+        litellm.cache = None
         response = completion(
             model="together_ai/togethercomputer/llama-2-70b-chat",
             messages=messages,
@@ -41,6 +42,7 @@ def test_completion_custom_provider_model_name():
 
 def test_completion_claude():
     litellm.set_verbose = False
+    litellm.cache = None
     litellm.AnthropicConfig(max_tokens_to_sample=200, metadata={"user_id": "1224"})
     try:
         # test without max tokens
