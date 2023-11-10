@@ -2563,7 +2563,7 @@ def handle_failure(exception, traceback_exception, start_time, end_time, args, k
 def convert_to_model_response_object(response_object: Optional[dict]=None, model_response_object: Optional[ModelResponse]=None):
         try: 
             if response_object is None or model_response_object is None:
-                raise OpenAIError(status_code=500, message="Error in response object format")
+                raise Exception("Error in response object format")
             choice_list=[]
             for idx, choice in enumerate(response_object["choices"]): 
                 message = Message(content=choice["message"]["content"], role=choice["message"]["role"], function_call=choice["message"].get("function_call", None))
@@ -2581,7 +2581,7 @@ def convert_to_model_response_object(response_object: Optional[dict]=None, model
                 model_response_object.model = response_object["model"]
             return model_response_object
         except: 
-            OpenAIError(status_code=500, message="Invalid response object.")
+            Exception("Invalid response object.")
 
 
 # NOTE: DEPRECATING this in favor of using success_handler() in Logging:
