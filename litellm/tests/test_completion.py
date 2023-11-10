@@ -733,7 +733,7 @@ def test_completion_azure_deployment_id():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_azure_deployment_id()
+# test_completion_azure_deployment_id()
 
 # Only works for local endpoint
 # def test_completion_anthropic_openai_proxy():
@@ -1169,7 +1169,7 @@ def test_mistral_anyscale_stream():
     for chunk in response:
         # print(chunk)
         print(chunk["choices"][0]["delta"].get("content", ""), end="")
-# test_mistral_anyscale_stream()
+test_mistral_anyscale_stream()
 # test_completion_anyscale_2()
 # def test_completion_with_fallbacks_multiple_keys():
 #     print(f"backup key 1: {os.getenv('BACKUP_OPENAI_API_KEY_1')}")
