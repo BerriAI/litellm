@@ -235,7 +235,6 @@ class OpenAIChatCompletion(BaseLLM):
                             
                         ## RESPONSE OBJECT
                         return response.iter_lines()
-                    
                     else:
                         response = self._client_session.post(
                             url=api_base,
@@ -304,9 +303,6 @@ class OpenAIChatCompletion(BaseLLM):
                 if response.status != 200:
                     raise OpenAIError(status_code=response.status, message=await response.text())
 
-                # Handle the streamed response
-                # async for line in response.content:
-                #     print(line)
                 streamwrapper = CustomStreamWrapper(completion_stream=response, model=model, custom_llm_provider="openai",logging_obj=logging_obj)
                 async for transformed_chunk in streamwrapper:
                     yield transformed_chunk

@@ -1,7 +1,7 @@
 from typing import Optional, Union
 import types, requests
 from .base import BaseLLM
-from litellm.utils import ModelResponse, Choices, Message
+from litellm.utils import ModelResponse, Choices, Message, CustomStreamWrapper
 from typing import Callable, Optional
 from litellm import OpenAIConfig
 import aiohttp
@@ -143,8 +143,12 @@ class AzureChatCompletion(BaseLLM):
                     "api_base": api_base,
                 },
             )
-
-            if "stream" in optional_params and optional_params["stream"] == True:
+            if acompletion is True: 
+                if optional_params.get("stream", False):
+                    return self.async_streaming(logging_obj=logging_obj, api_base=api_base, data=data, headers=headers, model_response=model_response, model=model)
+                else:
+                    return self.acompletion(logging_obj=logging_obj, api_base=api_base, data=data, headers=headers, model_response=model_response, model=model)
+            elif "stream" in optional_params and optional_params["stream"] == True:
                 response = self._client_session.post(
                     url=api_base,
                     json=data,
@@ -156,8 +160,6 @@ class AzureChatCompletion(BaseLLM):
                     
                 ## RESPONSE OBJECT
                 return response.iter_lines()
-            elif acompletion is True: 
-                return self.acompletion(api_base=api_base, data=data, headers=headers, model_response=model_response)
             else:
                 response = self._client_session.post(
                     url=api_base,
@@ -190,6 +192,22 @@ class AzureChatCompletion(BaseLLM):
                 ## RESPONSE OBJECT
                 return self.convert_to_model_response_object(response_object=response_json, model_response_object=model_response)
 
+    async def async_streaming(self, 
+                          logging_obj,
+                          api_base: str, 
+                          data: dict, headers: dict, 
+                          model_response: ModelResponse, 
+                          model: str):
+        async with aiohttp.ClientSession() as session:
+            async with session.post(api_base, json=data, headers=headers) as response:
+                # Check if the request was successful (status code 200)
+                if response.status != 200:
+                    raise AzureOpenAIError(status_code=response.status, message=await response.text())
+                
+                # Handle the streamed response
+                stream_wrapper = CustomStreamWrapper(completion_stream=response, model=model, custom_llm_provider="azure",logging_obj=logging_obj)
+                async for transformed_chunk in stream_wrapper:
+                    yield transformed_chunk
 
     def embedding(self,
                 model: str,
