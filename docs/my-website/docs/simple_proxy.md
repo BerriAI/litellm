@@ -692,7 +692,7 @@ $ litellm --config /path/to/config.yaml
    - Configure Litellm by providing a configuration file path.
    - **Usage:** 
      ```shell
-     litellm --config path/to/config.json
+     litellm --config path/to/config.yaml
      ```
 
 #### --telemetry
