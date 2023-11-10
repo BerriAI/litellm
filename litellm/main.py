@@ -311,7 +311,6 @@ def completion(
     non_default_params = {k: v for k,v in kwargs.items() if k not in default_params} # model-specific params - pass them straight to the model/provider
     if mock_response:
         return mock_completion(model, messages, stream=stream, mock_response=mock_response)
-    
     try:
         logging = litellm_logging_obj
         fallbacks = (
