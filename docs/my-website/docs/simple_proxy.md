@@ -243,6 +243,84 @@ python gpt4_eval.py -q '../evaluation_set/flask_evaluation.jsonl'
 ```
 </TabItem>
 
+<TabItem value="mlflow" label="ML Flow Eval">
+
+MLflow provides an API `mlflow.evaluate()` to help evaluate your LLMs https://mlflow.org/docs/latest/llms/llm-evaluate/index.html
+
+## Pre Requisites
+```shell
+pip install litellm
+```
+```shell
+pip install mlflow
+```
+
+### Step 1: Start LiteLLM Proxy on the CLI
+LiteLLM allows you to create an OpenAI compatible server for all supported LLMs. [More information on litellm proxy here](https://docs.litellm.ai/docs/simple_proxy)
+
+```shell
+$ litellm --model huggingface/bigcode/starcoder
+
+#INFO: Proxy running on http://0.0.0.0:8000
+```
+
+### Step 2: Run ML Flow
+Before running the eval we will set `openai.api_base` to the litellm proxy from Step 1
+
+```python
+openai.api_base = "http://0.0.0.0:8000"
+```
+
+```python
+import openai
+import pandas as pd
+openai.api_key = "anything"             # this can be anything, we set the key on the proxy
+openai.api_base = "http://0.0.0.0:8000" # set api base to the proxy from step 1
+
+
+import mlflow
+eval_data = pd.DataFrame(
+    {
+        "inputs": [
+            "What is the largest country",
+            "What is the weather in sf?",
+        ],
+        "ground_truth": [
+            "India is a large country",
+            "It's cold in SF today"
+        ],
+    }
+)
+
+with mlflow.start_run() as run:
+    system_prompt = "Answer the following question in two sentences"
+    logged_model_info = mlflow.openai.log_model(
+        model="gpt-3.5",
+        task=openai.ChatCompletion,
+        artifact_path="model",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": "{question}"},
+        ],
+    )
+
+    # Use predefined question-answering metrics to evaluate our model.
+    results = mlflow.evaluate(
+        logged_model_info.model_uri,
+        eval_data,
+        targets="ground_truth",
+        model_type="question-answering",
+    )
+    print(f"See aggregated evaluation results below: \n{results.metrics}")
+
+    # Evaluation result for each data record is available in `results.tables`.
+    eval_table = results.tables["eval_results_table"]
+    print(f"See evaluation table below: \n{eval_table}")
+
+
+```
+</TabItem>
+
 <TabItem value="continue-dev" label="ContinueDev">
 
 Continue-Dev brings ChatGPT to VSCode. See how to [install it here](https://continue.dev/docs/quickstart).
@@ -259,6 +337,7 @@ In the [config.py](https://continue.dev/docs/reference/Models/openai) set this a
 
 Credits [@vividfog](https://github.com/jmorganca/ollama/issues/305#issuecomment-1751848077) for this tutorial. 
 </TabItem>
+
 <TabItem value="aider" label="Aider">
 
 ```shell
