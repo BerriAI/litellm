@@ -479,11 +479,12 @@ class Logging:
                         )
                     elif isinstance(callback, CustomLogger): # custom logger class 
                         callback.log_post_api_call(
-                            model=self.model,
-                            messages=self.messages,
                             kwargs=self.model_call_details,
+                            response_obj=None,
+                            start_time=self.start_time,
+                            end_time=None
                         )
-                except:
+                except Exception as e:
                     print_verbose(
                         f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while post-call logging with integrations {traceback.format_exc()}"
                     )
