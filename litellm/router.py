@@ -109,7 +109,7 @@ class Router:
         if len(self.healthy_deployments) > 0:
             for item in self.healthy_deployments:
                 if item[0]["model_name"] == model: # first one in queue will be the one with the most availability
-                    return item or item[0]
+                    return item[0]
         else: 
             potential_deployments = []
             for item in self.model_list:
