@@ -3960,7 +3960,12 @@ class CustomStreamWrapper:
         is_finished = False
         finish_reason = ""
         text = ""
-        if chunk.startswith("data:"):
+        if "data: [DONE]" in chunk:
+            text = ""
+            is_finished = True
+            finish_reason = "stop"
+            return {"text": text, "is_finished": is_finished, "finish_reason": finish_reason}
+        elif chunk.startswith("data:"):
             data_json = json.loads(chunk[5:]) # chunk.startswith("data:"):
             try:
                 text = data_json["choices"][0]["delta"].get("content", "") 
@@ -4285,7 +4290,7 @@ class CustomStreamWrapper:
     
     async def __anext__(self):
         try:
-            if self.custom_llm_provider == "openai":
+            if self.custom_llm_provider == "openai" or self.custom_llm_provider == "azure":
                 async for chunk in self.completion_stream.content:
                     if chunk == "None" or chunk is None:
                         raise Exception

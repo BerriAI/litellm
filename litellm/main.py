@@ -442,7 +442,7 @@ def completion(
                 logging_obj=logging, 
                 acompletion=acompletion
             )
-            if "stream" in optional_params and optional_params["stream"] == True:
+            if optional_params.get("stream", False) and acompletion is False:
                 response = CustomStreamWrapper(response, model, custom_llm_provider=custom_llm_provider, logging_obj=logging)
                 return response
             ## LOGGING
