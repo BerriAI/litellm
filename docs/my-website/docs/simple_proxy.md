@@ -496,7 +496,7 @@ completion = openai.ChatCompletion.create(model="gpt-3.5-turbo", messages=[{"rol
 print(completion.choices[0].message.content)
 ```
 
-### Save Model-specific params (API Base, API Keys, Temperature, etc.)
+### Save Model-specific params (API Base, API Keys, Temperature, Headers etc.)
 You can use the config to save model-specific information like api_base, api_key, temperature, max_tokens, etc. 
 
 **Step 1**: Create a `config.yaml` file
