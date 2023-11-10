@@ -518,6 +518,7 @@ def test_completion_palm_stream():
 
 def test_completion_claude_stream_bad_key():
     try:
+        litellm.cache = None
         api_key = "bad-key"
         messages = [
             {"role": "system", "content": "You are a helpful assistant."},
@@ -538,14 +539,15 @@ def test_completion_claude_stream_bad_key():
             complete_response += chunk
         if complete_response.strip() == "": 
             raise Exception("Empty response received")
-        print(f"completion_response: {complete_response}")
+        print(f"1234completion_response: {complete_response}")
+        raise Exception("Auth error not raised")
     except AuthenticationError as e:
-        pass
+        print("Auth Error raised")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
 
-# test_completion_claude_stream_bad_key() 
+test_completion_claude_stream_bad_key() 
 # test_completion_replicate_stream()
 
 # def test_completion_vertexai_stream():
@@ -912,7 +914,7 @@ def test_openai_chat_completion_complete_response_call():
         print(f"error occurred: {traceback.format_exc()}")
         pass
 
-test_openai_chat_completion_complete_response_call()
+# test_openai_chat_completion_complete_response_call()
 
 def test_openai_text_completion_call():
     try:
