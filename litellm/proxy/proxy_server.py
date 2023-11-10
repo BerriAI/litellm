@@ -199,7 +199,7 @@ def save_params_to_config(data: dict):
 
 def load_router_config(router: Optional[litellm.Router], config_file_path: str):
     config = {}
-    server_settings  = {} 
+    server_settings: dict = {} 
     try: 
         if os.path.exists(config_file_path):
             with open(config_file_path, 'r') as file:

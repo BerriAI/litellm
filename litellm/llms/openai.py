@@ -222,7 +222,7 @@ class OpenAIChatCompletion(BaseLLM):
                         if optional_params.get("stream", False):
                             return self.async_streaming(logging_obj=logging_obj, api_base=api_base, data=data, headers=headers, model_response=model_response, model=model)
                         else:
-                            return self.acompletion(logging_obj=logging_obj, api_base=api_base, data=data, headers=headers, model_response=model_response, model=model)
+                            return self.acompletion(api_base=api_base, data=data, headers=headers, model_response=model_response)
                     elif "stream" in optional_params and optional_params["stream"] == True:
                         response = self._client_session.post(
                             url=api_base,
@@ -276,11 +276,9 @@ class OpenAIChatCompletion(BaseLLM):
                 raise OpenAIError(status_code=500, message=traceback.format_exc())
     
     async def acompletion(self, 
-                          logging_obj,
                           api_base: str, 
                           data: dict, headers: dict, 
-                          model_response: ModelResponse, 
-                          model: str): 
+                          model_response: ModelResponse): 
         async with aiohttp.ClientSession() as session:
             async with session.post(api_base, json=data, headers=headers) as response:
                 response_json = await response.json()
