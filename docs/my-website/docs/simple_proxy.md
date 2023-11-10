@@ -452,7 +452,7 @@ Here's how you can use multiple llms with one proxy `config.yaml`.
 #### Step 1: Setup Config
 ```yaml
 model_list:
-  - model_name: zephyr-alpha
+  - model_name: zephyr-alpha # the 1st model is the default on the proxy
     litellm_params: # params for litellm.completion() - https://docs.litellm.ai/docs/completion/input#input---request-body
       model: huggingface/HuggingFaceH4/zephyr-7b-alpha
       api_base: http://0.0.0.0:8001
@@ -466,6 +466,9 @@ model_list:
       api_key: sk-claude
     
 ```
+
+#### Default Model - Config:
+The proxy uses the first model in the config as the default model - in this config the default model is `zephyr-alpha`
 
 #### Step 2: Start Proxy with config
 
