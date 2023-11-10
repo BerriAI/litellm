@@ -777,6 +777,33 @@ def test_completion_replicate_vicuna():
         pytest.fail(f"Error occurred: {e}")
 # test_completion_replicate_vicuna()
 
+def test_completion_replicate_llama2_stream():
+    print("TESTING REPLICATE streaming")
+    litellm.set_verbose=False
+    model_name = "replicate/meta/llama-2-7b-chat:13c3cdee13ee059ab779f0291d29054dab00a47dad8261375654de5540165fb0"
+    try:
+        response = completion(
+            model=model_name, 
+            messages=[
+                {
+                    "role": "user",
+                    "content": "what is yc write 1 paragraph",
+                }
+            ], 
+            stream=True,
+            max_tokens=20,
+            num_retries=3
+        )
+        print(response)
+        # Add any assertions here to check the response
+        for i, chunk in enumerate(response):
+            if i == 0:
+                assert len(chunk.choices[0].delta["content"]) > 5
+            print(chunk)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+# test_completion_replicate_llama2_stream()
+
 # commenthing this out since we won't be always testing a custom replicate deployment
 # def test_completion_replicate_deployments():
 #     print("TESTING REPLICATE")
@@ -787,6 +814,7 @@ def test_completion_replicate_vicuna():
 #             model=model_name, 
 #             messages=messages, 
 #             temperature=0.5,
+#             seed=-1,
 #         )
 #         print(response)
 #         # Add any assertions here to check the response
@@ -1171,7 +1199,7 @@ def test_mistral_anyscale_stream():
     for chunk in response:
         # print(chunk)
         print(chunk["choices"][0]["delta"].get("content", ""), end="")
-test_mistral_anyscale_stream()
+# test_mistral_anyscale_stream()
 # test_completion_anyscale_2()
 # def test_completion_with_fallbacks_multiple_keys():
 #     print(f"backup key 1: {os.getenv('BACKUP_OPENAI_API_KEY_1')}")
