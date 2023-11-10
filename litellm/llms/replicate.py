@@ -129,7 +129,7 @@ def handle_prediction_response(prediction_url, api_token, print_verbose):
             logs = response_data.get("logs", "")
             if status == "failed":
                 replicate_error = response_data.get("error", "")
-                raise ReplicateError(status_code=500, message=f"Error: {replicate_error}, \n Replicate logs{logs}")
+                raise ReplicateError(status_code=400, message=f"Error: {replicate_error}, \nReplicate logs:{logs}")
         else:
             # this can fail temporarily but it does not mean the replicate request failed, replicate request fails when status=="failed"
             print_verbose("Replicate: Failed to fetch prediction status and output.")
@@ -241,7 +241,7 @@ def completion(
 
         if len(result) == 0: # edge case, where result from replicate is empty
             result = " "
-        
+
         ## Building RESPONSE OBJECT
         if len(result) > 1:
             model_response["choices"][0]["message"]["content"] = result
