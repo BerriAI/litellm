@@ -117,7 +117,7 @@ def handle_prediction_response(prediction_url, api_token, print_verbose):
     status = ""
     logs = ""
     while True and (status not in ["succeeded", "failed", "canceled"]):
-        print_verbose("making request")
+        print_verbose(f"replicate: polling endpoint{prediction_url}")
         time.sleep(0.5)
         response = requests.get(prediction_url, headers=headers)
         if response.status_code == 200:
@@ -125,10 +125,14 @@ def handle_prediction_response(prediction_url, api_token, print_verbose):
             if "output" in response_data:
                 output_string = "".join(response_data['output'])
                 print_verbose(f"Non-streamed output:{output_string}")
-            status = response_data['status']
+            status = response_data.get('status', None)
             logs = response_data.get("logs", "")
+            if status == "failed":
+                replicate_error = response_data.get("error", "")
+                raise ReplicateError(status_code=500, message=f"Error: {replicate_error}, \n Replicate logs{logs}")
         else:
-            print_verbose("Failed to fetch prediction status and output.")
+            # this can fail temporarily but it does not mean the replicate request failed, replicate request fails when status=="failed"
+            print_verbose("Replicate: Failed to fetch prediction status and output.")
     return output_string, logs
 
 # Function to handle prediction response (streaming)
