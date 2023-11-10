@@ -34,6 +34,12 @@ response = completion(
 )
 ```
 
+:::warning Replicate Cold Boots
+
+Replicate responses can take 3-5 mins due to replicate cold boots, if you're trying to debug try making the request with `litellm.set_verbose=True`. [More info on replicate cold boots](https://replicate.com/docs/how-does-replicate-work#cold-boots)
+
+:::
+
 ### Replicate Models
 liteLLM supports all replicate LLMs
 
