@@ -33,6 +33,7 @@ This list is constantly being updated.
 |Anthropic| ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |  |   |
 |OpenAI| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 |Replicate | ✅ | ✅ | ✅ | ✅ | ✅ | |  |   |  |   |
+|Anyscale | ✅ | ✅ | ✅ | ✅ |
 |Cohere| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |   |   |
 |Huggingface| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |    |
 |Openrouter| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -45,7 +46,7 @@ This list is constantly being updated.
 |Palm| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |  |   |
 |NLP Cloud| ✅ | ✅ | ✅ | ✅ | ✅ | |  |  |  |   |
 |Petals| ✅ | ✅ |  | ✅ | |  |   |  |  |   |
-|Ollama| ✅ | ✅ | ✅ | ✅ | ✅ |  |   | ✅ |  |   |n
+|Ollama| ✅ | ✅ | ✅ | ✅ | ✅ |  |   | ✅ |  |   |
 
 :::note
 
