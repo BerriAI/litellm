@@ -257,7 +257,7 @@ class OpenAIChatCompletion(BaseLLM):
                           data: dict, headers: dict, 
                           model_response: ModelResponse): 
         async with aiohttp.ClientSession() as session:
-            async with session.post(api_base, json=data, headers=headers) as response:
+            async with session.post(api_base, json=data, headers=headers, ssl=False) as response:
                 response_json = await response.json()
                 if response.status != 200:
                     raise OpenAIError(status_code=response.status, message=response.text)
