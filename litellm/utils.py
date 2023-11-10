@@ -118,11 +118,13 @@ def map_finish_reason(finish_reason: str): # openai supports 5 stop sequences - 
     return finish_reason
 
 class Message(OpenAIObject):
-    def __init__(self, content="default", role="assistant", logprobs=None, **params):
+    def __init__(self, content="default", role="assistant", logprobs=None, function_call=None, **params):
         super(Message, self).__init__(**params)
         self.content = content
         self.role = role
         self._logprobs = logprobs
+        if function_call: 
+            self.function_call = function_call
 
 class Delta(OpenAIObject):
     def __init__(self, content=None, logprobs=None, role=None, **params):
@@ -906,29 +908,6 @@ def client(original_function):
             except:
                 # [Non-Blocking Error]
                 pass
-
-    def convert_to_model_response_object(response_object: Optional[dict]=None, model_response_object: Optional[ModelResponse]=None):
-        try: 
-            if response_object is None or model_response_object is None:
-                raise OpenAIError(status_code=500, message="Error in response object format")
-            choice_list=[]
-            for idx, choice in enumerate(response_object["choices"]): 
-                message = Message(content=choice["message"]["content"], role=choice["message"]["role"])
-                choice = Choices(finish_reason=choice["finish_reason"], index=idx, message=message)
-                choice_list.append(choice)
-            model_response_object.choices = choice_list
-
-            if "usage" in response_object: 
-                model_response_object.usage = response_object["usage"]
-            
-            if "id" in response_object: 
-                model_response_object.id = response_object["id"]
-            
-            if "model" in response_object: 
-                model_response_object.model = response_object["model"]
-            return model_response_object
-        except: 
-            OpenAIError(status_code=500, message="Invalid response object.")
 
     def wrapper(*args, **kwargs):
         start_time = datetime.datetime.now()
@@ -2579,6 +2558,30 @@ def handle_failure(exception, traceback_exception, start_time, end_time, args, k
         # LOGGING
         exception_logging(logger_fn=user_logger_fn, exception=e)
         pass
+
+
+def convert_to_model_response_object(response_object: Optional[dict]=None, model_response_object: Optional[ModelResponse]=None):
+        try: 
+            if response_object is None or model_response_object is None:
+                raise OpenAIError(status_code=500, message="Error in response object format")
+            choice_list=[]
+            for idx, choice in enumerate(response_object["choices"]): 
+                message = Message(content=choice["message"]["content"], role=choice["message"]["role"], function_call=choice["message"].get("function_call", None))
+                choice = Choices(finish_reason=choice["finish_reason"], index=idx, message=message)
+                choice_list.append(choice)
+            model_response_object.choices = choice_list
+
+            if "usage" in response_object: 
+                model_response_object.usage = response_object["usage"]
+            
+            if "id" in response_object: 
+                model_response_object.id = response_object["id"]
+            
+            if "model" in response_object: 
+                model_response_object.model = response_object["model"]
+            return model_response_object
+        except: 
+            OpenAIError(status_code=500, message="Invalid response object.")
 
 
 # NOTE: DEPRECATING this in favor of using success_handler() in Logging:
