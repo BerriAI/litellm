@@ -947,8 +947,11 @@ def client(original_function):
                     cached_result = litellm.cache.get_cache(*args, **kwargs)
                     if cached_result != None:
                         print_verbose(f"Cache Hit!")
-                        return convert_to_model_response_object(response_object=cached_result, model_response_object=ModelResponse())
-
+                        call_type = original_function.__name__
+                        if call_type == CallTypes.completion.value:
+                            return convert_to_model_response_object(response_object=cached_result, model_response_object=ModelResponse())
+                        else:
+                            return cached_result
             # MODEL CALL
             result = original_function(*args, **kwargs)
             end_time = datetime.datetime.now()
