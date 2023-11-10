@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.abspath('../..'))
 
 from litellm import completion
 import litellm
-
+litellm.num_retries = 3
 litellm.success_callback = ["langfuse"]
 # litellm.set_verbose = True
 import time
