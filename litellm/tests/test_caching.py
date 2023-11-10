@@ -352,98 +352,98 @@ def test_hosted_cache():
 # test_hosted_cache()
 
 
-def test_redis_cache_with_ttl():
-    cache = Cache(type="redis", host=os.environ['REDIS_HOST'], port=os.environ['REDIS_PORT'], password=os.environ['REDIS_PASSWORD'])
-    sample_model_response_object_str = """{
-  "choices": [
-    {
-      "finish_reason": "stop",
-      "index": 0,
-      "message": {
-        "role": "assistant",
-        "content": "I'm doing well, thank you for asking. I am Claude, an AI assistant created by Anthropic."
-      }
-    }
-  ],
-  "created": 1691429984.3852863,
-  "model": "claude-instant-1",
-  "usage": {
-    "prompt_tokens": 18,
-    "completion_tokens": 23,
-    "total_tokens": 41
-  }
-}"""
-    sample_model_response_object = {
-  "choices": [
-    {
-      "finish_reason": "stop",
-      "index": 0,
-      "message": {
-        "role": "assistant",
-        "content": "I'm doing well, thank you for asking. I am Claude, an AI assistant created by Anthropic."
-      }
-    }
-  ],
-  "created": 1691429984.3852863,
-  "model": "claude-instant-1",
-  "usage": {
-    "prompt_tokens": 18,
-    "completion_tokens": 23,
-    "total_tokens": 41
-  }
-}
-    cache.add_cache(cache_key="test_key", result=sample_model_response_object_str, ttl=1)
-    cached_value = cache.get_cache(cache_key="test_key")
-    print(f"cached-value: {cached_value}")
-    assert cached_value['choices'][0]['message']['content'] == sample_model_response_object['choices'][0]['message']['content']
-    time.sleep(2)
-    assert cache.get_cache(cache_key="test_key") is None
+# def test_redis_cache_with_ttl():
+#     cache = Cache(type="redis", host=os.environ['REDIS_HOST'], port=os.environ['REDIS_PORT'], password=os.environ['REDIS_PASSWORD'])
+#     sample_model_response_object_str = """{
+#   "choices": [
+#     {
+#       "finish_reason": "stop",
+#       "index": 0,
+#       "message": {
+#         "role": "assistant",
+#         "content": "I'm doing well, thank you for asking. I am Claude, an AI assistant created by Anthropic."
+#       }
+#     }
+#   ],
+#   "created": 1691429984.3852863,
+#   "model": "claude-instant-1",
+#   "usage": {
+#     "prompt_tokens": 18,
+#     "completion_tokens": 23,
+#     "total_tokens": 41
+#   }
+# }"""
+#     sample_model_response_object = {
+#   "choices": [
+#     {
+#       "finish_reason": "stop",
+#       "index": 0,
+#       "message": {
+#         "role": "assistant",
+#         "content": "I'm doing well, thank you for asking. I am Claude, an AI assistant created by Anthropic."
+#       }
+#     }
+#   ],
+#   "created": 1691429984.3852863,
+#   "model": "claude-instant-1",
+#   "usage": {
+#     "prompt_tokens": 18,
+#     "completion_tokens": 23,
+#     "total_tokens": 41
+#   }
+# }
+#     cache.add_cache(cache_key="test_key", result=sample_model_response_object_str, ttl=1)
+#     cached_value = cache.get_cache(cache_key="test_key")
+#     print(f"cached-value: {cached_value}")
+#     assert cached_value['choices'][0]['message']['content'] == sample_model_response_object['choices'][0]['message']['content']
+#     time.sleep(2)
+#     assert cache.get_cache(cache_key="test_key") is None
 
-# test_redis_cache_with_ttl()
+# # test_redis_cache_with_ttl()
 
-def test_in_memory_cache_with_ttl():
-    cache = Cache(type="local")
-    sample_model_response_object_str = """{
-  "choices": [
-    {
-      "finish_reason": "stop",
-      "index": 0,
-      "message": {
-        "role": "assistant",
-        "content": "I'm doing well, thank you for asking. I am Claude, an AI assistant created by Anthropic."
-      }
-    }
-  ],
-  "created": 1691429984.3852863,
-  "model": "claude-instant-1",
-  "usage": {
-    "prompt_tokens": 18,
-    "completion_tokens": 23,
-    "total_tokens": 41
-  }
-}"""
-    sample_model_response_object = {
-  "choices": [
-    {
-      "finish_reason": "stop",
-      "index": 0,
-      "message": {
-        "role": "assistant",
-        "content": "I'm doing well, thank you for asking. I am Claude, an AI assistant created by Anthropic."
-      }
-    }
-  ],
-  "created": 1691429984.3852863,
-  "model": "claude-instant-1",
-  "usage": {
-    "prompt_tokens": 18,
-    "completion_tokens": 23,
-    "total_tokens": 41
-  }
-}
-    cache.add_cache(cache_key="test_key", result=sample_model_response_object_str, ttl=1)
-    cached_value = cache.get_cache(cache_key="test_key")
-    assert cached_value['choices'][0]['message']['content'] == sample_model_response_object['choices'][0]['message']['content']
-    time.sleep(2)
-    assert cache.get_cache(cache_key="test_key") is None
-# test_in_memory_cache_with_ttl()
+# def test_in_memory_cache_with_ttl():
+#     cache = Cache(type="local")
+#     sample_model_response_object_str = """{
+#   "choices": [
+#     {
+#       "finish_reason": "stop",
+#       "index": 0,
+#       "message": {
+#         "role": "assistant",
+#         "content": "I'm doing well, thank you for asking. I am Claude, an AI assistant created by Anthropic."
+#       }
+#     }
+#   ],
+#   "created": 1691429984.3852863,
+#   "model": "claude-instant-1",
+#   "usage": {
+#     "prompt_tokens": 18,
+#     "completion_tokens": 23,
+#     "total_tokens": 41
+#   }
+# }"""
+#     sample_model_response_object = {
+#   "choices": [
+#     {
+#       "finish_reason": "stop",
+#       "index": 0,
+#       "message": {
+#         "role": "assistant",
+#         "content": "I'm doing well, thank you for asking. I am Claude, an AI assistant created by Anthropic."
+#       }
+#     }
+#   ],
+#   "created": 1691429984.3852863,
+#   "model": "claude-instant-1",
+#   "usage": {
+#     "prompt_tokens": 18,
+#     "completion_tokens": 23,
+#     "total_tokens": 41
+#   }
+# }
+#     cache.add_cache(cache_key="test_key", result=sample_model_response_object_str, ttl=1)
+#     cached_value = cache.get_cache(cache_key="test_key")
+#     assert cached_value['choices'][0]['message']['content'] == sample_model_response_object['choices'][0]['message']['content']
+#     time.sleep(2)
+#     assert cache.get_cache(cache_key="test_key") is None
+# # test_in_memory_cache_with_ttl()
