@@ -139,7 +139,7 @@ async def acompletion(*args, **kwargs):
     _, custom_llm_provider, _, _ = get_llm_provider(model=model, api_base=kwargs.get("api_base", None))
 
 
-    if (custom_llm_provider == "openai" or custom_llm_provider == "azure"): # currently implemented aiohttp calls for just azure and openai, soon all. 
+    if (custom_llm_provider == "openai" or custom_llm_provider == "azure" or custom_llm_provider == "custom_openai"): # currently implemented aiohttp calls for just azure and openai, soon all. 
         if kwargs.get("stream", False): 
             response = completion(*args, **kwargs)
         else:
