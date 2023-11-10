@@ -77,7 +77,7 @@ openai_text_completions = OpenAITextCompletion()
 azure_chat_completions = AzureChatCompletion()
 ####### COMPLETION ENDPOINTS ################
 
-async def acompletion(model: str, messages: List = [], *args, **kwargs):
+async def acompletion(*args, **kwargs):
     """
     Asynchronously executes a litellm.completion() call for any of litellm supported llms (example gpt-4, gpt-3.5-turbo, claude-2, command-nightly)
 
@@ -117,7 +117,8 @@ async def acompletion(model: str, messages: List = [], *args, **kwargs):
         - If `stream` is True, the function returns an async generator that yields completion lines.
     """
     loop = asyncio.get_event_loop()
-
+    model = args[0] if len(args) > 0 else kwargs["model"]
+    messages = args[1] if len(args) > 1 else kwargs["messages"]
     ### INITIALIZE LOGGING OBJECT ### 
     kwargs["litellm_call_id"] = str(uuid.uuid4())
     start_time = datetime.datetime.now()
