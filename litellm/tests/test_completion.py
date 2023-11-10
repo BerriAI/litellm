@@ -396,7 +396,7 @@ def test_completion_text_openai():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_text_openai()
+# test_completion_text_openai()
 
 def test_completion_openai_with_optional_params():
     try:
@@ -772,6 +772,26 @@ def test_completion_replicate_vicuna():
         pytest.fail(f"Error occurred: {e}")
 # test_completion_replicate_vicuna()
 
+# commenthing this out since we won't be always testing a custom replicate deployment
+# def test_completion_replicate_deployments():
+#     print("TESTING REPLICATE")
+#     litellm.set_verbose=False
+#     model_name = "replicate/deployments/ishaan-jaff/ishaan-mistral"
+#     try:
+#         response = completion(
+#             model=model_name, 
+#             messages=messages, 
+#             temperature=0.5,
+#         )
+#         print(response)
+#         # Add any assertions here to check the response
+#         response_str = response["choices"][0]["message"]["content"]
+#         print("RESPONSE STRING\n", response_str)
+#         if type(response_str) != str:
+#             pytest.fail(f"Error occurred: {e}")
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
+# test_completion_replicate_deployments()
 
 
 ######## Test TogetherAI ######## 
