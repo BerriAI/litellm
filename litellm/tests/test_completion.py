@@ -9,7 +9,7 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import pytest
-from openai.error import Timeout
+from openai import Timeout
 import litellm
 from litellm import embedding, completion, completion_cost
 from litellm import RateLimitError
@@ -405,7 +405,6 @@ def test_completion_openai():
         litellm.api_key = os.environ['OPENAI_API_KEY']
         response = completion(model="gpt-3.5-turbo", messages=messages, max_tokens=10, request_timeout=10)
         print("This is the response object\n", response)
-        print("\n\nThis is response ms:", response.response_ms)
 
         
         response_str = response["choices"][0]["message"]["content"]
@@ -422,14 +421,15 @@ def test_completion_openai():
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_completion_openai()
+test_completion_openai()
 
 def test_completion_text_openai():
     try:
-        litellm.set_verbose = True
+        # litellm.set_verbose = True
         response = completion(model="gpt-3.5-turbo-instruct", messages=messages)
-        print(response)
+        print(response["choices"][0]["message"]["content"])
     except Exception as e:
+        print(e)
         pytest.fail(f"Error occurred: {e}")
 # test_completion_text_openai()
 

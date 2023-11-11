@@ -1,4 +1,8 @@
-from openai.error import AuthenticationError, InvalidRequestError, RateLimitError, OpenAIError
+try:
+    from openai import AuthenticationError, BadRequestError, RateLimitError, OpenAIError
+except: 
+    from openai.error import AuthenticationError, InvalidRequestError, RateLimitError, OpenAIError
+
 import os
 import sys
 import traceback
@@ -38,23 +42,24 @@ models = ["command-nightly"]
 # Test 1: Context Window Errors 
 @pytest.mark.parametrize("model", models)
 def test_context_window(model):
-    sample_text = "Say error 50 times" * 100000
+    sample_text = "Say error 50 times" * 10000
     messages = [{"content": sample_text, "role": "user"}]
-    print(f"model: {model}")
     try:
-        completion(model=model, messages=messages)
+        response = completion(model=model, messages=messages)
+        print(f"response: {response}")
+        print("FAILED!")
         pytest.fail(f"An exception occurred")
-    except ContextWindowExceededError:
-        pass
+    except ContextWindowExceededError as e:
+        print(f"Worked!")
     except RateLimitError:
-        pass
+        print("RateLimited!")
     except Exception as e: 
         print(f"{e}")
         pytest.fail(f"An error occcurred - {e}")
         
 @pytest.mark.parametrize("model", models)
 def test_context_window_with_fallbacks(model):
-    ctx_window_fallback_dict = {"command-nightly": "claude-2"}
+    ctx_window_fallback_dict = {"command-nightly": "claude-2", "gpt-3.5-turbo-instruct": "gpt-3.5-turbo-16k"}
     sample_text = "how does a court case get to the Supreme Court?" * 1000
     messages = [{"content": sample_text, "role": "user"}]
 
@@ -62,8 +67,8 @@ def test_context_window_with_fallbacks(model):
 
 # for model in litellm.models_by_provider["bedrock"]:
 #     test_context_window(model=model)
-# test_context_window(model="gpt-3.5-turbo-instruct")
-# test_context_window_with_fallbacks(model="command-nightly")
+# test_context_window(model="gpt-3.5-turbo")
+# test_context_window_with_fallbacks(model="gpt-3.5-turbo")
 # Test 2: InvalidAuth Errors
 @pytest.mark.parametrize("model", models)
 def invalid_auth(model):  # set the model key to an invalid key, depending on the model
@@ -158,14 +163,14 @@ def invalid_auth(model):  # set the model key to an invalid key, depending on th
 
 # for model in litellm.models_by_provider["bedrock"]:
 #     invalid_auth(model=model)
-# invalid_auth(model="gpt-3.5-turbo-instruct")
+# invalid_auth(model="gpt-3.5-turbo")
 
 # Test 3: Invalid Request Error 
 @pytest.mark.parametrize("model", models)
 def test_invalid_request_error(model):
     messages = [{"content": "hey, how's it going?", "role": "user"}]
 
-    with pytest.raises(InvalidRequestError):
+    with pytest.raises(BadRequestError):
         completion(model=model, messages=messages, max_tokens="hello world")
 
 # test_invalid_request_error(model="gpt-3.5-turbo")
@@ -178,15 +183,16 @@ def test_invalid_request_error(model):
 #         response = completion(model=model, messages=messages)
 #     except RateLimitError:
 #         return True
-#     except OpenAIError: # is at least an openai error -> in case of random model errors - e.g. overloaded server
-#         return True
+#     # except OpenAIError: # is at least an openai error -> in case of random model errors - e.g. overloaded server
+#     #     return True
 #     except Exception as e:
 #         print(f"Uncaught Exception {model}: {type(e).__name__} - {e}")
 #         traceback.print_exc()
 #         pass
 #     return False
 # # Repeat each model 500 times
-# extended_models = [model for model in models for _ in range(250)]
+# # extended_models = [model for model in models for _ in range(250)]
+# extended_models = ["gpt-3.5-turbo-instruct" for _ in range(250)]
 
 # def worker(model):
 #     return test_model_call(model)
