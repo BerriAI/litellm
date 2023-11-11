@@ -42,7 +42,7 @@ def test_async_response():
 def test_get_response_streaming():
     import asyncio
     async def test_async_call():
-        user_message = "Hello, how are you?"
+        user_message = "write a short poem in one sentence"
         messages = [{"content": user_message, "role": "user"}]
         try:
             response = await acompletion(model="azure/chatgpt-v-2", messages=messages, stream=True)
@@ -62,7 +62,7 @@ def test_get_response_streaming():
             print(f"output: {output}")
             assert output is not None, "output cannot be None."
             assert isinstance(output, str), "output needs to be of type str"
-            assert len(output) > 0, "Length of output needs to be greater than 0."
+            assert len(output) > 0, f"Length of output needs to be greater than 0. {output}"
 
         except Exception as e:
             pytest.fail(f"An exception occurred: {e}")
