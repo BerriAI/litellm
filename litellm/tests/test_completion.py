@@ -115,6 +115,7 @@ def test_completion_gpt4_turbo():
 
 def test_completion_gpt4_vision():
     try:
+        litellm.set_verbose=True
         response = completion(
             model="gpt-4-vision-preview", 
             messages=[
@@ -123,7 +124,7 @@ def test_completion_gpt4_vision():
                     "content": [
                                     {
                                         "type": "text",
-                                        "text": "What’s in this image?"
+                                        "text": "Whats in this image?"
                                     },
                                     {
                                         "type": "image_url",
@@ -141,7 +142,7 @@ def test_completion_gpt4_vision():
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_completion_gpt4_turbo()
+test_completion_gpt4_vision()
 
 def test_completion_perplexity_api():
     try:
