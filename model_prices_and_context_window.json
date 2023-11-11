@@ -48,6 +48,13 @@
         "litellm_provider": "openai",
         "mode": "chat"
     },
+    "gpt-4-vision-preview": {
+        "max_tokens": 128000,
+        "input_cost_per_token": 0.00001,
+        "output_cost_per_token": 0.00003,
+        "litellm_provider": "openai",
+        "mode": "chat"
+    },
     "gpt-3.5-turbo": {
         "max_tokens": 4097,
         "input_cost_per_token": 0.0000015,
