@@ -113,6 +113,36 @@ def test_completion_gpt4_turbo():
         pytest.fail(f"Error occurred: {e}")
 # test_completion_gpt4_turbo()
 
+def test_completion_gpt4_vision():
+    try:
+        response = completion(
+            model="gpt-4-vision-preview", 
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                                    {
+                                        "type": "text",
+                                        "text": "What’s in this image?"
+                                    },
+                                    {
+                                        "type": "image_url",
+                                        "image_url": {
+                                        "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
+                                        }
+                                    }
+                                ]
+                }
+            ],
+        )
+        print(response)
+    except openai.error.RateLimitError:
+        print("got a rate liimt error")
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+# test_completion_gpt4_turbo()
+
 def test_completion_perplexity_api():
     try:
         # litellm.set_verbose=True
