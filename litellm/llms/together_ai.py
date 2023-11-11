@@ -154,6 +154,10 @@ def completion(
             )
         print_verbose(f"raw model_response: {response.text}")
         ## RESPONSE OBJECT
+        if response.status_code != 200:
+            raise TogetherAIError(
+                status_code=response.status_code, message=response.text
+            )
         completion_response = response.json()
 
         if "error" in completion_response:
