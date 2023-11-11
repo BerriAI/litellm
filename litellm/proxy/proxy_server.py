@@ -206,7 +206,9 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
                 config = yaml.safe_load(file)
         else:
             pass
-    except:
+    except Exception as e:
+        print_verbose(f"Exception while reading Config: {e}")
+
         pass
     
     print_verbose(f"Configs passed in, loaded config YAML\n{config}")
