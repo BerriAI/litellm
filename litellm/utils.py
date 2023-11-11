@@ -3159,7 +3159,7 @@ def register_prompt_template(model: str, roles: dict, initial_prompt_value: str 
     )
     ```
     """
-    model, _ = get_llm_provider(model=model)
+    model = get_llm_provider(model=model)[0]
     litellm.custom_prompt_dict[model] = {
         "roles": roles,
         "initial_prompt_value": initial_prompt_value,

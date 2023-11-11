@@ -322,7 +322,7 @@ def completion(
     max_retries = kwargs.get("max_retries", None)
     context_window_fallback_dict = kwargs.get("context_window_fallback_dict", None)
     ### CUSTOM PROMPT TEMPLATE ### 
-    initial_prompt_value = kwargs.get("intial_prompt_value", None)
+    initial_prompt_value = kwargs.get("initial_prompt_value", None)
     roles = kwargs.get("roles", None)
     final_prompt_value = kwargs.get("final_prompt_value", None)
     bos_token = kwargs.get("bos_token", None)
