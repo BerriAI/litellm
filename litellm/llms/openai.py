@@ -1,14 +1,17 @@
 from typing import Optional, Union
-import types, requests
+import types
+import httpx
 from .base import BaseLLM
 from litellm.utils import ModelResponse, Choices, Message, CustomStreamWrapper, convert_to_model_response_object
 from typing import Callable, Optional
 import aiohttp
 
 class OpenAIError(Exception):
-    def __init__(self, status_code, message):
+    def __init__(self, status_code, message, request: httpx.Request, response: httpx.Response):
         self.status_code = status_code
         self.message = message
+        self.request = request
+        self.response = response
         super().__init__(
             self.message
         )  # Call the base class constructor with the parameters it needs
@@ -144,7 +147,7 @@ class OpenAITextCompletionConfig():
                 and v is not None}
 
 class OpenAIChatCompletion(BaseLLM):
-    _client_session: requests.Session
+    _client_session: httpx.Client
 
     def __init__(self) -> None:
         super().__init__()
@@ -200,18 +203,8 @@ class OpenAIChatCompletion(BaseLLM):
                             return self.async_streaming(logging_obj=logging_obj, api_base=api_base, data=data, headers=headers, model_response=model_response, model=model)
                         else:
                             return self.acompletion(api_base=api_base, data=data, headers=headers, model_response=model_response)
-                    elif "stream" in optional_params and optional_params["stream"] == True:
-                        response = self._client_session.post(
-                            url=api_base,
-                            json=data,
-                            headers=headers,
-                            stream=optional_params["stream"]
-                        )
-                        if response.status_code != 200:
-                            raise OpenAIError(status_code=response.status_code, message=response.text)
-                            
-                        ## RESPONSE OBJECT
-                        return response.iter_lines()
+                    elif optional_params.get("stream", False):
+                        return self.streaming(logging_obj=logging_obj, api_base=api_base, data=data, headers=headers, model_response=model_response, model=model)
                     else:
                         response = self._client_session.post(
                             url=api_base,
@@ -219,7 +212,7 @@ class OpenAIChatCompletion(BaseLLM):
                             headers=headers,
                         )
                         if response.status_code != 200:
-                            raise OpenAIError(status_code=response.status_code, message=response.text)
+                            raise OpenAIError(status_code=response.status_code, message=response.text, request=response.request, response=response)
                             
                         ## RESPONSE OBJECT
                         return convert_to_model_response_object(response_object=response.json(), model_response_object=model_response)
@@ -246,41 +239,64 @@ class OpenAIChatCompletion(BaseLLM):
             exception_mapping_worked = True
             raise e
         except Exception as e: 
-            if exception_mapping_worked: 
-                raise e
-            else: 
-                import traceback
-                raise OpenAIError(status_code=500, message=traceback.format_exc())
+            raise e
     
     async def acompletion(self, 
                           api_base: str, 
                           data: dict, headers: dict, 
                           model_response: ModelResponse): 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(api_base, json=data, headers=headers, ssl=False) as response:
-                response_json = await response.json()
-                if response.status != 200:
-                    raise OpenAIError(status_code=response.status, message=response.text)
+        async with httpx.AsyncClient() as client:
+            response = await client.post(api_base, json=data, headers=headers) 
+            response_json = response.json()
+            if response.status != 200:
+                raise OpenAIError(status_code=response.status, message=response.text)
                 
 
-                ## RESPONSE OBJECT
-                return convert_to_model_response_object(response_object=response_json, model_response_object=model_response)
+            ## RESPONSE OBJECT
+            return convert_to_model_response_object(response_object=response_json, model_response_object=model_response)
+
+    def streaming(self,
+                  logging_obj,
+                  api_base: str, 
+                  data: dict, 
+                  headers: dict, 
+                  model_response: ModelResponse, 
+                  model: str
+    ):
+        with self._client_session.stream(
+                    url=f"{api_base}",
+                    json=data,
+                    headers=headers,
+                    method="POST"
+                ) as response: 
+                    if response.status_code != 200:
+                        raise OpenAIError(status_code=response.status_code, message=response.text(), request=self._client_session.request, response=response)
+                    
+                    completion_stream = response.iter_lines()
+                    streamwrapper = CustomStreamWrapper(completion_stream=completion_stream, model=model, custom_llm_provider="openai",logging_obj=logging_obj)
+                    for transformed_chunk in streamwrapper:
+                        yield transformed_chunk
 
     async def async_streaming(self, 
                           logging_obj,
                           api_base: str, 
-                          data: dict, headers: dict, 
+                          data: dict, 
+                          headers: dict, 
                           model_response: ModelResponse, 
                           model: str):
-        async with aiohttp.ClientSession() as session:
-            async with session.post(api_base, json=data, headers=headers, ssl=False) as response:
-                # Check if the request was successful (status code 200)
-                if response.status != 200:
-                    raise OpenAIError(status_code=response.status, message=await response.text())
-
-                streamwrapper = CustomStreamWrapper(completion_stream=response, model=model, custom_llm_provider="openai",logging_obj=logging_obj)
-                async for transformed_chunk in streamwrapper:
-                    yield transformed_chunk
+        client = httpx.AsyncClient()
+        async with client.stream(
+                    url=f"{api_base}",
+                    json=data,
+                    headers=headers,
+                    method="POST"
+                ) as response: 
+            if response.status_code != 200:
+                raise OpenAIError(status_code=response.status_code, message=response.text(), request=self._client_session.request, response=response)
+            
+            streamwrapper = CustomStreamWrapper(completion_stream=response.aiter_lines(), model=model, custom_llm_provider="openai",logging_obj=logging_obj)
+            async for transformed_chunk in streamwrapper:
+                yield transformed_chunk
 
     def embedding(self,
                 model: str,
@@ -349,7 +365,7 @@ class OpenAIChatCompletion(BaseLLM):
 
 
 class OpenAITextCompletion(BaseLLM):
-    _client_session: requests.Session
+    _client_session: httpx.Client
 
     def __init__(self) -> None:
         super().__init__()
@@ -367,7 +383,7 @@ class OpenAITextCompletion(BaseLLM):
         try: 
             ## RESPONSE OBJECT
             if response_object is None or model_response_object is None:
-                raise OpenAIError(status_code=500, message="Error in response object format")
+                raise ValueError(message="Error in response object format")
             choice_list=[]
             for idx, choice in enumerate(response_object["choices"]): 
                 message = Message(content=choice["text"], role="assistant")
@@ -386,8 +402,8 @@ class OpenAITextCompletion(BaseLLM):
             
             model_response_object._hidden_params["original_response"] = response_object # track original response, if users make a litellm.text_completion() request, we can return the original response
             return model_response_object
-        except: 
-            OpenAIError(status_code=500, message="Invalid response object.")
+        except Exception as e: 
+            raise e
 
     def completion(self, 
                model: Optional[str]=None,
@@ -397,6 +413,7 @@ class OpenAITextCompletion(BaseLLM):
                api_key: Optional[str]=None,
                api_base: Optional[str]=None,
                logging_obj=None,
+               acompletion: bool = False,
                optional_params=None,
                litellm_params=None,
                logger_fn=None,
@@ -412,9 +429,6 @@ class OpenAITextCompletion(BaseLLM):
             api_base = f"{api_base}/completions"
 
             if len(messages)>0 and "content" in messages[0] and type(messages[0]["content"]) == list: 
-                # Note: internal logic - for enabling litellm.text_completion()
-                # text-davinci-003 can accept a string or array, if it's an array, assume the array is set in messages[0]['content']
-                # https://platform.openai.com/docs/api-reference/completions/create
                 prompt = messages[0]["content"]
             else:
                 prompt = " ".join([message["content"] for message in messages]) # type: ignore
@@ -431,19 +445,13 @@ class OpenAITextCompletion(BaseLLM):
                 api_key=api_key,
                 additional_args={"headers": headers, "api_base": api_base, "data": data},
             )
-
-            if "stream" in optional_params and optional_params["stream"] == True:
-                response = self._client_session.post(
-                    url=f"{api_base}",
-                    json=data,
-                    headers=headers,
-                    stream=optional_params["stream"]
-                )
-                if response.status_code != 200:
-                    raise OpenAIError(status_code=response.status_code, message=response.text)
-                    
-                ## RESPONSE OBJECT
-                return response.iter_lines()
+            if acompletion == True: 
+                if optional_params.get("stream", False):
+                    return self.async_streaming(logging_obj=logging_obj, api_base=api_base, data=data, headers=headers, model_response=model_response, model=model)
+                else:
+                    return self.acompletion(api_base=api_base, data=data, headers=headers, model_response=model_response, prompt=prompt, api_key=api_key, logging_obj=logging_obj, model=model)
+            elif optional_params.get("stream", False):
+                return self.streaming(logging_obj=logging_obj, api_base=api_base, data=data, headers=headers, model_response=model_response, model=model)
             else:
                 response = self._client_session.post(
                     url=f"{api_base}",
@@ -451,7 +459,7 @@ class OpenAITextCompletion(BaseLLM):
                     headers=headers,
                 )
                 if response.status_code != 200:
-                    raise OpenAIError(status_code=response.status_code, message=response.text)
+                    raise OpenAIError(status_code=response.status_code, message=response.text, request=self._client_session.request, response=response)
                 
                 ## LOGGING
                 logging_obj.post_call(
@@ -466,12 +474,76 @@ class OpenAITextCompletion(BaseLLM):
 
                 ## RESPONSE OBJECT
                 return self.convert_to_model_response_object(response_object=response.json(), model_response_object=model_response)
-        except OpenAIError as e: 
-            exception_mapping_worked = True
-            raise e
         except Exception as e: 
-            if exception_mapping_worked: 
-                raise e
-            else: 
-                import traceback
-                raise OpenAIError(status_code=500, message=traceback.format_exc())
+            raise e
+    
+    async def acompletion(self, 
+                        logging_obj,
+                        api_base: str, 
+                        data: dict, 
+                        headers: dict, 
+                        model_response: ModelResponse, 
+                        prompt: str, 
+                        api_key: str, 
+                        model: str): 
+        async with httpx.AsyncClient() as client:
+            response = await client.post(api_base, json=data, headers=headers) 
+            response_json = response.json()
+            if response.status_code != 200:
+                raise OpenAIError(status_code=response.status_code, message=response.text)
+                
+            ## LOGGING
+            logging_obj.post_call(
+                input=prompt,
+                api_key=api_key,
+                original_response=response,
+                additional_args={
+                    "headers": headers,
+                    "api_base": api_base,
+                },
+            )
+
+            ## RESPONSE OBJECT
+            return self.convert_to_model_response_object(response_object=response_json, model_response_object=model_response)
+
+    def streaming(self,
+                  logging_obj,
+                  api_base: str, 
+                  data: dict, 
+                  headers: dict, 
+                  model_response: ModelResponse, 
+                  model: str
+    ):
+        with self._client_session.stream(
+                    url=f"{api_base}",
+                    json=data,
+                    headers=headers,
+                    method="POST"
+                ) as response: 
+                    if response.status_code != 200:
+                        raise OpenAIError(status_code=response.status_code, message=response.text(), request=self._client_session.request, response=response)
+                    
+                    streamwrapper = CustomStreamWrapper(completion_stream=response.iter_lines(), model=model, custom_llm_provider="text-completion-openai",logging_obj=logging_obj)
+                    for transformed_chunk in streamwrapper:
+                        yield transformed_chunk
+
+    async def async_streaming(self, 
+                          logging_obj,
+                          api_base: str, 
+                          data: dict, 
+                          headers: dict, 
+                          model_response: ModelResponse, 
+                          model: str):
+        client = httpx.AsyncClient()
+        async with client.stream(
+                    url=f"{api_base}",
+                    json=data,
+                    headers=headers,
+                    method="POST"
+                ) as response: 
+            if response.status_code != 200:
+                raise OpenAIError(status_code=response.status_code, message=response.text(), request=self._client_session.request, response=response)
+            
+            streamwrapper = CustomStreamWrapper(completion_stream=response.aiter_lines(), model=model, custom_llm_provider="text-completion-openai",logging_obj=logging_obj)
+            async for transformed_chunk in streamwrapper:
+                yield transformed_chunk
