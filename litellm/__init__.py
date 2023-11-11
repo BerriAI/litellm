@@ -380,6 +380,7 @@ from .exceptions import (
     OpenAIError,
     ContextWindowExceededError,
     BudgetExceededError, 
+    APIError,
 )
 from .budget_manager import BudgetManager
 from .proxy.proxy_cli import run_server
