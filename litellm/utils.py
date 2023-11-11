@@ -1121,7 +1121,7 @@ def openai_token_counter(messages, model="gpt-3.5-turbo-0613"):
     try:
         encoding = tiktoken.encoding_for_model(model)
     except KeyError:
-        print("Warning: model not found. Using cl100k_base encoding.")
+        print_verbose("Warning: model not found. Using cl100k_base encoding.")
         encoding = tiktoken.get_encoding("cl100k_base")
     if model in {
         "gpt-3.5-turbo-0613",
@@ -1137,10 +1137,10 @@ def openai_token_counter(messages, model="gpt-3.5-turbo-0613"):
         tokens_per_message = 4  # every message follows <|start|>{role/name}\n{content}<|end|>\n
         tokens_per_name = -1  # if there's a name, the role is omitted
     elif "gpt-3.5-turbo" in model:
-        print("Warning: gpt-3.5-turbo may update over time. Returning num tokens assuming gpt-3.5-turbo-0613.")
+        print_verbose("Warning: gpt-3.5-turbo may update over time. Returning num tokens assuming gpt-3.5-turbo-0613.")
         return openai_token_counter(messages, model="gpt-3.5-turbo-0613")
     elif "gpt-4" in model:
-        print("Warning: gpt-4 may update over time. Returning num tokens assuming gpt-4-0613.")
+        print_verbose("Warning: gpt-4 may update over time. Returning num tokens assuming gpt-4-0613.")
         return openai_token_counter(messages, model="gpt-4-0613")
     else:
         raise NotImplementedError(
@@ -2618,7 +2618,11 @@ def convert_to_model_response_object(response_object: Optional[dict]=None, model
             choice_list=[]
             for idx, choice in enumerate(response_object["choices"]): 
                 message = Message(content=choice["message"]["content"], role=choice["message"]["role"], function_call=choice["message"].get("function_call", None))
-                choice = Choices(finish_reason=choice["finish_reason"], index=idx, message=message)
+                finish_reason = choice.get("finish_reason", None)
+                if finish_reason == None:
+                    # gpt-4 vision can return 'finish_reason' or 'finish_details'
+                    finish_reason = choice.get("finish_details")
+                choice = Choices(finish_reason=finish_reason, index=idx, message=message)
                 choice_list.append(choice)
             model_response_object.choices = choice_list
 
@@ -2631,8 +2635,8 @@ def convert_to_model_response_object(response_object: Optional[dict]=None, model
             if "model" in response_object: 
                 model_response_object.model = response_object["model"]
             return model_response_object
-        except: 
-            Exception("Invalid response object.")
+        except Exception as e: 
+            raise Exception(f"Invalid response object {e}")
 
 
 # NOTE: DEPRECATING this in favor of using success_handler() in Logging:
