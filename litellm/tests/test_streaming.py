@@ -11,7 +11,7 @@ sys.path.insert(
 from dotenv import load_dotenv
 load_dotenv()
 import litellm
-from litellm import completion, acompletion, AuthenticationError, InvalidRequestError, RateLimitError
+from litellm import completion, acompletion, AuthenticationError, BadRequestError, RateLimitError, ModelResponse
 
 litellm.logging = False
 litellm.set_verbose = False
@@ -47,38 +47,17 @@ first_openai_chunk_example = {
 
 def validate_first_format(chunk):
     # write a test to make sure chunk follows the same format as first_openai_chunk_example
-    assert isinstance(chunk, dict), "Chunk should be a dictionary."
-    assert "id" in chunk, "Chunk should have an 'id'."
+    assert isinstance(chunk, ModelResponse), "Chunk should be a dictionary."
     assert isinstance(chunk['id'], str), "'id' should be a string."
-    
-    assert "object" in chunk, "Chunk should have an 'object'."
     assert isinstance(chunk['object'], str), "'object' should be a string."
-
-    assert "created" in chunk, "Chunk should have a 'created'."
     assert isinstance(chunk['created'], int), "'created' should be an integer."
-
-    assert "model" in chunk, "Chunk should have a 'model'."
     assert isinstance(chunk['model'], str), "'model' should be a string."
-
-    assert "choices" in chunk, "Chunk should have 'choices'."
     assert isinstance(chunk['choices'], list), "'choices' should be a list."
 
     for choice in chunk['choices']:
-        assert isinstance(choice, dict), "Each choice should be a dictionary."
-
-        assert "index" in choice, "Each choice should have 'index'."
         assert isinstance(choice['index'], int), "'index' should be an integer."
-
-        assert "delta" in choice, "Each choice should have 'delta'." 
-        assert isinstance(choice['delta'], dict), "'delta' should be a dictionary."
-
-        assert "role" in choice['delta'], "'delta' should have a 'role'."
         assert isinstance(choice['delta']['role'], str), "'role' should be a string."
-
-        assert "content" in choice['delta'], "'delta' should have 'content'."
         assert isinstance(choice['delta']['content'], str), "'content' should be a string."
-
-        assert "finish_reason" in choice, "Each choice should have 'finish_reason'."
         assert (choice['finish_reason'] is None) or isinstance(choice['finish_reason'], str), "'finish_reason' should be None or a string."
 
 second_openai_chunk_example = {
@@ -98,35 +77,16 @@ second_openai_chunk_example = {
 }
 
 def validate_second_format(chunk):
-    assert isinstance(chunk, dict), "Chunk should be a dictionary."
-    assert "id" in chunk, "Chunk should have an 'id'."
+    assert isinstance(chunk, ModelResponse), "Chunk should be a dictionary."
     assert isinstance(chunk['id'], str), "'id' should be a string."
-    
-    assert "object" in chunk, "Chunk should have an 'object'."
     assert isinstance(chunk['object'], str), "'object' should be a string."
-
-    assert "created" in chunk, "Chunk should have a 'created'."
     assert isinstance(chunk['created'], int), "'created' should be an integer."
-
-    assert "model" in chunk, "Chunk should have a 'model'."
     assert isinstance(chunk['model'], str), "'model' should be a string."
-
-    assert "choices" in chunk, "Chunk should have 'choices'."
     assert isinstance(chunk['choices'], list), "'choices' should be a list."
 
     for choice in chunk['choices']:
-        assert isinstance(choice, dict), "Each choice should be a dictionary."
-
-        assert "index" in choice, "Each choice should have 'index'."
         assert isinstance(choice['index'], int), "'index' should be an integer."
-
-        assert "delta" in choice, "Each choice should have 'delta'." 
-        assert isinstance(choice['delta'], dict), "'delta' should be a dictionary."
-
-        assert "content" in choice['delta'], "'delta' should have 'content'."
         assert isinstance(choice['delta']['content'], str), "'content' should be a string."
-
-        assert "finish_reason" in choice, "Each choice should have 'finish_reason'."
         assert (choice['finish_reason'] is None) or isinstance(choice['finish_reason'], str), "'finish_reason' should be None or a string."
 
 last_openai_chunk_example = {
@@ -144,32 +104,15 @@ last_openai_chunk_example = {
 }
 
 def validate_last_format(chunk):
-    assert isinstance(chunk, dict), "Chunk should be a dictionary."
-    assert "id" in chunk, "Chunk should have an 'id'."
+    assert isinstance(chunk, ModelResponse), "Chunk should be a dictionary."
     assert isinstance(chunk['id'], str), "'id' should be a string."
-    
-    assert "object" in chunk, "Chunk should have an 'object'."
     assert isinstance(chunk['object'], str), "'object' should be a string."
-
-    assert "created" in chunk, "Chunk should have a 'created'."
     assert isinstance(chunk['created'], int), "'created' should be an integer."
-
-    assert "model" in chunk, "Chunk should have a 'model'."
     assert isinstance(chunk['model'], str), "'model' should be a string."
-
-    assert "choices" in chunk, "Chunk should have 'choices'."
     assert isinstance(chunk['choices'], list), "'choices' should be a list."
 
     for choice in chunk['choices']:
-        assert isinstance(choice, dict), "Each choice should be a dictionary."
-
-        assert "index" in choice, "Each choice should have 'index'."
         assert isinstance(choice['index'], int), "'index' should be an integer."
-
-        assert "delta" in choice, "Each choice should have 'delta'." 
-        assert isinstance(choice['delta'], dict), "'delta' should be a dictionary."
-
-        assert "finish_reason" in choice, "Each choice should have 'finish_reason'."
         assert isinstance(choice['finish_reason'], str), "'finish_reason' should be a string."
 
 def streaming_format_tests(idx, chunk):
@@ -188,6 +131,7 @@ def streaming_format_tests(idx, chunk):
     if chunk["choices"][0]["finish_reason"]: # ensure finish reason is only in last chunk
         validate_last_format(chunk=chunk)
         finished = True
+    print(f"chunk choices: {chunk['choices'][0]['delta']['content']}")
     if "content" in chunk["choices"][0]["delta"]:
         extracted_chunk = chunk["choices"][0]["delta"]["content"]
     print(f"extracted chunk: {extracted_chunk}")
@@ -549,7 +493,7 @@ def test_completion_claude_stream_bad_key():
         pytest.fail(f"Error occurred: {e}")
 
 
-test_completion_claude_stream_bad_key() 
+# test_completion_claude_stream_bad_key() 
 # test_completion_replicate_stream()
 
 # def test_completion_vertexai_stream():
@@ -824,7 +768,7 @@ def ai21_completion_call_bad_key():
         if complete_response.strip() == "": 
             raise Exception("Empty response received")
         print(f"completion_response: {complete_response}")
-    except InvalidRequestError as e: 
+    except Bad as e: 
         pass
     except:
         pytest.fail(f"error occurred: {traceback.format_exc()}")
@@ -885,7 +829,7 @@ def ai21_completion_call_bad_key():
 # test on openai completion call
 def test_openai_chat_completion_call():
     try:
-        litellm.set_verbose = True
+        litellm.set_verbose = False
         response = completion(
             model="gpt-3.5-turbo", messages=messages, stream=True
         )
@@ -904,7 +848,7 @@ def test_openai_chat_completion_call():
         print(f"error occurred: {traceback.format_exc()}")
         pass
 
-# test_openai_chat_completion_call()
+test_openai_chat_completion_call()
 
 def test_openai_chat_completion_complete_response_call():
     try:
@@ -928,6 +872,7 @@ def test_openai_text_completion_call():
         start_time = time.time()
         for idx, chunk in enumerate(response):
             chunk, finished = streaming_format_tests(idx, chunk)
+            print(f"chunk: {chunk}")
             complete_response += chunk
             if finished:
                 break
@@ -938,6 +883,8 @@ def test_openai_text_completion_call():
     except:
         print(f"error occurred: {traceback.format_exc()}")
         pass
+
+# test_openai_text_completion_call()
 
 # # test on together ai completion call - starcoder
 def test_together_ai_completion_call_starcoder():
@@ -992,7 +939,7 @@ def test_together_ai_completion_call_starcoder_bad_key():
         if complete_response == "":
             raise Exception("Empty response received")
         print(f"complete response: {complete_response}")
-    except InvalidRequestError as e:
+    except BadRequestError as e:
         pass
     except:
         print(f"error occurred: {traceback.format_exc()}")

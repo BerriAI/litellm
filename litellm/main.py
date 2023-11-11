@@ -138,8 +138,10 @@ async def acompletion(*args, **kwargs):
 
     _, custom_llm_provider, _, _ = get_llm_provider(model=model, api_base=kwargs.get("api_base", None))
 
-
-    if (custom_llm_provider == "openai" or custom_llm_provider == "azure" or custom_llm_provider == "custom_openai"): # currently implemented aiohttp calls for just azure and openai, soon all. 
+    if (custom_llm_provider == "openai" 
+        or custom_llm_provider == "azure" 
+        or custom_llm_provider == "custom_openai"
+        or custom_llm_provider == "text-completion-openai"): # currently implemented aiohttp calls for just azure and openai, soon all. 
         if kwargs.get("stream", False): 
             response = completion(*args, **kwargs)
         else:
@@ -161,7 +163,7 @@ async def acompletion(*args, **kwargs):
             line
             async for line in response
         )
-    else:
+    else: 
         end_time = datetime.datetime.now()
         # [OPTIONAL] ADD TO CACHE
         if litellm.caching or litellm.caching_with_models or litellm.cache != None: # user init a cache object
@@ -596,15 +598,16 @@ def completion(
                 print_verbose=print_verbose,
                 api_key=api_key,
                 api_base=api_base,
+                acompletion=acompletion,
                 logging_obj=logging,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
                 logger_fn=logger_fn
             )
             
-            if "stream" in optional_params and optional_params["stream"] == True:
-                response = CustomStreamWrapper(model_response, model, custom_llm_provider="text-completion-openai", logging_obj=logging)
-                return response
+            # if "stream" in optional_params and optional_params["stream"] == True:
+            #     response = CustomStreamWrapper(model_response, model, custom_llm_provider="text-completion-openai", logging_obj=logging)
+            #     return response
             response = model_response
         elif (
             "replicate" in model or 

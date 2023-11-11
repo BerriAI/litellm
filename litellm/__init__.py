@@ -375,6 +375,7 @@ from .integrations import *
 from .exceptions import (
     AuthenticationError,
     InvalidRequestError,
+    BadRequestError,
     RateLimitError,
     ServiceUnavailableError,
     OpenAIError,

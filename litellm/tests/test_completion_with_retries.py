@@ -14,7 +14,7 @@ import litellm
 from litellm import completion_with_retries, completion
 from litellm import (
     AuthenticationError,
-    InvalidRequestError,
+    BadRequestError,
     RateLimitError,
     ServiceUnavailableError,
     OpenAIError,
