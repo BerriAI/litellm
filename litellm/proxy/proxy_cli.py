@@ -67,7 +67,7 @@ def is_port_in_use(port):
 @click.option('--request_timeout', default=600, type=int, help='Set timeout in seconds for completion calls') 
 @click.option('--drop_params', is_flag=True, help='Drop any unmapped params') 
 @click.option('--add_function_to_prompt', is_flag=True, help='If function passed but unsupported, pass it as prompt') 
-@click.option('--config', '-c', help='Configure Litellm')  
+@click.option('--config', '-c', default=None, help='Configure Litellm')  
 @click.option('--file', '-f', help='Path to config file')
 @click.option('--max_budget', default=None, type=float, help='Set max budget for API calls - works for hosted models like OpenAI, TogetherAI, Anthropic, etc.`') 
 @click.option('--telemetry', default=True, type=bool, help='Helps us know if people are using this feature. Turn this off by doing `--telemetry False`') 
