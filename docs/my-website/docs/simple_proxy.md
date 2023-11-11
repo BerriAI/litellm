@@ -170,7 +170,7 @@ $ litellm --model command-nightly
 - GET `/models` - available models on server
 
 
-### Using with OpenAI compatible projects
+## Using with OpenAI compatible projects
 LiteLLM allows you to set `openai.api_base` to the proxy server and use all LiteLLM supported LLMs in any OpenAI supported project
 
 <Tabs>
@@ -243,6 +243,84 @@ python gpt4_eval.py -q '../evaluation_set/flask_evaluation.jsonl'
 ```
 </TabItem>
 
+<TabItem value="mlflow" label="ML Flow Eval">
+
+MLflow provides an API `mlflow.evaluate()` to help evaluate your LLMs https://mlflow.org/docs/latest/llms/llm-evaluate/index.html
+
+## Pre Requisites
+```shell
+pip install litellm
+```
+```shell
+pip install mlflow
+```
+
+### Step 1: Start LiteLLM Proxy on the CLI
+LiteLLM allows you to create an OpenAI compatible server for all supported LLMs. [More information on litellm proxy here](https://docs.litellm.ai/docs/simple_proxy)
+
+```shell
+$ litellm --model huggingface/bigcode/starcoder
+
+#INFO: Proxy running on http://0.0.0.0:8000
+```
+
+### Step 2: Run ML Flow
+Before running the eval we will set `openai.api_base` to the litellm proxy from Step 1
+
+```python
+openai.api_base = "http://0.0.0.0:8000"
+```
+
+```python
+import openai
+import pandas as pd
+openai.api_key = "anything"             # this can be anything, we set the key on the proxy
+openai.api_base = "http://0.0.0.0:8000" # set api base to the proxy from step 1
+
+
+import mlflow
+eval_data = pd.DataFrame(
+    {
+        "inputs": [
+            "What is the largest country",
+            "What is the weather in sf?",
+        ],
+        "ground_truth": [
+            "India is a large country",
+            "It's cold in SF today"
+        ],
+    }
+)
+
+with mlflow.start_run() as run:
+    system_prompt = "Answer the following question in two sentences"
+    logged_model_info = mlflow.openai.log_model(
+        model="gpt-3.5",
+        task=openai.ChatCompletion,
+        artifact_path="model",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": "{question}"},
+        ],
+    )
+
+    # Use predefined question-answering metrics to evaluate our model.
+    results = mlflow.evaluate(
+        logged_model_info.model_uri,
+        eval_data,
+        targets="ground_truth",
+        model_type="question-answering",
+    )
+    print(f"See aggregated evaluation results below: \n{results.metrics}")
+
+    # Evaluation result for each data record is available in `results.tables`.
+    eval_table = results.tables["eval_results_table"]
+    print(f"See evaluation table below: \n{eval_table}")
+
+
+```
+</TabItem>
+
 <TabItem value="continue-dev" label="ContinueDev">
 
 Continue-Dev brings ChatGPT to VSCode. See how to [install it here](https://continue.dev/docs/quickstart).
@@ -259,6 +337,7 @@ In the [config.py](https://continue.dev/docs/reference/Models/openai) set this a
 
 Credits [@vividfog](https://github.com/jmorganca/ollama/issues/305#issuecomment-1751848077) for this tutorial. 
 </TabItem>
+
 <TabItem value="aider" label="Aider">
 
 ```shell
@@ -341,8 +420,128 @@ print(result)
 </TabItem>
 </Tabs>
 
-## Advanced
+## Proxy Configs
+The Config allows you to set the following params
 
+| Param Name           | Description                                                   |
+|----------------------|---------------------------------------------------------------|
+| `model_list`         | List of supported models on the server, with model-specific configs |
+| `litellm_settings`   | litellm Module settings, example `litellm.drop_params=True`, `litellm.set_verbose=True`, `litellm.api_base` |
+
+### Example Config
+```yaml
+model_list:
+  - model_name: zephyr-alpha
+    litellm_params: # params for litellm.completion() - https://docs.litellm.ai/docs/completion/input#input---request-body
+      model: huggingface/HuggingFaceH4/zephyr-7b-alpha
+      api_base: http://0.0.0.0:8001
+  - model_name: zephyr-beta
+    litellm_params:
+      model: huggingface/HuggingFaceH4/zephyr-7b-beta
+      api_base: https://<my-hosted-endpoint>
+
+litellm_settings:
+  drop_params: True
+  set_verbose: True
+```
+
+### Quick Start - Config 
+
+Here's how you can use multiple llms with one proxy `config.yaml`. 
+
+#### Step 1: Setup Config
+```yaml
+model_list:
+  - model_name: zephyr-alpha # the 1st model is the default on the proxy
+    litellm_params: # params for litellm.completion() - https://docs.litellm.ai/docs/completion/input#input---request-body
+      model: huggingface/HuggingFaceH4/zephyr-7b-alpha
+      api_base: http://0.0.0.0:8001
+  - model_name: gpt-4
+    litellm_params:
+      model: gpt-4
+      api_key: sk-1233
+  - model_name: claude-2
+    litellm_params:
+      model: claude-2
+      api_key: sk-claude
+    
+```
+
+#### Default Model - Config:
+The proxy uses the first model in the config as the default model - in this config the default model is `zephyr-alpha`
+
+#### Step 2: Start Proxy with config
+
+```shell
+$ litellm --config /path/to/config.yaml
+```
+
+#### Step 3: Start Proxy with config
+
+If you're repo let's you set model name, you can call the specific model by just passing in that model's name - 
+
+**Setting model name**
+```python
+import openai 
+openai.api_base = "http://0.0.0.0:8000" 
+
+completion = openai.ChatCompletion.create(model="zephyr-alpha", messages=[{"role": "user", "content": "Hello world"}])
+print(completion.choices[0].message.content)
+```
+
+**Setting API Base with model name**
+If you're repo only let's you specify api base, then you can add the model name to the api base passed in - 
+```python
+import openai 
+openai.api_base = "http://0.0.0.0:8000/openai/deployments/zephyr-alpha/chat/completions" # zephyr-alpha will be used 
+
+completion = openai.ChatCompletion.create(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hello world"}])
+print(completion.choices[0].message.content)
+```
+
+### Save Model-specific params (API Base, API Keys, Temperature, Headers etc.)
+You can use the config to save model-specific information like api_base, api_key, temperature, max_tokens, etc. 
+
+**Step 1**: Create a `config.yaml` file
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params: # params for litellm.completion() - https://docs.litellm.ai/docs/completion/input#input---request-body
+      model: azure/chatgpt-v-2 # azure/<your-deployment-name>
+      api_key: your_azure_api_key
+      api_version: your_azure_api_version
+      api_base: your_azure_api_base
+  - model_name: mistral-7b
+    litellm_params:
+      model: ollama/mistral
+      api_base: your_ollama_api_base
+      headers: {
+        "HTTP-Referer": "litellm.ai",  
+        "X-Title": "LiteLLM Server"
+      }
+```
+
+**Step 2**: Start server with config
+
+```shell
+$ litellm --config /path/to/config.yaml
+```
+### Model Alias 
+
+Set a model alias for your deployments. 
+
+In the `config.yaml` the model_name parameter is the user-facing name to use for your deployment. 
+
+E.g.: If we want to save a Huggingface TGI Mistral-7b deployment, as 'mistral-7b' for our users, we might save it as: 
+
+```yaml
+model_list:
+  - model_name: mistral-7b # ALIAS
+    litellm_params:
+      model: huggingface/mistralai/Mistral-7B-Instruct-v0.1 # ACTUAL NAME
+      api_key: your_huggingface_api_key # [OPTIONAL] if deployed on huggingface inference endpoints
+      api_base: your_api_base # url where model is deployed 
+```
 
 ### Set Custom Prompt Templates
 
@@ -369,88 +568,6 @@ model_list:
 
 ```shell
 $ litellm --config /path/to/config.yaml
-```
-
-### Using Multiple Models 
-
-If you have 1 model running on a local GPU and another that's hosted (e.g. on Runpod), you can call both via the same litellm server by listing them in your `config.yaml`. 
-
-```yaml
-model_list:
-  - model_name: zephyr-alpha
-    litellm_params: # params for litellm.completion() - https://docs.litellm.ai/docs/completion/input#input---request-body
-      model: huggingface/HuggingFaceH4/zephyr-7b-alpha
-      api_base: http://0.0.0.0:8001
-  - model_name: zephyr-beta
-    litellm_params:
-      model: huggingface/HuggingFaceH4/zephyr-7b-beta
-      api_base: https://<my-hosted-endpoint>
-```
-
-```shell
-$ litellm --config /path/to/config.yaml
-```
-
-### Call specific model
-
-If you're repo let's you set model name, you can call the specific model by just passing in that model's name - 
-
-```python
-import openai 
-openai.api_base = "http://0.0.0.0:8000" 
-
-completion = openai.ChatCompletion.create(model="zephyr-alpha", messages=[{"role": "user", "content": "Hello world"}])
-print(completion.choices[0].message.content)
-```
-
-If you're repo only let's you specify api base, then you can add the model name to the api base passed in - 
-
-```python
-import openai 
-openai.api_base = "http://0.0.0.0:8000/openai/deployments/zephyr-alpha/chat/completions" # zephyr-alpha will be used 
-
-completion = openai.ChatCompletion.create(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hello world"}])
-print(completion.choices[0].message.content)
-```
-
-### Save Model-specific params (API Base, API Keys, Temperature, etc.)
-Use the [router_config_template.yaml](https://github.com/BerriAI/litellm/blob/main/router_config_template.yaml) to save model-specific information like api_base, api_key, temperature, max_tokens, etc. 
-
-**Step 1**: Create a `config.yaml` file
-```shell
-model_list:
-  - model_name: gpt-3.5-turbo
-    litellm_params: # params for litellm.completion() - https://docs.litellm.ai/docs/completion/input#input---request-body
-      model: azure/chatgpt-v-2 # azure/<your-deployment-name>
-      api_key: your_azure_api_key
-      api_version: your_azure_api_version
-      api_base: your_azure_api_base
-  - model_name: mistral-7b
-    litellm_params:
-      model: ollama/mistral
-      api_base: your_ollama_api_base
-```
-
-**Step 2**: Start server with config
-
-```shell
-$ litellm --config /path/to/config.yaml
-```
-### Model Alias 
-
-Set a model alias for your deployments. 
-
-In the `config.yaml` the model_name parameter is the user-facing name to use for your deployment. 
-
-E.g.: If we want to save a Huggingface TGI Mistral-7b deployment, as 'mistral-7b' for our users, we might save it as: 
-
-```yaml
-model_list:
-  - model_name: mistral-7b # ALIAS
-    litellm_params:
-      model: huggingface/mistralai/Mistral-7B-Instruct-v0.1 # ACTUAL NAME
-      api_key: your_huggingface_api_key # [OPTIONAL] if deployed on huggingface inference endpoints
-      api_base: your_api_base # url where model is deployed 
 ```
 
 ## Proxy CLI Arguments
@@ -575,7 +692,7 @@ model_list:
    - Configure Litellm by providing a configuration file path.
    - **Usage:** 
      ```shell
-     litellm --config path/to/config.json
+     litellm --config path/to/config.yaml
      ```
 
 #### --telemetry

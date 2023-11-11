@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Union, Literal
 import random, threading, time
 import litellm
 import logging
@@ -29,12 +29,16 @@ class Router:
                  redis_host: Optional[str] = None,
                  redis_port: Optional[int] = None,
                  redis_password: Optional[str] = None,
-                 cache_responses: bool = False) -> None:
+                 cache_responses: bool = False,
+                 routing_strategy: Literal["simple-shuffle", "least-busy"] = "simple-shuffle") -> None:
         if model_list:
             self.set_model_list(model_list)
-            self.healthy_deployments: List = []
-        ### HEALTH CHECK THREAD ### - commenting out as further testing required
-        self._start_health_check_thread()
+            self.healthy_deployments: List = self.model_list
+        
+        self.routing_strategy = routing_strategy
+        ### HEALTH CHECK THREAD ###
+        if self.routing_strategy == "least-busy":
+            self._start_health_check_thread()
 
         ### CACHING ###
         if redis_host is not None and redis_port is not None and redis_password is not None:
@@ -104,19 +108,21 @@ class Router:
         """
         Returns the deployment with the shortest queue 
         """
-        ### COMMENTING OUT AS IT NEEDS FURTHER TESTING
         logging.debug(f"self.healthy_deployments: {self.healthy_deployments}")
-        if len(self.healthy_deployments) > 0:
-            for item in self.healthy_deployments:
-                if item[0]["model_name"] == model: # first one in queue will be the one with the most availability
-                    return item
-        else: 
+        if self.routing_strategy == "least-busy":
+            if len(self.healthy_deployments) > 0:
+                for item in self.healthy_deployments:
+                    if item[0]["model_name"] == model: # first one in queue will be the one with the most availability
+                        return item[0]
+            else: 
+                raise ValueError("No models available.")
+        elif self.routing_strategy == "simple-shuffle": 
             potential_deployments = []
             for item in self.model_list:
                 if item["model_name"] == model:
                     potential_deployments.append(item)
             item = random.choice(potential_deployments)
-            return item
+            return item or item[0]
         
         raise ValueError("No models available.")
 

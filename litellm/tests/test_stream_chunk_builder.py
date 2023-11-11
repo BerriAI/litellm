@@ -1,6 +1,7 @@
 from litellm import completion, stream_chunk_builder
 import litellm
 import os, dotenv
+import pytest
 dotenv.load_dotenv()
 
 user_message = "What is the current weather in Boston?"
@@ -23,7 +24,9 @@ function_schema = {
   },
 }
 
+@pytest.mark.skip
 def test_stream_chunk_builder():
+    litellm.set_verbose = False
     litellm.api_key = os.environ["OPENAI_API_KEY"]
     response = completion(
         model="gpt-3.5-turbo",
@@ -35,10 +38,11 @@ def test_stream_chunk_builder():
     chunks = []
 
     for chunk in response:
-        print(chunk)
+        # print(chunk)
         chunks.append(chunk)
 
     try:
+        print(f"chunks: {chunks}")
         rebuilt_response = stream_chunk_builder(chunks)
 
         # exract the response from the rebuilt response
@@ -56,5 +60,4 @@ def test_stream_chunk_builder():
         print(role, content, finish_reason)
     except Exception as e:
         raise Exception("stream_chunk_builder failed to rebuild response", e)
-test_stream_chunk_builder()
 

@@ -79,7 +79,8 @@ def generate_feedback_box():
         "\033[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new\033[0m"
     )
     print()
-    print("\033[1;34mDocs: https://docs.litellm.ai/docs/proxy_server\033[0m")
+    print("\033[1;34mDocs: https://docs.litellm.ai/docs/simple_proxy\033[0m\n")
+    print(f"\033[32mLiteLLM: Test your local endpoint with: \"litellm --test\" [In a new terminal tab]\033[0m\n")
     print()
 
 import litellm
@@ -198,21 +199,19 @@ def save_params_to_config(data: dict):
 
 def load_router_config(router: Optional[litellm.Router], config_file_path: str):
     config = {}
-    server_settings  = {} 
+    server_settings: dict = {} 
     try: 
         if os.path.exists(config_file_path):
             with open(config_file_path, 'r') as file:
                 config = yaml.safe_load(file)
         else:
             pass
-    except:
+    except Exception as e:
+        raise Exception(f"Exception while reading Config: {e}")
+
         pass
-
-    ## SERVER SETTINGS (e.g. default completion model = 'ollama/mistral')
-    _server_settings = config.get("server_settings", None)
-    if _server_settings: 
-        server_settings = _server_settings
-
+    
+    print_verbose(f"Configs passed in, loaded config YAML\n{config}")
     ## LITELLM MODULE SETTINGS (e.g. litellm.drop_params=True,..)
     litellm_settings = config.get('litellm_settings', None)
     if litellm_settings: 
@@ -221,9 +220,13 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
 
     ## MODEL LIST
     model_list = config.get('model_list', None)
-    if model_list: 
+    if model_list:
         router = litellm.Router(model_list=model_list)
-    
+        print(f"\033[32mLiteLLM: Proxy initialized with Config, Set models:\033[0m")
+        for model in model_list:
+            print(f"\033[32m    {model.get('model_name', '')}\033[0m")
+        print()
+
     ## ENVIRONMENT VARIABLES
     environment_variables = config.get('environment_variables', None)
     if environment_variables: 
@@ -392,7 +395,7 @@ def initialize(
     if max_budget:  # litellm-specific param
         litellm.max_budget = max_budget
         dynamic_config["general"]["max_budget"] = max_budget
-    if debug:  # litellm-specific param
+    if debug==True:  # litellm-specific param
         litellm.set_verbose = True
     if experimental: 
         pass
@@ -415,7 +418,7 @@ def data_generator(response):
 def litellm_completion(*args, **kwargs):
     global user_temperature, user_request_timeout, user_max_tokens, user_api_base
     call_type = kwargs.pop("call_type")
-    # override with user settings
+    # override with user settings, these are params passed via cli
     if user_temperature: 
         kwargs["temperature"] = user_temperature
     if user_request_timeout:
@@ -425,12 +428,20 @@ def litellm_completion(*args, **kwargs):
     if user_api_base: 
         kwargs["api_base"] = user_api_base
     ## CHECK CONFIG ## 
-    if llm_model_list and kwargs["model"] in [m["model_name"] for m in llm_model_list]:
-        for m in llm_model_list: 
-            if kwargs["model"] == m["model_name"]: 
-                for key, value in m["litellm_params"].items(): 
-                    kwargs[key] = value
-                break
+    if llm_model_list != None:
+        llm_models = [m["model_name"] for m in llm_model_list]
+        if kwargs["model"] in llm_models:
+            for m in llm_model_list: 
+                if kwargs["model"] == m["model_name"]: # if user has specified a config, this will use the config
+                    for key, value in m["litellm_params"].items(): 
+                        kwargs[key] = value
+                    break
+        else:
+            print_verbose("user sent model not in config, using default config model")
+            default_model = llm_model_list[0]
+            litellm_params = default_model.get('litellm_params', None)
+            for key, value in litellm_params.items():
+                kwargs[key] = value
     if call_type == "chat_completion":
         response = litellm.completion(*args, **kwargs)
     elif call_type == "text_completion":
@@ -445,7 +456,7 @@ def startup_event():
     import json
     worker_config = json.loads(os.getenv("WORKER_CONFIG"))
     initialize(**worker_config)
-    print(f"\033[32mWorker Initialized\033[0m\n")
+    # print(f"\033[32mWorker Initialized\033[0m\n")
 
 #### API ENDPOINTS ####
 @router.get("/v1/models")

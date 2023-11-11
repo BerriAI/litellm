@@ -1,11 +1,9 @@
 from typing import Optional, Union
 import types, requests
 from .base import BaseLLM
-from litellm.utils import ModelResponse, Choices, Message
+from litellm.utils import ModelResponse, Choices, Message, CustomStreamWrapper, convert_to_model_response_object
 from typing import Callable, Optional
-
-# This file just has the openai config classes. 
-# For implementation check out completion() in main.py
+import aiohttp
 
 class OpenAIError(Exception):
     def __init__(self, status_code, message):
@@ -159,47 +157,26 @@ class OpenAIChatCompletion(BaseLLM):
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         return headers
-    
-    def convert_to_model_response_object(self, response_object: Optional[dict]=None, model_response_object: Optional[ModelResponse]=None):
-        try: 
-            if response_object is None or model_response_object is None:
-                raise OpenAIError(status_code=500, message="Error in response object format")
-            choice_list=[]
-            for idx, choice in enumerate(response_object["choices"]): 
-                message = Message(content=choice["message"]["content"], role=choice["message"]["role"])
-                choice = Choices(finish_reason=choice["finish_reason"], index=idx, message=message)
-                choice_list.append(choice)
-            model_response_object.choices = choice_list
-
-            if "usage" in response_object: 
-                model_response_object.usage = response_object["usage"]
-            
-            if "id" in response_object: 
-                model_response_object.id = response_object["id"]
-            
-            if "model" in response_object: 
-                model_response_object.model = response_object["model"]
-            return model_response_object
-        except: 
-            OpenAIError(status_code=500, message="Invalid response object.")
 
     def completion(self, 
-               model: Optional[str]=None,
-               messages: Optional[list]=None,
-               model_response: Optional[ModelResponse]=None,
-               print_verbose: Optional[Callable]=None,
-               api_key: Optional[str]=None,
-               api_base: Optional[str]=None,
-               logging_obj=None,
-               optional_params=None,
-               litellm_params=None,
-               logger_fn=None,
-               headers: Optional[dict]=None):
+                model_response: ModelResponse,
+                model: Optional[str]=None,
+                messages: Optional[list]=None,
+                print_verbose: Optional[Callable]=None,
+                api_key: Optional[str]=None,
+                api_base: Optional[str]=None,
+                acompletion: bool = False,
+                logging_obj=None,
+                optional_params=None,
+                litellm_params=None,
+                logger_fn=None,
+                headers: Optional[dict]=None):
         super().completion()
         exception_mapping_worked = False
         try: 
             if headers is None:
                 headers = self.validate_environment(api_key=api_key)
+            api_base = f"{api_base}/chat/completions"
             if model is None or messages is None:
                 raise OpenAIError(status_code=422, message=f"Missing model or messages")
             
@@ -214,13 +191,18 @@ class OpenAIChatCompletion(BaseLLM):
                 logging_obj.pre_call(
                     input=messages,
                     api_key=api_key,
-                    additional_args={"headers": headers, "api_base": api_base},
+                    additional_args={"headers": headers, "api_base": api_base, "acompletion": acompletion, "data": data},
                 )
                 
                 try: 
-                    if "stream" in optional_params and optional_params["stream"] == True:
+                    if acompletion is True: 
+                        if optional_params.get("stream", False):
+                            return self.async_streaming(logging_obj=logging_obj, api_base=api_base, data=data, headers=headers, model_response=model_response, model=model)
+                        else:
+                            return self.acompletion(api_base=api_base, data=data, headers=headers, model_response=model_response)
+                    elif "stream" in optional_params and optional_params["stream"] == True:
                         response = self._client_session.post(
-                            url=f"{api_base}/chat/completions",
+                            url=api_base,
                             json=data,
                             headers=headers,
                             stream=optional_params["stream"]
@@ -232,7 +214,7 @@ class OpenAIChatCompletion(BaseLLM):
                         return response.iter_lines()
                     else:
                         response = self._client_session.post(
-                            url=f"{api_base}/chat/completions",
+                            url=api_base,
                             json=data,
                             headers=headers,
                         )
@@ -240,7 +222,7 @@ class OpenAIChatCompletion(BaseLLM):
                             raise OpenAIError(status_code=response.status_code, message=response.text)
                             
                         ## RESPONSE OBJECT
-                        return self.convert_to_model_response_object(response_object=response.json(), model_response_object=model_response)
+                        return convert_to_model_response_object(response_object=response.json(), model_response_object=model_response)
                 except Exception as e:
                     if "Conversation roles must alternate user/assistant" in str(e) or "user and assistant roles should be alternating" in str(e): 
                         # reformat messages to ensure user/assistant are alternating, if there's either 2 consecutive 'user' messages or 2 consecutive 'assistant' message, add a blank 'user' or 'assistant' message to ensure compatibility
@@ -270,6 +252,36 @@ class OpenAIChatCompletion(BaseLLM):
                 import traceback
                 raise OpenAIError(status_code=500, message=traceback.format_exc())
     
+    async def acompletion(self, 
+                          api_base: str, 
+                          data: dict, headers: dict, 
+                          model_response: ModelResponse): 
+        async with aiohttp.ClientSession() as session:
+            async with session.post(api_base, json=data, headers=headers, ssl=False) as response:
+                response_json = await response.json()
+                if response.status != 200:
+                    raise OpenAIError(status_code=response.status, message=response.text)
+                
+
+                ## RESPONSE OBJECT
+                return convert_to_model_response_object(response_object=response_json, model_response_object=model_response)
+
+    async def async_streaming(self, 
+                          logging_obj,
+                          api_base: str, 
+                          data: dict, headers: dict, 
+                          model_response: ModelResponse, 
+                          model: str):
+        async with aiohttp.ClientSession() as session:
+            async with session.post(api_base, json=data, headers=headers, ssl=False) as response:
+                # Check if the request was successful (status code 200)
+                if response.status != 200:
+                    raise OpenAIError(status_code=response.status, message=await response.text())
+
+                streamwrapper = CustomStreamWrapper(completion_stream=response, model=model, custom_llm_provider="openai",logging_obj=logging_obj)
+                async for transformed_chunk in streamwrapper:
+                    yield transformed_chunk
+
     def embedding(self,
                 model: str,
                 input: list,

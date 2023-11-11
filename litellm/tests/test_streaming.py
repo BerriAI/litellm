@@ -15,6 +15,7 @@ from litellm import completion, acompletion, AuthenticationError, InvalidRequest
 
 litellm.logging = False
 litellm.set_verbose = False
+litellm.cache = None
 
 score = 0
 
@@ -226,6 +227,7 @@ def streaming_format_tests(idx, chunk):
 
 def test_completion_cohere_stream_bad_key():
     try:
+        litellm.cache = None
         api_key = "bad-key"
         messages = [
             {"role": "system", "content": "You are a helpful assistant."},
@@ -518,6 +520,7 @@ def test_completion_palm_stream():
 
 def test_completion_claude_stream_bad_key():
     try:
+        litellm.cache = None
         api_key = "bad-key"
         messages = [
             {"role": "system", "content": "You are a helpful assistant."},
@@ -538,14 +541,15 @@ def test_completion_claude_stream_bad_key():
             complete_response += chunk
         if complete_response.strip() == "": 
             raise Exception("Empty response received")
-        print(f"completion_response: {complete_response}")
+        print(f"1234completion_response: {complete_response}")
+        raise Exception("Auth error not raised")
     except AuthenticationError as e:
-        pass
+        print("Auth Error raised")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
 
-# test_completion_claude_stream_bad_key() 
+test_completion_claude_stream_bad_key() 
 # test_completion_replicate_stream()
 
 # def test_completion_vertexai_stream():
@@ -902,6 +906,17 @@ def test_openai_chat_completion_call():
 
 # test_openai_chat_completion_call()
 
+def test_openai_chat_completion_complete_response_call():
+    try:
+        complete_response = completion(
+            model="gpt-3.5-turbo", messages=messages, stream=True, complete_response=True
+        )
+        print(f"complete response: {complete_response}")
+    except:
+        print(f"error occurred: {traceback.format_exc()}")
+        pass
+
+# test_openai_chat_completion_complete_response_call()
 
 def test_openai_text_completion_call():
     try:

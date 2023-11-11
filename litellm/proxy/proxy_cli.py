@@ -66,34 +66,25 @@ def is_port_in_use(port):
 @click.option('--max_tokens', default=None, type=int, help='Set max tokens for the model') 
 @click.option('--request_timeout', default=600, type=int, help='Set timeout in seconds for completion calls') 
 @click.option('--drop_params', is_flag=True, help='Drop any unmapped params') 
-@click.option('--create_proxy', is_flag=True, help='Creates a local OpenAI-compatible server template') 
 @click.option('--add_function_to_prompt', is_flag=True, help='If function passed but unsupported, pass it as prompt') 
-@click.option('--config', '-c', help='Configure Litellm')  
+@click.option('--config', '-c', default=None, help='Configure Litellm')  
 @click.option('--file', '-f', help='Path to config file')
 @click.option('--max_budget', default=None, type=float, help='Set max budget for API calls - works for hosted models like OpenAI, TogetherAI, Anthropic, etc.`') 
 @click.option('--telemetry', default=True, type=bool, help='Helps us know if people are using this feature. Turn this off by doing `--telemetry False`') 
 @click.option('--logs', flag_value=False, type=int, help='Gets the "n" most recent logs. By default gets most recent log.') 
 @click.option('--test', flag_value=True, help='proxy chat completions url to make a test request to')
 @click.option('--local', is_flag=True, default=False, help='for local debugging')
-def run_server(host, port, api_base, api_version, model, alias, add_key, headers, save, debug, temperature, max_tokens, request_timeout, drop_params, create_proxy, add_function_to_prompt, config, file, max_budget, telemetry, logs, test, local, num_workers):
+def run_server(host, port, api_base, api_version, model, alias, add_key, headers, save, debug, temperature, max_tokens, request_timeout, drop_params, add_function_to_prompt, config, file, max_budget, telemetry, logs, test, local, num_workers):
     global feature_telemetry
     args = locals()
     if local:
         from proxy_server import app, save_worker_config, usage_telemetry, add_keys_to_config
-        debug = True
     else:
         try:
             from .proxy_server import app, save_worker_config, usage_telemetry, add_keys_to_config
         except ImportError as e: 
             from proxy_server import app, save_worker_config, usage_telemetry, add_keys_to_config
     feature_telemetry = usage_telemetry
-    if create_proxy == True: 
-        repo_url = 'https://github.com/BerriAI/litellm'
-        subfolder = 'litellm/proxy' 
-        destination = os.path.join(os.getcwd(), 'litellm-proxy')
-
-        clone_subfolder(repo_url, subfolder, destination)
-        return
     if logs is not None:
         if logs == 0: # default to 1
             logs = 1
@@ -167,7 +158,6 @@ def run_server(host, port, api_base, api_version, model, alias, add_key, headers
             import uvicorn
         except:
             raise ImportError("Uvicorn needs to be imported. Run - `pip install uvicorn`")
-        print(f"\033[32mLiteLLM: Test your local endpoint with: \"litellm --test\" [In a new terminal tab]\033[0m\n")
         if port == 8000 and is_port_in_use(port):
             port = random.randint(1024, 49152)
         uvicorn.run("litellm.proxy.proxy_server:app", host=host, port=port, workers=num_workers)
