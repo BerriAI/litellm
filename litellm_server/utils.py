@@ -43,16 +43,17 @@ def set_callbacks():
     
     ## CACHING 
     ### REDIS
-    if len(os.getenv("REDIS_HOST", "")) >  0 and len(os.getenv("REDIS_PORT", "")) > 0 and len(os.getenv("REDIS_PASSWORD", "")) > 0: 
-        from litellm.caching import Cache
-        litellm.cache = Cache(type="redis", host=os.getenv("REDIS_HOST"), port=os.getenv("REDIS_PORT"), password=os.getenv("REDIS_PASSWORD"))
-        print("\033[92mLiteLLM: Switched on Redis caching\033[0m")
+    # if len(os.getenv("REDIS_HOST", "")) >  0 and len(os.getenv("REDIS_PORT", "")) > 0 and len(os.getenv("REDIS_PASSWORD", "")) > 0: 
+    #     print(f"redis host: {os.getenv('REDIS_HOST')}; redis port: {os.getenv('REDIS_PORT')}; password: {os.getenv('REDIS_PASSWORD')}")
+    #     from litellm.caching import Cache
+    #     litellm.cache = Cache(type="redis", host=os.getenv("REDIS_HOST"), port=os.getenv("REDIS_PORT"), password=os.getenv("REDIS_PASSWORD"))
+    #     print("\033[92mLiteLLM: Switched on Redis caching\033[0m")
 
 
 
 def load_router_config(router: Optional[litellm.Router], config_file_path: Optional[str]='/app/config.yaml'):
     config = {}
-
+    server_settings  = {} 
     try: 
         if os.path.exists(config_file_path):
             with open(config_file_path, 'r') as file:
@@ -61,6 +62,11 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: Optio
             pass
     except:
         pass
+
+    ## SERVER SETTINGS (e.g. default completion model = 'ollama/mistral')
+    server_settings = config.get("server_settings", None)
+    if server_settings: 
+        server_settings = server_settings
 
     ## LITELLM MODULE SETTINGS (e.g. litellm.drop_params=True,..)
     litellm_settings = config.get('litellm_settings', None)
@@ -79,4 +85,4 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: Optio
         for key, value in environment_variables.items(): 
             os.environ[key] = value
 
-    return router, model_list
+    return router, model_list, server_settings

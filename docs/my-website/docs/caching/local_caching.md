@@ -6,7 +6,6 @@ liteLLM implements exact match caching and supports the following Caching:
 * In-Memory Caching [Default]
 * Redis Caching Local
 * Redis Caching Hosted
-* GPTCache 
 
 ## Quick Start Usage - Completion
 Caching - cache

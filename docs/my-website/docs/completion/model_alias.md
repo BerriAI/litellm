@@ -45,14 +45,9 @@ litellm.model_alias_map = model_alias_map
 
 messages = [{ "content": "Hello, how are you?","role": "user"}]
 
-# openai call
+# call "gpt-3.5-turbo-16k"
 response = completion(model="GPT-3.5", messages=messages)
 
-# replicate call
+# call replicate/llama-2-70b-chat:2796ee9483c3fd7aa2e171d38f4ca1...
 response = completion("llama2", messages)
 ```
-
-
-# no-code
-
-If you use litellm client, you can also do this without going into code. [Learn more]("https://docs.litellm.ai/docs/debugging/hosted_debugging")

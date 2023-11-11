@@ -6,8 +6,10 @@ import TabItem from '@theme/TabItem';
 A fast, and lightweight OpenAI-compatible server to call 100+ LLM APIs. 
 
 :::info
-This is deprecated. Support for the CLI tool will be removed in our next MAJOR release - https://github.com/BerriAI/litellm/discussions/648.
-::: 
+
+Docs outdated. New docs 👉 [here](./simple_proxy.md)
+
+:::
 
 ## Usage 
 ```shell
@@ -133,32 +135,6 @@ $ litellm --model command-nightly
 </TabItem>
 
 </Tabs>
-
-[**Jump to Code**](https://github.com/BerriAI/litellm/blob/fef4146396d5d87006259e00095a62e3900d6bb4/litellm/proxy.py#L36)
-
-## Docker
-
-Here's how to use our Docker image to go to production with OpenAI Proxy Server
-
-```shell
-git clone https://github.com/BerriAI/litellm.git
-```
-
-Add your API keys / LLM configs to `template_secrets.toml`.
-```shell
-[keys]
-OPENAI_API_KEY="sk-..."
-COHERE_API_KEY="Wa-..."
-```
-
-[All Configs](https://github.com/BerriAI/litellm/blob/main/secrets_template.toml)
-
-Run Docker image: 
-```shell
-docker build -t litellm . && docker run -p 8000:8000 litellm
-
-## INFO: OpenAI Proxy server running on http://0.0.0.0:8000
-```
 
 ### Tutorial: Use with Multiple LLMs + LibreChat/Chatbot-UI/Auto-Gen/ChatDev/Langroid,etc. 
 <Tabs>
@@ -816,49 +792,6 @@ litellm --model ollama/llama2 \
   --temperature 0.5
 
 # OpenAI-compatible server running on http://0.0.0.0:8000
-```
-
-**Across restarts**:  
-Create a file called `litellm_config.toml` and paste this in there:
-
-```shell
-[model."ollama/llama2"] # run via `litellm --model ollama/llama2`
-max_tokens = 250 # set max tokens for the model 
-temperature = 0.5 # set temperature for the model 
-api_base = "http://localhost:11434" # set a custom api base for the model
-```
-
-&nbsp;   
-
-Save it to the proxy with: 
-```shell
-$ litellm --config -f ./litellm_config.toml 
-```
-LiteLLM will save a copy of this file in it's package, so it can persist these settings across restarts.
-
-
-[**Complete Config File**](https://github.com/BerriAI/litellm/blob/main/secrets_template.toml)
-[**🔥 [Tutorial] modify a model prompt on the proxy**](./tutorials/model_config_proxy.md)
-
-
-### Track Costs
-By default litellm proxy writes cost logs to litellm/proxy/costs.json
-
-How can the proxy be better? Let us know [here](https://github.com/BerriAI/litellm/issues)
-```json
-{
-  "Oct-12-2023": {
-    "claude-2": {
-      "cost": 0.02365918,
-      "num_requests": 1
-    }
-  }
-}
-```
-
-You can view costs on the cli using 
-```shell
-litellm --cost
 ```
 
 ### Performance

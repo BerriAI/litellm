@@ -1,0 +1,17 @@
+model_list:
+  - model_name: zephyr-alpha
+    litellm_params: # params for litellm.completion() - https://docs.litellm.ai/docs/completion/input#input---request-body
+      model: huggingface/HuggingFaceH4/zephyr-7b-alpha
+      max_tokens: 20
+      temperature: 0
+  - model_name: gpt-4
+    litellm_params: # params for litellm.completion() - https://docs.litellm.ai/docs/completion/input#input---request-body
+      model: gpt-4
+      api_key: sk-123
+  - model_name: mistral-7b
+    litellm_params: # params for litellm.completion() - https://docs.litellm.ai/docs/completion/input#input---request-body
+      model: deepinfra/mistralai/Mistral-7B-Instruct-v0.1
+      api_key: sk-1234
+
+litellm_settings:
+  drop_params: True

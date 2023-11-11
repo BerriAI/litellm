@@ -29,10 +29,52 @@ os.environ["AWS_SECRET_ACCESS_KEY"] = ""
 os.environ["AWS_REGION_NAME"] = ""
 
 response = completion(
-            model="anthropic.claude-instant-v1", 
-            messages=[{ "content": "Hello, how are you?","role": "user"}]
+  model="anthropic.claude-instant-v1", 
+  messages=[{ "content": "Hello, how are you?","role": "user"}]
 )
 ```
+
+## Usage - Streaming
+```python
+import os 
+from litellm import completion
+
+os.environ["AWS_ACCESS_KEY_ID"] = ""
+os.environ["AWS_SECRET_ACCESS_KEY"] = ""
+os.environ["AWS_REGION_NAME"] = ""
+
+response = completion(
+  model="anthropic.claude-instant-v1", 
+  messages=[{ "content": "Hello, how are you?","role": "user"}],
+  stream=True
+)
+for chunk in response:
+  print(chunk)
+```
+
+#### Example Streaming Output Chunk
+```json
+{
+  "choices": [
+    {
+      "finish_reason": null,
+      "index": 0,
+      "delta": {
+        "content": "ase can appeal the case to a higher federal court. If a higher federal court rules in a way that conflicts with a ruling from a lower federal court or conflicts with a ruling from a higher state court, the parties involved in the case can appeal the case to the Supreme Court. In order to appeal a case to the Sup"
+      }
+    }
+  ],
+  "created": null,
+  "model": "anthropic.claude-instant-v1",
+  "usage": {
+    "prompt_tokens": null,
+    "completion_tokens": null,
+    "total_tokens": null
+  }
+}
+```
+
+## Boto3 - Authentication
 
 ### Passing credentials as parameters - Completion()
 Pass AWS credentials as parameters to litellm.completion
@@ -93,8 +135,8 @@ response = completion(
 ## Supported AWS Bedrock Models
 Here's an example of using a bedrock model with LiteLLM 
 
-| Model Name               | Command                                                          | Environment Variables                                              |
-|--------------------------|------------------------------------------------------------------|---------------------------------------------------------------------|
+| Model Name               | Command                                                          |
+|--------------------------|------------------------------------------------------------------|
 | Anthropic Claude-V2      | `completion(model='anthropic.claude-v2', messages=messages)`   | `os.environ['ANTHROPIC_ACCESS_KEY_ID']`, `os.environ['ANTHROPIC_SECRET_ACCESS_KEY']`           |
 | Anthropic Claude-Instant V1 | `completion(model='anthropic.claude-instant-v1', messages=messages)` | `os.environ['ANTHROPIC_ACCESS_KEY_ID']`, `os.environ['ANTHROPIC_SECRET_ACCESS_KEY']`           |
 | Anthropic Claude-V1      | `completion(model='anthropic.claude-v1', messages=messages)`   | `os.environ['ANTHROPIC_ACCESS_KEY_ID']`, `os.environ['ANTHROPIC_SECRET_ACCESS_KEY']`           |
@@ -104,45 +146,29 @@ Here's an example of using a bedrock model with LiteLLM
 | AI21 J2-Mid             | `completion(model='ai21.j2-mid-v1', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']` |
 | AI21 J2-Ultra              | `completion(model='ai21.j2-ultra-v1', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']` |
 
+## Bedrock Embedding
 
-## Streaming
-
+### API keys
+This can be set as env variables or passed as **params to litellm.embedding()**
 ```python
-import os 
-from litellm import completion
+import os
+os.environ["AWS_ACCESS_KEY_ID"] = ""        # Access key
+os.environ["AWS_SECRET_ACCESS_KEY"] = ""    # Secret access key
+os.environ["AWS_REGION_NAME"] = ""           # us-east-1, us-east-2, us-west-1, us-west-2
+```
 
-os.environ["AWS_ACCESS_KEY_ID"] = ""
-os.environ["AWS_SECRET_ACCESS_KEY"] = ""
-os.environ["AWS_REGION_NAME"] = ""
-
-response = completion(
-            model="bedrock/anthropic.claude-instant-v1", 
-            messages=[{ "content": "Hello, how are you?","role": "user"}],
-            stream=True
+### Usage
+```python
+from litellm import embedding
+response = embedding(
+    model="amazon.titan-embed-text-v1",
+    input=["good morning from litellm"],
 )
-
-for chunk in response:
-    print(chunk)
+print(response)
 ```
 
-### Example Streaming Output Chunk
-```json
-{
-  "choices": [
-    {
-      "finish_reason": null,
-      "index": 0,
-      "delta": {
-        "content": "ase can appeal the case to a higher federal court. If a higher federal court rules in a way that conflicts with a ruling from a lower federal court or conflicts with a ruling from a higher state court, the parties involved in the case can appeal the case to the Supreme Court. In order to appeal a case to the Sup"
-      }
-    }
-  ],
-  "created": null,
-  "model": "amazon.titan-tg1-large",
-  "usage": {
-    "prompt_tokens": null,
-    "completion_tokens": null,
-    "total_tokens": null
-  }
-}
-```
+## Supported AWS Bedrock Embedding Models
+
+| Model Name           | Function Call                               |
+|----------------------|---------------------------------------------|
+| Titan Embeddings - G1 | `embedding(model="amazon.titan-embed-text-v1", input=input)` |

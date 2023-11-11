@@ -89,8 +89,15 @@ class _LoopWrapper(Thread):
         self.loop = asyncio.new_event_loop()
 
     def run(self) -> None:
-        self.loop.run_forever()
-        self.loop.call_soon_threadsafe(self.loop.close)
+        try:
+            self.loop.run_forever()
+            self.loop.call_soon_threadsafe(self.loop.close)
+        except Exception as e:
+            # Log exception here
+            pass
+        finally:
+            self.loop.close()
+            asyncio.set_event_loop(None)
 
     def stop_loop(self):
         for task in asyncio.all_tasks(self.loop):
