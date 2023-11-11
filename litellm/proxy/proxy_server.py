@@ -205,11 +205,9 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
             with open(config_file_path, 'r') as file:
                 config = yaml.safe_load(file)
         else:
-            pass
+            raise Exception(f"Path to config does not exist, 'os.path.exists({config_file_path})' returned False")
     except Exception as e:
         raise Exception(f"Exception while reading Config: {e}")
-
-        pass
     
     print_verbose(f"Configs passed in, loaded config YAML\n{config}")
     ## LITELLM MODULE SETTINGS (e.g. litellm.drop_params=True,..)
