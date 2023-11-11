@@ -50,7 +50,7 @@ os.environ["OPENAI_API_BASE"] = "openaiai-api-base"     # OPTIONAL
 
 These also support the `OPENAI_API_BASE` environment variable, which can be used to specify a custom API endpoint.
 
-## OpenAI Vision Models
+## OpenAI Vision Models 
 | Model Name            | Function Call                                                   |
 |-----------------------|-----------------------------------------------------------------|
 | gpt-4-vision-preview    | `response = completion(model="gpt-4-vision-preview", messages=messages)` |
