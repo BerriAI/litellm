@@ -34,6 +34,10 @@ LiteLLM manages
 
 # Usage ([**Docs**](https://docs.litellm.ai/docs/))
 
+> [!IMPORTANT]
+> LiteLLM v1.0.0 is being launched to require `openai>=1.0.0`. Track this [here](https://github.com/BerriAI/litellm/issues/774)
+
+
 <a target="_blank" href="https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/liteLLM_Getting_Started.ipynb">
   <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
 </a>
