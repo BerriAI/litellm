@@ -207,7 +207,7 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
         else:
             pass
     except Exception as e:
-        print_verbose(f"Exception while reading Config: {e}")
+        raise Exception(f"Exception while reading Config: {e}")
 
         pass
     
