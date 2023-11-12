@@ -2,7 +2,7 @@ import os, types, traceback
 import json
 from enum import Enum
 import requests
-import time
+import time, httpx
 from typing import Callable, Optional
 from litellm.utils import ModelResponse, Choices, Message
 import litellm
@@ -11,6 +11,8 @@ class AI21Error(Exception):
     def __init__(self, status_code, message):
         self.status_code = status_code
         self.message = message
+        self.request = httpx.Request(method="POST", url="https://api.replicate.com/v1/deployments")
+        self.response = httpx.Response(status_code=status_code, request=self.request)
         super().__init__(
             self.message
         )  # Call the base class constructor with the parameters it needs
