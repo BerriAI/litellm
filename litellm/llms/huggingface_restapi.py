@@ -2,7 +2,7 @@
 import os, copy, types
 import json
 from enum import Enum
-import requests
+import httpx, requests
 import time
 import litellm
 from typing import Callable, Dict, List, Any
@@ -14,6 +14,8 @@ class HuggingfaceError(Exception):
     def __init__(self, status_code, message):
         self.status_code = status_code
         self.message = message
+        self.response = httpx.Response(status_code=status_code)
+        self.request = self.response.request
         super().__init__(
             self.message
         )  # Call the base class constructor with the parameters it needs

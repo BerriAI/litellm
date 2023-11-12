@@ -42,9 +42,10 @@ models = ["command-nightly"]
 # Test 1: Context Window Errors 
 @pytest.mark.parametrize("model", models)
 def test_context_window(model):
-    sample_text = "Say error 50 times" * 10000
+    sample_text = "Say error 50 times" * 1000000
     messages = [{"content": sample_text, "role": "user"}]
     try:
+        litellm.set_verbose = False
         response = completion(model=model, messages=messages)
         print(f"response: {response}")
         print("FAILED!")
@@ -67,8 +68,8 @@ def test_context_window_with_fallbacks(model):
 
 # for model in litellm.models_by_provider["bedrock"]:
 #     test_context_window(model=model)
-# test_context_window(model="azure/chatgpt-v-2")
-# test_context_window_with_fallbacks(model="azure/chatgpt-v-2")
+# test_context_window(model="command-nightly")
+# test_context_window_with_fallbacks(model="command-nightly")
 # Test 2: InvalidAuth Errors
 @pytest.mark.parametrize("model", models)
 def invalid_auth(model):  # set the model key to an invalid key, depending on the model
@@ -78,7 +79,7 @@ def invalid_auth(model):  # set the model key to an invalid key, depending on th
         if model == "gpt-3.5-turbo" or model == "gpt-3.5-turbo-instruct":
             temporary_key = os.environ["OPENAI_API_KEY"]
             os.environ["OPENAI_API_KEY"] = "bad-key"
-        elif model == "bedrock/anthropic.claude-v2":
+        elif "bedrock" in model:
             temporary_aws_access_key = os.environ["AWS_ACCESS_KEY_ID"]
             os.environ["AWS_ACCESS_KEY_ID"] = "bad-key"
             temporary_aws_region_name = os.environ["AWS_REGION_NAME"]
@@ -163,7 +164,7 @@ def invalid_auth(model):  # set the model key to an invalid key, depending on th
 
 # for model in litellm.models_by_provider["bedrock"]:
 #     invalid_auth(model=model)
-# invalid_auth(model="azure/chatgpt-v-2")
+# invalid_auth(model="command-nightly")
 
 # Test 3: Invalid Request Error 
 @pytest.mark.parametrize("model", models)
@@ -173,7 +174,7 @@ def test_invalid_request_error(model):
     with pytest.raises(BadRequestError):
         completion(model=model, messages=messages, max_tokens="hello world")
 
-# test_invalid_request_error(model="azure/chatgpt-v-2")
+# test_invalid_request_error(model="command-nightly")
 # Test 3: Rate Limit Errors
 # def test_model_call(model):
 #     try:

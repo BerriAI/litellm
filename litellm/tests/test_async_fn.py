@@ -28,7 +28,7 @@ def test_async_response():
         user_message = "Hello, how are you?"
         messages = [{"content": user_message, "role": "user"}]
         try:
-            response = await acompletion(model="azure/chatgpt-v-2", messages=messages)
+            response = await acompletion(model="command-nightly", messages=messages)
             print(f"response: {response}")
         except Exception as e:
             pytest.fail(f"An exception occurred: {e}")
@@ -42,7 +42,7 @@ def test_get_response_streaming():
         user_message = "write a short poem in one sentence"
         messages = [{"content": user_message, "role": "user"}]
         try:
-            response = await acompletion(model="azure/chatgpt-v-2", messages=messages, stream=True)
+            response = await acompletion(model="command-nightly", messages=messages, stream=True)
             print(type(response))
 
             import inspect
@@ -65,7 +65,7 @@ def test_get_response_streaming():
     asyncio.run(test_async_call())
 
 
-test_get_response_streaming()
+# test_get_response_streaming()
 
 def test_get_response_non_openai_streaming():
     import asyncio
