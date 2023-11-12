@@ -67,7 +67,7 @@ def test_context_window_with_fallbacks(model):
 
 # for model in litellm.models_by_provider["bedrock"]:
 #     test_context_window(model=model)
-# test_context_window(model="gpt-3.5-turbo")
+test_context_window(model="azure/chatgpt-v-2")
 # test_context_window_with_fallbacks(model="gpt-3.5-turbo")
 # Test 2: InvalidAuth Errors
 @pytest.mark.parametrize("model", models)

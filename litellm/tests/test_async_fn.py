@@ -28,14 +28,13 @@ def test_async_response():
         user_message = "Hello, how are you?"
         messages = [{"content": user_message, "role": "user"}]
         try:
-            response = await acompletion(model="gpt-3.5-turbo-instruct", messages=messages)
+            response = await acompletion(model="gpt-3.5-turbo", messages=messages)
             print(f"response: {response}")
         except Exception as e:
             pytest.fail(f"An exception occurred: {e}")
 
-    response = asyncio.run(test_get_response())
-    print(response)
-# test_async_response()
+    asyncio.run(test_get_response())
+test_async_response()
 
 def test_get_response_streaming():
     import asyncio
@@ -43,7 +42,7 @@ def test_get_response_streaming():
         user_message = "write a short poem in one sentence"
         messages = [{"content": user_message, "role": "user"}]
         try:
-            response = await acompletion(model="gpt-3.5-turbo-instruct", messages=messages, stream=True)
+            response = await acompletion(model="gpt-3.5-turbo", messages=messages, stream=True)
             print(type(response))
 
             import inspect
