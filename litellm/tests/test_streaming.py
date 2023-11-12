@@ -131,7 +131,6 @@ def streaming_format_tests(idx, chunk):
     if chunk["choices"][0]["finish_reason"]: # ensure finish reason is only in last chunk
         validate_last_format(chunk=chunk)
         finished = True
-    print(f"chunk choices: {chunk['choices'][0]['delta']['content']}")
     if "content" in chunk["choices"][0]["delta"]:
         extracted_chunk = chunk["choices"][0]["delta"]["content"]
     print(f"extracted chunk: {extracted_chunk}")
@@ -837,6 +836,7 @@ def test_openai_chat_completion_call():
         start_time = time.time()
         for idx, chunk in enumerate(response):
             chunk, finished = streaming_format_tests(idx, chunk)
+            print(f"outside chunk: {chunk}")
             if finished:
                 break
             complete_response += chunk
