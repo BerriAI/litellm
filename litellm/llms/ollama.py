@@ -3,6 +3,7 @@ import json
 import traceback
 from typing import Optional
 import litellm 
+import httpx
 
 try:
     from async_generator import async_generator, yield_  # optional dependency
@@ -14,6 +15,8 @@ class OllamaError(Exception):
     def __init__(self, status_code, message):
         self.status_code = status_code
         self.message = message
+        self.request = httpx.Request(method="POST", url="http://localhost:11434")
+        self.response = httpx.Response(status_code=status_code, request=self.request)
         super().__init__(
             self.message
         )  # Call the base class constructor with the parameters it needs
