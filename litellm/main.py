@@ -147,7 +147,7 @@ async def acompletion(*args, **kwargs):
         else:
             # Await normally
             init_response = completion(*args, **kwargs)
-            if isinstance(init_response, dict):
+            if isinstance(init_response, dict) or isinstance(init_response, ModelResponse):
                 response = init_response
             else:
                 response = await init_response
