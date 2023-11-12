@@ -3845,7 +3845,8 @@ def exception_type(
                         raise AuthenticationError(
                             message=f"AzureException - {original_exception.message}",
                             llm_provider="azure",
-                            model=model
+                            model=model,
+                            response=original_exception.response
                         )
                     elif original_exception.status_code == 408:
                         exception_mapping_worked = True
@@ -4225,7 +4226,6 @@ class CustomStreamWrapper:
             raise ValueError(f"Unable to parse response. Original response: {chunk}")
     
     def handle_azure_chunk(self, chunk):
-        chunk = chunk.decode("utf-8")
         is_finished = False
         finish_reason = ""
         text = ""
@@ -4299,7 +4299,6 @@ class CustomStreamWrapper:
 
     def handle_openai_text_completion_chunk(self, chunk):
         try: 
-            # str_line = chunk.decode("utf-8")  # Convert bytes to string
             str_line = chunk
             text = "" 
             is_finished = False

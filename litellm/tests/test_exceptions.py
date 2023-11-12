@@ -59,7 +59,7 @@ def test_context_window(model):
         
 @pytest.mark.parametrize("model", models)
 def test_context_window_with_fallbacks(model):
-    ctx_window_fallback_dict = {"command-nightly": "claude-2", "gpt-3.5-turbo-instruct": "gpt-3.5-turbo-16k"}
+    ctx_window_fallback_dict = {"command-nightly": "claude-2", "gpt-3.5-turbo-instruct": "gpt-3.5-turbo-16k", "azure/chatgpt-v-2": "gpt-3.5-turbo-16k"}
     sample_text = "how does a court case get to the Supreme Court?" * 1000
     messages = [{"content": sample_text, "role": "user"}]
 
@@ -67,8 +67,8 @@ def test_context_window_with_fallbacks(model):
 
 # for model in litellm.models_by_provider["bedrock"]:
 #     test_context_window(model=model)
-test_context_window(model="azure/chatgpt-v-2")
-# test_context_window_with_fallbacks(model="gpt-3.5-turbo")
+# test_context_window(model="azure/chatgpt-v-2")
+# test_context_window_with_fallbacks(model="azure/chatgpt-v-2")
 # Test 2: InvalidAuth Errors
 @pytest.mark.parametrize("model", models)
 def invalid_auth(model):  # set the model key to an invalid key, depending on the model
@@ -163,7 +163,7 @@ def invalid_auth(model):  # set the model key to an invalid key, depending on th
 
 # for model in litellm.models_by_provider["bedrock"]:
 #     invalid_auth(model=model)
-# invalid_auth(model="gpt-3.5-turbo")
+# invalid_auth(model="azure/chatgpt-v-2")
 
 # Test 3: Invalid Request Error 
 @pytest.mark.parametrize("model", models)
@@ -173,7 +173,7 @@ def test_invalid_request_error(model):
     with pytest.raises(BadRequestError):
         completion(model=model, messages=messages, max_tokens="hello world")
 
-# test_invalid_request_error(model="gpt-3.5-turbo")
+# test_invalid_request_error(model="azure/chatgpt-v-2")
 # Test 3: Rate Limit Errors
 # def test_model_call(model):
 #     try:
