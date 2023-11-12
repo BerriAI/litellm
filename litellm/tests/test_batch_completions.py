@@ -7,7 +7,7 @@ import pytest
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-from openai.error import Timeout
+from openai import Timeout
 import litellm
 from litellm import batch_completion, batch_completion_models, completion, batch_completion_models_all_responses
 # litellm.set_verbose=True

@@ -106,7 +106,7 @@ def test_completion_gpt4_turbo():
             max_tokens=10,
         )
         print(response)
-    except openai.error.RateLimitError:
+    except openai.RateLimitError:
         print("got a rate liimt error")
         pass
     except Exception as e:
@@ -137,7 +137,7 @@ def test_completion_gpt4_vision():
             ],
         )
         print(response)
-    except openai.error.RateLimitError:
+    except openai.RateLimitError:
         print("got a rate liimt error")
         pass
     except Exception as e:

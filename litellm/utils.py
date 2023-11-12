@@ -1136,9 +1136,8 @@ def client(original_function):
                 context_window_fallback_dict = kwargs.get("context_window_fallback_dict", {})
 
                 if num_retries: 
-                    if (isinstance(e, openai.error.APIError) 
-                    or isinstance(e, openai.error.Timeout) 
-                    or isinstance(e, openai.error.ServiceUnavailableError)):
+                    if (isinstance(e, openai.APIError) 
+                    or isinstance(e, openai.Timeout)):
                         kwargs["num_retries"] = num_retries
                         return litellm.completion_with_retries(*args, **kwargs)
                 elif isinstance(e, litellm.exceptions.ContextWindowExceededError) and context_window_fallback_dict and model in context_window_fallback_dict:
