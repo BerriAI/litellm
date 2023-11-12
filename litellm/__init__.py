@@ -2,6 +2,7 @@
 import threading, requests
 from typing import Callable, List, Optional, Dict, Union
 from litellm.caching import Cache
+import httpx
 
 input_callback: List[Union[str, Callable]] = []
 success_callback: List[Union[str, Callable]] = []
@@ -44,7 +45,7 @@ max_budget: float = 0.0 # set the max budget across all providers
 _current_cost = 0 # private variable, used if max budget is set 
 error_logs: Dict = {}
 add_function_to_prompt: bool = False # if function calling not supported by api, append function call details to system prompt
-client_session: Optional[requests.Session] = None
+client_session: Optional[httpx.Client] = None
 model_fallbacks: Optional[List] = None
 model_cost_map_url: str = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
 num_retries: Optional[int] = None
