@@ -8,7 +8,7 @@ readme = "README.md"
 
 [tool.poetry.dependencies]
 python = "^3.8"
-openai = "*"
+openai = ">=1"
 python-dotenv = ">=0.2.0"
 tiktoken = ">=0.4.0"
 importlib-metadata = ">=6.8.0"
@@ -18,9 +18,18 @@ jinja2 = "^3.1.2"
 certifi = "^2023.7.22"
 appdirs = "^1.4.4"
 aiohttp = "*"
+fastapi = {extras = ["server"], version = "^0.104.1"}
+uvicorn = {extras = ["server"], version = "^0.24.0.post1"}
+boto3 = {extras = ["server"], version = "^1.28.84"}
+redis = {extras = ["server"], version = "^5.0.1"}
+httpx = {extras = ["server"], version = "^0.25.1"}
 
 [tool.poetry.scripts]
 litellm = 'litellm:run_server'
+
+[tool.poetry.group.dev.dependencies]
+black = ">=23.11.0"
+pydantic-core = "^2.14.1"
 
 [build-system]
 requires = ["poetry-core"]
