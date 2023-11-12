@@ -524,10 +524,7 @@ def completion(
                     additional_args={"headers": headers},
                 )
                 raise e
-            
-            if optional_params.get("stream", False) and acompletion is False:
-                response = CustomStreamWrapper(response, model, custom_llm_provider=custom_llm_provider, logging_obj=logging)
-                return response
+
             ## LOGGING
             logging.post_call(
                 input=messages,

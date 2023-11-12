@@ -4549,7 +4549,7 @@ class CustomStreamWrapper:
         except StopIteration:
             raise StopIteration
         except Exception as e: 
-            traceback_exception = traceback.print_exc()
+            traceback_exception = traceback.format_exc()
             e.message = str(e)
              # LOG FAILURE - handle streaming failure logging in the _next_ object, remove `handle_failure` once it's deprecated
             threading.Thread(target=self.logging_obj.failure_handler, args=(e, traceback_exception)).start()
@@ -4557,18 +4557,25 @@ class CustomStreamWrapper:
 
     ## needs to handle the empty string case (even starting chunk can be an empty string)
     def __next__(self):
-        while True: # loop until a non-empty string is found
-            try:
-                # if isinstance(self.completion_stream, str):
-                #     chunk = self.completion_stream
-                # else:
-                chunk = next(self.completion_stream)
-                response = self.chunk_creator(chunk=chunk)
-                # if response is not None:
-                return response
-            except Exception as e:
-                raise StopIteration
-    
+        try:
+            while True: 
+                if isinstance(self.completion_stream, str):
+                    chunk = self.completion_stream
+                else:
+                    chunk = next(self.completion_stream)
+
+                if chunk is not None:
+                    response = self.chunk_creator(chunk=chunk)
+                    if response is not None:
+                        return response
+        except StopIteration:
+            raise  # Re-raise StopIteration
+        except Exception as e:
+            # Handle other exceptions if needed
+            pass
+
+
+        
     async def __anext__(self):
         try:
             if (self.custom_llm_provider == "openai" 

@@ -245,11 +245,11 @@ class OpenAIChatCompletion(BaseLLM):
                           api_base: str, 
                           data: dict, headers: dict, 
                           model_response: ModelResponse): 
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=600) as client:
             response = await client.post(api_base, json=data, headers=headers) 
             response_json = response.json()
-            if response.status != 200:
-                raise OpenAIError(status_code=response.status, message=response.text)
+            if response.status_code != 200:
+                raise OpenAIError(status_code=response.status_code, message=response.text)
                 
 
             ## RESPONSE OBJECT
