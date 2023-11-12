@@ -395,7 +395,7 @@ def test_completion_cohere(): # commenting for now as the cohere endpoint is bei
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-# test_completion_cohere() #
+# test_completion_cohere() 
 
 
 def test_completion_openai():
@@ -634,7 +634,7 @@ def test_completion_azure():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_completion_azure()
+# test_completion_azure()
 def test_completion_azure2():
     # test if we can pass api_base, api_version and api_key in compleition()
     try:
@@ -941,7 +941,7 @@ def test_completion_bedrock_claude():
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_completion_bedrock_claude()
+test_completion_bedrock_claude()
 
 def test_completion_bedrock_cohere():
     print("calling bedrock cohere")
