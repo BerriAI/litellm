@@ -12,6 +12,7 @@ from typing import Any
 from functools import partial
 import dotenv, traceback, random, asyncio, time, contextvars
 from copy import deepcopy
+import httpx
 import litellm
 from litellm import (  # type: ignore
     client,
@@ -838,14 +839,14 @@ def completion(
             )
             ## COMPLETION CALL
             openai.api_key = api_key # set key for deep infra 
+            openai.base_url = api_base # use the deepinfra api base
             try:
-                response = openai.ChatCompletion.create(
-                    model=model,
-                    messages=messages,
-                    api_base=api_base, # use the deepinfra api base
-                    api_type="openai",
-                    api_version=api_version, # default None
-                    **optional_params,
+                response = openai.chat.completions.create(
+                    model=model, # type: ignore
+                    messages=messages, # type: ignore
+                    api_type="openai", # type: ignore
+                    api_version=api_version, # type: ignore
+                    **optional_params, # type: ignore
                 )
             except Exception as e:
                 ## LOGGING - log the original exception returned
@@ -932,7 +933,7 @@ def completion(
         elif model in litellm.openrouter_models or custom_llm_provider == "openrouter":
             openai.api_type = "openai"
             # not sure if this will work after someone first uses another API
-            openai.api_base = (
+            openai.base_url = (
                 litellm.api_base
                 if litellm.api_base is not None
                 else "https://openrouter.ai/api/v1"
@@ -963,9 +964,9 @@ def completion(
             logging.pre_call(input=messages, api_key=openai.api_key, additional_args={"complete_input_dict": data, "headers": headers})
             ## COMPLETION CALL
             if headers:
-                response = openai.ChatCompletion.create(
-                    headers=headers,
-                    **data,
+                response = openai.chat.completions.create(
+                    headers=headers, # type: ignore
+                    **data, # type: ignore
                 )
             else:
                 openrouter_site_url = get_secret("OR_SITE_URL")
@@ -976,11 +977,11 @@ def completion(
                 # if openrouter_app_name is None, set it to liteLLM
                 if openrouter_app_name is None:
                     openrouter_app_name = "liteLLM"
-                response = openai.ChatCompletion.create(
-                    headers={
-                        "HTTP-Referer": openrouter_site_url,  # To identify your site
-                        "X-Title": openrouter_app_name,  # To identify your app
-                    },
+                response = openai.chat.completions.create( # type: ignore
+                    extra_headers=httpx.Headers({ # type: ignore
+                        "HTTP-Referer": openrouter_site_url,  # type: ignore
+                        "X-Title": openrouter_app_name,  # type: ignore
+                    }), # type: ignore
                     **data,
                 )
             ## LOGGING
@@ -1961,7 +1962,7 @@ def text_completion(
                     futures = [executor.submit(process_prompt, i, individual_prompt) for i, individual_prompt in enumerate(prompt)]
                     for i, future in enumerate(concurrent.futures.as_completed(futures)):
                         responses[i] = future.result()
-                    text_completion_response["choices"] = responses
+                    text_completion_response.choices = responses 
 
                 return text_completion_response
     # else:
@@ -2012,10 +2013,10 @@ def moderation(input: str, api_key: Optional[str]=None):
                 get_secret("OPENAI_API_KEY")
             )
     openai.api_key = api_key
-    openai.api_type = "open_ai"
+    openai.api_type = "open_ai" # type: ignore
     openai.api_version = None
-    openai.api_base = "https://api.openai.com/v1"
-    response = openai.Moderation.create(input)
+    openai.base_url = "https://api.openai.com/v1"
+    response = openai.moderations.create(input=input)
     return response
 
 ####### HELPER FUNCTIONS ################

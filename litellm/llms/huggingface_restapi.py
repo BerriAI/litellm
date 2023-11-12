@@ -6,7 +6,7 @@ import httpx, requests
 import time
 import litellm
 from typing import Callable, Dict, List, Any
-from litellm.utils import ModelResponse, Choices, Message, CustomStreamWrapper
+from litellm.utils import ModelResponse, Choices, Message, CustomStreamWrapper, Usage
 from typing import Optional
 from .prompt_templates.factory import prompt_factory, custom_prompt
 
@@ -381,9 +381,12 @@ def completion(
 
             model_response["created"] = time.time()
             model_response["model"] = model
-            model_response.usage.completion_tokens = completion_tokens
-            model_response.usage.prompt_tokens = prompt_tokens
-            model_response.usage.total_tokens = prompt_tokens + completion_tokens
+            usage = Usage(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=prompt_tokens + completion_tokens
+            )
+            model_response.usage = usage
             model_response._hidden_params["original_response"] = completion_response
             return model_response
     except HuggingfaceError as e: 

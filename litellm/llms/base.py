@@ -1,9 +1,10 @@
 ## This is a template base class to be used for adding new LLM providers via API calls
 import litellm 
 import httpx, certifi, ssl
+from typing import Optional
 
 class BaseLLM:
-    _client_session = None
+    _client_session: Optional[httpx.Client] = None
     def create_client_session(self):
         if litellm.client_session: 
             _client_session = litellm.client_session

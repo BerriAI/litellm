@@ -76,8 +76,8 @@ class ContextWindowExceededError(BadRequestError):  # type: ignore
         self.llm_provider = llm_provider
         super().__init__(
             message=self.message, 
-            model=self.model, 
-            llm_provider=self.llm_provider, 
+            model=self.model, # type: ignore
+            llm_provider=self.llm_provider, # type: ignore
             response=response
         )  # Call the base class constructor with the parameters it needs
 
@@ -101,7 +101,7 @@ class APIError(APIError): # type: ignore
         self.model = model
         super().__init__(
             self.message,
-            request=request
+            request=request # type: ignore
         )
 
 # raised if an invalid request (not get, delete, put, post) is made

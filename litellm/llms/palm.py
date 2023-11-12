@@ -3,7 +3,7 @@ import json
 from enum import Enum
 import time
 from typing import Callable, Optional
-from litellm.utils import ModelResponse, get_secret, Choices, Message
+from litellm.utils import ModelResponse, get_secret, Choices, Message, Usage
 import litellm
 import sys
 
@@ -157,9 +157,12 @@ def completion(
 
     model_response["created"] = time.time()
     model_response["model"] = "palm/" + model
-    model_response.usage.completion_tokens = completion_tokens
-    model_response.usage.prompt_tokens = prompt_tokens
-    model_response.usage.total_tokens = prompt_tokens + completion_tokens
+    usage = Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens
+        )
+    model_response.usage = usage
     return model_response
 
 def embedding():
