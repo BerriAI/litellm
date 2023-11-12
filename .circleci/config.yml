@@ -37,6 +37,7 @@ jobs:
             pip install langchain
             pip install numpydoc
             pip install traceloop-sdk==0.0.69
+            pip install openai
       - save_cache:
           paths:
             - ./venv
