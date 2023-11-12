@@ -257,7 +257,7 @@ def test_acompletion_on_router():
 		traceback.print_exc()
 		pytest.fail(f"Error occurred: {e}")
 
-# test_acompletion_on_router() 
+test_acompletion_on_router() 
 
 def test_function_calling_on_router(): 
 	try: 
