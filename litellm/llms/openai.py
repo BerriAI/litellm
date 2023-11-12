@@ -249,7 +249,7 @@ class OpenAIChatCompletion(BaseLLM):
             response = await client.post(api_base, json=data, headers=headers) 
             response_json = response.json()
             if response.status_code != 200:
-                raise OpenAIError(status_code=response.status_code, message=response.text)
+                raise OpenAIError(status_code=response.status_code, message=response.text, request=response.request, response=response)
                 
 
             ## RESPONSE OBJECT
