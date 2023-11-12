@@ -23,6 +23,7 @@ uvicorn = {extras = ["server"], version = "^0.24.0.post1"}
 boto3 = {extras = ["server"], version = "^1.28.84"}
 redis = {extras = ["server"], version = "^5.0.1"}
 httpx = {extras = ["server"], version = "^0.25.1"}
+requests = "^2.31.0"
 
 [tool.poetry.scripts]
 litellm = 'litellm:run_server'
