@@ -2,9 +2,9 @@
 # it makes async Completion requests with streaming
 import openai
 
-openai.api_base = "http://0.0.0.0:8000"
+openai.base_url = "http://0.0.0.0:8000"
 openai.api_key = "temp-key"
-print(openai.api_base)
+print(openai.base_url)
 
 async def test_async_completion():
     response = await openai.Completion.acreate(

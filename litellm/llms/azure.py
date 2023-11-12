@@ -7,11 +7,17 @@ from litellm import OpenAIConfig
 import httpx
 
 class AzureOpenAIError(Exception):
-    def __init__(self, status_code, message, request: httpx.Request, response: httpx.Response):
+    def __init__(self, status_code, message, request: Optional[httpx.Request]=None, response: Optional[httpx.Response]=None):
         self.status_code = status_code
         self.message = message
-        self.request = request
-        self.response = response
+        if request:
+            self.request = request
+        else:
+            self.request = httpx.Request(method="POST", url="https://api.openai.com/v1")
+        if response:
+            self.response = response
+        else:
+            self.response = httpx.Response(status_code=status_code, request=self.request)
         super().__init__(
             self.message
         )  # Call the base class constructor with the parameters it needs
@@ -136,7 +142,7 @@ class AzureChatCompletion(BaseLLM):
                     headers=headers,
                 )
                 if response.status_code != 200:
-                    raise AzureOpenAIError(status_code=response.status_code, message=response.text, request=response.request, response=response)
+                    raise AzureOpenAIError(status_code=response.status_code, message=response.text)
                     
                 ## RESPONSE OBJECT
                 return convert_to_model_response_object(response_object=response.json(), model_response_object=model_response)
@@ -172,7 +178,7 @@ class AzureChatCompletion(BaseLLM):
                     method="POST"
                 ) as response: 
                     if response.status_code != 200:
-                        raise AzureOpenAIError(status_code=response.status_code, message=response.text(), request=self._client_session.request, response=response)
+                        raise AzureOpenAIError(status_code=response.status_code, message=response.text)
                     
                     completion_stream = response.iter_lines()
                     streamwrapper = CustomStreamWrapper(completion_stream=completion_stream, model=model, custom_llm_provider="openai",logging_obj=logging_obj)
@@ -194,7 +200,7 @@ class AzureChatCompletion(BaseLLM):
                     method="POST"
                 ) as response: 
             if response.status_code != 200:
-                raise AzureOpenAIError(status_code=response.status_code, message=response.text(), request=self._client_session.request, response=response)
+                raise AzureOpenAIError(status_code=response.status_code, message=response.text)
             
             streamwrapper = CustomStreamWrapper(completion_stream=response.aiter_lines(), model=model, custom_llm_provider="azure",logging_obj=logging_obj)
             async for transformed_chunk in streamwrapper:

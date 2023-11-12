@@ -1,8 +1,4 @@
-try:
-    from openai import AuthenticationError, BadRequestError, RateLimitError, OpenAIError
-except: 
-    from openai.error import AuthenticationError, InvalidRequestError, RateLimitError, OpenAIError
-
+from openai import AuthenticationError, BadRequestError, RateLimitError, OpenAIError
 import os
 import sys
 import traceback
