@@ -4,7 +4,7 @@ from enum import Enum
 import time
 from typing import Callable, Optional
 import litellm
-from litellm.utils import ModelResponse, get_secret
+from litellm.utils import ModelResponse, get_secret, Usage
 from .prompt_templates.factory import prompt_factory, custom_prompt
 import httpx
 
@@ -424,9 +424,12 @@ def completion(
 
         model_response["created"] = time.time()
         model_response["model"] = model
-        model_response.usage.completion_tokens = completion_tokens
-        model_response.usage.prompt_tokens = prompt_tokens
-        model_response.usage.total_tokens = prompt_tokens + completion_tokens
+        usage = Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens = prompt_tokens + completion_tokens
+        )
+        model_response.usage = usage
         return model_response
     except BedrockError as e:
         exception_mapping_worked = True
@@ -497,6 +500,11 @@ def embedding(
         "total_tokens": input_tokens,
     }
 
-
+    usage = Usage(
+            prompt_tokens=input_tokens,
+            completion_tokens=0,
+            total_tokens=input_tokens + 0
+    )
+    model_response.usage = usage
 
     return model_response

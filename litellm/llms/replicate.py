@@ -3,7 +3,7 @@ import json
 import requests
 import time
 from typing import Callable, Optional
-from litellm.utils import ModelResponse
+from litellm.utils import ModelResponse, Usage
 import litellm 
 import httpx
 
@@ -261,9 +261,12 @@ def completion(
         prompt_tokens = len(encoding.encode(prompt))
         completion_tokens = len(encoding.encode(model_response["choices"][0]["message"].get("content", "")))
         model_response["model"] = "replicate/" + model
-        model_response.usage.completion_tokens = completion_tokens
-        model_response.usage.prompt_tokens = prompt_tokens
-        model_response.usage.total_tokens = prompt_tokens + completion_tokens
+        usage = Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens
+        )
+        model_response.usage = usage
         return model_response
 
 
