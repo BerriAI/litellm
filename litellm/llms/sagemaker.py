@@ -8,11 +8,14 @@ import litellm
 from litellm.utils import ModelResponse, get_secret
 import sys
 from copy import deepcopy
+import httpx
 
 class SagemakerError(Exception):
     def __init__(self, status_code, message):
         self.status_code = status_code
         self.message = message
+        self.request = httpx.Request(method="POST", url="https://us-west-2.console.aws.amazon.com/sagemaker")
+        self.response = httpx.Response(status_code=status_code, request=self.request)
         super().__init__(
             self.message
         )  # Call the base class constructor with the parameters it needs
