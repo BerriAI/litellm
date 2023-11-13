@@ -122,13 +122,12 @@ def run_server(host, port, api_base, api_version, model, alias, add_key, headers
             api_base = f"http://{host}:{port}"
         else: 
             api_base = test
-        openai.api_base = api_base
-        openai.api_key = "temp-key"
-        print(openai.api_base)
-        response = openai.completions.create(model="gpt-3.5-turbo", prompt='this is a test request, write a short poem')
-        print(response)
+        client = openai.OpenAI(
+            api_key="My API Key",
+            base_url=api_base
+        )
 
-        response = openai.chat.completions.create(model="gpt-3.5-turbo", messages = [
+        response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
             {
                 "role": "user",
                 "content": "this is a test request, write a short poem"
@@ -137,16 +136,19 @@ def run_server(host, port, api_base, api_version, model, alias, add_key, headers
         click.echo(f'LiteLLM: response from proxy {response}')
 
         click.echo(f'LiteLLM: response from proxy with streaming {response}')
-        response = openai.chat.completions.create(model="gpt-3.5-turbo", messages = [
-            {
-                "role": "user",
-                "content": "this is a test request, write a short poem"
-            }
-        ],
-        stream=True,
-        )
-        for chunk in response:
-            click.echo(f'LiteLLM: streaming response from proxy {chunk}')
+        # response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
+        #     {
+        #         "role": "user",
+        #         "content": "this is a test request, write a short poem"
+        #     }
+        # ],
+        # stream=True,
+        # )
+        # for chunk in response:
+        #     click.echo(f'LiteLLM: streaming response from proxy {chunk}')
+
+        response = client.completions.create(model="gpt-3.5-turbo", prompt='this is a test request, write a short poem')
+        print(response)
 
         return
     else:
