@@ -5,7 +5,7 @@
         <p align="center">Benchmark LLMs response, cost and response time</p>
     </p>
 
-| Model | Provider | Cost (Decimal) |
+| Model | Provider | Cost per input + output token ($)|
 | --- | --- | --- |
 | openrouter/mistralai/mistral-7b-instruct | openrouter | 0.0 |
 | ollama/llama2 | ollama | 0.0 |
