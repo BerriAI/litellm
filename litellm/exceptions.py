@@ -46,11 +46,12 @@ class BadRequestError(BadRequestError):  # type: ignore
         )  # Call the base class constructor with the parameters it needs
 
 class Timeout(APITimeoutError):  # type: ignore
-    def __init__(self, message, model, llm_provider, request: httpx.Request):
+    def __init__(self, message, model, llm_provider):
         self.status_code = 408
         self.message = message
         self.model = model
         self.llm_provider = llm_provider
+        request = httpx.Request(method="POST", url="https://api.openai.com/v1")
         super().__init__(
             request=request
         )  # Call the base class constructor with the parameters it needs
