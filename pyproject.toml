@@ -24,6 +24,10 @@ boto3 = {extras = ["server"], version = "^1.28.84"}
 redis = {extras = ["server"], version = "^5.0.1"}
 httpx = {extras = ["server"], version = "^0.25.1"}
 requests = "^2.31.0"
+tomli = {extras = ["server"], version = "^2.0.1"}
+tomli-w = {extras = ["server"], version = "^1.0.0"}
+backoff = {extras = ["server"], version = "^2.2.1"}
+pyyaml = {extras = ["server"], version = "^6.0.1"}
 
 [tool.poetry.scripts]
 litellm = 'litellm:run_server'
