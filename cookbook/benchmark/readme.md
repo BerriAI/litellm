@@ -5,6 +5,73 @@
         <p align="center">Benchmark LLMs response, cost and response time</p>
     </p>
 
+| Model | Provider | Cost (Decimal) |
+| --- | --- | --- |
+| openrouter/mistralai/mistral-7b-instruct | openrouter | 0.0 |
+| ollama/llama2 | ollama | 0.0 |
+| ollama/llama2:13b | ollama | 0.0 |
+| ollama/llama2:70b | ollama | 0.0 |
+| ollama/llama2-uncensored | ollama | 0.0 |
+| ollama/mistral | ollama | 0.0 |
+| ollama/codellama | ollama | 0.0 |
+| ollama/orca-mini | ollama | 0.0 |
+| ollama/vicuna | ollama | 0.0 |
+| perplexity/codellama-34b-instruct | perplexity | 0.0 |
+| perplexity/llama-2-13b-chat | perplexity | 0.0 |
+| perplexity/llama-2-70b-chat | perplexity | 0.0 |
+| perplexity/mistral-7b-instruct | perplexity | 0.0 |
+| perplexity/replit-code-v1.5-3b | perplexity | 0.0 |
+| text-bison | vertex_ai-text-models | 0.00000025 |
+| text-bison@001 | vertex_ai-text-models | 0.00000025 |
+| chat-bison | vertex_ai-chat-models | 0.00000025 |
+| chat-bison@001 | vertex_ai-chat-models | 0.00000025 |
+| chat-bison-32k | vertex_ai-chat-models | 0.00000025 |
+| code-bison | vertex_ai-code-text-models | 0.00000025 |
+| code-bison@001 | vertex_ai-code-text-models | 0.00000025 |
+| code-gecko@001 | vertex_ai-chat-models | 0.00000025 |
+| code-gecko@latest | vertex_ai-chat-models | 0.00000025 |
+| codechat-bison | vertex_ai-code-chat-models | 0.00000025 |
+| codechat-bison@001 | vertex_ai-code-chat-models | 0.00000025 |
+| codechat-bison-32k | vertex_ai-code-chat-models | 0.00000025 |
+| palm/chat-bison | palm | 0.00000025 |
+| palm/chat-bison-001 | palm | 0.00000025 |
+| palm/text-bison | palm | 0.00000025 |
+| palm/text-bison-001 | palm | 0.00000025 |
+| palm/text-bison-safety-off | palm | 0.00000025 |
+| palm/text-bison-safety-recitation-off | palm | 0.00000025 |
+| anyscale/meta-llama/Llama-2-7b-chat-hf | anyscale | 0.0000003 |
+| anyscale/mistralai/Mistral-7B-Instruct-v0.1 | anyscale | 0.0000003 |
+| openrouter/meta-llama/llama-2-13b-chat | openrouter | 0.0000004 |
+| openrouter/nousresearch/nous-hermes-llama2-13b | openrouter | 0.0000004 |
+| deepinfra/meta-llama/Llama-2-7b-chat-hf | deepinfra | 0.0000004 |
+| deepinfra/mistralai/Mistral-7B-Instruct-v0.1 | deepinfra | 0.0000004 |
+| anyscale/meta-llama/Llama-2-13b-chat-hf | anyscale | 0.0000005 |
+| amazon.titan-text-lite-v1 | bedrock | 0.0000007 |
+| deepinfra/meta-llama/Llama-2-13b-chat-hf | deepinfra | 0.0000007 |
+| text-babbage-001 | text-completion-openai | 0.0000008 |
+| text-ada-001 | text-completion-openai | 0.0000008 |
+| babbage-002 | text-completion-openai | 0.0000008 |
+| openrouter/google/palm-2-chat-bison | openrouter | 0.000001 |
+| openrouter/google/palm-2-codechat-bison | openrouter | 0.000001 |
+| openrouter/meta-llama/codellama-34b-instruct | openrouter | 0.000001 |
+| deepinfra/codellama/CodeLlama-34b-Instruct-hf | deepinfra | 0.0000012 |
+| deepinfra/meta-llama/Llama-2-70b-chat-hf | deepinfra | 0.0000016499999999999999 |
+| deepinfra/jondurbin/airoboros-l2-70b-gpt4-1.4.1 | deepinfra | 0.0000016499999999999999 |
+| anyscale/meta-llama/Llama-2-70b-chat-hf | anyscale | 0.000002 |
+| anyscale/codellama/CodeLlama-34b-Instruct-hf | anyscale | 0.000002 |
+| gpt-3.5-turbo-1106 | openai | 0.000003 |
+| openrouter/meta-llama/llama-2-70b-chat | openrouter | 0.000003 |
+| amazon.titan-text-express-v1 | bedrock | 0.000003 |
+| gpt-3.5-turbo | openai | 0.0000035 |
+| gpt-3.5-turbo-0301 | openai | 0.0000035 |
+| gpt-3.5-turbo-0613 | openai | 0.0000035 |
+| gpt-3.5-turbo-instruct | text-completion-openai | 0.0000035 |
+| openrouter/openai/gpt-3.5-turbo | openrouter | 0.0000035 |
+| cohere.command-text-v14 | bedrock | 0.0000035 |
+| openrouter/gryphe/mythomax-l2-13b | openrouter | 0.00000375 |
+| openrouter/undi95/remm-slerp-l2-13b | openrouter | 0.00000375 |
+| openrouter/pygmalionai/mythalion-13b | openrouter | 0.00000375 |
+
 
 
 ## Setup:
