@@ -1108,7 +1108,7 @@ def client(original_function):
                     if cached_result != None:
                         print_verbose(f"Cache Hit!")
                         call_type = original_function.__name__
-                        if call_type == CallTypes.completion.value:
+                        if call_type == CallTypes.completion.value and isinstance(cached_result, dict):
                             return convert_to_model_response_object(response_object=cached_result, model_response_object=ModelResponse())
                         else:
                             return cached_result
