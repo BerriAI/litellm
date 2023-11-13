@@ -680,7 +680,9 @@ class Logging:
                     complete_streaming_response = litellm.stream_chunk_builder(self.streaming_chunks)
                 else:
                     self.streaming_chunks.append(result)
-            
+            elif isinstance(result, OpenAIObject):
+                result = result.model_dump()
+
             if complete_streaming_response: 
                 self.model_call_details["complete_streaming_response"] = complete_streaming_response
 
