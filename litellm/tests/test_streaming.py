@@ -166,7 +166,7 @@ def test_completion_cohere_stream():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_completion_cohere_stream()
+# test_completion_cohere_stream()
 
 def test_completion_cohere_stream_bad_key():
     try:
@@ -464,6 +464,7 @@ def test_completion_palm_stream():
 def test_completion_claude_stream_bad_key():
     try:
         litellm.cache = None
+        litellm.set_verbose = True
         api_key = "bad-key"
         messages = [
             {"role": "system", "content": "You are a helpful assistant."},
@@ -492,7 +493,7 @@ def test_completion_claude_stream_bad_key():
         pytest.fail(f"Error occurred: {e}")
 
 
-# test_completion_claude_stream_bad_key() 
+test_completion_claude_stream_bad_key() 
 # test_completion_replicate_stream()
 
 # def test_completion_vertexai_stream():
