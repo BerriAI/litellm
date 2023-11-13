@@ -109,10 +109,8 @@ $ litellm --model huggingface/bigcode/starcoder
 
 ### Step 2: Replace openai base
 ```python
-import openai 
-
-openai.api_base = "http://0.0.0.0:8000"
-
+import openai
+client = openai.OpenAI(api_key="anything", base_url="http://0.0.0.0:8000")
 print(openai.chat.completions.create(model="test", messages=[{"role":"user", "content":"Hey!"}]))
 ```
 
