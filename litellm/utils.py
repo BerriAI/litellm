@@ -1323,7 +1323,7 @@ def token_counter(model="", text=None,  messages: Optional[List] = None):
             enc = tokenizer_json["tokenizer"].encode(text)
             num_tokens = len(enc.ids)
         elif tokenizer_json["type"] == "openai_tokenizer": 
-            if messages is not None:
+            if model in litellm.open_ai_chat_completion_models and messages != None:
                 num_tokens = openai_token_counter(messages, model=model)
             else:
                 enc = tokenizer_json["tokenizer"].encode(text)
