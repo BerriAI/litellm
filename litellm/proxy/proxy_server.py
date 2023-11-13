@@ -410,7 +410,10 @@ def data_generator(response):
     print_verbose("inside generator")
     for chunk in response:
         print_verbose(f"returned chunk: {chunk}")
-        yield f"data: {json.dumps(chunk.dict())}\n\n"
+        try:
+            yield f"data: {json.dumps(chunk.dict())}\n\n"
+        except:
+            yield f"data: {json.dumps(chunk)}\n\n"
 
 
 def litellm_completion(*args, **kwargs):
