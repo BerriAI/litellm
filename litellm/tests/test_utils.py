@@ -181,33 +181,55 @@ def test_function_to_dict():
 
 
 def test_token_counter():
-    messages = [
-        {
-            "role": "user",
-            "content": "hi how are you what time is it"
-        }
-    ]
-    tokens = token_counter(
-        model = "gpt-3.5-turbo",
-        messages=messages
-    )
-    print(tokens)
+    try:
+        messages = [
+            {
+                "role": "user",
+                "content": "hi how are you what time is it"
+            }
+        ]
+        tokens = token_counter(
+            model = "gpt-3.5-turbo",
+            messages=messages
+        )
+        print("gpt-35-turbo")
+        print(tokens)
+        assert tokens > 0
 
-    tokens = token_counter(
-        model = "claude-2",
-        messages=messages
-    )
-    print("claude-2")
-    print(tokens)
+        tokens = token_counter(
+            model = "claude-2",
+            messages=messages
+        )
+        print("claude-2")
+        print(tokens)
+        assert tokens > 0
 
-    tokens = token_counter(
-        model = "command-nightly",
-        messages=messages
-    )
-    print("command-nightly")
-    print(tokens)
+        tokens = token_counter(
+            model = "palm/chat-bison",
+            messages=messages
+        )
+        print("palm/chat-bison")
+        print(tokens)
+        assert tokens > 0
 
-# test_token_counter()
+        tokens = token_counter(
+            model = "ollama/llama2",
+            messages=messages
+        )
+        print("ollama/llama2")
+        print(tokens)
+        assert tokens > 0
+
+        tokens = token_counter(
+            model = "anthropic.claude-instant-v1",
+            messages=messages
+        )
+        print("anthropic.claude-instant-v1")
+        print(tokens)
+        assert tokens > 0
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+test_token_counter()
 
 
 
