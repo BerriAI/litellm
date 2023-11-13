@@ -84,7 +84,7 @@ class LiteLLM:
   def __init__(self, *, 
                api_key=None, 
                organization: str | None = None,
-               base_url: str = None,
+               base_url: str | None = None,
                timeout: Union[float, None] = 600,
                max_retries: int | None = litellm.num_retries,
                default_headers: Mapping[str, str] | None = None,):
