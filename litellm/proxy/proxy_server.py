@@ -1,7 +1,13 @@
-import sys, os, platform, time, copy
-import threading, ast
-import shutil, random, traceback, requests
+import ast
+import os
+import sys
+import threading
+import traceback
 from typing import Optional
+
+import requests
+import yaml
+
 messages: list = []
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -14,7 +20,7 @@ try:
     import appdirs
     import tomli_w
     import backoff
-    import yaml
+    import PyYAML
 except ImportError:
     import subprocess
     import sys
@@ -31,7 +37,7 @@ except ImportError:
             "appdirs",
             "tomli-w",
             "backoff",
-            "pyyaml"
+            "pyyaml",
         ]
     )
     import uvicorn
