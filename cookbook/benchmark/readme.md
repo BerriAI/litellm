@@ -3,6 +3,7 @@
     </h1>
     <p align="center">
         <p align="center">Benchmark LLMs response, cost and response time</p>
+        [Excel Sheet here](https://docs.google.com/spreadsheets/d/1mvPbP02OLFgc-5-Ubn1KxGuQQdbMyG1jhMSWxAldWy4/edit?usp=sharing)
         <img width="806" alt="Screenshot 2023-11-13 at 2 51 06 PM" src="https://github.com/BerriAI/litellm/assets/29436595/6d1bed71-d062-40b8-a113-28359672636a">
     </p>
 
