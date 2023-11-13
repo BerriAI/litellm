@@ -291,10 +291,6 @@ class ModelResponse(OpenAIObject):
             created = int(time.time())
         else:
             created = created
-        if response_ms:
-            _response_ms = response_ms
-        else:
-            _response_ms = None
         model = model
         if usage:
             usage = usage
@@ -319,19 +315,33 @@ class ModelResponse(OpenAIObject):
     def __setitem__(self, key, value):
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
-class EmbeddingResponse(OpenAIObject):
-    def __init__(self, id=None, choices=None, created=None, model=None, usage=None, stream=False, response_ms=None, **params):
-        self.object = "list"
-        if response_ms:
-            self._response_ms = response_ms
-        else:
-            self._response_ms = None
-        self.data = []
-        self.model = model
 
-    def to_dict_recursive(self):
-        d = super().to_dict_recursive()
-        return d
+class EmbeddingResponse(OpenAIObject):
+    def __init__(self, id=None, choices=None, created=None, model=None, usage=None, stream=False, response_ms=None):
+        object = "list"
+        if response_ms:
+            _response_ms = response_ms
+        else:
+            _response_ms = None
+        data = []
+        model = model
+        super().__init__(id=id, choices=choices, created=created, model=model, object=object, data=data, usage=usage)
+
+    def __contains__(self, key):
+        # Define custom behavior for the 'in' operator
+        return hasattr(self, key)
+    
+    def get(self, key, default=None):
+        # Custom .get() method to access attributes with a default value if the attribute doesn't exist
+        return getattr(self, key, default)
+    
+    def __getitem__(self, key):
+        # Allow dictionary-style access to attributes
+        return getattr(self, key)
+
+    def __setitem__(self, key, value):
+        # Allow dictionary-style assignment of attributes
+        setattr(self, key, value)
 
 class TextChoices(OpenAIObject):
     def __init__(self, finish_reason=None, index=0, text=None, logprobs=None, **params):
