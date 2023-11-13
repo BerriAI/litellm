@@ -29,6 +29,7 @@ tomli-w = {extras = ["server"], version = "^1.0.0"}
 backoff = {extras = ["server"], version = "^2.2.1"}
 pyyaml = {extras = ["server"], version = "^6.0.1"}
 json5 = "^0.9.14"
+contextvars = "^2.4"
 
 [tool.poetry.scripts]
 litellm = 'litellm:run_server'
