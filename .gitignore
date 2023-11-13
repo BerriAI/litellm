@@ -17,3 +17,4 @@ config.yaml
 litellm_server/config.yaml
 litellm_server/router_config.yaml
 .vscode/
+**/api_logs.json
