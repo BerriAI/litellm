@@ -4,7 +4,7 @@ openai.api_key = "this can be anything"
 print("making request")
 
 api_key = ""
-response = openai.ChatCompletion.create(
+response = openai.chat.completions.create(
     model = "openrouter/google/palm-2-chat-bison",
     messages = [
         {
@@ -20,7 +20,7 @@ response = openai.ChatCompletion.create(
 print(response)
 
 
-response = openai.ChatCompletion.create(
+response = openai.chat.completions.create(
     model = "openrouter/google/palm-2-chat-bison",
     messages = [
         {

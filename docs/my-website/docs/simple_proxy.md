@@ -33,7 +33,7 @@ import openai
 
 openai.api_base = "http://0.0.0.0:8000"
 
-print(openai.ChatCompletion.create(model="test", messages=[{"role":"user", "content":"Hey!"}]))
+print(openai.chat.completions.create(model="test", messages=[{"role":"user", "content":"Hey!"}]))
 ```
 
 ### Supported LLMs
@@ -541,7 +541,7 @@ If you're repo let's you set model name, you can call the specific model by just
 import openai 
 openai.api_base = "http://0.0.0.0:8000" 
 
-completion = openai.ChatCompletion.create(model="zephyr-alpha", messages=[{"role": "user", "content": "Hello world"}])
+completion = openai.chat.completions.create(model="zephyr-alpha", messages=[{"role": "user", "content": "Hello world"}])
 print(completion.choices[0].message.content)
 ```
 
@@ -551,7 +551,7 @@ If you're repo only let's you specify api base, then you can add the model name 
 import openai 
 openai.api_base = "http://0.0.0.0:8000/openai/deployments/zephyr-alpha/chat/completions" # zephyr-alpha will be used 
 
-completion = openai.ChatCompletion.create(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hello world"}])
+completion = openai.chat.completions.create(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hello world"}])
 print(completion.choices[0].message.content)
 ```
 
