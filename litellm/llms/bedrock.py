@@ -172,6 +172,36 @@ class AnthropicConstants(Enum):
     HUMAN_PROMPT = "\n\nHuman: "
     AI_PROMPT = "\n\nAssistant: "
 
+class AmazonLlamaConfig(): 
+    """
+    Reference: https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=meta.llama2-13b-chat-v1
+
+    Supported Params for the Amazon / Meta Llama models:
+
+    - `max_gen_len` (integer) max tokens,
+    - `temperature` (float) temperature for model,
+    - `top_p` (float) top p for model
+    """
+    max_gen_len: Optional[int]=None
+    temperature: Optional[float]=None
+    topP: Optional[float]=None
+
+    def __init__(self, 
+                 maxTokenCount: Optional[int]=None,
+                 temperature: Optional[float]=None,
+                 topP: Optional[int]=None) -> None:
+        locals_ = locals()
+        for key, value in locals_.items():
+            if key != 'self' and value is not None:
+                setattr(self.__class__, key, value)
+    
+    @classmethod
+    def get_config(cls):
+        return {k: v for k, v in cls.__dict__.items() 
+                if not k.startswith('__') 
+                and not isinstance(v, (types.FunctionType, types.BuiltinFunctionType, classmethod, staticmethod)) 
+                and v is not None}
+
 
 def init_bedrock_client(
         region_name = None,
@@ -337,6 +367,16 @@ def completion(
                 "prompt": prompt,
                 **inference_params
             })
+        elif provider == "meta":
+            ## LOAD CONFIG
+            config = litellm.AmazonLlamaConfig.get_config()
+            for k, v in config.items(): 
+                if k not in inference_params: # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
+                    inference_params[k] = v
+            data = json.dumps({
+                "prompt": prompt,
+                **inference_params
+            })
         elif provider == "amazon":  # amazon titan
             ## LOAD CONFIG
             config = litellm.AmazonTitanConfig.get_config() 
@@ -398,6 +438,8 @@ def completion(
             model_response["finish_reason"] = response_body["stop_reason"]
         elif provider == "cohere": 
             outputText = response_body["generations"][0]["text"]
+        elif provider == "meta": 
+            outputText = response_body["generation"]
         else:  # amazon titan
             outputText = response_body.get('results')[0].get('outputText')
 
