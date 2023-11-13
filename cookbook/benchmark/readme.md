@@ -68,9 +68,35 @@
 | gpt-3.5-turbo-instruct | text-completion-openai | 0.0000035 |
 | openrouter/openai/gpt-3.5-turbo | openrouter | 0.0000035 |
 | cohere.command-text-v14 | bedrock | 0.0000035 |
-| openrouter/gryphe/mythomax-l2-13b | openrouter | 0.00000375 |
-| openrouter/undi95/remm-slerp-l2-13b | openrouter | 0.00000375 |
-| openrouter/pygmalionai/mythalion-13b | openrouter | 0.00000375 |
+| gpt-3.5-turbo-0613 | openai | 0.0000035 |
+| claude-instant-1 | anthropic | 0.00000714 |
+| claude-instant-1.2 | anthropic | 0.00000714 |
+| openrouter/anthropic/claude-instant-v1 | openrouter | 0.00000714 |
+| anthropic.claude-instant-v1 | bedrock | 0.00000714 |
+| openrouter/mancer/weaver | openrouter | 0.00001125 |
+| j2-mid | ai21 | 0.00002 |
+| ai21.j2-mid-v1 | bedrock | 0.000025 |
+| openrouter/jondurbin/airoboros-l2-70b-2.1 | openrouter | 0.00002775 |
+| command-nightly | cohere | 0.00003 |
+| command | cohere | 0.00003 |
+| command-light | cohere | 0.00003 |
+| command-medium-beta | cohere | 0.00003 |
+| command-xlarge-beta | cohere | 0.00003 |
+| j2-ultra | ai21 | 0.00003 |
+| ai21.j2-ultra-v1 | bedrock | 0.0000376 |
+| gpt-4-1106-preview | openai | 0.00004 |
+| gpt-4-vision-preview | openai | 0.00004 |
+| claude-2 | anthropic | 0.0000437 |
+| openrouter/anthropic/claude-2 | openrouter | 0.0000437 |
+| anthropic.claude-v1 | bedrock | 0.0000437 |
+| anthropic.claude-v2 | bedrock | 0.0000437 |
+| gpt-4 | openai | 0.00009 |
+| gpt-4-0314 | openai | 0.00009 |
+| gpt-4-0613 | openai | 0.00009 |
+| openrouter/openai/gpt-4 | openrouter | 0.00009 |
+| gpt-4-32k | openai | 0.00018 |
+| gpt-4-32k-0314 | openai | 0.00018 |
+| gpt-4-32k-0613 | openai | 0.00018 |
 
 
 
