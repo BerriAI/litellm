@@ -491,7 +491,7 @@ def test_completion_openrouter1():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_completion_openrouter1()
+# test_completion_openrouter1() 
 
 def test_completion_openrouter2():
     try:
@@ -873,18 +873,20 @@ def test_completion_together_ai():
 # test_completion_together_ai()
 def test_customprompt_together_ai():
     try:
-        litellm.set_verbose = True
+        litellm.set_verbose = False
+        litellm.num_retries = 0
         response = completion(
             model="together_ai/OpenAssistant/llama2-70b-oasst-sft-v10",
             messages=messages, 
             roles={"system":{"pre_message":"<|im_start|>system\n", "post_message":"<|im_end|>"}, "assistant":{"pre_message":"<|im_start|>assistant\n","post_message":"<|im_end|>"}, "user":{"pre_message":"<|im_start|>user\n","post_message":"<|im_end|>"}}
         )
         print(response)
-    except litellm.APIError as e:
+    except litellm.exceptions.Timeout as e:
+        print(f"Timeout Error")
+        litellm.num_retries = 3 # reset retries
         pass
     except Exception as e:
-        print(type(e))
-        print(e)
+        print(f"ERROR TYPE {type(e)}")
         pytest.fail(f"Error occurred: {e}")
 
 # test_customprompt_together_ai()
@@ -1364,9 +1366,11 @@ def test_completion_deep_infra_mistral():
         )
         # Add any assertions here to check the response
         print(response)
+    except litellm.exceptions.Timeout as e: 
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_deep_infra_mistral()
+# test_completion_deep_infra_mistral()
 
 # Palm tests
 def test_completion_palm():
@@ -1454,8 +1458,8 @@ def test_moderation():
     openai.api_version = "GM"
     response = litellm.moderation(input="i'm ishaan cto of litellm")   
     print(response)
-    output = response["results"][0]
+    output = response.results[0]
     print(output)
     return output
 
-# test_moderation()
+test_moderation()

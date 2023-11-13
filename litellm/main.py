@@ -877,28 +877,39 @@ def completion(
                 return response
             response = model_response
         elif model in litellm.openrouter_models or custom_llm_provider == "openrouter":
-            openai.api_type = "openai"
-            # not sure if this will work after someone first uses another API
-            openai.base_url = (
-                litellm.api_base
-                if litellm.api_base is not None
-                else "https://openrouter.ai/api/v1"
+            api_base = (
+                api_base
+                or litellm.api_base
+                or  "https://openrouter.ai/api/v1"
             )
-            openai.api_version = None
-            if litellm.organization:
-                openai.organization = litellm.organization
-            if api_key:
-                openai.api_key = api_key
-            elif litellm.openrouter_key:
-                openai.api_key = litellm.openrouter_key
-            else:
-                openai.api_key = get_secret("OPENROUTER_API_KEY") or get_secret(
-                    "OR_API_KEY"
-                ) or litellm.api_key
+
+            api_key = (
+                api_key or
+                litellm.api_key or
+                litellm.openrouter_key or
+                get_secret("OPENROUTER_API_KEY") or 
+                get_secret("OR_API_KEY")
+            )
+
+            openrouter_site_url = (
+                get_secret("OR_SITE_URL")
+                or "https://litellm.ai"
+            )
+
+            openrouter_app_name = (
+                get_secret("OR_APP_NAME")
+                or "liteLLM"
+            )
 
             headers = (
                 headers or
-                litellm.headers
+                litellm.headers or 
+                {
+                    "HTTP-Referer": openrouter_site_url,
+                    "X-Title": openrouter_app_name,
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {api_key}"
+                }
             )
 
             data = {
@@ -909,27 +920,44 @@ def completion(
             ## LOGGING
             logging.pre_call(input=messages, api_key=openai.api_key, additional_args={"complete_input_dict": data, "headers": headers})
             ## COMPLETION CALL
-            if headers:
-                response = openai.chat.completions.create(
-                    headers=headers, # type: ignore
-                    **data, # type: ignore
-                )
-            else:
-                openrouter_site_url = get_secret("OR_SITE_URL")
-                openrouter_app_name = get_secret("OR_APP_NAME")
-                # if openrouter_site_url is None, set it to https://litellm.ai
-                if openrouter_site_url is None:
-                    openrouter_site_url = "https://litellm.ai"
-                # if openrouter_app_name is None, set it to liteLLM
-                if openrouter_app_name is None:
-                    openrouter_app_name = "liteLLM"
-                response = openai.chat.completions.create( # type: ignore
-                    extra_headers=httpx.Headers({ # type: ignore
-                        "HTTP-Referer": openrouter_site_url,  # type: ignore
-                        "X-Title": openrouter_app_name,  # type: ignore
-                    }), # type: ignore
-                    **data,
-                )
+
+            ## COMPLETION CALL
+            response = openai_chat_completions.completion(
+                model=model,
+                messages=messages,
+                headers=headers,
+                api_key=api_key,
+                api_base=api_base,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                logging_obj=logging, 
+                acompletion=acompletion
+            )
+
+            # if headers:
+            #     response = openai.chat.completions.create(
+            #         headers=headers, # type: ignore
+            #         **data, # type: ignore
+            #     )
+            # else:
+            #     openrouter_site_url = get_secret("OR_SITE_URL")
+            #     openrouter_app_name = get_secret("OR_APP_NAME")
+            #     # if openrouter_site_url is None, set it to https://litellm.ai
+            #     if openrouter_site_url is None:
+            #         openrouter_site_url = "https://litellm.ai"
+            #     # if openrouter_app_name is None, set it to liteLLM
+            #     if openrouter_app_name is None:
+            #         openrouter_app_name = "liteLLM"
+            #     response = openai.chat.completions.create( # type: ignore
+            #         extra_headers=httpx.Headers({ # type: ignore
+            #             "HTTP-Referer": openrouter_site_url,  # type: ignore
+            #             "X-Title": openrouter_app_name,  # type: ignore
+            #         }), # type: ignore
+            #         **data,
+            #     )
             ## LOGGING
             logging.post_call(
                 input=messages, api_key=openai.api_key, original_response=response
@@ -1961,7 +1989,7 @@ def moderation(input: str, api_key: Optional[str]=None):
     openai.api_key = api_key
     openai.api_type = "open_ai" # type: ignore
     openai.api_version = None
-    openai.base_url = "https://api.openai.com/v1"
+    openai.base_url = "https://api.openai.com/v1/"
     response = openai.moderations.create(input=input)
     return response
 

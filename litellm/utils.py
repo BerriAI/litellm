@@ -3182,6 +3182,13 @@ def exception_type(
                             llm_provider="openai",
                             response=original_exception.response
                         )
+                    elif original_exception.status_code == 504: # gateway timeout error
+                        exception_mapping_worked = True
+                        raise Timeout(
+                            message=f"OpenAIException - {original_exception.message}",
+                            model=model,
+                            llm_provider="openai",
+                        )
                     else:
                         exception_mapping_worked = True
                         raise APIError(
@@ -3707,7 +3714,10 @@ def exception_type(
                         )
             elif custom_llm_provider == "together_ai":
                 import json
-                error_response = json.loads(error_str)
+                try:
+                    error_response = json.loads(error_str)
+                except:
+                    error_response = {"error": error_str}
                 if "error" in error_response and "`inputs` tokens + `max_new_tokens` must be <=" in error_response["error"]:
                     exception_mapping_worked = True
                     raise ContextWindowExceededError(
@@ -3732,6 +3742,7 @@ def exception_type(
                         llm_provider="together_ai",
                         response=original_exception.response
                     )
+                
                 elif "error" in error_response and "API key doesn't match expected format." in error_response["error"]:
                     exception_mapping_worked = True
                     raise BadRequestError(
@@ -3764,6 +3775,13 @@ def exception_type(
                             model=model,
                             response=original_exception.response
                         )
+                elif original_exception.status_code == 524:
+                    exception_mapping_worked = True
+                    raise Timeout(
+                        message=f"TogetherAIException - {original_exception.message}",
+                        llm_provider="together_ai",
+                        model=model,
+                    )
                 else: 
                     exception_mapping_worked = True
                     raise APIError(
@@ -3967,8 +3985,8 @@ def exception_type(
                             model=model,
                             request=original_exception.request
                         )
-        exception_mapping_worked = True
         if "BadRequestError.__init__() missing 1 required positional argument: 'param'" in str(original_exception): # deal with edge-case invalid request error bug in openai-python sdk
+            exception_mapping_worked = True
             raise BadRequestError(
                 message=f"OpenAIException: This can happen due to missing AZURE_API_VERSION: {str(original_exception)}",
                 model=model, 
