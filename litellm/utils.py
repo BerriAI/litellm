@@ -385,6 +385,7 @@ class TextCompletionResponse(OpenAIObject):
     }
     """
     def __init__(self, id=None, choices=None, created=None, model=None, usage=None, stream=False, response_ms=None, **params):
+        super(TextCompletionResponse, self).__init__(**params)
         if stream:
             self.object = "text_completion.chunk"
             self.choices = [TextChoices()]
@@ -409,7 +410,7 @@ class TextCompletionResponse(OpenAIObject):
         else:
             self.usage = Usage()
         self._hidden_params = {} # used in case users want to access the original model response
-        super(TextCompletionResponse, self).__init__(**params)
+
     
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
