@@ -233,10 +233,10 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
         print()
 
     ## ENVIRONMENT VARIABLES
-    environment_variables = config.get('environment_variables', None)
-    if environment_variables: 
-        for key, value in environment_variables.items(): 
-            os.environ[key] = value
+    environment_variables = config.get("environment_variables", None)
+    if environment_variables:
+        for key, value in environment_variables.items():
+            os.environ[key] = str(value)
 
     return router, model_list, server_settings
 
