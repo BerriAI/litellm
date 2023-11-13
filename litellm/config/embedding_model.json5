@@ -1,0 +1,16 @@
+{
+  "bedrock_embedding_models": [
+    "amazon.titan-embed-text-v1"
+  ],
+  "cohere_embedding_models": [
+    "embed-english-v3.0",
+    "embed-english-light-v3.0",
+    "embed-multilingual-v3.0",
+    "embed-english-v2.0",
+    "embed-english-light-v2.0",
+    "embed-multilingual-v2.0"
+  ],
+  "open_ai_embedding_models": [
+    "text-embedding-ada-002"
+  ]
+}
