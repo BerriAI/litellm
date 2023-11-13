@@ -55,6 +55,8 @@ class Router:
         if cache_responses:
             litellm.cache = litellm.Cache(**cache_config) # use Redis for caching completion requests
             self.cache_responses = cache_responses
+        
+        self.chat = litellm.Chat(params={})
 
 
     def _start_health_check_thread(self):
