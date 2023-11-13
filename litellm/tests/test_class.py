@@ -9,13 +9,21 @@
 # )  # Adds the parent directory to the system path
 # import litellm
 # litellm.set_verbose = True
-# from litellm import LiteLLM
+# from litellm import Router
 # import instructor
 # from pydantic import BaseModel
 
 # # This enables response_model keyword
 # # from client.chat.completions.create
-# client = instructor.patch(LiteLLM())
+# client = instructor.patch(Router(model_list=[{
+#     "model_name": "gpt-3.5-turbo", # openai model name 
+#     "litellm_params": { # params for litellm completion/embedding call 
+#         "model": "azure/chatgpt-v-2", 
+#         "api_key": os.getenv("AZURE_API_KEY"),
+#         "api_version": os.getenv("AZURE_API_VERSION"),
+#         "api_base": os.getenv("AZURE_API_BASE")
+#     }
+# }]))
 
 # class UserDetail(BaseModel):
 #     name: str
@@ -32,3 +40,5 @@
 # assert isinstance(user, UserDetail)
 # assert user.name == "Jason"
 # assert user.age == 25
+
+# print(f"user: {user}")
