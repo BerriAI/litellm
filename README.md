@@ -113,7 +113,7 @@ import openai
 
 openai.api_base = "http://0.0.0.0:8000"
 
-print(openai.ChatCompletion.create(model="test", messages=[{"role":"user", "content":"Hey!"}]))
+print(openai.chat.completions.create(model="test", messages=[{"role":"user", "content":"Hey!"}]))
 ```
 
 ## Supported Provider ([Docs](https://docs.litellm.ai/docs/providers))
