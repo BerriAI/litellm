@@ -146,6 +146,7 @@ def usage_telemetry(
     feature: str,
 ):  # helps us know if people are using this feature. Set `litellm --telemetry False` to your cli call to turn this off
     if user_telemetry:
+        logging.info(R"Telemetry on")
         data = {"feature": feature}  # "local_proxy_server"
         threading.Thread(
             target=litellm.utils.litellm_telemetry, args=(data,), daemon=True
