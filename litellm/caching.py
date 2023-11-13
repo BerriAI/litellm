@@ -11,7 +11,6 @@ import litellm
 import time, logging
 import json, traceback
 
-
 def get_prompt(*args, **kwargs):
     # make this safe checks, it should not throw any exceptions
     if len(args) > 1:
@@ -222,6 +221,8 @@ class Cache:
             else:
                 cache_key = self.get_cache_key(*args, **kwargs)
             if cache_key is not None:
+                if isinstance(result, litellm.ModelResponse):
+                    result = result.model_dump_json()
                 self.cache.set_cache(cache_key, result, **kwargs)
         except:
             pass
