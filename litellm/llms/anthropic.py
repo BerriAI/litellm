@@ -125,11 +125,18 @@ def completion(
             data=json.dumps(data),
             stream=optional_params["stream"],
         )
+        
+        if response.status_code != 200:
+            raise AnthropicError(status_code=response.status_code, message=response.text)
+
         return response.iter_lines()
     else:
         response = requests.post(
             api_base, headers=headers, data=json.dumps(data)
         )
+        if response.status_code != 200:
+            raise AnthropicError(status_code=response.status_code, message=response.text)
+        
         ## LOGGING
         logging_obj.post_call(
             input=prompt,

@@ -53,7 +53,7 @@ from .exceptions import (
     APIError,
     BudgetExceededError
 )
-from typing import cast, List, Dict, Union, Optional, Literal
+from typing import cast, List, Dict, Union, Optional, Literal, TypedDict, Required
 from .caching import Cache
 
 ####### ENVIRONMENT VARIABLES ####################
@@ -118,6 +118,10 @@ def map_finish_reason(finish_reason: str): # openai supports 5 stop sequences - 
         return "stop"
     return finish_reason
 
+class FunctionCall(OpenAIObject):
+    arguments: str
+    name: str
+
 class Message(OpenAIObject):
     def __init__(self, content="default", role="assistant", logprobs=None, function_call=None, **params):
         super(Message, self).__init__(**params)
@@ -125,7 +129,7 @@ class Message(OpenAIObject):
         self.role = role
         self._logprobs = logprobs
         if function_call: 
-            self.function_call = function_call
+            self.function_call = FunctionCall(**function_call)
 
     def get(self, key, default=None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
@@ -922,7 +926,7 @@ class Logging:
                         callback.log_failure_event(
                             start_time=start_time,
                             end_time=end_time,
-                            messages=self.messages,
+                            response_obj=result,
                             kwargs=self.model_call_details,
                         )
                 except Exception as e:
