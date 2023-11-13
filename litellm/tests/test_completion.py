@@ -51,16 +51,14 @@ def test_completion_claude():
         )
         # Add any assertions here to check the response
         print(response)
-        print(response.response_ms)
         print(response.usage)
         print(response.usage.completion_tokens)
         print(response["usage"]["completion_tokens"])
         # print("new cost tracking")
-        print(response.cost())
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-# test_completion_claude()
+test_completion_claude()
 
 # def test_completion_oobabooga():
 #     try:
@@ -1333,7 +1331,6 @@ def test_completion_ai21():
         response = completion(model=model_name, messages=messages, max_tokens=100, temperature=0.8)
         # Add any assertions here to check the response
         print(response)
-        print(response.response_ms)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -1351,7 +1348,6 @@ def test_completion_deep_infra():
         )
         # Add any assertions here to check the response
         print(response)
-        print(response._response_ms)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 test_completion_deep_infra()
@@ -1368,7 +1364,6 @@ def test_completion_deep_infra_mistral():
         )
         # Add any assertions here to check the response
         print(response)
-        print(response._response_ms)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 test_completion_deep_infra_mistral()
@@ -1381,7 +1376,6 @@ def test_completion_palm():
         response = completion(model=model_name, messages=messages, stop=["stop"])
         # Add any assertions here to check the response
         print(response)
-        print(response.response_ms)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 # test_completion_palm()
