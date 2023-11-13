@@ -5,26 +5,7 @@
         <p align="center">Benchmark LLMs response, cost and response time</p>
     </p>
 
-<h4 align="center">
-    <a href="https://pypi.org/project/litellm/" target="_blank">
-        <img src="https://img.shields.io/pypi/v/litellm.svg" alt="PyPI Version">
-    </a>
-    <a href="https://pypi.org/project/litellm/0.1.1/" target="_blank">
-        <img src="https://img.shields.io/badge/stable%20version-v0.1.424-blue?color=green&link=https://pypi.org/project/litellm/0.1.1/" alt="Stable Version">
-    </a>
-    <a href="https://dl.circleci.com/status-badge/redirect/gh/BerriAI/litellm/tree/main" target="_blank">
-        <img src="https://dl.circleci.com/status-badge/img/gh/BerriAI/litellm/tree/main.svg?style=svg" alt="CircleCI">
-    </a>
-    <img src="https://img.shields.io/pypi/dm/litellm" alt="Downloads">
-    <a href="https://discord.gg/wuPM9dRgDw" target="_blank">
-        <img src="https://dcbadge.vercel.app/api/server/wuPM9dRgDw?style=flat">
-    </a>
-    <a href="https://www.ycombinator.com/companies/berriai">
-        <img src="https://img.shields.io/badge/Y%20Combinator-W23-orange?style=flat-square" alt="Y Combinator W23">
-    </a>
-<img width="1156" alt="Screenshot 2023-09-08 at 6 31 55 AM" src="https://github.com/BerriAI/litellm/assets/29436595/269a9c35-fc5f-4173-87eb-d73fc9322538">
 
-</h4>
 
 ## Setup:
 ```
