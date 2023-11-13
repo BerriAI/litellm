@@ -522,6 +522,13 @@
         "litellm_provider": "bedrock",
         "mode": "chat"
     },
+    "meta.llama2-13b-chat-v1": {
+        "max_tokens": 4096, 
+        "input_cost_per_token": 0.00000075,
+        "output_cost_per_token": 0.000001,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
     "together-ai-up-to-3b": {
         "input_cost_per_token": 0.0000001,
         "output_cost_per_token": 0.0000001
