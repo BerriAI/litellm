@@ -109,7 +109,7 @@ model_list = [{ # list of model deployments
 
 router = Router(model_list=model_list)
 
-# openai.ChatCompletion.create replacement
+# openai.chat.completions.create replacement
 response = router.completion(model="gpt-3.5-turbo", 
 				messages=[{"role": "user", "content": "Hey, how's it going?"}]
 
