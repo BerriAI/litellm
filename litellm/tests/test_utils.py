@@ -10,7 +10,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import pytest
 import litellm
-from litellm.utils import trim_messages, get_token_count, get_valid_models, check_valid_key, validate_environment, function_to_dict
+from litellm.utils import trim_messages, get_token_count, get_valid_models, check_valid_key, validate_environment, function_to_dict, token_counter
 
 # Assuming your trim_messages, shorten_message_to_fit_limit, and get_token_count functions are all in a module named 'message_utils'
 
@@ -178,4 +178,38 @@ def test_function_to_dict():
 
     print("passed")
 # test_function_to_dict()
+
+
+def test_token_counter():
+    messages = [
+        {
+            "role": "user",
+            "content": "hi how are you what time is it"
+        }
+    ]
+    tokens = token_counter(
+        model = "gpt-3.5-turbo",
+        messages=messages
+    )
+    print(tokens)
+
+    tokens = token_counter(
+        model = "claude-2",
+        messages=messages
+    )
+    print("claude-2")
+    print(tokens)
+
+    tokens = token_counter(
+        model = "command-nightly",
+        messages=messages
+    )
+    print("command-nightly")
+    print(tokens)
+
+# test_token_counter()
+
+
+
+
 
