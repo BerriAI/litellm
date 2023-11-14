@@ -1,13 +1,18 @@
-# #### What this tests ####
-# #    This tests the LiteLLM Class
+#### What this tests ####
+#    This tests the LiteLLM Class
 
-# import sys, os
-# import traceback
-# import pytest
-# sys.path.insert(
-#     0, os.path.abspath("../..")
-# )  # Adds the parent directory to the system path
-# import litellm
+import sys, os
+import traceback
+import pytest
+sys.path.insert(
+    0, os.path.abspath("../..")
+)  # Adds the parent directory to the system path
+import litellm
+
+mr1 = litellm.ModelResponse(stream=True, model="gpt-3.5-turbo")
+mr1.choices[0].finish_reason = "stop"
+mr2 = litellm.ModelResponse(stream=True, model="gpt-3.5-turbo")
+print(mr2.choices[0].finish_reason)
 # litellm.set_verbose = True
 # from litellm import Router
 # import instructor
