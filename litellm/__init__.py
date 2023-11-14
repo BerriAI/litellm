@@ -61,6 +61,7 @@ suppress_debug_info = False
 
 
 def get_model_cost_map(url: str):
+    print(f"Model cost loaded from: {url}")
     try:
         response = requests.get(url)
         response.raise_for_status()  # Raise an exception if request is unsuccessful
@@ -70,6 +71,7 @@ def get_model_cost_map(url: str):
         import importlib.resources
         import json
 
+        print(R"Model cost loaded from local copy")
         with importlib.resources.open_text(
             "litellm", "model_prices_and_context_window_backup.json"
         ) as f:
@@ -152,8 +154,21 @@ for key, value in model_cost.items():
         deepinfra_models.append(key)
     elif value.get("litellm_provider") == "perplexity":
         perplexity_models.append(key)
+    elif value.get("litellm_provider") in [
+        "palm",
+        "replicate",
+        "ollama",
+        "anyscale",
+        "together",
+    ]:
+        pass
+    elif value.get("litellm_provider") == "None":
+        print(f"Model provider not recognized:{key}")
+        pass
     else:
-        print(f"Model provider not recognized:{value.get('litellm_provider')}")
+        print(
+            f"Model provider not recognized - add litellm_provider for:{key} - {value.get('litellm_provider')}"
+        )
 
 
 # well-supported replicate llms
