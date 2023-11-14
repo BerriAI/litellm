@@ -4458,6 +4458,7 @@ class CustomStreamWrapper:
     
     def chunk_creator(self, chunk):
         model_response = ModelResponse(stream=True, model=self.model)
+        print_verbose(f"model_response finish reason 1: {model_response.choices[0].finish_reason}")
         try:
             # return this for all models
             completion_obj = {"content": ""}
@@ -4497,6 +4498,7 @@ class CustomStreamWrapper:
                 print_verbose(f"len(completion_obj['content']: {len(completion_obj['content'])}")
                 if response_obj["is_finished"]: 
                     model_response.choices[0].finish_reason = response_obj["finish_reason"]
+                    print_verbose(f"model_response finish reason 2: {model_response.choices[0].finish_reason}")
             elif self.custom_llm_provider and self.custom_llm_provider == "maritalk":
                 response_obj = self.handle_maritalk_chunk(chunk)
                 completion_obj["content"] = response_obj["text"]
@@ -4601,6 +4603,7 @@ class CustomStreamWrapper:
             
             model_response.model = self.model
             print_verbose(f"model_response: {model_response}; completion_obj: {completion_obj}")
+            print_verbose(f"model_response finish reason 3: {model_response.choices[0].finish_reason}")
             if len(completion_obj["content"]) > 0: # cannot set content of an OpenAI Object to be an empty string
                 hold, model_response_str = self.check_special_tokens(completion_obj["content"])
                 if hold is False: 

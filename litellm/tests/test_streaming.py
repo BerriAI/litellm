@@ -351,7 +351,7 @@ def test_completion_cohere_stream_bad_key():
 
 def test_completion_azure_stream():
     try:
-        litellm.set_verbose = True
+        litellm.set_verbose = False
         messages = [
             {"role": "system", "content": "You are a helpful assistant."},
             {
