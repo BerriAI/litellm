@@ -639,6 +639,7 @@ def test_azure_openai_ad_token():
     def tester(    
         kwargs,                 # kwargs to completion
     ):
+        print(kwargs["additional_args"])
         if kwargs["additional_args"]["headers"]["Authorization"] != 'Bearer gm':
             pytest.fail("AZURE AD TOKEN Passed but not set in request header")
         return
@@ -656,9 +657,11 @@ def test_azure_openai_ad_token():
         )
         print("azure ad token respoonse\n")
         print(response)
+        litellm.input_callback = []
     except:
+        litellm.input_callback = []
         pass
-test_azure_openai_ad_token()
+# test_azure_openai_ad_token()
 
 
 # test_completion_azure()
@@ -1357,6 +1360,8 @@ def test_mistral_anyscale_stream():
 
 #### Test A121 ###################
 def test_completion_ai21():
+    print("running ai21 j2light test")
+    litellm.set_verbose=True
     model_name = "j2-light"
     try:
         response = completion(model=model_name, messages=messages, max_tokens=100, temperature=0.8)
