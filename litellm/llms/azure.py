@@ -181,7 +181,7 @@ class AzureChatCompletion(BaseLLM):
                         raise AzureOpenAIError(status_code=response.status_code, message=response.text)
                     
                     completion_stream = response.iter_lines()
-                    streamwrapper = CustomStreamWrapper(completion_stream=completion_stream, model=model, custom_llm_provider="openai",logging_obj=logging_obj)
+                    streamwrapper = CustomStreamWrapper(completion_stream=completion_stream, model=model, custom_llm_provider="azure",logging_obj=logging_obj)
                     for transformed_chunk in streamwrapper:
                         yield transformed_chunk
 

@@ -4296,6 +4296,7 @@ class CustomStreamWrapper:
         is_finished = False
         finish_reason = ""
         text = ""
+        print_verbose(f"chunk: {chunk}")
         if "data: [DONE]" in chunk:
             text = ""
             is_finished = True
@@ -4308,6 +4309,7 @@ class CustomStreamWrapper:
                 if data_json["choices"][0].get("finish_reason", None): 
                     is_finished = True
                     finish_reason = data_json["choices"][0]["finish_reason"]
+                print_verbose(f"text: {text}; is_finished: {is_finished}; finish_reason: {finish_reason}")
                 return {"text": text, "is_finished": is_finished, "finish_reason": finish_reason}
             except:
                 raise ValueError(f"Unable to parse response. Original response: {chunk}")
@@ -4370,6 +4372,7 @@ class CustomStreamWrapper:
             text = "" 
             is_finished = False
             finish_reason = None
+            print_verbose(f"str_line: {str_line}")
             if "data: [DONE]" in str_line:
                 text = ""
                 is_finished = True
@@ -4489,6 +4492,8 @@ class CustomStreamWrapper:
             elif self.custom_llm_provider and self.custom_llm_provider == "azure": 
                 response_obj = self.handle_azure_chunk(chunk)
                 completion_obj["content"] = response_obj["text"]
+                print_verbose(f"completion obj content: {completion_obj['content']}")
+                print_verbose(f"len(completion_obj['content']: {len(completion_obj['content'])}")
                 if response_obj["is_finished"]: 
                     model_response.choices[0].finish_reason = response_obj["finish_reason"]
             elif self.custom_llm_provider and self.custom_llm_provider == "maritalk":
