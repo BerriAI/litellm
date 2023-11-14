@@ -14,7 +14,8 @@ import litellm
 from litellm import completion, acompletion, AuthenticationError, BadRequestError, RateLimitError, ModelResponse
 
 litellm.logging = False
-litellm.set_verbose = False
+litellm.set_verbose = True
+litellm.num_retries = 3
 litellm.cache = None
 
 score = 0
@@ -350,6 +351,7 @@ def test_completion_cohere_stream_bad_key():
 
 def test_completion_azure_stream():
     try:
+        litellm.set_verbose = True
         messages = [
             {"role": "system", "content": "You are a helpful assistant."},
             {
@@ -372,7 +374,7 @@ def test_completion_azure_stream():
         print(f"completion_response: {complete_response}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_completion_azure_stream() 
+test_completion_azure_stream() 
 
 def test_completion_claude_stream():
     try:
