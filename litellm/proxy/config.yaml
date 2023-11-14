@@ -15,3 +15,6 @@ model_list:
 
 litellm_settings:
   drop_params: True
+
+general_settings: 
+  master_key: sk-12345
