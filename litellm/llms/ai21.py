@@ -142,6 +142,11 @@ def completion(
     response = requests.post(
         api_base + model + "/complete", headers=headers, data=json.dumps(data)
     )
+    if response.status_code != 200:
+        raise AI21Error(
+            status_code=response.status_code,
+            message=response.text
+        )
     if "stream" in optional_params and optional_params["stream"] == True:
         return response.iter_lines()
     else:
@@ -154,24 +159,18 @@ def completion(
             )
         ## RESPONSE OBJECT
         completion_response = response.json()
-        if "error" in completion_response:
-            raise AI21Error(
-                message=completion_response["error"],
-                status_code=response.status_code,
-            )
-        else:
-            try:
-                choices_list = []
-                for idx, item in enumerate(completion_response["completions"]):
-                    if len(item["data"]["text"]) > 0:
-                        message_obj = Message(content=item["data"]["text"])
-                    else: 
-                        message_obj = Message(content=None)
-                    choice_obj = Choices(finish_reason=item["finishReason"]["reason"], index=idx+1, message=message_obj)
-                    choices_list.append(choice_obj)
-                model_response["choices"] = choices_list
-            except Exception as e:
-                raise AI21Error(message=traceback.format_exc(), status_code=response.status_code)
+        try:
+            choices_list = []
+            for idx, item in enumerate(completion_response["completions"]):
+                if len(item["data"]["text"]) > 0:
+                    message_obj = Message(content=item["data"]["text"])
+                else: 
+                    message_obj = Message(content=None)
+                choice_obj = Choices(finish_reason=item["finishReason"]["reason"], index=idx+1, message=message_obj)
+                choices_list.append(choice_obj)
+            model_response["choices"] = choices_list
+        except Exception as e:
+            raise AI21Error(message=traceback.format_exc(), status_code=response.status_code)
 
         ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here. 
         prompt_tokens = len(
