@@ -6,3 +6,14 @@ repos:
        exclude: ^litellm/tests/|^litellm/proxy/|^litellm/integrations/
        additional_dependencies: [flake8-print]
        files: litellm/.*\.py
+
+-   repo: https://github.com/python-poetry/poetry
+    rev: '1.6.1' # The version of poetry to use
+    # to review outdated packages
+    # poetry show --outdated | grep --file=<(poetry show --tree | grep '^\w' | sed 's/^\([^ ]*\).*/^\1/')
+    hooks:
+    -  id: poetry-check
+    -  id: poetry-lock
+    -  id: poetry-export
+    -  id: poetry-install
+#    -  id: poetry-audit #not sure if it will work
