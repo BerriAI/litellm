@@ -83,13 +83,15 @@ class ContextWindowExceededError(BadRequestError):  # type: ignore
         )  # Call the base class constructor with the parameters it needs
 
 class ServiceUnavailableError(APIStatusError):  # type: ignore
-    def __init__(self, message, llm_provider, model):
+    def __init__(self, message, llm_provider, model, response: httpx.Response):
         self.status_code = 503
         self.message = message
         self.llm_provider = llm_provider
         self.model = model
         super().__init__(
-            self.message
+            self.message,
+            response=response,
+            body=None
         )  # Call the base class constructor with the parameters it needs
 
 
