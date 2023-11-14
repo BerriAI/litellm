@@ -104,7 +104,7 @@ class APIError(APIError): # type: ignore
         self.model = model
         super().__init__(
             self.message,
-            request=request, # type: ignore,
+            request=request, # type: ignore
             body=None,
         )
 
