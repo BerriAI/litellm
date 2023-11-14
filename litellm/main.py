@@ -1878,7 +1878,6 @@ def text_completion(
     **kwargs
 ):
     global print_verbose
-    import copy
     """
     Generate text completions using the OpenAI API.
 
