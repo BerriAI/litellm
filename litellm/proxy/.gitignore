@@ -1,2 +1,4 @@
 .env
 secrets.toml
+litellm.secrets.toml
+api_log.json

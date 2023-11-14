@@ -10,10 +10,13 @@ litellm_results.jsonl
 secrets.toml
 .gitignore
 litellm/proxy/litellm_secrets.toml
+litellm/proxy/litellm_secrets
 litellm/proxy/api_log.json
 .idea/
 router_config.yaml
 **/config.yaml
 litellm_server/router_config.yaml
+litellm_server/litellm.secrets
 .vscode/
 **/api_logs.json
+/litellm_server/litellm.secrets.toml
