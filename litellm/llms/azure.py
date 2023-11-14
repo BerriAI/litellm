@@ -214,6 +214,7 @@ class AzureChatCompletion(BaseLLM):
                 input: list,
                 api_key: str,
                 api_base: str,
+                azure_ad_token: str,
                 api_version: str,
                 logging_obj=None,
                 model_response=None,
@@ -221,7 +222,7 @@ class AzureChatCompletion(BaseLLM):
         super().embedding()
         exception_mapping_worked = False
         try: 
-            headers = self.validate_environment(api_key)
+            headers = self.validate_environment(api_key, azure_ad_token=azure_ad_token)
             # Ensure api_base ends with a trailing slash
             if not api_base.endswith('/'):
                 api_base += '/'
