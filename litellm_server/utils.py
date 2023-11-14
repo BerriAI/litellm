@@ -1,3 +1,4 @@
+import logging
 import os
 
 import dotenv
@@ -82,16 +83,22 @@ def load_router_config(
     if server_settings:
         server_settings = server_settings
 
+    logging.debug(f"Server settings: {server_settings}")
+
     ## LITELLM MODULE SETTINGS (e.g. litellm.drop_params=True,..)
     litellm_settings = config.get("litellm_settings", None)
     if litellm_settings:
         for key, value in litellm_settings.items():
             setattr(litellm, key, value)
 
+    logging.debug(f"Litellm settings: {litellm_settings}")
+
     ## MODEL LIST
     model_list = config.get("model_list", None)
     if model_list:
         router = litellm.Router(model_list=model_list)
+
+    logging.debug(f"Model List: {model_list}")
 
     ## ENVIRONMENT VARIABLES
     environment_variables = config.get("environment_variables", None)
