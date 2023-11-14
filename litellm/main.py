@@ -1728,6 +1728,11 @@ def embedding(
                 get_secret("AZURE_API_VERSION")
             )
 
+            azure_ad_token = (
+                kwargs.pop("azure_ad_token", None) or
+                get_secret("AZURE_AD_TOKEN")
+            )
+
             api_key = (
                 api_key or
                 litellm.api_key or
