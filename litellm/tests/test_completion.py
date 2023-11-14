@@ -632,26 +632,33 @@ def test_completion_azure():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-def test_azure_openai():
+def test_azure_openai_ad_token():
+    # this tests if the azure ad token is set in the request header
+    # the request can fail since azure ad tokens expire after 30 mins, but the header MUST have the azure ad token
+    # we use litellm.input_callbacks for this test
+    def tester(    
+        kwargs,                 # kwargs to completion
+    ):
+        if kwargs["additional_args"]["headers"]["Authorization"] != 'Bearer gm':
+            pytest.fail("AZURE AD TOKEN Passed but not set in request header")
+        return
+    litellm.input_callback = [tester]
     try:
-        print("\n making azure ad token call\n")
-        # os.environ.pop("AZURE_API_KEY")
-        litellm.set_verbose=False
         response = litellm.completion(
             model="azure/chatgpt-v-2",  # e.g. gpt-35-instant
             messages=[
                 {
                     "role": "user",
-                    "content": "How do I output all files in a directory using Python?",
+                    "content": "what is your name",
                 },
             ],
+            azure_ad_token="gm"
         )
         print("azure ad token respoonse\n")
         print(response)
     except:
-        # this test fails, since we use AD tokens whcih last 30mins
         pass
-test_azure_openai()
+test_azure_openai_ad_token()
 
 
 # test_completion_azure()
@@ -1405,7 +1412,7 @@ def test_completion_palm():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_palm()
+# test_completion_palm()
 
 # test palm with streaming
 def test_completion_palm_stream():
