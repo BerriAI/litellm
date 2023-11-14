@@ -4588,12 +4588,12 @@ class CustomStreamWrapper:
                 response_obj = self.handle_openai_chat_completion_chunk(chunk)
                 completion_obj["content"] = response_obj["text"]
                 print_verbose(f"completion obj content: {completion_obj['content']}")
-                print_verbose(f"len(completion_obj['content']: {completion_obj['content']}")
+                print_verbose(f"len(completion_obj['content']: {len(completion_obj['content'])}")
                 if response_obj["is_finished"]: 
                     model_response.choices[0].finish_reason = response_obj["finish_reason"]
             
             model_response.model = self.model
-            print_verbose(f"model_response: {model_response}")
+            print_verbose(f"model_response: {model_response}; completion_obj: {completion_obj}")
             if len(completion_obj["content"]) > 0: # cannot set content of an OpenAI Object to be an empty string
                 hold, model_response_str = self.check_special_tokens(completion_obj["content"])
                 if hold is False: 
