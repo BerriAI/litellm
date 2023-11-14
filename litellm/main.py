@@ -7,13 +7,26 @@
 #
 #  Thank you ! We ❤️ you! - Krrish & Ishaan
 
-import os, openai, sys, json, inspect, uuid, datetime, threading
-from typing import Any
+import asyncio
+import contextvars
+import datetime
+import inspect
+import os
+import sys
+import time
+import traceback
+import uuid
 from functools import partial
+from typing import Any
 
-import dotenv, traceback, random, asyncio, time, contextvars
-from copy import deepcopy
+import dotenv
 import httpx
+import openai
+
+sys.path.insert(
+    0, os.path.abspath("..")
+)  # Adds the parent directory to the system path - for litellm local dev
+
 import litellm
 from litellm import (  # type: ignore
     client,
