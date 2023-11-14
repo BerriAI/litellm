@@ -457,6 +457,7 @@ def completion(
             )
 
             azure_ad_token = (
+                optional_params.pop("azure_ad_token", None) or
                 get_secret("AZURE_AD_TOKEN")
             )
 
@@ -1740,6 +1741,7 @@ def embedding(
                 api_base=api_base,
                 api_key=api_key,
                 api_version=api_version,
+                azure_ad_token=None,
                 logging_obj=logging,
                 model_response=EmbeddingResponse(), 
                 optional_params=kwargs
