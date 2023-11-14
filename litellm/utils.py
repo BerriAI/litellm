@@ -4629,9 +4629,11 @@ class CustomStreamWrapper:
                     chunk = self.completion_stream
                 else:
                     chunk = next(self.completion_stream)
-
+                
+                print_verbose(f"chunk in __next__: {chunk}")
                 if chunk is not None:
                     response = self.chunk_creator(chunk=chunk)
+                    print_verbose(f"response in __next__: {response}")
                     if response is not None:
                         return response
         except StopIteration:
