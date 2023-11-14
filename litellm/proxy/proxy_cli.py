@@ -21,7 +21,6 @@ user_config_path = os.getenv("LITELLM_CONFIG_PATH", os.path.join(config_dir, con
 print(f"User folder for the configuration: {user_config_path}" )
 
 load_dotenv()
-from importlib import resources
 import shutil
 telemetry = None
 
