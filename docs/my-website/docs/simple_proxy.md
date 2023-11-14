@@ -583,12 +583,17 @@ You can use the config to save model-specific information like api_base, api_key
 **Step 1**: Create a `config.yaml` file
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4-team1
     litellm_params: # params for litellm.completion() - https://docs.litellm.ai/docs/completion/input#input---request-body
-      model: azure/chatgpt-v-2 # azure/<your-deployment-name>
-      api_key: your_azure_api_key
-      api_version: your_azure_api_version
-      api_base: your_azure_api_base
+      model: azure/chatgpt-v-2
+      api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
+      api_version: "2023-05-15"
+      azure_ad_token: eyJ0eXAiOiJ
+  - model_name: gpt-4-team2
+    litellm_params:
+      model: azure/gpt-4
+      api_key: sk-123
+      api_base: https://openai-gpt-4-test-v-2.openai.azure.com/
   - model_name: mistral-7b
     litellm_params:
       model: ollama/mistral
