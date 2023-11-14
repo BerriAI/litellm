@@ -1746,7 +1746,7 @@ def embedding(
                 api_base=api_base,
                 api_key=api_key,
                 api_version=api_version,
-                azure_ad_token=None,
+                azure_ad_token=azure_ad_token,
                 logging_obj=logging,
                 model_response=EmbeddingResponse(), 
                 optional_params=kwargs
