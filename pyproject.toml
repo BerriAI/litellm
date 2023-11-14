@@ -33,6 +33,8 @@ contextvars = "^2.4"
 posthog = {extras = ["utils"], version = "^3.0.2"}
 slack-bolt = {extras = ["utils"], version = "^1.18.0"}
 sentry-sdk = {extras = ["utils"], version = "^1.35.0"}
+numpydoc = {extras = ["utils"], version = "^1.6.0"}
+anthropic = {extras = ["utils"], version = "^0.6.0"}
 
 [tool.poetry.scripts]
 litellm = 'litellm:run_server'
