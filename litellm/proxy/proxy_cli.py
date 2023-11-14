@@ -85,7 +85,7 @@ def run_server(host, port, api_base, api_version, model, alias, add_key, headers
     global feature_telemetry
     args = locals()
     if local:
-        from proxy_server import app, save_worker_config, usage_telemetry, add_keys_to_config
+        from proxy_server import save_worker_config, usage_telemetry, add_keys_to_config
     else:
         try:
             from .proxy_server import app, save_worker_config, usage_telemetry, add_keys_to_config
