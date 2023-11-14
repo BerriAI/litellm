@@ -1,17 +1,17 @@
 ### INIT VARIABLES ###
-import threading, requests
-from typing import Callable, List, Optional, Dict, Union
-from litellm.caching import Cache
+import threading
+from typing import Callable, Optional, Dict, Union
+
 import httpx
 import json5
 import requests
 
 from litellm.caching import Cache
 
-input_callback: List[Union[str, Callable]] = []
-success_callback: List[Union[str, Callable]] = []
-failure_callback: List[Union[str, Callable]] = []
-callbacks: List[Callable] = []
+input_callback: list[Union[str, Callable]] = []
+success_callback: list[Union[str, Callable]] = []
+failure_callback: list[Union[str, Callable]] = []
+callbacks: list[Callable] = []
 set_verbose = False
 email: Optional[
     str
@@ -41,20 +41,24 @@ aleph_alpha_key: Optional[str] = None
 nlp_cloud_key: Optional[str] = None
 use_client: bool = False
 logging: bool = True
-caching: bool = False # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
+caching: bool = False  # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
 caching_with_models: bool = False  # # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
-cache: Optional[Cache] = None # cache object <- use this - https://docs.litellm.ai/docs/caching
+cache: Optional[
+    Cache
+] = None  # cache object <- use this - https://docs.litellm.ai/docs/caching
 model_alias_map: Dict[str, str] = {}
-max_budget: float = 0.0 # set the max budget across all providers
-_current_cost = 0 # private variable, used if max budget is set 
+max_budget: float = 0.0  # set the max budget across all providers
+_current_cost = 0  # private variable, used if max budget is set
 error_logs: Dict = {}
-add_function_to_prompt: bool = False # if function calling not supported by api, append function call details to system prompt
+add_function_to_prompt: bool = False  # if function calling not supported by api, append function call details to system prompt
 client_session: Optional[httpx.Client] = None
-model_fallbacks: Optional[List] = None
+model_fallbacks: Optional[list] = None
 model_cost_map_url: str = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
+# can be found under ../
 num_retries: Optional[int] = None
 suppress_debug_info = False
 #############################################
+
 
 def get_model_cost_map(url: str):
     try:
@@ -65,11 +69,18 @@ def get_model_cost_map(url: str):
     except:
         import importlib.resources
         import json
-        with importlib.resources.open_text("litellm", "model_prices_and_context_window_backup.json") as f:
+
+        with importlib.resources.open_text(
+            "litellm", "model_prices_and_context_window_backup.json"
+        ) as f:
             content = json.load(f)
             return content
+
+
 model_cost = get_model_cost_map(url=model_cost_map_url)
-custom_prompt_dict:Dict[str, dict] = {}
+custom_prompt_dict: Dict[str, dict] = {}
+
+
 ####### THREAD-SPECIFIC DATA ###################
 class MyLocal(threading.local):
     def __init__(self):
@@ -94,61 +105,61 @@ config_path = None
 ####### Secret Manager #####################
 secret_manager_client = None
 ####### COMPLETION MODELS ###################
-open_ai_chat_completion_models: List = []
-open_ai_text_completion_models: List = []
-cohere_models: List = []
-anthropic_models: List = []
-openrouter_models: List = []
-vertex_chat_models: List = []
-vertex_code_chat_models: List = []
-vertex_text_models: List = []
-vertex_code_text_models: List = []
-ai21_models: List = []
-nlp_cloud_models: List = []
-aleph_alpha_models: List = []
-bedrock_models: List = []
-deepinfra_models: List = []
-perplexity_models: List = []
+open_ai_chat_completion_models: list = []
+open_ai_text_completion_models: list = []
+cohere_models: list = []
+anthropic_models: list = []
+openrouter_models: list = []
+vertex_chat_models: list = []
+vertex_code_chat_models: list = []
+vertex_text_models: list = []
+vertex_code_text_models: list = []
+ai21_models: list = []
+nlp_cloud_models: list = []
+aleph_alpha_models: list = []
+bedrock_models: list = []
+deepinfra_models: list = []
+perplexity_models: list = []
 for key, value in model_cost.items():
-    if value.get('litellm_provider') == 'openai':
+    if value.get("litellm_provider") == "openai":
         open_ai_chat_completion_models.append(key)
-    elif value.get('litellm_provider') == 'text-completion-openai':
+    elif value.get("litellm_provider") == "text-completion-openai":
         open_ai_text_completion_models.append(key)
-    elif value.get('litellm_provider') == 'cohere':
+    elif value.get("litellm_provider") == "cohere":
         cohere_models.append(key)
-    elif value.get('litellm_provider') == 'anthropic':
+    elif value.get("litellm_provider") == "anthropic":
         anthropic_models.append(key)
-    elif value.get('litellm_provider') == 'openrouter':
-        split_string = key.split('/', 1)
+    elif value.get("litellm_provider") == "openrouter":
+        split_string = key.split("/", 1)
         openrouter_models.append(split_string[1])
-    elif value.get('litellm_provider') == 'vertex_ai-text-models':
+    elif value.get("litellm_provider") == "vertex_ai-text-models":
         vertex_text_models.append(key)
-    elif value.get('litellm_provider') == 'vertex_ai-code-text-models':
+    elif value.get("litellm_provider") == "vertex_ai-code-text-models":
         vertex_code_text_models.append(key)
-    elif value.get('litellm_provider') == 'vertex_ai-chat-models':
+    elif value.get("litellm_provider") == "vertex_ai-chat-models":
         vertex_chat_models.append(key)
-    elif value.get('litellm_provider') == 'vertex_ai-code-chat-models':
+    elif value.get("litellm_provider") == "vertex_ai-code-chat-models":
         vertex_code_chat_models.append(key)
-    elif value.get('litellm_provider') == 'ai21':
+    elif value.get("litellm_provider") == "ai21":
         ai21_models.append(key)
-    elif value.get('litellm_provider') == 'nlp_cloud':
+    elif value.get("litellm_provider") == "nlp_cloud":
         nlp_cloud_models.append(key)
-    elif value.get('litellm_provider') == 'aleph_alpha':
+    elif value.get("litellm_provider") == "aleph_alpha":
         aleph_alpha_models.append(key)
-    elif value.get('litellm_provider') == 'bedrock': 
+    elif value.get("litellm_provider") == "bedrock":
         bedrock_models.append(key)
-    elif value.get('litellm_provider') == 'deepinfra':
+    elif value.get("litellm_provider") == "deepinfra":
         deepinfra_models.append(key)
-    elif value.get('litellm_provider') == 'perplexity':
+    elif value.get("litellm_provider") == "perplexity":
         perplexity_models.append(key)
+    else:
+        print(f"Model provider not recognized:{value.get('litellm_provider')}")
 
-# known openai compatible endpoints - we'll eventually move this list to the model_prices_and_context_window.json dictionary
-openai_compatible_endpoints: list = ["api.perplexity.ai"]
 
-
-# well supported replicate llms
+# well-supported replicate llms
 with open("config/models.json5") as json5_file:
     models_data = json5.load(json5_file)
+    openai_compatible_endpoints: list = models_data["openai_compatible"]
     replicate_models: list = models_data["replicate_models"]
     huggingface_models: list = models_data["huggingface_models"]
     together_ai_models: list = models_data["together_ai_models"]
@@ -184,34 +195,6 @@ model_list = (
     + maritalk_models
 )
 
-provider_list: List = [
-    "openai",
-    "custom_openai",
-    "cohere",
-    "anthropic",
-    "replicate",
-    "huggingface",
-    "together_ai",
-    "openrouter",
-    "vertex_ai",
-    "palm",
-    "ai21",
-    "baseten",
-    "azure",
-    "sagemaker",
-    "bedrock",
-    "vllm",
-    "nlp_cloud",
-    "petals",
-    "oobabooga",
-    "ollama",
-    "deepinfra",
-    "perplexity",
-    "anyscale",
-    "maritalk",
-    "custom", # custom apis
-]
-
 models_by_provider: dict = {
     "openai": open_ai_chat_completion_models + open_ai_text_completion_models,
     "cohere": cohere_models,
@@ -228,29 +211,7 @@ models_by_provider: dict = {
     "ollama": ollama_models,
     "deepinfra": deepinfra_models,
     "perplexity": perplexity_models,
-    "maritalk": maritalk_models
-}
-
-# mapping for those models which have larger equivalents 
-longer_context_model_fallback_dict: dict = {
-    # openai chat completion models
-    "gpt-3.5-turbo": "gpt-3.5-turbo-16k", 
-    "gpt-3.5-turbo-0301": "gpt-3.5-turbo-16k-0301", 
-    "gpt-3.5-turbo-0613": "gpt-3.5-turbo-16k-0613", 
-    "gpt-4": "gpt-4-32k", 
-    "gpt-4-0314": "gpt-4-32k-0314", 
-    "gpt-4-0613": "gpt-4-32k-0613", 
-    # anthropic 
-    "claude-instant-1": "claude-2", 
-    "claude-instant-1.2": "claude-2",
-    # vertexai
-    "chat-bison": "chat-bison-32k",
-    "chat-bison@001": "chat-bison-32k",
-    "codechat-bison": "codechat-bison-32k", 
-    "codechat-bison@001": "codechat-bison-32k",
-    # openrouter 
-    "openrouter/openai/gpt-3.5-turbo": "openrouter/openai/gpt-3.5-turbo-16k", 
-    "openrouter/anthropic/claude-instant-v1": "openrouter/anthropic/claude-2",
+    "maritalk": maritalk_models,
 }
 
 ####### EMBEDDING MODELS ###################
@@ -282,8 +243,8 @@ from .utils import (
     get_llm_provider,
     completion_with_config,
     register_model,
-    encode, 
-    decode
+    encode,
+    decode,
 )
 from .llms.huggingface_restapi import HuggingfaceConfig
 from .llms.anthropic import AnthropicConfig
@@ -299,7 +260,12 @@ from .llms.vertex_ai import VertexAIConfig
 from .llms.sagemaker import SagemakerConfig
 from .llms.ollama import OllamaConfig
 from .llms.maritalk import MaritTalkConfig
-from .llms.bedrock import AmazonTitanConfig, AmazonAI21Config, AmazonAnthropicConfig, AmazonCohereConfig
+from .llms.bedrock import (
+    AmazonTitanConfig,
+    AmazonAI21Config,
+    AmazonAnthropicConfig,
+    AmazonCohereConfig,
+)
 from .llms.openai import OpenAIConfig, OpenAITextCompletionConfig
 from .llms.azure import AzureOpenAIConfig
 from .main import *  # type: ignore
@@ -312,7 +278,7 @@ from .exceptions import (
     ServiceUnavailableError,
     OpenAIError,
     ContextWindowExceededError,
-    BudgetExceededError, 
+    BudgetExceededError,
     APIError,
 )
 from .budget_manager import BudgetManager
