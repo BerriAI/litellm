@@ -1,12 +1,16 @@
-import os, traceback
-from fastapi import FastAPI, Request, HTTPException
-from fastapi.routing import APIRouter
-from fastapi.responses import StreamingResponse, FileResponse
-from fastapi.middleware.cors import CORSMiddleware
-import json, sys
+import json
+import os
+import sys
+import traceback
 from typing import Optional
+
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from fastapi.routing import APIRouter
+
 sys.path.insert(
-    0, os.path.abspath("../")
+    0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path - for litellm local dev
 import litellm
 print(f"litellm: {litellm}")
