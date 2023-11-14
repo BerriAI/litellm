@@ -60,6 +60,27 @@ $ litellm --model huggingface/<your model name> --api_base https://k58ory32yinf1
 ```
 
 </TabItem>
+<TabItem value="azure" label="Azure OpenAI">
+
+```shell
+$ export AZURE_API_KEY=my-api-key
+$ export AZURE_API_BASE=my-api-base
+```
+```
+$ litellm --model azure/my-deployment-name
+```
+
+</TabItem>
+<TabItem value="openai-proxy" label="OpenAI">
+
+```shell
+$ export OPENAI_API_KEY=my-api-key
+```
+
+```shell
+$ litellm --model gpt-3.5-turbo
+```
+</TabItem>
 <TabItem value="anthropic" label="Anthropic">
 
 ```shell
@@ -75,12 +96,6 @@ Assuming you're running vllm locally
 
 ```shell
 $ litellm --model vllm/facebook/opt-125m
-```
-</TabItem>
-<TabItem value="openai-proxy" label="OpenAI Compatible Server">
-
-```shell
-$ litellm --model openai/<model_name> --api_base <your-api-base>
 ```
 </TabItem>
 <TabItem value="together_ai" label="TogetherAI">
@@ -121,18 +136,6 @@ $ export PALM_API_KEY=my-palm-key
 ```
 ```shell
 $ litellm --model palm/chat-bison
-```
-
-</TabItem>
-
-<TabItem value="azure" label="Azure OpenAI">
-
-```shell
-$ export AZURE_API_KEY=my-api-key
-$ export AZURE_API_BASE=my-api-base
-```
-```
-$ litellm --model azure/my-deployment-name
 ```
 
 </TabItem>
