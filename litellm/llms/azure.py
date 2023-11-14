@@ -78,12 +78,14 @@ class AzureChatCompletion(BaseLLM):
         super().__init__()
         self._client_session = self.create_client_session()
     
-    def validate_environment(self, api_key):
+    def validate_environment(self, api_key, azure_ad_token):
         headers = {
             "content-type": "application/json",
         }
-        if api_key:
+        if api_key is not None:
             headers["api-key"] = api_key
+        if azure_ad_token is not None:
+            headers["Authorization"] = f"Bearer {azure_ad_token}"
         return headers
 
     def completion(self, 
@@ -94,6 +96,7 @@ class AzureChatCompletion(BaseLLM):
                api_base: str,
                api_version: str,
                api_type: str,
+               azure_ad_token: str,
                print_verbose: Callable,
                logging_obj,
                optional_params,
@@ -105,7 +108,7 @@ class AzureChatCompletion(BaseLLM):
         exception_mapping_worked = False
         try:
             if headers is None:
-                headers = self.validate_environment(api_key=api_key)
+                headers = self.validate_environment(api_key=api_key, azure_ad_token=azure_ad_token)
 
             if model is None or messages is None:
                 raise AzureOpenAIError(status_code=422, message=f"Missing model or messages")
