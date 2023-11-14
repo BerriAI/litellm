@@ -37,9 +37,6 @@ from litellm import (  # type: ignore
     Logging,
 )
 from litellm.utils import (
-    get_secret,
-    CustomStreamWrapper,
-    read_config_args,
     completion_with_fallbacks,
     get_llm_provider,
     get_api_key,
