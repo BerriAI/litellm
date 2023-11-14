@@ -483,6 +483,7 @@ The Config allows you to set the following params
 |----------------------|---------------------------------------------------------------|
 | `model_list`         | List of supported models on the server, with model-specific configs |
 | `litellm_settings`   | litellm Module settings, example `litellm.drop_params=True`, `litellm.set_verbose=True`, `litellm.api_base` |
+| `general_settings`   | Server settings, example setting `master_key: sk-my_special_key` |
 
 ### Example Config
 ```yaml
@@ -499,6 +500,9 @@ model_list:
 litellm_settings:
   drop_params: True
   set_verbose: True
+
+general_settings: 
+  master_key: sk-1234 # [OPTIONAL] Only use this if you to require all calls to contain this key (Authorization: Bearer sk-1234)
 ```
 
 ### Quick Start - Config 
