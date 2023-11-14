@@ -48,7 +48,13 @@
 	"meta-llama/Llama-2-70b-chat",
 	//these have been tested on extensively. But by default all text2text-generation and text-generation models are supported by liteLLM. - https://docs.litellm.ai/docs/providers
   ],
-  "together_ai_models:": [
+  "together_ai_models": [
+	//New models?
+	"ai-up-to-3b",
+	"ai-3.1b-7b",
+	"7.1b-20b",
+	"20.1b-40b",
+	"40.1b-70b",
 	// llama llms - chat
 	"togethercomputer/llama-2-70b-chat",
 	// llama llms - language / instruct
@@ -122,5 +128,7 @@
 	// custom apis
   ],
   // known openai compatible endpoints - we'll eventually move this list to the model_prices_and_context_window.json dictionary
-  "openai_compatible": ["api.perplexity.ai"]
+  "openai_compatible": [
+	"api.perplexity.ai"
+  ]
 }
