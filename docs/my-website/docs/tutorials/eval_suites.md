@@ -234,6 +234,9 @@ pip install autoevals
 
 ### Quick Start
 In this code sample we use the `Factuality()` evaluator from `autoevals.llm` to test whether an output is factual, compared to an original (expected) value.
+
+**Autoevals uses gpt-3.5-turbo / gpt-4-turbo by default to evaluate responses**
+
 See autoevals docs on the [supported evaluators](https://www.braintrustdata.com/docs/autoevals/python#autoevalsllm) - Translation, Summary, Security Evaluators etc
 
 ```python
