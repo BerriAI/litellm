@@ -4492,6 +4492,7 @@ class CustomStreamWrapper:
             elif self.custom_llm_provider and self.custom_llm_provider == "azure": 
                 response_obj = self.handle_azure_chunk(chunk)
                 completion_obj["content"] = response_obj["text"]
+                print_verbose(f"response_obj: {response_obj}")
                 print_verbose(f"completion obj content: {completion_obj['content']}")
                 print_verbose(f"len(completion_obj['content']: {len(completion_obj['content'])}")
                 if response_obj["is_finished"]: 
