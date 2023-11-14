@@ -2,10 +2,6 @@ import Image from '@theme/IdealImage';
 
 # Reliability - Fallbacks, Azure Deployments, etc.
 
-Prevent failed calls and slow response times with multiple deployments for API calls (E.g. multiple azure-openai deployments).
-
-<Image img={require('../img/multiple_deployments.png')} alt="HF_Dashboard" style={{ maxWidth: '100%', height: 'auto' }}/>
-
 ## Manage Multiple Deployments
 
 Use this if you're trying to load-balance across multiple deployments (e.g. Azure/OpenAI). 
