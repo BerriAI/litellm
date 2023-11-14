@@ -17,6 +17,9 @@ config_filename = "litellm.secrets"
 config_dir = appdirs.user_config_dir("litellm")
 user_config_path = os.getenv("LITELLM_CONFIG_PATH", os.path.join(config_dir, config_filename))
 
+#More for debug for now
+print(f"User folder for the configuration: {user_config_path}" )
+
 load_dotenv()
 from importlib import resources
 import shutil
