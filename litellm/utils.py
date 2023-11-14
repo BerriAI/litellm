@@ -3445,6 +3445,15 @@ def exception_type(
                         llm_provider="palm",
                         response=original_exception.response
                     )
+                if hasattr(original_exception, "status_code"):
+                    if original_exception.status_code == 400:
+                        exception_mapping_worked = True
+                        raise BadRequestError(
+                            message=f"PalmException - {error_str}",
+                            model=model,
+                            llm_provider="palm",
+                            response=original_exception.response
+                        )
                 # Dailed: Error occurred: 400 Request payload size exceeds the limit: 20000 bytes
             elif custom_llm_provider == "cohere":  # Cohere
                 if (
