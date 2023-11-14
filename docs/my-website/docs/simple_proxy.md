@@ -523,8 +523,7 @@ model_list:
   - model_name: claude-2
     litellm_params:
       model: claude-2
-      api_key: sk-claude
-    
+      api_key: sk-claude    
 ```
 
 #### Default Model - Config:
@@ -540,6 +539,22 @@ $ litellm --config /path/to/config.yaml
 
 If you're repo let's you set model name, you can call the specific model by just passing in that model's name - 
 
+#### Step 4: Use proxy
+Curl Command
+```shell
+curl --location 'http://0.0.0.0:8000/chat/completions' \
+--header 'Content-Type: application/json' \
+--data ' {
+      "model": "gpt-4-team1",
+      "messages": [
+        {
+          "role": "user",
+          "content": "what llm are you"
+        }
+      ],
+    }
+'
+```
 **Setting model name**
 ```python
 import openai 
