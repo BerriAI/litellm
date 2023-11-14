@@ -1,5 +1,6 @@
 # Azure OpenAI
-## API KEYS
+## API Keys, Params
+api_key, api_base, api_version etc can be passed directly to `litellm.completion` - see here or set as `litellm.api_key` params see here
 ```python
 import os
 os.environ["AZURE_API_KEY"] = ""
@@ -44,6 +45,21 @@ response = litellm.completion(
     api_base = "",                                      # azure api base
     api_version = "",                                   # azure api version
     api_key = "",                                       # azure api key
+    messages = [{"role": "user", "content": "good morning"}],
+)
+```
+
+### Completion - using azure_ad_token, api_base, api_version
+
+```python
+import litellm
+
+# azure call
+response = litellm.completion(
+    model = "azure/<your deployment name>",             # model = azure/<your deployment name> 
+    api_base = "",                                      # azure api base
+    api_version = "",                                   # azure api version
+    azure_ad_token="", 									# azure_ad_token 
     messages = [{"role": "user", "content": "good morning"}],
 )
 ```
