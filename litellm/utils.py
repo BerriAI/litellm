@@ -3264,7 +3264,8 @@ def exception_type(
                         raise ServiceUnavailableError(
                             message=f"AnthropicException - {original_exception.message}",
                             llm_provider="anthropic",
-                            model=model
+                            model=model,
+                            response=original_exception.response
                         )
                     else:
                         exception_mapping_worked = True
@@ -3346,7 +3347,8 @@ def exception_type(
                         raise ServiceUnavailableError(
                             message=f"ReplicateException - {original_exception.message}",
                             llm_provider="replicate",
-                            model=model
+                            model=model,
+                            response=original_exception.response
                         )
                 exception_mapping_worked = True
                 raise APIError(
@@ -3395,7 +3397,8 @@ def exception_type(
                         raise ServiceUnavailableError(
                             message=f"BedrockException - {original_exception.message}",
                             llm_provider="bedrock",
-                            model=model
+                            model=model,
+                            response=original_exception.response
                         )
                     elif original_exception.status_code == 401:
                         exception_mapping_worked = True
@@ -3477,7 +3480,8 @@ def exception_type(
                         raise ServiceUnavailableError(
                             message=f"CohereException - {original_exception.message}",
                             llm_provider="cohere",
-                            model=model
+                            model=model,
+                            response=original_exception.response
                         )
                 elif (
                     "CohereConnectionError" in exception_type
@@ -3502,7 +3506,8 @@ def exception_type(
                     raise ServiceUnavailableError(
                         message=f"CohereException - {original_exception.message}",
                         llm_provider="cohere",
-                        model=model
+                        model=model,
+                        response=original_exception.response
                     )
                 else:
                     if hasattr(original_exception, "status_code"):
@@ -3710,7 +3715,8 @@ def exception_type(
                         raise ServiceUnavailableError(
                             message=f"NLPCloudException - {original_exception.message}",
                             model=model,
-                            llm_provider="nlp_cloud"
+                            llm_provider="nlp_cloud",
+                            response=original_exception.response
                         )
                     else:
                         exception_mapping_worked = True
@@ -3847,7 +3853,8 @@ def exception_type(
                         raise ServiceUnavailableError(
                             message=f"AlephAlphaException - {original_exception.message}",
                             llm_provider="aleph_alpha",
-                            model=model
+                            model=model,
+                            response=original_exception.response
                         )
                     raise original_exception
                 raise original_exception
@@ -3872,7 +3879,8 @@ def exception_type(
                     raise ServiceUnavailableError(
                         message=f"OllamaException: {original_exception}",
                         llm_provider="ollama", 
-                        model=model
+                        model=model,
+                        response=original_exception.response
                     )
                 elif "Invalid response object from API" in error_str:
                     exception_mapping_worked = True
