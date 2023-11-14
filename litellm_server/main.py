@@ -44,6 +44,12 @@ if "CONFIG_FILE_PATH" in os.environ:
     llm_router, llm_model_list, server_settings = load_router_config(router=llm_router, config_file_path=os.getenv("CONFIG_FILE_PATH"))
 else:
     llm_router, llm_model_list, server_settings = load_router_config(router=llm_router)
+#debug statements
+#print(llm_router)
+#print(llm_model_list)
+#print(server_settings)
+
+
 #### API ENDPOINTS ####
 @router.get("/v1/models")
 @router.get("/models")  # if project requires model list
