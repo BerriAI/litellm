@@ -58,7 +58,7 @@ def test_completion_claude():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_completion_claude()
+# test_completion_claude()
 
 # def test_completion_oobabooga():
 #     try:
@@ -1352,7 +1352,7 @@ def test_completion_deep_infra():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_deep_infra()
+# test_completion_deep_infra()
 
 def test_completion_deep_infra_mistral():
     print("deep infra test with temp=0")
@@ -1374,15 +1374,16 @@ def test_completion_deep_infra_mistral():
 
 # Palm tests
 def test_completion_palm():
-    # litellm.set_verbose = True
+    litellm.set_verbose = True
     model_name = "palm/chat-bison"
+    messages = [{"role": "user", "content": "what model are you?"}]
     try:
-        response = completion(model=model_name, messages=messages, stop=["stop"])
+        response = completion(model=model_name, messages=messages)
         # Add any assertions here to check the response
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_completion_palm()
+test_completion_palm()
 
 # test palm with streaming
 def test_completion_palm_stream():
@@ -1462,4 +1463,4 @@ def test_moderation():
     print(output)
     return output
 
-test_moderation()
+# test_moderation()
