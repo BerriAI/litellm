@@ -124,6 +124,8 @@ local_logging = True # writes logs to a local api_log.json file for debugging
 config_filename = "litellm.secrets.toml"
 config_dir = os.getcwd()
 config_dir = appdirs.user_config_dir("litellm")
+if user_debug:
+    print(config_dir)
 user_config_path = os.getenv(
     "LITELLM_CONFIG_PATH", os.path.join(config_dir, config_filename)
 )
