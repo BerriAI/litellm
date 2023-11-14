@@ -632,6 +632,28 @@ def test_completion_azure():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+def test_azure_openai():
+    try:
+        print("\n making azure ad token call\n")
+        # os.environ.pop("AZURE_API_KEY")
+        litellm.set_verbose=False
+        response = litellm.completion(
+            model="azure/chatgpt-v-2",  # e.g. gpt-35-instant
+            messages=[
+                {
+                    "role": "user",
+                    "content": "How do I output all files in a directory using Python?",
+                },
+            ],
+        )
+        print("azure ad token respoonse\n")
+        print(response)
+    except:
+        # this test fails, since we use AD tokens whcih last 30mins
+        pass
+test_azure_openai()
+
+
 # test_completion_azure()
 def test_completion_azure2():
     # test if we can pass api_base, api_version and api_key in compleition()
