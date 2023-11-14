@@ -63,7 +63,11 @@ from .llms import (
     maritalk)
 from .llms.openai import OpenAIChatCompletion, OpenAITextCompletion
 from .llms.azure import AzureChatCompletion
-from .llms.prompt_templates.factory import prompt_factory, custom_prompt, function_call_prompt
+from .llms.prompt_templates.factory import (
+    prompt_factory,
+    custom_prompt,
+    function_call_prompt,
+)
 import tiktoken
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, List, Optional, Dict, Union, Mapping
@@ -89,8 +93,8 @@ azure_chat_completions = AzureChatCompletion()
 
 class LiteLLM:
 
-  def __init__(self, *, 
-               api_key=None, 
+  def __init__(self, *,
+               api_key=None,
                organization: Optional[str] = None,
                base_url: Optional[str]= None,
                timeout: Optional[float] = 600,
@@ -106,7 +110,7 @@ class Chat():
     self.completions = Completions(self.params)
 
 class Completions():
-  
+
   def __init__(self, params):
     self.params = params
 
@@ -355,9 +359,9 @@ def completion(
     if mock_response:
         return mock_completion(model, messages, stream=stream, mock_response=mock_response)
     try:
-        if base_url: 
+        if base_url:
             api_base = base_url
-        if max_retries: 
+        if max_retries:
             num_retries = max_retries
         logging = litellm_logging_obj
         fallbacks = (
@@ -692,10 +696,10 @@ def completion(
 
         elif custom_llm_provider=="anthropic":
             api_key = (
-                api_key 
-                or litellm.anthropic_key 
+                api_key
+                or litellm.anthropic_key
                 or litellm.api_key
-                or os.environ.get("ANTHROPIC_API_KEY") 
+                or os.environ.get("ANTHROPIC_API_KEY")
             )
             api_base = (
                 api_base
@@ -933,7 +937,7 @@ def completion(
                 api_key or
                 litellm.api_key or
                 litellm.openrouter_key or
-                get_secret("OPENROUTER_API_KEY") or 
+                get_secret("OPENROUTER_API_KEY") or
                 get_secret("OR_API_KEY")
             )
 
@@ -949,7 +953,7 @@ def completion(
 
             headers = (
                 headers or
-                litellm.headers or 
+                litellm.headers or
                 {
                     "HTTP-Referer": openrouter_site_url,
                     "X-Title": openrouter_app_name,
@@ -979,7 +983,7 @@ def completion(
                 optional_params=optional_params,
                 litellm_params=litellm_params,
                 logger_fn=logger_fn,
-                logging_obj=logging, 
+                logging_obj=logging,
                 acompletion=acompletion
             )
 
