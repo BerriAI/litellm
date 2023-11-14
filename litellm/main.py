@@ -456,6 +456,10 @@ def completion(
                 get_secret("AZURE_API_KEY")
             )
 
+            azure_ad_token = (
+                get_secret("AZURE_AD_TOKEN")
+            )
+
             headers = (
                 headers or
                 litellm.headers
@@ -476,6 +480,7 @@ def completion(
                 api_base=api_base,
                 api_version=api_version,
                 api_type=api_type,
+                azure_ad_token=azure_ad_token,
                 model_response=model_response,
                 print_verbose=print_verbose,
                 optional_params=optional_params,
