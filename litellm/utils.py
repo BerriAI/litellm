@@ -226,7 +226,10 @@ class Usage(OpenAIObject):
 class StreamingChoices(OpenAIObject):
     def __init__(self, finish_reason=None, index=0, delta: Optional[Delta]=None, **params):
         super(StreamingChoices, self).__init__(**params)
-        self.finish_reason = finish_reason
+        if finish_reason:
+            self.finish_reason = finish_reason
+        else:
+            self.finish_reason = None
         self.index = index
         if delta:
             self.delta = delta
@@ -4458,7 +4461,7 @@ class CustomStreamWrapper:
     
     def chunk_creator(self, chunk):
         model_response = ModelResponse(stream=True, model=self.model)
-        print_verbose(f"model_response finish reason 1: {model_response.choices[0].finish_reason}")
+        model_response.choices[0].finish_reason = None
         try:
             # return this for all models
             completion_obj = {"content": ""}
