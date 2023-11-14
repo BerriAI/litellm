@@ -61,10 +61,11 @@ class Router:
                     'port': redis_port,
                     'password': redis_password
             }
-        else: # use an in-memory cache
-            cache_config = {
-                "type": "local"
-            }
+            logging.debug(f"Caching server: Redis {redis_host}")
+        else:  # use an in-memory cache
+            cache_config = {"type": "local"}
+            logging.debug(f"Caching server: {cache_config['type']}")
+
         if cache_responses:
             litellm.cache = litellm.Cache(**cache_config) # use Redis for caching completion requests
             self.cache_responses = cache_responses
