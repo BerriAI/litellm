@@ -413,6 +413,8 @@ def initialize(
         print("\033[1;32mDone successfully\033[0m")
     user_telemetry = telemetry
     usage_telemetry(feature="local_proxy_server")
+#    logging.debug(dynamic_config)
+
 
 # for streaming
 def data_generator(response):
