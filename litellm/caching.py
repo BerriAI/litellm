@@ -6,11 +6,18 @@
 # +-----------------------------------------------+
 #
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
+import json
+import logging
+import os
+import sys
+import time
+import traceback
+
+sys.path.insert(
+    0, os.path.abspath("..")
+)  # Adds the parent directory to the system path - for litellm local dev
 
 import litellm
-import time, logging
-import json, traceback
-
 
 def get_prompt(*args, **kwargs):
     # make this safe checks, it should not throw any exceptions
@@ -222,6 +229,8 @@ class Cache:
             else:
                 cache_key = self.get_cache_key(*args, **kwargs)
             if cache_key is not None:
+                if isinstance(result, litellm.ModelResponse):
+                    result = result.model_dump_json()
                 self.cache.set_cache(cache_key, result, **kwargs)
         except:
             pass

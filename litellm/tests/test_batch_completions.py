@@ -7,7 +7,7 @@ import pytest
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-from openai import Timeout
+from openai import APITimeoutError as Timeout
 import litellm
 from litellm import batch_completion, batch_completion_models, completion, batch_completion_models_all_responses
 # litellm.set_verbose=True
@@ -31,7 +31,7 @@ def test_batch_completions():
         pass
     except Exception as e:
         pytest.fail(f"An error occurred: {e}")
-# test_batch_completions()
+test_batch_completions()
 
 def test_batch_completions_models():
     try:

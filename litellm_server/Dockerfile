@@ -1,4 +1,5 @@
-FROM python:3.10
+ARG PYTHON_VERSION=3.11
+FROM python:${PYTHON_VERSION}
 
 ENV LITELLM_CONFIG_PATH="/litellm.secrets.toml"
 COPY . /app

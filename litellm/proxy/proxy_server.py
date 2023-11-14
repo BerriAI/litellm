@@ -124,6 +124,8 @@ local_logging = True # writes logs to a local api_log.json file for debugging
 config_filename = "litellm.secrets.toml"
 config_dir = os.getcwd()
 config_dir = appdirs.user_config_dir("litellm")
+if user_debug:
+    print(config_dir)
 user_config_path = os.getenv(
     "LITELLM_CONFIG_PATH", os.path.join(config_dir, config_filename)
 )
@@ -411,13 +413,18 @@ def initialize(
         print("\033[1;32mDone successfully\033[0m")
     user_telemetry = telemetry
     usage_telemetry(feature="local_proxy_server")
+#    logging.debug(dynamic_config)
+
 
 # for streaming
 def data_generator(response):
     print_verbose("inside generator")
     for chunk in response:
         print_verbose(f"returned chunk: {chunk}")
-        yield f"data: {json.dumps(chunk)}\n\n"
+        try:
+            yield f"data: {json.dumps(chunk.dict())}\n\n"
+        except:
+            yield f"data: {json.dumps(chunk)}\n\n"
 
 
 def litellm_completion(*args, **kwargs):

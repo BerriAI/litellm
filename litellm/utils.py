@@ -118,6 +118,10 @@ def map_finish_reason(finish_reason: str): # openai supports 5 stop sequences - 
         return "stop"
     return finish_reason
 
+class FunctionCall(OpenAIObject):
+    arguments: str
+    name: str
+
 class Message(OpenAIObject):
     def __init__(self, content="default", role="assistant", logprobs=None, function_call=None, **params):
         super(Message, self).__init__(**params)
@@ -125,7 +129,7 @@ class Message(OpenAIObject):
         self.role = role
         self._logprobs = logprobs
         if function_call: 
-            self.function_call = function_call
+            self.function_call = FunctionCall(**function_call)
 
     def get(self, key, default=None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
@@ -222,7 +226,10 @@ class Usage(OpenAIObject):
 class StreamingChoices(OpenAIObject):
     def __init__(self, finish_reason=None, index=0, delta: Optional[Delta]=None, **params):
         super(StreamingChoices, self).__init__(**params)
-        self.finish_reason = finish_reason
+        if finish_reason:
+            self.finish_reason = finish_reason
+        else:
+            self.finish_reason = None
         self.index = index
         if delta:
             self.delta = delta
@@ -291,10 +298,6 @@ class ModelResponse(OpenAIObject):
             created = int(time.time())
         else:
             created = created
-        if response_ms:
-            _response_ms = response_ms
-        else:
-            _response_ms = None
         model = model
         if usage:
             usage = usage
@@ -319,19 +322,33 @@ class ModelResponse(OpenAIObject):
     def __setitem__(self, key, value):
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
-class EmbeddingResponse(OpenAIObject):
-    def __init__(self, id=None, choices=None, created=None, model=None, usage=None, stream=False, response_ms=None, **params):
-        self.object = "list"
-        if response_ms:
-            self._response_ms = response_ms
-        else:
-            self._response_ms = None
-        self.data = []
-        self.model = model
 
-    def to_dict_recursive(self):
-        d = super().to_dict_recursive()
-        return d
+class EmbeddingResponse(OpenAIObject):
+    def __init__(self, id=None, choices=None, created=None, model=None, usage=None, stream=False, response_ms=None):
+        object = "list"
+        if response_ms:
+            _response_ms = response_ms
+        else:
+            _response_ms = None
+        data = []
+        model = model
+        super().__init__(id=id, choices=choices, created=created, model=model, object=object, data=data, usage=usage)
+
+    def __contains__(self, key):
+        # Define custom behavior for the 'in' operator
+        return hasattr(self, key)
+    
+    def get(self, key, default=None):
+        # Custom .get() method to access attributes with a default value if the attribute doesn't exist
+        return getattr(self, key, default)
+    
+    def __getitem__(self, key):
+        # Allow dictionary-style access to attributes
+        return getattr(self, key)
+
+    def __setitem__(self, key, value):
+        # Allow dictionary-style assignment of attributes
+        setattr(self, key, value)
 
 class TextChoices(OpenAIObject):
     def __init__(self, finish_reason=None, index=0, text=None, logprobs=None, **params):
@@ -385,6 +402,7 @@ class TextCompletionResponse(OpenAIObject):
     }
     """
     def __init__(self, id=None, choices=None, created=None, model=None, usage=None, stream=False, response_ms=None, **params):
+        super(TextCompletionResponse, self).__init__(**params)
         if stream:
             self.object = "text_completion.chunk"
             self.choices = [TextChoices()]
@@ -409,7 +427,7 @@ class TextCompletionResponse(OpenAIObject):
         else:
             self.usage = Usage()
         self._hidden_params = {} # used in case users want to access the original model response
-        super(TextCompletionResponse, self).__init__(**params)
+
     
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -665,7 +683,9 @@ class Logging:
                     complete_streaming_response = litellm.stream_chunk_builder(self.streaming_chunks)
                 else:
                     self.streaming_chunks.append(result)
-            
+            elif isinstance(result, OpenAIObject):
+                result = result.model_dump()
+
             if complete_streaming_response: 
                 self.model_call_details["complete_streaming_response"] = complete_streaming_response
 
@@ -911,7 +931,7 @@ class Logging:
                         callback.log_failure_event(
                             start_time=start_time,
                             end_time=end_time,
-                            messages=self.messages,
+                            response_obj=result,
                             kwargs=self.model_call_details,
                         )
                 except Exception as e:
@@ -1091,7 +1111,7 @@ def client(original_function):
                     if cached_result != None:
                         print_verbose(f"Cache Hit!")
                         call_type = original_function.__name__
-                        if call_type == CallTypes.completion.value:
+                        if call_type == CallTypes.completion.value and isinstance(cached_result, dict):
                             return convert_to_model_response_object(response_object=cached_result, model_response_object=ModelResponse())
                         else:
                             return cached_result
@@ -1323,7 +1343,7 @@ def token_counter(model="", text=None,  messages: Optional[List] = None):
             enc = tokenizer_json["tokenizer"].encode(text)
             num_tokens = len(enc.ids)
         elif tokenizer_json["type"] == "openai_tokenizer": 
-            if messages is not None:
+            if model in litellm.open_ai_chat_completion_models and messages != None:
                 num_tokens = openai_token_counter(messages, model=model)
             else:
                 enc = tokenizer_json["tokenizer"].encode(text)
@@ -1991,6 +2011,11 @@ def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None, api_
                 # anyscale is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
                 api_base = "https://api.endpoints.anyscale.com/v1"
                 dynamic_api_key = os.getenv("ANYSCALE_API_KEY")
+                custom_llm_provider = "custom_openai"
+            elif custom_llm_provider == "deepinfra": 
+                # deepinfra is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
+                api_base = "https://api.deepinfra.com/v1/openai"
+                dynamic_api_key = os.getenv("DEEPINFRA_API_KEY")
                 custom_llm_provider = "custom_openai"
             return model, custom_llm_provider, dynamic_api_key, api_base
 
@@ -3166,6 +3191,13 @@ def exception_type(
                             llm_provider="openai",
                             response=original_exception.response
                         )
+                    elif original_exception.status_code == 504: # gateway timeout error
+                        exception_mapping_worked = True
+                        raise Timeout(
+                            message=f"OpenAIException - {original_exception.message}",
+                            model=model,
+                            llm_provider="openai",
+                        )
                     else:
                         exception_mapping_worked = True
                         raise APIError(
@@ -3232,7 +3264,8 @@ def exception_type(
                         raise ServiceUnavailableError(
                             message=f"AnthropicException - {original_exception.message}",
                             llm_provider="anthropic",
-                            model=model
+                            model=model,
+                            response=original_exception.response
                         )
                     else:
                         exception_mapping_worked = True
@@ -3314,7 +3347,8 @@ def exception_type(
                         raise ServiceUnavailableError(
                             message=f"ReplicateException - {original_exception.message}",
                             llm_provider="replicate",
-                            model=model
+                            model=model,
+                            response=original_exception.response
                         )
                 exception_mapping_worked = True
                 raise APIError(
@@ -3363,7 +3397,8 @@ def exception_type(
                         raise ServiceUnavailableError(
                             message=f"BedrockException - {original_exception.message}",
                             llm_provider="bedrock",
-                            model=model
+                            model=model,
+                            response=original_exception.response
                         )
                     elif original_exception.status_code == 401:
                         exception_mapping_worked = True
@@ -3445,7 +3480,8 @@ def exception_type(
                         raise ServiceUnavailableError(
                             message=f"CohereException - {original_exception.message}",
                             llm_provider="cohere",
-                            model=model
+                            model=model,
+                            response=original_exception.response
                         )
                 elif (
                     "CohereConnectionError" in exception_type
@@ -3470,7 +3506,8 @@ def exception_type(
                     raise ServiceUnavailableError(
                         message=f"CohereException - {original_exception.message}",
                         llm_provider="cohere",
-                        model=model
+                        model=model,
+                        response=original_exception.response
                     )
                 else:
                     if hasattr(original_exception, "status_code"):
@@ -3678,7 +3715,8 @@ def exception_type(
                         raise ServiceUnavailableError(
                             message=f"NLPCloudException - {original_exception.message}",
                             model=model,
-                            llm_provider="nlp_cloud"
+                            llm_provider="nlp_cloud",
+                            response=original_exception.response
                         )
                     else:
                         exception_mapping_worked = True
@@ -3691,7 +3729,10 @@ def exception_type(
                         )
             elif custom_llm_provider == "together_ai":
                 import json
-                error_response = json.loads(error_str)
+                try:
+                    error_response = json.loads(error_str)
+                except:
+                    error_response = {"error": error_str}
                 if "error" in error_response and "`inputs` tokens + `max_new_tokens` must be <=" in error_response["error"]:
                     exception_mapping_worked = True
                     raise ContextWindowExceededError(
@@ -3716,6 +3757,7 @@ def exception_type(
                         llm_provider="together_ai",
                         response=original_exception.response
                     )
+                
                 elif "error" in error_response and "API key doesn't match expected format." in error_response["error"]:
                     exception_mapping_worked = True
                     raise BadRequestError(
@@ -3748,6 +3790,13 @@ def exception_type(
                             model=model,
                             response=original_exception.response
                         )
+                elif original_exception.status_code == 524:
+                    exception_mapping_worked = True
+                    raise Timeout(
+                        message=f"TogetherAIException - {original_exception.message}",
+                        llm_provider="together_ai",
+                        model=model,
+                    )
                 else: 
                     exception_mapping_worked = True
                     raise APIError(
@@ -3804,7 +3853,8 @@ def exception_type(
                         raise ServiceUnavailableError(
                             message=f"AlephAlphaException - {original_exception.message}",
                             llm_provider="aleph_alpha",
-                            model=model
+                            model=model,
+                            response=original_exception.response
                         )
                     raise original_exception
                 raise original_exception
@@ -3829,7 +3879,8 @@ def exception_type(
                     raise ServiceUnavailableError(
                         message=f"OllamaException: {original_exception}",
                         llm_provider="ollama", 
-                        model=model
+                        model=model,
+                        response=original_exception.response
                     )
                 elif "Invalid response object from API" in error_str:
                     exception_mapping_worked = True
@@ -3951,8 +4002,8 @@ def exception_type(
                             model=model,
                             request=original_exception.request
                         )
-        exception_mapping_worked = True
         if "BadRequestError.__init__() missing 1 required positional argument: 'param'" in str(original_exception): # deal with edge-case invalid request error bug in openai-python sdk
+            exception_mapping_worked = True
             raise BadRequestError(
                 message=f"OpenAIException: This can happen due to missing AZURE_API_VERSION: {str(original_exception)}",
                 model=model, 
@@ -4256,6 +4307,7 @@ class CustomStreamWrapper:
         is_finished = False
         finish_reason = ""
         text = ""
+        print_verbose(f"chunk: {chunk}")
         if "data: [DONE]" in chunk:
             text = ""
             is_finished = True
@@ -4268,6 +4320,7 @@ class CustomStreamWrapper:
                 if data_json["choices"][0].get("finish_reason", None): 
                     is_finished = True
                     finish_reason = data_json["choices"][0]["finish_reason"]
+                print_verbose(f"text: {text}; is_finished: {is_finished}; finish_reason: {finish_reason}")
                 return {"text": text, "is_finished": is_finished, "finish_reason": finish_reason}
             except:
                 raise ValueError(f"Unable to parse response. Original response: {chunk}")
@@ -4330,6 +4383,7 @@ class CustomStreamWrapper:
             text = "" 
             is_finished = False
             finish_reason = None
+            print_verbose(f"str_line: {str_line}")
             if "data: [DONE]" in str_line:
                 text = ""
                 is_finished = True
@@ -4337,11 +4391,12 @@ class CustomStreamWrapper:
                 return {"text": text, "is_finished": is_finished, "finish_reason": finish_reason}
             elif str_line.startswith("data:"):
                 data_json = json.loads(str_line[5:])
-                print_verbose(f"delta content: {data_json['choices'][0]['text']}")
+                print_verbose(f"delta content: {data_json}")
                 text = data_json["choices"][0].get("text", "") 
                 if data_json["choices"][0].get("finish_reason", None): 
                     is_finished = True
                     finish_reason = data_json["choices"][0]["finish_reason"]
+                print_verbose(f"text: {text}; is_finished: {is_finished}; finish_reason: {finish_reason}")
                 return {"text": text, "is_finished": is_finished, "finish_reason": finish_reason}
             elif "error" in str_line:
                 raise ValueError(f"Unable to parse response. Original response: {str_line}")
@@ -4414,6 +4469,7 @@ class CustomStreamWrapper:
     
     def chunk_creator(self, chunk):
         model_response = ModelResponse(stream=True, model=self.model)
+        model_response.choices[0].finish_reason = None
         try:
             # return this for all models
             completion_obj = {"content": ""}
@@ -4448,8 +4504,12 @@ class CustomStreamWrapper:
             elif self.custom_llm_provider and self.custom_llm_provider == "azure": 
                 response_obj = self.handle_azure_chunk(chunk)
                 completion_obj["content"] = response_obj["text"]
+                print_verbose(f"response_obj: {response_obj}")
+                print_verbose(f"completion obj content: {completion_obj['content']}")
+                print_verbose(f"len(completion_obj['content']: {len(completion_obj['content'])}")
                 if response_obj["is_finished"]: 
                     model_response.choices[0].finish_reason = response_obj["finish_reason"]
+                    print_verbose(f"model_response finish reason 2: {model_response.choices[0].finish_reason}")
             elif self.custom_llm_provider and self.custom_llm_provider == "maritalk":
                 response_obj = self.handle_maritalk_chunk(chunk)
                 completion_obj["content"] = response_obj["text"]
@@ -4548,10 +4608,13 @@ class CustomStreamWrapper:
                 response_obj = self.handle_openai_chat_completion_chunk(chunk)
                 completion_obj["content"] = response_obj["text"]
                 print_verbose(f"completion obj content: {completion_obj['content']}")
+                print_verbose(f"len(completion_obj['content']: {len(completion_obj['content'])}")
                 if response_obj["is_finished"]: 
                     model_response.choices[0].finish_reason = response_obj["finish_reason"]
             
             model_response.model = self.model
+            print_verbose(f"model_response: {model_response}; completion_obj: {completion_obj}")
+            print_verbose(f"model_response finish reason 3: {model_response.choices[0].finish_reason}")
             if len(completion_obj["content"]) > 0: # cannot set content of an OpenAI Object to be an empty string
                 hold, model_response_str = self.check_special_tokens(completion_obj["content"])
                 if hold is False: 
@@ -4589,9 +4652,11 @@ class CustomStreamWrapper:
                     chunk = self.completion_stream
                 else:
                     chunk = next(self.completion_stream)
-
+                
+                print_verbose(f"chunk in __next__: {chunk}")
                 if chunk is not None:
                     response = self.chunk_creator(chunk=chunk)
+                    print_verbose(f"response in __next__: {response}")
                     if response is not None:
                         return response
         except StopIteration:

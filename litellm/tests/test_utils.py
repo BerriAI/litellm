@@ -10,7 +10,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import pytest
 import litellm
-from litellm.utils import trim_messages, get_token_count, get_valid_models, check_valid_key, validate_environment, function_to_dict
+from litellm.utils import trim_messages, get_token_count, get_valid_models, check_valid_key, validate_environment, function_to_dict, token_counter
 
 # Assuming your trim_messages, shorten_message_to_fit_limit, and get_token_count functions are all in a module named 'message_utils'
 
@@ -178,4 +178,60 @@ def test_function_to_dict():
 
     print("passed")
 # test_function_to_dict()
+
+
+def test_token_counter():
+    try:
+        messages = [
+            {
+                "role": "user",
+                "content": "hi how are you what time is it"
+            }
+        ]
+        tokens = token_counter(
+            model = "gpt-3.5-turbo",
+            messages=messages
+        )
+        print("gpt-35-turbo")
+        print(tokens)
+        assert tokens > 0
+
+        tokens = token_counter(
+            model = "claude-2",
+            messages=messages
+        )
+        print("claude-2")
+        print(tokens)
+        assert tokens > 0
+
+        tokens = token_counter(
+            model = "palm/chat-bison",
+            messages=messages
+        )
+        print("palm/chat-bison")
+        print(tokens)
+        assert tokens > 0
+
+        tokens = token_counter(
+            model = "ollama/llama2",
+            messages=messages
+        )
+        print("ollama/llama2")
+        print(tokens)
+        assert tokens > 0
+
+        tokens = token_counter(
+            model = "anthropic.claude-instant-v1",
+            messages=messages
+        )
+        print("anthropic.claude-instant-v1")
+        print(tokens)
+        assert tokens > 0
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+test_token_counter()
+
+
+
+
 

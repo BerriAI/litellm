@@ -19,7 +19,7 @@ import openai
 
 openai.api_base = "http://0.0.0.0:8000"
 
-print(openai.ChatCompletion.create(model="test", messages=[{"role":"user", "content":"Hey!"}]))
+print(openai.chat.completions.create(model="test", messages=[{"role":"user", "content":"Hey!"}]))
 ``` 
 
 [**See how to call Huggingface,Bedrock,TogetherAI,Anthropic, etc.**](https://docs.litellm.ai/docs/simple_proxy)

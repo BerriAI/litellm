@@ -31,7 +31,7 @@ def test_completion_openai_prompt():
         #print(response.choices[0].text)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_completion_openai_prompt()
+test_completion_openai_prompt()
 
 
 def test_completion_chatgpt_prompt():

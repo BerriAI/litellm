@@ -120,5 +120,7 @@
 	"maritalk",
 	"custom",
 	// custom apis
-  ]
+  ],
+  // known openai compatible endpoints - we'll eventually move this list to the model_prices_and_context_window.json dictionary
+  "openai_compatible": ["api.perplexity.ai"]
 }

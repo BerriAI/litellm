@@ -127,6 +127,7 @@ def test_embedding_caching():
     start_time = time.time()
     embedding2 = embedding(model="text-embedding-ada-002", input=text_to_embed, caching=True)
     end_time = time.time()
+    print(f"embedding2: {embedding2}")
     print(f"Embedding 2 response time: {end_time - start_time} seconds")
 
     litellm.cache = None
@@ -136,7 +137,7 @@ def test_embedding_caching():
         print(f"embedding2: {embedding2}")
         pytest.fail("Error occurred: Embedding caching failed")
 
-# test_embedding_caching()
+test_embedding_caching()
 
 
 def test_embedding_caching_azure():

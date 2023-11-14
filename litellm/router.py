@@ -1,8 +1,17 @@
-from datetime import datetime
-from typing import Dict, List, Optional, Union, Literal
-import random, threading, time
-import litellm
 import logging
+import os
+import random
+import sys
+import threading
+import time
+from typing import Dict, List, Optional, Union, Literal
+
+sys.path.insert(
+    0, os.path.abspath("..")
+)  # Adds the parent directory to the system path - for litellm local dev
+
+import litellm
+
 
 class Router:
     """
@@ -30,11 +39,15 @@ class Router:
                  redis_port: Optional[int] = None,
                  redis_password: Optional[str] = None,
                  cache_responses: bool = False,
+                 num_retries: Optional[int] = None,
                  routing_strategy: Literal["simple-shuffle", "least-busy"] = "simple-shuffle") -> None:
         if model_list:
             self.set_model_list(model_list)
             self.healthy_deployments: List = self.model_list
         
+        if num_retries: 
+            litellm.num_retries = num_retries
+
         self.routing_strategy = routing_strategy
         ### HEALTH CHECK THREAD ###
         if self.routing_strategy == "least-busy":
@@ -48,13 +61,16 @@ class Router:
                     'port': redis_port,
                     'password': redis_password
             }
-        else: # use an in-memory cache
-            cache_config = {
-                "type": "local"
-            }
+            logging.debug(f"Caching server: Redis {redis_host}")
+        else:  # use an in-memory cache
+            cache_config = {"type": "local"}
+            logging.debug(f"Caching server: {cache_config['type']}")
+
         if cache_responses:
             litellm.cache = litellm.Cache(**cache_config) # use Redis for caching completion requests
             self.cache_responses = cache_responses
+        
+        self.chat = litellm.Chat(params={})
 
 
     def _start_health_check_thread(self):

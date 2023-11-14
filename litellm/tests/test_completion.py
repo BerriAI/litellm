@@ -51,16 +51,14 @@ def test_completion_claude():
         )
         # Add any assertions here to check the response
         print(response)
-        print(response.response_ms)
         print(response.usage)
         print(response.usage.completion_tokens)
         print(response["usage"]["completion_tokens"])
         # print("new cost tracking")
-        print(response.cost())
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-# test_completion_claude()
+test_completion_claude()
 
 # def test_completion_oobabooga():
 #     try:
@@ -493,7 +491,7 @@ def test_completion_openrouter1():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_completion_openrouter1()
+# test_completion_openrouter1() 
 
 def test_completion_openrouter2():
     try:
@@ -875,18 +873,20 @@ def test_completion_together_ai():
 # test_completion_together_ai()
 def test_customprompt_together_ai():
     try:
-        litellm.set_verbose = True
+        litellm.set_verbose = False
+        litellm.num_retries = 0
         response = completion(
             model="together_ai/OpenAssistant/llama2-70b-oasst-sft-v10",
             messages=messages, 
             roles={"system":{"pre_message":"<|im_start|>system\n", "post_message":"<|im_end|>"}, "assistant":{"pre_message":"<|im_start|>assistant\n","post_message":"<|im_end|>"}, "user":{"pre_message":"<|im_start|>user\n","post_message":"<|im_end|>"}}
         )
         print(response)
-    except litellm.APIError as e:
+    except litellm.exceptions.Timeout as e:
+        print(f"Timeout Error")
+        litellm.num_retries = 3 # reset retries
         pass
     except Exception as e:
-        print(type(e))
-        print(e)
+        print(f"ERROR TYPE {type(e)}")
         pytest.fail(f"Error occurred: {e}")
 
 # test_customprompt_together_ai()
@@ -941,7 +941,7 @@ def test_completion_bedrock_claude():
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_bedrock_claude()
+# test_completion_bedrock_claude()
 
 def test_completion_bedrock_cohere():
     print("calling bedrock cohere")
@@ -1333,14 +1333,13 @@ def test_completion_ai21():
         response = completion(model=model_name, messages=messages, max_tokens=100, temperature=0.8)
         # Add any assertions here to check the response
         print(response)
-        print(response.response_ms)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
 # test_completion_ai21()
 ## test deep infra 
 def test_completion_deep_infra():
-    # litellm.set_verbose = True
+    litellm.set_verbose = False
     model_name = "deepinfra/meta-llama/Llama-2-70b-chat-hf"
     try:
         response = completion(
@@ -1351,10 +1350,10 @@ def test_completion_deep_infra():
         )
         # Add any assertions here to check the response
         print(response)
-        print(response.response_ms)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_completion_deep_infra()
+test_completion_deep_infra()
+
 def test_completion_deep_infra_mistral():
     print("deep infra test with temp=0")
     model_name = "deepinfra/mistralai/Mistral-7B-Instruct-v0.1"
@@ -1362,12 +1361,13 @@ def test_completion_deep_infra_mistral():
         response = completion(
             model=model_name, 
             messages=messages,
-            temperature=0, # mistrail fails with temperature 0.001
+            temperature=0.01, # mistrail fails with temperature=0
             max_tokens=10
         )
         # Add any assertions here to check the response
         print(response)
-        print(response.response_ms)
+    except litellm.exceptions.Timeout as e: 
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 # test_completion_deep_infra_mistral()
@@ -1380,7 +1380,6 @@ def test_completion_palm():
         response = completion(model=model_name, messages=messages, stop=["stop"])
         # Add any assertions here to check the response
         print(response)
-        print(response.response_ms)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 # test_completion_palm()
@@ -1459,8 +1458,8 @@ def test_moderation():
     openai.api_version = "GM"
     response = litellm.moderation(input="i'm ishaan cto of litellm")   
     print(response)
-    output = response["results"][0]
+    output = response.results[0]
     print(output)
     return output
 
-# test_moderation()
+test_moderation()

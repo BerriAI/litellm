@@ -115,7 +115,7 @@ print(openai.api_base)
 
 
 print(f'LiteLLM: response from proxy with streaming')
-response = openai.ChatCompletion.create(
+response = openai.chat.completions.create(
     model="ollama/llama2", 
     messages = [
         {
