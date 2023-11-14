@@ -1,10 +1,15 @@
-import click
-import subprocess, traceback, json
-import os, sys
-import random, appdirs
-from datetime import datetime
-from dotenv import load_dotenv
+import json
 import operator
+import os
+import random
+import subprocess
+import sys
+from datetime import datetime
+
+import appdirs
+import click
+from dotenv import load_dotenv
+
 sys.path.append(os.getcwd())
 
 config_filename = "litellm.secrets"
