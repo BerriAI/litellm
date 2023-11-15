@@ -255,7 +255,7 @@ def completion(
         logging_obj.pre_call(
                 input=input_text,
                 api_key=api_key,
-                additional_args={"complete_input_dict": data, "task": task, "headers": headers},
+                additional_args={"complete_input_dict": data, "task": task, "headers": headers, "api_base": completion_url},
             )
         ## COMPLETION CALL
         if "stream" in optional_params and optional_params["stream"] == True:
