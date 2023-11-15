@@ -25,6 +25,22 @@ async def main():
                 "model": "gpt-3.5-turbo", 
                 "api_key": os.getenv("OPENAI_API_KEY"), 
             },
+        }, {
+            "model_name": "gpt-3.5-turbo", 
+            "litellm_params": {
+                "model": "azure/chatgpt-v-2", 
+                "api_key": os.getenv("AZURE_API_KEY"), 
+                "api_base": os.getenv("AZURE_API_BASE"),
+                "api_version": os.getenv("AZURE_API_VERSION")
+            },
+        }, {
+            "model_name": "gpt-3.5-turbo", 
+            "litellm_params": {
+                "model": "azure/chatgpt-functioncalling", 
+                "api_key": os.getenv("AZURE_API_KEY"), 
+                "api_base": os.getenv("AZURE_API_BASE"),
+                "api_version": os.getenv("AZURE_API_VERSION")
+            },
         }]
     router = Router(model_list=model_list, num_retries=3)
 
@@ -35,13 +51,13 @@ async def main():
     tasks = []
 
     # Launch 1000 tasks
-    for _ in range(1000):
+    for _ in range(100):
         task = asyncio.create_task(call_acompletion(semaphore, router, {"model": "gpt-3.5-turbo", "messages": [{"role":"user", "content": "Hey, how's it going?"}]}))
         tasks.append(task)
 
     # Wait for all tasks to complete
     responses = await asyncio.gather(*tasks)
     # Process responses as needed
-
+    print(f"NUMBER OF COMPLETED TASKS: {len(responses)}")
 # Run the main function
 asyncio.run(main())
