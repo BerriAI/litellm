@@ -713,7 +713,7 @@ def completion(
                 response = CustomStreamWrapper(model_response, model, custom_llm_provider="anthropic", logging_obj=logging)
                 return response
             response = model_response
-        elif model in litellm.nlp_cloud_models or custom_llm_provider == "nlp_cloud":
+        elif custom_llm_provider == "nlp_cloud":
             nlp_cloud_key = (
                 api_key or litellm.nlp_cloud_key or get_secret("NLP_CLOUD_API_KEY") or litellm.api_key
             )
@@ -744,7 +744,7 @@ def completion(
                 response = CustomStreamWrapper(model_response, model, custom_llm_provider="nlp_cloud", logging_obj=logging)
                 return response
             response = model_response
-        elif model in litellm.aleph_alpha_models:
+        elif custom_llm_provider == "aleph_alpha":
             aleph_alpha_key = (
                 api_key or litellm.aleph_alpha_key or get_secret("ALEPH_ALPHA_API_KEY") or get_secret("ALEPHALPHA_API_KEY") or litellm.api_key
             )
@@ -909,7 +909,7 @@ def completion(
                 )
                 return response
             response = model_response
-        elif model in litellm.openrouter_models or custom_llm_provider == "openrouter":
+        elif custom_llm_provider == "openrouter":
             api_base = (
                 api_base
                 or litellm.api_base
@@ -969,28 +969,6 @@ def completion(
                 logging_obj=logging, 
                 acompletion=acompletion
             )
-
-            # if headers:
-            #     response = openai.chat.completions.create(
-            #         headers=headers, # type: ignore
-            #         **data, # type: ignore
-            #     )
-            # else:
-            #     openrouter_site_url = get_secret("OR_SITE_URL")
-            #     openrouter_app_name = get_secret("OR_APP_NAME")
-            #     # if openrouter_site_url is None, set it to https://litellm.ai
-            #     if openrouter_site_url is None:
-            #         openrouter_site_url = "https://litellm.ai"
-            #     # if openrouter_app_name is None, set it to liteLLM
-            #     if openrouter_app_name is None:
-            #         openrouter_app_name = "liteLLM"
-            #     response = openai.chat.completions.create( # type: ignore
-            #         extra_headers=httpx.Headers({ # type: ignore
-            #             "HTTP-Referer": openrouter_site_url,  # type: ignore
-            #             "X-Title": openrouter_app_name,  # type: ignore
-            #         }), # type: ignore
-            #         **data,
-            #     )
             ## LOGGING
             logging.post_call(
                 input=messages, api_key=openai.api_key, original_response=response
@@ -1093,7 +1071,7 @@ def completion(
                     )
                 return response
             response = model_response
-        elif model in litellm.ai21_models:
+        elif custom_llm_provider == "ai21":
             custom_llm_provider = "ai21"
             ai21_key = (
                 api_key
@@ -1233,7 +1211,6 @@ def completion(
                 )
             else:
                 prompt = prompt_factory(model=model, messages=messages, custom_llm_provider=custom_llm_provider)
-
             ## LOGGING
             if kwargs.get('acompletion', False) == True:    
                 if optional_params.get("stream", False) == True:
