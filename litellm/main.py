@@ -1235,16 +1235,13 @@ def completion(
                 prompt = prompt_factory(model=model, messages=messages, custom_llm_provider=custom_llm_provider)
 
             ## LOGGING
-            logging.pre_call(
-                input=prompt, api_key=None, additional_args={"api_base": api_base, "custom_prompt_dict": custom_prompt_dict}
-            )
             if kwargs.get('acompletion', False) == True:    
                 if optional_params.get("stream", False) == True:
                 # assume all ollama responses are streamed
-                    async_generator = ollama.async_get_ollama_response_stream(api_base, model, prompt, optional_params)
+                    async_generator = ollama.async_get_ollama_response_stream(api_base, model, prompt, optional_params, logging_obj=logging)
                     return async_generator
 
-            generator = ollama.get_ollama_response_stream(api_base, model, prompt, optional_params)
+            generator = ollama.get_ollama_response_stream(api_base, model, prompt, optional_params, logging_obj=logging)
             if optional_params.get("stream", False) == True:
                 # assume all ollama responses are streamed
                 response = CustomStreamWrapper(

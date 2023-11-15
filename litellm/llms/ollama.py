@@ -113,7 +113,8 @@ def get_ollama_response_stream(
         api_base="http://localhost:11434",
         model="llama2",
         prompt="Why is the sky blue?", 
-        optional_params=None
+        optional_params=None,
+        logging_obj=None,
     ):
     if api_base.endswith("/api/generate"):
         url = api_base
@@ -131,6 +132,12 @@ def get_ollama_response_stream(
         "prompt": prompt,
         **optional_params
     }
+    ## LOGGING
+    logging_obj.pre_call(
+        input=None,
+        api_key=None,
+        additional_args={"api_base": url, "complete_input_dict": data},
+    )
     session = requests.Session()
 
     with session.post(url, json=data, stream=True) as resp:
@@ -169,7 +176,8 @@ if async_generator_imported:
             api_base="http://localhost:11434",
             model="llama2",
             prompt="Why is the sky blue?",
-            optional_params=None
+            optional_params=None,
+            logging_obj=None,
         ):
         url = f"{api_base}/api/generate"
         
@@ -184,6 +192,12 @@ if async_generator_imported:
             "prompt": prompt,
             **optional_params
         }
+        ## LOGGING
+        logging_obj.pre_call(
+            input=None,
+            api_key=None,
+            additional_args={"api_base": url, "complete_input_dict": data},
+        )
         session = requests.Session()
 
         with session.post(url, json=data, stream=True) as resp:
