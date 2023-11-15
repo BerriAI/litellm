@@ -171,7 +171,7 @@ class AzureChatCompletion(BaseLLM):
             ## RESPONSE OBJECT
             return convert_to_model_response_object(response_object=response_json, model_response_object=model_response)
        except Exception as e: 
-           if httpx.TimeoutException:
+           if isinstance(e,httpx.TimeoutException):
                 raise AzureOpenAIError(status_code=500, message="Request Timeout Error")
            elif response and hasattr(response, "text"):
                 raise AzureOpenAIError(status_code=500, message=f"{str(e)}\n\nOriginal Response: {response.text}")
@@ -186,6 +186,8 @@ class AzureChatCompletion(BaseLLM):
                   model_response: ModelResponse, 
                   model: str
     ):
+        if self._client_session is None:
+            self._client_session = self.create_client_session()
         with self._client_session.stream(
                     url=f"{api_base}",
                     json=data,
@@ -207,7 +209,9 @@ class AzureChatCompletion(BaseLLM):
                           headers: dict, 
                           model_response: ModelResponse, 
                           model: str):
-        client = httpx.AsyncClient()
+        if self._aclient_session is None:
+           self._aclient_session = self.create_aclient_session()
+        client = self._aclient_session
         async with client.stream(
                     url=f"{api_base}",
                     json=data,
@@ -233,6 +237,8 @@ class AzureChatCompletion(BaseLLM):
                 optional_params=None,):
         super().embedding()
         exception_mapping_worked = False
+        if self._client_session is None:
+            self._client_session = self.create_client_session()
         try: 
             headers = self.validate_environment(api_key, azure_ad_token=azure_ad_token)
             # Ensure api_base ends with a trailing slash

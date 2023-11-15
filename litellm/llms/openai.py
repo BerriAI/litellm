@@ -275,7 +275,7 @@ class OpenAIChatCompletion(BaseLLM):
             ## RESPONSE OBJECT
             return convert_to_model_response_object(response_object=response_json, model_response_object=model_response)
         except Exception as e: 
-            if httpx.TimeoutException:
+            if isinstance(e, httpx.TimeoutException):
                 raise OpenAIError(status_code=500, message="Request Timeout Error")
             if response and hasattr(response, "text"):
                 raise OpenAIError(status_code=500, message=f"{str(e)}\n\nOriginal Response: {response.text}")
@@ -290,6 +290,8 @@ class OpenAIChatCompletion(BaseLLM):
                   model_response: ModelResponse, 
                   model: str
     ):
+        if self._client_session is None:
+            self._client_session = self.create_client_session()
         with self._client_session.stream(
                     url=f"{api_base}", # type: ignore
                     json=data,
@@ -311,6 +313,8 @@ class OpenAIChatCompletion(BaseLLM):
                           headers: dict, 
                           model_response: ModelResponse, 
                           model: str):
+        if self._aclient_session is None:
+            self._aclient_session = self.create_aclient_session()
         async with self._aclient_session.stream(
                     url=f"{api_base}",
                     json=data,
@@ -334,6 +338,8 @@ class OpenAIChatCompletion(BaseLLM):
                 optional_params=None,):
         super().embedding()
         exception_mapping_worked = False
+        if self._client_session is None:
+            self._client_session = self.create_client_session()
         try: 
             headers = self.validate_environment(api_key)
             api_base = f"{api_base}/embeddings"
