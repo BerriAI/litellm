@@ -19,22 +19,56 @@ $ litellm --model huggingface/bigcode/starcoder
 ```
 
 ### Test
-In a new shell, run, this will make an `openai.ChatCompletion` request
+In a new shell, run, this will make an `openai.chat.completions` request. Ensure you're using openai v1.0.0+
 ```shell
 litellm --test
 ```
 
 This will now automatically route any requests for gpt-3.5-turbo to bigcode starcoder, hosted on huggingface inference endpoints. 
 
-### Replace openai base
+### Using LiteLLM Proxy - Curl Request, OpenAI Package
+
+<Tabs>
+<TabItem value="Curl" label="Curl Request">
+
+```shell
+curl --location 'http://0.0.0.0:8000/chat/completions' \
+--header 'Content-Type: application/json' \
+--data ' {
+      "model": "gpt-3.5-turbo",
+      "messages": [
+        {
+          "role": "user",
+          "content": "what llm are you"
+        }
+      ],
+    }
+'
+```
+</TabItem>
+<TabItem value="openai" label="OpenAI v1.0.0+">
 
 ```python
-import openai 
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:8000"
+)
 
-openai.api_base = "http://0.0.0.0:8000"
+# request sent to model set on litellm proxy, `litellm --model`
+response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
+    {
+        "role": "user",
+        "content": "this is a test request, write a short poem"
+    }
+])
 
-print(openai.chat.completions.create(model="test", messages=[{"role":"user", "content":"Hey!"}]))
+print(response)
+
 ```
+</TabItem>
+
+</Tabs>
 
 ### Supported LLMs
 <Tabs>
