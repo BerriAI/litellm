@@ -202,7 +202,7 @@ class OpenAIChatCompletion(BaseLLM):
                 logging_obj.pre_call(
                     input=messages,
                     api_key=api_key,
-                    additional_args={"headers": headers, "api_base": api_base, "acompletion": acompletion, "data": data},
+                    additional_args={"headers": headers, "api_base": api_base, "acompletion": acompletion, "complete_input_dict": data},
                 )
                 
                 try: 
@@ -450,7 +450,7 @@ class OpenAITextCompletion(BaseLLM):
             logging_obj.pre_call(
                 input=messages,
                 api_key=api_key,
-                additional_args={"headers": headers, "api_base": api_base, "data": data},
+                additional_args={"headers": headers, "api_base": api_base, "complete_input_dict": data},
             )
             if acompletion == True: 
                 if optional_params.get("stream", False):

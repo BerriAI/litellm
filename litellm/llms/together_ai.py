@@ -126,10 +126,10 @@ def completion(
 
     ## LOGGING
     logging_obj.pre_call(
-            input=prompt,
-            api_key=api_key,
-            additional_args={"complete_input_dict": data},
-        )
+        input=prompt,
+        api_key=api_key,
+        additional_args={"complete_input_dict": data, "headers": headers, "api_base": api_base},
+    )
     ## COMPLETION CALL
     if (
             "stream_tokens" in optional_params
