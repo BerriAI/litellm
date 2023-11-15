@@ -454,7 +454,7 @@ def litellm_completion(*args, **kwargs):
     if user_api_base: 
         kwargs["api_base"] = user_api_base
     ## ROUTE TO CORRECT ENDPOINT ## 
-    router_model_names = [m["model_name"] for m in llm_model_list]
+    router_model_names = [m["model_name"] for m in llm_model_list] if llm_model_list is not None else []
     if llm_router is not None and kwargs["model"] in router_model_names: # model in router model list 
         if call_type == "chat_completion":
             response = llm_router.completion(*args, **kwargs)
