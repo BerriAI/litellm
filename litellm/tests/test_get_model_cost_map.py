@@ -7,8 +7,6 @@ sys.path.insert(
 import time
 from litellm import get_max_tokens, model_cost, open_ai_chat_completion_models
 
-print(get_max_tokens("gpt-3.5-turbo"))
-
 def test_get_gpt3_tokens():
     max_tokens = get_max_tokens("gpt-3.5-turbo")
     results = max_tokens['max_tokens']
@@ -21,3 +19,10 @@ def test_get_palm_tokens():
     results = max_tokens['max_tokens']
     print(results)
 # test_get_palm_tokens()
+
+def test_zephyr_hf_tokens():
+    max_tokens = get_max_tokens("huggingface/HuggingFaceH4/zephyr-7b-beta")
+    results = max_tokens["max_tokens"]
+    print(results)
+
+test_zephyr_hf_tokens()
