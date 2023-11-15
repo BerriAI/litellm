@@ -1238,7 +1238,7 @@ def client(original_function):
                         else:
                             return cached_result
             # MODEL CALL
-            result = original_function(*args, **kwargs)
+            result = await original_function(*args, **kwargs)
             end_time = datetime.datetime.now()
             if "stream" in kwargs and kwargs["stream"] == True:
                 if "complete_response" in kwargs and kwargs["complete_response"] == True: 
@@ -1248,7 +1248,6 @@ def client(original_function):
                     return litellm.stream_chunk_builder(chunks)
                 else: 
                     return result
-            result = await result 
             # [OPTIONAL] ADD TO CACHE
             if litellm.caching or litellm.caching_with_models or litellm.cache != None: # user init a cache object
                 litellm.cache.add_cache(result, *args, **kwargs)
@@ -4458,7 +4457,6 @@ class CustomStreamWrapper:
         except Exception as e:
             traceback.print_exc()
             raise e
-
 
     def handle_openai_text_completion_chunk(self, chunk):
         try: 
