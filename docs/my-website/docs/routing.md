@@ -8,6 +8,9 @@ Use this if you're trying to load-balance across multiple deployments (e.g. Azur
 
 In production, [Router connects to a Redis Cache](#redis-queue) to track usage across multiple deployments.
 
+
+(s/o [@paulpierre](https://www.linkedin.com/in/paulpierre/) for his contribution to this implementation)
+
 ### Quick Start
 
 ```python
