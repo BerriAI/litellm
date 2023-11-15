@@ -451,6 +451,7 @@ class Huggingface(BaseLLM):
        if self._aclient_session is None:
            self._aclient_session = self.create_aclient_session()
        client = self._aclient_session
+       response = None
        try:
             response = await client.post(url=api_base, json=data, headers=headers) 
             response_json = response.json()
@@ -468,7 +469,7 @@ class Huggingface(BaseLLM):
        except Exception as e: 
            if isinstance(e,httpx.TimeoutException):
                 raise HuggingfaceError(status_code=500, message="Request Timeout Error")
-           elif response and hasattr(response, "text"):
+           elif response is not None and hasattr(response, "text"):
                 raise HuggingfaceError(status_code=500, message=f"{str(e)}\n\nOriginal Response: {response.text}")
            else: 
                 raise HuggingfaceError(status_code=500, message=f"{str(e)}")
