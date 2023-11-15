@@ -492,7 +492,6 @@ class Logging:
 
     def pre_call(self, input, api_key, model=None, additional_args={}):
         # Log the exact input to the LLM API
-        print_verbose(f"Logging Details Pre-API Call for call id {self.litellm_call_id}")
         litellm.error_logs['PRE_CALL'] = locals()
         try:
             # print_verbose(f"logging pre call for model: {self.model} with call type: {self.call_type}")
@@ -506,7 +505,21 @@ class Logging:
                 self.model_call_details["model"] = model
 
             # User Logging -> if you pass in a custom logging function
-            print_verbose(f"MODEL CALL INPUT: {self.model_call_details}\n\n")
+            headers = additional_args.get("headers", {})
+            data = additional_args.get("complete_input_dict", {})
+            api_base = additional_args.get("api_base", "")
+            masked_headers = {k: v[:-5] + '*' * 5 if len(v) > 5 else v for k, v in headers.items()}
+            formatted_headers = " ".join([f"-H '{k}: {v}'" for k, v in masked_headers.items()])
+            curl_command = (
+                "\n\nPOST Request Sent from LiteLLM:\ncurl -X POST \\"
+                f"    {api_base} \\\n"
+                f"    {formatted_headers} \\\n"
+                f"    -d '{json.dumps(data)}'\n"
+            )
+            if api_base == "":
+                curl_command = self.model_call_details
+
+            print_verbose(f"\033[92m{curl_command}\033[0m\n")
             if self.logger_fn and callable(self.logger_fn):
                 try:
                     self.logger_fn(
