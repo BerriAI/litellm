@@ -710,33 +710,39 @@ https://api.openai.com/v1/chat/completions \
 ```
 
 ## Logging Proxy Input/Output - Langfuse
-We will use the `--config` with the proxy for logging input/output to Langfuse
-- We will use the `litellm.success_callback = ["langfuse"]` this will log all successfull LLM calls to langfuse
+We will use the `--config` to set `litellm.success_callback = ["langfuse"]` this will log all successfull LLM calls to langfuse
 
-**Step 1**: Create a `config.yaml` file
+**Step 1** Install langfuse
+
+```shell
+pip install langfuse
+```
+
+**Step 2**: Create a `config.yaml` file and set `litellm_settings`: `success_callback`
 ```yaml
 model_list:
  - model_name: gpt-3.5-turbo
     litellm_params:
       model: gpt-3.5-turbo
-  - model_name: gpt-4-team1
-    litellm_params:
-      model: azure/chatgpt-v-2
-      api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
-      api_version: "2023-05-15"
 litellm_settings:
   success_callback: ["langfuse"]
 ```
 
-**Step 2**: Start the proxy, make a test request
+**Step 3**: Start the proxy, make a test request
+
+Start proxy
 ```shell
-litellm --model gpt-3.5-turbo --debug
+litellm --config config.yaml --debug
 ```
 
 Test Request
 ```
 litellm --test
 ```
+
+Expected output on Langfuse
+
+<Image img={require('../img/langfuse_small.png')} />
 
 
 ## Proxy CLI Arguments
