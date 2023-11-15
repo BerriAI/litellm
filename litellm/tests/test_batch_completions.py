@@ -9,6 +9,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 from openai import APITimeoutError as Timeout
 import litellm
+litellm.num_retries = 3
 from litellm import batch_completion, batch_completion_models, completion, batch_completion_models_all_responses
 # litellm.set_verbose=True
 

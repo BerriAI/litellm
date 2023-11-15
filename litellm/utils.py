@@ -816,6 +816,43 @@ class Logging:
                             run_id=self.litellm_call_id,
                             print_verbose=print_verbose,
                         )
+                    if callback == "helicone":
+                        print_verbose("reaches helicone for logging!")
+                        model = self.model
+                        messages = kwargs["messages"]
+                        heliconeLogger.log_success(
+                            model=model,
+                            messages=messages,
+                            response_obj=result,
+                            start_time=start_time,
+                            end_time=end_time,
+                            print_verbose=print_verbose,
+                        )
+                    if callback == "langfuse":
+                        print_verbose("reaches langfuse for logging!")
+                        deep_copy = {}
+                        for k, v in self.model_call_details.items(): 
+                            if k != "original_response": # copy.deepcopy raises errors as this could be a coroutine
+                                deep_copy[k] = v
+                        langFuseLogger.log_event(
+                            kwargs=deep_copy,
+                            response_obj=result,
+                            start_time=start_time,
+                            end_time=end_time,
+                            print_verbose=print_verbose,
+                        )
+                    if callback == "traceloop":
+                        deep_copy = {}
+                        for k, v in self.model_call_details.items(): 
+                            if k != "original_response": 
+                                deep_copy[k] = v
+                        traceloopLogger.log_event(
+                            kwargs=deep_copy,
+                            response_obj=result,
+                            start_time=start_time,
+                            end_time=end_time,
+                            print_verbose=print_verbose,
+                        )
                     if isinstance(callback, CustomLogger): # custom logger class 
                         if self.stream and complete_streaming_response is None:
                             callback.log_stream_event(
@@ -2955,37 +2992,6 @@ def handle_success(args, kwargs, result, start_time, end_time):
                     slack_app.client.chat_postMessage(
                         channel=alerts_channel, text=slack_msg
                     )
-                elif callback == "helicone":
-                    print_verbose("reaches helicone for logging!")
-                    model = args[0] if len(args) > 0 else kwargs["model"]
-                    messages = args[1] if len(args) > 1 else kwargs["messages"]
-                    heliconeLogger.log_success(
-                        model=model,
-                        messages=messages,
-                        response_obj=result,
-                        start_time=start_time,
-                        end_time=end_time,
-                        print_verbose=print_verbose,
-                    )
-                elif callback == "langfuse":
-                    print_verbose("reaches langfuse for logging!")
-                    langFuseLogger.log_event(
-                        kwargs=kwargs,
-                        response_obj=result,
-                        start_time=start_time,
-                        end_time=end_time,
-                        print_verbose=print_verbose,
-                    )
-                
-                elif callback == "traceloop":
-                    traceloopLogger.log_event(
-                        kwargs=kwargs,
-                        response_obj=result,
-                        start_time=start_time,
-                        end_time=end_time,
-                        print_verbose=print_verbose,
-                    )
-
                 elif callback == "aispend":
                     print_verbose("reaches aispend for logging!")
                     model = args[0] if len(args) > 0 else kwargs["model"]
