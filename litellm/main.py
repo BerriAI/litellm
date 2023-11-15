@@ -1779,7 +1779,7 @@ def embedding(
                 or get_secret("HUGGINGFACE_API_KEY")
                 or litellm.api_key
             )
-            response = huggingface_restapi.embedding(
+            response = huggingface.embedding(
                 model=model,
                 input=input,
                 encoding=encoding,
