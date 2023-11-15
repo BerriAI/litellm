@@ -50,16 +50,6 @@ $ export AWS_SECRET_ACCESS_KEY=""
 $ litellm --model bedrock/anthropic.claude-v2
 ```
 </TabItem>
-<TabItem value="huggingface" label="Huggingface (TGI)">
-
-```shell
-$ export HUGGINGFACE_API_KEY=my-api-key #[OPTIONAL]
-```
-```shell
-$ litellm --model huggingface/<your model name> --api_base https://k58ory32yinf1ly0.us-east-1.aws.endpoints.huggingface.cloud
-```
-
-</TabItem>
 <TabItem value="azure" label="Azure OpenAI">
 
 ```shell
@@ -80,6 +70,23 @@ $ export OPENAI_API_KEY=my-api-key
 ```shell
 $ litellm --model gpt-3.5-turbo
 ```
+</TabItem>
+<TabItem value="huggingface" label="Huggingface (TGI) Deployed">
+
+```shell
+$ export HUGGINGFACE_API_KEY=my-api-key #[OPTIONAL]
+```
+```shell
+$ litellm --model huggingface/<your model name> --api_base https://k58ory32yinf1ly0.us-east-1.aws.endpoints.huggingface.cloud
+```
+
+</TabItem>
+<TabItem value="huggingface-local" label="Huggingface (TGI) Local">
+
+```shell
+$ litellm --model huggingface/<your model name> --api_base http://0.0.0.0:8001
+```
+
 </TabItem>
 <TabItem value="anthropic" label="Anthropic">
 
