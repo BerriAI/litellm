@@ -3742,8 +3742,6 @@ def exception_type(
                             model=model,
                             request=original_exception.request
                         )
-                exception_mapping_worked = True
-                raise APIError(status_code=500, message=error_str, model=model, llm_provider=custom_llm_provider)
             elif custom_llm_provider == "ai21":
                 if hasattr(original_exception, "message"):
                     if "Prompt has too many tokens" in original_exception.message:
