@@ -1,14 +1,14 @@
 [tool.poetry]
 name = "litellm"
-version = "0.14.1"
+version = "1.0.3.dev1"
 description = "Library to easily interface with LLM API providers"
 authors = ["BerriAI"]
 license = "MIT License"
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = "^3.10"
-openai = ">=1"
+python = "^3.8"
+openai = ">=1.0.0"
 python-dotenv = ">=0.2.0"
 tiktoken = ">=0.4.0"
 importlib-metadata = ">=6.8.0"
@@ -43,7 +43,7 @@ requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.commitizen]
-version = "0.14.1"
+version = "1.0.3.dev1"
 version_files = [
     "pyproject.toml:^version"
 ]

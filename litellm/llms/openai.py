@@ -1,5 +1,5 @@
 from typing import Optional, Union
-import types
+import types, time
 import httpx
 from .base import BaseLLM
 from litellm.utils import ModelResponse, Choices, Message, CustomStreamWrapper, convert_to_model_response_object, Usage
@@ -153,11 +153,11 @@ class OpenAITextCompletionConfig():
                 and v is not None}
 
 class OpenAIChatCompletion(BaseLLM):
-    _client_session: httpx.Client
+    _client_session: Optional[httpx.Client] = None
+    _aclient_session: Optional[httpx.AsyncClient] = None
 
     def __init__(self) -> None:
         super().__init__()
-        self._client_session = self.create_client_session()
     
     def validate_environment(self, api_key):
         headers = {
@@ -166,6 +166,15 @@ class OpenAIChatCompletion(BaseLLM):
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         return headers
+    
+    def _retry_request(self, *args, **kwargs): 
+        self._num_retry_httpx_errors -= 1
+        
+        time.sleep(1)
+
+        original_function = kwargs.pop("original_function")
+
+        return original_function(*args, **kwargs)
 
     def completion(self, 
                 model_response: ModelResponse,
@@ -181,6 +190,8 @@ class OpenAIChatCompletion(BaseLLM):
                 logger_fn=None,
                 headers: Optional[dict]=None):
         super().completion()
+        if self._client_session is None:
+            self._client_session = self.create_client_session()
         exception_mapping_worked = False
         try: 
             if headers is None:
@@ -200,7 +211,7 @@ class OpenAIChatCompletion(BaseLLM):
                 logging_obj.pre_call(
                     input=messages,
                     api_key=api_key,
-                    additional_args={"headers": headers, "api_base": api_base, "acompletion": acompletion, "data": data},
+                    additional_args={"headers": headers, "api_base": api_base, "acompletion": acompletion, "complete_input_dict": data},
                 )
                 
                 try: 
@@ -251,15 +262,25 @@ class OpenAIChatCompletion(BaseLLM):
                           api_base: str, 
                           data: dict, headers: dict, 
                           model_response: ModelResponse): 
-        async with httpx.AsyncClient(timeout=600) as client:
+        kwargs = locals()
+        if self._aclient_session is None:
+            self._aclient_session = self.create_aclient_session()
+        client = self._aclient_session
+        try: 
             response = await client.post(api_base, json=data, headers=headers) 
             response_json = response.json()
             if response.status_code != 200:
                 raise OpenAIError(status_code=response.status_code, message=response.text, request=response.request, response=response)
-                
-
+            
             ## RESPONSE OBJECT
             return convert_to_model_response_object(response_object=response_json, model_response_object=model_response)
+        except Exception as e: 
+            if isinstance(e, httpx.TimeoutException):
+                raise OpenAIError(status_code=500, message="Request Timeout Error")
+            if response and hasattr(response, "text"):
+                raise OpenAIError(status_code=500, message=f"{str(e)}\n\nOriginal Response: {response.text}")
+            else: 
+                raise OpenAIError(status_code=500, message=f"{str(e)}")
 
     def streaming(self,
                   logging_obj,
@@ -269,6 +290,8 @@ class OpenAIChatCompletion(BaseLLM):
                   model_response: ModelResponse, 
                   model: str
     ):
+        if self._client_session is None:
+            self._client_session = self.create_client_session()
         with self._client_session.stream(
                     url=f"{api_base}", # type: ignore
                     json=data,
@@ -290,8 +313,9 @@ class OpenAIChatCompletion(BaseLLM):
                           headers: dict, 
                           model_response: ModelResponse, 
                           model: str):
-        client = httpx.AsyncClient()
-        async with client.stream(
+        if self._aclient_session is None:
+            self._aclient_session = self.create_aclient_session()
+        async with self._aclient_session.stream(
                     url=f"{api_base}",
                     json=data,
                     headers=headers,
@@ -314,6 +338,8 @@ class OpenAIChatCompletion(BaseLLM):
                 optional_params=None,):
         super().embedding()
         exception_mapping_worked = False
+        if self._client_session is None:
+            self._client_session = self.create_client_session()
         try: 
             headers = self.validate_environment(api_key)
             api_base = f"{api_base}/embeddings"
@@ -449,7 +475,7 @@ class OpenAITextCompletion(BaseLLM):
             logging_obj.pre_call(
                 input=messages,
                 api_key=api_key,
-                additional_args={"headers": headers, "api_base": api_base, "data": data},
+                additional_args={"headers": headers, "api_base": api_base, "complete_input_dict": data},
             )
             if acompletion == True: 
                 if optional_params.get("stream", False):

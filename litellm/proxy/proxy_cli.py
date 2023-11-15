@@ -120,7 +120,6 @@ def run_server(host, port, api_base, api_version, model, alias, add_key, headers
         print("\033[1;32mDone successfully\033[0m")
         return
     if model and "ollama" in model: 
-        print(f"ollama called")
         run_ollama_serve()
     if test != False:
         click.echo('\nLiteLLM: Making a test ChatCompletions request to your proxy')

@@ -5,12 +5,14 @@ import time
 from typing import Callable, Optional
 from litellm.utils import ModelResponse, get_secret, Choices, Message, Usage
 import litellm
-import sys
+import sys, httpx
 
 class PalmError(Exception):
     def __init__(self, status_code, message):
         self.status_code = status_code
         self.message = message
+        self.request = httpx.Request(method="POST", url="https://developers.generativeai.google/api/python/google/generativeai/chat")
+        self.response = httpx.Response(status_code=status_code, request=self.request)
         super().__init__(
             self.message
         )  # Call the base class constructor with the parameters it needs
@@ -146,6 +148,11 @@ def completion(
     except Exception as e:
         traceback.print_exc()
         raise PalmError(message=traceback.format_exc(), status_code=response.status_code)
+    
+    try: 
+        completion_response = model_response["choices"][0]["message"].get("content")
+    except:
+        raise PalmError(status_code=400, message=f"No response received. Original response - {response}")
 
     ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here. 
     prompt_tokens = len(

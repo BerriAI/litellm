@@ -23,6 +23,7 @@ telemetry = True
 max_tokens = 256  # OpenAI Defaults
 drop_params = False
 retry = True
+request_timeout: float = 600
 api_key: Optional[str] = None
 openai_key: Optional[str] = None
 azure_key: Optional[str] = None
@@ -52,6 +53,7 @@ _current_cost = 0  # private variable, used if max budget is set
 error_logs: Dict = {}
 add_function_to_prompt: bool = False  # if function calling not supported by api, append function call details to system prompt
 client_session: Optional[httpx.Client] = None
+aclient_session: Optional[httpx.AsyncClient] = None
 model_fallbacks: Optional[list] = None
 model_cost_map_url: str = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
 # can be found under ../
@@ -295,6 +297,7 @@ from .exceptions import (
     ContextWindowExceededError,
     BudgetExceededError,
     APIError,
+    Timeout
 )
 from .budget_manager import BudgetManager
 from .proxy.proxy_cli import run_server
