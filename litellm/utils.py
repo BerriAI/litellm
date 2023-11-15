@@ -3236,6 +3236,15 @@ def exception_type(
                 exception_type = type(original_exception).__name__
             else:
                 exception_type = ""
+            
+            if "Request Timeout Error" in error_str: 
+                exception_mapping_worked = True
+                raise Timeout(
+                    message=f"APITimeoutError - Request timed out",
+                    model=model,
+                    llm_provider=custom_llm_provider
+                )
+
             if custom_llm_provider == "openai" or custom_llm_provider == "text-completion-openai" or custom_llm_provider == "custom_openai":
                 if "This model's maximum context length is" in error_str or "Request too large" in error_str:
                     exception_mapping_worked = True
@@ -4081,8 +4090,12 @@ def exception_type(
                 response=original_exception.response
             )
         else:
-            # raise BadRequestError(message=str(original_exception), llm_provider=custom_llm_provider, model=model, response=original_exception.response)
-            raise original_exception
+            exception_mapping_worked = True
+            raise APIConnectionError(
+                message=f"{str(original_exception)}",
+                llm_provider=custom_llm_provider,
+                model=model
+            )
     except Exception as e:
         # LOGGING
         exception_logging(

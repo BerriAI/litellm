@@ -72,11 +72,11 @@ class AzureOpenAIConfig(OpenAIConfig):
                          top_p)
 
 class AzureChatCompletion(BaseLLM):
-    _client_session: httpx.Client
+    _client_session: Optional[httpx.Client] = None
+    _aclient_session: Optional[httpx.AsyncClient] = None
 
     def __init__(self) -> None:
         super().__init__()
-        self._client_session = self.create_client_session()
     
     def validate_environment(self, api_key, azure_ad_token):
         headers = {
@@ -105,6 +105,8 @@ class AzureChatCompletion(BaseLLM):
                acompletion: bool = False,
                headers: Optional[dict]=None):
         super().completion()
+        if self._client_session is None: 
+            self._client_session = self.create_client_session()
         exception_mapping_worked = False
         try:
             if headers is None:
@@ -157,15 +159,24 @@ class AzureChatCompletion(BaseLLM):
             raise e
     
     async def acompletion(self, api_base: str, data: dict, headers: dict, model_response: ModelResponse): 
-       async with httpx.AsyncClient(timeout=600) as client:
+       if self._aclient_session is None:
+           self._aclient_session = self.create_aclient_session()
+       client = self._aclient_session
+       try:
             response = await client.post(api_base, json=data, headers=headers) 
             response_json = response.json()
             if response.status_code != 200:
-                raise AzureOpenAIError(status_code=response.status_code, message=response.text)
-                
-
+                raise AzureOpenAIError(status_code=response.status_code, message=response.text, request=response.request, response=response)
+            
             ## RESPONSE OBJECT
             return convert_to_model_response_object(response_object=response_json, model_response_object=model_response)
+       except Exception as e: 
+           if httpx.TimeoutException:
+                raise AzureOpenAIError(status_code=500, message="Request Timeout Error")
+           elif response and hasattr(response, "text"):
+                raise AzureOpenAIError(status_code=500, message=f"{str(e)}\n\nOriginal Response: {response.text}")
+           else: 
+                raise AzureOpenAIError(status_code=500, message=f"{str(e)}")
 
     def streaming(self,
                   logging_obj,
