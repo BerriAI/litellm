@@ -25,11 +25,12 @@ def test_sync_response():
 
 def test_async_response():
     import asyncio
+    litellm.set_verbose = True
     async def test_get_response():
         user_message = "Hello, how are you?"
         messages = [{"content": user_message, "role": "user"}]
         try:
-            response = await acompletion(model="command-nightly", messages=messages)
+            response = await acompletion(model="huggingface/HuggingFaceH4/zephyr-7b-beta", messages=messages)
             print(f"response: {response}")
         except Exception as e:
             pytest.fail(f"An exception occurred: {e}")
@@ -44,7 +45,7 @@ def test_get_response_streaming():
         messages = [{"content": user_message, "role": "user"}]
         try:
             litellm.set_verbose = True
-            response = await acompletion(model="command-nightly", messages=messages, stream=True)
+            response = await acompletion(model="gpt-3.5-turbo", messages=messages, stream=True)
             print(type(response))
 
             import inspect
@@ -67,15 +68,16 @@ def test_get_response_streaming():
     asyncio.run(test_async_call())
 
 
-test_get_response_streaming()
+# test_get_response_streaming()
 
 def test_get_response_non_openai_streaming():
     import asyncio
+    litellm.set_verbose = True
     async def test_async_call():
         user_message = "Hello, how are you?"
         messages = [{"content": user_message, "role": "user"}]
         try:
-            response = await acompletion(model="command-nightly", messages=messages, stream=True)
+            response = await acompletion(model="huggingface/HuggingFaceH4/zephyr-7b-beta", messages=messages, stream=True)
             print(type(response))
 
             import inspect
@@ -98,4 +100,4 @@ def test_get_response_non_openai_streaming():
         return response
     asyncio.run(test_async_call())
 
-# test_get_response_non_openai_streaming()
+test_get_response_non_openai_streaming()
