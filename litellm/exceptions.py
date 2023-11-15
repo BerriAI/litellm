@@ -105,7 +105,7 @@ class APIError(APIError): # type: ignore
         super().__init__(
             self.message,
             request=request, # type: ignore
-            body=None,
+            body=None
         )
 
 # raised if an invalid request (not get, delete, put, post) is made
