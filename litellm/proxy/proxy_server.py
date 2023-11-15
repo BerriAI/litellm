@@ -39,6 +39,8 @@ except ImportError:
     import tomli as tomllib
     import appdirs
     import tomli_w
+    import backoff
+    import yaml
 
 import random
 
