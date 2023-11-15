@@ -153,14 +153,11 @@ class OpenAITextCompletionConfig():
                 and v is not None}
 
 class OpenAIChatCompletion(BaseLLM):
-    _client_session: httpx.Client
-    _aclient_session: httpx.AsyncClient
+    _client_session: Optional[httpx.Client] = None
+    _aclient_session: Optional[httpx.AsyncClient] = None
 
     def __init__(self) -> None:
         super().__init__()
-        self._client_session = self.create_client_session()
-        self._aclient_session = self.create_aclient_session()
-        self._num_retry_httpx_errors = 3 # httpx throws random errors - e.g. ReadError, 
     
     def validate_environment(self, api_key):
         headers = {
@@ -193,6 +190,8 @@ class OpenAIChatCompletion(BaseLLM):
                 logger_fn=None,
                 headers: Optional[dict]=None):
         super().completion()
+        if self._client_session is None:
+            self._client_session = self.create_client_session()
         exception_mapping_worked = False
         try: 
             if headers is None:
@@ -264,6 +263,8 @@ class OpenAIChatCompletion(BaseLLM):
                           data: dict, headers: dict, 
                           model_response: ModelResponse): 
         kwargs = locals()
+        if self._aclient_session is None:
+            self._aclient_session = self.create_aclient_session()
         client = self._aclient_session
         try: 
             response = await client.post(api_base, json=data, headers=headers) 
@@ -273,13 +274,9 @@ class OpenAIChatCompletion(BaseLLM):
             
             ## RESPONSE OBJECT
             return convert_to_model_response_object(response_object=response_json, model_response_object=model_response)
-        except httpx.ReadError or httpx.ReadTimeout: 
-            if self._num_retry_httpx_errors > 0: 
-                kwargs["original_function"] = self.acompletion
-                return self._retry_request(**kwargs)
-            else: 
-                raise e
         except Exception as e: 
+            if httpx.TimeoutException:
+                raise OpenAIError(status_code=500, message="Request Timeout Error")
             if response and hasattr(response, "text"):
                 raise OpenAIError(status_code=500, message=f"{str(e)}\n\nOriginal Response: {response.text}")
             else: 
