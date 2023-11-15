@@ -228,7 +228,7 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
     except Exception as e:
         raise Exception(f"Exception while reading Config: {e}")
     
-    print_verbose(f"Configs passed in, loaded config YAML\n{config}")
+    print(f"Loaded config YAML:\n{json.dumps(config, indent=2)}")
 
     ## GENERAL SERVER SETTINGS (e.g. master key,..)
     general_settings = config.get("general_settings", None)
