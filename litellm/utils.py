@@ -18,7 +18,7 @@ import tiktoken
 import uuid
 import aiohttp
 import logging
-import asyncio
+import asyncio, httpx
 import copy
 from tokenizers import Tokenizer
 from dataclasses import (
@@ -4089,14 +4089,22 @@ def exception_type(
                 llm_provider=custom_llm_provider,
                 response=original_exception.response
             )
-        else:
+        else: # ensure generic errors always return APIConnectionError
             exception_mapping_worked = True
-            raise APIConnectionError(
-                message=f"{str(original_exception)}",
-                llm_provider=custom_llm_provider,
-                model=model,
-                request=original_exception.request
-            )
+            if hasattr(original_exception, "request"):
+                raise APIConnectionError(
+                    message=f"{str(original_exception)}",
+                    llm_provider=custom_llm_provider,
+                    model=model,
+                    request=original_exception.request
+                )
+            else: 
+                raise APIConnectionError( 
+                    message=f"{str(original_exception)}",
+                    llm_provider=custom_llm_provider,
+                    model=model,
+                    request= httpx.Request(method="POST", url="https://api.openai.com/v1/") # stub the request
+                )
     except Exception as e:
         # LOGGING
         exception_logging(
@@ -4400,10 +4408,11 @@ class CustomStreamWrapper:
         elif chunk.startswith("data:"):
             data_json = json.loads(chunk[5:]) # chunk.startswith("data:"):
             try:
-                text = data_json["choices"][0]["delta"].get("content", "") 
-                if data_json["choices"][0].get("finish_reason", None): 
-                    is_finished = True
-                    finish_reason = data_json["choices"][0]["finish_reason"]
+                if len(data_json["choices"]) > 0: 
+                    text = data_json["choices"][0]["delta"].get("content", "") 
+                    if data_json["choices"][0].get("finish_reason", None): 
+                        is_finished = True
+                        finish_reason = data_json["choices"][0]["finish_reason"]
                 print_verbose(f"text: {text}; is_finished: {is_finished}; finish_reason: {finish_reason}")
                 return {"text": text, "is_finished": is_finished, "finish_reason": finish_reason}
             except:
@@ -4725,7 +4734,7 @@ class CustomStreamWrapper:
             e.message = str(e)
              # LOG FAILURE - handle streaming failure logging in the _next_ object, remove `handle_failure` once it's deprecated
             threading.Thread(target=self.logging_obj.failure_handler, args=(e, traceback_exception)).start()
-            return exception_type(model=self.model, custom_llm_provider=self.custom_llm_provider, original_exception=e)
+            raise exception_type(model=self.model, custom_llm_provider=self.custom_llm_provider, original_exception=e)
 
     ## needs to handle the empty string case (even starting chunk can be an empty string)
     def __next__(self):
@@ -4746,7 +4755,7 @@ class CustomStreamWrapper:
             raise  # Re-raise StopIteration
         except Exception as e:
             # Handle other exceptions if needed
-            pass
+            raise e
 
 
         
