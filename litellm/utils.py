@@ -510,12 +510,12 @@ class Logging:
             api_base = additional_args.get("api_base", "")
             masked_headers = {k: v[:-5] + '*' * 5 if len(v) > 5 else v for k, v in headers.items()}
             formatted_headers = " ".join([f"-H '{k}: {v}'" for k, v in masked_headers.items()])
-            curl_command = (
-                "\n\nPOST Request Sent from LiteLLM:\ncurl -X POST \\"
-                f"    {api_base} \\\n"
-                f"    {formatted_headers} \\\n"
-                f"    -d '{json.dumps(data)}'\n"
-            )
+
+            curl_command = "\n\nPOST Request Sent from LiteLLM:\n"
+            curl_command += "curl -X POST \\\n"
+            curl_command += f"{api_base} \\\n"
+            curl_command += f"{formatted_headers} \\\n" if formatted_headers.strip() != "" else ""
+            curl_command += f"-d '{json.dumps(data)}'\n"
             if api_base == "":
                 curl_command = self.model_call_details
 
