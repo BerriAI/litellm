@@ -1,8 +1,8 @@
 import sys
 import os
 import io, asyncio
-import logging
-logging.basicConfig(level=logging.DEBUG)
+# import logging
+# logging.basicConfig(level=logging.DEBUG)
 sys.path.insert(0, os.path.abspath('../..'))
 
 from litellm import completion
@@ -13,6 +13,7 @@ litellm.success_callback = ["langfuse"]
 import time
 
 def test_langfuse_logging_async(): 
+    litellm.set_verbose = True
     async def _test_langfuse():
         return await litellm.acompletion(
             model="gpt-3.5-turbo",

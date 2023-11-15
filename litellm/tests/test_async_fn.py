@@ -11,6 +11,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import litellm
 from litellm import completion, acompletion, acreate
+litellm.num_retries = 3
 
 def test_sync_response():
     litellm.set_verbose = True
