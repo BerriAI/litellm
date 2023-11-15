@@ -317,7 +317,7 @@ def test_function_calling_on_router():
 	except Exception as e: 
 		print(f"An exception occurred: {e}")
 
-test_function_calling_on_router()
+# test_function_calling_on_router()
 
 def test_aembedding_on_router():
 	try:

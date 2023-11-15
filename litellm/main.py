@@ -108,6 +108,7 @@ class Completions():
     response = completion(model=model, messages=messages, **self.params)
     return response
 
+@client
 async def acompletion(*args, **kwargs):
     """
     Asynchronously executes a litellm.completion() call for any of litellm supported llms (example gpt-4, gpt-3.5-turbo, claude-2, command-nightly)
@@ -149,63 +150,51 @@ async def acompletion(*args, **kwargs):
     """
     loop = asyncio.get_event_loop()
     model = args[0] if len(args) > 0 else kwargs["model"]
-    messages = args[1] if len(args) > 1 else kwargs["messages"]
-    ### INITIALIZE LOGGING OBJECT ### 
-    kwargs["litellm_call_id"] = str(uuid.uuid4())
-    start_time = datetime.datetime.now()
-    logging_obj = Logging(model=model, messages=messages, stream=kwargs.get("stream", False), litellm_call_id=kwargs["litellm_call_id"], function_id=kwargs.get("id", None), call_type="completion", start_time=start_time)
-    
     ### PASS ARGS TO COMPLETION ### 
-    kwargs["litellm_logging_obj"] = logging_obj
     kwargs["acompletion"] = True
-    kwargs["model"] = model
-    kwargs["messages"] = messages
-    # Use a partial function to pass your keyword arguments
-    func = partial(completion, *args, **kwargs)
+    try: 
+        # Use a partial function to pass your keyword arguments
+        func = partial(completion, *args, **kwargs)
 
-    # Add the context to the function
-    ctx = contextvars.copy_context()
-    func_with_context = partial(ctx.run, func)
+        # Add the context to the function
+        ctx = contextvars.copy_context()
+        func_with_context = partial(ctx.run, func)
 
-    _, custom_llm_provider, _, _ = get_llm_provider(model=model, api_base=kwargs.get("api_base", None))
+        _, custom_llm_provider, _, _ = get_llm_provider(model=model, api_base=kwargs.get("api_base", None))
 
-    if (custom_llm_provider == "openai" 
-        or custom_llm_provider == "azure" 
-        or custom_llm_provider == "custom_openai"
-        or custom_llm_provider == "text-completion-openai"): # currently implemented aiohttp calls for just azure and openai, soon all. 
-        if kwargs.get("stream", False): 
-            response = completion(*args, **kwargs)
-        else:
-            # Await normally
-            init_response = completion(*args, **kwargs)
-            if isinstance(init_response, dict) or isinstance(init_response, ModelResponse):
-                response = init_response
+        if (custom_llm_provider == "openai" 
+            or custom_llm_provider == "azure" 
+            or custom_llm_provider == "custom_openai"
+            or custom_llm_provider == "text-completion-openai"): # currently implemented aiohttp calls for just azure and openai, soon all. 
+            if kwargs.get("stream", False): 
+                response = completion(*args, **kwargs)
             else:
-                response = await init_response
-    else: 
-        # Call the synchronous function using run_in_executor
-        response =  await loop.run_in_executor(None, func_with_context)
-    if kwargs.get("stream", False): # return an async generator
-        # do not change this
-        # for stream = True, always return an async generator
-        # See OpenAI acreate https://github.com/openai/openai-python/blob/5d50e9e3b39540af782ca24e65c290343d86e1a9/openai/api_resources/abstract/engine_api_resource.py#L193
-        # return response
-        return(
-            line
-            async for line in response
-        )
-    else: 
-        end_time = datetime.datetime.now()
-        # [OPTIONAL] ADD TO CACHE
-        if litellm.caching or litellm.caching_with_models or litellm.cache != None: # user init a cache object
-            litellm.cache.add_cache(response, *args, **kwargs)
+                # Await normally
+                init_response = completion(*args, **kwargs)
+                if isinstance(init_response, dict) or isinstance(init_response, ModelResponse): ## CACHING SCENARIO 
+                    response = init_response
+                else:
+                    response = await init_response
+        else: 
+            # Call the synchronous function using run_in_executor
+            response =  await loop.run_in_executor(None, func_with_context)
+        if kwargs.get("stream", False): # return an async generator
+            # do not change this
+            # for stream = True, always return an async generator
+            # See OpenAI acreate https://github.com/openai/openai-python/blob/5d50e9e3b39540af782ca24e65c290343d86e1a9/openai/api_resources/abstract/engine_api_resource.py#L193
+            # return response
+            return(
+                line
+                async for line in response
+            )
+        else: 
+            return response
+    except Exception as e: 
+        ## Map to OpenAI Exception
+        raise exception_type(
+                model=model, custom_llm_provider=custom_llm_provider, original_exception=e, completion_kwargs=args,
+            )
 
-        # LOG SUCCESS
-        logging_obj.success_handler(response, start_time, end_time)
-        # RETURN RESULT
-        response._response_ms = (end_time - start_time).total_seconds() * 1000 # return response latency in ms like openai
-
-        return response
 
 def mock_completion(model: str, messages: List, stream: Optional[bool] = False, mock_response: str = "This is a mock request", **kwargs):
     """
@@ -1420,8 +1409,14 @@ def completion_with_retries(*args, **kwargs):
         raise Exception(f"tenacity import failed please run `pip install tenacity`. Error{e}")
     
     num_retries = kwargs.pop("num_retries", 3)
-    retryer = tenacity.Retrying(stop=tenacity.stop_after_attempt(num_retries), reraise=True)
-    return retryer(completion, *args, **kwargs)
+    retry_strategy = kwargs.pop("retry_strategy", "constant_retry")
+    original_function = kwargs.pop("original_function", completion)
+    if retry_strategy == "constant_retry": 
+        retryer = tenacity.Retrying(stop=tenacity.stop_after_attempt(num_retries), reraise=True)
+    elif retry_strategy == "exponential_backoff_retry": 
+        retryer = tenacity.Retrying(wait=tenacity.wait_exponential(multiplier=1, max=10), stop=tenacity.stop_after_attempt(num_retries), reraise=True)
+    return retryer(original_function, *args, **kwargs)
+
 
 
 def batch_completion(
