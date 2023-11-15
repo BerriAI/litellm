@@ -110,12 +110,13 @@ class APIError(APIError): # type: ignore
 
 # raised if an invalid request (not get, delete, put, post) is made
 class APIConnectionError(APIConnectionError):  # type: ignore 
-    def __init__(self, message, llm_provider, model):
+    def __init__(self, message, llm_provider, model, request: httpx.Request):
         self.message = message
         self.llm_provider = llm_provider
         self.model = model
         super().__init__(
-            self.message
+            message=self.message,
+            request=request
         )
 
 class OpenAIError(OpenAIError):  # type: ignore
