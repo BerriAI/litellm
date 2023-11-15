@@ -347,7 +347,7 @@ Since LiteLLM provides an OpenAI compatible proxy `-t` and `-m` don't need to ch
 
 MLflow provides an API `mlflow.evaluate()` to help evaluate your LLMs https://mlflow.org/docs/latest/llms/llm-evaluate/index.html
 
-## Pre Requisites
+#### Pre Requisites
 ```shell
 pip install litellm
 ```
@@ -355,7 +355,7 @@ pip install litellm
 pip install mlflow
 ```
 
-### Step 1: Start LiteLLM Proxy on the CLI
+#### Step 1: Start LiteLLM Proxy on the CLI
 LiteLLM allows you to create an OpenAI compatible server for all supported LLMs. [More information on litellm proxy here](https://docs.litellm.ai/docs/simple_proxy)
 
 ```shell
@@ -364,7 +364,7 @@ $ litellm --model huggingface/bigcode/starcoder
 #INFO: Proxy running on http://0.0.0.0:8000
 ```
 
-### Step 2: Run ML Flow
+#### Step 2: Run ML Flow
 Before running the eval we will set `openai.api_base` to the litellm proxy from Step 1
 
 ```python
