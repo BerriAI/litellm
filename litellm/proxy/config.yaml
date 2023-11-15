@@ -25,4 +25,5 @@ model_list:
 
 litellm_settings:
   drop_params: True
+  success_callback: ["langfuse"] # https://docs.litellm.ai/docs/observability/langfuse_integration
 
