@@ -511,6 +511,8 @@ class Logging:
             masked_headers = {k: v[:-40] + '*' * 40 if len(v) > 40 else v for k, v in headers.items()}
             formatted_headers = " ".join([f"-H '{k}: {v}'" for k, v in masked_headers.items()])
 
+            print_verbose(f"PRE-API-CALL ADDITIONAL ARGS: {additional_args}")
+
             curl_command = "\n\nPOST Request Sent from LiteLLM:\n"
             curl_command += "curl -X POST \\\n"
             curl_command += f"{api_base} \\\n"
@@ -4313,7 +4315,6 @@ class CustomStreamWrapper:
 
     def handle_huggingface_chunk(self, chunk):
         try:
-            chunk = chunk.decode("utf-8")
             text = "" 
             is_finished = False
             finish_reason = ""
@@ -4770,7 +4771,8 @@ class CustomStreamWrapper:
             if (self.custom_llm_provider == "openai" 
                 or self.custom_llm_provider == "azure"
                 or self.custom_llm_provider == "custom_openai"
-                or self.custom_llm_provider == "text-completion-openai"):
+                or self.custom_llm_provider == "text-completion-openai"
+                or self.custom_llm_provider == "huggingface"):
                 async for chunk in self.completion_stream:
                     if chunk == "None" or chunk is None:
                         raise Exception
