@@ -579,36 +579,34 @@ def test_completion_openai_with_more_optional_params():
         pytest.fail(f"Error occurred: {e}")
 
 # test_completion_openai_with_more_optional_params()
-# def test_completion_openai_azure_with_functions():
-#     function1 = [
-#         {
-#             "name": "get_current_weather",
-#             "description": "Get the current weather in a given location",
-#             "parameters": {
-#                 "type": "object",
-#                 "properties": {
-#                     "location": {
-#                         "type": "string",
-#                         "description": "The city and state, e.g. San Francisco, CA",
-#                     },
-#                     "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
-#                 },
-#                 "required": ["location"],
-#             },
-#         }
-#     ]
-#     try:
-#         response = completion(
-#             model="azure/chatgpt-functioncalling", messages=messages, stream=True
-#         )
-#         # Add any assertions here to check the response
-#         print(response)
-#         for chunk in response:
-#             print(chunk)
-#             print(chunk["choices"][0]["finish_reason"])
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
-# test_completion_openai_azure_with_functions()
+def test_completion_openai_azure_with_functions():
+    function1 = [
+        {
+            "name": "get_current_weather",
+            "description": "Get the current weather in a given location",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {
+                        "type": "string",
+                        "description": "The city and state, e.g. San Francisco, CA",
+                    },
+                    "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                },
+                "required": ["location"],
+            },
+        }
+    ]
+    try:
+        messages = [{"role": "user", "content": "What is the weather like in Boston?"}]
+        response = completion(
+            model="azure/chatgpt-functioncalling", messages=messages, functions=function1
+        )
+        # Add any assertions here to check the response
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+test_completion_openai_azure_with_functions()
 
 
 def test_completion_azure():

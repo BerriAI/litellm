@@ -2,7 +2,7 @@ import os
 import json
 from enum import Enum
 import requests
-import time
+import time, httpx
 from typing import Callable, Any
 from litellm.utils import ModelResponse, Usage
 from .prompt_templates.factory import prompt_factory, custom_prompt
@@ -11,6 +11,8 @@ class VLLMError(Exception):
     def __init__(self, status_code, message):
         self.status_code = status_code
         self.message = message
+        self.request = httpx.Request(method="POST", url="http://0.0.0.0:8000")
+        self.response = httpx.Response(status_code=status_code, request=self.request)
         super().__init__(
             self.message
         )  # Call the base class constructor with the parameters it needs

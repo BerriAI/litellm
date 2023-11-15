@@ -195,7 +195,7 @@ class AzureChatCompletion(BaseLLM):
                     method="POST"
                 ) as response: 
                     if response.status_code != 200:
-                        raise AzureOpenAIError(status_code=response.status_code, message=response.text)
+                        raise AzureOpenAIError(status_code=response.status_code, message="An error occurred while streaming")
                     
                     completion_stream = response.iter_lines()
                     streamwrapper = CustomStreamWrapper(completion_stream=completion_stream, model=model, custom_llm_provider="azure",logging_obj=logging_obj)

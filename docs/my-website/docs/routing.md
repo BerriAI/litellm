@@ -1,8 +1,6 @@
 import Image from '@theme/IdealImage';
 
-# Reliability - Fallbacks, Azure Deployments, etc.
-
-## Manage Multiple Deployments
+# Manage Multiple Deployments
 
 Use this if you're trying to load-balance across multiple deployments (e.g. Azure/OpenAI). 
 

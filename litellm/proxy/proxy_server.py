@@ -453,25 +453,18 @@ def litellm_completion(*args, **kwargs):
         kwargs["max_tokens"] = user_max_tokens
     if user_api_base: 
         kwargs["api_base"] = user_api_base
-    ## CHECK CONFIG ## 
-    if llm_model_list != None:
-        llm_models = [m["model_name"] for m in llm_model_list]
-        if kwargs["model"] in llm_models:
-            for m in llm_model_list: 
-                if kwargs["model"] == m["model_name"]: # if user has specified a config, this will use the config
-                    for key, value in m["litellm_params"].items(): 
-                        kwargs[key] = value
-                    break
-        else:
-            print_verbose("user sent model not in config, using default config model")
-            default_model = llm_model_list[0]
-            litellm_params = default_model.get('litellm_params', None)
-            for key, value in litellm_params.items():
-                kwargs[key] = value
-    if call_type == "chat_completion":
-        response = litellm.completion(*args, **kwargs)
-    elif call_type == "text_completion":
-        response = litellm.text_completion(*args, **kwargs)
+    ## ROUTE TO CORRECT ENDPOINT ## 
+    router_model_names = [m["model_name"] for m in llm_model_list]
+    if llm_router is not None and kwargs["model"] in router_model_names: # model in router model list 
+        if call_type == "chat_completion":
+            response = llm_router.completion(*args, **kwargs)
+        elif call_type == "text_completion":
+            response = llm_router.text_completion(*args, **kwargs)
+    else: 
+        if call_type == "chat_completion":
+            response = litellm.completion(*args, **kwargs)
+        elif call_type == "text_completion":
+            response = litellm.text_completion(*args, **kwargs)
     if 'stream' in kwargs and kwargs['stream'] == True: # use generate_responses to stream responses
         return StreamingResponse(data_generator(response), media_type='text/event-stream')
     return response
