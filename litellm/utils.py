@@ -2896,7 +2896,7 @@ def convert_to_model_response_object(response_object: Optional[dict]=None, model
                 raise Exception("Error in response object format")
             choice_list=[]
             for idx, choice in enumerate(response_object["choices"]): 
-                message = Message(content=choice["message"]["content"], role=choice["message"]["role"], function_call=choice["message"].get("function_call", None))
+                message = Message(content=choice["message"].get("content", None), role=choice["message"]["role"], function_call=choice["message"].get("function_call", None))
                 finish_reason = choice.get("finish_reason", None)
                 if finish_reason == None:
                     # gpt-4 vision can return 'finish_reason' or 'finish_details'
@@ -4018,7 +4018,8 @@ def exception_type(
                         raise APIConnectionError(
                             message=f"VLLMException - {original_exception.message}",
                             llm_provider="vllm",
-                            model=model
+                            model=model,
+                            request=original_exception.request
                         )
             elif custom_llm_provider == "azure": 
                 if "This model's maximum context length is" in error_str:
@@ -4093,7 +4094,8 @@ def exception_type(
             raise APIConnectionError(
                 message=f"{str(original_exception)}",
                 llm_provider=custom_llm_provider,
-                model=model
+                model=model,
+                request=original_exception.request
             )
     except Exception as e:
         # LOGGING
