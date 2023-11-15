@@ -129,6 +129,7 @@ class AzureChatCompletion(BaseLLM):
                     "headers": headers,
                     "api_version": api_version,
                     "api_base": api_base,
+                    "complete_input_dict": data,
                 },
             )
             if acompletion is True: 
