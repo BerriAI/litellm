@@ -694,6 +694,23 @@ model_list:
 $ litellm --config /path/to/config.yaml
 ```
 
+## Debugging Proxy 
+Run the proxy with `--debug` to easily view debug logs 
+```shell
+litellm --model gpt-3.5-turbo --debug
+```
+
+When making requests you should see the POST request sent by LiteLLM to the LLM on the Terminal output
+```shell
+POST Request Sent from LiteLLM:
+curl -X POST \
+https://api.openai.com/v1/chat/completions \
+-H 'content-type: application/json' -H 'Authorization: Bearer sk-qnWGUIW9****************************************' \
+-d '{"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "this is a test request, write a short poem"}]}'
+```
+
+## Logging Proxy Input/Output - Langfuse
+
 ## Proxy CLI Arguments
 
 #### --host
