@@ -5,9 +5,9 @@ tomli
 appdirs
 tomli_w
 backoff
-yaml
+pyyaml
 uvicorn
 boto3
 litellm
 redis
-yaml
+pyyaml
