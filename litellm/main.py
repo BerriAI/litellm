@@ -236,9 +236,6 @@ def mock_completion(model: str, messages: List, stream: Optional[bool] = False, 
         raise Exception("Mock completion response failed")
 
 @client
-@timeout(  # type: ignore
-    600
-)  ## set timeouts, in case calls hang (e.g. Azure) - default is 600s, override with `force_timeout`
 def completion(
     model: str,
     # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
