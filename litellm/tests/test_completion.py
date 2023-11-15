@@ -1410,7 +1410,7 @@ def test_completion_deep_infra_mistral():
 def test_completion_palm():
     litellm.set_verbose = True
     model_name = "palm/chat-bison"
-    messages = [{"role": "user", "content": "what model are you?"}]
+    messages = [{"role": "user", "content": "Hey, how's it going?"}]
     try:
         response = completion(model=model_name, messages=messages)
         # Add any assertions here to check the response
