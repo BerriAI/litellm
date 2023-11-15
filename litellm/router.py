@@ -34,6 +34,7 @@ class Router:
                  cache_responses: bool = False,
                  num_retries: Optional[int] = None,
                  timeout: float = 600,
+                 chat_completion_params = {}, # default params for Router.chat.completion.create 
                  routing_strategy: Literal["simple-shuffle", "least-busy"] = "simple-shuffle") -> None:
 
         if model_list:
@@ -42,6 +43,8 @@ class Router:
         
         if num_retries: 
             self.num_retries = num_retries
+        
+        self.chat = litellm.Chat(params=chat_completion_params)
 
         litellm.request_timeout = timeout
         self.routing_strategy = routing_strategy
@@ -65,7 +68,6 @@ class Router:
             litellm.cache = litellm.Cache(**cache_config) # use Redis for caching completion requests
             self.cache_responses = cache_responses
         
-        self.chat = litellm.Chat(params={})
 
 
     def _start_health_check_thread(self):
