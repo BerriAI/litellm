@@ -37,7 +37,7 @@ class LangFuseLogger:
                 f"Langfuse Logging - Enters logging function for model {kwargs}"
             )
             metadata = kwargs.get("metadata", {})
-            prompt = [kwargs['messages']]
+            prompt = [kwargs.get('messages')]
 
             # langfuse does not accept jsons for logging metadata #
             kwargs.pop("litellm_logging_obj", None)
@@ -52,7 +52,7 @@ class LangFuseLogger:
                 startTime=start_time,
                 endTime=end_time,
                 model=kwargs['model'],
-                modelParameters= kwargs,
+                modelParameters= kwargs["optional_params"],
                 prompt=prompt,
                 completion=response_obj['choices'][0]['message'],
                 usage=Usage(
