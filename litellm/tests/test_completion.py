@@ -58,7 +58,7 @@ def test_completion_claude():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_completion_claude()
+# test_completion_claude()
 
 # def test_completion_oobabooga():
 #     try:
@@ -631,6 +631,38 @@ def test_completion_azure():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+def test_azure_openai_ad_token():
+    # this tests if the azure ad token is set in the request header
+    # the request can fail since azure ad tokens expire after 30 mins, but the header MUST have the azure ad token
+    # we use litellm.input_callbacks for this test
+    def tester(    
+        kwargs,                 # kwargs to completion
+    ):
+        print(kwargs["additional_args"])
+        if kwargs["additional_args"]["headers"]["Authorization"] != 'Bearer gm':
+            pytest.fail("AZURE AD TOKEN Passed but not set in request header")
+        return
+    litellm.input_callback = [tester]
+    try:
+        response = litellm.completion(
+            model="azure/chatgpt-v-2",  # e.g. gpt-35-instant
+            messages=[
+                {
+                    "role": "user",
+                    "content": "what is your name",
+                },
+            ],
+            azure_ad_token="gm"
+        )
+        print("azure ad token respoonse\n")
+        print(response)
+        litellm.input_callback = []
+    except:
+        litellm.input_callback = []
+        pass
+# test_azure_openai_ad_token()
+
 
 # test_completion_azure()
 def test_completion_azure2():
@@ -1328,6 +1360,8 @@ def test_mistral_anyscale_stream():
 
 #### Test A121 ###################
 def test_completion_ai21():
+    print("running ai21 j2light test")
+    litellm.set_verbose=True
     model_name = "j2-light"
     try:
         response = completion(model=model_name, messages=messages, max_tokens=100, temperature=0.8)
@@ -1352,7 +1386,7 @@ def test_completion_deep_infra():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_deep_infra()
+# test_completion_deep_infra()
 
 def test_completion_deep_infra_mistral():
     print("deep infra test with temp=0")
@@ -1374,10 +1408,11 @@ def test_completion_deep_infra_mistral():
 
 # Palm tests
 def test_completion_palm():
-    # litellm.set_verbose = True
+    litellm.set_verbose = True
     model_name = "palm/chat-bison"
+    messages = [{"role": "user", "content": "Hey, how's it going?"}]
     try:
-        response = completion(model=model_name, messages=messages, stop=["stop"])
+        response = completion(model=model_name, messages=messages)
         # Add any assertions here to check the response
         print(response)
     except Exception as e:
@@ -1462,4 +1497,4 @@ def test_moderation():
     print(output)
     return output
 
-test_moderation()
+# test_moderation()

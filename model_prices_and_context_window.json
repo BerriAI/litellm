@@ -617,8 +617,8 @@
         "litellm_provider": "together"
     },
     "together-ai-40.1b-70b": {
-        "input_cost_per_token": 0.000001,
-        "output_cost_per_token": 0.000001,
+        "input_cost_per_token": 0.0000009,
+        "output_cost_per_token": 0.0000009,
         "litellm_provider": "together"
     },
     "ollama/llama2": {

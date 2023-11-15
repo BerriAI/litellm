@@ -72,18 +72,20 @@ class AzureOpenAIConfig(OpenAIConfig):
                          top_p)
 
 class AzureChatCompletion(BaseLLM):
-    _client_session: httpx.Client
+    _client_session: Optional[httpx.Client] = None
+    _aclient_session: Optional[httpx.AsyncClient] = None
 
     def __init__(self) -> None:
         super().__init__()
-        self._client_session = self.create_client_session()
     
-    def validate_environment(self, api_key):
+    def validate_environment(self, api_key, azure_ad_token):
         headers = {
             "content-type": "application/json",
         }
-        if api_key:
+        if api_key is not None:
             headers["api-key"] = api_key
+        if azure_ad_token is not None:
+            headers["Authorization"] = f"Bearer {azure_ad_token}"
         return headers
 
     def completion(self, 
@@ -94,6 +96,7 @@ class AzureChatCompletion(BaseLLM):
                api_base: str,
                api_version: str,
                api_type: str,
+               azure_ad_token: str,
                print_verbose: Callable,
                logging_obj,
                optional_params,
@@ -102,10 +105,12 @@ class AzureChatCompletion(BaseLLM):
                acompletion: bool = False,
                headers: Optional[dict]=None):
         super().completion()
+        if self._client_session is None: 
+            self._client_session = self.create_client_session()
         exception_mapping_worked = False
         try:
             if headers is None:
-                headers = self.validate_environment(api_key=api_key)
+                headers = self.validate_environment(api_key=api_key, azure_ad_token=azure_ad_token)
 
             if model is None or messages is None:
                 raise AzureOpenAIError(status_code=422, message=f"Missing model or messages")
@@ -126,6 +131,7 @@ class AzureChatCompletion(BaseLLM):
                     "headers": headers,
                     "api_version": api_version,
                     "api_base": api_base,
+                    "complete_input_dict": data,
                 },
             )
             if acompletion is True: 
@@ -153,15 +159,24 @@ class AzureChatCompletion(BaseLLM):
             raise e
     
     async def acompletion(self, api_base: str, data: dict, headers: dict, model_response: ModelResponse): 
-       async with httpx.AsyncClient(timeout=600) as client:
+       if self._aclient_session is None:
+           self._aclient_session = self.create_aclient_session()
+       client = self._aclient_session
+       try:
             response = await client.post(api_base, json=data, headers=headers) 
             response_json = response.json()
             if response.status_code != 200:
-                raise AzureOpenAIError(status_code=response.status_code, message=response.text)
-                
-
+                raise AzureOpenAIError(status_code=response.status_code, message=response.text, request=response.request, response=response)
+            
             ## RESPONSE OBJECT
             return convert_to_model_response_object(response_object=response_json, model_response_object=model_response)
+       except Exception as e: 
+           if isinstance(e,httpx.TimeoutException):
+                raise AzureOpenAIError(status_code=500, message="Request Timeout Error")
+           elif response and hasattr(response, "text"):
+                raise AzureOpenAIError(status_code=500, message=f"{str(e)}\n\nOriginal Response: {response.text}")
+           else: 
+                raise AzureOpenAIError(status_code=500, message=f"{str(e)}")
 
     def streaming(self,
                   logging_obj,
@@ -171,6 +186,8 @@ class AzureChatCompletion(BaseLLM):
                   model_response: ModelResponse, 
                   model: str
     ):
+        if self._client_session is None:
+            self._client_session = self.create_client_session()
         with self._client_session.stream(
                     url=f"{api_base}",
                     json=data,
@@ -192,7 +209,9 @@ class AzureChatCompletion(BaseLLM):
                           headers: dict, 
                           model_response: ModelResponse, 
                           model: str):
-        client = httpx.AsyncClient()
+        if self._aclient_session is None:
+           self._aclient_session = self.create_aclient_session()
+        client = self._aclient_session
         async with client.stream(
                     url=f"{api_base}",
                     json=data,
@@ -211,14 +230,17 @@ class AzureChatCompletion(BaseLLM):
                 input: list,
                 api_key: str,
                 api_base: str,
+                azure_ad_token: str,
                 api_version: str,
                 logging_obj=None,
                 model_response=None,
                 optional_params=None,):
         super().embedding()
         exception_mapping_worked = False
+        if self._client_session is None:
+            self._client_session = self.create_client_session()
         try: 
-            headers = self.validate_environment(api_key)
+            headers = self.validate_environment(api_key, azure_ad_token=azure_ad_token)
             # Ensure api_base ends with a trailing slash
             if not api_base.endswith('/'):
                 api_base += '/'

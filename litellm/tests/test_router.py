@@ -246,7 +246,7 @@ def test_acompletion_on_router():
 		]
 
 		async def get_response(): 
-			router = Router(model_list=model_list, redis_host=os.environ["REDIS_HOST"], redis_password=os.environ["REDIS_PASSWORD"], redis_port=os.environ["REDIS_PORT"], cache_responses=True)
+			router = Router(model_list=model_list, redis_host=os.environ["REDIS_HOST"], redis_password=os.environ["REDIS_PASSWORD"], redis_port=os.environ["REDIS_PORT"], cache_responses=True, timeout=10)
 			response1 = await router.acompletion(model="gpt-3.5-turbo", messages=messages)
 			print(f"response1: {response1}")
 			response2 = await router.acompletion(model="gpt-3.5-turbo", messages=messages)
@@ -317,7 +317,7 @@ def test_function_calling_on_router():
 	except Exception as e: 
 		print(f"An exception occurred: {e}")
 
-test_function_calling_on_router()
+# test_function_calling_on_router()
 
 def test_aembedding_on_router():
 	try:

@@ -60,6 +60,27 @@ $ litellm --model huggingface/<your model name> --api_base https://k58ory32yinf1
 ```
 
 </TabItem>
+<TabItem value="azure" label="Azure OpenAI">
+
+```shell
+$ export AZURE_API_KEY=my-api-key
+$ export AZURE_API_BASE=my-api-base
+```
+```
+$ litellm --model azure/my-deployment-name
+```
+
+</TabItem>
+<TabItem value="openai-proxy" label="OpenAI">
+
+```shell
+$ export OPENAI_API_KEY=my-api-key
+```
+
+```shell
+$ litellm --model gpt-3.5-turbo
+```
+</TabItem>
 <TabItem value="anthropic" label="Anthropic">
 
 ```shell
@@ -75,12 +96,6 @@ Assuming you're running vllm locally
 
 ```shell
 $ litellm --model vllm/facebook/opt-125m
-```
-</TabItem>
-<TabItem value="openai-proxy" label="OpenAI Compatible Server">
-
-```shell
-$ litellm --model openai/<model_name> --api_base <your-api-base>
 ```
 </TabItem>
 <TabItem value="together_ai" label="TogetherAI">
@@ -121,18 +136,6 @@ $ export PALM_API_KEY=my-palm-key
 ```
 ```shell
 $ litellm --model palm/chat-bison
-```
-
-</TabItem>
-
-<TabItem value="azure" label="Azure OpenAI">
-
-```shell
-$ export AZURE_API_KEY=my-api-key
-$ export AZURE_API_BASE=my-api-base
-```
-```
-$ litellm --model azure/my-deployment-name
 ```
 
 </TabItem>
@@ -483,6 +486,7 @@ The Config allows you to set the following params
 |----------------------|---------------------------------------------------------------|
 | `model_list`         | List of supported models on the server, with model-specific configs |
 | `litellm_settings`   | litellm Module settings, example `litellm.drop_params=True`, `litellm.set_verbose=True`, `litellm.api_base` |
+| `general_settings`   | Server settings, example setting `master_key: sk-my_special_key` |
 
 ### Example Config
 ```yaml
@@ -499,6 +503,9 @@ model_list:
 litellm_settings:
   drop_params: True
   set_verbose: True
+
+general_settings: 
+  master_key: sk-1234 # [OPTIONAL] Only use this if you to require all calls to contain this key (Authorization: Bearer sk-1234)
 ```
 
 ### Quick Start - Config 
@@ -519,8 +526,7 @@ model_list:
   - model_name: claude-2
     litellm_params:
       model: claude-2
-      api_key: sk-claude
-    
+      api_key: sk-claude    
 ```
 
 #### Default Model - Config:
@@ -536,6 +542,22 @@ $ litellm --config /path/to/config.yaml
 
 If you're repo let's you set model name, you can call the specific model by just passing in that model's name - 
 
+#### Step 4: Use proxy
+Curl Command
+```shell
+curl --location 'http://0.0.0.0:8000/chat/completions' \
+--header 'Content-Type: application/json' \
+--data ' {
+      "model": "gpt-4-team1",
+      "messages": [
+        {
+          "role": "user",
+          "content": "what llm are you"
+        }
+      ],
+    }
+'
+```
 **Setting model name**
 ```python
 import openai 
@@ -561,12 +583,17 @@ You can use the config to save model-specific information like api_base, api_key
 **Step 1**: Create a `config.yaml` file
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-4-team1
     litellm_params: # params for litellm.completion() - https://docs.litellm.ai/docs/completion/input#input---request-body
-      model: azure/chatgpt-v-2 # azure/<your-deployment-name>
-      api_key: your_azure_api_key
-      api_version: your_azure_api_version
-      api_base: your_azure_api_base
+      model: azure/chatgpt-v-2
+      api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
+      api_version: "2023-05-15"
+      azure_ad_token: eyJ0eXAiOiJ
+  - model_name: gpt-4-team2
+    litellm_params:
+      model: azure/gpt-4
+      api_key: sk-123
+      api_base: https://openai-gpt-4-test-v-2.openai.azure.com/
   - model_name: mistral-7b
     litellm_params:
       model: ollama/mistral

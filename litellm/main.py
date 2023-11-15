@@ -120,6 +120,7 @@ class Completions():
     response = completion(model=model, messages=messages, **self.params)
     return response
 
+@client
 async def acompletion(*args, **kwargs):
     """
     Asynchronously executes a litellm.completion() call for any of litellm supported llms (example gpt-4, gpt-3.5-turbo, claude-2, command-nightly)
@@ -161,63 +162,51 @@ async def acompletion(*args, **kwargs):
     """
     loop = asyncio.get_event_loop()
     model = args[0] if len(args) > 0 else kwargs["model"]
-    messages = args[1] if len(args) > 1 else kwargs["messages"]
-    ### INITIALIZE LOGGING OBJECT ### 
-    kwargs["litellm_call_id"] = str(uuid.uuid4())
-    start_time = datetime.datetime.now()
-    logging_obj = Logging(model=model, messages=messages, stream=kwargs.get("stream", False), litellm_call_id=kwargs["litellm_call_id"], function_id=kwargs.get("id", None), call_type="completion", start_time=start_time)
-    
     ### PASS ARGS TO COMPLETION ### 
-    kwargs["litellm_logging_obj"] = logging_obj
     kwargs["acompletion"] = True
-    kwargs["model"] = model
-    kwargs["messages"] = messages
-    # Use a partial function to pass your keyword arguments
-    func = partial(completion, *args, **kwargs)
+    try: 
+        # Use a partial function to pass your keyword arguments
+        func = partial(completion, *args, **kwargs)
 
-    # Add the context to the function
-    ctx = contextvars.copy_context()
-    func_with_context = partial(ctx.run, func)
+        # Add the context to the function
+        ctx = contextvars.copy_context()
+        func_with_context = partial(ctx.run, func)
 
-    _, custom_llm_provider, _, _ = get_llm_provider(model=model, api_base=kwargs.get("api_base", None))
+        _, custom_llm_provider, _, _ = get_llm_provider(model=model, api_base=kwargs.get("api_base", None))
 
-    if (custom_llm_provider == "openai" 
-        or custom_llm_provider == "azure" 
-        or custom_llm_provider == "custom_openai"
-        or custom_llm_provider == "text-completion-openai"): # currently implemented aiohttp calls for just azure and openai, soon all. 
-        if kwargs.get("stream", False): 
-            response = completion(*args, **kwargs)
-        else:
-            # Await normally
-            init_response = completion(*args, **kwargs)
-            if isinstance(init_response, dict) or isinstance(init_response, ModelResponse):
-                response = init_response
+        if (custom_llm_provider == "openai" 
+            or custom_llm_provider == "azure" 
+            or custom_llm_provider == "custom_openai"
+            or custom_llm_provider == "text-completion-openai"): # currently implemented aiohttp calls for just azure and openai, soon all. 
+            if kwargs.get("stream", False): 
+                response = completion(*args, **kwargs)
             else:
-                response = await init_response
-    else: 
-        # Call the synchronous function using run_in_executor
-        response =  await loop.run_in_executor(None, func_with_context)
-    if kwargs.get("stream", False): # return an async generator
-        # do not change this
-        # for stream = True, always return an async generator
-        # See OpenAI acreate https://github.com/openai/openai-python/blob/5d50e9e3b39540af782ca24e65c290343d86e1a9/openai/api_resources/abstract/engine_api_resource.py#L193
-        # return response
-        return(
-            line
-            async for line in response
-        )
-    else: 
-        end_time = datetime.datetime.now()
-        # [OPTIONAL] ADD TO CACHE
-        if litellm.caching or litellm.caching_with_models or litellm.cache != None: # user init a cache object
-            litellm.cache.add_cache(response, *args, **kwargs)
+                # Await normally
+                init_response = completion(*args, **kwargs)
+                if isinstance(init_response, dict) or isinstance(init_response, ModelResponse): ## CACHING SCENARIO 
+                    response = init_response
+                else:
+                    response = await init_response
+        else: 
+            # Call the synchronous function using run_in_executor
+            response =  await loop.run_in_executor(None, func_with_context)
+        if kwargs.get("stream", False): # return an async generator
+            # do not change this
+            # for stream = True, always return an async generator
+            # See OpenAI acreate https://github.com/openai/openai-python/blob/5d50e9e3b39540af782ca24e65c290343d86e1a9/openai/api_resources/abstract/engine_api_resource.py#L193
+            # return response
+            return(
+                line
+                async for line in response
+            )
+        else: 
+            return response
+    except Exception as e: 
+        ## Map to OpenAI Exception
+        raise exception_type(
+                model=model, custom_llm_provider=custom_llm_provider, original_exception=e, completion_kwargs=args,
+            )
 
-        # LOG SUCCESS
-        logging_obj.success_handler(response, start_time, end_time)
-        # RETURN RESULT
-        response._response_ms = (end_time - start_time).total_seconds() * 1000 # return response latency in ms like openai
-
-        return response
 
 def mock_completion(model: str, messages: List, stream: Optional[bool] = False, mock_response: str = "This is a mock request", **kwargs):
     """
@@ -259,9 +248,6 @@ def mock_completion(model: str, messages: List, stream: Optional[bool] = False, 
         raise Exception("Mock completion response failed")
 
 @client
-@timeout(  # type: ignore
-    600
-)  ## set timeouts, in case calls hang (e.g. Azure) - default is 600s, override with `force_timeout`
 def completion(
     model: str,
     # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
@@ -468,6 +454,11 @@ def completion(
                 get_secret("AZURE_API_KEY")
             )
 
+            azure_ad_token = (
+                optional_params.pop("azure_ad_token", None) or
+                get_secret("AZURE_AD_TOKEN")
+            )
+
             headers = (
                 headers or
                 litellm.headers
@@ -488,6 +479,7 @@ def completion(
                 api_base=api_base,
                 api_version=api_version,
                 api_type=api_type,
+                azure_ad_token=azure_ad_token,
                 model_response=model_response,
                 print_verbose=print_verbose,
                 optional_params=optional_params,
@@ -730,7 +722,7 @@ def completion(
                 response = CustomStreamWrapper(model_response, model, custom_llm_provider="anthropic", logging_obj=logging)
                 return response
             response = model_response
-        elif model in litellm.nlp_cloud_models or custom_llm_provider == "nlp_cloud":
+        elif custom_llm_provider == "nlp_cloud":
             nlp_cloud_key = (
                 api_key or litellm.nlp_cloud_key or get_secret("NLP_CLOUD_API_KEY") or litellm.api_key
             )
@@ -761,7 +753,7 @@ def completion(
                 response = CustomStreamWrapper(model_response, model, custom_llm_provider="nlp_cloud", logging_obj=logging)
                 return response
             response = model_response
-        elif model in litellm.aleph_alpha_models:
+        elif custom_llm_provider == "aleph_alpha":
             aleph_alpha_key = (
                 api_key or litellm.aleph_alpha_key or get_secret("ALEPH_ALPHA_API_KEY") or get_secret("ALEPHALPHA_API_KEY") or litellm.api_key
             )
@@ -926,7 +918,7 @@ def completion(
                 )
                 return response
             response = model_response
-        elif model in litellm.openrouter_models or custom_llm_provider == "openrouter":
+        elif custom_llm_provider == "openrouter":
             api_base = (
                 api_base
                 or litellm.api_base
@@ -986,28 +978,6 @@ def completion(
                 logging_obj=logging,
                 acompletion=acompletion
             )
-
-            # if headers:
-            #     response = openai.chat.completions.create(
-            #         headers=headers, # type: ignore
-            #         **data, # type: ignore
-            #     )
-            # else:
-            #     openrouter_site_url = get_secret("OR_SITE_URL")
-            #     openrouter_app_name = get_secret("OR_APP_NAME")
-            #     # if openrouter_site_url is None, set it to https://litellm.ai
-            #     if openrouter_site_url is None:
-            #         openrouter_site_url = "https://litellm.ai"
-            #     # if openrouter_app_name is None, set it to liteLLM
-            #     if openrouter_app_name is None:
-            #         openrouter_app_name = "liteLLM"
-            #     response = openai.chat.completions.create( # type: ignore
-            #         extra_headers=httpx.Headers({ # type: ignore
-            #             "HTTP-Referer": openrouter_site_url,  # type: ignore
-            #             "X-Title": openrouter_app_name,  # type: ignore
-            #         }), # type: ignore
-            #         **data,
-            #     )
             ## LOGGING
             logging.post_call(
                 input=messages, api_key=openai.api_key, original_response=response
@@ -1110,7 +1080,7 @@ def completion(
                     )
                 return response
             response = model_response
-        elif model in litellm.ai21_models:
+        elif custom_llm_provider == "ai21":
             custom_llm_provider = "ai21"
             ai21_key = (
                 api_key
@@ -1250,18 +1220,14 @@ def completion(
                 )
             else:
                 prompt = prompt_factory(model=model, messages=messages, custom_llm_provider=custom_llm_provider)
-
             ## LOGGING
-            logging.pre_call(
-                input=prompt, api_key=None, additional_args={"api_base": api_base, "custom_prompt_dict": custom_prompt_dict}
-            )
             if kwargs.get('acompletion', False) == True:    
                 if optional_params.get("stream", False) == True:
                 # assume all ollama responses are streamed
-                    async_generator = ollama.async_get_ollama_response_stream(api_base, model, prompt, optional_params)
+                    async_generator = ollama.async_get_ollama_response_stream(api_base, model, prompt, optional_params, logging_obj=logging)
                     return async_generator
 
-            generator = ollama.get_ollama_response_stream(api_base, model, prompt, optional_params)
+            generator = ollama.get_ollama_response_stream(api_base, model, prompt, optional_params, logging_obj=logging)
             if optional_params.get("stream", False) == True:
                 # assume all ollama responses are streamed
                 response = CustomStreamWrapper(
@@ -1426,8 +1392,14 @@ def completion_with_retries(*args, **kwargs):
         raise Exception(f"tenacity import failed please run `pip install tenacity`. Error{e}")
     
     num_retries = kwargs.pop("num_retries", 3)
-    retryer = tenacity.Retrying(stop=tenacity.stop_after_attempt(num_retries), reraise=True)
-    return retryer(completion, *args, **kwargs)
+    retry_strategy = kwargs.pop("retry_strategy", "constant_retry")
+    original_function = kwargs.pop("original_function", completion)
+    if retry_strategy == "constant_retry": 
+        retryer = tenacity.Retrying(stop=tenacity.stop_after_attempt(num_retries), reraise=True)
+    elif retry_strategy == "exponential_backoff_retry": 
+        retryer = tenacity.Retrying(wait=tenacity.wait_exponential(multiplier=1, max=10), stop=tenacity.stop_after_attempt(num_retries), reraise=True)
+    return retryer(original_function, *args, **kwargs)
+
 
 
 def batch_completion(
@@ -1734,6 +1706,11 @@ def embedding(
                 get_secret("AZURE_API_VERSION")
             )
 
+            azure_ad_token = (
+                kwargs.pop("azure_ad_token", None) or
+                get_secret("AZURE_AD_TOKEN")
+            )
+
             api_key = (
                 api_key or
                 litellm.api_key or
@@ -1747,6 +1724,7 @@ def embedding(
                 api_base=api_base,
                 api_key=api_key,
                 api_version=api_version,
+                azure_ad_token=azure_ad_token,
                 logging_obj=logging,
                 model_response=EmbeddingResponse(), 
                 optional_params=kwargs

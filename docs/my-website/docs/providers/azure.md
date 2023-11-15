@@ -1,10 +1,15 @@
 # Azure OpenAI
-## API KEYS
+## API Keys, Params
+api_key, api_base, api_version etc can be passed directly to `litellm.completion` - see here or set as `litellm.api_key` params see here
 ```python
 import os
 os.environ["AZURE_API_KEY"] = ""
 os.environ["AZURE_API_BASE"] = ""
 os.environ["AZURE_API_VERSION"] = ""
+
+# optional
+os.environ["AZURE_AD_TOKEN"] = ""
+os.environ["AZURE_API_TYPE"] = ""
 ```
 
 ## Usage
@@ -40,6 +45,21 @@ response = litellm.completion(
     api_base = "",                                      # azure api base
     api_version = "",                                   # azure api version
     api_key = "",                                       # azure api key
+    messages = [{"role": "user", "content": "good morning"}],
+)
+```
+
+### Completion - using azure_ad_token, api_base, api_version
+
+```python
+import litellm
+
+# azure call
+response = litellm.completion(
+    model = "azure/<your deployment name>",             # model = azure/<your deployment name> 
+    api_base = "",                                      # azure api base
+    api_version = "",                                   # azure api version
+    azure_ad_token="", 									# azure_ad_token 
     messages = [{"role": "user", "content": "good morning"}],
 )
 ```
@@ -125,4 +145,49 @@ router = Router(model_list=model_list,
                 redis_port=os.getenv("REDIS_PORT"))
 
 print(response)
+```
+
+## Azure Active Directory Tokens - Microsoft Entra ID
+This is a walkthrough on how to use Azure Active Directory Tokens - Microsoft Entra ID to make `litellm.completion()` calls 
+
+Step 1 - Download Azure CLI 
+Installation instructons: https://learn.microsoft.com/en-us/cli/azure/install-azure-cli
+```shell
+brew update && brew install azure-cli
+```
+Step 2 - Sign in using `az`
+```shell
+az login --output table
+```
+
+Step 3 - Generate azure ad token
+```shell
+az account get-access-token --resource https://cognitiveservices.azure.com
+```
+
+In this step you should see an `accessToken` generated
+```shell
+{
+  "accessToken": "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIsIng1dCI6IjlHbW55RlBraGMzaE91UjIybXZTdmduTG83WSIsImtpZCI6IjlHbW55RlBraGMzaE91UjIybXZTdmduTG83WSJ9",
+  "expiresOn": "2023-11-14 15:50:46.000000",
+  "expires_on": 1700005846,
+  "subscription": "db38de1f-4bb3..",
+  "tenant": "bdfd79b3-8401-47..",
+  "tokenType": "Bearer"
+}
+```
+
+Step 4 - Make litellm.completion call with Azure AD token
+
+Set `azure_ad_token` = `accessToken` from step 3 or set `os.environ['AZURE_AD_TOKEN']`
+
+```python
+response = litellm.completion(
+    model = "azure/<your deployment name>",             # model = azure/<your deployment name> 
+    api_base = "",                                      # azure api base
+    api_version = "",                                   # azure api version
+    azure_ad_token="", 									# your accessToken from step 3 
+    messages = [{"role": "user", "content": "good morning"}],
+)
+
 ```
