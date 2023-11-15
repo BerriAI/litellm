@@ -30,6 +30,12 @@ backoff = {extras = ["server"], version = "^2.2.1"}
 pyyaml = {extras = ["server"], version = "^6.0.1"}
 json5 = "^0.9.14"
 contextvars = "^2.4"
+posthog = {extras = ["utils"], version = "^3.0.2"}
+slack-bolt = {extras = ["utils"], version = "^1.18.0"}
+sentry-sdk = {extras = ["utils"], version = "^1.35.0"}
+numpydoc = {extras = ["utils"], version = "^1.6.0"}
+anthropic = {extras = ["utils"], version = "^0.6.0"}
+huggingface-hub = {extras = ["utils"], version = "^0.19.2"}
 
 [tool.poetry.scripts]
 litellm = 'litellm:run_server'
@@ -37,6 +43,7 @@ litellm = 'litellm:run_server'
 [tool.poetry.group.dev.dependencies]
 black = ">=23.11.0"
 pydantic-core = "^2.14.1"
+pre-commit = "^3.5.0"
 
 [build-system]
 requires = ["poetry-core"]
