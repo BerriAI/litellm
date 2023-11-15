@@ -1,4 +1,5 @@
 ### INIT VARIABLES ###
+import os
 import threading
 from typing import Callable, Optional, Dict, Union
 
@@ -53,7 +54,8 @@ error_logs: Dict = {}
 add_function_to_prompt: bool = False  # if function calling not supported by api, append function call details to system prompt
 client_session: Optional[httpx.Client] = None
 model_fallbacks: Optional[list] = None
-model_cost_map_url: str = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
+model_cost_map_url: str = os.environ.get('LLM_MODEL_COST_MAP_URL', "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json")
+
 # can be found under ../
 num_retries: Optional[int] = None
 suppress_debug_info = False
@@ -172,7 +174,7 @@ for key, value in model_cost.items():
 
 
 # well-supported replicate llms
-with open("config/models.json5") as json5_file:
+with open("litellm/config/models.json5") as json5_file:
     models_data = json5.load(json5_file)
     openai_compatible_endpoints: list = models_data["openai_compatible"]
     replicate_models: list = models_data["replicate_models"]
@@ -231,7 +233,7 @@ models_by_provider: dict = {
 
 ####### EMBEDDING MODELS ###################
 
-with open("config/embedding_model.json5") as json5_file:
+with open("litellm/config/embedding_model.json5") as json5_file:
     embedding_data = json5.load(json5_file)
     open_ai_embedding_models: list = embedding_data["open_ai_embedding_models"]
     cohere_embedding_models: list = embedding_data["cohere_embedding_models"]
