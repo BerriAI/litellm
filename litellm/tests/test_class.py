@@ -56,7 +56,7 @@
 #         "api_version": os.getenv("AZURE_API_VERSION"),
 #         "api_base": os.getenv("AZURE_API_BASE")
 #     }
-# }], chat_completion_params={"acompletion": True}))
+# }], default_litellm_params={"acompletion": True}))
 
 # class UserExtract(BaseModel):
 #     name: str
