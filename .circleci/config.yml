@@ -25,7 +25,6 @@ jobs:
           command: |
             python -m pip install --upgrade pip
             python -m pip install -r .circleci/requirements.txt
-            pip install infisical
             pip install pytest
             pip install pytest-asyncio
             pip install mypy
