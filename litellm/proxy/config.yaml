@@ -19,6 +19,9 @@ model_list:
     litellm_params:
       model: azure/gpt-4
       api_key: sk-123
+  - model_name: ollama/zephyr
+    litellm_params:
+        model: ollama/zephyr
 
 litellm_settings:
   drop_params: True
