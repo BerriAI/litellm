@@ -1,5 +1,5 @@
 from typing import Optional, Union
-import types
+import types, time
 import httpx
 from .base import BaseLLM
 from litellm.utils import ModelResponse, Choices, Message, CustomStreamWrapper, convert_to_model_response_object, Usage
@@ -160,6 +160,7 @@ class OpenAIChatCompletion(BaseLLM):
         super().__init__()
         self._client_session = self.create_client_session()
         self._aclient_session = self.create_aclient_session()
+        self._num_retry_httpx_errors = 3 # httpx throws random errors - e.g. ReadError, 
     
     def validate_environment(self, api_key):
         headers = {
@@ -168,6 +169,15 @@ class OpenAIChatCompletion(BaseLLM):
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         return headers
+    
+    def _retry_request(self, *args, **kwargs): 
+        self._num_retry_httpx_errors -= 1
+        
+        time.sleep(1)
+
+        original_function = kwargs.pop("original_function")
+
+        return original_function(*args, **kwargs)
 
     def completion(self, 
                 model_response: ModelResponse,
@@ -253,15 +263,27 @@ class OpenAIChatCompletion(BaseLLM):
                           api_base: str, 
                           data: dict, headers: dict, 
                           model_response: ModelResponse): 
+        kwargs = locals()
         client = self._aclient_session
-
-        response = await client.post(api_base, json=data, headers=headers) 
-        response_json = response.json()
-        if response.status_code != 200:
-            raise OpenAIError(status_code=response.status_code, message=response.text, request=response.request, response=response)
+        try: 
+            response = await client.post(api_base, json=data, headers=headers) 
+            response_json = response.json()
+            if response.status_code != 200:
+                raise OpenAIError(status_code=response.status_code, message=response.text, request=response.request, response=response)
             
-        ## RESPONSE OBJECT
-        return convert_to_model_response_object(response_object=response_json, model_response_object=model_response)
+            ## RESPONSE OBJECT
+            return convert_to_model_response_object(response_object=response_json, model_response_object=model_response)
+        except httpx.ReadError or httpx.ReadTimeout: 
+            if self._num_retry_httpx_errors > 0: 
+                kwargs["original_function"] = self.acompletion
+                return self._retry_request(**kwargs)
+            else: 
+                raise e
+        except Exception as e: 
+            if response and hasattr(response, "text"):
+                raise OpenAIError(status_code=500, message=f"{str(e)}\n\nOriginal Response: {response.text}")
+            else: 
+                raise OpenAIError(status_code=500, message=f"{str(e)}")
 
     def streaming(self,
                   logging_obj,
