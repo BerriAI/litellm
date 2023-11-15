@@ -508,7 +508,7 @@ class Logging:
             headers = additional_args.get("headers", {})
             data = additional_args.get("complete_input_dict", {})
             api_base = additional_args.get("api_base", "")
-            masked_headers = {k: v[:-12] + '*' * 12 if len(v) > 12 else v for k, v in headers.items()}
+            masked_headers = {k: v[:-40] + '*' * 40 if len(v) > 40 else v for k, v in headers.items()}
             formatted_headers = " ".join([f"-H '{k}: {v}'" for k, v in masked_headers.items()])
 
             curl_command = "\n\nPOST Request Sent from LiteLLM:\n"
