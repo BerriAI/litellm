@@ -1188,7 +1188,7 @@ def client(original_function):
                 litellm.cache.add_cache(result, *args, **kwargs)
 
             # LOG SUCCESS - handle streaming success logging in the _next_ object, remove `handle_success` once it's deprecated
-            logging_obj.success_handler(result, start_time, end_time)
+            threading.Thread(target=logging_obj.success_handler, args=(result, start_time, end_time)).start()
             # threading.Thread(target=logging_obj.success_handler, args=(result, start_time, end_time)).start()
             my_thread = threading.Thread(
                 target=handle_success, args=(args, kwargs, result, start_time, end_time)
@@ -1292,7 +1292,7 @@ def client(original_function):
                 litellm.cache.add_cache(result, *args, **kwargs)
 
             # LOG SUCCESS - handle streaming success logging in the _next_ object, remove `handle_success` once it's deprecated
-            logging_obj.success_handler(result, start_time, end_time)
+            threading.Thread(target=logging_obj.success_handler, args=(result, start_time, end_time)).start()
             # RETURN RESULT
             return result
         except Exception as e: 

@@ -9,7 +9,7 @@ class BaseLLM:
         if litellm.client_session: 
             _client_session = litellm.client_session
         else: 
-            _client_session = httpx.Client(timeout=litellm.request_timeout)
+            _client_session = httpx.Client()
         
         return _client_session
     
@@ -17,7 +17,7 @@ class BaseLLM:
         if litellm.aclient_session: 
             _aclient_session = litellm.aclient_session
         else: 
-            _aclient_session = httpx.AsyncClient(timeout=litellm.request_timeout)
+            _aclient_session = httpx.AsyncClient()
         
         return _aclient_session
     
