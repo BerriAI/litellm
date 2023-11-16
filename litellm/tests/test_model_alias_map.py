@@ -26,7 +26,7 @@ def test_model_alias_map():
             messages=[{"role": "user", "content": "Hey, how's it going?"}],
             top_p=0.1,
             temperature=0.01,
-            max_tokens=60,
+            max_tokens=10,
         )
         print(response.model)
         assert "Llama-2-7b-chat-hf" in response.model
