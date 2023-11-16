@@ -374,7 +374,7 @@ def test_completion_azure_stream():
         print(f"completion_response: {complete_response}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_azure_stream() 
+# test_completion_azure_stream() 
 
 def test_completion_claude_stream():
     try:
@@ -829,6 +829,7 @@ def ai21_completion_call_bad_key():
 def test_openai_chat_completion_call():
     try:
         litellm.set_verbose = False
+        print(f"making openai chat completion call")
         response = completion(
             model="gpt-3.5-turbo", messages=messages, stream=True
         )
@@ -848,7 +849,7 @@ def test_openai_chat_completion_call():
         print(f"error occurred: {traceback.format_exc()}")
         pass
 
-# test_openai_chat_completion_call()
+test_openai_chat_completion_call()
 
 def test_openai_chat_completion_complete_response_call():
     try:
