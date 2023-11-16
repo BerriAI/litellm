@@ -333,7 +333,6 @@ cohere_embedding_models: List = [
 bedrock_embedding_models: List = ["amazon.titan-embed-text-v1"]
 
 from .timeout import timeout
-from .testing import *
 from .utils import (
     client,
     exception_type,
