@@ -506,6 +506,8 @@ class Logging:
 
             # User Logging -> if you pass in a custom logging function
             headers = additional_args.get("headers", {})
+            if headers is None: 
+                headers = {}
             data = additional_args.get("complete_input_dict", {})
             api_base = additional_args.get("api_base", "")
             masked_headers = {k: v[:-40] + '*' * 40 if len(v) > 40 else v for k, v in headers.items()}
