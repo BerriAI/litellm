@@ -1819,7 +1819,7 @@ def embedding(
 ###### Text Completion ################
 def text_completion(
     prompt: Union[str, List[Union[str, List[Union[str, List[int]]]]]], # Required: The prompt(s) to generate completions for.
-    model: str,                 # Required: ID of the model to use.
+    model: Optional[str],                 # Optional: either `model` or `engine` can be set
     best_of: Optional[int] = None,   # Optional: Generates best_of completions server-side.
     echo: Optional[bool] = None,  # Optional: Echo back the prompt in addition to the completion.
     frequency_penalty: Optional[float] = None, # Optional: Penalize new tokens based on their existing frequency.
