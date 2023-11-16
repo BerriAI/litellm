@@ -228,7 +228,7 @@ class OpenAIChatCompletion(BaseLLM):
                             url=api_base,
                             json=data,
                             headers=headers,
-                            timeout=litellm.request_timeout
+                            timeout=600 # Set a 10-minute timeout for both connection and read
                         )
                         if response.status_code != 200:
                             raise OpenAIError(status_code=response.status_code, message=response.text)
