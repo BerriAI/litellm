@@ -24,7 +24,7 @@ def test_langfuse_logging_async():
     response = asyncio.run(_test_langfuse())
     print(f"response: {response}")
 
-test_langfuse_logging_async()
+# test_langfuse_logging_async()
 
 def test_langfuse_logging():
     try:
@@ -41,6 +41,28 @@ def test_langfuse_logging():
         print(e)
 
 # test_langfuse_logging()
+
+
+def test_langfuse_logging_stream():
+    try:
+        litellm.set_verbose=True
+        response = completion(model="anyscale/meta-llama/Llama-2-7b-chat-hf",
+                              messages=[{
+                                  "role": "user",
+                                  "content": "this is a streaming test for llama2 + langfuse"
+                              }],
+                              max_tokens=20,
+                              temperature=0.2,
+                              stream=True
+                              )
+        print(response)
+        for chunk in response:
+            pass
+            # print(chunk)
+    except Exception as e:
+        print(e)
+
+# test_langfuse_logging_stream()
 
 def test_langfuse_logging_custom_generation_name():
     try:
