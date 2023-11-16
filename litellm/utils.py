@@ -2036,6 +2036,18 @@ def get_optional_params(  # use the openai defaults
                 optional_params["topP"] = top_p
             if stream: 
                 optional_params["stream"] = stream
+        elif "meta" in model: # amazon / meta llms
+            supported_params = ["max_tokens", "temperature", "top_p", "stream"]
+            _check_valid_arg(supported_params=supported_params)
+            # see https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=titan-large
+            if max_tokens:
+                optional_params["max_gen_len"] = max_tokens
+            if temperature:
+                optional_params["temperature"] = temperature
+            if top_p:
+                optional_params["top_p"] = top_p
+            if stream: 
+                optional_params["stream"] = stream
         elif "cohere" in model: # cohere models on bedrock
             supported_params = ["stream", "temperature", "max_tokens", "logit_bias", "top_p", "frequency_penalty", "presence_penalty", "stop"]
             _check_valid_arg(supported_params=supported_params)
@@ -4583,6 +4595,9 @@ class CustomStreamWrapper:
                     is_finished = True
                     finish_reason = stop_reason
             ######## bedrock.cohere mappings ###############
+            # meta mapping
+            elif "generation" in chunk_data:
+                text = chunk_data['generation'] # bedrock.meta
             # cohere mapping
             elif "text" in chunk_data:
                 text = chunk_data["text"] # bedrock.cohere
