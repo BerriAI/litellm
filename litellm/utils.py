@@ -4496,26 +4496,12 @@ class CustomStreamWrapper:
             text = "" 
             is_finished = False
             finish_reason = None
-            if "data: [DONE]" in str_line:
-                # anyscale returns a [DONE] special char for streaming, this cannot be json loaded. This is the end of stream
-                text = ""
+            if str_line.choices[0].delta.content is not None:
+                text = str_line.choices[0].delta.content
+            if str_line.choices[0].finish_reason:
                 is_finished = True
-                finish_reason = "stop"
-                return {"text": text, "is_finished": is_finished, "finish_reason": finish_reason}
-            elif str_line.startswith("data:") and len(str_line[5:]) > 0:
-                str_line = str_line[5:]
-                data_json = json.loads(str_line)
-                print_verbose(f"delta content: {data_json['choices'][0]['delta']}")
-                text = data_json["choices"][0]["delta"].get("content", "") 
-                if data_json["choices"][0].get("finish_reason", None): 
-                    is_finished = True
-                    finish_reason = data_json["choices"][0]["finish_reason"]
-                return {"text": text, "is_finished": is_finished, "finish_reason": finish_reason}
-            elif "error" in str_line:
-                raise ValueError(f"Unable to parse response. Original response: {str_line}")
-            else:
-                return {"text": text, "is_finished": is_finished, "finish_reason": finish_reason}
-
+                finish_reason = str_line.choices[0].finish_reason
+            return {"text": text, "is_finished": is_finished, "finish_reason": finish_reason}
         except Exception as e:
             traceback.print_exc()
             raise e
