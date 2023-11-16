@@ -4367,6 +4367,7 @@ class CustomStreamWrapper:
 
     def handle_huggingface_chunk(self, chunk):
         try:
+            chunk = chunk.decode("utf-8") # DO NOT REMOVE this: This is required for HF inference API + Streaming
             text = "" 
             is_finished = False
             finish_reason = ""
