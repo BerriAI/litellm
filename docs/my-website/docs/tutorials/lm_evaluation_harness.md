@@ -8,6 +8,8 @@ Evaluate LLMs 20x faster with TGI via litellm proxy's `/completions` endpoint.
 
 This tutorial assumes you're using the `big-refactor` branch of [lm-evaluation-harness](https://github.com/EleutherAI/lm-evaluation-harness/tree/big-refactor)
 
+NOTE: LM Harness has not updated to using `openai 1.0.0+`, in order to deal with this we will run lm harness in a venv
+
 **Step 1: Start the local proxy**
 see supported models [here](https://docs.litellm.ai/docs/simple_proxy)
 ```shell
@@ -20,10 +22,22 @@ Using a custom api base
 $ export HUGGINGFACE_API_KEY=my-api-key #[OPTIONAL]
 $ litellm --model huggingface/tinyllama --api_base https://k58ory32yinf1ly0.us-east-1.aws.endpoints.huggingface.cloud
 ```
-
 OpenAI Compatible Endpoint at http://0.0.0.0:8000
 
-**Step 2: Set OpenAI API Base & Key**
+**Step 2: Create a Virtual Env for LM Harness + Use OpenAI 0.28.1**
+We will now run lm harness with a new virtual env with openai==0.28.1
+
+```shell
+python3 -m venv lmharness 
+source lmharness/bin/activate
+```
+
+Pip install openai==0.28.01 in the venv
+```shell
+pip install openai==0.28.01
+```
+
+**Step 3: Set OpenAI API Base & Key**
 ```shell
 $ export OPENAI_API_BASE=http://0.0.0.0:8000
 ```
@@ -33,7 +47,15 @@ LM Harness requires you to set an OpenAI API key `OPENAI_API_SECRET_KEY` for run
 export OPENAI_API_SECRET_KEY=anything
 ```
 
-**Step 3: Run LM-Eval-Harness**
+**Step 4: Run LM-Eval-Harness**
+```shell
+cd lm-evaluation-harness
+```
+
+pip install lm harness dependencies in venv
+```
+python3 -m pip install -e .
+```
 
 ```shell
 python3 -m lm_eval \
