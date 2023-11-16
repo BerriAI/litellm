@@ -16,7 +16,7 @@ from litellm import completion, acompletion, acreate
 litellm.num_retries = 3
 
 def test_sync_response():
-    litellm.set_verbose = True
+    litellm.set_verbose = False
     user_message = "Hello, how are you?"
     messages = [{"content": user_message, "role": "user"}]
     try:
@@ -146,4 +146,4 @@ def test_get_response_non_openai_streaming():
         return response
     asyncio.run(test_async_call())
 
-test_get_response_non_openai_streaming()
+# test_get_response_non_openai_streaming()
