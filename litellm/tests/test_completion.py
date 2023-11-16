@@ -419,7 +419,7 @@ def test_completion_openai():
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_completion_openai()
+test_completion_openai()
 
 def test_completion_text_openai():
     try:
