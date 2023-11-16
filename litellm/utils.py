@@ -694,7 +694,7 @@ class Logging:
             
             ## BUILD COMPLETE STREAMED RESPONSE
             if self.stream: 
-                if result.choices[0].finish_reason: # if it's the last chunk 
+                if result.choices[0].finish_reason is not None: # if it's the last chunk
                     self.streaming_chunks.append(result)
                     complete_streaming_response = litellm.stream_chunk_builder(self.streaming_chunks)
                 else:
@@ -832,12 +832,20 @@ class Logging:
                         )
                     if callback == "langfuse":
                         print_verbose("reaches langfuse for logging!")
-                        deep_copy = {}
+                        kwargs = {}
                         for k, v in self.model_call_details.items(): 
                             if k != "original_response": # copy.deepcopy raises errors as this could be a coroutine
-                                deep_copy[k] = v
+                                kwargs[k] = v
+                        # this only logs streaming once, complete_streaming_response exists i.e when stream ends
+                        if self.stream:
+                            if "complete_streaming_response" not in kwargs:
+                                return
+                            else:
+                                print_verbose("reaches langfuse for streaming logging!")
+                                result = kwargs["complete_streaming_response"]
+
                         langFuseLogger.log_event(
-                            kwargs=deep_copy,
+                            kwargs=kwargs,
                             response_obj=result,
                             start_time=start_time,
                             end_time=end_time,
@@ -4738,6 +4746,8 @@ class CustomStreamWrapper:
                     model_response.choices[0].finish_reason = response_obj["finish_reason"]
             else: # openai chat model
                 response_obj = self.handle_openai_chat_completion_chunk(chunk)
+                if response_obj == None:
+                    return
                 completion_obj["content"] = response_obj["text"]
                 print_verbose(f"completion obj content: {completion_obj['content']}")
                 print_verbose(f"len(completion_obj['content']: {len(completion_obj['content'])}")
