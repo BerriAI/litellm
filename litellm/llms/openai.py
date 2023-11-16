@@ -1,11 +1,11 @@
 from typing import Optional, Union
-import types, time
+import types, time, json
 import httpx
 from .base import BaseLLM
 from litellm.utils import ModelResponse, Choices, Message, CustomStreamWrapper, convert_to_model_response_object, Usage
 from typing import Callable, Optional
 import aiohttp, requests
-import litellm
+import litellm, openai
 
 class OpenAIError(Exception):
     def __init__(self, status_code, message, request: Optional[httpx.Request]=None, response: Optional[httpx.Response]=None):
@@ -224,17 +224,23 @@ class OpenAIChatCompletion(BaseLLM):
                     elif optional_params.get("stream", False):
                         return self.streaming(logging_obj=logging_obj, api_base=api_base, data=data, headers=headers, model_response=model_response, model=model)
                     else:
-                        response = requests.post(
-                            url=api_base,
-                            json=data,
-                            headers=headers,
-                            timeout=600 # Set a 10-minute timeout for both connection and read
-                        )
-                        if response.status_code != 200:
-                            raise OpenAIError(status_code=response.status_code, message=response.text)
+                        if model in litellm.models_by_provider["openai"]:
+                            if api_key:
+                                openai.api_key = api_key
+                            response = openai.chat.completions.create(**data)
+                            return convert_to_model_response_object(response_object=json.loads(response.model_dump_json()), model_response_object=model_response)
+                        else: 
+                            response = requests.post(
+                                url=api_base,
+                                json=data,
+                                headers=headers,
+                                timeout=600 # Set a 10-minute timeout for both connection and read
+                            )
+                            if response.status_code != 200:
+                                raise OpenAIError(status_code=response.status_code, message=response.text)
                             
-                        ## RESPONSE OBJECT
-                        return convert_to_model_response_object(response_object=response.json(), model_response_object=model_response)
+                            ## RESPONSE OBJECT
+                            return convert_to_model_response_object(response_object=response.json(), model_response_object=model_response)
                 except Exception as e:
                     if "Conversation roles must alternate user/assistant" in str(e) or "user and assistant roles should be alternating" in str(e): 
                         # reformat messages to ensure user/assistant are alternating, if there's either 2 consecutive 'user' messages or 2 consecutive 'assistant' message, add a blank 'user' or 'assistant' message to ensure compatibility
