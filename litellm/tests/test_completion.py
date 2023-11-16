@@ -494,7 +494,7 @@ def test_completion_openrouter1():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_completion_openrouter1() 
+test_completion_openrouter1() 
 
 def test_completion_hf_model_no_provider():
     try:
@@ -562,7 +562,7 @@ def test_completion_azure():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_completion_azure()
+# test_completion_azure()
 
 def test_azure_openai_ad_token():
     # this tests if the azure ad token is set in the request header
