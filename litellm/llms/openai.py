@@ -233,9 +233,9 @@ class OpenAIChatCompletion(BaseLLM):
     
     async def acompletion(self, 
                           data: dict, 
-                          model_response: ModelResponse,
-                          api_base: str, 
-                          api_key: str): 
+                          model_response: ModelResponse, 
+                          api_key: Optional[str]=None,
+                          api_base: Optional[str]=None): 
         response = None
         try: 
             openai_aclient = AsyncOpenAI(api_key=api_key, base_url=api_base)
@@ -251,8 +251,8 @@ class OpenAIChatCompletion(BaseLLM):
                   logging_obj,
                   data: dict, 
                   model: str,
-                  api_key: str, 
-                  api_base: str
+                  api_key: Optional[str]=None,
+                  api_base: Optional[str]=None
     ):
         openai_client = OpenAI(api_key=api_key, base_url=api_base)
         response = openai_client.chat.completions.create(**data)
@@ -264,14 +264,13 @@ class OpenAIChatCompletion(BaseLLM):
                           logging_obj,
                           data: dict, 
                           model: str,
-                          api_key: str, 
-                          api_base: str):
+                          api_key: Optional[str]=None,
+                          api_base: Optional[str]=None):
         openai_aclient = AsyncOpenAI(api_key=api_key, base_url=api_base)
         response = await openai_aclient.chat.completions.create(**data)
         streamwrapper = CustomStreamWrapper(completion_stream=response, model=model, custom_llm_provider="openai",logging_obj=logging_obj)
         async for transformed_chunk in streamwrapper:
             yield transformed_chunk
-
 
     def embedding(self,
                 model: str,
@@ -284,7 +283,7 @@ class OpenAIChatCompletion(BaseLLM):
         super().embedding()
         exception_mapping_worked = False
         try: 
-            openai_client = OpenAI(api_key=api_key, api_base=api_base)
+            openai_client = OpenAI(api_key=api_key, base_url=api_base)
             model = model
             data = {
                 "model": model,
