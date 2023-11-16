@@ -455,16 +455,19 @@ def litellm_completion(*args, **kwargs):
         kwargs["api_base"] = user_api_base
     ## ROUTE TO CORRECT ENDPOINT ## 
     router_model_names = [m["model_name"] for m in llm_model_list] if llm_model_list is not None else []
-    if llm_router is not None and kwargs["model"] in router_model_names: # model in router model list 
-        if call_type == "chat_completion":
-            response = llm_router.completion(*args, **kwargs)
-        elif call_type == "text_completion":
-            response = llm_router.text_completion(*args, **kwargs)
-    else: 
-        if call_type == "chat_completion":
-            response = litellm.completion(*args, **kwargs)
-        elif call_type == "text_completion":
-            response = litellm.text_completion(*args, **kwargs)
+    try:
+        if llm_router is not None and kwargs["model"] in router_model_names: # model in router model list 
+            if call_type == "chat_completion":
+                response = llm_router.completion(*args, **kwargs)
+            elif call_type == "text_completion":
+                response = llm_router.text_completion(*args, **kwargs)
+        else: 
+            if call_type == "chat_completion":
+                response = litellm.completion(*args, **kwargs)
+            elif call_type == "text_completion":
+                response = litellm.text_completion(*args, **kwargs)
+    except Exception as e:
+        raise e
     if 'stream' in kwargs and kwargs['stream'] == True: # use generate_responses to stream responses
         return StreamingResponse(data_generator(response), media_type='text/event-stream')
     return response
