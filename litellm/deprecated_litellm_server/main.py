@@ -84,7 +84,7 @@ async def embedding(request: Request):
         # default to always using the "ENV" variables, only if AUTH_STRATEGY==DYNAMIC then reads headers
         if os.getenv("AUTH_STRATEGY", None) == "DYNAMIC" and "authorization" in request.headers: # if users pass LLM api keys as part of header
             api_key = request.headers.get("authorization")
-            api_key = api_key.replace("Bearer", "").strip()
+            api_key = api_key.replace("Bearer", "").strip() # type: ignore
             if len(api_key.strip()) > 0:
                 api_key = api_key
                 data["api_key"] = api_key
@@ -174,7 +174,7 @@ async def router_embedding(request: Request):
         if llm_router is None: 
             raise Exception("Save model list via config.yaml. Eg.: ` docker build -t myapp --build-arg CONFIG_FILE=myconfig.yaml .` or pass it in as model_list=[..] as part of the request body")
 
-        response = await llm_router.aembedding(model="gpt-3.5-turbo", 
+        response = await llm_router.aembedding(model="gpt-3.5-turbo",  # type: ignore
                         messages=[{"role": "user", "content": "Hey, how's it going?"}])
 
         if 'stream' in data and data['stream'] == True: # use generate_responses to stream responses
