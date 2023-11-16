@@ -58,9 +58,14 @@ def test_acompletion_sync():
             print(f"error occurred: {traceback.format_exc()}")
             pass
 
-
     asyncio.run(completion_call())
 # test_acompletion_sync()
+
+
+# reset callbacks
+litellm.input_callback = []
+litellm.success_callback = []
+litellm.failure_callback = []
 
 
 
