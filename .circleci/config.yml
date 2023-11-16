@@ -30,7 +30,6 @@ jobs:
             pip install mypy
             pip install -q google-generativeai
             pip install openai[datalib]
-            pip install -Uq chromadb==0.3.29
             pip install "boto3>=1.28.57"
             pip install appdirs
             pip install langchain
