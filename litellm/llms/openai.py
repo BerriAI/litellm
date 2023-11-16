@@ -231,7 +231,7 @@ class OpenAIChatCompletion(BaseLLM):
                             timeout=litellm.request_timeout
                         )
                         if response.status_code != 200:
-                            raise OpenAIError(status_code=response.status_code, message=response.text, request=response.request, response=response)
+                            raise OpenAIError(status_code=response.status_code, message=response.text)
                             
                         ## RESPONSE OBJECT
                         return convert_to_model_response_object(response_object=response.json(), model_response_object=model_response)
