@@ -1054,6 +1054,16 @@ def client(original_function):
         try:
             global callback_list, add_breadcrumb, user_logger_fn, Logging
             function_id = kwargs["id"] if "id" in kwargs else None
+            if litellm.client_session is None: 
+                litellm.client_session = httpx.Client(
+                    limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
+                    timeout = httpx.Timeout(timeout=600.0, connect=5.0)
+                )
+            if litellm.aclient_session is None: 
+                litellm.aclient_session = httpx.AsyncClient(
+                    limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
+                    timeout = httpx.Timeout(timeout=600.0, connect=5.0)
+                )
             if litellm.use_client or ("use_client" in kwargs and kwargs["use_client"] == True): 
                 print_verbose(f"litedebugger initialized")
                 if "lite_debugger" not in litellm.input_callback:
