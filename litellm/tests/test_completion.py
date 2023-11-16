@@ -432,6 +432,7 @@ def test_completion_text_openai():
 
 def test_completion_openai_with_optional_params():
     try:
+        litellm.set_verbose = True
         response = completion(
             model="gpt-3.5-turbo",
             messages=messages,
@@ -450,6 +451,7 @@ test_completion_openai_with_optional_params()
 
 def test_completion_openai_litellm_key():
     try:
+        litellm.set_verbose = False
         litellm.api_key = os.environ['OPENAI_API_KEY']
 
         # ensure key is set to None in .env and in openai.api_key
