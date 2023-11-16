@@ -589,7 +589,7 @@ Curl Command
 curl --location 'http://0.0.0.0:8000/chat/completions' \
 --header 'Content-Type: application/json' \
 --data ' {
-      "model": "gpt-4-team1",
+      "model": "zephyr-alpha",
       "messages": [
         {
           "role": "user",
@@ -599,24 +599,7 @@ curl --location 'http://0.0.0.0:8000/chat/completions' \
     }
 '
 ```
-**Setting model name**
-```python
-import openai 
-openai.api_base = "http://0.0.0.0:8000" 
 
-completion = openai.chat.completions.create(model="zephyr-alpha", messages=[{"role": "user", "content": "Hello world"}])
-print(completion.choices[0].message.content)
-```
-
-**Setting API Base with model name**
-If you're repo only let's you specify api base, then you can add the model name to the api base passed in - 
-```python
-import openai 
-openai.api_base = "http://0.0.0.0:8000/openai/deployments/zephyr-alpha/chat/completions" # zephyr-alpha will be used 
-
-completion = openai.chat.completions.create(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hello world"}])
-print(completion.choices[0].message.content)
-```
 
 ### Save Model-specific params (API Base, API Keys, Temperature, Headers etc.)
 You can use the config to save model-specific information like api_base, api_key, temperature, max_tokens, etc. 
@@ -656,15 +639,19 @@ Set a model alias for your deployments.
 
 In the `config.yaml` the model_name parameter is the user-facing name to use for your deployment. 
 
-E.g.: If we want to save a Huggingface TGI Mistral-7b deployment, as 'mistral-7b' for our users, we might save it as: 
+In the config below requests with `model=gpt-4` will route to `ollama/zephyr`
 
 ```yaml
 model_list:
-  - model_name: mistral-7b # ALIAS
+  - model_name: text-davinci-003
     litellm_params:
-      model: huggingface/mistralai/Mistral-7B-Instruct-v0.1 # ACTUAL NAME
-      api_key: your_huggingface_api_key # [OPTIONAL] if deployed on huggingface inference endpoints
-      api_base: your_api_base # url where model is deployed 
+        model: ollama/zephyr
+  - model_name: gpt-4
+    litellm_params:
+        model: ollama/llama2
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+        model: ollama/llama2
 ```
 
 ### Set Custom Prompt Templates
