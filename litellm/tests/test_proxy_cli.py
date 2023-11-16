@@ -3,6 +3,7 @@ import time
 import openai
 import pytest
 from dotenv import load_dotenv
+import os
 
 load_dotenv()
 
@@ -12,6 +13,7 @@ load_dotenv()
 def test_basic_proxy_cli_command():
 
     # Command to run
+    print("current working dir", os.getcwd())
     command = "python3 ../proxy/proxy_cli.py --model gpt-3.5-turbo --port 51670"
     print("Running command to start proxy")
 
