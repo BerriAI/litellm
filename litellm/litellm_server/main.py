@@ -9,7 +9,7 @@ sys.path.insert(
     0, os.path.abspath("../")
 )  # Adds the parent directory to the system path - for litellm local dev
 import litellm
-print(f"litellm: {litellm}")
+
 try:
     from utils import set_callbacks, load_router_config, print_verbose
 except ImportError:
@@ -36,7 +36,6 @@ server_settings: Optional[dict] = None
 set_callbacks() # sets litellm callbacks for logging if they exist in the environment 
 
 if "CONFIG_FILE_PATH" in os.environ:
-    print(f"CONFIG FILE DETECTED")
     llm_router, llm_model_list, server_settings = load_router_config(router=llm_router, config_file_path=os.getenv("CONFIG_FILE_PATH"))
 else:
     llm_router, llm_model_list, server_settings = load_router_config(router=llm_router)
@@ -61,9 +60,9 @@ def model_list():
     )
 # for streaming
 def data_generator(response):
-    print("inside generator")
+
     for chunk in response:
-        print(f"returned chunk: {chunk}")
+
         yield f"data: {json.dumps(chunk)}\n\n"
 
 @router.post("/v1/completions")
@@ -105,7 +104,6 @@ async def chat_completion(request: Request, model: Optional[str] = None):
     global llm_model_list, server_settings
     try:
         data = await request.json()
-        print(f"data: {data}")
         server_model = server_settings.get("completion_model", None) if server_settings else None
         data["model"] = server_model or model or data["model"]
         ## CHECK KEYS ## 
@@ -136,11 +134,10 @@ async def chat_completion(request: Request, model: Optional[str] = None):
         )
         if 'stream' in data and data['stream'] == True: # use generate_responses to stream responses
                 return StreamingResponse(data_generator(response), media_type='text/event-stream')
-        print(f"response: {response}")
         return response
     except Exception as e:
         error_traceback = traceback.format_exc()
-        print(f"{error_traceback}")
+
         error_msg = f"{str(e)}\n\n{error_traceback}"
         # return {"error": error_msg}
         raise HTTPException(status_code=500, detail=error_msg)
