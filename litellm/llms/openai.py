@@ -154,18 +154,36 @@ class OpenAITextCompletionConfig():
                 and v is not None}
 
 class OpenAIChatCompletion(BaseLLM):
-    _client_session: Optional[httpx.Client] = None
-    _aclient_session: Optional[httpx.AsyncClient] = None
+    openai_client: Optional[openai.Client] = None
+    openai_aclient: Optional[openai.AsyncClient] = None
 
     def __init__(self) -> None:
         super().__init__()
+        self.openai_client = openai.OpenAI()
+        self.openai_aclient = openai.AsyncOpenAI()
     
-    def validate_environment(self, api_key):
-        headers = {
-            "content-type": "application/json",
-        }
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
+    def validate_environment(self, api_key, api_base, headers):
+        if headers is None: 
+            headers = {
+                "content-type": "application/json",
+            }
+            if api_key: 
+                headers["Authorization"] = f"Bearer {api_key}"
+        
+        self.openai_client.api_key = api_key
+        self.openai_aclient.api_key = api_key
+        if api_base: 
+            if self.openai_client.base_url is None or self.openai_client.base_url != api_base:
+                if api_base.endswith("/"):
+                    self.openai_client._base_url = httpx.URL(url=api_base)
+                else: 
+                    self.openai_client._base_url = httpx.URL(url=api_base+"/")
+            if self.openai_aclient.base_url is None or self.openai_aclient.base_url != api_base:
+                if api_base.endswith("/"):
+                    self.openai_aclient._base_url = httpx.URL(url=api_base)
+                else: 
+                    self.openai_aclient._base_url = httpx.URL(url=api_base+"/")
+        
         return headers
     
     def _retry_request(self, *args, **kwargs): 
@@ -191,13 +209,9 @@ class OpenAIChatCompletion(BaseLLM):
                 logger_fn=None,
                 headers: Optional[dict]=None):
         super().completion()
-        if self._client_session is None:
-            self._client_session = self.create_client_session()
         exception_mapping_worked = False
         try: 
-            if headers is None:
-                headers = self.validate_environment(api_key=api_key)
-            api_base = f"{api_base}/chat/completions"
+            headers = self.validate_environment(api_key=api_key, api_base=api_base, headers=headers)
             if model is None or messages is None:
                 raise OpenAIError(status_code=422, message=f"Missing model or messages")
             
@@ -224,23 +238,8 @@ class OpenAIChatCompletion(BaseLLM):
                     elif optional_params.get("stream", False):
                         return self.streaming(logging_obj=logging_obj, api_base=api_base, data=data, headers=headers, model_response=model_response, model=model)
                     else:
-                        if model in litellm.models_by_provider["openai"]:
-                            if api_key:
-                                openai.api_key = api_key
-                            response = openai.chat.completions.create(**data)
-                            return convert_to_model_response_object(response_object=json.loads(response.model_dump_json()), model_response_object=model_response)
-                        else: 
-                            response = requests.post(
-                                url=api_base,
-                                json=data,
-                                headers=headers,
-                                timeout=600 # Set a 10-minute timeout for both connection and read
-                            )
-                            if response.status_code != 200:
-                                raise OpenAIError(status_code=response.status_code, message=response.text)
-                            
-                            ## RESPONSE OBJECT
-                            return convert_to_model_response_object(response_object=response.json(), model_response_object=model_response)
+                        response = self.openai_client.chat.completions.create(**data)
+                        return convert_to_model_response_object(response_object=json.loads(response.model_dump_json()), model_response_object=model_response)
                 except Exception as e:
                     if "Conversation roles must alternate user/assistant" in str(e) or "user and assistant roles should be alternating" in str(e): 
                         # reformat messages to ensure user/assistant are alternating, if there's either 2 consecutive 'user' messages or 2 consecutive 'assistant' message, add a blank 'user' or 'assistant' message to ensure compatibility
@@ -270,19 +269,11 @@ class OpenAIChatCompletion(BaseLLM):
                           api_base: str, 
                           data: dict, headers: dict, 
                           model_response: ModelResponse): 
-        kwargs = locals()
+        response = None
         try: 
-            async with httpx.AsyncClient() as client:
-                response = await client.post(api_base, json=data, headers=headers, timeout=litellm.request_timeout) 
-                response_json = response.json()
-                if response.status_code != 200:
-                    raise OpenAIError(status_code=response.status_code, message=response.text, request=response.request, response=response)
-                
-                ## RESPONSE OBJECT
-                return convert_to_model_response_object(response_object=response_json, model_response_object=model_response)
+            response = await self.openai_aclient.chat.completions.create(**data)
+            return convert_to_model_response_object(response_object=json.loads(response.model_dump_json()), model_response_object=model_response)
         except Exception as e: 
-            if isinstance(e, httpx.TimeoutException):
-                raise OpenAIError(status_code=500, message="Request Timeout Error")
             if response and hasattr(response, "text"):
                 raise OpenAIError(status_code=500, message=f"{str(e)}\n\nOriginal Response: {response.text}")
             else: 
@@ -296,20 +287,10 @@ class OpenAIChatCompletion(BaseLLM):
                   model_response: ModelResponse, 
                   model: str
     ):
-        with httpx.stream(
-                    url=f"{api_base}", # type: ignore
-                    json=data,
-                    headers=headers,
-                    method="POST",
-                    timeout=litellm.request_timeout 
-                ) as response: 
-                    if response.status_code != 200:
-                        raise OpenAIError(status_code=response.status_code, message=response.text()) # type: ignore
-                    
-                    completion_stream = response.iter_lines()
-                    streamwrapper = CustomStreamWrapper(completion_stream=completion_stream, model=model, custom_llm_provider="openai",logging_obj=logging_obj)
-                    for transformed_chunk in streamwrapper:
-                        yield transformed_chunk
+        response = self.openai_client.chat.completions.create(**data)
+        streamwrapper = CustomStreamWrapper(completion_stream=response, model=model, custom_llm_provider="openai",logging_obj=logging_obj)
+        for transformed_chunk in streamwrapper:
+            yield transformed_chunk
 
     async def async_streaming(self, 
                           logging_obj,
@@ -318,20 +299,11 @@ class OpenAIChatCompletion(BaseLLM):
                           headers: dict, 
                           model_response: ModelResponse, 
                           model: str):
-        client = httpx.AsyncClient()
-        async with client.stream(
-                    url=f"{api_base}",
-                    json=data,
-                    headers=headers,
-                    method="POST",
-                    timeout=litellm.request_timeout
-                ) as response: 
-            if response.status_code != 200:
-                raise OpenAIError(status_code=response.status_code, message=response.text()) # type: ignore
-            
-            streamwrapper = CustomStreamWrapper(completion_stream=response.aiter_lines(), model=model, custom_llm_provider="openai",logging_obj=logging_obj)
-            async for transformed_chunk in streamwrapper:
-                yield transformed_chunk
+        response = await self.openai_aclient.chat.completions.create(**data)
+        streamwrapper = CustomStreamWrapper(completion_stream=response, model=model, custom_llm_provider="openai",logging_obj=logging_obj)
+        async for transformed_chunk in streamwrapper:
+            yield transformed_chunk
+
 
     def embedding(self,
                 model: str,

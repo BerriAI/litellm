@@ -23,7 +23,18 @@ def test_sync_response():
         response = completion(model="gpt-3.5-turbo", messages=messages, api_key=os.environ["OPENAI_API_KEY"])
     except Exception as e:
         pytest.fail(f"An exception occurred: {e}")
+# test_sync_response()
 
+def test_sync_response_anyscale():
+    litellm.set_verbose = True
+    user_message = "Hello, how are you?"
+    messages = [{"content": user_message, "role": "user"}]
+    try:
+        response = completion(model="anyscale/mistralai/Mistral-7B-Instruct-v0.1", messages=messages)
+    except Exception as e:
+        pytest.fail(f"An exception occurred: {e}")
+
+# test_sync_response_anyscale()
 
 def test_async_response():
     import asyncio
@@ -32,13 +43,28 @@ def test_async_response():
         user_message = "Hello, how are you?"
         messages = [{"content": user_message, "role": "user"}]
         try:
-            response = await acompletion(model="huggingface/HuggingFaceH4/zephyr-7b-beta", messages=messages)
+            response = await acompletion(model="gpt-3.5-turbo", messages=messages)
+            # response = await response
             print(f"response: {response}")
         except Exception as e:
             pytest.fail(f"An exception occurred: {e}")
 
     asyncio.run(test_get_response())
-# test_async_response()
+
+def test_async_anyscale_response():
+    import asyncio
+    litellm.set_verbose = True
+    async def test_get_response():
+        user_message = "Hello, how are you?"
+        messages = [{"content": user_message, "role": "user"}]
+        try:
+            response = await acompletion(model="anyscale/mistralai/Mistral-7B-Instruct-v0.1", messages=messages)
+            # response = await response
+            print(f"response: {response}")
+        except Exception as e:
+            pytest.fail(f"An exception occurred: {e}")
+
+    asyncio.run(test_get_response())
 
 def test_get_response_streaming():
     import asyncio
@@ -70,7 +96,7 @@ def test_get_response_streaming():
     asyncio.run(test_async_call())
 
 
-# test_get_response_streaming()
+test_get_response_streaming()
 
 def test_get_response_non_openai_streaming():
     import asyncio
@@ -79,7 +105,7 @@ def test_get_response_non_openai_streaming():
         user_message = "Hello, how are you?"
         messages = [{"content": user_message, "role": "user"}]
         try:
-            response = await acompletion(model="huggingface/HuggingFaceH4/zephyr-7b-beta", messages=messages, stream=True)
+            response = await acompletion(model="anyscale/mistralai/Mistral-7B-Instruct-v0.1", messages=messages, stream=True)
             print(type(response))
 
             import inspect
