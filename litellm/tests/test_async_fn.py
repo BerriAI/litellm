@@ -4,7 +4,9 @@
 import sys, os
 import pytest
 import traceback
-import asyncio
+import asyncio, logging
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -99,5 +101,3 @@ def test_get_response_non_openai_streaming():
             pytest.fail(f"An exception occurred: {e}")
         return response
     asyncio.run(test_async_call())
-
-test_get_response_non_openai_streaming()
