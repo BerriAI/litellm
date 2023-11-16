@@ -541,7 +541,7 @@ async def completion(request: Request, model: Optional[str] = None):
         error_traceback = traceback.format_exc()
         error_msg = f"{str(e)}\n\n{error_traceback}"
         try:
-            status = e.status_code
+            status = e.status_code  # type: ignore
         except:
             status = status.HTTP_500_INTERNAL_SERVER_ERROR,
         raise HTTPException(
@@ -577,7 +577,7 @@ async def chat_completion(request: Request, model: Optional[str] = None):
         error_traceback = traceback.format_exc()
         error_msg = f"{str(e)}\n\n{error_traceback}"
         try:
-            status = e.status_code
+            status = e.status_code # type: ignore
         except:
             status = status.HTTP_500_INTERNAL_SERVER_ERROR,
         raise HTTPException(
@@ -601,7 +601,7 @@ async def router_completion(request: Request):
         error_traceback = traceback.format_exc()
         error_msg = f"{str(e)}\n\n{error_traceback}"
         try:
-            status = e.status_code
+            status = e.status_code # type: ignore
         except:
             status = status.HTTP_500_INTERNAL_SERVER_ERROR,
         raise HTTPException(
