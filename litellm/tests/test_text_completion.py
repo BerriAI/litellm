@@ -31,7 +31,37 @@ def test_completion_openai_prompt():
         #print(response.choices[0].text)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_openai_prompt()
+# test_completion_openai_prompt()
+
+def test_completion_openai_engine_and_model():
+    try:
+        print("\n text 003 test\n")
+        litellm.set_verbose=True
+        response = text_completion(
+            model="text-davinci-003", engine="anything", prompt="What's the weather in SF?", max_tokens=5
+        )
+        print(response)
+        response_str = response["choices"][0]["text"]
+        # print(response.choices[0])
+        #print(response.choices[0].text)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+test_completion_openai_engine_and_model()
+
+def test_completion_openai_engine():
+    try:
+        print("\n text 003 test\n")
+        litellm.set_verbose=True
+        response = text_completion(
+            engine="text-davinci-003", prompt="What's the weather in SF?", max_tokens=5
+        )
+        print(response)
+        response_str = response["choices"][0]["text"]
+        # print(response.choices[0])
+        #print(response.choices[0].text)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+test_completion_openai_engine()
 
 
 def test_completion_chatgpt_prompt():
