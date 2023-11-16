@@ -14,10 +14,8 @@ def test_basic_proxy_cli_command():
 
     # Command to run
     print("current working dir", os.getcwd())
-    contents = os.listdir(os.getcwd())
-    print("Contents in dir", contents)
 
-    command = "python3 litellm/proxy/proxy_cli.py --model gpt-3.5-turbo --port 51670"
+    command = "python3 litellm/proxy/proxy_cli.py --model gpt-3.5-turbo --port 51670 --debug"
     print("Running command to start proxy")
 
     # Start the subprocess asynchronously
