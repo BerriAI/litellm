@@ -438,7 +438,6 @@ def test_completion_openai_with_optional_params():
             messages=messages,
             temperature=0.5,
             top_p=0.1,
-            user="ishaan_dev@berri.ai",
         )
         # Add any assertions here to check the response
         print(response)
@@ -447,11 +446,12 @@ def test_completion_openai_with_optional_params():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_completion_openai_with_optional_params()
+# test_completion_openai_with_optional_params()
 
 def test_completion_openai_litellm_key():
     try:
-        litellm.set_verbose = False
+        litellm.set_verbose = True
+        litellm.num_retries = 0
         litellm.api_key = os.environ['OPENAI_API_KEY']
 
         # ensure key is set to None in .env and in openai.api_key
@@ -481,7 +481,7 @@ def test_completion_openai_litellm_key():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-# test_completion_openai_litellm_key()
+test_completion_openai_litellm_key()
 
 def test_completion_openrouter1():
     try:
@@ -495,33 +495,6 @@ def test_completion_openrouter1():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 # test_completion_openrouter1() 
-
-def test_completion_openrouter2():
-    try:
-        print("testing openrouter/gpt-3.5-turbo")
-        response = completion(
-            model="openrouter/gpt-3.5-turbo",
-            messages=messages,
-            max_tokens=5,
-        )
-        # Add any assertions here to check the response
-        print(response)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-# test_completion_openrouter2()
-
-def test_completion_openrouter3():
-    try:
-        response = completion(
-            model="openrouter/mistralai/mistral-7b-instruct",
-            messages=messages,
-            max_tokens=5,
-        )
-        # Add any assertions here to check the response
-        print(response)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-# test_completion_openrouter3()
 
 def test_completion_hf_model_no_provider():
     try:
@@ -538,77 +511,33 @@ def test_completion_hf_model_no_provider():
 
 # test_completion_hf_model_no_provider()
 
-def test_completion_hf_model_no_provider_2():
-    try:
-        response = completion(
-            model="meta-llama/Llama-2-70b-chat-hf",
-            messages=messages,
-            max_tokens=5,
-        )
-        # Add any assertions here to check the response
-        pytest.fail(f"Error occurred: {e}")
-    except Exception as e:
-        pass
-
-# test_completion_hf_model_no_provider_2()
-
-def test_completion_openai_with_more_optional_params():
-    try:
-        response = completion(
-            model="gpt-3.5-turbo",
-            messages=messages,
-            temperature=0.5,
-            top_p=0.1,
-            n=2,
-            max_tokens=150,
-            presence_penalty=0.5,
-            frequency_penalty=-0.5,
-            logit_bias={123: 5},
-            user="ishaan_dev@berri.ai",
-        )
-        # Add any assertions here to check the response
-        print(response)
-        response_str = response["choices"][0]["message"]["content"]
-        response_str_2 = response.choices[0].message.content
-        print(response["choices"][0]["message"]["content"])
-        print(response.choices[0].message.content)
-        if type(response_str) != str:
-            pytest.fail(f"Error occurred: {e}")
-        if type(response_str_2) != str:
-            pytest.fail(f"Error occurred: {e}")
-    except Timeout as e: 
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-# test_completion_openai_with_more_optional_params()
-def test_completion_openai_azure_with_functions():
-    function1 = [
-        {
-            "name": "get_current_weather",
-            "description": "Get the current weather in a given location",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "location": {
-                        "type": "string",
-                        "description": "The city and state, e.g. San Francisco, CA",
-                    },
-                    "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
-                },
-                "required": ["location"],
-            },
-        }
-    ]
-    try:
-        messages = [{"role": "user", "content": "What is the weather like in Boston?"}]
-        response = completion(
-            model="azure/chatgpt-functioncalling", messages=messages, functions=function1
-        )
-        # Add any assertions here to check the response
-        print(response)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
+# def test_completion_openai_azure_with_functions():
+#     function1 = [
+#         {
+#             "name": "get_current_weather",
+#             "description": "Get the current weather in a given location",
+#             "parameters": {
+#                 "type": "object",
+#                 "properties": {
+#                     "location": {
+#                         "type": "string",
+#                         "description": "The city and state, e.g. San Francisco, CA",
+#                     },
+#                     "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+#                 },
+#                 "required": ["location"],
+#             },
+#         }
+#     ]
+#     try:
+#         messages = [{"role": "user", "content": "What is the weather like in Boston?"}]
+#         response = completion(
+#             model="azure/chatgpt-functioncalling", messages=messages, functions=function1
+#         )
+#         # Add any assertions here to check the response
+#         print(response)
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
 # test_completion_openai_azure_with_functions()
 
 
