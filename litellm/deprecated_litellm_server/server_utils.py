@@ -53,8 +53,8 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: Optio
     config = {}
     server_settings  = {} 
     try: 
-        if os.path.exists(config_file_path):
-            with open(config_file_path, 'r') as file:
+        if os.path.exists(config_file_path): # type: ignore
+            with open(config_file_path, 'r') as file: # type: ignore
                 config = yaml.safe_load(file)
         else:
             pass
