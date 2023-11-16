@@ -6,8 +6,6 @@ importlib_metadata
 baseten
 cohere
 redis
-replicate
 anthropic
-gptcache
 boto3
 appdirs
