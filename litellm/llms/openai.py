@@ -265,17 +265,15 @@ class OpenAIChatCompletion(BaseLLM):
                           data: dict, headers: dict, 
                           model_response: ModelResponse): 
         kwargs = locals()
-        if self._aclient_session is None:
-            self._aclient_session = self.create_aclient_session()
-        client = self._aclient_session
         try: 
-            response = await client.post(api_base, json=data, headers=headers, timeout=litellm.request_timeout) 
-            response_json = response.json()
-            if response.status_code != 200:
-                raise OpenAIError(status_code=response.status_code, message=response.text, request=response.request, response=response)
-            
-            ## RESPONSE OBJECT
-            return convert_to_model_response_object(response_object=response_json, model_response_object=model_response)
+            async with httpx.AsyncClient() as client:
+                response = await client.post(api_base, json=data, headers=headers, timeout=litellm.request_timeout) 
+                response_json = response.json()
+                if response.status_code != 200:
+                    raise OpenAIError(status_code=response.status_code, message=response.text, request=response.request, response=response)
+                
+                ## RESPONSE OBJECT
+                return convert_to_model_response_object(response_object=response_json, model_response_object=model_response)
         except Exception as e: 
             if isinstance(e, httpx.TimeoutException):
                 raise OpenAIError(status_code=500, message="Request Timeout Error")
@@ -292,9 +290,7 @@ class OpenAIChatCompletion(BaseLLM):
                   model_response: ModelResponse, 
                   model: str
     ):
-        if self._client_session is None:
-            self._client_session = self.create_client_session()
-        with self._client_session.stream(
+        with httpx.stream(
                     url=f"{api_base}", # type: ignore
                     json=data,
                     headers=headers,
@@ -316,9 +312,8 @@ class OpenAIChatCompletion(BaseLLM):
                           headers: dict, 
                           model_response: ModelResponse, 
                           model: str):
-        if self._aclient_session is None:
-            self._aclient_session = self.create_aclient_session()
-        async with self._aclient_session.stream(
+        client = httpx.AsyncClient()
+        async with client.stream(
                     url=f"{api_base}",
                     json=data,
                     headers=headers,
@@ -361,7 +356,7 @@ class OpenAIChatCompletion(BaseLLM):
                     additional_args={"complete_input_dict": data},
                 )
             ## COMPLETION CALL
-            response = self._client_session.post(
+            response = httpx.post(
                 api_base, headers=headers, json=data, timeout=litellm.request_timeout
             )
             ## LOGGING
