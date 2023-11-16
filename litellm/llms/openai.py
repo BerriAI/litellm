@@ -4,7 +4,7 @@ import httpx
 from .base import BaseLLM
 from litellm.utils import ModelResponse, Choices, Message, CustomStreamWrapper, convert_to_model_response_object, Usage
 from typing import Callable, Optional
-import aiohttp
+import aiohttp, requests
 import litellm
 
 class OpenAIError(Exception):
@@ -356,7 +356,7 @@ class OpenAIChatCompletion(BaseLLM):
                     additional_args={"complete_input_dict": data},
                 )
             ## COMPLETION CALL
-            response = httpx.post(
+            response = requests.post(
                 api_base, headers=headers, json=data, timeout=litellm.request_timeout
             )
             ## LOGGING
@@ -488,7 +488,6 @@ class OpenAITextCompletion(BaseLLM):
                     url=f"{api_base}",
                     json=data,
                     headers=headers,
-                    timeout=litellm.request_timeout
                 )
                 if response.status_code != 200:
                     raise OpenAIError(status_code=response.status_code, message=response.text)

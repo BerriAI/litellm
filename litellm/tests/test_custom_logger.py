@@ -38,11 +38,6 @@ def test_chat_openai():
         for chunk in response:
             # print(chunk)
             continue
-        response = completion(model="gpt-3.5-turbo",
-                              messages=[{
-                                  "role": "user",
-                                  "content": "Hi 👋 - i'm openai"
-                              }])
         # print(response)
 
     except Exception as e:
