@@ -4,8 +4,9 @@ from .base import BaseLLM
 from litellm.utils import ModelResponse, Choices, Message, CustomStreamWrapper, convert_to_model_response_object
 from typing import Callable, Optional
 from litellm import OpenAIConfig
-import litellm
+import litellm, json
 import httpx
+from openai import AzureOpenAI, AsyncAzureOpenAI
 
 class AzureOpenAIError(Exception):
     def __init__(self, status_code, message, request: Optional[httpx.Request]=None, response: Optional[httpx.Response]=None):
@@ -73,12 +74,10 @@ class AzureOpenAIConfig(OpenAIConfig):
                          top_p)
 
 class AzureChatCompletion(BaseLLM):
-    _client_session: Optional[httpx.Client] = None
-    _aclient_session: Optional[httpx.AsyncClient] = None
 
     def __init__(self) -> None:
         super().__init__()
-    
+
     def validate_environment(self, api_key, azure_ad_token):
         headers = {
             "content-type": "application/json",
@@ -110,17 +109,12 @@ class AzureChatCompletion(BaseLLM):
             self._client_session = self.create_client_session()
         exception_mapping_worked = False
         try:
-            if headers is None:
-                headers = self.validate_environment(api_key=api_key, azure_ad_token=azure_ad_token)
 
             if model is None or messages is None:
                 raise AzureOpenAIError(status_code=422, message=f"Missing model or messages")
-            # Ensure api_base ends with a trailing slash
-            if not api_base.endswith('/'):
-                api_base += '/'
-
-            api_base = api_base + f"openai/deployments/{model}/chat/completions?api-version={api_version}"
+        
             data = {
+                "model": model,
                 "messages": messages, 
                 **optional_params
             }
@@ -137,41 +131,34 @@ class AzureChatCompletion(BaseLLM):
             )
             if acompletion is True: 
                 if optional_params.get("stream", False):
-                    return self.async_streaming(logging_obj=logging_obj, api_base=api_base, data=data, headers=headers, model_response=model_response, model=model)
+                    return self.async_streaming(logging_obj=logging_obj, api_base=api_base, data=data, headers=headers, model_response=model_response, model=model, api_key=api_key, api_version=api_version, azure_ad_token=azure_ad_token)
                 else:
-                    return self.acompletion(api_base=api_base, data=data, headers=headers, model_response=model_response)
+                    return self.acompletion(api_base=api_base, data=data, headers=headers, model_response=model_response, api_key=api_key, api_version=api_version, model=model, azure_ad_token=azure_ad_token)
             elif "stream" in optional_params and optional_params["stream"] == True:
-                return self.streaming(logging_obj=logging_obj, api_base=api_base, data=data, headers=headers, model_response=model_response, model=model)
+                return self.streaming(logging_obj=logging_obj, api_base=api_base, data=data, headers=headers, model_response=model_response, model=model, api_key=api_key, api_version=api_version, azure_ad_token=azure_ad_token)
             else:
-                response = self._client_session.post(
-                    url=api_base,
-                    json=data,
-                    headers=headers,
-                    timeout=litellm.request_timeout
-                )
-                if response.status_code != 200:
-                    raise AzureOpenAIError(status_code=response.status_code, message=response.text)
-                    
-                ## RESPONSE OBJECT
-                return convert_to_model_response_object(response_object=response.json(), model_response_object=model_response)
+                azure_client = AzureOpenAI(api_key=api_key, api_version=api_version, azure_endpoint=api_base, azure_deployment=model, azure_ad_token=azure_ad_token)
+                response = azure_client.chat.completions.create(**data) # type: ignore
+                return convert_to_model_response_object(response_object=json.loads(response.model_dump_json()), model_response_object=model_response)
         except AzureOpenAIError as e: 
             exception_mapping_worked = True
             raise e
         except Exception as e: 
             raise e
     
-    async def acompletion(self, api_base: str, data: dict, headers: dict, model_response: ModelResponse): 
-       if self._aclient_session is None:
-           self._aclient_session = self.create_aclient_session()
-       client = self._aclient_session
+    async def acompletion(self, 
+                          api_key: str, 
+                          api_version: str, 
+                          model: str, 
+                          api_base: str, 
+                          data: dict, 
+                          headers: dict, 
+                          model_response: ModelResponse,
+                          azure_ad_token: Optional[str]=None, ): 
        try:
-            response = await client.post(api_base, json=data, headers=headers, timeout=litellm.request_timeout) 
-            response_json = response.json()
-            if response.status_code != 200:
-                raise AzureOpenAIError(status_code=response.status_code, message=response.text, request=response.request, response=response)
-            
-            ## RESPONSE OBJECT
-            return convert_to_model_response_object(response_object=response_json, model_response_object=model_response)
+            azure_client = AsyncAzureOpenAI(api_key=api_key, api_version=api_version, azure_endpoint=api_base, azure_deployment=model, azure_ad_token=azure_ad_token)
+            response = await azure_client.chat.completions.create(**data) 
+            return convert_to_model_response_object(response_object=json.loads(response.model_dump_json()), model_response_object=model_response)
        except Exception as e: 
            if isinstance(e,httpx.TimeoutException):
                 raise AzureOpenAIError(status_code=500, message="Request Timeout Error")
@@ -183,74 +170,52 @@ class AzureChatCompletion(BaseLLM):
     def streaming(self,
                   logging_obj,
                   api_base: str, 
+                  api_key: str,
+                  api_version: str, 
                   data: dict, 
                   headers: dict, 
                   model_response: ModelResponse, 
-                  model: str
+                  model: str,
+                  azure_ad_token: Optional[str]=None, 
     ):
-        if self._client_session is None:
-            self._client_session = self.create_client_session()
-        with self._client_session.stream(
-                    url=f"{api_base}",
-                    json=data,
-                    headers=headers,
-                    method="POST",
-                    timeout=litellm.request_timeout
-                ) as response: 
-                    if response.status_code != 200:
-                        raise AzureOpenAIError(status_code=response.status_code, message="An error occurred while streaming")
-                    
-                    completion_stream = response.iter_lines()
-                    streamwrapper = CustomStreamWrapper(completion_stream=completion_stream, model=model, custom_llm_provider="azure",logging_obj=logging_obj)
-                    for transformed_chunk in streamwrapper:
-                        yield transformed_chunk
+        azure_client = AzureOpenAI(api_key=api_key, api_version=api_version, azure_endpoint=api_base, azure_deployment=model, azure_ad_token=azure_ad_token)
+        response = azure_client.chat.completions.create(**data)
+        streamwrapper = CustomStreamWrapper(completion_stream=response, model=model, custom_llm_provider="azure",logging_obj=logging_obj)
+        for transformed_chunk in streamwrapper:
+            yield transformed_chunk
 
     async def async_streaming(self, 
                           logging_obj,
                           api_base: str, 
+                          api_key: str, 
+                          api_version: str, 
                           data: dict, 
                           headers: dict, 
                           model_response: ModelResponse, 
-                          model: str):
-        if self._aclient_session is None:
-           self._aclient_session = self.create_aclient_session()
-        client = self._aclient_session
-        async with client.stream(
-                    url=f"{api_base}",
-                    json=data,
-                    headers=headers,
-                    method="POST",
-                    timeout=litellm.request_timeout
-                ) as response: 
-            if response.status_code != 200:
-                raise AzureOpenAIError(status_code=response.status_code, message=response.text)
-            
-            streamwrapper = CustomStreamWrapper(completion_stream=response.aiter_lines(), model=model, custom_llm_provider="azure",logging_obj=logging_obj)
-            async for transformed_chunk in streamwrapper:
-                yield transformed_chunk
+                          model: str,
+                          azure_ad_token: Optional[str]=None):
+        azure_client = AsyncAzureOpenAI(api_key=api_key, api_version=api_version, azure_endpoint=api_base, azure_deployment=model, azure_ad_token=azure_ad_token)
+        response = await azure_client.chat.completions.create(**data)
+        streamwrapper = CustomStreamWrapper(completion_stream=response, model=model, custom_llm_provider="azure",logging_obj=logging_obj)
+        async for transformed_chunk in streamwrapper:
+            yield transformed_chunk
 
     def embedding(self,
                 model: str,
                 input: list,
                 api_key: str,
                 api_base: str,
-                azure_ad_token: str,
                 api_version: str,
                 logging_obj=None,
                 model_response=None,
-                optional_params=None,):
+                optional_params=None,
+                azure_ad_token: Optional[str]=None):
         super().embedding()
         exception_mapping_worked = False
         if self._client_session is None:
             self._client_session = self.create_client_session()
         try: 
-            headers = self.validate_environment(api_key, azure_ad_token=azure_ad_token)
-            # Ensure api_base ends with a trailing slash
-            if not api_base.endswith('/'):
-                api_base += '/'
-
-            api_base = api_base + f"openai/deployments/{model}/embeddings?api-version={api_version}"
-            model = model
+            azure_client = AzureOpenAI(api_key=api_key, api_version=api_version, azure_endpoint=api_base, azure_deployment=model, azure_ad_token=azure_ad_token)
             data = {
                 "model": model,
                 "input": input,
@@ -263,10 +228,8 @@ class AzureChatCompletion(BaseLLM):
                     api_key=api_key,
                     additional_args={"complete_input_dict": data},
                 )
-            ## COMPLETION CALL
-            response = self._client_session.post(
-                api_base, headers=headers, json=data, timeout=litellm.request_timeout
-            )
+            ## COMPLETION CALL            
+            response = azure_client.embeddings.create(**data) # type: ignore
             ## LOGGING
             logging_obj.post_call(
                     input=input,
@@ -275,9 +238,7 @@ class AzureChatCompletion(BaseLLM):
                     original_response=response,
                 )
 
-            if response.status_code!=200:
-                raise AzureOpenAIError(message=response.text, status_code=response.status_code)
-            embedding_response = response.json() 
+            embedding_response = json.loads(response.model_dump_json()) 
             output_data = []
             for idx, embedding in enumerate(embedding_response["data"]):
                 output_data.append(
