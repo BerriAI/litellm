@@ -224,7 +224,7 @@ class OpenAIChatCompletion(BaseLLM):
                     elif optional_params.get("stream", False):
                         return self.streaming(logging_obj=logging_obj, api_base=api_base, data=data, headers=headers, model_response=model_response, model=model)
                     else:
-                        response = self._client_session.post(
+                        response = requests.post(
                             url=api_base,
                             json=data,
                             headers=headers,
