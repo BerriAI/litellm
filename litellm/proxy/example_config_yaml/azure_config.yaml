@@ -1,0 +1,17 @@
+model_list:
+  - model_name: gpt-4-team1
+    litellm_params:
+      model: azure/chatgpt-v-2
+      api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
+      api_version: "2023-05-15"
+      azure_ad_token: eyJ0eXAiOiJ
+  - model_name: gpt-4-team2
+    litellm_params:
+      model: azure/gpt-4
+      api_key: sk-123
+      api_base: https://openai-gpt-4-test-v-2.openai.azure.com/
+  - model_name: gpt-4-team3
+    litellm_params:
+      model: azure/gpt-4
+      api_key: sk-123
+
