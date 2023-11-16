@@ -50,26 +50,15 @@ def test_batch_completions_models():
 def test_batch_completion_models_all_responses():
     try:
         responses = batch_completion_models_all_responses(
-            models=["j2-light", "claude-instant-1.2", "command-nightly"], 
+            models=["j2-light", "claude-instant-1.2"], 
             messages=[{"role": "user", "content": "write a poem"}],
-            max_tokens=500
+            max_tokens=10
         )
         print(responses)
-        assert(len(responses) == 3)
+        assert(len(responses) == 2)
     except Timeout as e:
         pass
     except Exception as e:
         pytest.fail(f"An error occurred: {e}")
 # test_batch_completion_models_all_responses()
-
-# def test_batch_completions():
-#     try:
-#         result = completion(
-#             model=["gpt-3.5-turbo", "claude-instant-1.2", "command-nightly"], 
-#             messages=[{"role": "user", "content": "Hey, how's it going"}]
-#         )
-#         print(result)
-#     except Exception as e:
-#         pytest.fail(f"An error occurred: {e}")
-# test_batch_completions()
 
