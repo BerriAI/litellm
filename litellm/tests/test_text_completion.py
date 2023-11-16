@@ -46,7 +46,7 @@ def test_completion_openai_engine_and_model():
         #print(response.choices[0].text)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_openai_engine_and_model()
+# test_completion_openai_engine_and_model()
 
 def test_completion_openai_engine():
     try:
@@ -61,7 +61,7 @@ def test_completion_openai_engine():
         #print(response.choices[0].text)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_openai_engine()
+# test_completion_openai_engine()
 
 
 def test_completion_chatgpt_prompt():
@@ -135,7 +135,7 @@ def test_completion_text_003_prompt_array():
 ##### hugging face tests
 def test_completion_hf_prompt_array():
     try:
-        litellm.set_verbose=False
+        litellm.set_verbose=True
         print("\n testing hf mistral\n")
         response = text_completion(
             model="huggingface/mistralai/Mistral-7B-v0.1", 
