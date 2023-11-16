@@ -9,9 +9,8 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import pytest
-from openai import Timeout
 import litellm
-from litellm import embedding, completion, completion_cost
+from litellm import embedding, completion, completion_cost, Timeout
 from litellm import RateLimitError
 litellm.num_retries = 3
 litellm.cache = None
@@ -419,7 +418,7 @@ def test_completion_openai():
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_openai()
+# test_completion_openai()
 
 def test_completion_text_openai():
     try:
@@ -442,10 +441,12 @@ def test_completion_openai_with_optional_params():
         )
         # Add any assertions here to check the response
         print(response)
-    except Timeout as e: 
+    except litellm.Timeout as e: 
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+test_completion_openai_with_optional_params()
 
 def test_completion_openai_litellm_key():
     try:
@@ -606,7 +607,7 @@ def test_completion_openai_azure_with_functions():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_openai_azure_with_functions()
+# test_completion_openai_azure_with_functions()
 
 
 def test_completion_azure():
