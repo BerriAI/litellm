@@ -155,11 +155,16 @@ def test_completion_hf_prompt_array():
 # test_completion_hf_prompt_array()
 
 def test_text_completion_stream():
-    response = text_completion(
-            model="huggingface/mistralai/Mistral-7B-v0.1", 
-            prompt="good morning",
-            stream=True
-        )
-    for chunk in response:
-        print(chunk)
+    try:
+        response = text_completion(
+                model="huggingface/mistralai/Mistral-7B-v0.1", 
+                prompt="good morning",
+                stream=True,
+                max_tokens=10,
+            )
+        for chunk in response:
+            print(chunk)
+    except Exception as e:
+        pytest.fail(f"GOT exception for HF In streaming{e}")
+
 test_text_completion_stream()
