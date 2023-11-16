@@ -481,7 +481,7 @@ def test_completion_openai_litellm_key():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_completion_openai_litellm_key()
+# test_completion_openai_litellm_key()
 
 def test_completion_openrouter1():
     try:
@@ -561,6 +561,8 @@ def test_completion_azure():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+test_completion_azure()
 
 def test_azure_openai_ad_token():
     # this tests if the azure ad token is set in the request header
