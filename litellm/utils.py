@@ -4443,6 +4443,9 @@ class CustomStreamWrapper:
                     is_finished = True
                     finish_reason = stop_reason
             ######## bedrock.cohere mappings ###############
+            # meta mapping
+            elif "generation" in chunk_data:
+                text = chunk_data['generation'] # bedrock.meta
             # cohere mapping
             elif "text" in chunk_data:
                 text = chunk_data["text"] # bedrock.cohere
