@@ -29,7 +29,6 @@ jobs:
             pip install pytest-asyncio
             pip install mypy
             pip install -q google-generativeai
-            pip install openai[datalib]
             pip install "boto3>=1.28.57"
             pip install appdirs
             pip install langchain
