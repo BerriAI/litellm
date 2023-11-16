@@ -8,6 +8,8 @@ model_list:
   - model_name: gpt-3.5-turbo
     litellm_params:
         model: ollama/llama2
+        temperature: 0.1
+        max_tokens: 20
 
 
 # request to gpt-4, response from ollama/llama2
