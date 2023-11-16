@@ -105,8 +105,6 @@ class AzureChatCompletion(BaseLLM):
                acompletion: bool = False,
                headers: Optional[dict]=None):
         super().completion()
-        if self._client_session is None: 
-            self._client_session = self.create_client_session()
         exception_mapping_worked = False
         try:
             if headers is None:
@@ -142,7 +140,7 @@ class AzureChatCompletion(BaseLLM):
             elif "stream" in optional_params and optional_params["stream"] == True:
                 return self.streaming(logging_obj=logging_obj, api_base=api_base, data=data, headers=headers, model_response=model_response, model=model)
             else:
-                response = self._client_session.post(
+                response = httpx.post(
                     url=api_base,
                     json=data,
                     headers=headers,
@@ -159,17 +157,15 @@ class AzureChatCompletion(BaseLLM):
             raise e
     
     async def acompletion(self, api_base: str, data: dict, headers: dict, model_response: ModelResponse): 
-       if self._aclient_session is None:
-           self._aclient_session = self.create_aclient_session()
-       client = self._aclient_session
        try:
-            response = await client.post(api_base, json=data, headers=headers) 
-            response_json = response.json()
-            if response.status_code != 200:
-                raise AzureOpenAIError(status_code=response.status_code, message=response.text, request=response.request, response=response)
-            
-            ## RESPONSE OBJECT
-            return convert_to_model_response_object(response_object=response_json, model_response_object=model_response)
+            async with httpx.AsyncClient() as client:
+                response = await client.post(api_base, json=data, headers=headers) 
+                response_json = response.json()
+                if response.status_code != 200:
+                    raise AzureOpenAIError(status_code=response.status_code, message=response.text, request=response.request, response=response)
+                
+                ## RESPONSE OBJECT
+                return convert_to_model_response_object(response_object=response_json, model_response_object=model_response)
        except Exception as e: 
            if isinstance(e,httpx.TimeoutException):
                 raise AzureOpenAIError(status_code=500, message="Request Timeout Error")
@@ -186,9 +182,7 @@ class AzureChatCompletion(BaseLLM):
                   model_response: ModelResponse, 
                   model: str
     ):
-        if self._client_session is None:
-            self._client_session = self.create_client_session()
-        with self._client_session.stream(
+        with httpx.stream(
                     url=f"{api_base}",
                     json=data,
                     headers=headers,
@@ -209,9 +203,7 @@ class AzureChatCompletion(BaseLLM):
                           headers: dict, 
                           model_response: ModelResponse, 
                           model: str):
-        if self._aclient_session is None:
-           self._aclient_session = self.create_aclient_session()
-        client = self._aclient_session
+        client = httpx.AsyncClient()
         async with client.stream(
                     url=f"{api_base}",
                     json=data,
