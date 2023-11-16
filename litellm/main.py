@@ -941,8 +941,6 @@ def completion(
                 {
                     "HTTP-Referer": openrouter_site_url,
                     "X-Title": openrouter_app_name,
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {api_key}"
                 }
             )
 

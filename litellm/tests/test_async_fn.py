@@ -50,6 +50,8 @@ def test_async_response_openai():
 
     asyncio.run(test_get_response())
 
+# test_async_response_openai()
+
 def test_async_response_azure():
     import asyncio
     litellm.set_verbose = True
@@ -80,6 +82,8 @@ def test_async_anyscale_response():
 
     asyncio.run(test_get_response())
 
+# test_async_anyscale_response()
+
 def test_get_response_streaming():
     import asyncio
     async def test_async_call():
@@ -87,7 +91,7 @@ def test_get_response_streaming():
         messages = [{"content": user_message, "role": "user"}]
         try:
             litellm.set_verbose = True
-            response = await acompletion(model="azure/chatgpt-v-2", messages=messages, stream=True)
+            response = await acompletion(model="gpt-3.5-turbo", messages=messages, stream=True)
             print(type(response))
 
             import inspect
@@ -110,7 +114,7 @@ def test_get_response_streaming():
     asyncio.run(test_async_call())
 
 
-test_get_response_streaming()
+# test_get_response_streaming()
 
 def test_get_response_non_openai_streaming():
     import asyncio
@@ -141,3 +145,5 @@ def test_get_response_non_openai_streaming():
             pytest.fail(f"An exception occurred: {e}")
         return response
     asyncio.run(test_async_call())
+
+test_get_response_non_openai_streaming()
