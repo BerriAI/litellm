@@ -11,9 +11,9 @@ sys.path.insert(
 import litellm
 
 try:
-    from utils import set_callbacks, load_router_config, print_verbose
+    from litellm.deprecated_litellm_server.server_utils import set_callbacks, load_router_config, print_verbose
 except ImportError:
-    from litellm_server.utils import set_callbacks, load_router_config, print_verbose
+    from litellm.deprecated_litellm_server.server_utils import set_callbacks, load_router_config, print_verbose
 import dotenv
 dotenv.load_dotenv() # load env variables
 
