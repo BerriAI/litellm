@@ -484,7 +484,7 @@ class OpenAITextCompletion(BaseLLM):
             elif optional_params.get("stream", False):
                 return self.streaming(logging_obj=logging_obj, api_base=api_base, data=data, headers=headers, model_response=model_response, model=model)
             else:
-                response = self._client_session.post(
+                response = httpx.post(
                     url=f"{api_base}",
                     json=data,
                     headers=headers,
@@ -546,7 +546,7 @@ class OpenAITextCompletion(BaseLLM):
                   model_response: ModelResponse, 
                   model: str
     ):
-        with self._client_session.stream(
+        with httpx.stream(
                     url=f"{api_base}",
                     json=data,
                     headers=headers,
