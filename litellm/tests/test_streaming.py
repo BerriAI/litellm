@@ -374,7 +374,7 @@ def test_completion_azure_stream():
         print(f"completion_response: {complete_response}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_completion_azure_stream() 
+test_completion_azure_stream() 
 
 def test_completion_claude_stream():
     try:

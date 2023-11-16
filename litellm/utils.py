@@ -4505,11 +4505,12 @@ class CustomStreamWrapper:
             text = "" 
             is_finished = False
             finish_reason = None
-            if str_line.choices[0].delta.content is not None:
-                text = str_line.choices[0].delta.content
-            if str_line.choices[0].finish_reason:
-                is_finished = True
-                finish_reason = str_line.choices[0].finish_reason
+            if len(str_line.choices) > 0: 
+                if str_line.choices[0].delta.content is not None:
+                    text = str_line.choices[0].delta.content
+                if str_line.choices[0].finish_reason:
+                    is_finished = True
+                    finish_reason = str_line.choices[0].finish_reason
             return {"text": text, "is_finished": is_finished, "finish_reason": finish_reason}
         except Exception as e:
             traceback.print_exc()
@@ -4642,15 +4643,6 @@ class CustomStreamWrapper:
                 completion_obj["content"] = response_obj["text"]
                 if response_obj["is_finished"]: 
                     model_response.choices[0].finish_reason = response_obj["finish_reason"]
-            elif self.custom_llm_provider and self.custom_llm_provider == "azure": 
-                response_obj = self.handle_azure_chunk(chunk)
-                completion_obj["content"] = response_obj["text"]
-                print_verbose(f"response_obj: {response_obj}")
-                print_verbose(f"completion obj content: {completion_obj['content']}")
-                print_verbose(f"len(completion_obj['content']: {len(completion_obj['content'])}")
-                if response_obj["is_finished"]: 
-                    model_response.choices[0].finish_reason = response_obj["finish_reason"]
-                    print_verbose(f"model_response finish reason 2: {model_response.choices[0].finish_reason}")
             elif self.custom_llm_provider and self.custom_llm_provider == "maritalk":
                 response_obj = self.handle_maritalk_chunk(chunk)
                 completion_obj["content"] = response_obj["text"]
