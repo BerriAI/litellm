@@ -131,11 +131,11 @@ class AzureChatCompletion(BaseLLM):
             )
             if acompletion is True: 
                 if optional_params.get("stream", False):
-                    return self.async_streaming(logging_obj=logging_obj, api_base=api_base, data=data, headers=headers, model_response=model_response, model=model, api_key=api_key, api_version=api_version, azure_ad_token=azure_ad_token)
+                    return self.async_streaming(logging_obj=logging_obj, api_base=api_base, data=data, model=model, api_key=api_key, api_version=api_version, azure_ad_token=azure_ad_token)
                 else:
-                    return self.acompletion(api_base=api_base, data=data, headers=headers, model_response=model_response, api_key=api_key, api_version=api_version, model=model, azure_ad_token=azure_ad_token)
+                    return self.acompletion(api_base=api_base, data=data, model_response=model_response, api_key=api_key, api_version=api_version, model=model, azure_ad_token=azure_ad_token)
             elif "stream" in optional_params and optional_params["stream"] == True:
-                return self.streaming(logging_obj=logging_obj, api_base=api_base, data=data, headers=headers, model_response=model_response, model=model, api_key=api_key, api_version=api_version, azure_ad_token=azure_ad_token)
+                return self.streaming(logging_obj=logging_obj, api_base=api_base, data=data, model=model, api_key=api_key, api_version=api_version, azure_ad_token=azure_ad_token)
             else:
                 azure_client = AzureOpenAI(api_key=api_key, api_version=api_version, azure_endpoint=api_base, azure_deployment=model, azure_ad_token=azure_ad_token)
                 response = azure_client.chat.completions.create(**data) # type: ignore
@@ -152,7 +152,6 @@ class AzureChatCompletion(BaseLLM):
                           model: str, 
                           api_base: str, 
                           data: dict, 
-                          headers: dict, 
                           model_response: ModelResponse,
                           azure_ad_token: Optional[str]=None, ): 
        try:
@@ -173,8 +172,6 @@ class AzureChatCompletion(BaseLLM):
                   api_key: str,
                   api_version: str, 
                   data: dict, 
-                  headers: dict, 
-                  model_response: ModelResponse, 
                   model: str,
                   azure_ad_token: Optional[str]=None, 
     ):
@@ -190,8 +187,6 @@ class AzureChatCompletion(BaseLLM):
                           api_key: str, 
                           api_version: str, 
                           data: dict, 
-                          headers: dict, 
-                          model_response: ModelResponse, 
                           model: str,
                           azure_ad_token: Optional[str]=None):
         azure_client = AsyncAzureOpenAI(api_key=api_key, api_version=api_version, azure_endpoint=api_base, azure_deployment=model, azure_ad_token=azure_ad_token)
