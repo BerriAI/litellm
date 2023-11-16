@@ -2048,11 +2048,11 @@ def get_optional_params(  # use the openai defaults
             supported_params = ["max_tokens", "temperature", "top_p", "stream"]
             _check_valid_arg(supported_params=supported_params)
             # see https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/providers?model=titan-large
-            if max_tokens:
+            if max_tokens is not None:
                 optional_params["max_gen_len"] = max_tokens
-            if temperature:
+            if temperature is not None:
                 optional_params["temperature"] = temperature
-            if top_p:
+            if top_p is not None:
                 optional_params["top_p"] = top_p
             if stream: 
                 optional_params["stream"] = stream
