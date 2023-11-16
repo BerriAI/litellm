@@ -1818,8 +1818,8 @@ def embedding(
 
 ###### Text Completion ################
 def text_completion(
-    model: str,                   # Required: ID of the model to use.
     prompt: Union[str, List[Union[str, List[Union[str, List[int]]]]]], # Required: The prompt(s) to generate completions for.
+    model: str = None,                 # Required: ID of the model to use.
     best_of: Optional[int] = None,   # Optional: Generates best_of completions server-side.
     echo: Optional[bool] = None,  # Optional: Echo back the prompt in addition to the completion.
     frequency_penalty: Optional[float] = None, # Optional: Penalize new tokens based on their existing frequency.
@@ -1875,7 +1875,9 @@ def text_completion(
         Your example of how to use this function goes here.
     """
     if "engine" in  kwargs:
-        model = kwargs["engine"]
+        if model==None:
+            # only use engine when model not passed
+            model = kwargs["engine"]
         kwargs.pop("engine")
 
     text_completion_response = TextCompletionResponse()
