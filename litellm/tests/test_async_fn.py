@@ -50,7 +50,7 @@ def test_async_response():
             pytest.fail(f"An exception occurred: {e}")
 
     asyncio.run(test_get_response())
-
+test_async_response()
 def test_async_anyscale_response():
     import asyncio
     litellm.set_verbose = True
