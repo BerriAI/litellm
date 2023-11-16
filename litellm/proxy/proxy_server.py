@@ -540,8 +540,14 @@ async def completion(request: Request, model: Optional[str] = None):
         print(f"\033[1;31mAn error occurred: {e}\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`")
         error_traceback = traceback.format_exc()
         error_msg = f"{str(e)}\n\n{error_traceback}"
-        print(error_msg)
-        return {"error": error_msg}
+        try:
+            status = e.status_code
+        except:
+            status = status.HTTP_500_INTERNAL_SERVER_ERROR,
+        raise HTTPException(
+            status_code=status,
+            detail=error_msg
+        )
                               
 
 @router.post("/v1/chat/completions", dependencies=[Depends(user_api_key_auth)])
@@ -570,7 +576,14 @@ async def chat_completion(request: Request, model: Optional[str] = None):
         print(f"\033[1;31mAn error occurred: {e}\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`")
         error_traceback = traceback.format_exc()
         error_msg = f"{str(e)}\n\n{error_traceback}"
-        return {"error": error_msg}
+        try:
+            status = e.status_code
+        except:
+            status = status.HTTP_500_INTERNAL_SERVER_ERROR,
+        raise HTTPException(
+            status_code=status,
+            detail=error_msg
+        )
 
 
 @router.post("/router/chat/completions", dependencies=[Depends(user_api_key_auth)])
@@ -587,7 +600,14 @@ async def router_completion(request: Request):
         print(f"\033[1;31mAn error occurred: {e}\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`")
         error_traceback = traceback.format_exc()
         error_msg = f"{str(e)}\n\n{error_traceback}"
-        return {"error": error_msg}
+        try:
+            status = e.status_code
+        except:
+            status = status.HTTP_500_INTERNAL_SERVER_ERROR,
+        raise HTTPException(
+            status_code=status,
+            detail=error_msg
+        )
 
 @router.get("/ollama_logs", dependencies=[Depends(user_api_key_auth)])
 async def retrieve_server_log(request: Request):
