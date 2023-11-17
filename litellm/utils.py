@@ -3612,6 +3612,14 @@ def exception_type(
                         llm_provider="vertex_ai",
                         response=original_exception.response
                     )
+                elif "403 Permission denied" in error_str: 
+                    exception_mapping_worked = True
+                    raise AuthenticationError(
+                        message=f"VertexAIException - {error_str}", 
+                        model=model, 
+                        llm_provider="vertex_ai",
+                        response=original_exception.response
+                    )
             elif custom_llm_provider == "palm":
                 if "503 Getting metadata" in error_str:
                     # auth errors look like this
