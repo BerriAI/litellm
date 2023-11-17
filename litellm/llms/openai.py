@@ -161,7 +161,7 @@ class OpenAIChatCompletion(BaseLLM):
 
     def completion(self, 
                 model_response: ModelResponse,
-                timeout: Any, 
+                timeout: float, 
                 model: Optional[str]=None,
                 messages: Optional[list]=None,
                 print_verbose: Optional[Callable]=None,
