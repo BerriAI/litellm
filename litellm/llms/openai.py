@@ -209,6 +209,12 @@ class OpenAIChatCompletion(BaseLLM):
                     else:
                         openai_client = OpenAI(api_key=api_key, base_url=api_base, http_client=litellm.client_session, timeout=timeout)
                         response = openai_client.chat.completions.create(**data) # type: ignore
+                        logging_obj.post_call(
+                                input=None,
+                                api_key=api_key,
+                                original_response=response,
+                                additional_args={"complete_input_dict": data},
+                            )
                         return convert_to_model_response_object(response_object=json.loads(response.model_dump_json()), model_response_object=model_response)
                 except Exception as e:
                     if "Conversation roles must alternate user/assistant" in str(e) or "user and assistant roles should be alternating" in str(e): 
