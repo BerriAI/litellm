@@ -624,7 +624,7 @@ class Logging:
             self.model_call_details["log_event_type"] = "post_api_call"
 
             # User Logging -> if you pass in a custom logging function
-            print_verbose(f"RAW RESPONSE: {self.model_call_details}\n\n")
+            print_verbose(f"RAW RESPONSE:\n{self.model_call_details.get('original_response', self.model_call_details)}\n\n")
             print_verbose(
                 f"Logging Details Post-API Call: logger_fn - {self.logger_fn} | callable(logger_fn) - {callable(self.logger_fn)}"
             )
