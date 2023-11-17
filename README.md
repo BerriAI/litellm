@@ -80,7 +80,7 @@ for chunk in result:
 ```
 
 ## OpenAI Proxy - ([Docs](https://docs.litellm.ai/docs/simple_proxy))
-**If you don't want to make code changes to add the litellm package to your code base**, you can use litellm proxy. Create a server to call 100+ LLMs (Huggingface/Bedrock/TogetherAI/etc) in the OpenAI ChatCompletions & Completions format
+**If you want to use non-openai models in an openai code base**, you can use litellm proxy. Create a server to call 100+ LLMs (Huggingface/Bedrock/TogetherAI/etc) in the OpenAI ChatCompletions & Completions format
 
 ### Step 1: Start litellm proxy
 ```shell
