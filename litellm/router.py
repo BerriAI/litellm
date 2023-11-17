@@ -3,6 +3,7 @@ from typing import Dict, List, Optional, Union, Literal
 import random, threading, time
 import litellm, openai
 import logging, asyncio
+import inspect
 
 class Router:
     """
@@ -154,7 +155,7 @@ class Router:
             try:
                 # if the function call is successful, no exception will be raised and we'll break out of the loop
                 response = await original_function(*args, **kwargs)
-                if isinstance(response, asyncio.coroutines.Coroutine): # async errors are often returned as coroutines 
+                if inspect.iscoroutinefunction(response): # async errors are often returned as coroutines 
                     response = await response
                 return response
 
@@ -234,7 +235,7 @@ class Router:
             deployment = self.get_available_deployment(model=model, messages=messages)
             data = deployment["litellm_params"]
             response = await litellm.acompletion(**{**data, "messages": messages, "caching": self.cache_responses, **kwargs})
-            if isinstance(response, asyncio.coroutines.Coroutine): # async errors are often returned as coroutines 
+            if inspect.iscoroutinefunction(response): # async errors are often returned as coroutines 
                 response = await response
             return response
         except Exception as e: 
