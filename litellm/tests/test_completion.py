@@ -434,10 +434,17 @@ def test_completion_openai_with_optional_params():
     try:
         litellm.set_verbose = True
         response = completion(
-            model="gpt-3.5-turbo",
-            messages=messages,
+            model="gpt-3.5-turbo-1106",
+            messages=[
+                {
+                    "role": "user",
+                    "content": "respond in valid, json - what is the day"
+                }
+            ],
             temperature=0.5,
             top_p=0.1,
+            seed=12,
+            response_format={ "type": "json_object" }
         )
         # Add any assertions here to check the response
         print(response)
@@ -446,7 +453,7 @@ def test_completion_openai_with_optional_params():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-# test_completion_openai_with_optional_params()
+test_completion_openai_with_optional_params()
 
 def test_completion_openai_litellm_key():
     try:
@@ -494,7 +501,7 @@ def test_completion_openrouter1():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_openrouter1() 
+# test_completion_openrouter1() 
 
 def test_completion_hf_model_no_provider():
     try:
