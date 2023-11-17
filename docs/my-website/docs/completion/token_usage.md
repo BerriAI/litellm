@@ -13,7 +13,7 @@ However, we also expose 5 helper functions + **[NEW]** an API to calculate token
 
 - `completion_cost`: This returns the overall cost (in USD) for a given LLM API Call. It combines `token_counter` and `cost_per_token` to return the cost for that query (counting both cost of input and output). [**Jump to code**](#5-completion_cost)
 
-- `get_max_tokens`: This returns a dictionary for a specific model, with it's max_tokens, input_cost_per_token and output_cost_per_token. [**Jump to code**](#6-get_max_tokens)
+- `get_max_tokens`: This returns the maximum number of tokens allowed for the given model. [**Jump to code**](#6-get_max_tokens)
 
 - `model_cost`: This returns a dictionary for all models, with their max_tokens, input_cost_per_token and output_cost_per_token. It uses the `api.litellm.ai` call shown below. [**Jump to code**](#7-model_cost)
 
@@ -101,15 +101,15 @@ print(formatted_string)
 ```
 ### 6. `get_max_tokens`
 
-* Input: Accepts a model name - e.g. `gpt-3.5-turbo` (to get a complete list, call `litellm.model_list`)
-* Output: Returns a dict object containing the max_tokens, input_cost_per_token, output_cost_per_token
+Input: Accepts a model name - e.g., gpt-3.5-turbo (to get a complete list, call litellm.model_list).
+Output: Returns the maximum number of tokens allowed for the given model
 
 ```python 
 from litellm import get_max_tokens 
 
 model = "gpt-3.5-turbo"
 
-print(get_max_tokens(model)) # {'max_tokens': 4000, 'input_cost_per_token': 1.5e-06, 'output_cost_per_token': 2e-06}
+print(get_max_tokens(model)) # Output: 4097
 ```
 
 ### 7. `model_cost`
@@ -150,19 +150,5 @@ litellm.register_model(model_cost=
 "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json")
 ```
 
-### 9. `api.litellm.ai`
 
-**Example Curl Request**
-```shell
-curl 'https://api.litellm.ai/get_max_tokens?model=claude-2'
-```
-
-```json
-{
-    "input_cost_per_token": 1.102e-05,
-    "max_tokens": 100000,
-    "model": "claude-2",
-    "output_cost_per_token": 3.268e-05
-}
-```
 
