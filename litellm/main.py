@@ -5,7 +5,7 @@
 # |                                               |
 # +-----------------------------------------------+
 #
-#  Thank you ! We ❤️ you! - Krrish & Ishaan
+#  Thank you ! We ❤️ you! - Krrish & Ishaan 
 
 import os, openai, sys, json, inspect, uuid, datetime, threading
 from typing import Any
