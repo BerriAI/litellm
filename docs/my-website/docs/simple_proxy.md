@@ -8,6 +8,9 @@ LiteLLM Server manages:
 
 * Calling 100+ LLMs [Huggingface/Bedrock/TogetherAI/etc.](#other-supported-models) in the OpenAI `ChatCompletions` & `Completions` format
 * Set custom prompt templates + model-specific configs (`temperature`, `max_tokens`, etc.)
+* Routing between [Multiple Models](#multiple-models---quick-start) + [Deployments of the same model](#multiple-instances-of-1-model)
+
+[**See code**](https://github.com/BerriAI/litellm/tree/main/litellm/proxy)
 
 ## Quick Start 
 View all the supported args for the Proxy CLI [here](https://docs.litellm.ai/docs/simple_proxy#proxy-cli-arguments)
@@ -593,8 +596,11 @@ model_list:
       api_key: sk-claude    
 ```
 
-#### Default Model - Config:
+:::info
+
 The proxy uses the first model in the config as the default model - in this config the default model is `zephyr-alpha`
+:::
+
 
 #### Step 2: Start Proxy with config
 
@@ -602,11 +608,7 @@ The proxy uses the first model in the config as the default model - in this conf
 $ litellm --config /path/to/config.yaml
 ```
 
-#### Step 3: Start Proxy with config
-
-If you're repo let's you set model name, you can call the specific model by just passing in that model's name - 
-
-#### Step 4: Use proxy
+#### Step 3: Use proxy
 Curl Command
 ```shell
 curl --location 'http://0.0.0.0:8000/chat/completions' \
@@ -703,6 +705,28 @@ model_list:
         api_base: http://0.0.0.0:8003
 ```
 
+#### Step 2: Start Proxy with config
+
+```shell
+$ litellm --config /path/to/config.yaml
+```
+
+#### Step 3: Use proxy
+Curl Command
+```shell
+curl --location 'http://0.0.0.0:8000/chat/completions' \
+--header 'Content-Type: application/json' \
+--data ' {
+      "model": "zephyr-beta",
+      "messages": [
+        {
+          "role": "user",
+          "content": "what llm are you"
+        }
+      ],
+    }
+'
+```
 
 ### Set Custom Prompt Templates
 
