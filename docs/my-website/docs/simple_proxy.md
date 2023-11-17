@@ -75,12 +75,12 @@ print(response)
 
 ### Supported LLMs
 <Tabs>
-<TabItem value="bedrock" label="Bedrock">
+<TabItem value="bedrock" label="AWS Bedrock">
 
 ```shell
-$ export AWS_ACCESS_KEY_ID=""
-$ export AWS_REGION_NAME="" # e.g. us-west-2
-$ export AWS_SECRET_ACCESS_KEY=""
+$ export AWS_ACCESS_KEY_ID=
+$ export AWS_REGION_NAME=
+$ export AWS_SECRET_ACCESS_KEY=
 ```
 
 ```shell
@@ -122,6 +122,19 @@ $ litellm --model huggingface/<your model name> --api_base https://k58ory32yinf1
 
 ```shell
 $ litellm --model huggingface/<your model name> --api_base http://0.0.0.0:8001
+```
+
+</TabItem>
+<TabItem value="aws-sagemaker" label="AWS Sagemaker">
+
+```shell
+export AWS_ACCESS_KEY_ID=
+export AWS_REGION_NAME=
+export AWS_SECRET_ACCESS_KEY=
+```
+
+```shell
+$ litellm --model sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b
 ```
 
 </TabItem>
