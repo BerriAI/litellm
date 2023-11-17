@@ -64,37 +64,7 @@ print(response)
 
 ### Deploy Router 
 
-1. Clone repo
-```shell
- git clone https://github.com/BerriAI/litellm
-```
-
-2. Create + Modify router_config.yaml (save your azure/openai/etc. deployment info)
-
-```shell
-cp ./router_config_template.yaml ./router_config.yaml
-```
-
-3. Build + Run docker image 
-
-```shell
-docker build -t litellm-proxy . --build-arg CONFIG_FILE=./router_config.yaml 
-```
-
-```shell
-docker run --name litellm-proxy -e PORT=8000 -p 8000:8000 litellm-proxy
-```
-
-### Test 
-
-```curl
-curl 'http://0.0.0.0:8000/router/completions' \
---header 'Content-Type: application/json' \
---data '{
-    "model": "gpt-3.5-turbo",
-    "messages": [{"role": "user", "content": "Hey"}]
-}'
-```
+If you want a server to just route requests to different LLM APIs, use our [OpenAI Proxy Server](./simple_proxy.md)
 
 ## Retry failed requests
 

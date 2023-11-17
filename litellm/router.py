@@ -153,7 +153,10 @@ class Router:
         for current_attempt in range(self.num_retries):
             try:
                 # if the function call is successful, no exception will be raised and we'll break out of the loop
-                return await original_function(*args, **kwargs)
+                response = await original_function(*args, **kwargs)
+                if isinstance(response, asyncio.coroutines.Coroutine): # async errors are often returned as coroutines 
+                    response = await response
+                return response
 
             except openai.RateLimitError as e:
                 # on RateLimitError we'll wait for an exponential time before trying again
@@ -231,6 +234,8 @@ class Router:
             deployment = self.get_available_deployment(model=model, messages=messages)
             data = deployment["litellm_params"]
             response = await litellm.acompletion(**{**data, "messages": messages, "caching": self.cache_responses, **kwargs})
+            if isinstance(response, asyncio.coroutines.Coroutine): # async errors are often returned as coroutines 
+                response = await response
             return response
         except Exception as e: 
             kwargs["model"] = model
