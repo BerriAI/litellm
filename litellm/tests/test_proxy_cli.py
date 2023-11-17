@@ -6,7 +6,7 @@
 # from dotenv import load_dotenv
 # import os
 
-# load_dotenv()
+# load_dotenv() 
 
 # ## This tests the litellm proxy cli, it creates a proxy server and makes a basic chat completion request to gpt-3.5-turbo
 # ## Do not comment this test out
