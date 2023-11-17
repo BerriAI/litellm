@@ -1751,6 +1751,10 @@ def get_optional_params(  # use the openai defaults
     user="",
     model=None,
     custom_llm_provider="",
+    response_format=None,
+    seed=None,
+    tools=None,
+    tool_choice=None,
     **kwargs
 ):
     # retrieve all parameters passed to the function
@@ -1773,6 +1777,10 @@ def get_optional_params(  # use the openai defaults
         "user":"",
         "model":None,
         "custom_llm_provider":"",
+        "response_format": None,
+        "seed": None,
+        "tools": None,
+        "tool_choice": None
     }
     # filter out those parameters that were passed with non-default values
     non_default_params = {k: v for k, v in passed_params.items() if (k != "model" and k != "custom_llm_provider" and k in default_params and v != default_params[k])}
@@ -2166,7 +2174,7 @@ def get_optional_params(  # use the openai defaults
                 temperature = 0.0001 # close to 0
             optional_params["temperature"] = temperature
     else:  # assume passing in params for openai/azure openai
-        supported_params = ["functions", "function_call", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user"]
+        supported_params = ["functions", "function_call", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "response_format", "seed", "tools", "tool_choice"]
         _check_valid_arg(supported_params=supported_params)
         optional_params = non_default_params
     # if user passed in non-default kwargs for specific providers/models, pass them along 
