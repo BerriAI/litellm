@@ -976,7 +976,8 @@ def completion(
                 litellm_params=litellm_params,
                 logger_fn=logger_fn,
                 logging_obj=logging, 
-                acompletion=acompletion
+                acompletion=acompletion,
+                timeout=timeout
             )
             ## LOGGING
             logging.post_call(
