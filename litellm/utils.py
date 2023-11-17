@@ -1057,12 +1057,12 @@ def client(original_function):
             if litellm.client_session is None: 
                 litellm.client_session = httpx.Client(
                     limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
-                    timeout = httpx.Timeout(timeout=600.0, connect=5.0)
+                    timeout = None
                 )
             if litellm.aclient_session is None: 
                 litellm.aclient_session = httpx.AsyncClient(
                     limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
-                    timeout = httpx.Timeout(timeout=600.0, connect=5.0)
+                    timeout = None
                 )
             if litellm.use_client or ("use_client" in kwargs and kwargs["use_client"] == True): 
                 print_verbose(f"litedebugger initialized")
