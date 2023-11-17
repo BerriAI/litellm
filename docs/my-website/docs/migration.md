@@ -15,6 +15,7 @@ When we have breaking changes (i.e. going from 1.x.x to 2.x.x), we will document
 - *NEW* litellm client, allow users to pass api_key
     - `litellm.Litellm(api_key="sk-123")`
 - response objects now inherit from `BaseModel` (prev. `OpenAIObject`)
+- *NEW* default exception - `APIConnectionError` (prev. `APIError`)
 
 **How can we communicate changes better?**
 Tell us

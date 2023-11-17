@@ -9,7 +9,7 @@ LiteLLM maps exceptions across all providers to their OpenAI counterparts.
 - APIError 
 - APIConnectionError
 
-Base case we return APIError
+Base case we return APIConnectionError
 
 All our exceptions inherit from OpenAI's exception types, so any error-handling you have for that, should work out of the box with LiteLLM. 
 
