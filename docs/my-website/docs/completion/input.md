@@ -113,19 +113,9 @@ def completion(
 
 
 
-### Optional Fields
+## Optional Fields
 
-- `functions`: *array* - A list of functions that the model may use to generate JSON inputs. Each function should have the following properties:
-
-    - `name`: *string* - The name of the function to be called. It should contain a-z, A-Z, 0-9, underscores and dashes, with a maximum length of 64 characters.
-    
-    - `description`: *string (optional)* - A description explaining what the function does. It helps the model to decide when and how to call the function.
-    
-    - `parameters`: *object* - The parameters that the function accepts, described as a JSON Schema object.
-    
-    - `function_call`: *string or object (optional)* - Controls how the model responds to function calls.
-
-- `temperature`: *number or null (optional)* - The sampling temperature to be used, between 0 and 2. Higher values like 0.8 produce more random outputs, while lower values like 0.2 make outputs more focused and deterministic. 
+`temperature`: *number or null (optional)* - The sampling temperature to be used, between 0 and 2. Higher values like 0.8 produce more random outputs, while lower values like 0.2 make outputs more focused and deterministic. 
 
 - `top_p`: *number or null (optional)* - An alternative to sampling with temperature. It instructs the model to consider the results of the tokens with top_p probability. For example, 0.1 means only the tokens comprising the top 10% probability mass are considered.
 
@@ -139,6 +129,24 @@ def completion(
 
 - `presence_penalty`: *number or null (optional)* - It is used to penalize new tokens based on their existence in the text so far.
 
+- `response_format`: *object (optional)* - An object specifying the format that the model must output.
+
+    - Setting to { "type": "json_object" } enables JSON mode, which guarantees the message the model generates is valid JSON.
+    
+    - Important: when using JSON mode, you must also instruct the model to produce JSON yourself via a system or user message. Without this, the model may generate an unending stream of whitespace until the generation reaches the token limit, resulting in a long-running and seemingly "stuck" request. Also note that the message content may be partially cut off if finish_reason="length", which indicates the generation exceeded max_tokens or the conversation exceeded the max context length.
+
+- `seed`: *integer or null (optional)* - This feature is in Beta. If specified, our system will make a best effort to sample deterministically, such that repeated requests with the same seed and parameters should return the same result. Determinism is not guaranteed, and you should refer to the `system_fingerprint` response parameter to monitor changes in the backend.
+
+- `tools`: *array (optional)* - A list of tools the model may call. Currently, only functions are supported as a tool. Use this to provide a list of functions the model may generate JSON inputs for.
+
+    - `type`: *string* - The type of the tool. Currently, only function is supported.
+
+    - `function`: *object* - Required.
+
+- `tool_choice`: *string or object (optional)* - Controls which (if any) function is called by the model. none means the model will not call a function and instead generates a message. auto means the model can pick between generating a message or calling a function. Specifying a particular function via {"type: "function", "function": {"name": "my_function"}} forces the model to call that function.
+
+    - `none` is the default when no functions are present. `auto` is the default if functions are present.
+
 - `frequency_penalty`: *number or null (optional)* - It is used to penalize new tokens based on their frequency in the text so far.
 
 - `logit_bias`: *map (optional)* - Used to modify the probability of specific tokens appearing in the completion.
@@ -146,6 +154,18 @@ def completion(
 - `user`: *string (optional)* - A unique identifier representing your end-user. This can help OpenAI to monitor and detect abuse.
 
 - `request_timeout`: *int (optional)* - Timeout in seconds for completion requests (Defaults to 600 seconds)
+
+#### Deprecated Params
+- `functions`: *array* - A list of functions that the model may use to generate JSON inputs. Each function should have the following properties:
+
+    - `name`: *string* - The name of the function to be called. It should contain a-z, A-Z, 0-9, underscores and dashes, with a maximum length of 64 characters.
+    
+    - `description`: *string (optional)* - A description explaining what the function does. It helps the model to decide when and how to call the function.
+    
+    - `parameters`: *object* - The parameters that the function accepts, described as a JSON Schema object.
+    
+- `function_call`: *string or object (optional)* - Controls how the model responds to function calls.
+
 
 #### litellm-specific params 
 
