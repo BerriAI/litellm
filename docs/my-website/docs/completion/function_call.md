@@ -32,6 +32,9 @@ In this example we define a single function `get_current_weather`.
 ```python
 import litellm
 import json
+# set openai api key
+import os
+os.environ['OPENAI_API_KEY'] = "" # litellm reads OPENAI_API_KEY from .env and sends the request
 
 # Example dummy function hard coded to return the same weather
 # In production, this could be your backend API or an external API
@@ -126,6 +129,23 @@ Below is an explanation of what is happening in the code snippet above for Paral
 ### Step1: litellm.completion() with `tools` set to `get_current_weather`
 ```python
 import litellm
+import json
+# set openai api key
+import os
+os.environ['OPENAI_API_KEY'] = "" # litellm reads OPENAI_API_KEY from .env and sends the request
+# Example dummy function hard coded to return the same weather
+# In production, this could be your backend API or an external API
+def get_current_weather(location, unit="fahrenheit"):
+    """Get the current weather in a given location"""
+    if "tokyo" in location.lower():
+        return json.dumps({"location": "Tokyo", "temperature": "10", "unit": "celsius"})
+    elif "san francisco" in location.lower():
+        return json.dumps({"location": "San Francisco", "temperature": "72", "unit": "fahrenheit"})
+    elif "paris" in location.lower():
+        return json.dumps({"location": "Paris", "temperature": "22", "unit": "celsius"})
+    else:
+        return json.dumps({"location": location, "temperature": "unknown"})
+
 messages = [{"role": "user", "content": "What's the weather like in San Francisco, Tokyo, and Paris?"}]
 tools = [
     {
@@ -147,13 +167,16 @@ tools = [
         },
     }
 ]
+
 response = litellm.completion(
     model="gpt-3.5-turbo-1106",
     messages=messages,
     tools=tools,
     tool_choice="auto",  # auto is default, but we'll be explicit
 )
-print("Response\n", response)
+print("\nLLM Response1:\n", response)
+response_message = response.choices[0].message
+tool_calls = response.choices[0].message.tool_calls
 ```
 
 ##### Expected output
@@ -186,9 +209,6 @@ ModelResponse(
 After sending the initial request, parse the model response to identify the function calls it wants to make. In this example, we expect three tool calls, each corresponding to a location (San Francisco, Tokyo, and Paris). 
 
 ```python
-response_message = response.choices[0].message
-tool_calls = response_message.tool_calls
-
 # Check if the model wants to call a function
 if tool_calls:
     # Execute the functions and prepare responses
@@ -199,24 +219,26 @@ if tool_calls:
     messages.append(response_message)  # Extend conversation with assistant's reply
 
     for tool_call in tool_calls:
-        function_name = tool_call.function.name
-        function_to_call = available_functions[function_name]
-        function_args = json.loads(tool_call.function.arguments)
-        # calling the get_current_weather() function
-        function_response = function_to_call(
-            location=function_args.get("location"),
-            unit=function_args.get("unit"),
-        )
+      print(f"\nExecuting tool call\n{tool_call}")
+      function_name = tool_call.function.name
+      function_to_call = available_functions[function_name]
+      function_args = json.loads(tool_call.function.arguments)
+      # calling the get_current_weather() function
+      function_response = function_to_call(
+          location=function_args.get("location"),
+          unit=function_args.get("unit"),
+      )
+      print(f"Result from tool call\n{function_response}\n")
 
-        # Extend conversation with function response
-        messages.append(
-            {
-                "tool_call_id": tool_call.id,
-                "role": "tool",
-                "name": function_name,
-                "content": function_response,
-            }
-        )
+      # Extend conversation with function response
+      messages.append(
+          {
+              "tool_call_id": tool_call.id,
+              "role": "tool",
+              "name": function_name,
+              "content": function_response,
+          }
+      )
 
 ```
 
@@ -228,7 +250,6 @@ second_response = litellm.completion(
     messages=messages,
 )
 print("Second Response\n", second_response)
-
 ```
 
 #### Expected output
