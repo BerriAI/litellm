@@ -239,14 +239,31 @@ def test_acompletion_on_router():
 				"tpm": 100000,
 				"rpm": 10000,
 			},
+			{
+				"model_name": "gpt-3.5-turbo",
+				"litellm_params": {
+					"model": "chatgpt-v-2",
+					"api_key": os.getenv("AZURE_API_KEY"),
+					"api_base": os.getenv("AZURE_API_BASE"),
+					"api_version": os.getenv("AZURE_API_VERSION")
+				},
+				"tpm": 100000,
+				"rpm": 10000,
+			}
 		]
 
 		messages = [
-			{"role": "user", "content": "What is the weather like in SF?"}
+			{"role": "user", "content": "What is the weather like in Boston?"}
 		]
-
+		start_time = time.time()
 		async def get_response(): 
-			router = Router(model_list=model_list, redis_host=os.environ["REDIS_HOST"], redis_password=os.environ["REDIS_PASSWORD"], redis_port=os.environ["REDIS_PORT"], cache_responses=True, timeout=10)
+			router = Router(model_list=model_list, 
+				   redis_host=os.environ["REDIS_HOST"], 
+				   redis_password=os.environ["REDIS_PASSWORD"], 
+				   redis_port=os.environ["REDIS_PORT"], 
+				   cache_responses=True, 
+				   timeout=30,
+				   routing_strategy="usage-based-routing")
 			response1 = await router.acompletion(model="gpt-3.5-turbo", messages=messages)
 			print(f"response1: {response1}")
 			response2 = await router.acompletion(model="gpt-3.5-turbo", messages=messages)
@@ -254,6 +271,8 @@ def test_acompletion_on_router():
 			assert response1["choices"][0]["message"]["content"] == response2["choices"][0]["message"]["content"]
 		asyncio.run(get_response())
 	except litellm.Timeout as e: 
+		end_time = time.time()
+		print(f"timeout error occurred: {end_time - start_time}")
 		pass
 	except Exception as e:
 		traceback.print_exc()
@@ -304,17 +323,6 @@ def test_function_calling_on_router():
             ]
 		response = router.completion(model="gpt-3.5-turbo", messages=messages, functions=function1)
 		print(f"final returned response: {response}")
-		# async def get_response(): 
-		# 	messages=[
-        #         {
-        #             "role": "user",
-        #             "content": "what's the weather in boston"
-        #         }
-        #     ],
-		# 	response1 = await router.acompletion(model="gpt-3.5-turbo", messages=messages, functions=function1)
-		# 	print(f"response1: {response1}")
-		# 	return response
-		# response = asyncio.run(get_response())
 		assert isinstance(response["choices"][0]["message"]["function_call"], dict)
 	except Exception as e: 
 		print(f"An exception occurred: {e}")
