@@ -17,6 +17,9 @@ In addition, parallel function calls is supported on the following models:
 Parallel function calling is the model's ability to perform multiple function calls together, allowing the effects and results of these function calls to be resolved in parallel
 
 ## Quick Start - gpt-3.5-turbo-1106
+<a target="_blank" href="https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/Parallel_function_calling.ipynb">
+  <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
+</a>
 In this example we define a single function `get_current_weather`. 
 
 - Step 1: Send the model the `get_current_weather` with the user question
