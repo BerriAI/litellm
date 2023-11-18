@@ -847,7 +847,7 @@ def test_customprompt_together_ai():
         litellm.set_verbose = False
         litellm.num_retries = 0
         response = completion(
-            model="together_ai/OpenAssistant/llama2-70b-oasst-sft-v10",
+            model="together_ai/togethercomputer/llama-2-70b-chat",
             messages=messages, 
             roles={"system":{"pre_message":"<|im_start|>system\n", "post_message":"<|im_end|>"}, "assistant":{"pre_message":"<|im_start|>assistant\n","post_message":"<|im_end|>"}, "user":{"pre_message":"<|im_start|>user\n","post_message":"<|im_end|>"}}
         )
@@ -860,7 +860,7 @@ def test_customprompt_together_ai():
         print(f"ERROR TYPE {type(e)}")
         pytest.fail(f"Error occurred: {e}")
 
-# test_customprompt_together_ai()
+test_customprompt_together_ai()
 
 def test_completion_sagemaker():
     try:
