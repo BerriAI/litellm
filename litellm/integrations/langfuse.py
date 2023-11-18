@@ -43,7 +43,11 @@ class LangFuseLogger:
             # langfuse only accepts str, int, bool, float for logging
             for param, value in optional_params.items():
                 if not isinstance(value, (str, int, bool, float)):
-                    optional_params[param] = str(value)
+                    try:
+                        optional_params[param] = str(value)
+                    except:
+                        # if casting value to str fails don't block logging
+                        pass
  
             # end of processing langfuse ########################
 
