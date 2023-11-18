@@ -93,11 +93,6 @@ print(response)
 
 
 
-### Example - FastAPI Server with LiteLLM + Langfuse
-https://replit.com/@BerriAI/LiteLLMFastAPILangfuse
-
-<iframe src="https://replit.com/@BerriAI/LiteLLMFastAPILangfuse?embed=1" width="800" height="600"></iframe>
-
 ## Troubleshooting & Errors
 ### Data not getting logged to Langfuse ? 
 - Ensure you're on the latest version of langfuse `pip install langfuse -U`. The latest version allows litellm to log JSON input/outputs to langfuse
