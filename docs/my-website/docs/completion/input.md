@@ -66,8 +66,6 @@ def completion(
     model: str,
     messages: List = [],
     # Optional OpenAI params
-    functions: List = [],
-    function_call: str = "",  # optional params
     temperature: Optional[float] = None,
     top_p: Optional[float] = None,
     n: Optional[int] = None,
@@ -80,6 +78,12 @@ def completion(
     user: str = "",
     deployment_id = None,
     request_timeout: Optional[int] = None,
+    response_format: Optional[dict] = None,
+    seed: Optional[int] = None,
+    tools: Optional[List] = None,
+    tool_choice: Optional[str] = None,
+    functions: List = [],       # soon to be deprecated
+    function_call: str = "",    # soon to be deprecated
 
     # Optional LiteLLM params
     api_base: Optional[str] = None,
