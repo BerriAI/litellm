@@ -15,11 +15,17 @@ $ litellm --model ollama/codellama
 
 ## replace openai base
 ```python 
-import openai 
+import openai # openai v1.0.0+
+client = openai.OpenAI(api_key="anything",base_url="http://0.0.0.0:8000") # set proxy to base_url
+# request sent to model set on litellm proxy, `litellm --model`
+response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
+    {
+        "role": "user",
+        "content": "this is a test request, write a short poem"
+    }
+])
 
-openai.api_base = "http://0.0.0.0:8000"
-
-print(openai.chat.completions.create(model="test", messages=[{"role":"user", "content":"Hey!"}]))
+print(response)
 ``` 
 
 [**See how to call Huggingface,Bedrock,TogetherAI,Anthropic, etc.**](https://docs.litellm.ai/docs/simple_proxy)
