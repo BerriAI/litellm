@@ -8,6 +8,5 @@ backoff
 pyyaml
 uvicorn
 boto3
-litellm
 redis
 pyyaml
