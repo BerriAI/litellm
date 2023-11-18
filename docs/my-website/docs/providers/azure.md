@@ -80,7 +80,8 @@ response = litellm.completion(
 | gpt-3.5-turbo-16k    | `completion('azure/<your deployment name>', messages)` |
 | gpt-3.5-turbo-16k-0613    | `completion('azure/<your deployment name>', messages)`
 
-## Azure API Load-Balancing
+## Advanced
+### Azure API Load-Balancing
 
 Use this if you're trying to load-balance across multiple Azure/OpenAI deployments. 
 
@@ -88,7 +89,7 @@ Use this if you're trying to load-balance across multiple Azure/OpenAI deploymen
 
 In production, [Router connects to a Redis Cache](#redis-queue) to track usage across multiple deployments.
 
-### Quick Start
+#### Quick Start
 
 ```python
 pip install litellm
@@ -136,7 +137,7 @@ response = router.completion(model="gpt-3.5-turbo",
 print(response)
 ```
 
-### Redis Queue 
+#### Redis Queue 
 
 ```python
 router = Router(model_list=model_list, 
@@ -147,7 +148,68 @@ router = Router(model_list=model_list,
 print(response)
 ```
 
-## Azure Active Directory Tokens - Microsoft Entra ID
+
+### Parallel Function calling
+See a detailed walthrough of parallel function calling with litellm [here](https://docs.litellm.ai/docs/completion/function_call)
+```python
+# set Azure env variables
+import os
+os.environ['AZURE_API_KEY'] = "" # litellm reads AZURE_API_KEY from .env and sends the request
+os.environ['AZURE_API_BASE'] = "https://openai-gpt-4-test-v-1.openai.azure.com/"
+os.environ['AZURE_API_VERSION'] = "2023-07-01-preview"
+
+import litellm
+import json
+# Example dummy function hard coded to return the same weather
+# In production, this could be your backend API or an external API
+def get_current_weather(location, unit="fahrenheit"):
+    """Get the current weather in a given location"""
+    if "tokyo" in location.lower():
+        return json.dumps({"location": "Tokyo", "temperature": "10", "unit": "celsius"})
+    elif "san francisco" in location.lower():
+        return json.dumps({"location": "San Francisco", "temperature": "72", "unit": "fahrenheit"})
+    elif "paris" in location.lower():
+        return json.dumps({"location": "Paris", "temperature": "22", "unit": "celsius"})
+    else:
+        return json.dumps({"location": location, "temperature": "unknown"})
+
+## Step 1: send the conversation and available functions to the model
+messages = [{"role": "user", "content": "What's the weather like in San Francisco, Tokyo, and Paris?"}]
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_current_weather",
+            "description": "Get the current weather in a given location",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {
+                        "type": "string",
+                        "description": "The city and state, e.g. San Francisco, CA",
+                    },
+                    "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                },
+                "required": ["location"],
+            },
+        },
+    }
+]
+
+response = litellm.completion(
+    model="azure/chatgpt-functioncalling", # model = azure/<your-azure-deployment-name>
+    messages=messages,
+    tools=tools,
+    tool_choice="auto",  # auto is default, but we'll be explicit
+)
+print("\nLLM Response1:\n", response)
+response_message = response.choices[0].message
+tool_calls = response.choices[0].message.tool_calls
+print("\nTool Choice:\n", tool_calls)
+```
+
+
+### Authentication with Azure Active Directory Tokens (Microsoft Entra ID)
 This is a walkthrough on how to use Azure Active Directory Tokens - Microsoft Entra ID to make `litellm.completion()` calls 
 
 Step 1 - Download Azure CLI 
