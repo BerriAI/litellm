@@ -15,8 +15,10 @@ from litellm import RateLimitError
 import pytest
 litellm.num_retries = 3
 litellm.cache = None
-litellm.set_verbose=False
+# litellm.set_verbose=True
 import json
+
+# litellm.success_callback = ["langfuse"]
 
 def get_current_weather(location, unit="fahrenheit"):
     """Get the current weather in a given location"""
@@ -98,6 +100,8 @@ def test_parallel_function_call():
             second_response = litellm.completion(
                 model="gpt-3.5-turbo-1106",
                 messages=messages,
+                temperature=0.2,
+                seed=22
             )  # get a new response from the model where it can see the function response
             print("second response\n", second_response)
             return second_response
