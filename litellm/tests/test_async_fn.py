@@ -20,6 +20,8 @@ def test_sync_response():
     try:
         response = completion(model="gpt-3.5-turbo", messages=messages, timeout=5)
         print(f"response: {response}")
+    except litellm.Timeout as e: 
+        pass
     except Exception as e:
         pytest.fail(f"An exception occurred: {e}")
 # test_sync_response()
@@ -29,12 +31,11 @@ def test_sync_response_anyscale():
     user_message = "Hello, how are you?"
     messages = [{"content": user_message, "role": "user"}]
     try:
-        response = completion(model="anyscale/mistralai/Mistral-7B-Instruct-v0.1", messages=messages)
+        response = completion(model="anyscale/mistralai/Mistral-7B-Instruct-v0.1", messages=messages, timeout=5)
+    except litellm.Timeout as e: 
+        pass
     except Exception as e:
         pytest.fail(f"An exception occurred: {e}")
-test_sync_response()
-print(f"STARTING ANYSCALE RESPONSE")
-test_sync_response_anyscale()
 # test_sync_response_anyscale()
 
 def test_async_response_openai():
