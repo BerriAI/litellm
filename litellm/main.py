@@ -243,7 +243,7 @@ def completion(
     messages: List = [],
     functions: List = [],
     function_call: str = "",  # optional params
-    timeout: Union[float, int] = 600.0,
+    timeout: Optional[Union[float, int]] = None,
     temperature: Optional[float] = None,
     top_p: Optional[float] = None,
     n: Optional[int] = None,
@@ -338,6 +338,8 @@ def completion(
     
     if mock_response:
         return mock_completion(model, messages, stream=stream, mock_response=mock_response)
+    if timeout is None: 
+        timeout = 600 # set timeout for 10 minutes by default 
     timeout = float(timeout)
     try:
         if base_url: 

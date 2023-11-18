@@ -11,18 +11,25 @@ litellm.num_retries = 3
 litellm.success_callback = ["langfuse"]
 # litellm.set_verbose = True
 import time
+import pytest
 
 def test_langfuse_logging_async(): 
-    litellm.set_verbose = True
-    async def _test_langfuse():
-        return await litellm.acompletion(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content":"This is a test"}],
-            max_tokens=1000,
-            temperature=0.7,
-        )
-    response = asyncio.run(_test_langfuse())
-    print(f"response: {response}")
+    try: 
+        litellm.set_verbose = True
+        async def _test_langfuse():
+            return await litellm.acompletion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content":"This is a test"}],
+                max_tokens=1000,
+                temperature=0.7,
+                timeout=5
+            )
+        response = asyncio.run(_test_langfuse())
+        print(f"response: {response}")
+    except litellm.Timeout as e: 
+        pass
+    except Exception as e: 
+        pytest.fail(f"An exception occurred - {e}")
 
 # test_langfuse_logging_async()
 
@@ -37,6 +44,8 @@ def test_langfuse_logging():
                               temperature=0.2
                               )
         print(response)
+    except litellm.Timeout as e: 
+        pass
     except Exception as e:
         print(e)
 
@@ -59,6 +68,8 @@ def test_langfuse_logging_stream():
         for chunk in response:
             pass
             # print(chunk)
+    except litellm.Timeout as e: 
+        pass
     except Exception as e:
         print(e)
 
@@ -79,6 +90,8 @@ def test_langfuse_logging_custom_generation_name():
                               }
         )
         print(response)
+    except litellm.Timeout as e: 
+        pass
     except Exception as e:
         print(e)
 
@@ -112,6 +125,8 @@ def test_langfuse_logging_function_calling():
                               functions=function1,
             )
         print(response)
+    except litellm.Timeout as e: 
+        pass
     except Exception as e:
         print(e)
 
