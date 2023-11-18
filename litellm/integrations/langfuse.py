@@ -38,13 +38,13 @@ class LangFuseLogger:
             )
             metadata = kwargs.get("metadata", {})
             prompt = [kwargs.get('messages')]
+            optional_params = kwargs.get("optional_params", {})
 
-            # langfuse does not accept jsons for logging metadata #
-            kwargs.pop("litellm_logging_obj", None)
-            kwargs.pop("messages", None)
-            kwargs.pop("functions", None) # ensure it's a safe pop
-            kwargs.pop("function_call", None) # ensure it's a safe pop
-            kwargs.pop("metadata", None) # ensure it's a safe pop
+            # langfuse only accepts str, int, bool, float for logging
+            for param, value in optional_params.items():
+                if not isinstance(value, (str, int, bool, float)):
+                    optional_params[param] = str(value)
+ 
             # end of processing langfuse ########################
 
             self.Langfuse.generation(InitialGeneration(
@@ -52,7 +52,7 @@ class LangFuseLogger:
                 startTime=start_time,
                 endTime=end_time,
                 model=kwargs['model'],
-                modelParameters= kwargs["optional_params"],
+                modelParameters=optional_params,
                 prompt=prompt,
                 completion=response_obj['choices'][0]['message'],
                 usage=Usage(
