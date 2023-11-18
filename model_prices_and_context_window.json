@@ -604,24 +604,29 @@
     },
     "together-ai-up-to-3b": {
         "input_cost_per_token": 0.0000001,
-        "output_cost_per_token": 0.0000001
+        "output_cost_per_token": 0.0000001,
+        "litellm_provider": "together_ai"
     },
     "together-ai-3.1b-7b": {
         "input_cost_per_token": 0.0000002,
-        "output_cost_per_token": 0.0000002
+        "output_cost_per_token": 0.0000002,
+        "litellm_provider": "together_ai"
     },
     "together-ai-7.1b-20b": {
         "max_tokens": 1000,
         "input_cost_per_token": 0.0000004,
-        "output_cost_per_token": 0.0000004
+        "output_cost_per_token": 0.0000004,
+        "litellm_provider": "together_ai"
     },
     "together-ai-20.1b-40b": {
         "input_cost_per_token": 0.0000008,
-        "output_cost_per_token": 0.0000008
+        "output_cost_per_token": 0.0000008,
+        "litellm_provider": "together_ai"
     },
     "together-ai-40.1b-70b": {
         "input_cost_per_token": 0.0000009,
-        "output_cost_per_token": 0.0000009
+        "output_cost_per_token": 0.0000009,
+        "litellm_provider": "together_ai"
     },
     "ollama/llama2": {
         "max_tokens": 4096,
