@@ -4867,13 +4867,17 @@ class CustomStreamWrapper:
                 else: 
                     return 
             elif response_obj is not None and response_obj.get("original_chunk", None) is not None: # function / tool calling branch - only set for openai/azure compatible endpoints
+                # enter this branch when no content has been passed in response
                 original_chunk = response_obj.get("original_chunk", None)
                 model_response.id = original_chunk.id
-                delta =  dict(original_chunk.choices[0].delta)
-                model_response.choices[0].delta = Delta(**delta)
+                try:
+                    delta = dict(original_chunk.choices[0].delta)
+                    model_response.choices[0].delta = Delta(**delta)
+                except:
+                    model_response.choices[0].delta = Delta()
                 model_response.system_fingerprint = original_chunk.system_fingerprint
                 if self.sent_first_chunk == False:
-                    completion_obj["role"] = "assistant"
+                    model_response.choices[0].delta["role"] = "assistant"
                     self.sent_first_chunk = True
                 threading.Thread(target=self.logging_obj.success_handler, args=(model_response,)).start() # log response
                 return model_response
