@@ -14,6 +14,8 @@ In production, [Router connects to a Redis Cache](#redis-queue) to track usage a
 
 (s/o [@paulpierre](https://www.linkedin.com/in/paulpierre/) for his contribution to this implementation)
 
+[**See Code**](https://github.com/BerriAI/litellm/blob/main/litellm/router.py)
+
 ### Quick Start
 
 ```python
