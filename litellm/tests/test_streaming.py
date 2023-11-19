@@ -58,7 +58,7 @@ def validate_first_format(chunk):
     for choice in chunk['choices']:
         assert isinstance(choice['index'], int), "'index' should be an integer."
         assert isinstance(choice['delta']['role'], str), "'role' should be a string."
-        assert isinstance(choice['delta']['content'], str), "'content' should be a string."
+        # openai v1.0.0 returns content as None
         assert (choice['finish_reason'] is None) or isinstance(choice['finish_reason'], str), "'finish_reason' should be None or a string."
 
 second_openai_chunk_example = {
@@ -87,7 +87,7 @@ def validate_second_format(chunk):
 
     for choice in chunk['choices']:
         assert isinstance(choice['index'], int), "'index' should be an integer."
-        assert isinstance(choice['delta']['content'], str), "'content' should be a string."
+        # openai v1.0.0 returns content as None
         assert (choice['finish_reason'] is None) or isinstance(choice['finish_reason'], str), "'finish_reason' should be None or a string."
 
 last_openai_chunk_example = {
@@ -132,7 +132,7 @@ def streaming_format_tests(idx, chunk):
     if chunk["choices"][0]["finish_reason"]: # ensure finish reason is only in last chunk
         validate_last_format(chunk=chunk)
         finished = True
-    if "content" in chunk["choices"][0]["delta"]:
+    if "content" in chunk["choices"][0]["delta"] and chunk["choices"][0]["delta"]["content"] is not None:
         extracted_chunk = chunk["choices"][0]["delta"]["content"]
     print(f"extracted chunk: {extracted_chunk}")
     return extracted_chunk, finished
@@ -229,7 +229,7 @@ def test_completion_azure_stream():
         print(f"completion_response: {complete_response}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_completion_azure_stream() 
+test_completion_azure_stream() 
 
 def test_completion_claude_stream():
     try:
