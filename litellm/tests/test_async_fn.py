@@ -111,6 +111,8 @@ def test_get_response_streaming():
             i = 0
             async for chunk in response:
                 token = chunk["choices"][0]["delta"].get("content", "")
+                if token == None:
+                    continue # openai v1.0.0 returns content=None
                 output += token
             assert output is not None, "output cannot be None."
             assert isinstance(output, str), "output needs to be of type str"
