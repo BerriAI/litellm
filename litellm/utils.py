@@ -4714,6 +4714,7 @@ class CustomStreamWrapper:
     def chunk_creator(self, chunk):
         model_response = ModelResponse(stream=True, model=self.model)
         model_response.choices[0].finish_reason = None
+        response_obj = None
         try:
             # return this for all models
             completion_obj = {"content": ""}
@@ -4865,7 +4866,7 @@ class CustomStreamWrapper:
                     return model_response
                 else: 
                     return 
-            elif response_obj.get("original_chunk", None) is not None: # function / tool calling branch
+            elif response_obj is not None and response_obj.get("original_chunk", None) is not None: # function / tool calling branch - only set for openai/azure compatible endpoints
                 original_chunk = response_obj.get("original_chunk", None)
                 model_response.id = original_chunk.id
                 delta =  dict(original_chunk.choices[0].delta)
