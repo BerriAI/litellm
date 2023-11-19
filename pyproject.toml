@@ -5,7 +5,7 @@ description = "Library to easily interface with LLM API providers"
 authors = ["BerriAI"]
 license = "MIT License"
 readme = "README.md"
-
+#To install, use: poetry install --with utils,server
 [tool.poetry.dependencies]
 python = "^3.10"
 openai = ">=1.3.0"
@@ -15,7 +15,7 @@ importlib-metadata = ">=6.8.0"
 tokenizers = "*"
 click = "*"
 jinja2 = "^3.1.2"
-certifi = "^2023.7.22"
+certifi = "*"
 appdirs = "^1.4.4"
 aiohttp = "*"
 httpx = "^0.25.1"
