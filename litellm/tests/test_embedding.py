@@ -95,7 +95,8 @@ def test_cohere_embedding3():
 def test_bedrock_embedding():
     try:
         response = embedding(
-            model="amazon.titan-embed-text-v1", input=["good morning from litellm, attempting to embed data"]
+            model="amazon.titan-embed-text-v1", input=["good morning from litellm, attempting to embed data",
+                                                       "lets test a second string for good measure"]
         )
         print(f"response:", response)
     except Exception as e:
