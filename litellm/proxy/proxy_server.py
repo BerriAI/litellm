@@ -320,7 +320,7 @@ async def generate_key_helper_fn(duration_str: str):
             "token": token, 
             "expires": expires
         }
-        new_verification_token = await db.litellm_verificationtoken.create(
+        new_verification_token = await db.litellm_verificationtoken.create( # type: ignore
            {**verification_token_data}
         )
         print(f"new_verification_token: {new_verification_token}")
