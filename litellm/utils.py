@@ -162,10 +162,8 @@ class Message(OpenAIObject):
 class Delta(OpenAIObject):
     def __init__(self, content=None, role=None, **params):
         super(Delta, self).__init__(**params)
-        if content is not None:
-            self.content = content
-        if role:
-            self.role = role
+        self.content = content
+        self.role = role
     
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -4867,7 +4865,11 @@ class CustomStreamWrapper:
                 else: 
                     return 
             elif response_obj.get("original_chunk", None) is not None: # function / tool calling branch
-                model_response = response_obj.get("original_chunk", None)
+                original_chunk = response_obj.get("original_chunk", None)
+                model_response.id = original_chunk.id
+                delta =  dict(original_chunk.choices[0].delta)
+                model_response.choices[0].delta = Delta(**delta)
+                model_response.system_fingerprint = original_chunk.system_fingerprint
                 if self.sent_first_chunk == False:
                     completion_obj["role"] = "assistant"
                     self.sent_first_chunk = True
