@@ -3682,7 +3682,7 @@ def exception_type(
                         llm_provider="vertex_ai",
                         response=original_exception.response
                     )
-                elif "403 Permission denied" in error_str: 
+                elif "403" in error_str: 
                     exception_mapping_worked = True
                     raise AuthenticationError(
                         message=f"VertexAIException - {error_str}", 
