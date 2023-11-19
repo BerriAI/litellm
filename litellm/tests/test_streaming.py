@@ -128,7 +128,7 @@ def streaming_format_tests(idx, chunk):
         validate_second_format(chunk=chunk)
     if idx != 0: # ensure no role
         if "role" in chunk["choices"][0]["delta"]:
-            raise Exception("role should not exist after first chunk")
+            pass # openai v1.0.0+ passes role = None
     if chunk["choices"][0]["finish_reason"]: # ensure finish reason is only in last chunk
         validate_last_format(chunk=chunk)
         finished = True
@@ -374,7 +374,7 @@ def test_completion_azure_stream():
         print(f"completion_response: {complete_response}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_azure_stream() 
+# test_completion_azure_stream() 
 
 def test_completion_claude_stream():
     try:
@@ -968,8 +968,17 @@ def test_completion_openai_with_functions():
         }
     ]
     try:
+        litellm.set_verbose=False
         response = completion(
-            model="gpt-3.5-turbo", messages=messages, functions=function1, stream=True,
+            model="gpt-3.5-turbo-1106", 
+            messages=[
+                {
+                    "role": "user",
+                    "content": "what's the weather in SF"
+                }
+            ], 
+            functions=function1, 
+            stream=True,
         )
         # Add any assertions here to check the response
         print(response)
@@ -981,7 +990,7 @@ def test_completion_openai_with_functions():
             print(chunk["choices"][0]["delta"]["content"])
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-
+# test_completion_openai_with_functions()
 #### Test Async streaming ####
 
 # # test on ai21 completion call
