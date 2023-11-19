@@ -2092,7 +2092,7 @@ def stream_chunk_builder(chunks: list):
     content_list = []
     combined_content = ""
 
-    if "function_call" in chunks[0]["choices"][0]["delta"]:
+    if "function_call" in chunks[0]["choices"][0]["delta"] and chunks[0]["choices"][0]["delta"]["function_call"] is not None:
         argument_list = []
         delta = chunks[0]["choices"][0]["delta"]
         function_call = delta.get("function_call", "")
@@ -2123,6 +2123,8 @@ def stream_chunk_builder(chunks: list):
             for choice in choices:
                 delta = choice.get("delta", {})
                 content = delta.get("content", "")
+                if content == None:
+                    continue # openai v1.0.0 sets content = None for chunks
                 content_list.append(content)
 
         # Combine the "content" strings into a single string
