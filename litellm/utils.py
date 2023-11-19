@@ -7,24 +7,31 @@
 #
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
-import sys
-import dotenv, json, traceback, threading
-import subprocess, os
-import litellm, openai
-import itertools
-import random, uuid, requests
-import datetime, time
-import tiktoken
-import uuid
-import aiohttp
-import logging
-import asyncio, httpx, inspect
 import copy
+import datetime
+import json
+import os
+import subprocess
+import sys
+import threading
+import time
+import traceback
+import uuid
+
+import dotenv
+import httpx
+import inspect
+import openai
+import requests
+import tiktoken
 from tokenizers import Tokenizer
-from dataclasses import (
-    dataclass,
-    field,
-)  # for storing API inputs, outputs, and metadata
+
+sys.path.insert(
+    0, os.path.abspath("..")
+)  # Adds the parent directory to the system path - for litellm local dev
+
+import litellm
+
 encoding = tiktoken.get_encoding("cl100k_base")
 import importlib.metadata
 from .integrations.traceloop import TraceloopLogger
@@ -39,21 +46,19 @@ from .integrations.weights_biases import WeightsBiasesLogger
 from .integrations.custom_logger import CustomLogger
 from .integrations.langfuse import LangFuseLogger
 from .integrations.litedebugger import LiteDebugger
-from openai import OpenAIError as OriginalError
 from openai._models import BaseModel as OpenAIObject
 from .exceptions import (
     AuthenticationError,
     BadRequestError,
     RateLimitError,
     ServiceUnavailableError,
-    OpenAIError,
     ContextWindowExceededError,
     Timeout,
     APIConnectionError,
     APIError,
     BudgetExceededError
 )
-from typing import cast, List, Dict, Union, Optional, Literal
+from typing import List, Dict, Union, Optional
 from .caching import Cache
 
 ####### ENVIRONMENT VARIABLES ####################
@@ -3174,7 +3179,7 @@ def prompt_token_calculator(model, messages):
             import anthropic
         except:
             Exception("Anthropic import failed please run `pip install anthropic`")
-        from anthropic import Anthropic, HUMAN_PROMPT, AI_PROMPT
+        from anthropic import Anthropic
 
         anthropic = Anthropic()
         num_tokens = anthropic.count_tokens(text)

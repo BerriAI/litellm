@@ -9,9 +9,13 @@ bun.lockb
 litellm_results.jsonl
 secrets.toml
 .gitignore
-litellm/proxy/litellm_secrets.toml
-litellm/proxy/api_log.json
+**/litellm_secrets.toml
 .idea/
 router_config.yaml
-litellm_server/config.yaml
+**/config.yaml
+router_config.yaml
+.vscode/
+**/api_logs.json
+**/litellm.secrets.toml
+.github/workflows/test/
 litellm/proxy/_secret_config.yaml

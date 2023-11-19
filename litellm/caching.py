@@ -6,6 +6,12 @@
 # +-----------------------------------------------+
 #
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
+import os
+import sys
+
+sys.path.insert(
+    0, os.path.abspath("..")
+)  # Adds the parent directory to the system path - for litellm local dev
 
 import litellm
 import time, logging

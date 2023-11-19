@@ -163,7 +163,7 @@ git clone https://github.com/BerriAI/litellm.git
 Step 2: Navigate into the project, and install dependencies: 
 ```
 cd litellm
-poetry install
+poetry install --all-extras
 ```
 
 Step 3: Test your change:

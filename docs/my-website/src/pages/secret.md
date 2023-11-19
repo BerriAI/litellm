@@ -1,5 +1,5 @@
 # Secret Managers
-liteLLM reads secrets from yoour secret manager, .env file 
+liteLLM reads secrets from your secret manager, .env file 
 
 - [Infisical Secret Manager](#infisical-secret-manager)
 - [.env Files](#env-files)

@@ -1,0 +1,44 @@
+#Ignore files/folders
+#Ignore docker build files
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+#Ignore the git and cache folders
+.git
+.cache
+.git
+.gitlab-ci.yml
+
+#Ignore dev environments
+.venv
+__pycache__
+
+#Ignore dummy files
+**/*~
+**/*.log
+**/.DS_Store
+**/Thumbs.db
+**/*.example
+
+#Docs
+cookbook
+dist
+docs
+
+#Debug folders
+#we keep it for debugging
+#**/.flake8
+
+#Ignore logs directory
+logs/
+
+#Ingore all markdown and class files
+*.md
+**/*.class
+
+#Other
+.idea
+
+#Ignore ISO images
+*.iso

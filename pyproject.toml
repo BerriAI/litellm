@@ -7,8 +7,8 @@ license = "MIT License"
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = "^3.8"
-openai = ">=1.0.0"
+python = "^3.10"
+openai = ">=1.3.0"
 python-dotenv = ">=0.2.0"
 tiktoken = ">=0.4.0"
 importlib-metadata = ">=6.8.0"
@@ -18,9 +18,51 @@ jinja2 = "^3.1.2"
 certifi = "^2023.7.22"
 appdirs = "^1.4.4"
 aiohttp = "*"
+httpx = "^0.25.1"
+requests = "^2.31.0"
+
+contextvars = "^2.4"
+
+[tool.poetry.group.server]
+optional = true
+
+[tool.poetry.group.server.dependencies]
+tomli = "^2.0.1"
+tomli-w = "^1.0.0"
+backoff = "^2.2.1"
+pyyaml = "^6.0.1"
+json5 = "*"
+fastapi = "^0.104.1"
+uvicorn = "^0.24.0.post1"
+boto3 = "^1.29.1"
+redis = "*"
+
+[tool.poetry.group.utils]
+optional = true
+
+[tool.poetry.group.utils.dependencies]
+posthog = "^3.0.2"
+slack-bolt = "~1.18.0"
+sentry-sdk = "^1.35.0"
+numpydoc = "~1.6.0"
+anthropic = "~0.7.0"
+huggingface-hub = "~0.19.2"
+autoevals = "^0.0.31"
+#seems a big one, depends on nvidia
+#torch = "~2.1.1"
 
 [tool.poetry.scripts]
 litellm = 'litellm:run_server'
+
+[tool.poetry.group.dev.dependencies]
+black = ">=23.11.0"
+pydantic-core = "^2.14.1"
+pre-commit = "^3.5.0"
+pytest = "^7.4.3"
+termcolor = "^2.3.0"
+gptcache = "^0.1.42"
+flask = "^3.0.0"
+flask-cors = "^4.0.0"
 
 [build-system]
 requires = ["poetry-core"]
