@@ -11,4 +11,5 @@ generator client {
 model LiteLLM_VerificationToken {
     token      String   @unique
     expires    DateTime
+    models     String[]
 }
