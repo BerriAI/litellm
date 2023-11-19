@@ -588,7 +588,7 @@ general_settings:
   master_key: sk-1234 # [OPTIONAL] Only use this if you to require all calls to contain this key (Authorization: Bearer sk-1234)
 ```
 
-### Multiple Models - Quick Start
+### Multiple Models
 
 Here's how you can use multiple llms with one proxy `config.yaml`. 
 
@@ -638,8 +638,60 @@ curl --location 'http://0.0.0.0:8000/chat/completions' \
 '
 ```
 
+### Managing Auth - Virtual Keys
 
+Grant other's temporary access to your proxy, with keys that expire after a set duration.
 
+Requirements: 
+
+- Need to a postgres database (e.g. [Supabase](https://supabase.com/))
+
+You can then generate temporary keys by hitting the `/key/generate` endpoint.
+
+[**See code**](https://github.com/BerriAI/litellm/blob/7a669a36d2689c7f7890bc9c93e04ff3c2641299/litellm/proxy/proxy_server.py#L672)
+
+**Step 1: Save postgres db url**
+
+```yaml
+model_list:
+  - model_name: gpt-4
+    litellm_params:
+        model: ollama/llama2
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+        model: ollama/llama2
+
+general_settings: 
+  master_key: sk-1234 # [OPTIONAL] if set all calls to proxy will require either this key or a valid generated token
+  database_url: "postgresql://<user>:<password>@<host>:<port>/<dbname>"
+```
+
+**Step 2: Start litellm**
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+**Step 3: Generate temporary keys**
+
+```curl 
+curl 'http://0.0.0.0:8000/key/generate' \
+--h 'Authorization: Bearer sk-1234' \
+--d '{"models": ["gpt-3.5-turbo", "gpt-4", "claude-2"], "duration": "20m"}'
+```
+
+- `models`: *list or null (optional)* - Specify the models a token has access too. If null, then token has access to all models on server. 
+
+- `duration`: *str or null (optional)* Specify the length of time the token is valid for. If null, default is set to 1 hour. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
+
+Expected response: 
+
+```python
+{
+    "key": "sk-kdEXbIqZRwEeEiHwdg7sFA", # Bearer token
+    "expires": "2023-11-19T01:38:25.838000+00:00" # datetime object
+}
+```
 
 ### Save Model-specific params (API Base, API Keys, Temperature, Headers etc.)
 You can use the config to save model-specific information like api_base, api_key, temperature, max_tokens, etc. 
