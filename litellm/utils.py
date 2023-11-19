@@ -4592,6 +4592,7 @@ class CustomStreamWrapper:
     
     def handle_openai_chat_completion_chunk(self, chunk): 
         try: 
+            print_verbose(f"\nRaw OpenAI Chunk\n{chunk}\n")
             str_line = chunk
             text = "" 
             is_finished = False
