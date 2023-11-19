@@ -329,7 +329,7 @@ async def generate_key_helper_fn(duration_str: str, models: Optional[list]):
             "models": models
         }
         new_verification_token = await db.litellm_verificationtoken.create( # type: ignore
-           {**verification_token_data}
+           {**verification_token_data} # type: ignore
         )
         print(f"new_verification_token: {new_verification_token}")
     except Exception as e:
