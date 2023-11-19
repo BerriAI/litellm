@@ -9,6 +9,7 @@
 
 import copy
 import datetime
+import inspect
 import json
 import os
 import subprocess
@@ -20,15 +21,10 @@ import uuid
 
 import dotenv
 import httpx
-import inspect
 import openai
 import requests
 import tiktoken
 from tokenizers import Tokenizer
-
-sys.path.insert(
-    0, os.path.abspath("..")
-)  # Adds the parent directory to the system path - for litellm local dev
 
 import litellm
 
@@ -56,7 +52,7 @@ from .exceptions import (
     Timeout,
     APIConnectionError,
     APIError,
-    BudgetExceededError
+    BudgetExceededError,
 )
 from typing import List, Dict, Union, Optional
 from .caching import Cache
