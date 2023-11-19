@@ -11,7 +11,7 @@ class Router:
     Example usage:
     from litellm import Router
     model_list = [{
-        "model_name": "gpt-3.5-turbo", # openai model name
+        "model_name": "gpt-3.5-turbo", # model alias 
         "litellm_params": { # params for litellm completion/embedding call
             "model": "azure/<your-deployment-name>",
             "api_key": <your-api-key>,
@@ -47,9 +47,9 @@ class Router:
         
         self.chat = litellm.Chat(params=default_litellm_params)
 
-        self.default_litellm_params = {
-            "timeout": timeout
-        }
+        self.default_litellm_params = default_litellm_params
+        self.default_litellm_params["timeout"] = timeout
+        
         self.routing_strategy = routing_strategy
         ### HEALTH CHECK THREAD ###
         if self.routing_strategy == "least-busy":
