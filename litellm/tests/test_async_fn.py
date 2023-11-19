@@ -142,7 +142,10 @@ def test_get_response_non_openai_streaming():
             output = ""
             i = 0
             async for chunk in response:
-                token = chunk["choices"][0]["delta"].get("content", "")
+                token = chunk["choices"][0]["delta"].get("content", None)
+                if token == None:
+                    continue
+                print(token)
                 output += token
             print(f"output: {output}")
             assert output is not None, "output cannot be None."
