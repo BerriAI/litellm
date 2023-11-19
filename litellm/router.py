@@ -1,3 +1,12 @@
+# +-----------------------------------------------+
+# |                                               |
+# |           Give Feedback / Get Help            |
+# | https://github.com/BerriAI/litellm/issues/new |
+# |                                               |
+# +-----------------------------------------------+
+#
+#  Thank you ! We ❤️ you! - Krrish & Ishaan 
+
 from datetime import datetime
 from typing import Dict, List, Optional, Union, Literal
 import random, threading, time
@@ -49,7 +58,7 @@ class Router:
 
         self.default_litellm_params = default_litellm_params
         self.default_litellm_params["timeout"] = timeout
-        
+
         self.routing_strategy = routing_strategy
         ### HEALTH CHECK THREAD ###
         if self.routing_strategy == "least-busy":
