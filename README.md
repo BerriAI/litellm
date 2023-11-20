@@ -30,9 +30,6 @@ LiteLLM manages
 - Exception mapping - common exceptions across providers are mapped to the OpenAI exception types.
 - Load-balance across multiple deployments (e.g. Azure/OpenAI) - `Router`
 
-**10/05/2023:** LiteLLM is adopting Semantic Versioning for all commits. [Learn more](https://github.com/BerriAI/litellm/issues/532)  
-**10/16/2023:** **Self-hosted OpenAI-proxy server** [Learn more](https://docs.litellm.ai/docs/simple_proxy)
-
 # Usage ([**Docs**](https://docs.litellm.ai/docs/))
 
 > [!IMPORTANT]
