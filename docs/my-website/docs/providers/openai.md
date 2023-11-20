@@ -34,6 +34,7 @@ os.environ["OPENAI_API_BASE"] = "openaiai-api-base"     # OPTIONAL
 
 | Model Name            | Function Call                                                   |
 |-----------------------|-----------------------------------------------------------------|
+| gpt-4-1106-preview    | `response = completion(model="gpt-4-1106-preview", messages=messages)` |
 | gpt-3.5-turbo         | `response = completion(model="gpt-3.5-turbo", messages=messages)` |
 | gpt-3.5-turbo-0301    | `response = completion(model="gpt-3.5-turbo-0301", messages=messages)` |
 | gpt-3.5-turbo-0613    | `response = completion(model="gpt-3.5-turbo-0613", messages=messages)` |
@@ -49,7 +50,43 @@ os.environ["OPENAI_API_BASE"] = "openaiai-api-base"     # OPTIONAL
 
 These also support the `OPENAI_API_BASE` environment variable, which can be used to specify a custom API endpoint.
 
-### OpenAI Text Completion Models / Instruct Models
+## OpenAI Vision Models 
+| Model Name            | Function Call                                                   |
+|-----------------------|-----------------------------------------------------------------|
+| gpt-4-vision-preview    | `response = completion(model="gpt-4-vision-preview", messages=messages)` |
+
+#### Usage
+```python
+import os 
+from litellm import completion
+
+os.environ["OPENAI_API_KEY"] = "your-api-key"
+
+# openai call
+response = completion(
+    model = "gpt-4-vision-preview", 
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                            {
+                                "type": "text",
+                                "text": "What’s in this image?"
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
+                                }
+                            }
+                        ]
+        }
+    ],
+)
+
+```
+
+## OpenAI Text Completion Models / Instruct Models
 
 | Model Name          | Function Call                                      |
 |---------------------|----------------------------------------------------|
@@ -60,6 +97,62 @@ These also support the `OPENAI_API_BASE` environment variable, which can be used
 | babbage-001         | `response = completion(model="babbage-001", messages=messages)` |
 | babbage-002         | `response = completion(model="babbage-002", messages=messages)` |
 | davinci-002         | `response = completion(model="davinci-002", messages=messages)` |
+
+## Advanced
+
+### Parallel Function calling
+See a detailed walthrough of parallel function calling with litellm [here](https://docs.litellm.ai/docs/completion/function_call)
+```python
+import litellm
+import json
+# set openai api key
+import os
+os.environ['OPENAI_API_KEY'] = "" # litellm reads OPENAI_API_KEY from .env and sends the request
+# Example dummy function hard coded to return the same weather
+# In production, this could be your backend API or an external API
+def get_current_weather(location, unit="fahrenheit"):
+    """Get the current weather in a given location"""
+    if "tokyo" in location.lower():
+        return json.dumps({"location": "Tokyo", "temperature": "10", "unit": "celsius"})
+    elif "san francisco" in location.lower():
+        return json.dumps({"location": "San Francisco", "temperature": "72", "unit": "fahrenheit"})
+    elif "paris" in location.lower():
+        return json.dumps({"location": "Paris", "temperature": "22", "unit": "celsius"})
+    else:
+        return json.dumps({"location": location, "temperature": "unknown"})
+
+messages = [{"role": "user", "content": "What's the weather like in San Francisco, Tokyo, and Paris?"}]
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_current_weather",
+            "description": "Get the current weather in a given location",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {
+                        "type": "string",
+                        "description": "The city and state, e.g. San Francisco, CA",
+                    },
+                    "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                },
+                "required": ["location"],
+            },
+        },
+    }
+]
+
+response = litellm.completion(
+    model="gpt-3.5-turbo-1106",
+    messages=messages,
+    tools=tools,
+    tool_choice="auto",  # auto is default, but we'll be explicit
+)
+print("\nLLM Response1:\n", response)
+response_message = response.choices[0].message
+tool_calls = response.choices[0].message.tool_calls
+```
 
 
 ### Setting Organization-ID for completion calls

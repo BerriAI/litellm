@@ -5,8 +5,9 @@ import random, appdirs
 from datetime import datetime
 from dotenv import load_dotenv
 import operator
+sys.path.append(os.getcwd())
 
-config_filename = "litellm.secrets.toml"
+config_filename = "litellm.secrets"
 # Using appdirs to determine user-specific config path
 config_dir = appdirs.user_config_dir("litellm")
 user_config_path = os.getenv("LITELLM_CONFIG_PATH", os.path.join(config_dir, config_filename))
@@ -21,39 +22,6 @@ def run_ollama_serve():
     
     with open(os.devnull, 'w') as devnull:
         process = subprocess.Popen(command, stdout=devnull, stderr=devnull)
-
-def open_config(file_path=None):
-    # Create the .env file if it doesn't exist
-    if file_path: 
-        # Ensure the user-specific directory exists
-        os.makedirs(config_dir, exist_ok=True)
-        # Copying the file using shutil.copy
-        try:
-            shutil.copy(file_path, user_config_path)
-            with open(file_path) as f:
-                print(f"Source file: {file_path}")
-                print(f.read())
-
-            with open(user_config_path) as f:
-                print(f"Dest file: {user_config_path}")
-                print(f.read())
-            print("\033[1;32mDone successfully\033[0m")
-        except Exception as e:
-            print(f"Failed to copy {file_path}: {e}")
-    else: 
-        if os.path.exists(user_config_path):
-            if os.path.getsize(user_config_path) == 0:
-                print(f"{user_config_path} exists but is empty")
-                print(f"To create a config (save keys, modify model prompt), copy the template located here: https://docs.litellm.ai/docs/proxy_server")
-            else: 
-                with open(user_config_path) as f:
-                    print(f"Saved Config file: {user_config_path}")
-                    print(f.read())
-        else:
-            print(f"{user_config_path} hasn't been created yet.")
-            print(f"To create a config (save keys, modify model prompt), copy the template located here: https://docs.litellm.ai/docs/proxy_server")
-    print(f"LiteLLM: config location - {user_config_path}")
-
 
 def clone_subfolder(repo_url, subfolder, destination):
   # Clone the full repo
@@ -85,6 +53,7 @@ def is_port_in_use(port):
 @click.command()
 @click.option('--host', default='0.0.0.0', help='Host for the server to listen on.')
 @click.option('--port', default=8000, help='Port to bind the server to.')
+@click.option('--num_workers', default=1, help='Number of uvicorn workers to spin up')
 @click.option('--api_base', default=None, help='API base URL.')
 @click.option('--api_version', default="2023-07-01-preview", help='For azure - pass in the api version.')
 @click.option('--model', '-m', default=None, help='The model name to pass to litellm expects') 
@@ -97,41 +66,25 @@ def is_port_in_use(port):
 @click.option('--max_tokens', default=None, type=int, help='Set max tokens for the model') 
 @click.option('--request_timeout', default=600, type=int, help='Set timeout in seconds for completion calls') 
 @click.option('--drop_params', is_flag=True, help='Drop any unmapped params') 
-@click.option('--create_proxy', is_flag=True, help='Creates a local OpenAI-compatible server template') 
 @click.option('--add_function_to_prompt', is_flag=True, help='If function passed but unsupported, pass it as prompt') 
-@click.option('--config', '-c', is_flag=True, help='Configure Litellm')  
+@click.option('--config', '-c', default=None, help='Configure Litellm')  
 @click.option('--file', '-f', help='Path to config file')
 @click.option('--max_budget', default=None, type=float, help='Set max budget for API calls - works for hosted models like OpenAI, TogetherAI, Anthropic, etc.`') 
 @click.option('--telemetry', default=True, type=bool, help='Helps us know if people are using this feature. Turn this off by doing `--telemetry False`') 
 @click.option('--logs', flag_value=False, type=int, help='Gets the "n" most recent logs. By default gets most recent log.') 
 @click.option('--test', flag_value=True, help='proxy chat completions url to make a test request to')
 @click.option('--local', is_flag=True, default=False, help='for local debugging')
-@click.option('--cost', is_flag=True, default=False, help='for viewing cost logs')
-def run_server(host, port, api_base, api_version, model, alias, add_key, headers, save, debug, temperature, max_tokens, request_timeout, drop_params, create_proxy, add_function_to_prompt, config, file, max_budget, telemetry, logs, test, local, cost):
+def run_server(host, port, api_base, api_version, model, alias, add_key, headers, save, debug, temperature, max_tokens, request_timeout, drop_params, add_function_to_prompt, config, file, max_budget, telemetry, logs, test, local, num_workers):
     global feature_telemetry
     args = locals()
     if local:
-        from proxy_server import app, initialize, print_cost_logs, usage_telemetry, add_keys_to_config
-        debug = True
+        from proxy_server import app, save_worker_config, usage_telemetry, add_keys_to_config
     else:
         try:
-            from .proxy_server import app, initialize, print_cost_logs, usage_telemetry, add_keys_to_config
+            from .proxy_server import app, save_worker_config, usage_telemetry, add_keys_to_config
         except ImportError as e: 
-            from proxy_server import app, initialize, print_cost_logs, usage_telemetry, add_keys_to_config
+            from proxy_server import app, save_worker_config, usage_telemetry, add_keys_to_config
     feature_telemetry = usage_telemetry
-    if create_proxy == True: 
-        repo_url = 'https://github.com/BerriAI/litellm'
-        subfolder = 'litellm/proxy' 
-        destination = os.path.join(os.getcwd(), 'litellm-proxy')
-
-        clone_subfolder(repo_url, subfolder, destination)
-        return
-    if config:
-        if file: 
-            open_config(file_path=file)
-        else: 
-            open_config()
-        return
     if logs is not None:
         if logs == 0: # default to 1
             logs = 1
@@ -160,57 +113,55 @@ def run_server(host, port, api_base, api_version, model, alias, add_key, headers
         print("\033[1;32mDone successfully\033[0m")
         return
     if model and "ollama" in model: 
-        print(f"ollama called")
         run_ollama_serve()
-    if cost == True:
-        print_cost_logs()
-        return
     if test != False:
-        click.echo('LiteLLM: Making a test ChatCompletions request to your proxy')
+        click.echo('\nLiteLLM: Making a test ChatCompletions request to your proxy')
         import openai
         if test == True: # flag value set
             api_base = f"http://{host}:{port}"
         else: 
             api_base = test
-        openai.api_base = api_base
-        openai.api_key = "temp-key"
-        print(openai.api_base)
+        client = openai.OpenAI(
+            api_key="My API Key",
+            base_url=api_base
+        )
 
-        response = openai.ChatCompletion.create(model="gpt-3.5-turbo", messages = [
+        response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
             {
                 "role": "user",
-                "content": "this is a test request, acknowledge that you got it"
+                "content": "this is a test request, write a short poem"
             }
         ])
-        click.echo(f'LiteLLM: response from proxy {response}')
+        click.echo(f'\nLiteLLM: response from proxy {response}')
 
-        click.echo(f'LiteLLM: response from proxy with streaming {response}')
-        response = openai.ChatCompletion.create(model="gpt-3.5-turbo", messages = [
+        print("\n Making streaming request to proxy")
+
+        response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
             {
                 "role": "user",
-                "content": "this is a test request, acknowledge that you got it"
+                "content": "this is a test request, write a short poem"
             }
         ],
         stream=True,
         )
         for chunk in response:
             click.echo(f'LiteLLM: streaming response from proxy {chunk}')
+        print("\n making completion request to proxy")
+        response = client.completions.create(model="gpt-3.5-turbo", prompt='this is a test request, write a short poem')
+        print(response)
+
         return
     else:
         if headers:
             headers = json.loads(headers)
-        initialize(model=model, alias=alias, api_base=api_base, api_version=api_version, debug=debug, temperature=temperature, max_tokens=max_tokens, request_timeout=request_timeout, max_budget=max_budget, telemetry=telemetry, drop_params=drop_params, add_function_to_prompt=add_function_to_prompt, headers=headers, save=save)
+        save_worker_config(model=model, alias=alias, api_base=api_base, api_version=api_version, debug=debug, temperature=temperature, max_tokens=max_tokens, request_timeout=request_timeout, max_budget=max_budget, telemetry=telemetry, drop_params=drop_params, add_function_to_prompt=add_function_to_prompt, headers=headers, save=save, config=config)
         try:
             import uvicorn
         except:
             raise ImportError("Uvicorn needs to be imported. Run - `pip install uvicorn`")
-        print(f"\033[32mLiteLLM: Test your local endpoint with: \"litellm --test\" [In a new terminal tab]\033[0m\n")
-        print(f"\033[32mLiteLLM: View available endpoints for this server on: http://{host}:{port}\033[0m\n")
-        print(f"\033[32mLiteLLM: Self-host your proxy using the following: https://docs.litellm.ai/docs/proxy_server#deploy-proxy \033[0m\n")
-        
         if port == 8000 and is_port_in_use(port):
             port = random.randint(1024, 49152)
-        uvicorn.run(app, host=host, port=port)
+        uvicorn.run("litellm.proxy.proxy_server:app", host=host, port=port, workers=num_workers)
 
 
 if __name__ == "__main__":

@@ -14,7 +14,7 @@ class LangFuseLogger:
         try:
             from langfuse import Langfuse
         except Exception as e:
-            raise Exception("\033[91mLangfuse not installed, try running 'pip install langfuse' to fix this error\033[0m", e)
+            raise Exception(f"\033[91mLangfuse not installed, try running 'pip install langfuse' to fix this error: {e}\033[0m")
         # Instance variables
         self.secret_key = os.getenv("LANGFUSE_SECRET_KEY")
         self.public_key = os.getenv("LANGFUSE_PUBLIC_KEY")
@@ -36,19 +36,19 @@ class LangFuseLogger:
             print_verbose(
                 f"Langfuse Logging - Enters logging function for model {kwargs}"
             )
-            # print(response_obj)
-            # print(response_obj['choices'][0]['message']['content'])
-            # print(response_obj['usage']['prompt_tokens'])
-            # print(response_obj['usage']['completion_tokens'])
             metadata = kwargs.get("metadata", {})
-            prompt = [kwargs['messages']]
+            prompt = [kwargs.get('messages')]
+            optional_params = kwargs.get("optional_params", {})
 
-            # langfuse does not accept jsons for logging metadata #
-            kwargs.pop("litellm_logging_obj", None)
-            kwargs.pop("messages", None)
-            kwargs.pop("functions", None) # ensure it's a safe pop
-            kwargs.pop("function_call", None) # ensure it's a safe pop
-            kwargs.pop("metadata", None) # ensure it's a safe pop
+            # langfuse only accepts str, int, bool, float for logging
+            for param, value in optional_params.items():
+                if not isinstance(value, (str, int, bool, float)):
+                    try:
+                        optional_params[param] = str(value)
+                    except:
+                        # if casting value to str fails don't block logging
+                        pass
+ 
             # end of processing langfuse ########################
 
             self.Langfuse.generation(InitialGeneration(
@@ -56,7 +56,7 @@ class LangFuseLogger:
                 startTime=start_time,
                 endTime=end_time,
                 model=kwargs['model'],
-                modelParameters= kwargs,
+                modelParameters=optional_params,
                 prompt=prompt,
                 completion=response_obj['choices'][0]['message'],
                 usage=Usage(

@@ -2,15 +2,17 @@ import os
 import json
 from enum import Enum
 import requests
-import time
+import time, httpx
 from typing import Callable, Any
-from litellm.utils import ModelResponse
+from litellm.utils import ModelResponse, Usage
 from .prompt_templates.factory import prompt_factory, custom_prompt
 llm = None
 class VLLMError(Exception):
     def __init__(self, status_code, message):
         self.status_code = status_code
         self.message = message
+        self.request = httpx.Request(method="POST", url="http://0.0.0.0:8000")
+        self.response = httpx.Response(status_code=status_code, request=self.request)
         super().__init__(
             self.message
         )  # Call the base class constructor with the parameters it needs
@@ -90,9 +92,12 @@ def completion(
 
         model_response["created"] = time.time()
         model_response["model"] = model
-        model_response.usage.completion_tokens = completion_tokens
-        model_response.usage.prompt_tokens = prompt_tokens
-        model_response.usage.total_tokens = prompt_tokens + completion_tokens
+        usage = Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens
+        )
+        model_response.usage = usage
         return model_response
 
 def batch_completions(
@@ -170,9 +175,12 @@ def batch_completions(
 
         model_response["created"] = time.time()
         model_response["model"] = model
-        model_response.usage.completion_tokens = completion_tokens
-        model_response.usage.prompt_tokens = prompt_tokens
-        model_response.usage.total_tokens = prompt_tokens + completion_tokens
+        usage = Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens
+        )
+        model_response.usage = usage
         final_outputs.append(model_response)
     return final_outputs
 

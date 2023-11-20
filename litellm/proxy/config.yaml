@@ -1,0 +1,17 @@
+model_list:
+  - model_name: zephyr-alpha
+    litellm_params: # params for litellm.completion() - https://docs.litellm.ai/docs/completion/input#input---request-body
+      model: huggingface/HuggingFaceH4/zephyr-7b-alpha
+      api_base: http://0.0.0.0:8001
+  - model_name: zephyr-beta
+    litellm_params:
+      model: huggingface/HuggingFaceH4/zephyr-7b-beta
+      api_base: https://<my-hosted-endpoint>
+
+litellm_settings:
+  drop_params: True
+  set_verbose: True
+
+general_settings: 
+  master_key: sk-1234 # [OPTIONAL] Only use this if you to require all calls to contain this key (Authorization: Bearer sk-1234)
+  database_url: "postgresql://<user>:<password>@<host>:<port>/<dbname>" # [OPTIONAL] use for token-based auth to proxy

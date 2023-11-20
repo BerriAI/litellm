@@ -309,18 +309,19 @@ except OpenAIError as e:
 ```
 
 ## Logging Observability - Log LLM Input/Output ([Docs](https://docs.litellm.ai/docs/observability/callbacks))
-LiteLLM exposes pre defined callbacks to send data to LLMonitor, Langfuse, Helicone, Promptlayer, Traceloop, Slack
+LiteLLM exposes pre defined callbacks to send data to Langfuse, LLMonitor, Helicone, Promptlayer, Traceloop, Slack
 ```python
 from litellm import completion
 
 ## set env variables for logging tools
-os.environ["PROMPTLAYER_API_KEY"] = "your-promptlayer-key"
+os.environ["LANGFUSE_PUBLIC_KEY"] = ""
+os.environ["LANGFUSE_SECRET_KEY"] = ""
 os.environ["LLMONITOR_APP_ID"] = "your-llmonitor-app-id"
 
 os.environ["OPENAI_API_KEY"]
 
 # set callbacks
-litellm.success_callback = ["promptlayer", "llmonitor"] # log input/output to promptlayer, llmonitor, supabase
+litellm.success_callback = ["langfuse", "llmonitor"] # log input/output to langfuse, llmonitor, supabase
 
 #openai call
 response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])
@@ -394,22 +395,6 @@ response = completion(
     stream=True
 )
 ```
-
-## 💥 LiteLLM Server - Deploy LiteLLM
-1-Click Deploy 
-A simple, fast, and lightweight OpenAI-compatible server to call 100+ LLM APIs in the OpenAI Input/Output format
-
-### Server Endpoints:
-- `/chat/completions` - chat completions endpoint to call 100+ LLMs
-- `/models` - available models on serve
-
-👉 Docs: https://docs.litellm.ai/docs/simple_proxy
-
-[![Deploy](https://deploy.cloud.run/button.svg)](https://l.linklyhq.com/l/1uHtX)
-[![Deploy](https://render.com/images/deploy-to-render-button.svg)](https://l.linklyhq.com/l/1uHsr)
-[![Deploy](../img/deploy-to-aws.png)](https://docs.litellm.ai/docs/simple_proxy#deploy-on-aws-apprunner)
-
-
 
 ## More details
 * [exception mapping](./exception_mapping.md)

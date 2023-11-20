@@ -135,8 +135,8 @@ response = completion(
 ## Supported AWS Bedrock Models
 Here's an example of using a bedrock model with LiteLLM 
 
-| Model Name               | Command                                                          | Environment Variables                                              |
-|--------------------------|------------------------------------------------------------------|---------------------------------------------------------------------|
+| Model Name               | Command                                                          |
+|--------------------------|------------------------------------------------------------------|
 | Anthropic Claude-V2      | `completion(model='anthropic.claude-v2', messages=messages)`   | `os.environ['ANTHROPIC_ACCESS_KEY_ID']`, `os.environ['ANTHROPIC_SECRET_ACCESS_KEY']`           |
 | Anthropic Claude-Instant V1 | `completion(model='anthropic.claude-instant-v1', messages=messages)` | `os.environ['ANTHROPIC_ACCESS_KEY_ID']`, `os.environ['ANTHROPIC_SECRET_ACCESS_KEY']`           |
 | Anthropic Claude-V1      | `completion(model='anthropic.claude-v1', messages=messages)`   | `os.environ['ANTHROPIC_ACCESS_KEY_ID']`, `os.environ['ANTHROPIC_SECRET_ACCESS_KEY']`           |
@@ -145,5 +145,31 @@ Here's an example of using a bedrock model with LiteLLM
 | Cohere Command              | `completion(model='cohere.command-text-v14', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']` |
 | AI21 J2-Mid             | `completion(model='ai21.j2-mid-v1', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']` |
 | AI21 J2-Ultra              | `completion(model='ai21.j2-ultra-v1', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']` |
+| Meta Llama 2 Chat 13b              | `completion(model='meta.llama2-13b-chat-v1', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']` |
 
+## Bedrock Embedding
 
+### API keys
+This can be set as env variables or passed as **params to litellm.embedding()**
+```python
+import os
+os.environ["AWS_ACCESS_KEY_ID"] = ""        # Access key
+os.environ["AWS_SECRET_ACCESS_KEY"] = ""    # Secret access key
+os.environ["AWS_REGION_NAME"] = ""           # us-east-1, us-east-2, us-west-1, us-west-2
+```
+
+### Usage
+```python
+from litellm import embedding
+response = embedding(
+    model="amazon.titan-embed-text-v1",
+    input=["good morning from litellm"],
+)
+print(response)
+```
+
+## Supported AWS Bedrock Embedding Models
+
+| Model Name           | Function Call                               |
+|----------------------|---------------------------------------------|
+| Titan Embeddings - G1 | `embedding(model="amazon.titan-embed-text-v1", input=input)` |

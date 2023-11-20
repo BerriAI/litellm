@@ -8,6 +8,33 @@ os.environ['OPENAI_API_KEY'] = ""
 response = embedding('text-embedding-ada-002', input=["good morning from litellm"])
 ```
 
+### Expected Output from litellm.embedding()
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "object": "embedding",
+      "index": 0,
+      "embedding": [
+        -0.0022326677571982145,
+        0.010749882087111473,
+        ...
+        ...
+        ...
+   
+      ]
+    }
+  ],
+  "model": "text-embedding-ada-002-v2",
+  "usage": {
+    "prompt_tokens": 10,
+    "total_tokens": 10
+  }
+}
+```
+
 ## OpenAI Embedding Models
 
 ### Usage
@@ -52,22 +79,57 @@ print(response)
 
 h/t to [Mikko](https://www.linkedin.com/in/mikkolehtimaki/) for this integration
 
+
+## Bedrock Embedding
+
+### API keys
+This can be set as env variables or passed as **params to litellm.embedding()**
+```python
+import os
+os.environ["AWS_ACCESS_KEY_ID"] = ""  # Access key
+os.environ["AWS_SECRET_ACCESS_KEY"] = "" # Secret access key
+os.environ["AWS_REGION_NAME"] = "" # us-east-1, us-east-2, us-west-1, us-west-2
+```
+
+### Usage
+```python
+from litellm import embedding
+response = embedding(
+    model="amazon.titan-embed-text-v1",
+    input=["good morning from litellm"],
+)
+print(response)
+```
+
+| Model Name           | Function Call                               |
+|----------------------|---------------------------------------------|
+| Titan Embeddings - G1 | `embedding(model="amazon.titan-embed-text-v1", input=input)` |
+
+
 ## Cohere Embedding Models
 https://docs.cohere.com/reference/embed
 
 ### Usage
 ```python
 from litellm import embedding
-import os
-os.environ['COHERE_API_KEY'] = ""
-response = embedding('embed-english-v2.0', input=["good morning from litellm"])
-```
+os.environ["COHERE_API_KEY"] = "cohere key"
 
-| Model Name            | Function Call | Required OS Variables                        |
-|-----------------------|--------------------------------------------------------------|-------------------------------------------------|
-| embed-english-v2.0    | `embedding('embed-english-v2.0', input=input)`               | `os.environ['COHERE_API_KEY']`                                             |
-| embed-english-light-v2.0 | `embedding('embed-english-light-v2.0', input=input)`         | `os.environ['COHERE_API_KEY']`                                             |
-| embed-multilingual-v2.0 | `embedding('embed-multilingual-v2.0', input=input)`         | `os.environ['COHERE_API_KEY']`                                             |
+# cohere call
+response = embedding(
+    model="embed-english-v3.0", 
+    input=["good morning from litellm", "this is another item"], 
+    input_type="search_document" # optional param for v3 llms
+)
+```
+| Model Name               | Function Call                                                |
+|--------------------------|--------------------------------------------------------------|
+| embed-english-v3.0       | `embedding(model="embed-english-v3.0", input=["good morning from litellm", "this is another item"])` |
+| embed-english-light-v3.0 | `embedding(model="embed-english-light-v3.0", input=["good morning from litellm", "this is another item"])` |
+| embed-multilingual-v3.0  | `embedding(model="embed-multilingual-v3.0", input=["good morning from litellm", "this is another item"])` |
+| embed-multilingual-light-v3.0 | `embedding(model="embed-multilingual-light-v3.0", input=["good morning from litellm", "this is another item"])` |
+| embed-english-v2.0       | `embedding(model="embed-english-v2.0", input=["good morning from litellm", "this is another item"])` |
+| embed-english-light-v2.0 | `embedding(model="embed-english-light-v2.0", input=["good morning from litellm", "this is another item"])` |
+| embed-multilingual-v2.0  | `embedding(model="embed-multilingual-v2.0", input=["good morning from litellm", "this is another item"])` |
 
 ## HuggingFace Embedding Models
 LiteLLM supports all Feature-Extraction Embedding models: https://huggingface.co/models?pipeline_tag=feature-extraction
@@ -88,4 +150,3 @@ response = embedding(
 | microsoft/codebert-base    | `embedding('huggingface/microsoft/codebert-base', input=input)`               | `os.environ['HUGGINGFACE_API_KEY']`                                             |
 | BAAI/bge-large-zh | `embedding('huggingface/BAAI/bge-large-zh', input=input)`         | `os.environ['HUGGINGFACE_API_KEY']`                                             |
 | any-hf-embedding-model | `embedding('huggingface/hf-embedding-model', input=input)`         | `os.environ['HUGGINGFACE_API_KEY']`                                             |
-

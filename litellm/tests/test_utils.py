@@ -1,6 +1,6 @@
 import sys, os
-import traceback
 from dotenv import load_dotenv
+import copy
 
 load_dotenv()
 import os
@@ -10,7 +10,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import pytest
 import litellm
-from litellm.utils import trim_messages, get_token_count, get_valid_models, check_valid_key, validate_environment, function_to_dict
+from litellm.utils import trim_messages, get_token_count, get_valid_models, check_valid_key, validate_environment, function_to_dict, token_counter
 
 # Assuming your trim_messages, shorten_message_to_fit_limit, and get_token_count functions are all in a module named 'message_utils'
 
@@ -56,13 +56,41 @@ def test_multiple_messages_no_trimming():
 # test_multiple_messages_no_trimming()
 
 
-def test_large_trimming():
+def test_large_trimming_multiple_messages():
     messages = [{"role": "user", "content": "This is a singlelongwordthatexceedsthelimit."}, {"role": "user", "content": "This is a singlelongwordthatexceedsthelimit."},{"role": "user", "content": "This is a singlelongwordthatexceedsthelimit."},{"role": "user", "content": "This is a singlelongwordthatexceedsthelimit."},{"role": "user", "content": "This is a singlelongwordthatexceedsthelimit."}]
-    trimmed_messages = trim_messages(messages, max_tokens=20, model="random")
+    trimmed_messages = trim_messages(messages, max_tokens=20, model="gpt-4-0613")
     print("trimmed messages")
     print(trimmed_messages)
-    assert(get_token_count(messages=trimmed_messages, model="random")) <= 20
+    assert(get_token_count(messages=trimmed_messages, model="gpt-4-0613")) <= 20
 # test_large_trimming()
+
+def test_large_trimming_single_message():
+    messages = [{"role": "user", "content": "This is a singlelongwordthatexceedsthelimit."}]
+    trimmed_messages = trim_messages(messages, max_tokens=5, model="gpt-4-0613")
+    assert(get_token_count(messages=trimmed_messages, model="gpt-4-0613")) <= 5
+    assert(get_token_count(messages=trimmed_messages, model="gpt-4-0613")) > 0
+
+
+def test_trimming_with_system_message_within_max_tokens():
+    # This message is 33 tokens long
+    messages = [{"role": "system", "content": "This is a short system message"}, {"role": "user", "content": "This is a medium normal message, let's say litellm is awesome."}]
+    trimmed_messages = trim_messages(messages, max_tokens=30, model="gpt-4-0613") # The system message should fit within the token limit
+    assert len(trimmed_messages) == 2
+    assert trimmed_messages[0]["content"] == "This is a short system message"
+
+
+def test_trimming_with_system_message_exceeding_max_tokens():
+    # This message is 33 tokens long. The system message is 13 tokens long.
+    messages = [{"role": "system", "content": "This is a short system message"}, {"role": "user", "content": "This is a medium normal message, let's say litellm is awesome."}]
+    trimmed_messages = trim_messages(messages, max_tokens=12, model="gpt-4-0613")
+    assert len(trimmed_messages) == 1
+    assert '..' in trimmed_messages[0]["content"]
+
+def test_trimming_should_not_change_original_messages():
+    messages = [{"role": "system", "content": "This is a short system message"}, {"role": "user", "content": "This is a medium normal message, let's say litellm is awesome."}]
+    messages_copy = copy.deepcopy(messages)
+    trimmed_messages = trim_messages(messages, max_tokens=12, model="gpt-4-0613")
+    assert(messages==messages_copy)
 
 def test_get_valid_models():
     old_environ = os.environ
@@ -150,4 +178,60 @@ def test_function_to_dict():
 
     print("passed")
 # test_function_to_dict()
+
+
+def test_token_counter():
+    try:
+        messages = [
+            {
+                "role": "user",
+                "content": "hi how are you what time is it"
+            }
+        ]
+        tokens = token_counter(
+            model = "gpt-3.5-turbo",
+            messages=messages
+        )
+        print("gpt-35-turbo")
+        print(tokens)
+        assert tokens > 0
+
+        tokens = token_counter(
+            model = "claude-2",
+            messages=messages
+        )
+        print("claude-2")
+        print(tokens)
+        assert tokens > 0
+
+        tokens = token_counter(
+            model = "palm/chat-bison",
+            messages=messages
+        )
+        print("palm/chat-bison")
+        print(tokens)
+        assert tokens > 0
+
+        tokens = token_counter(
+            model = "ollama/llama2",
+            messages=messages
+        )
+        print("ollama/llama2")
+        print(tokens)
+        assert tokens > 0
+
+        tokens = token_counter(
+            model = "anthropic.claude-instant-v1",
+            messages=messages
+        )
+        print("anthropic.claude-instant-v1")
+        print(tokens)
+        assert tokens > 0
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+test_token_counter()
+
+
+
+
 

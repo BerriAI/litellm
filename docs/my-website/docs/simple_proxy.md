@@ -2,761 +2,1007 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# 💥 Evaluate LLMs - OpenAI Compatible Server
+# 💥 OpenAI Proxy Server
 
-LiteLLM Server, is a simple, fast, and lightweight **OpenAI-compatible server** to call 100+ LLM APIs in the OpenAI Input/Output format
+LiteLLM Server manages:
 
-LiteLLM Server supports:
+* Calling 100+ LLMs [Huggingface/Bedrock/TogetherAI/etc.](#other-supported-models) in the OpenAI `ChatCompletions` & `Completions` format
+* Set custom prompt templates + model-specific configs (`temperature`, `max_tokens`, etc.)
+* Routing between [Multiple Models](#multiple-models---quick-start) + [Deployments of the same model](#multiple-instances-of-1-model)
 
-* LLM API Calls in the OpenAI ChatCompletions format
-* Caching + Logging capabilities (Redis and Langfuse, respectively)
-* Setting API keys in the request headers or in the .env
+[**See code**](https://github.com/BerriAI/litellm/tree/main/litellm/proxy)
 
-[**See Code**](https://github.com/BerriAI/litellm/tree/main/litellm_server)
-
-:::info
-We want to learn how we can make the server better! Meet the [founders](https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version) or
-join our [discord](https://discord.gg/wuPM9dRgDw)
-::: 
-
-## Usage 
+## Quick Start 
+View all the supported args for the Proxy CLI [here](https://docs.litellm.ai/docs/simple_proxy#proxy-cli-arguments)
 
 ```shell
-docker run -e PORT=8000 -p 8000:8000 ghcr.io/berriai/litellm:latest
-```
-OpenAI Proxy running on http://0.0.0.0:8000
+$ litellm --model huggingface/bigcode/starcoder
 
+#INFO: Proxy running on http://0.0.0.0:8000
+```
+
+### Test
+In a new shell, run, this will make an `openai.chat.completions` request. Ensure you're using openai v1.0.0+
 ```shell
-curl http://0.0.0.0:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $YOUR_API_KEY"
-  -d '{
-     "model": "gpt-3.5-turbo",
-     "messages": [{"role": "user", "content": "Say this is a test!"}],
-     "temperature": 0.7
-   }'
+litellm --test
 ```
 
-#### Other supported models:
+This will now automatically route any requests for gpt-3.5-turbo to bigcode starcoder, hosted on huggingface inference endpoints. 
+
+### Using LiteLLM Proxy - Curl Request, OpenAI Package
+
 <Tabs>
-<TabItem value="bedrock" label="Bedrock">
+<TabItem value="Curl" label="Curl Request">
 
 ```shell
-$ docker run -e PORT=8000 -e AWS_ACCESS_KEY_ID=<your-access-key> -e AWS_SECRET_ACCESS_KEY=<your-secret-key> -p 8000:8000 ghcr.io/berriai/litellm:latest
+curl --location 'http://0.0.0.0:8000/chat/completions' \
+--header 'Content-Type: application/json' \
+--data ' {
+      "model": "gpt-3.5-turbo",
+      "messages": [
+        {
+          "role": "user",
+          "content": "what llm are you"
+        }
+      ],
+    }
+'
+```
+</TabItem>
+<TabItem value="openai" label="OpenAI v1.0.0+">
+
+```python
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:8000"
+)
+
+# request sent to model set on litellm proxy, `litellm --model`
+response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
+    {
+        "role": "user",
+        "content": "this is a test request, write a short poem"
+    }
+])
+
+print(response)
+
+```
+</TabItem>
+
+</Tabs>
+
+### Supported LLMs
+<Tabs>
+<TabItem value="bedrock" label="AWS Bedrock">
+
+```shell
+$ export AWS_ACCESS_KEY_ID=
+$ export AWS_REGION_NAME=
+$ export AWS_SECRET_ACCESS_KEY=
+```
+
+```shell
+$ litellm --model bedrock/anthropic.claude-v2
+```
+</TabItem>
+<TabItem value="azure" label="Azure OpenAI">
+
+```shell
+$ export AZURE_API_KEY=my-api-key
+$ export AZURE_API_BASE=my-api-base
+```
+```
+$ litellm --model azure/my-deployment-name
 ```
 
 </TabItem>
-<TabItem value="huggingface" label="Huggingface">
+<TabItem value="openai-proxy" label="OpenAI">
 
-**Set API Keys in .env**  
-If, you're calling it via Huggingface Inference Endpoints. 
 ```shell
-$ docker run -e PORT=8000 -e HUGGINGFACE_API_KEY=<your-api-key> -p 8000:8000 ghcr.io/berriai/litellm:latest
+$ export OPENAI_API_KEY=my-api-key
 ```
 
-Else,
 ```shell
-$ docker run -e PORT=8000 -p 8000:8000 ghcr.io/berriai/litellm:latest
+$ litellm --model gpt-3.5-turbo
+```
+</TabItem>
+<TabItem value="huggingface" label="Huggingface (TGI) Deployed">
+
+```shell
+$ export HUGGINGFACE_API_KEY=my-api-key #[OPTIONAL]
+```
+```shell
+$ litellm --model huggingface/<your model name> --api_base https://k58ory32yinf1ly0.us-east-1.aws.endpoints.huggingface.cloud
 ```
 
-**Set API Keys in request headers**
+</TabItem>
+<TabItem value="huggingface-local" label="Huggingface (TGI) Local">
+
 ```shell
-curl http://0.0.0.0:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $HUGGINGFACE_API_KEY"
-  -d '{
-     "model": "huggingface/bigcoder/starcoder",
-     "messages": [{"role": "user", "content": "Say this is a test!"}],
-     "temperature": 0.7
-   }'
+$ litellm --model huggingface/<your model name> --api_base http://0.0.0.0:8001
 ```
 
+</TabItem>
+<TabItem value="aws-sagemaker" label="AWS Sagemaker">
+
+```shell
+export AWS_ACCESS_KEY_ID=
+export AWS_REGION_NAME=
+export AWS_SECRET_ACCESS_KEY=
+```
+
+```shell
+$ litellm --model sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b
+```
 
 </TabItem>
 <TabItem value="anthropic" label="Anthropic">
 
-**Set API Keys in .env**  
 ```shell
-$ docker run -e PORT=8000 -e ANTHROPIC_API_KEY=<your-api-key> -p 8000:8000 ghcr.io/berriai/litellm:latest
+$ export ANTHROPIC_API_KEY=my-api-key
 ```
-
-**Set API Keys in request headers**
 ```shell
-curl http://0.0.0.0:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $ANTHROPIC_API_KEY"
-  -d '{
-     "model": "claude-2",
-     "messages": [{"role": "user", "content": "Say this is a test!"}],
-     "temperature": 0.7
-   }'
-```
-
-
-</TabItem>
-
-<TabItem value="ollama" label="Ollama">
-
-```shell
-$ docker run -e PORT=8000 -e OLLAMA_API_BASE=<your-ollama-api-base> -p 8000:8000 ghcr.io/berriai/litellm:latest
+$ litellm --model claude-instant-1
 ```
 
 </TabItem>
+<TabItem value="vllm-local" label="VLLM">
+Assuming you're running vllm locally
 
-
+```shell
+$ litellm --model vllm/facebook/opt-125m
+```
+</TabItem>
 <TabItem value="together_ai" label="TogetherAI">
 
-**Set API Keys in .env**  
 ```shell
-$ docker run -e PORT=8000 -e TOGETHERAI_API_KEY=<your-api-key> -p 8000:8000 ghcr.io/berriai/litellm:latest
+$ export TOGETHERAI_API_KEY=my-api-key
 ```
-
-**Set API Keys in request headers**
 ```shell
-curl http://0.0.0.0:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $TOGETHERAI_API_KEY"
-  -d '{
-     "model": "together_ai/togethercomputer/llama-2-70b-chat",
-     "messages": [{"role": "user", "content": "Say this is a test!"}],
-     "temperature": 0.7
-   }'
+$ litellm --model together_ai/lmsys/vicuna-13b-v1.5-16k
 ```
 
 </TabItem>
 
 <TabItem value="replicate" label="Replicate">
 
-**Set API Keys in .env**  
 ```shell
-$ docker run -e PORT=8000 -e REPLICATE_API_KEY=<your-api-key> -p 8000:8000 ghcr.io/berriai/litellm:latest
+$ export REPLICATE_API_KEY=my-api-key
+```
+```shell
+$ litellm \
+  --model replicate/meta/llama-2-70b-chat:02e509c789964a7ea8736978a43525956ef40397be9033abf9fd2badfe68c9e3
 ```
 
-**Set API Keys in request headers**
-```shell
-curl http://0.0.0.0:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $REPLICATE_API_KEY"
-  -d '{
-     "model": "replicate/llama-2-70b-chat:2796ee9483c3fd7aa2e171d38f4ca12251a30609463dcfd4cd76703f22e96cdf",
-     "messages": [{"role": "user", "content": "Say this is a test!"}],
-     "temperature": 0.7
-   }'
-```
+</TabItem>
 
+<TabItem value="petals" label="Petals">
+
+```shell
+$ litellm --model petals/meta-llama/Llama-2-70b-chat-hf
+```
 
 </TabItem>
 
 <TabItem value="palm" label="Palm">
 
-**Set API Keys in .env**  
 ```shell
-$ docker run -e PORT=8000 -e PALM_API_KEY=<your-api-key> -p 8000:8000 ghcr.io/berriai/litellm:latest
+$ export PALM_API_KEY=my-palm-key
 ```
-
-**Set API Keys in request headers**
 ```shell
-curl http://0.0.0.0:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $PALM_API_KEY"
-  -d '{
-     "model": "palm/chat-bison",
-     "messages": [{"role": "user", "content": "Say this is a test!"}],
-     "temperature": 0.7
-   }'
-```
-
-</TabItem>
-
-<TabItem value="azure" label="Azure OpenAI">
-
-**Set API Keys in .env**  
-```shell
-$ docker run -e PORT=8000 -e AZURE_API_KEY=<your-api-key> -e AZURE_API_BASE=<your-api-base> -p 8000:8000 ghcr.io/berriai/litellm:latest
+$ litellm --model palm/chat-bison
 ```
 
 </TabItem>
 
 <TabItem value="ai21" label="AI21">
 
-**Set API Keys in .env**  
 ```shell
-$ docker run -e PORT=8000 -e AI21_API_KEY=<your-api-key> -p 8000:8000 ghcr.io/berriai/litellm:latest
+$ export AI21_API_KEY=my-api-key
 ```
 
-**Set API Keys in request headers**
 ```shell
-curl http://0.0.0.0:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $AI21_API_KEY"
-  -d '{
-     "model": "j2-mid",
-     "messages": [{"role": "user", "content": "Say this is a test!"}],
-     "temperature": 0.7
-   }'
+$ litellm --model j2-light
 ```
 
 </TabItem>
 
 <TabItem value="cohere" label="Cohere">
 
-**Set API Keys in .env**  
-
 ```shell
-$ docker run -e PORT=8000 -e COHERE_API_KEY=<your-api-key> -p 8000:8000 ghcr.io/berriai/litellm:latest
+$ export COHERE_API_KEY=my-api-key
 ```
 
-**Set API Keys in request headers**
 ```shell
-curl http://0.0.0.0:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $COHERE_API_KEY"
-  -d '{
-     "model": "command-nightly",
-     "messages": [{"role": "user", "content": "Say this is a test!"}],
-     "temperature": 0.7
-   }'
+$ litellm --model command-nightly
 ```
-
 
 </TabItem>
 
 </Tabs>
 
-## Tutorials (Chat-UI, NeMO-Guardrails, PromptTools, Phoenix ArizeAI, Langchain, ragas, LlamaIndex, etc.)
+### Server Endpoints
+- POST `/chat/completions` - chat completions endpoint to call 100+ LLMs
+- POST `/completions` - completions endpoint
+- POST `/embeddings` - embedding endpoint for Azure, OpenAI, Huggingface endpoints
+- GET `/models` - available models on server
 
-**Start server:**
-```shell
-`docker run -e PORT=8000 -p 8000:8000 ghcr.io/berriai/litellm:latest`
-```
-The server is now live on http://0.0.0.0:8000
+
+## Using with OpenAI compatible projects
+LiteLLM allows you to set `openai.api_base` to the proxy server and use all LiteLLM supported LLMs in any OpenAI supported project
 
 <Tabs>
-<TabItem value="chat-ui" label="Chat UI">
+<TabItem value="lm-harness" label="LM-Harness Evals">
+This tutorial assumes you're using the `big-refactor` branch of LM Harness https://github.com/EleutherAI/lm-evaluation-harness/tree/big-refactor
 
-Here's the `docker-compose.yml` for running LiteLLM Server with Mckay Wrigley's Chat-UI: 
-```yaml
-version: '3'
-services:
-  container1:
-    image: ghcr.io/berriai/litellm:latest
-    ports:
-      - '8000:8000'
-    environment:
-      - PORT=8000
-      - OPENAI_API_KEY=<your-openai-key>
+NOTE: LM Harness has not updated to using `openai 1.0.0+`, in order to deal with this we will run lm harness in a venv
 
-  container2:
-    image: ghcr.io/mckaywrigley/chatbot-ui:main
-    ports:
-      - '3000:3000'
-    environment:
-      - OPENAI_API_KEY=my-fake-key
-      - OPENAI_API_HOST=http://container1:8000
+**Step 1: Start the local proxy**
+see supported models [here](https://docs.litellm.ai/docs/simple_proxy)
+```shell
+$ litellm --model huggingface/bigcode/starcoder
 ```
 
-Run this via: 
+Using a custom api base
+
 ```shell
-docker-compose up
+$ export HUGGINGFACE_API_KEY=my-api-key #[OPTIONAL]
+$ litellm --model huggingface/tinyllama --api_base https://k58ory32yinf1ly0.us-east-1.aws.endpoints.huggingface.cloud
+```
+OpenAI Compatible Endpoint at http://0.0.0.0:8000
+
+**Step 2: Create a Virtual Env for LM Harness + Use OpenAI 0.28.1**
+We will now run lm harness with a new virtual env with openai==0.28.1
+
+```shell
+python3 -m venv lmharness 
+source lmharness/bin/activate
+```
+
+Pip install openai==0.28.01 in the venv
+```shell
+pip install openai==0.28.01
+```
+
+**Step 3: Set OpenAI API Base & Key**
+```shell
+$ export OPENAI_API_BASE=http://0.0.0.0:8000
+```
+
+LM Harness requires you to set an OpenAI API key `OPENAI_API_SECRET_KEY` for running benchmarks
+```shell
+export OPENAI_API_SECRET_KEY=anything
+```
+
+**Step 4: Run LM-Eval-Harness**
+```shell
+cd lm-evaluation-harness
+```
+
+pip install lm harness dependencies in venv
+```
+python3 -m pip install -e .
+```
+
+```shell
+python3 -m lm_eval \
+  --model openai-completions \
+  --model_args engine=davinci \
+  --task crows_pairs_english_age
+
+```
+
+
+</TabItem>
+
+<TabItem value="flask evals" label="FLASK Evals">
+FLASK - Fine-grained Language Model Evaluation 
+Use litellm to evaluate any LLM on FLASK https://github.com/kaistAI/FLASK 
+
+**Step 1: Start the local proxy**
+```shell
+$ litellm --model huggingface/bigcode/starcoder
+```
+
+**Step 2: Set OpenAI API Base & Key**
+```shell
+$ export OPENAI_API_BASE=http://0.0.0.0:8000
+```
+
+**Step 3 Run with FLASK** 
+
+```shell
+git clone https://github.com/kaistAI/FLASK
+```
+```shell
+cd FLASK/gpt_review
+```
+
+Run the eval 
+```shell
+python gpt4_eval.py -q '../evaluation_set/flask_evaluation.jsonl'
 ```
 </TabItem>
-<TabItem value="nemo-guardrails" label="NeMO-Guardrails">
 
-#### Adding NeMO-Guardrails to Bedrock 
+<TabItem value="FastEval" label="Fast Eval">
 
-1. Start server
+**Step 1: Start the local proxy**
+see supported models [here](https://docs.litellm.ai/docs/simple_proxy)
 ```shell
-`docker run -e PORT=8000 -e AWS_ACCESS_KEY_ID=<your-aws-access-key> -e AWS_SECRET_ACCESS_KEY=<your-aws-secret-key> -p 8000:8000 ghcr.io/berriai/litellm:latest`
+$ litellm --model huggingface/bigcode/starcoder
 ```
 
-2. Install dependencies
+**Step 2: Set OpenAI API Base & Key**
 ```shell
-pip install nemoguardrails langchain
+$ export OPENAI_API_BASE=http://0.0.0.0:8000
 ```
 
-3. Run script
+Set this to anything since the proxy has the credentials
+```shell
+export OPENAI_API_KEY=anything
+```
+
+**Step 3 Run with FastEval** 
+
+**Clone FastEval**
+```shell
+# Clone this repository, make it the current working directory
+git clone --depth 1 https://github.com/FastEval/FastEval.git
+cd FastEval
+```
+
+**Set API Base on FastEval**
+
+On FastEval make the following **2 line code change** to set `OPENAI_API_BASE`
+
+https://github.com/FastEval/FastEval/pull/90/files
+```python
+try:
+    api_base = os.environ["OPENAI_API_BASE"] #changed: read api base from .env
+    if api_base == None:
+        api_base = "https://api.openai.com/v1"
+    response = await self.reply_two_attempts_with_different_max_new_tokens(
+        conversation=conversation,
+        api_base=api_base, # #changed: pass api_base
+        api_key=os.environ["OPENAI_API_KEY"],
+        temperature=temperature,
+        max_new_tokens=max_new_tokens,
+```
+
+**Run FastEval**
+Set `-b` to the benchmark you want to run. Possible values are `mt-bench`, `human-eval-plus`, `ds1000`, `cot`, `cot/gsm8k`, `cot/math`, `cot/bbh`, `cot/mmlu` and `custom-test-data`
+
+Since LiteLLM provides an OpenAI compatible proxy `-t` and `-m` don't need to change
+`-t` will remain openai
+`-m` will remain gpt-3.5
+
+```shell
+./fasteval -b human-eval-plus -t openai -m gpt-3.5-turbo
+```
+</TabItem>
+<TabItem value="mlflow" label="ML Flow Eval">
+
+MLflow provides an API `mlflow.evaluate()` to help evaluate your LLMs https://mlflow.org/docs/latest/llms/llm-evaluate/index.html
+
+#### Pre Requisites
+```shell
+pip install litellm
+```
+```shell
+pip install mlflow
+```
+
+#### Step 1: Start LiteLLM Proxy on the CLI
+LiteLLM allows you to create an OpenAI compatible server for all supported LLMs. [More information on litellm proxy here](https://docs.litellm.ai/docs/simple_proxy)
+
+```shell
+$ litellm --model huggingface/bigcode/starcoder
+
+#INFO: Proxy running on http://0.0.0.0:8000
+```
+
+#### Step 2: Run ML Flow
+Before running the eval we will set `openai.api_base` to the litellm proxy from Step 1
+
+```python
+openai.api_base = "http://0.0.0.0:8000"
+```
+
 ```python
 import openai
-from langchain.chat_models import ChatOpenAI
+import pandas as pd
+openai.api_key = "anything"             # this can be anything, we set the key on the proxy
+openai.api_base = "http://0.0.0.0:8000" # set api base to the proxy from step 1
 
-llm = ChatOpenAI(model_name="bedrock/anthropic.claude-v2", openai_api_base="http://0.0.0.0:8000", openai_api_key="my-fake-key")
 
-from nemoguardrails import LLMRails, RailsConfig
+import mlflow
+eval_data = pd.DataFrame(
+    {
+        "inputs": [
+            "What is the largest country",
+            "What is the weather in sf?",
+        ],
+        "ground_truth": [
+            "India is a large country",
+            "It's cold in SF today"
+        ],
+    }
+)
 
-config = RailsConfig.from_path("./config.yml")
-app = LLMRails(config, llm=llm)
+with mlflow.start_run() as run:
+    system_prompt = "Answer the following question in two sentences"
+    logged_model_info = mlflow.openai.log_model(
+        model="gpt-3.5",
+        task=openai.ChatCompletion,
+        artifact_path="model",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": "{question}"},
+        ],
+    )
 
-new_message = app.generate(messages=[{
-    "role": "user",
-    "content": "Hello! What can you do for me?"
-}])
-``` 
+    # Use predefined question-answering metrics to evaluate our model.
+    results = mlflow.evaluate(
+        logged_model_info.model_uri,
+        eval_data,
+        targets="ground_truth",
+        model_type="question-answering",
+    )
+    print(f"See aggregated evaluation results below: \n{results.metrics}")
+
+    # Evaluation result for each data record is available in `results.tables`.
+    eval_table = results.tables["eval_results_table"]
+    print(f"See evaluation table below: \n{eval_table}")
+
+
+```
 </TabItem>
-<TabItem value="prompttools" label="PromptTools">
 
-Use [PromptTools](https://github.com/hegelai/prompttools) for evaluating different LLMs
+<TabItem value="continue-dev" label="ContinueDev">
 
-1. Start server
+Continue-Dev brings ChatGPT to VSCode. See how to [install it here](https://continue.dev/docs/quickstart).
+
+In the [config.py](https://continue.dev/docs/reference/Models/openai) set this as your default model.
+```python
+  default=OpenAI(
+      api_key="IGNORED",
+      model="fake-model-name",
+      context_length=2048, # customize if needed for your model
+      api_base="http://localhost:8000" # your proxy server url
+  ),
+```
+
+Credits [@vividfog](https://github.com/jmorganca/ollama/issues/305#issuecomment-1751848077) for this tutorial. 
+</TabItem>
+
+<TabItem value="aider" label="Aider">
+
 ```shell
-`docker run -e PORT=8000 -p 8000:8000 ghcr.io/berriai/litellm:latest`
-```
+$ pip install aider 
 
-2. Install dependencies 
-```python 
-pip install prompttools
-```
-
-3. Run script 
-```python 
-import os
-os.environ['DEBUG']=""  # Set this to "" to call OpenAI's API
-os.environ['AZURE_OPENAI_KEY'] = "my-api-key"  # Insert your key here
-
-from typing import Dict, List
-from prompttools.experiment import OpenAIChatExperiment
-
-models = ["gpt-3.5-turbo", "gpt-3.5-turbo-0613"]
-messages = [
-    [
-        {"role": "system", "content": "You are a helpful assistant."},
-        {"role": "user", "content": "Who was the first president?"},
-    ]
-]
-temperatures = [0.0, 1.0]
-# You can add more parameters that you'd like to test here.
-
-experiment = OpenAIChatExperiment(models, messages, temperature=temperatures, azure_openai_service_configs={"AZURE_OPENAI_ENDPOINT": "http://0.0.0.0:8000", "API_TYPE": "azure", "API_VERSION": "2023-05-15"})
+$ aider --openai-api-base http://0.0.0.0:8000 --openai-api-key fake-key
 ```
 </TabItem>
-<TabItem value="phoenix-arizeai" label="ArizeAI">
+<TabItem value="autogen" label="AutoGen">
 
-Use [Arize AI's LLM Evals](https://github.com/Arize-ai/phoenix#llm-evals) to evaluate different LLMs
+```python
+pip install pyautogen
+```
 
-1. Start server
+```python
+from autogen import AssistantAgent, UserProxyAgent, oai
+config_list=[
+    {
+        "model": "my-fake-model",
+        "api_base": "http://localhost:8000",  #litellm compatible endpoint
+        "api_type": "open_ai",
+        "api_key": "NULL", # just a placeholder
+    }
+]
+
+response = oai.Completion.create(config_list=config_list, prompt="Hi")
+print(response) # works fine
+
+llm_config={
+    "config_list": config_list,
+}
+
+assistant = AssistantAgent("assistant", llm_config=llm_config)
+user_proxy = UserProxyAgent("user_proxy")
+user_proxy.initiate_chat(assistant, message="Plot a chart of META and TESLA stock price change YTD.", config_list=config_list)
+```
+
+Credits [@victordibia](https://github.com/microsoft/autogen/issues/45#issuecomment-1749921972) for this tutorial.
+</TabItem>
+
+<TabItem value="guidance" label="guidance">
+A guidance language for controlling large language models.
+https://github.com/guidance-ai/guidance
+
+**NOTE:** Guidance sends additional params like `stop_sequences` which can cause some models to fail if they don't support it. 
+
+**Fix**: Start your proxy using the `--drop_params` flag
+
 ```shell
-`docker run -e PORT=8000 -p 8000:8000 ghcr.io/berriai/litellm:latest`
+litellm --model ollama/codellama --temperature 0.3 --max_tokens 2048 --drop_params
 ```
 
-2. Use this LLM Evals Quickstart colab
-[![Open in Colab](https://img.shields.io/static/v1?message=Open%20in%20Colab&logo=googlecolab&labelColor=grey&color=blue&logoColor=orange&label=%20)](https://colab.research.google.com/github/Arize-ai/phoenix/blob/main/tutorials/evals/evaluate_relevance_classifications.ipynb)
-
-3. Call the model
 ```python
-import openai 
+import guidance
 
-## SET API BASE + PROVIDER KEY
-openai.api_base = "http://0.0.0.0:8000
-openai.api_key = "my-anthropic-key"
+# set api_base to your proxy
+# set api_key to anything
+gpt4 = guidance.llms.OpenAI("gpt-4", api_base="http://0.0.0.0:8000", api_key="anything")
 
-## CALL MODEL 
-model = OpenAIModel(
-    model_name="claude-2",
-    temperature=0.0,
-)
-```
-</TabItem>
-<TabItem value="langchain" label="Langchain">
+experts = guidance('''
+{{#system~}}
+You are a helpful and terse assistant.
+{{~/system}}
 
-```python
-from langchain.chat_models import ChatOpenAI
-from langchain.prompts.chat import (
-    ChatPromptTemplate,
-    SystemMessagePromptTemplate,
-    AIMessagePromptTemplate,
-    HumanMessagePromptTemplate,
-)
-from langchain.schema import AIMessage, HumanMessage, SystemMessage
+{{#user~}}
+I want a response to the following question:
+{{query}}
+Name 3 world-class experts (past or present) who would be great at answering this?
+Don't answer the question yet.
+{{~/user}}
 
-chat = ChatOpenAI(model_name="claude-instant-1", openai_api_key="my-anthropic-key", openai_api_base="http://0.0.0.0:8000")
+{{#assistant~}}
+{{gen 'expert_names' temperature=0 max_tokens=300}}
+{{~/assistant}}
+''', llm=gpt4)
 
-messages = [
-    SystemMessage(
-        content="You are a helpful assistant that translates English to French."
-    ),
-    HumanMessage(
-        content="Translate this sentence from English to French. I love programming."
-    ),
-]
-chat(messages)
-```
-</TabItem>
-<TabItem value="ragas" label="ragas">
-
-#### Evaluating with Open-Source LLMs 
-
-Use [Ragas](https://github.com/explodinggradients/ragas/blob/7b123533df80d0ada33a2cb2dd2fdedf36807f33/docs/howtos/customisations/llms.ipynb#L247) to evaluate LLMs for RAG-scenarios.
-```python
-from langchain.chat_models import ChatOpenAI
-
-inference_server_url = "http://localhost:8080/v1"
-
-chat = ChatOpenAI(
-    model="bedrock/anthropic.claude-v2",
-    openai_api_key="no-key",
-    openai_api_base=inference_server_url,
-    max_tokens=5,
-    temperature=0,
-)
-
-from ragas.metrics import (
-    context_precision,
-    answer_relevancy,
-    faithfulness,
-    context_recall,
-)
-from ragas.metrics.critique import harmfulness
-
-# change the LLM
-
-faithfulness.llm.langchain_llm = chat
-answer_relevancy.llm.langchain_llm = chat
-context_precision.llm.langchain_llm = chat
-context_recall.llm.langchain_llm = chat
-harmfulness.llm.langchain_llm = chat
-
-
-# evaluate
-from ragas import evaluate
-
-result = evaluate(
-    fiqa_eval["baseline"].select(range(5)),  # showing only 5 for demonstration
-    metrics=[faithfulness],
-)
-
-result
-```
-</TabItem>
-<TabItem value="llama_index" label="Llama Index">
-
-```python
-!pip install llama-index
-```
-```python
-from llama_index.llms import OpenAI
-
-response = OpenAI(model="claude-2", api_key="your-anthropic-key",api_base="http://0.0.0.0:8000").complete('Paul Graham is ')
-print(response)
+result = experts(query='How can I be more productive?')
+print(result)
 ```
 </TabItem>
 </Tabs>
 
+## Proxy Configs
+The Config allows you to set the following params
 
-## Endpoints:
-- `/chat/completions` - chat completions endpoint to call 100+ LLMs
-- `/embeddings` - embedding endpoint for Azure, OpenAI, Huggingface endpoints
-- `/models` - available models on server
+| Param Name           | Description                                                   |
+|----------------------|---------------------------------------------------------------|
+| `model_list`         | List of supported models on the server, with model-specific configs |
+| `litellm_settings`   | litellm Module settings, example `litellm.drop_params=True`, `litellm.set_verbose=True`, `litellm.api_base` |
+| `general_settings`   | Server settings, example setting `master_key: sk-my_special_key` |
 
-
-## Save Model-specific params (API Base, API Keys, Temperature, etc.)
-Use the [router_config_template.yaml](https://github.com/BerriAI/litellm/blob/main/router_config_template.yaml) to save model-specific information like api_base, api_key, temperature, max_tokens, etc. 
-
-1. Create a `config.yaml` file
-```shell
+### Example Config
+```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: zephyr-alpha
     litellm_params: # params for litellm.completion() - https://docs.litellm.ai/docs/completion/input#input---request-body
-      model: azure/chatgpt-v-2 # azure/<your-deployment-name>
-      api_key: your_azure_api_key
-      api_version: your_azure_api_version
-      api_base: your_azure_api_base
+      model: huggingface/HuggingFaceH4/zephyr-7b-alpha
+      api_base: http://0.0.0.0:8001
+  - model_name: zephyr-beta
+    litellm_params:
+      model: huggingface/HuggingFaceH4/zephyr-7b-beta
+      api_base: https://<my-hosted-endpoint>
+
+litellm_settings:
+  drop_params: True
+  set_verbose: True
+
+general_settings: 
+  master_key: sk-1234 # [OPTIONAL] Only use this if you to require all calls to contain this key (Authorization: Bearer sk-1234)
+```
+
+### Multiple Models
+
+Here's how you can use multiple llms with one proxy `config.yaml`. 
+
+#### Step 1: Setup Config
+```yaml
+model_list:
+  - model_name: zephyr-alpha # the 1st model is the default on the proxy
+    litellm_params: # params for litellm.completion() - https://docs.litellm.ai/docs/completion/input#input---request-body
+      model: huggingface/HuggingFaceH4/zephyr-7b-alpha
+      api_base: http://0.0.0.0:8001
+  - model_name: gpt-4
+    litellm_params:
+      model: gpt-4
+      api_key: sk-1233
+  - model_name: claude-2
+    litellm_params:
+      model: claude-2
+      api_key: sk-claude    
+```
+
+:::info
+
+The proxy uses the first model in the config as the default model - in this config the default model is `zephyr-alpha`
+:::
+
+
+#### Step 2: Start Proxy with config
+
+```shell
+$ litellm --config /path/to/config.yaml
+```
+
+#### Step 3: Use proxy
+Curl Command
+```shell
+curl --location 'http://0.0.0.0:8000/chat/completions' \
+--header 'Content-Type: application/json' \
+--data ' {
+      "model": "zephyr-alpha",
+      "messages": [
+        {
+          "role": "user",
+          "content": "what llm are you"
+        }
+      ],
+    }
+'
+```
+
+### Managing Auth - Virtual Keys
+
+Grant other's temporary access to your proxy, with keys that expire after a set duration.
+
+Requirements: 
+
+- Need to a postgres database (e.g. [Supabase](https://supabase.com/))
+
+You can then generate temporary keys by hitting the `/key/generate` endpoint.
+
+[**See code**](https://github.com/BerriAI/litellm/blob/7a669a36d2689c7f7890bc9c93e04ff3c2641299/litellm/proxy/proxy_server.py#L672)
+
+**Step 1: Save postgres db url**
+
+```yaml
+model_list:
+  - model_name: gpt-4
+    litellm_params:
+        model: ollama/llama2
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+        model: ollama/llama2
+
+general_settings: 
+  master_key: sk-1234 # [OPTIONAL] if set all calls to proxy will require either this key or a valid generated token
+  database_url: "postgresql://<user>:<password>@<host>:<port>/<dbname>"
+```
+
+**Step 2: Start litellm**
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+**Step 3: Generate temporary keys**
+
+```curl 
+curl 'http://0.0.0.0:8000/key/generate' \
+--h 'Authorization: Bearer sk-1234' \
+--d '{"models": ["gpt-3.5-turbo", "gpt-4", "claude-2"], "duration": "20m"}'
+```
+
+- `models`: *list or null (optional)* - Specify the models a token has access too. If null, then token has access to all models on server. 
+
+- `duration`: *str or null (optional)* Specify the length of time the token is valid for. If null, default is set to 1 hour. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
+
+Expected response: 
+
+```python
+{
+    "key": "sk-kdEXbIqZRwEeEiHwdg7sFA", # Bearer token
+    "expires": "2023-11-19T01:38:25.838000+00:00" # datetime object
+}
+```
+
+### Save Model-specific params (API Base, API Keys, Temperature, Headers etc.)
+You can use the config to save model-specific information like api_base, api_key, temperature, max_tokens, etc. 
+
+**Step 1**: Create a `config.yaml` file
+```yaml
+model_list:
+  - model_name: gpt-4-team1
+    litellm_params: # params for litellm.completion() - https://docs.litellm.ai/docs/completion/input#input---request-body
+      model: azure/chatgpt-v-2
+      api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
+      api_version: "2023-05-15"
+      azure_ad_token: eyJ0eXAiOiJ
+  - model_name: gpt-4-team2
+    litellm_params:
+      model: azure/gpt-4
+      api_key: sk-123
+      api_base: https://openai-gpt-4-test-v-2.openai.azure.com/
   - model_name: mistral-7b
     litellm_params:
       model: ollama/mistral
       api_base: your_ollama_api_base
+      headers: {
+        "HTTP-Referer": "litellm.ai",  
+        "X-Title": "LiteLLM Server"
+      }
 ```
 
-2. Start the server
+**Step 2**: Start server with config
 
 ```shell
-docker run -e PORT=8000 -p 8000:8000 -v $(pwd)/config.yaml:/app/config.yaml ghcr.io/berriai/litellm:latest
+$ litellm --config /path/to/config.yaml
 ```
-## Model Alias 
+### Model Alias 
 
 Set a model alias for your deployments. 
 
 In the `config.yaml` the model_name parameter is the user-facing name to use for your deployment. 
 
-E.g.: If we want to save a Huggingface TGI Mistral-7b deployment, as 'mistral-7b' for our users, we might save it as: 
+In the config below requests with `model=gpt-4` will route to `ollama/zephyr`
 
 ```yaml
 model_list:
-  - model_name: mistral-7b # ALIAS
+  - model_name: text-davinci-003
     litellm_params:
-      model: huggingface/mistralai/Mistral-7B-Instruct-v0.1 # ACTUAL NAME
-      api_key: your_huggingface_api_key # [OPTIONAL] if deployed on huggingface inference endpoints
-      api_base: your_api_base # url where model is deployed 
+        model: ollama/zephyr
+  - model_name: gpt-4
+    litellm_params:
+        model: ollama/llama2
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+        model: ollama/llama2
 ```
 
-## Caching 
+### Multiple Instances of 1 model
 
-Add Redis Caching to your server via environment variables  
+If you have multiple instances of the same model,
 
-```env
-### REDIS
-REDIS_HOST = "" 
-REDIS_PORT = "" 
-REDIS_PASSWORD = "" 
+in the `config.yaml` just add all of them with the same 'model_name', and the proxy will handle routing requests (using LiteLLM's Router). 
+
+In the config below requests with `model=zephyr-beta` will be routed across multiple instances of `HuggingFaceH4/zephyr-7b-beta`
+
+```yaml
+model_list:
+  - model_name: zephyr-beta
+    litellm_params:
+        model: huggingface/HuggingFaceH4/zephyr-7b-beta
+        api_base: http://0.0.0.0:8001
+  - model_name: zephyr-beta
+    litellm_params:
+        model: huggingface/HuggingFaceH4/zephyr-7b-beta
+        api_base: http://0.0.0.0:8002
+  - model_name: zephyr-beta
+    litellm_params:
+        model: huggingface/HuggingFaceH4/zephyr-7b-beta
+        api_base: http://0.0.0.0:8003
 ```
 
-Docker command: 
+#### Step 2: Start Proxy with config
 
 ```shell
-docker run -e REDIST_HOST=<your-redis-host> -e REDIS_PORT=<your-redis-port> -e REDIS_PASSWORD=<your-redis-password> -e PORT=8000 -p 8000:8000 ghcr.io/berriai/litellm:latest
+$ litellm --config /path/to/config.yaml
 ```
 
-## Logging 
+#### Step 3: Use proxy
+Curl Command
+```shell
+curl --location 'http://0.0.0.0:8000/chat/completions' \
+--header 'Content-Type: application/json' \
+--data ' {
+      "model": "zephyr-beta",
+      "messages": [
+        {
+          "role": "user",
+          "content": "what llm are you"
+        }
+      ],
+    }
+'
+```
 
-1. Debug Logs
-Print the input/output params by setting `SET_VERBOSE = "True"`.
+### Set Custom Prompt Templates
 
-Docker command:
+LiteLLM by default checks if a model has a [prompt template and applies it](./completion/prompt_formatting.md) (e.g. if a huggingface model has a saved chat template in it's tokenizer_config.json). However, you can also set a custom prompt template on your proxy in the `config.yaml`: 
+
+**Step 1**: Save your prompt template in a `config.yaml`
+```yaml
+# Model-specific parameters
+model_list:
+  - model_name: mistral-7b # model alias
+    litellm_params: # actual params for litellm.completion()
+      model: "huggingface/mistralai/Mistral-7B-Instruct-v0.1" 
+      api_base: "<your-api-base>"
+      api_key: "<your-api-key>" # [OPTIONAL] for hf inference endpoints
+      initial_prompt_value: "\n"
+      roles: {"system":{"pre_message":"<|im_start|>system\n", "post_message":"<|im_end|>"}, "assistant":{"pre_message":"<|im_start|>assistant\n","post_message":"<|im_end|>"}, "user":{"pre_message":"<|im_start|>user\n","post_message":"<|im_end|>"}}
+      final_prompt_value: "\n"
+      bos_token: "<s>"
+      eos_token: "</s>"
+      max_tokens: 4096
+```
+
+**Step 2**: Start server with config
 
 ```shell
-docker run -e SET_VERBOSE="True" -e PORT=8000 -p 8000:8000 ghcr.io/berriai/litellm:latest
-```
-2. Add Langfuse Logging to your server via environment variables  
-
-```env
-### LANGFUSE
-LANGFUSE_PUBLIC_KEY = ""
-LANGFUSE_SECRET_KEY = ""
-# Optional, defaults to https://cloud.langfuse.com
-LANGFUSE_HOST = "" # optional
+$ litellm --config /path/to/config.yaml
 ```
 
-Docker command: 
+## Debugging Proxy 
+Run the proxy with `--debug` to easily view debug logs 
+```shell
+litellm --model gpt-3.5-turbo --debug
+```
+
+When making requests you should see the POST request sent by LiteLLM to the LLM on the Terminal output
+```shell
+POST Request Sent from LiteLLM:
+curl -X POST \
+https://api.openai.com/v1/chat/completions \
+-H 'content-type: application/json' -H 'Authorization: Bearer sk-qnWGUIW9****************************************' \
+-d '{"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "this is a test request, write a short poem"}]}'
+```
+
+## Logging Proxy Input/Output - Langfuse
+We will use the `--config` to set `litellm.success_callback = ["langfuse"]` this will log all successfull LLM calls to langfuse
+
+**Step 1** Install langfuse
 
 ```shell
-docker run -e LANGFUSE_PUBLIC_KEY=<your-public-key> -e LANGFUSE_SECRET_KEY=<your-secret-key> -e LANGFUSE_HOST=<your-langfuse-host> -e PORT=8000 -p 8000:8000 ghcr.io/berriai/litellm:latest
+pip install langfuse
 ```
 
-## Local Usage 
-
-```shell 
-$ git clone https://github.com/BerriAI/litellm.git
+**Step 2**: Create a `config.yaml` file and set `litellm_settings`: `success_callback`
+```yaml
+model_list:
+ - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+litellm_settings:
+  success_callback: ["langfuse"]
 ```
+
+**Step 3**: Start the proxy, make a test request
+
+Start proxy
 ```shell
-$ cd ./litellm/litellm_server
+litellm --config config.yaml --debug
 ```
 
-```shell
-$ uvicorn main:app --host 0.0.0.0 --port 8000
+Test Request
+```
+litellm --test
 ```
 
-## Setting LLM API keys
-This server allows two ways of passing API keys to litellm
-- Environment Variables - This server by default assumes the LLM API Keys are stored in the environment variables
-- Dynamic Variables passed to `/chat/completions`
-  - Set `AUTH_STRATEGY=DYNAMIC` in the Environment 
-  - Pass required auth params `api_key`,`api_base`, `api_version` with the request params
+Expected output on Langfuse
+
+<Image img={require('../img/langfuse_small.png')} />
 
 
-<Tabs>
-<TabItem value="gcp-run" label="Google Cloud Run">
+## Proxy CLI Arguments
 
-## Deploy on Google Cloud Run
-**Click the button** to deploy to Google Cloud Run
+#### --host
+   - **Default:** `'0.0.0.0'`
+   - The host for the server to listen on.
+   - **Usage:** 
+     ```shell
+     litellm --host 127.0.0.1
+     ```
 
-[![Deploy](https://deploy.cloud.run/button.svg)](https://l.linklyhq.com/l/1uHtX)
+#### --port
+   - **Default:** `8000`
+   - The port to bind the server to.
+   - **Usage:** 
+     ```shell
+     litellm --port 8080
+     ```
 
-On a successfull deploy your Cloud Run Shell will have this output
-<Image img={require('../img/cloud_run0.png')} />
+#### --num_workers
+   - **Default:** `1`
+   - The number of uvicorn workers to spin up.
+   - **Usage:** 
+     ```shell
+     litellm --num_workers 4
+     ```
 
-### Testing your deployed server
-**Assuming the required keys are set as Environment Variables**
+#### --api_base
+   - **Default:** `None`
+   - The API base for the model litellm should call.
+   - **Usage:** 
+     ```shell
+     litellm --model huggingface/tinyllama --api_base https://k58ory32yinf1ly0.us-east-1.aws.endpoints.huggingface.cloud
+     ```
 
-https://litellm-7yjrj3ha2q-uc.a.run.app is our example server, substitute it with your deployed cloud run app
+#### --api_version
+   - **Default:** `None`
+   - For Azure services, specify the API version.
+   - **Usage:** 
+     ```shell
+     litellm --model azure/gpt-deployment --api_version 2023-08-01 --api_base https://<your api base>"
+     ```
 
-<Tabs>
-<TabItem value="openai" label="OpenAI">
+#### --model or -m
+   - **Default:** `None`
+   - The model name to pass to Litellm.
+   - **Usage:** 
+     ```shell
+     litellm --model gpt-3.5-turbo
+     ```
 
-```shell
-curl https://litellm-7yjrj3ha2q-uc.a.run.app/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-     "model": "gpt-3.5-turbo",
-     "messages": [{"role": "user", "content": "Say this is a test!"}],
-     "temperature": 0.7
-   }'
-```
+#### --test
+   - **Type:** `bool` (Flag)
+   - Proxy chat completions URL to make a test request.
+   - **Usage:** 
+     ```shell
+     litellm --test
+     ```
 
-</TabItem>
-<TabItem value="azure" label="Azure">
+#### --alias
+   - **Default:** `None`
+   - An alias for the model, for user-friendly reference.
+   - **Usage:** 
+     ```shell
+     litellm --alias my-gpt-model
+     ```
 
-```shell
-curl https://litellm-7yjrj3ha2q-uc.a.run.app/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-     "model": "azure/<your-deployment-name>",
-     "messages": [{"role": "user", "content": "Say this is a test!"}],
-     "temperature": 0.7
-   }'
-```
+#### --debug
+   - **Default:** `False`
+   - **Type:** `bool` (Flag)
+   - Enable debugging mode for the input.
+   - **Usage:** 
+     ```shell
+     litellm --debug
+     ```
 
-</TabItem>
+#### --temperature
+   - **Default:** `None`
+   - **Type:** `float`
+   - Set the temperature for the model.
+   - **Usage:** 
+     ```shell
+     litellm --temperature 0.7
+     ```
 
-<TabItem value="anthropic" label="Anthropic">
+#### --max_tokens
+   - **Default:** `None`
+   - **Type:** `int`
+   - Set the maximum number of tokens for the model output.
+   - **Usage:** 
+     ```shell
+     litellm --max_tokens 50
+     ```
 
-```shell
-curl https://litellm-7yjrj3ha2q-uc.a.run.app/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-     "model": "claude-2",
-     "messages": [{"role": "user", "content": "Say this is a test!"}],
-     "temperature": 0.7,
-   }'
-```
-</TabItem>
+#### --request_timeout
+   - **Default:** `600`
+   - **Type:** `int`
+   - Set the timeout in seconds for completion calls.
+   - **Usage:** 
+     ```shell
+     litellm --request_timeout 300
+     ```
 
-</Tabs>
+#### --drop_params
+   - **Type:** `bool` (Flag)
+   - Drop any unmapped params.
+   - **Usage:** 
+     ```shell
+     litellm --drop_params
+     ```
 
-### Set LLM API Keys
-#### Environment Variables 
-More info [here](https://cloud.google.com/run/docs/configuring/services/environment-variables#console)
+#### --add_function_to_prompt
+   - **Type:** `bool` (Flag)
+   - If a function passed but unsupported, pass it as a part of the prompt.
+   - **Usage:** 
+     ```shell
+     litellm --add_function_to_prompt
+     ```
 
-1. In the Google Cloud console, go to Cloud Run: [Go to Cloud Run](https://console.cloud.google.com/run)
+#### --config
+   - Configure Litellm by providing a configuration file path.
+   - **Usage:** 
+     ```shell
+     litellm --config path/to/config.yaml
+     ```
 
-2. Click on the **litellm** service
-<Image img={require('../img/cloud_run1.png')} />
-
-3. Click **Edit and Deploy New Revision**
-<Image img={require('../img/cloud_run2.png')} />
-
-4. Enter your Environment Variables
-Example `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`
-<Image img={require('../img/cloud_run3.png')} />
-
-</TabItem>
-<TabItem value="render" label="Render">
-
-## Deploy on Render
-**Click the button** to deploy to Render
-
-[![Deploy](https://render.com/images/deploy-to-render-button.svg)](https://l.linklyhq.com/l/1uHsr)
-
-On a successfull deploy https://dashboard.render.com/ should display the following
-<Image img={require('../img/render1.png')} />
-
-<Image img={require('../img/render2.png')} />
-</TabItem>
-<TabItem value="aws-apprunner" label="AWS Apprunner">
-
-## Deploy on AWS Apprunner
-1. Fork LiteLLM https://github.com/BerriAI/litellm 
-2. Navigate to to App Runner on AWS Console: https://console.aws.amazon.com/apprunner/home#/services
-3. Follow the steps in the video below
-<iframe width="800" height="450" src="https://www.loom.com/embed/5fccced4dde8461a8caeee97addb2231?sid=eac60660-073e-455e-a737-b3d05a5a756a" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
-
-4. Testing your deployed endpoint
-
-  **Assuming the required keys are set as Environment Variables** Example: `OPENAI_API_KEY`
-
-  https://b2w6emmkzp.us-east-1.awsapprunner.com is our example server, substitute it with your deployed apprunner endpoint
-
-  <Tabs>
-  <TabItem value="openai" label="OpenAI">
-
-  ```shell
-  curl https://b2w6emmkzp.us-east-1.awsapprunner.com/v1/chat/completions \
-    -H "Content-Type: application/json" \
-    -d '{
-      "model": "gpt-3.5-turbo",
-      "messages": [{"role": "user", "content": "Say this is a test!"}],
-      "temperature": 0.7
-    }'
-  ```
-
-  </TabItem>
-  <TabItem value="azure" label="Azure">
-
-  ```shell
-  curl https://b2w6emmkzp.us-east-1.awsapprunner.com/v1/chat/completions \
-    -H "Content-Type: application/json" \
-    -d '{
-      "model": "azure/<your-deployment-name>",
-      "messages": [{"role": "user", "content": "Say this is a test!"}],
-      "temperature": 0.7
-    }'
-  ```
-
-  </TabItem>
-
-  <TabItem value="anthropic" label="Anthropic">
-
-  ```shell
-  curl https://b2w6emmkzp.us-east-1.awsapprunner.com/v1/chat/completions \
-    -H "Content-Type: application/json" \
-    -d '{
-      "model": "claude-2",
-      "messages": [{"role": "user", "content": "Say this is a test!"}],
-      "temperature": 0.7,
-    }'
-  ```
-  </TabItem>
-
-  </Tabs>
-
-</TabItem>
-</Tabs>
-
-## Advanced
-### Caching - Completion() and Embedding() Responses
-
-Enable caching by adding the following credentials to your server environment
-
-  ```
-  REDIS_HOST = ""       # REDIS_HOST='redis-18841.c274.us-east-1-3.ec2.cloud.redislabs.com'
-  REDIS_PORT = ""       # REDIS_PORT='18841'
-  REDIS_PASSWORD = ""   # REDIS_PASSWORD='liteLlmIsAmazing'
-  ```
-
-#### Test Caching 
-Send the same request twice:
-```shell
-curl http://0.0.0.0:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-     "model": "gpt-3.5-turbo",
-     "messages": [{"role": "user", "content": "write a poem about litellm!"}],
-     "temperature": 0.7
-   }'
-
-curl http://0.0.0.0:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-     "model": "gpt-3.5-turbo",
-     "messages": [{"role": "user", "content": "write a poem about litellm!"}],
-     "temperature": 0.7
-   }'
-```
-
-#### Control caching per completion request
-Caching can be switched on/off per /chat/completions request
-- Caching on for completion - pass `caching=True`:
-  ```shell
-  curl http://0.0.0.0:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-     "model": "gpt-3.5-turbo",
-     "messages": [{"role": "user", "content": "write a poem about litellm!"}],
-     "temperature": 0.7,
-     "caching": true
-   }'
-  ```
-- Caching off for completion - pass `caching=False`:
-  ```shell
-  curl http://0.0.0.0:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-     "model": "gpt-3.5-turbo",
-     "messages": [{"role": "user", "content": "write a poem about litellm!"}],
-     "temperature": 0.7,
-     "caching": false
-   }'
-  ```
-
-
-
-
+#### --telemetry
+   - **Default:** `True`
+   - **Type:** `bool`
+   - Help track usage of this feature.
+   - **Usage:** 
+     ```shell
+     litellm --telemetry False
+     ```
 
 

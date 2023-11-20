@@ -11,10 +11,12 @@ sys.path.insert(
 from dotenv import load_dotenv
 load_dotenv()
 import litellm
-from litellm import completion, acompletion, AuthenticationError, InvalidRequestError, RateLimitError
+from litellm import completion, acompletion, AuthenticationError, BadRequestError, RateLimitError, ModelResponse
 
 litellm.logging = False
-litellm.set_verbose = False
+litellm.set_verbose = True
+litellm.num_retries = 3
+litellm.cache = None
 
 score = 0
 
@@ -46,38 +48,17 @@ first_openai_chunk_example = {
 
 def validate_first_format(chunk):
     # write a test to make sure chunk follows the same format as first_openai_chunk_example
-    assert isinstance(chunk, dict), "Chunk should be a dictionary."
-    assert "id" in chunk, "Chunk should have an 'id'."
+    assert isinstance(chunk, ModelResponse), "Chunk should be a dictionary."
     assert isinstance(chunk['id'], str), "'id' should be a string."
-    
-    assert "object" in chunk, "Chunk should have an 'object'."
     assert isinstance(chunk['object'], str), "'object' should be a string."
-
-    assert "created" in chunk, "Chunk should have a 'created'."
     assert isinstance(chunk['created'], int), "'created' should be an integer."
-
-    assert "model" in chunk, "Chunk should have a 'model'."
     assert isinstance(chunk['model'], str), "'model' should be a string."
-
-    assert "choices" in chunk, "Chunk should have 'choices'."
     assert isinstance(chunk['choices'], list), "'choices' should be a list."
 
     for choice in chunk['choices']:
-        assert isinstance(choice, dict), "Each choice should be a dictionary."
-
-        assert "index" in choice, "Each choice should have 'index'."
         assert isinstance(choice['index'], int), "'index' should be an integer."
-
-        assert "delta" in choice, "Each choice should have 'delta'." 
-        assert isinstance(choice['delta'], dict), "'delta' should be a dictionary."
-
-        assert "role" in choice['delta'], "'delta' should have a 'role'."
         assert isinstance(choice['delta']['role'], str), "'role' should be a string."
-
-        assert "content" in choice['delta'], "'delta' should have 'content'."
-        assert isinstance(choice['delta']['content'], str), "'content' should be a string."
-
-        assert "finish_reason" in choice, "Each choice should have 'finish_reason'."
+        # openai v1.0.0 returns content as None
         assert (choice['finish_reason'] is None) or isinstance(choice['finish_reason'], str), "'finish_reason' should be None or a string."
 
 second_openai_chunk_example = {
@@ -97,35 +78,16 @@ second_openai_chunk_example = {
 }
 
 def validate_second_format(chunk):
-    assert isinstance(chunk, dict), "Chunk should be a dictionary."
-    assert "id" in chunk, "Chunk should have an 'id'."
+    assert isinstance(chunk, ModelResponse), "Chunk should be a dictionary."
     assert isinstance(chunk['id'], str), "'id' should be a string."
-    
-    assert "object" in chunk, "Chunk should have an 'object'."
     assert isinstance(chunk['object'], str), "'object' should be a string."
-
-    assert "created" in chunk, "Chunk should have a 'created'."
     assert isinstance(chunk['created'], int), "'created' should be an integer."
-
-    assert "model" in chunk, "Chunk should have a 'model'."
     assert isinstance(chunk['model'], str), "'model' should be a string."
-
-    assert "choices" in chunk, "Chunk should have 'choices'."
     assert isinstance(chunk['choices'], list), "'choices' should be a list."
 
     for choice in chunk['choices']:
-        assert isinstance(choice, dict), "Each choice should be a dictionary."
-
-        assert "index" in choice, "Each choice should have 'index'."
         assert isinstance(choice['index'], int), "'index' should be an integer."
-
-        assert "delta" in choice, "Each choice should have 'delta'." 
-        assert isinstance(choice['delta'], dict), "'delta' should be a dictionary."
-
-        assert "content" in choice['delta'], "'delta' should have 'content'."
-        assert isinstance(choice['delta']['content'], str), "'content' should be a string."
-
-        assert "finish_reason" in choice, "Each choice should have 'finish_reason'."
+        # openai v1.0.0 returns content as None
         assert (choice['finish_reason'] is None) or isinstance(choice['finish_reason'], str), "'finish_reason' should be None or a string."
 
 last_openai_chunk_example = {
@@ -143,32 +105,15 @@ last_openai_chunk_example = {
 }
 
 def validate_last_format(chunk):
-    assert isinstance(chunk, dict), "Chunk should be a dictionary."
-    assert "id" in chunk, "Chunk should have an 'id'."
+    assert isinstance(chunk, ModelResponse), "Chunk should be a dictionary."
     assert isinstance(chunk['id'], str), "'id' should be a string."
-    
-    assert "object" in chunk, "Chunk should have an 'object'."
     assert isinstance(chunk['object'], str), "'object' should be a string."
-
-    assert "created" in chunk, "Chunk should have a 'created'."
     assert isinstance(chunk['created'], int), "'created' should be an integer."
-
-    assert "model" in chunk, "Chunk should have a 'model'."
     assert isinstance(chunk['model'], str), "'model' should be a string."
-
-    assert "choices" in chunk, "Chunk should have 'choices'."
     assert isinstance(chunk['choices'], list), "'choices' should be a list."
 
     for choice in chunk['choices']:
-        assert isinstance(choice, dict), "Each choice should be a dictionary."
-
-        assert "index" in choice, "Each choice should have 'index'."
         assert isinstance(choice['index'], int), "'index' should be an integer."
-
-        assert "delta" in choice, "Each choice should have 'delta'." 
-        assert isinstance(choice['delta'], dict), "'delta' should be a dictionary."
-
-        assert "finish_reason" in choice, "Each choice should have 'finish_reason'."
         assert isinstance(choice['finish_reason'], str), "'finish_reason' should be a string."
 
 def streaming_format_tests(idx, chunk):
@@ -183,17 +128,17 @@ def streaming_format_tests(idx, chunk):
         validate_second_format(chunk=chunk)
     if idx != 0: # ensure no role
         if "role" in chunk["choices"][0]["delta"]:
-            raise Exception("role should not exist after first chunk")
+            pass # openai v1.0.0+ passes role = None
     if chunk["choices"][0]["finish_reason"]: # ensure finish reason is only in last chunk
         validate_last_format(chunk=chunk)
         finished = True
-    if "content" in chunk["choices"][0]["delta"]:
+    if "content" in chunk["choices"][0]["delta"] and chunk["choices"][0]["delta"]["content"] is not None:
         extracted_chunk = chunk["choices"][0]["delta"]["content"]
     print(f"extracted chunk: {extracted_chunk}")
     return extracted_chunk, finished
 
 # def test_completion_cohere_stream():
-# this is a flaky test due to the cohere API endpoint being unstable
+# # this is a flaky test due to the cohere API endpoint being unstable
 #     try:
 #         messages = [
 #             {"role": "system", "content": "You are a helpful assistant."},
@@ -226,6 +171,7 @@ def streaming_format_tests(idx, chunk):
 
 def test_completion_cohere_stream_bad_key():
     try:
+        litellm.cache = None
         api_key = "bad-key"
         messages = [
             {"role": "system", "content": "You are a helpful assistant."},
@@ -258,150 +204,32 @@ def test_completion_cohere_stream_bad_key():
 
 # test_completion_cohere_stream_bad_key()
 
-# def test_completion_nlp_cloud():
-#     try:
-#         messages = [
-#             {"role": "system", "content": "You are a helpful assistant."},
-#             {
-#                 "role": "user",
-#                 "content": "how does a court case get to the Supreme Court?",
-#             },
-#         ]
-#         response = completion(model="dolphin", messages=messages, stream=True)
-#         complete_response = ""
-#         # Add any assertions here to check the response
-#         has_finish_reason = False
-#         for idx, chunk in enumerate(response):
-#             chunk, finished = streaming_format_tests(idx, chunk)
-#             has_finish_reason = finished
-#             complete_response += chunk
-#             if finished:
-#                 break
-#         if has_finish_reason is False:
-#             raise Exception("Finish reason not in final chunk")
-#         if complete_response.strip() == "": 
-#             raise Exception("Empty response received")
-#         print(f"completion_response: {complete_response}")
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
-
-# test_completion_nlp_cloud()
-
-# def test_completion_nlp_cloud_bad_key():
-#     try:
-#         api_key = "bad-key"
-#         messages = [
-#             {"role": "system", "content": "You are a helpful assistant."},
-#             {
-#                 "role": "user",
-#                 "content": "how does a court case get to the Supreme Court?",
-#             },
-#         ]
-#         response = completion(model="dolphin", messages=messages, stream=True, api_key=api_key)
-#         complete_response = ""
-#         # Add any assertions here to check the response
-#         has_finish_reason = False
-#         for idx, chunk in enumerate(response):
-#             chunk, finished = streaming_format_tests(idx, chunk)
-#             has_finish_reason = finished
-#             complete_response += chunk
-#             if finished:
-#                 break
-#         if has_finish_reason is False:
-#             raise Exception("Finish reason not in final chunk")
-#         if complete_response.strip() == "": 
-#             raise Exception("Empty response received")
-#         print(f"completion_response: {complete_response}")
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
-
-# test_completion_nlp_cloud_bad_key()
-
-# def test_completion_hf_stream():
-#     try:
-#         litellm.set_verbose = True
-#         # messages = [
-#         #     {
-#         #         "content": "Hello! How are you today?",
-#         #         "role": "user"
-#         #     },
-#         # ]
-#         # response = completion(
-#         #     model="huggingface/mistralai/Mistral-7B-Instruct-v0.1", messages=messages, api_base="https://n9ox93a8sv5ihsow.us-east-1.aws.endpoints.huggingface.cloud", stream=True, max_tokens=1000
-#         # )
-#         # complete_response = ""
-#         # # Add any assertions here to check the response
-#         # for idx, chunk in enumerate(response):
-#         #     chunk, finished = streaming_format_tests(idx, chunk)
-#         #     if finished:
-#         #         break
-#         #     complete_response += chunk
-#         # if complete_response.strip() == "": 
-#         #     raise Exception("Empty response received")
-#         # completion_response_1 = complete_response
-#         messages = [
-#             {
-#                 "content": "Hello! How are you today?",
-#                 "role": "user"
-#             },
-#             {
-#                 "content": "I'm doing well, thank you for asking! I'm excited to be here and help you with any questions or concerns you may have. What can I assist you with today?",
-#                 "role": "assistant"
-#             },
-#             {
-#                 "content": "What is the price of crude oil?",
-#                 "role": "user"
-#             },
-#         ]
-#         response = completion(
-#             model="huggingface/mistralai/Mistral-7B-Instruct-v0.1", messages=messages, api_base="https://n9ox93a8sv5ihsow.us-east-1.aws.endpoints.huggingface.cloud", stream=True, max_tokens=1000, n=1
-#         )
-#         complete_response = ""
-#         # Add any assertions here to check the response
-#         for idx, chunk in enumerate(response):
-#             chunk, finished = streaming_format_tests(idx, chunk)
-#             if finished:
-#                 break
-#             complete_response += chunk
-#         if complete_response.strip() == "": 
-#             raise Exception("Empty response received")
-#         # print(f"completion_response_1: {completion_response_1}")
-#         print(f"completion_response: {complete_response}")
-#     except InvalidRequestError as e:
-#         pass
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
-
-# test_completion_hf_stream()
-
-# def test_completion_hf_stream_bad_key():
-#     try:
-#         api_key = "bad-key"
-#         messages = [
-#             {
-#                 "content": "Hello! How are you today?",
-#                 "role": "user"
-#             },
-#         ]
-#         response = completion(
-#             model="huggingface/meta-llama/Llama-2-7b-chat-hf", messages=messages, api_base="https://a8l9e3ucxinyl3oj.us-east-1.aws.endpoints.huggingface.cloud", stream=True, max_tokens=1000, api_key=api_key
-#         )
-#         complete_response = ""
-#         # Add any assertions here to check the response
-#         for idx, chunk in enumerate(response):
-#             chunk, finished = streaming_format_tests(idx, chunk)
-#             if finished:
-#                 break
-#             complete_response += chunk
-#         if complete_response.strip() == "": 
-#             raise Exception("Empty response received")
-#         print(f"completion_response: {complete_response}")
-#     except InvalidRequestError as e:
-#         pass
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
-
-# test_completion_hf_stream_bad_key()
+def test_completion_azure_stream():
+    try:
+        litellm.set_verbose = True
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {
+                "role": "user",
+                "content": "how does a court case get to the Supreme Court?",
+            },
+        ]
+        response = completion(
+            model="azure/chatgpt-v-2", messages=messages, stream=True, max_tokens=50
+        )
+        complete_response = ""
+        # Add any assertions here to check the response
+        for idx, chunk in enumerate(response):
+            chunk, finished = streaming_format_tests(idx, chunk)
+            if finished:
+                break
+            complete_response += chunk
+        if complete_response.strip() == "": 
+            raise Exception("Empty response received")
+        print(f"completion_response: {complete_response}")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+test_completion_azure_stream() 
 
 def test_completion_claude_stream():
     try:
@@ -432,6 +260,7 @@ def test_completion_claude_stream():
 
 def test_completion_palm_stream():
     try:
+        litellm.set_verbose=False
         print("Streaming palm response")
         messages = [
             {"role": "system", "content": "You are a helpful assistant."},
@@ -448,7 +277,8 @@ def test_completion_palm_stream():
         complete_response = ""
         # Add any assertions here to check the response
         for idx, chunk in enumerate(response):
-            print(chunk.choices[0].delta)
+            print(chunk)
+            # print(chunk.choices[0].delta)
             chunk, finished = streaming_format_tests(idx, chunk)
             if finished:
                 break
@@ -492,6 +322,8 @@ def test_completion_palm_stream():
 
 def test_completion_claude_stream_bad_key():
     try:
+        litellm.cache = None
+        litellm.set_verbose = True
         api_key = "bad-key"
         messages = [
             {"role": "system", "content": "You are a helpful assistant."},
@@ -512,9 +344,10 @@ def test_completion_claude_stream_bad_key():
             complete_response += chunk
         if complete_response.strip() == "": 
             raise Exception("Empty response received")
-        print(f"completion_response: {complete_response}")
+        print(f"1234completion_response: {complete_response}")
+        raise Exception("Auth error not raised")
     except AuthenticationError as e:
-        pass
+        print("Auth Error raised")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -661,39 +494,38 @@ def test_completion_replicate_stream_bad_key():
 
 # test_completion_replicate_stream_bad_key()
 
-# def test_completion_bedrock_claude_stream():
-#     try:
-#         litellm.set_verbose=False
-#         response = completion(
-#             model="bedrock/anthropic.claude-instant-v1", 
-#             messages=[{"role": "user", "content": "Be as verbose as possible and give as many details as possible, how does a court case get to the Supreme Court?"}],
-#             temperature=1,
-#             max_tokens=20,
-#             stream=True,
-#         )
-#         print(response)
-#         complete_response = ""
-#         has_finish_reason = False
-#         # Add any assertions here to check the response
-#         for idx, chunk in enumerate(response):
-#             # print
-#             chunk, finished = streaming_format_tests(idx, chunk)
-#             has_finish_reason = finished
-#             complete_response += chunk
-#             if finished:
-#                 break
-#         if has_finish_reason is False:
-#             raise Exception("finish reason not set for last chunk")
-#         if complete_response.strip() == "": 
-#             raise Exception("Empty response received")
-#         print(f"completion_response: {complete_response}")
-#     except RateLimitError:
-#         pass
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
+def test_completion_bedrock_claude_stream():
+    try:
+        litellm.set_verbose=False
+        response = completion(
+            model="bedrock/anthropic.claude-instant-v1", 
+            messages=[{"role": "user", "content": "Be as verbose as possible and give as many details as possible, how does a court case get to the Supreme Court?"}],
+            temperature=1,
+            max_tokens=20,
+            stream=True,
+        )
+        print(response)
+        complete_response = ""
+        has_finish_reason = False
+        # Add any assertions here to check the response
+        for idx, chunk in enumerate(response):
+            # print
+            chunk, finished = streaming_format_tests(idx, chunk)
+            has_finish_reason = finished
+            complete_response += chunk
+            if finished:
+                break
+        if has_finish_reason is False:
+            raise Exception("finish reason not set for last chunk")
+        if complete_response.strip() == "": 
+            raise Exception("Empty response received")
+        print(f"completion_response: {complete_response}")
+    except RateLimitError:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 # test_completion_bedrock_claude_stream() 
-
 
 # def test_completion_sagemaker_stream():
 #     try:
@@ -742,22 +574,6 @@ def test_completion_replicate_stream_bad_key():
 #         pytest.fail(f"error occurred: {traceback.format_exc()}")
 # test_maritalk_streaming()
 # test on openai completion call
-def test_openai_text_completion_call():
-    try:
-        response = completion(
-            model="text-davinci-003", messages=messages, stream=True, logger_fn=logger_fn
-        )
-        complete_response = ""
-        start_time = time.time()
-        for idx, chunk in enumerate(response):
-            chunk, finished = streaming_format_tests(idx, chunk)
-            if finished:
-                break
-            complete_response += chunk
-        if complete_response.strip() == "": 
-            raise Exception("Empty response received")
-    except:
-        pytest.fail(f"error occurred: {traceback.format_exc()}")
 
 # # test on ai21 completion call
 def ai21_completion_call():
@@ -810,8 +626,6 @@ def ai21_completion_call_bad_key():
         if complete_response.strip() == "": 
             raise Exception("Empty response received")
         print(f"completion_response: {complete_response}")
-    except InvalidRequestError as e: 
-        pass
     except:
         pytest.fail(f"error occurred: {traceback.format_exc()}")
 
@@ -871,13 +685,16 @@ def ai21_completion_call_bad_key():
 # test on openai completion call
 def test_openai_chat_completion_call():
     try:
+        litellm.set_verbose = False
+        print(f"making openai chat completion call")
         response = completion(
-            model="gpt-3.5-turbo", messages=messages, stream=True, logger_fn=logger_fn, max_tokens=10
+            model="gpt-3.5-turbo", messages=messages, stream=True
         )
         complete_response = ""
         start_time = time.time()
         for idx, chunk in enumerate(response):
             chunk, finished = streaming_format_tests(idx, chunk)
+            print(f"outside chunk: {chunk}")
             if finished:
                 break
             complete_response += chunk
@@ -889,7 +706,43 @@ def test_openai_chat_completion_call():
         print(f"error occurred: {traceback.format_exc()}")
         pass
 
-# test_openai_chat_completion_call()
+test_openai_chat_completion_call()
+
+def test_openai_chat_completion_complete_response_call():
+    try:
+        complete_response = completion(
+            model="gpt-3.5-turbo", messages=messages, stream=True, complete_response=True
+        )
+        print(f"complete response: {complete_response}")
+    except:
+        print(f"error occurred: {traceback.format_exc()}")
+        pass
+
+# test_openai_chat_completion_complete_response_call()
+
+def test_openai_text_completion_call():
+    try:
+        litellm.set_verbose = True
+        response = completion(
+            model="gpt-3.5-turbo-instruct", messages=messages, stream=True
+        )
+        complete_response = ""
+        start_time = time.time()
+        for idx, chunk in enumerate(response):
+            chunk, finished = streaming_format_tests(idx, chunk)
+            print(f"chunk: {chunk}")
+            complete_response += chunk
+            if finished:
+                break
+            # print(f'complete_chunk: {complete_response}')
+        if complete_response.strip() == "": 
+            raise Exception("Empty response received")
+        print(f"complete response: {complete_response}")
+    except:
+        print(f"error occurred: {traceback.format_exc()}")
+        pass
+
+# test_openai_text_completion_call()
 
 # # test on together ai completion call - starcoder
 def test_together_ai_completion_call_starcoder():
@@ -944,7 +797,7 @@ def test_together_ai_completion_call_starcoder_bad_key():
         if complete_response == "":
             raise Exception("Empty response received")
         print(f"complete response: {complete_response}")
-    except InvalidRequestError as e:
+    except BadRequestError as e:
         pass
     except:
         print(f"error occurred: {traceback.format_exc()}")
@@ -972,8 +825,17 @@ def test_completion_openai_with_functions():
         }
     ]
     try:
+        litellm.set_verbose=False
         response = completion(
-            model="gpt-3.5-turbo", messages=messages, functions=function1, stream=True,
+            model="gpt-3.5-turbo-1106", 
+            messages=[
+                {
+                    "role": "user",
+                    "content": "what's the weather in SF"
+                }
+            ], 
+            functions=function1, 
+            stream=True,
         )
         # Add any assertions here to check the response
         print(response)
@@ -985,7 +847,7 @@ def test_completion_openai_with_functions():
             print(chunk["choices"][0]["delta"]["content"])
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-
+# test_completion_openai_with_functions()
 #### Test Async streaming ####
 
 # # test on ai21 completion call

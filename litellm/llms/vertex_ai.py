@@ -4,13 +4,16 @@ from enum import Enum
 import requests
 import time
 from typing import Callable, Optional
-from litellm.utils import ModelResponse
+from litellm.utils import ModelResponse, Usage
 import litellm
+import httpx
 
 class VertexAIError(Exception):
     def __init__(self, status_code, message):
         self.status_code = status_code
         self.message = message
+        self.request = httpx.Request(method="POST", url=" https://cloud.google.com/vertex-ai/")
+        self.response = httpx.Response(status_code=status_code, request=self.request)
         super().__init__(
             self.message
         )  # Call the base class constructor with the parameters it needs
@@ -109,7 +112,12 @@ def completion(
         logging_obj.pre_call(input=prompt, api_key=None, additional_args={"complete_input_dict": optional_params})
 
         if "stream" in optional_params and optional_params["stream"] == True:
+            # NOTE: VertexAI does not accept stream=True as a param and raises an error,
+            # we handle this by removing 'stream' from optional params and sending the request
+            # after we get the response we add optional_params["stream"] = True, since main.py needs to know it's a streaming response to then transform it for the OpenAI format
+            optional_params.pop("stream", None) # vertex ai raises an error when passing stream in optional params
             model_response = chat.send_message_streaming(prompt, **optional_params)
+            optional_params["stream"] = True
             return model_response
 
         completion_response = chat.send_message(prompt, **optional_params).text
@@ -118,7 +126,9 @@ def completion(
         logging_obj.pre_call(input=prompt, api_key=None)
 
         if "stream" in optional_params and optional_params["stream"] == True:
+            optional_params.pop("stream", None) # See note above on handling streaming for vertex ai 
             model_response = text_model.predict_streaming(prompt, **optional_params)
+            optional_params["stream"] = True
             return model_response
 
         completion_response = text_model.predict(prompt, **optional_params).text
@@ -143,10 +153,12 @@ def completion(
     completion_tokens = len(
         encoding.encode(model_response["choices"][0]["message"].get("content", ""))
     )
-
-    model_response.usage.completion_tokens = completion_tokens
-    model_response.usage.prompt_tokens = prompt_tokens
-    model_response.usage.total_tokens = prompt_tokens + completion_tokens
+    usage = Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens
+        )
+    model_response.usage = usage
     return model_response
 
 

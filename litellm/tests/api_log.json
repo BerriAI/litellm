@@ -37,5 +37,19 @@
       },
       "log_event_type": "pre_api_call"
     }
-  }
-}
+  },
+  "20231105211050527183": {
+    "pre_api_call": {
+      "model": "togethercomputer/llama-2-70b-chat",
+      "messages": [
+        {
+          "content": "Write a short poem about the sky",
+          "role": "user"
+        }
+      ],
+      "optional_params": {},
+      "litellm_params": {
+        "return_async": false,
+        "api_key": null,
+        "force_timeout": 600,
+        "logger_fn": 

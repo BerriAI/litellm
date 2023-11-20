@@ -1,7 +1,12 @@
 litellm
 openai
 fastapi
+tomli
+appdirs
+tomli_w
+backoff
+pyyaml
 uvicorn
 boto3
-litellm
 redis
+pyyaml

@@ -1,0 +1,15 @@
+datasource client {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-py"
+}
+
+// required for token gen
+model LiteLLM_VerificationToken {
+    token      String   @unique
+    expires    DateTime
+    models     String[]
+}

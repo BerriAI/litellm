@@ -39,7 +39,8 @@ def test_acompletion_sync():
                 messages=[{"role": "user", "content": "write a poem"}], 
                 max_tokens=10,
                 stream=True,
-                user="ishaanStreamingUser"
+                user="ishaanStreamingUser",
+                timeout=5
             )
             complete_response = ""
             start_time = time.time()
@@ -54,13 +55,20 @@ def test_acompletion_sync():
                     print("🤗🤗🤗 DONE")
                     return
 
+        except litellm.Timeout as e: 
+            pass
         except:
             print(f"error occurred: {traceback.format_exc()}")
             pass
 
-
     asyncio.run(completion_call())
 # test_acompletion_sync()
+
+
+# reset callbacks
+litellm.input_callback = []
+litellm.success_callback = []
+litellm.failure_callback = []
 
 
 

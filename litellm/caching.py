@@ -8,9 +8,8 @@
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
 import litellm
-import time
+import time, logging
 import json, traceback
-
 
 def get_prompt(*args, **kwargs):
     # make this safe checks, it should not throw any exceptions
@@ -37,7 +36,6 @@ class RedisCache(BaseCache):
     def __init__(self, host, port, password):
         import redis
         # if users don't provider one, use the default litellm cache
-        print(f"HOST: {host}; PORT: {port}; PASSWORD: {password}")
         self.redis_client = redis.Redis(host=host, port=port, password=password)
 
     def set_cache(self, key, value, **kwargs):
@@ -46,7 +44,7 @@ class RedisCache(BaseCache):
             self.redis_client.set(name=key, value=str(value), ex=ttl)
         except Exception as e:
             # NON blocking - notify users Redis is throwing an exception
-            print("LiteLLM Caching: set() - Got exception from REDIS : ", e)
+            logging.debug("LiteLLM Caching: set() - Got exception from REDIS : ", e)
 
     def get_cache(self, key, **kwargs):
         try:
@@ -61,13 +59,13 @@ class RedisCache(BaseCache):
         except Exception as e:
             # NON blocking - notify users Redis is throwing an exception
             traceback.print_exc()
-            print("LiteLLM Caching: get() - Got exception from REDIS: ", e)
+            logging.debug("LiteLLM Caching: get() - Got exception from REDIS: ", e)
 
 
 class HostedCache(BaseCache):
     def set_cache(self, key, value, **kwargs):
         if "ttl" in kwargs:
-            print("LiteLLM Caching: TTL is not supported for hosted cache!")
+            logging.debug("LiteLLM Caching: TTL is not supported for hosted cache!")
         # make a post request to api.litellm.ai/set_cache
         import requests
         url = f"https://api.litellm.ai/set_cache?key={key}&value={str(value)}"
@@ -200,12 +198,10 @@ class Cache:
                 cached_result = self.cache.get_cache(cache_key)
                 if cached_result != None and 'stream' in kwargs and kwargs['stream'] == True:
                     # if streaming is true and we got a cache hit, return a generator
-                    # print("cache hit and stream=True")
-                    # print(cached_result)
                     return self.generate_streaming_content(cached_result["choices"][0]['message']['content'])
                 return cached_result
         except Exception as e:
-            print(f"An exception occurred: {traceback.format_exc()}")
+            logging.debug(f"An exception occurred: {traceback.format_exc()}")
             return None
 
     def add_cache(self, result, *args, **kwargs):
@@ -224,10 +220,9 @@ class Cache:
                 cache_key = kwargs["cache_key"]
             else:
                 cache_key = self.get_cache_key(*args, **kwargs)
-            # print("adding to cache", cache_key, result)
-            # print(cache_key)
             if cache_key is not None:
-                # print("adding to cache", cache_key, result)
+                if isinstance(result, litellm.ModelResponse):
+                    result = result.model_dump_json()
                 self.cache.set_cache(cache_key, result, **kwargs)
         except:
             pass

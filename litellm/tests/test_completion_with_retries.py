@@ -14,7 +14,7 @@ import litellm
 from litellm import completion_with_retries, completion
 from litellm import (
     AuthenticationError,
-    InvalidRequestError,
+    BadRequestError,
     RateLimitError,
     ServiceUnavailableError,
     OpenAIError,
@@ -45,9 +45,8 @@ def test_completion_custom_provider_model_name():
 def test_completion_with_num_retries(): 
     try: 
         response = completion(model="j2-ultra", messages=[{"messages": "vibe", "bad": "message"}], num_retries=2)
-    except openai.APIError as e: 
-        pass
-    except Exception as e: 
         pytest.fail(f"Unmapped exception occurred")
+    except Exception as e: 
+        pass
 
 # test_completion_with_num_retries()

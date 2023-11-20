@@ -1,14 +1,11 @@
 # used by CI/CD testing
 openai
 python-dotenv
-openai
 tiktoken
 importlib_metadata
 baseten
 cohere
 redis
-replicate
 anthropic
-gptcache
 boto3
 appdirs

@@ -3,13 +3,16 @@ import json
 import requests
 import time
 from typing import Callable, Optional
-from litellm.utils import ModelResponse
+from litellm.utils import ModelResponse, Usage
 import litellm 
+import httpx
 
 class ReplicateError(Exception):
     def __init__(self, status_code, message):
         self.status_code = status_code
         self.message = message
+        self.request = httpx.Request(method="POST", url="https://api.replicate.com/v1/deployments")
+        self.response = httpx.Response(status_code=status_code, request=self.request)
         super().__init__(
             self.message
         )  # Call the base class constructor with the parameters it needs
@@ -74,8 +77,14 @@ class ReplicateConfig():
 
 
 # Function to start a prediction and get the prediction URL
-def start_prediction(version_id, input_data, api_token, api_base, logging_obj):
+def start_prediction(version_id, input_data, api_token, api_base, logging_obj, print_verbose):
     base_url = api_base
+    if "deployments" in version_id:
+        print_verbose("\nLiteLLM: Request to custom replicate deployment")
+        version_id = version_id.replace("deployments/", "")
+        base_url = f"https://api.replicate.com/v1/deployments/{version_id}"
+        print_verbose(f"Deployment base URL: {base_url}\n")
+
     headers = {
         "Authorization": f"Token {api_token}",
         "Content-Type": "application/json"
@@ -86,7 +95,7 @@ def start_prediction(version_id, input_data, api_token, api_base, logging_obj):
         "input": input_data,
     }
 
-        ## LOGGING
+    ## LOGGING
     logging_obj.pre_call(
             input=input_data["prompt"],
             api_key="",
@@ -111,7 +120,7 @@ def handle_prediction_response(prediction_url, api_token, print_verbose):
     status = ""
     logs = ""
     while True and (status not in ["succeeded", "failed", "canceled"]):
-        print_verbose("making request")
+        print_verbose(f"replicate: polling endpoint: {prediction_url}")
         time.sleep(0.5)
         response = requests.get(prediction_url, headers=headers)
         if response.status_code == 200:
@@ -119,10 +128,14 @@ def handle_prediction_response(prediction_url, api_token, print_verbose):
             if "output" in response_data:
                 output_string = "".join(response_data['output'])
                 print_verbose(f"Non-streamed output:{output_string}")
-            status = response_data['status']
+            status = response_data.get('status', None)
             logs = response_data.get("logs", "")
+            if status == "failed":
+                replicate_error = response_data.get("error", "")
+                raise ReplicateError(status_code=400, message=f"Error: {replicate_error}, \nReplicate logs:{logs}")
         else:
-            print_verbose("Failed to fetch prediction status and output.")
+            # this can fail temporarily but it does not mean the replicate request failed, replicate request fails when status=="failed"
+            print_verbose("Replicate: Failed to fetch prediction status and output.")
     return output_string, logs
 
 # Function to handle prediction response (streaming)
@@ -137,6 +150,7 @@ def handle_prediction_response_streaming(prediction_url, api_token, print_verbos
     status = ""
     while True and (status not in ["succeeded", "failed", "canceled"]):
         time.sleep(0.5) # prevent being rate limited by replicate
+        print_verbose(f"replicate: polling endpoint: {prediction_url}")
         response = requests.get(prediction_url, headers=headers)
         if response.status_code == 200:
             response_data = response.json()
@@ -144,9 +158,16 @@ def handle_prediction_response_streaming(prediction_url, api_token, print_verbos
             if "output" in response_data:
                 output_string = "".join(response_data['output'])
                 new_output = output_string[len(previous_output):]
+                print_verbose(f"New chunk: {new_output}")
                 yield {"output": new_output, "status": status}
                 previous_output = output_string
             status = response_data['status']
+            if status == "failed":
+                replicate_error = response_data.get("error", "")
+                raise ReplicateError(status_code=400, message=f"Error: {replicate_error}")
+        else:
+            # this can fail temporarily but it does not mean the replicate request failed, replicate request fails when status=="failed"
+            print_verbose(f"Replicate: Failed to fetch prediction status and output.{response.status_code}{response.text}")
 
 # Function to extract version ID from model string
 def model_to_version_id(model):
@@ -209,7 +230,7 @@ def completion(
     ## Step2: Poll prediction url for response
     ## Step2: is handled with and without streaming
     model_response["created"] = time.time() # for pricing this must remain right before calling api
-    prediction_url = start_prediction(version_id, input_data, api_key, api_base, logging_obj=logging_obj)
+    prediction_url = start_prediction(version_id, input_data, api_key, api_base, logging_obj=logging_obj, print_verbose=print_verbose)
     print_verbose(prediction_url)
 
     # Handle the prediction response (streaming or non-streaming)
@@ -231,7 +252,7 @@ def completion(
 
         if len(result) == 0: # edge case, where result from replicate is empty
             result = " "
-        
+
         ## Building RESPONSE OBJECT
         if len(result) > 1:
             model_response["choices"][0]["message"]["content"] = result
@@ -240,9 +261,12 @@ def completion(
         prompt_tokens = len(encoding.encode(prompt))
         completion_tokens = len(encoding.encode(model_response["choices"][0]["message"].get("content", "")))
         model_response["model"] = "replicate/" + model
-        model_response.usage.completion_tokens = completion_tokens
-        model_response.usage.prompt_tokens = prompt_tokens
-        model_response.usage.total_tokens = prompt_tokens + completion_tokens
+        usage = Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens
+        )
+        model_response.usage = usage
         return model_response
 
 

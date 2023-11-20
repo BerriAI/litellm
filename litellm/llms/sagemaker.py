@@ -5,14 +5,17 @@ import requests
 import time
 from typing import Callable, Optional
 import litellm
-from litellm.utils import ModelResponse, get_secret
+from litellm.utils import ModelResponse, get_secret, Usage
 import sys
 from copy import deepcopy
+import httpx
 
 class SagemakerError(Exception):
     def __init__(self, status_code, message):
         self.status_code = status_code
         self.message = message
+        self.request = httpx.Request(method="POST", url="https://us-west-2.console.aws.amazon.com/sagemaker")
+        self.response = httpx.Response(status_code=status_code, request=self.request)
         super().__init__(
             self.message
         )  # Call the base class constructor with the parameters it needs
@@ -169,9 +172,12 @@ def completion(
 
     model_response["created"] = time.time()
     model_response["model"] = model
-    model_response.usage.completion_tokens = completion_tokens
-    model_response.usage.prompt_tokens = prompt_tokens
-    model_response.usage.total_tokens = prompt_tokens + completion_tokens
+    usage = Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens
+        )
+    model_response.usage = usage
     return model_response
 
 def embedding():

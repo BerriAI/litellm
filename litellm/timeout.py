@@ -17,7 +17,7 @@ from concurrent import futures
 from inspect import iscoroutinefunction
 from functools import wraps
 from threading import Thread
-from openai.error import Timeout
+from litellm.exceptions import Timeout
 
 
 def timeout(timeout_duration: float = 0.0, exception_to_raise=Timeout):
@@ -53,8 +53,11 @@ def timeout(timeout_duration: float = 0.0, exception_to_raise=Timeout):
                 result = future.result(timeout=local_timeout_duration)
             except futures.TimeoutError:
                 thread.stop_loop()
+                model = args[0] if len(args) > 0 else kwargs["model"]
                 raise exception_to_raise(
-                    f"A timeout error occurred. The function call took longer than {local_timeout_duration} second(s)."
+                    f"A timeout error occurred. The function call took longer than {local_timeout_duration} second(s).",
+                    model=model, # [TODO]: replace with logic for parsing out llm provider from model name
+                    llm_provider="openai"
                 )
             thread.stop_loop()
             return result
@@ -72,8 +75,11 @@ def timeout(timeout_duration: float = 0.0, exception_to_raise=Timeout):
                 )
                 return value
             except asyncio.TimeoutError:
+                model = args[0] if len(args) > 0 else kwargs["model"]
                 raise exception_to_raise(
-                    f"A timeout error occurred. The function call took longer than {local_timeout_duration} second(s)."
+                    f"A timeout error occurred. The function call took longer than {local_timeout_duration} second(s).",
+                    model=model, # [TODO]: replace with logic for parsing out llm provider from model name
+                    llm_provider="openai"
                 )
 
         if iscoroutinefunction(func):
@@ -89,8 +95,15 @@ class _LoopWrapper(Thread):
         self.loop = asyncio.new_event_loop()
 
     def run(self) -> None:
-        self.loop.run_forever()
-        self.loop.call_soon_threadsafe(self.loop.close)
+        try:
+            self.loop.run_forever()
+            self.loop.call_soon_threadsafe(self.loop.close)
+        except Exception as e:
+            # Log exception here
+            pass
+        finally:
+            self.loop.close()
+            asyncio.set_event_loop(None)
 
     def stop_loop(self):
         for task in asyncio.all_tasks(self.loop):

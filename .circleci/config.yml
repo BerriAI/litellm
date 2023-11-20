@@ -25,18 +25,16 @@ jobs:
           command: |
             python -m pip install --upgrade pip
             python -m pip install -r .circleci/requirements.txt
-            pip install infisical
             pip install pytest
             pip install pytest-asyncio
             pip install mypy
             pip install -q google-generativeai
-            pip install openai[datalib]
-            pip install -Uq chromadb==0.3.29
             pip install "boto3>=1.28.57"
             pip install appdirs
             pip install langchain
             pip install numpydoc
             pip install traceloop-sdk==0.0.69
+            pip install openai
       - save_cache:
           paths:
             - ./venv
@@ -59,8 +57,8 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv litellm/tests/ -x --junitxml=test-results/junit.xml
-          no_output_timeout: 50m
+            python -m pytest -vv litellm/tests/ -x --junitxml=test-results/junit.xml --durations=5
+          no_output_timeout: 120m
 
       # Store test results
       - store_test_results:

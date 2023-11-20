@@ -5,13 +5,16 @@ import requests
 import time
 from typing import Callable, Optional
 import litellm
-from litellm.utils import ModelResponse
+import httpx
+from litellm.utils import ModelResponse, Usage
 from .prompt_templates.factory import prompt_factory, custom_prompt
 
 class TogetherAIError(Exception):
     def __init__(self, status_code, message):
         self.status_code = status_code
         self.message = message
+        self.request = httpx.Request(method="POST", url="https://api.together.xyz/inference")
+        self.response = httpx.Response(status_code=status_code, request=self.request)
         super().__init__(
             self.message
         )  # Call the base class constructor with the parameters it needs
@@ -99,15 +102,18 @@ def completion(
         if k not in optional_params: # completion(top_k=3) > togetherai_config(top_k=3) <- allows for dynamic variables to be passed in
             optional_params[k] = v
 
+    print_verbose(f"CUSTOM PROMPT DICT: {custom_prompt_dict}; model: {model}")
     if model in custom_prompt_dict:
         # check if the model has a registered custom prompt
         model_prompt_details = custom_prompt_dict[model]
         prompt = custom_prompt(
-            role_dict=model_prompt_details["roles"], 
-            initial_prompt_value=model_prompt_details["initial_prompt_value"],  
-            final_prompt_value=model_prompt_details["final_prompt_value"], 
-            messages=messages
-        )
+                role_dict=model_prompt_details.get("roles", {}), 
+                initial_prompt_value=model_prompt_details.get("initial_prompt_value", ""),  
+                final_prompt_value=model_prompt_details.get("final_prompt_value", ""), 
+                bos_token=model_prompt_details.get("bos_token", ""),
+                eos_token=model_prompt_details.get("eos_token", ""),
+                messages=messages,
+            )
     else:
         prompt = prompt_factory(model=model, messages=messages)
 
@@ -120,10 +126,10 @@ def completion(
 
     ## LOGGING
     logging_obj.pre_call(
-            input=prompt,
-            api_key=api_key,
-            additional_args={"complete_input_dict": data},
-        )
+        input=prompt,
+        api_key=api_key,
+        additional_args={"complete_input_dict": data, "headers": headers, "api_base": api_base},
+    )
     ## COMPLETION CALL
     if (
             "stream_tokens" in optional_params
@@ -151,6 +157,10 @@ def completion(
             )
         print_verbose(f"raw model_response: {response.text}")
         ## RESPONSE OBJECT
+        if response.status_code != 200:
+            raise TogetherAIError(
+                status_code=response.status_code, message=response.text
+            )
         completion_response = response.json()
 
         if "error" in completion_response:
@@ -175,9 +185,12 @@ def completion(
             model_response.choices[0].finish_reason = completion_response["output"]["choices"][0]["finish_reason"]
         model_response["created"] = time.time()
         model_response["model"] = model
-        model_response.usage.completion_tokens = completion_tokens
-        model_response.usage.prompt_tokens = prompt_tokens
-        model_response.usage.total_tokens = prompt_tokens + completion_tokens
+        usage = Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens
+        )
+        model_response.usage = usage
         return model_response
 
 def embedding():
