@@ -331,8 +331,13 @@ class Router:
         custom_llm_provider = kwargs.get("litellm_params", {}).get('custom_llm_provider', None)  # i.e. azure
         if custom_llm_provider:
             model_name = f"{custom_llm_provider}/{model_name}"
-        total_tokens = completion_response['usage']['total_tokens']
-        self._set_deployment_usage(model_name, total_tokens)
+        if kwargs["stream"] is True: 
+            if kwargs.get("complete_streaming_response"):
+                total_tokens = kwargs.get("complete_streaming_response")['usage']['total_tokens']
+                self._set_deployment_usage(model_name, total_tokens)
+        else: 
+            total_tokens = completion_response['usage']['total_tokens']
+            self._set_deployment_usage(model_name, total_tokens)
 
     def get_usage_based_available_deployment(self,
                                model: str,
