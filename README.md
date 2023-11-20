@@ -79,6 +79,44 @@ for chunk in result:
   print(chunk['choices'][0]['delta'])
 ```
 
+# Router - load balancing([Docs](https://docs.litellm.ai/docs/routing))
+LiteLLM allows you to load balance between multiple deployments (Azure, OpenAI). It picks the deployment which is below rate-limit and has the least amount of tokens used.
+```python
+from litellm import Router
+
+model_list = [{ # list of model deployments 
+    "model_name": "gpt-3.5-turbo", # model alias 
+    "litellm_params": { # params for litellm completion/embedding call 
+        "model": "azure/chatgpt-v-2", # actual model name
+        "api_key": os.getenv("AZURE_API_KEY"),
+        "api_version": os.getenv("AZURE_API_VERSION"),
+        "api_base": os.getenv("AZURE_API_BASE")
+    }
+}, {
+    "model_name": "gpt-3.5-turbo", 
+    "litellm_params": { # params for litellm completion/embedding call 
+        "model": "azure/chatgpt-functioncalling", 
+        "api_key": os.getenv("AZURE_API_KEY"),
+        "api_version": os.getenv("AZURE_API_VERSION"),
+        "api_base": os.getenv("AZURE_API_BASE")
+    }
+}, {
+    "model_name": "gpt-3.5-turbo", 
+    "litellm_params": { # params for litellm completion/embedding call 
+        "model": "gpt-3.5-turbo", 
+        "api_key": os.getenv("OPENAI_API_KEY"),
+    }
+}]
+
+router = Router(model_list=model_list)
+
+# openai.ChatCompletion.create replacement
+response = await router.completion(model="gpt-3.5-turbo", 
+                messages=[{"role": "user", "content": "Hey, how's it going?"}])
+
+print(response)
+```
+
 ## OpenAI Proxy - ([Docs](https://docs.litellm.ai/docs/simple_proxy))
 **If you want to use non-openai models in an openai code base**, you can use litellm proxy. Create a server to call 100+ LLMs (Huggingface/Bedrock/TogetherAI/etc) in the OpenAI ChatCompletions & Completions format
 
