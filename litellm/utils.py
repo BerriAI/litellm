@@ -5400,42 +5400,6 @@ def shorten_message_to_fit_limit(
         return message
 
 
-def shorten_message_to_fit_limit(
-    message: Dict[str, str],
-    tokens_needed: int,
-    model: str,
-    content_trimming_strategy: str = "filler",
-) -> Dict[str, str]:
-    """
-    Shorten a message's content to fit within a specified token limit.
-
-    Parameters
-    ----------
-    message : Dict[str, str]
-        A dictionary representing the message, should include a "content" key among others.
-    tokens_needed : int
-        The number of tokens that the content needs to be reduced to.
-    model : str
-        The language model used for token counting.
-    content_trimming_strategy : str, optional
-        The strategy to use for trimming content, by default "filler".
-
-    Returns
-    -------
-    Dict[str, str]
-        The message dictionary with the "content" field modified to fit the token limit.
-    """
-    message = message.copy()  # no inplace change of dictionnary
-    while True:
-        total_tokens = get_token_count([message], model)
-        if total_tokens <= tokens_needed:
-            break
-        message["content"] = shorten_message_content(
-            message["content"], tokens_needed, total_tokens, content_trimming_strategy
-        )
-    return message
-
-
 # LiteLLM token trimmer
 # this code is modified from https://github.com/KillianLucas/tokentrim/blob/main/tokentrim/tokentrim.py
 # Credits for this code go to Killian Lucas
@@ -5470,10 +5434,14 @@ def trim_messages(
                 max_tokens_for_model  = litellm.model_cost[model]['max_tokens'] 
                 max_tokens = int(max_tokens_for_model * trim_ratio)
             else:
-                # if user did not specify max tokens 
-                # or passed an llm litellm does not know
-                # do nothing, just return messages
-                return 
+                print_verbose(f"No model or max tokens given: keeping messages, no trimming")
+                if return_response_tokens:
+                    return (
+                        messages,
+                        None,
+                    )
+                else:
+                    return messages
         
         system_message = "" 
         for message in messages:
@@ -5486,7 +5454,14 @@ def trim_messages(
 
         # Do nothing if current tokens under messages
         if current_tokens < max_tokens:
-            return messages 
+            print_verbose(f"keeping messages, no trimming")
+            if return_response_tokens:
+                return (
+                    messages,
+                    max_tokens - current_tokens,
+                )
+            else:
+                return messages
         
         #### Trimming messages if current_tokens > max_tokens
         print_verbose(f"Need to trim input messages: {messages}, current_tokens{current_tokens}, max_tokens: {max_tokens}")
@@ -5494,7 +5469,10 @@ def trim_messages(
             system_message_event, max_tokens = process_system_message(system_message=system_message, max_tokens=max_tokens, model=model)
 
             if max_tokens == 0: # the system messages are too long
-                return [system_message_event]
+                final_messages = [system_message_event]
+                if return_response_tokens: # if user wants token count with new trimmed messages
+                    return final_messages, 0
+                return final_messages 
             
             # Since all system messages are combined and trimmed to fit the max_tokens, 
             # we remove all system messages from the messages list
