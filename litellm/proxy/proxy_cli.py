@@ -78,12 +78,12 @@ def run_server(host, port, api_base, api_version, model, alias, add_key, headers
     global feature_telemetry
     args = locals()
     if local:
-        from proxy_server import app, save_worker_config, usage_telemetry, add_keys_to_config
+        from proxy_server import app, save_worker_config, usage_telemetry
     else:
         try:
-            from .proxy_server import app, save_worker_config, usage_telemetry, add_keys_to_config
+            from .proxy_server import app, save_worker_config, usage_telemetry
         except ImportError as e: 
-            from proxy_server import app, save_worker_config, usage_telemetry, add_keys_to_config
+            from proxy_server import app, save_worker_config, usage_telemetry
     feature_telemetry = usage_telemetry
     if logs is not None:
         if logs == 0: # default to 1
@@ -104,13 +104,6 @@ def run_server(host, port, api_base, api_version, model, alias, add_key, headers
             print(json.dumps(recent_logs, indent=4))
         except:
             print("LiteLLM: No logs saved!")
-        return
-    if add_key:
-        key_name, key_value = add_key.split("=")
-        add_keys_to_config(key_name, key_value)
-        with open(user_config_path) as f:
-            print(f.read())
-        print("\033[1;32mDone successfully\033[0m")
         return
     if model and "ollama" in model: 
         run_ollama_serve()
