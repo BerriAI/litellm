@@ -2248,6 +2248,9 @@ def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None, api_
         ## openrouter
         elif model in litellm.maritalk_models:
             custom_llm_provider = "maritalk"
+        ## clova studio
+        elif model in litellm.clova_studio_models:
+            custom_llm_provider = "clova-studio"
         ## vertex - text + chat models
         elif(
             model in litellm.vertex_chat_models or 

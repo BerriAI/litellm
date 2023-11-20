@@ -21,6 +21,7 @@ from litellm import (  # type: ignore
     get_litellm_params,
     Logging,
 )
+from litellm.llms import clova_studio
 from litellm.utils import (
     get_secret,
     CustomStreamWrapper,
@@ -166,7 +167,8 @@ async def acompletion(*args, **kwargs):
             or custom_llm_provider == "azure" 
             or custom_llm_provider == "custom_openai"
             or custom_llm_provider == "text-completion-openai"
-            or custom_llm_provider == "huggingface"): # currently implemented aiohttp calls for just azure and openai, soon all. 
+            or custom_llm_provider == "huggingface"
+            or custom_llm_provider == "clova-studio"): # currently implemented aiohttp calls for just azure, openai, and clova-studio, soon all. 
             if kwargs.get("stream", False): 
                 response = completion(*args, **kwargs)
             else:
@@ -1027,6 +1029,45 @@ def completion(
                     model_response, model, custom_llm_provider="together_ai", logging_obj=logging
                 )
                 return response
+            response = model_response
+        elif custom_llm_provider == "clova-studio":
+            clova_studio_api_key = (
+                litellm.ncp_clova_studio_api_key
+                or get_secret("NCP_CLOVA_STUDIO_API_KEY")
+            )
+
+            apigw_api_key = (
+                litellm.ncp_apigw_api_key
+                or get_secret("NCP_APIGW_API_KEY")
+            )
+            
+            api_base = (
+                api_base
+                or litellm.api_base
+                or "https://clovastudio.apigw.ntruss.com"
+            )
+            
+            clova_studio_project = (
+                litellm.ncp_clova_studio_project
+                or get_secret("NCP_CLOVA_STUDIO_PROJECT")
+            )
+            
+            model_response = clova_studio.completion(
+                model=model,
+                messages=messages,
+                api_base=api_base,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                encoding=encoding,
+                clova_studio_api_key=clova_studio_api_key,
+                apigw_api_key=apigw_api_key,
+                clova_studio_project=clova_studio_project,
+                logging_obj=logging,
+                acompletion=acompletion, 
+            )
             response = model_response
         elif custom_llm_provider == "palm":
             palm_api_key = (

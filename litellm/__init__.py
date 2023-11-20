@@ -36,6 +36,9 @@ togetherai_api_key: Optional[str] = None
 baseten_key: Optional[str] = None
 aleph_alpha_key: Optional[str] = None
 nlp_cloud_key: Optional[str] = None
+ncp_clova_studio_api_key: Optional[str] = None
+ncp_apigw_api_key: Optional[str] = None
+ncp_clova_studio_project: Optional[str] = None
 use_client: bool = False
 logging: bool = True
 caching: bool = False # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
@@ -214,6 +217,7 @@ together_ai_models: List = [
 
 ] # supports all together ai models, just pass in the model id e.g. completion(model="together_computer/replit_code_3b",...)
 
+clova_studio_models: List = ["HCX-002"] # HyperCLOVA X
 
 baseten_models: List = ["qvv0xeq", "q841o8w", "31dxrj3"]  # FALCON 7B  # WizardLM  # Mosaic ML
 
@@ -362,6 +366,7 @@ from .llms.replicate import ReplicateConfig
 from .llms.cohere import CohereConfig
 from .llms.ai21 import AI21Config
 from .llms.together_ai import TogetherAIConfig
+from .llms.clova_studio import ClovaStudioConfig
 from .llms.palm import PalmConfig
 from .llms.nlp_cloud import NLPCloudConfig
 from .llms.aleph_alpha import AlephAlphaConfig
