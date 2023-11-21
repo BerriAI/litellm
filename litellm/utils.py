@@ -1082,7 +1082,7 @@ class Rules:
             if callable(rule): 
                 decision = rule(input)
                 if decision is False:
-                    raise litellm.APIResponseValidationError("LLM Response failed post-call-rule check", llm_provider=custom_llm_provider, model=model)
+                    raise litellm.APIResponseValidationError(message="LLM Response failed post-call-rule check", llm_provider=custom_llm_provider, model=model) # type: ignore
         return True 
 
     def post_call_rules(self, input: str, model: str): 
@@ -1091,7 +1091,7 @@ class Rules:
             if callable(rule): 
                 decision = rule(input)
                 if decision is False:
-                    raise litellm.APIResponseValidationError("LLM Response failed post-call-rule check", llm_provider=custom_llm_provider, model=model)
+                    raise litellm.APIResponseValidationError(message="LLM Response failed post-call-rule check", llm_provider=custom_llm_provider, model=model) # type: ignore
         return True 
 
 ####### CLIENT ###################
@@ -3135,10 +3135,10 @@ def convert_to_model_response_object(response_object: Optional[dict]=None, model
                 choice_list.append(choice)
             model_response_object.choices = choice_list
 
-            if "usage" in response_object:
-                model_response_object.usage.completion_tokens = response_object["usage"].get("completion_tokens", 0)
-                model_response_object.usage.prompt_tokens = response_object["usage"].get("prompt_tokens", 0)
-                model_response_object.usage.total_tokens = response_object["usage"].get("total_tokens", 0)
+            if "usage" in response_object and response_object["usage"] is not None:
+                model_response_object.usage.completion_tokens = response_object["usage"].get("completion_tokens", 0) # type: ignore
+                model_response_object.usage.prompt_tokens = response_object["usage"].get("prompt_tokens", 0) # type: ignore
+                model_response_object.usage.total_tokens = response_object["usage"].get("total_tokens", 0) # type: ignore
 
             if "id" in response_object: 
                 model_response_object.id = response_object["id"]
