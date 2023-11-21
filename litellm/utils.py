@@ -1077,21 +1077,19 @@ class Rules:
         pass
 
     def pre_call_rules(self, input: str, model: str): 
-        model, custom_llm_provider, _, _ =  get_llm_provider(model=model)
         for rule in litellm.pre_call_rules: 
             if callable(rule): 
                 decision = rule(input)
                 if decision is False:
-                    raise litellm.APIResponseValidationError(message="LLM Response failed post-call-rule check", llm_provider=custom_llm_provider, model=model) # type: ignore
+                    raise litellm.APIResponseValidationError(message="LLM Response failed post-call-rule check", llm_provider="", model=model) # type: ignore
         return True 
 
     def post_call_rules(self, input: str, model: str): 
-        model, custom_llm_provider, _, _ =  get_llm_provider(model=model)
         for rule in litellm.post_call_rules: 
             if callable(rule): 
                 decision = rule(input)
                 if decision is False:
-                    raise litellm.APIResponseValidationError(message="LLM Response failed post-call-rule check", llm_provider=custom_llm_provider, model=model) # type: ignore
+                    raise litellm.APIResponseValidationError(message="LLM Response failed post-call-rule check", llm_provider="", model=model) # type: ignore
         return True 
 
 ####### CLIENT ###################
