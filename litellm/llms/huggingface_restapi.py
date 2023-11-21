@@ -406,7 +406,7 @@ class Huggingface(BaseLLM):
                     try:
                         completion_response = response.json()
                         if isinstance(completion_response, dict): 
-                            completion_response: List[Dict[str, Any]] = [{"generated_text": completion_response}]
+                            completion_response: List[Dict[str, Any]] = [completion_response]
                     except:
                         import traceback
                         raise HuggingfaceError(
@@ -420,7 +420,6 @@ class Huggingface(BaseLLM):
                         message=completion_response["error"],
                         status_code=response.status_code,
                     )
-                
                 return self.convert_to_model_response_object(
                     completion_response=completion_response,
                     model_response=model_response,
