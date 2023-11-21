@@ -115,6 +115,7 @@ class APIConnectionError(APIConnectionError):  # type: ignore
         self.message = message
         self.llm_provider = llm_provider
         self.model = model
+        self.status_code = 500
         super().__init__(
             message=self.message,
             request=request
