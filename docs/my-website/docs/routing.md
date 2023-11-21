@@ -3,7 +3,7 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
 
-# Manage Multiple Deployments
+# Router - Load Balance Deployments
 
 Use this if you're trying to load-balance across multiple deployments (e.g. Azure/OpenAI). 
 
