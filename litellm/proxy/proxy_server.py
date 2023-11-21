@@ -493,7 +493,7 @@ async def completion(request: Request, model: Optional[str] = None):
         try:
             status = e.status_code  # type: ignore
         except:
-            status = status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status = 500
         raise HTTPException(
             status_code=status,
             detail=error_msg
@@ -529,7 +529,7 @@ async def chat_completion(request: Request, model: Optional[str] = None):
         try:
             status = e.status_code # type: ignore
         except:
-            status = status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status = 500
         raise HTTPException(
             status_code=status,
             detail=error_msg
