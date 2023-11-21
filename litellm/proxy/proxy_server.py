@@ -599,6 +599,7 @@ async def async_chat_completions(request: Request, task_id: str):
         job = redis_job.fetch(id=task_id, connection=redis_connection)
         print(f"job status: {job.get_status()}")
         result = job.result
+        status = "queued"
         if result is not None: 
             status = "finished"
         return {"status": status, "result": result}
