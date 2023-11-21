@@ -139,7 +139,7 @@ def test_completion_gpt4_vision():
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_completion_gpt4_vision()
+test_completion_gpt4_vision()
 
 def test_completion_perplexity_api():
     try:
