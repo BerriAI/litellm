@@ -82,14 +82,26 @@ def make_openai_completion(question):
             ],
         }
         response = requests.post("http://0.0.0.0:8000/queue/request", json=data)
-        print(response)
+        response = response.json()
         end_time = time.time()
-
         # Log the request details
         with open("request_log.txt", "a") as log_file:
             log_file.write(
-                f"Question: {question[:100]}\nResponse ID:{response.id} Content:{response.choices[0].message.content[:10]}\nTime: {end_time - start_time:.2f} seconds\n\n"
+                f"Question: {question[:100]}\nResponse ID: {response.get('id', 'N/A')} Url: {response.get('url', 'N/A')}\nTime: {end_time - start_time:.2f} seconds\n\n"
             )
+        
+        # polling the url 
+        url = response["url"]
+        polling_url = f"http://0.0.0.0:8000{url}"
+        print(f"POLLING JOB{polling_url}")
+        response = requests.get(polling_url)
+        response = response.json()
+        status = response["status"]
+        print(f"POLLING JOB{polling_url}\nSTATUS: {status}, \n Response {response}")
+        # if status == "finished":
+        #     print()
+
+
 
         return response
     except Exception as e:
