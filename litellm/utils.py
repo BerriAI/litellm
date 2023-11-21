@@ -3078,9 +3078,11 @@ def convert_to_model_response_object(response_object: Optional[dict]=None, model
                 choice_list.append(choice)
             model_response_object.choices = choice_list
 
-            if "usage" in response_object: 
-                model_response_object.usage = response_object["usage"]
-            
+            if "usage" in response_object:
+                model_response_object.usage.completion_tokens = response_object["usage"]["completion_tokens"]
+                model_response_object.usage.prompt_tokens = response_object["usage"]["prompt_tokens"]
+                model_response_object.usage.total_tokens = response_object["usage"]["total_tokens"]
+
             if "id" in response_object: 
                 model_response_object.id = response_object["id"]
             
