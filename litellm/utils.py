@@ -2247,6 +2247,12 @@ def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None, api_
     try:
         dynamic_api_key = None
         # check if llm provider provided
+        
+        if litellm.model_alias_map and model in litellm.model_alias_map:
+            model = litellm.model_alias_map[
+                model
+            ]  # update the model to the actual value if an alias has been passed in
+        
         if custom_llm_provider:
             return model, custom_llm_provider, dynamic_api_key, api_base
 

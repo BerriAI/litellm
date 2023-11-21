@@ -356,11 +356,6 @@ def completion(
         if model_list is not None: 
             deployments = [m["litellm_params"] for m in model_list if m["model_name"] == model]
             return batch_completion_models(deployments=deployments, **args)
-        if litellm.model_alias_map and model in litellm.model_alias_map:
-            args["model_alias_map"] = litellm.model_alias_map
-            model = litellm.model_alias_map[
-                model
-            ]  # update the model to the actual value if an alias has been passed in
 
         model_response = ModelResponse()
 
