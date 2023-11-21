@@ -571,7 +571,7 @@ async def generate_key_fn(request: Request):
             detail={"error": "models param must be a list"},
         )
 
-@router.post("/queue/chat/completions", dependencies=[Depends(user_api_key_auth)])
+@router.post("/queue/request", dependencies=[Depends(user_api_key_auth)])
 async def async_chat_completions(request: Request): 
     global request_queue
     body = await request.body()
@@ -587,7 +587,7 @@ async def async_chat_completions(request: Request):
     )
     data["call_type"] = "chat_completion"
     job = request_queue.enqueue(litellm_completion, **data)
-    return {"id": job.id, "url": f"/queue/chat/completions/{job.id}", "eta": 5, "status": "queued"}
+    return {"id": job.id, "url": f"/queue/response/{job.id}", "eta": 5, "status": "queued"}
     pass
 
 @router.get("/queue/response/{task_id}", dependencies=[Depends(user_api_key_auth)])
