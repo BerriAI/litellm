@@ -81,7 +81,10 @@ class Router:
             self.cache_responses = cache_responses
         self.cache = litellm.Cache(cache_config) # use Redis for tracking load balancing
         ## USAGE TRACKING ## 
-        litellm.success_callback = [self.deployment_callback]
+        if type(litellm.success_callback) == list:
+            litellm.success_callback.append(self.deployment_callback)
+        else:
+            litellm.success_callback = [self.deployment_callback]
 
     def _start_health_check_thread(self):
         """
