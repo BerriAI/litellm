@@ -405,6 +405,8 @@ class Huggingface(BaseLLM):
                     ## RESPONSE OBJECT
                     try:
                         completion_response = response.json()
+                        if isinstance(completion_response, dict): 
+                            completion_response: List[Dict[str, Any]] = [{"generated_text": content}]
                     except:
                         import traceback
                         raise HuggingfaceError(
