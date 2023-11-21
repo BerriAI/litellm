@@ -338,8 +338,8 @@ def completion(
     
     if mock_response:
         return mock_completion(model, messages, stream=stream, mock_response=mock_response)
-    if timeout is None: 
-        timeout = 600 # set timeout for 10 minutes by default 
+    if timeout is None:
+        timeout = kwargs.get("request_timeout", None) or 600 # set timeout for 10 minutes by default 
     timeout = float(timeout)
     try:
         if base_url is not None: 
