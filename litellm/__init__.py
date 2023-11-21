@@ -8,6 +8,8 @@ input_callback: List[Union[str, Callable]] = []
 success_callback: List[Union[str, Callable]] = []
 failure_callback: List[Union[str, Callable]] = []
 callbacks: List[Callable] = []
+pre_call_rules: List[Callable] = []
+post_call_rules: List[Callable] = []
 set_verbose = False
 email: Optional[
     str
@@ -386,7 +388,8 @@ from .exceptions import (
     BudgetExceededError, 
     APIError,
     Timeout,
-    APIConnectionError
+    APIConnectionError,
+    APIResponseValidationError
 )
 from .budget_manager import BudgetManager
 from .proxy.proxy_cli import run_server
