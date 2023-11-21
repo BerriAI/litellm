@@ -50,3 +50,24 @@ def test_completion_with_num_retries():
         pass
 
 # test_completion_with_num_retries()
+def test_completion_with_0_num_retries():
+    try:
+        litellm.set_verbose=False
+        print("making request")
+
+        # Use the completion function
+        response = completion(
+            model="gpt-3.5-turbo",
+            messages=[{"gm": "vibe", "role": "user"}],
+            max_retries=4
+        )
+
+        print(response)
+
+        # print(response)
+    except Exception as e:
+        print("exception", e)
+        pass
+
+# Call the test function
+test_completion_with_0_num_retries()
