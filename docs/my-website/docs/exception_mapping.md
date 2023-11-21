@@ -4,7 +4,7 @@ LiteLLM maps exceptions across all providers to their OpenAI counterparts.
 - Rate Limit Errors
 - Invalid Request Errors
 - Authentication Errors
-- Timeout Errors 
+- Timeout Errors `openai.APITimeoutError`
 - ServiceUnavailableError 
 - APIError 
 - APIConnectionError
@@ -67,7 +67,7 @@ except Exception as e:
 
 ```
 
-## details 
+## Details 
 
 To see how it's implemented - [check out the code](https://github.com/BerriAI/litellm/blob/a42c197e5a6de56ea576c73715e6c7c6b19fa249/litellm/utils.py#L1217)
 
@@ -75,7 +75,7 @@ To see how it's implemented - [check out the code](https://github.com/BerriAI/li
 
 **Note** For OpenAI and Azure we return the original exception (since they're of the OpenAI Error type). But we add the 'llm_provider' attribute to them. [See code](https://github.com/BerriAI/litellm/blob/a42c197e5a6de56ea576c73715e6c7c6b19fa249/litellm/utils.py#L1221)
 
-## custom mapping list
+## Custom mapping list
 
 Base case - we return the original exception.
 
