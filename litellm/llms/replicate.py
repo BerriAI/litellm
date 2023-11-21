@@ -229,7 +229,7 @@ def completion(
     ## Step1: Start Prediction: gets a prediction url
     ## Step2: Poll prediction url for response
     ## Step2: is handled with and without streaming
-    model_response["created"] = time.time() # for pricing this must remain right before calling api
+    model_response["created"] = int(time.time()) # for pricing this must remain right before calling api
     prediction_url = start_prediction(version_id, input_data, api_key, api_base, logging_obj=logging_obj, print_verbose=print_verbose)
     print_verbose(prediction_url)
 

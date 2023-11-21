@@ -224,7 +224,7 @@ class Huggingface(BaseLLM):
         else: 
             completion_tokens = 0
 
-        model_response["created"] = time.time()
+        model_response["created"] = int(time.time())
         model_response["model"] = model
         usage = Usage(
             prompt_tokens=prompt_tokens,

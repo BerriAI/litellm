@@ -144,7 +144,7 @@ def completion(
             "content"
         ] = str(completion_response)
     model_response["choices"][0]["message"]["content"] = str(completion_response)
-    model_response["created"] = time.time()
+    model_response["created"] = int(time.time())
     model_response["model"] = model
     ## CALCULATING USAGE
     prompt_tokens = len(

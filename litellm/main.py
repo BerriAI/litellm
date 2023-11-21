@@ -228,7 +228,7 @@ def mock_completion(model: str, messages: List, stream: Optional[bool] = False, 
             return response
         
         model_response["choices"][0]["message"]["content"] = mock_response
-        model_response["created"] = time.time()
+        model_response["created"] = int(time.time())
         model_response["model"] = model
         return model_response
 
@@ -388,7 +388,7 @@ def completion(
             api_base = "https://proxy.litellm.ai"
             custom_llm_provider = "openai" 
             api_key = model_api_key
-        
+
         # check if user passed in any of the OpenAI optional params
         optional_params = get_optional_params(
                 functions=functions,
@@ -1245,7 +1245,7 @@ def completion(
             
             ## RESPONSE OBJECT
             model_response["choices"][0]["message"]["content"] = response_string
-            model_response["created"] = time.time()
+            model_response["created"] = int(time.time())
             model_response["model"] = "ollama/" + model
             prompt_tokens = len(encoding.encode(prompt)) # type: ignore
             completion_tokens = len(encoding.encode(response_string))
@@ -1371,7 +1371,7 @@ def completion(
             string_response = response_json['data'][0]['output'][0]
             ## RESPONSE OBJECT
             model_response["choices"][0]["message"]["content"] = string_response
-            model_response["created"] = time.time()
+            model_response["created"] = int(time.time())
             model_response["model"] = model
             response = model_response
         else:

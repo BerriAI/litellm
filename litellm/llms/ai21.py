@@ -180,7 +180,7 @@ def completion(
             encoding.encode(model_response["choices"][0]["message"].get("content"))
         )
 
-        model_response["created"] = time.time()
+        model_response["created"] = int(time.time())
         model_response["model"] = model
         model_response["usage"] = {
             "prompt_tokens": prompt_tokens,
