@@ -68,13 +68,13 @@ Streaming is supported for all models (Bedrock, Huggingface, TogetherAI, Azure, 
 ```python
 from litellm import completion
 response = completion(model="gpt-3.5-turbo", messages=messages, stream=True)
-for chunk in response:
-    print(chunk['choices'][0]['delta'])
+for part in response:
+    print(part.choices[0].delta.content or "")
 
 # claude 2
-result = completion('claude-2', messages, stream=True)
-for chunk in result:
-  print(chunk['choices'][0]['delta'])
+response = completion('claude-2', messages, stream=True)
+for part in response:
+    print(part.choices[0].delta.content or "")
 ```
 
 # Router - load balancing([Docs](https://docs.litellm.ai/docs/routing))
