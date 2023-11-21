@@ -132,9 +132,12 @@ class Router:
                                messages: Optional[List[Dict[str, str]]] = None,
                                input: Optional[Union[str, List]] = None):
         """
-        Returns the deployment with the shortest queue 
+        Returns the deployment based on routing strategy
         """
-        logging.debug(f"self.healthy_deployments: {self.healthy_deployments}")
+        if litellm.model_alias_map and model in litellm.model_alias_map:
+            model = litellm.model_alias_map[
+                model
+            ]  # update the model to the actual value if an alias has been passed in
         if self.routing_strategy == "least-busy":
             if len(self.healthy_deployments) > 0:
                 for item in self.healthy_deployments:
