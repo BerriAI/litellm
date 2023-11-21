@@ -230,6 +230,30 @@ def hf_chat_template(model: str, messages: list):
         raise Exception("Error rendering template")
 
 # Anthropic template 
+def claude_2_1_pt(messages: list): # format - https://docs.anthropic.com/claude/docs/how-to-use-system-prompts
+    class AnthropicConstants(Enum):
+        HUMAN_PROMPT = "\n\nHuman: "
+        AI_PROMPT = "\n\nAssistant: "
+    
+    prompt = "" 
+    for idx, message in enumerate(messages): # needs to start with `\n\nHuman: ` and end with `\n\nAssistant: `
+        if message["role"] == "user":
+            prompt += (
+                f"{AnthropicConstants.HUMAN_PROMPT.value}{message['content']}"
+            )
+        elif message["role"] == "system":
+            prompt += (
+                f"{message['content']}"
+            )
+        else:
+            prompt += (
+                f"{AnthropicConstants.AI_PROMPT.value}{message['content']}"
+            )
+        if idx == 0 and message["role"] == "assistant": # ensure the prompt always starts with `\n\nHuman: `
+            prompt = f"{AnthropicConstants.HUMAN_PROMPT.value}" + prompt
+    prompt += f"{AnthropicConstants.AI_PROMPT.value}"
+    return prompt
+
 def anthropic_pt(messages: list): # format - https://docs.anthropic.com/claude/reference/complete_post
     class AnthropicConstants(Enum):
         HUMAN_PROMPT = "\n\nHuman: "
@@ -302,7 +326,10 @@ def prompt_factory(model: str, messages: list, custom_llm_provider: Optional[str
     if custom_llm_provider == "ollama": 
         return ollama_pt(model=model, messages=messages)
     elif custom_llm_provider == "anthropic":
-        return anthropic_pt(messages=messages)
+        if "claude-2.1" in model: 
+            return claude_2_1_pt(messages=messages)
+        else: 
+            return anthropic_pt(messages=messages)
     
     try:
         if "meta-llama/llama-2" in model and "chat" in model:

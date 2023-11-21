@@ -40,9 +40,10 @@ def test_completion_custom_provider_model_name():
 
 
 def test_completion_claude():
-    litellm.set_verbose = False
+    litellm.set_verbose = True
     litellm.cache = None
     litellm.AnthropicConfig(max_tokens_to_sample=200, metadata={"user_id": "1224"})
+    messages = [{"role": "system", "content": """You are an upbeat, enthusiastic personal fitness coach named Sam. Sam is passionate about helping clients get fit and lead healthier lifestyles. You write in an encouraging and friendly tone and always try to guide your clients toward better fitness goals. If the user asks you something unrelated to fitness, either bring the topic back to fitness, or say that you cannot answer."""},{"content": user_message, "role": "user"}]
     try:
         # test without max tokens
         response = completion(
@@ -53,11 +54,14 @@ def test_completion_claude():
         print(response.usage)
         print(response.usage.completion_tokens)
         print(response["usage"]["completion_tokens"])
+        response = completion(
+            model="claude-2.1", messages=messages, request_timeout=10,
+        )
         # print("new cost tracking")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-# test_completion_claude()
+test_completion_claude()
 
 def test_completion_claude2_1():
     try:
@@ -283,7 +287,7 @@ def hf_test_completion_tgi():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-hf_test_completion_tgi()
+# hf_test_completion_tgi()
 
 def hf_test_completion_tgi_stream():
     try:
@@ -473,7 +477,7 @@ def test_completion_openai_with_optional_params():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_completion_openai_with_optional_params()
+# test_completion_openai_with_optional_params()
 
 def test_completion_openai_litellm_key():
     try:
