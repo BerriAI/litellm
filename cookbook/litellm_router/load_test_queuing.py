@@ -91,13 +91,23 @@ def make_openai_completion(question):
             )
         
         # polling the url 
-        url = response["url"]
-        polling_url = f"http://0.0.0.0:8000{url}"
-        print(f"POLLING JOB{polling_url}")
-        response = requests.get(polling_url)
-        response = response.json()
-        status = response["status"]
-        print(f"POLLING JOB{polling_url}\nSTATUS: {status}, \n Response {response}")
+        while True:
+            try:
+                print("entering the loop to poll")
+                print("response", response)
+                url = response["url"]
+                polling_url = f"http://0.0.0.0:8000{url}"
+                print(f"POLLING JOB{polling_url}")
+                polling_response = requests.get(polling_url)
+                print("\n RESPONSE FROM POLLING JoB", polling_response)
+                polling_response = polling_response.json()
+                print("\n RESPONSE FROM POLLING JoB", polling_response)
+                status = polling_response["status"]
+                print(f"POLLING JOB{polling_url}\nSTATUS: {status}, \n Response {polling_response}")
+                time.sleep(0.5)
+            except Exception as e:
+                print("got exception in polling", e)
+                break
         # if status == "finished":
         #     print()
 
@@ -111,41 +121,42 @@ def make_openai_completion(question):
                 f"Question: {question[:100]}\nException: {str(e)}\n\n"
             )
         return None
+make_openai_completion("hello what's the time")
 
-# Number of concurrent calls (you can adjust this)
-concurrent_calls = 100
+# # Number of concurrent calls (you can adjust this)
+# concurrent_calls = 1
 
-# List to store the futures of concurrent calls
-futures = []
+# # List to store the futures of concurrent calls
+# futures = []
 
-# Make concurrent calls
-with concurrent.futures.ThreadPoolExecutor(max_workers=concurrent_calls) as executor:
-    for _ in range(concurrent_calls):
-        random_question = random.choice(questions)
-        futures.append(executor.submit(make_openai_completion, random_question))
+# # Make concurrent calls
+# with concurrent.futures.ThreadPoolExecutor(max_workers=concurrent_calls) as executor:
+#     for _ in range(concurrent_calls):
+#         random_question = random.choice(questions)
+#         futures.append(executor.submit(make_openai_completion, random_question))
 
-# Wait for all futures to complete
-concurrent.futures.wait(futures)
+# # Wait for all futures to complete
+# concurrent.futures.wait(futures)
 
-# Summarize the results
-successful_calls = 0
-failed_calls = 0
+# # Summarize the results
+# successful_calls = 0
+# failed_calls = 0
 
-for future in futures:
-    if future.result() is not None:
-        successful_calls += 1
-    else:
-        failed_calls += 1
+# for future in futures:
+#     if future.result() is not None:
+#         successful_calls += 1
+#     else:
+#         failed_calls += 1
 
-print(f"Load test Summary:")
-print(f"Total Requests: {concurrent_calls}")
-print(f"Successful Calls: {successful_calls}")
-print(f"Failed Calls: {failed_calls}")
+# print(f"Load test Summary:")
+# print(f"Total Requests: {concurrent_calls}")
+# print(f"Successful Calls: {successful_calls}")
+# print(f"Failed Calls: {failed_calls}")
 
-# Display content of the logs
-with open("request_log.txt", "r") as log_file:
-    print("\nRequest Log:\n", log_file.read())
+# # Display content of the logs
+# with open("request_log.txt", "r") as log_file:
+#     print("\nRequest Log:\n", log_file.read())
 
-with open("error_log.txt", "r") as error_log_file:
-    print("\nError Log:\n", error_log_file.read())
+# with open("error_log.txt", "r") as error_log_file:
+#     print("\nError Log:\n", error_log_file.read())
 
