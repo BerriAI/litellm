@@ -17,6 +17,7 @@ try:
     import tomli_w
     import backoff
     import yaml
+    import rq
 except ImportError:
     import sys
 
@@ -32,7 +33,8 @@ except ImportError:
             "appdirs",
             "tomli-w",
             "backoff",
-            "pyyaml"
+            "pyyaml", 
+            "rq"
         ]
     )
     import uvicorn
@@ -593,10 +595,15 @@ async def async_chat_completions(request: Request):
 @router.get("/queue/response/{task_id}", dependencies=[Depends(user_api_key_auth)])
 async def async_chat_completions(request: Request, task_id: str): 
     global redis_connection, redis_job
-    job = redis_job.fetch(id=task_id, connection=redis_connection)
-    print(f"job status: {job.get_status()}")
-    result = job.result
-    return {"status": job.get_status(), "result": result}
+    try: 
+        job = redis_job.fetch(id=task_id, connection=redis_connection)
+        print(f"job status: {job.get_status()}")
+        result = job.result
+        if result is not None: 
+            status = "finished"
+        return {"status": status, "result": result}
+    except Exception as e: 
+        return {"status": "finished", "result": str(e)}
 
 
 @router.get("/ollama_logs", dependencies=[Depends(user_api_key_auth)])
