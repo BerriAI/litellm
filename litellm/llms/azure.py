@@ -136,7 +136,7 @@ class AzureChatCompletion(BaseLLM):
             elif "stream" in optional_params and optional_params["stream"] == True:
                 return self.streaming(logging_obj=logging_obj, api_base=api_base, data=data, model=model, api_key=api_key, api_version=api_version, azure_ad_token=azure_ad_token, timeout=timeout)
             else:
-                azure_client = AzureOpenAI(api_key=api_key, api_version=api_version, azure_endpoint=api_base, azure_deployment=model, azure_ad_token=azure_ad_token, http_client=litellm.client_session, timeout=timeout)
+                azure_client = AzureOpenAI(api_key=api_key, api_version=api_version, azure_endpoint=api_base, azure_deployment=model, azure_ad_token=azure_ad_token, http_client=litellm.client_session, timeout=timeout,  max_retries=data.pop("max_retries", 2))
                 response = azure_client.chat.completions.create(**data) # type: ignore
                 return convert_to_model_response_object(response_object=json.loads(response.model_dump_json()), model_response_object=model_response)
         except AzureOpenAIError as e: 
@@ -156,7 +156,7 @@ class AzureChatCompletion(BaseLLM):
                           azure_ad_token: Optional[str]=None, ): 
        response = None
        try:
-            azure_client = AsyncAzureOpenAI(api_key=api_key, api_version=api_version, azure_endpoint=api_base, azure_deployment=model, azure_ad_token=azure_ad_token, http_client=litellm.aclient_session, timeout=timeout)
+            azure_client = AsyncAzureOpenAI(api_key=api_key, api_version=api_version, azure_endpoint=api_base, azure_deployment=model, azure_ad_token=azure_ad_token, http_client=litellm.aclient_session, timeout=timeout, max_retries=data.pop("max_retries", 2))
             response = await azure_client.chat.completions.create(**data) 
             return convert_to_model_response_object(response_object=json.loads(response.model_dump_json()), model_response_object=model_response)
        except Exception as e: 
@@ -177,7 +177,7 @@ class AzureChatCompletion(BaseLLM):
                   timeout: Any,
                   azure_ad_token: Optional[str]=None, 
     ):
-        azure_client = AzureOpenAI(api_key=api_key, api_version=api_version, azure_endpoint=api_base, azure_deployment=model, azure_ad_token=azure_ad_token, http_client=litellm.client_session, timeout=timeout)
+        azure_client = AzureOpenAI(api_key=api_key, api_version=api_version, azure_endpoint=api_base, azure_deployment=model, azure_ad_token=azure_ad_token, http_client=litellm.client_session, timeout=timeout,  max_retries=data.pop("max_retries", 2))
         response = azure_client.chat.completions.create(**data)
         streamwrapper = CustomStreamWrapper(completion_stream=response, model=model, custom_llm_provider="azure",logging_obj=logging_obj)
         for transformed_chunk in streamwrapper:
@@ -192,7 +192,7 @@ class AzureChatCompletion(BaseLLM):
                           model: str,
                           timeout: Any,
                           azure_ad_token: Optional[str]=None):
-        azure_client = AsyncAzureOpenAI(api_key=api_key, api_version=api_version, azure_endpoint=api_base, azure_deployment=model, azure_ad_token=azure_ad_token, http_client=litellm.aclient_session, timeout=timeout)
+        azure_client = AsyncAzureOpenAI(api_key=api_key, api_version=api_version, azure_endpoint=api_base, azure_deployment=model, azure_ad_token=azure_ad_token, http_client=litellm.aclient_session, timeout=timeout, max_retries=data.pop("max_retries", 2))
         response = await azure_client.chat.completions.create(**data)
         streamwrapper = CustomStreamWrapper(completion_stream=response, model=model, custom_llm_provider="azure",logging_obj=logging_obj)
         async for transformed_chunk in streamwrapper:
@@ -213,12 +213,12 @@ class AzureChatCompletion(BaseLLM):
         if self._client_session is None:
             self._client_session = self.create_client_session()
         try: 
-            azure_client = AzureOpenAI(api_key=api_key, api_version=api_version, azure_endpoint=api_base, azure_deployment=model, azure_ad_token=azure_ad_token, http_client=litellm.client_session)
             data = {
                 "model": model,
                 "input": input,
                 **optional_params
             }
+            azure_client = AzureOpenAI(api_key=api_key, api_version=api_version, azure_endpoint=api_base, azure_deployment=model, azure_ad_token=azure_ad_token, http_client=litellm.client_session, max_retries=data.pop("max_retries", 2))
 
             ## LOGGING
             logging_obj.pre_call(
