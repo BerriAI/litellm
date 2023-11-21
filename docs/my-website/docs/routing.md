@@ -3,17 +3,12 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
 
-# Router - Load Balance Deployments
+# Router - Load Balancing, Queing
 
-Use this if you're trying to load-balance across multiple deployments (e.g. Azure/OpenAI). 
-
-`Router` prevents failed requests, by picking the deployment which is below rate-limit and has the least amount of tokens used. 
-
-In production, [Router connects to a Redis Cache](#redis-queue) to track usage across multiple deployments.
-
+- Load-balance across multiple deployments (e.g. Azure/OpenAI): Pick the deployment which is below rate-limit and has the least amount of tokens used. 
+- Queuing Requests to ensure requests don't fail
 
 (s/o [@paulpierre](https://www.linkedin.com/in/paulpierre/) for his contribution to this implementation)
-
 [**See Code**](https://github.com/BerriAI/litellm/blob/main/litellm/router.py)
 
 ### Quick Start
@@ -61,7 +56,8 @@ print(response)
 - `router.aembeddings()` - async embeddings endpoint
 - `router.text_completion()` - completion calls in the old OpenAI `/v1/completions` endpoint format
 
-### Routing Strategies 
+## Advanced
+### Routing Strategies - Shuffle, Rate Limit Aware
 
 Router provides 2 strategies for routing your calls across multiple deployments: 
 
@@ -168,7 +164,6 @@ print(response)
 </TabItem>
 </Tabs>
 
-
 ### Caching + Request Timeouts 
 
 In production, we recommend using a Redis cache. For quickly testing things locally, we also support simple in-memory caching. 
@@ -250,8 +245,43 @@ print(f"response: {response}")
 
 If you want a server to just route requests to different LLM APIs, use our [OpenAI Proxy Server](./simple_proxy.md#multiple-instances-of-1-model)
 
+## Hosted Router + Request Queing api.litellm.ai
+Queue your LLM API requests to ensure you're under your rate limits
+- Step 1: Create a `/queue/reques` request
+- Step 2: Poll your request, to check if it's completed
 
-## litellm.completion() 
+### Step 1: Queue a `/chat/completion` request
+
+```python
+import requests
+# args to litellm.completion()
+data = {
+    'model': 'gpt-3.5-turbo',
+    'messages': [
+        {'role': 'system', 'content': f'You are a helpful assistant. What llm are you?'},
+    ],
+}
+response = requests.post("http://0.0.0.0:8000/queue/request", json=data)
+response = response.json()
+polling_url = response["url"]
+```
+
+### Step 2: Poll your `/chat/completion` request
+```python
+ while True:
+    try:
+        polling_url = f"http://0.0.0.0:8000{polling_url}"
+        polling_response = requests.get(polling_url)
+        polling_response = polling_response.json()
+        print("\n RESPONSE FROM POLLING JOB", polling_response)
+        status = polling_response["status"]
+        if status == "finished":
+            llm_response = polling_response["result"]
+            print(llm_response)
+```
+
+
+<!-- ## litellm.completion() 
 
 If you're calling litellm.completion(), here's the different reliability options you can enable. 
 
@@ -445,4 +475,4 @@ if (
                 )  # cool down this selected model
                 pass
     return response
-```
+``` -->
