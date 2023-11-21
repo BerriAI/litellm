@@ -7,6 +7,29 @@ from typing import Optional
 def default_pt(messages):
     return " ".join(message["content"] for message in messages)
 
+# alpaca prompt template - for models like mythomax, etc. 
+def alpaca_pt(messages): 
+    prompt = custom_prompt(
+        role_dict={
+            "system": {
+                "pre_message": "### Instruction:\n",
+                "post_message": "\n\n",
+            },
+            "user": {
+                "pre_message": "### Instruction:\n",
+                "post_message": "\n\n",
+            },
+            "assistant": {
+                "pre_message": "### Response:\n",
+                "post_message": "\n\n"
+            }
+        },
+        bos_token="<s>",
+        eos_token="</s>",
+        messages=messages
+    )
+    return prompt
+
 # Llama2 prompt template
 def llama_2_chat_pt(messages):
     prompt = custom_prompt(
@@ -276,7 +299,6 @@ def custom_prompt(role_dict: dict, messages: list, initial_prompt_value: str="",
 def prompt_factory(model: str, messages: list, custom_llm_provider: Optional[str]=None):
     original_model_name = model
     model = model.lower()
-
     if custom_llm_provider == "ollama": 
         return ollama_pt(model=model, messages=messages)
     elif custom_llm_provider == "anthropic":
@@ -302,6 +324,8 @@ def prompt_factory(model: str, messages: list, custom_llm_provider: Optional[str
             return phind_codellama_pt(messages=messages)
         elif "togethercomputer/llama-2" in model and ("instruct" in model or "chat" in model):
             return llama_2_chat_pt(messages=messages)
+        elif model in ["gryphe/mythomax-l2-13b", "gryphe/mythomix-l2-13b", "gryphe/mythologic-l2-13b"]:
+            return alpaca_pt(messages=messages) 
         else: 
             return hf_chat_template(original_model_name, messages)
     except:

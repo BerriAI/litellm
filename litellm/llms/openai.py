@@ -6,6 +6,7 @@ from litellm.utils import ModelResponse, Choices, Message, CustomStreamWrapper, 
 from typing import Callable, Optional
 import aiohttp, requests
 import litellm
+from .prompt_templates.factory import prompt_factory, custom_prompt
 from openai import OpenAI, AsyncOpenAI
 
 class OpenAIError(Exception):
@@ -172,7 +173,8 @@ class OpenAIChatCompletion(BaseLLM):
                 optional_params=None,
                 litellm_params=None,
                 logger_fn=None,
-                headers: Optional[dict]=None):
+                headers: Optional[dict]=None,
+                custom_prompt_dict: dict={}):
         super().completion()
         exception_mapping_worked = False
         try: 

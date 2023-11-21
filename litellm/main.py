@@ -556,7 +556,8 @@ def completion(
                     optional_params=optional_params,
                     litellm_params=litellm_params,
                     logger_fn=logger_fn,
-                    timeout=timeout
+                    timeout=timeout,
+                    custom_prompt_dict=custom_prompt_dict
                 )
             except Exception as e:
                 ## LOGGING - log the original exception returned
