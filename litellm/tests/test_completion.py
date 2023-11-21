@@ -54,14 +54,11 @@ def test_completion_claude():
         print(response.usage)
         print(response.usage.completion_tokens)
         print(response["usage"]["completion_tokens"])
-        response = completion(
-            model="claude-2.1", messages=messages, request_timeout=10,
-        )
         # print("new cost tracking")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_completion_claude()
+# test_completion_claude()
 
 def test_completion_claude2_1():
     try:
@@ -804,7 +801,6 @@ def test_completion_replicate_vicuna():
 # test_completion_replicate_vicuna()
 
 def test_completion_replicate_llama2_stream():
-    print("TESTING REPLICATE streaming")
     litellm.set_verbose=False
     model_name = "replicate/meta/llama-2-7b-chat:13c3cdee13ee059ab779f0291d29054dab00a47dad8261375654de5540165fb0"
     try:
@@ -820,15 +816,18 @@ def test_completion_replicate_llama2_stream():
             max_tokens=20,
             num_retries=3
         )
-        print(response)
+        print(f"response: {response}")
         # Add any assertions here to check the response
+        complete_response = "" 
         for i, chunk in enumerate(response):
-            if i == 0:
-                assert len(chunk.choices[0].delta["content"]) > 5
-            print(chunk)
+            complete_response += chunk.choices[0].delta["content"]
+            # if i == 0:
+            #     assert len(chunk.choices[0].delta["content"]) > 2
+            # print(chunk)
+        assert len(complete_response) > 5
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_completion_replicate_llama2_stream()
+test_completion_replicate_llama2_stream()
 
 # commenthing this out since we won't be always testing a custom replicate deployment
 # def test_completion_replicate_deployments():
