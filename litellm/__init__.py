@@ -393,4 +393,5 @@ from .exceptions import (
 )
 from .budget_manager import BudgetManager
 from .proxy.proxy_cli import run_server
+from .proxy.queue.rq import start_rq_worker_in_background
 from .router import Router
