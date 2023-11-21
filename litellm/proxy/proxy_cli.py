@@ -18,10 +18,15 @@ import shutil
 telemetry = None
 
 def run_ollama_serve():
-    command = ['ollama', 'serve']
-    
-    with open(os.devnull, 'w') as devnull:
-        process = subprocess.Popen(command, stdout=devnull, stderr=devnull)
+    try:
+        command = ['ollama', 'serve']
+        
+        with open(os.devnull, 'w') as devnull:
+            process = subprocess.Popen(command, stdout=devnull, stderr=devnull)
+    except Exception as e:
+        print(f"""
+            LiteLLM Warning: proxy started with `ollama` model\n`ollama serve` failed with Exception{e}. \nEnsure you run `ollama serve`
+        """)
 
 def clone_subfolder(repo_url, subfolder, destination):
   # Clone the full repo
