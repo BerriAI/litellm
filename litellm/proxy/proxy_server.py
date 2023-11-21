@@ -199,6 +199,11 @@ def prisma_setup(database_url: Optional[str]):
         from prisma import Client
         prisma_client = Client()
 
+def run_ollama_serve():
+    command = ['ollama', 'serve']
+    
+    with open(os.devnull, 'w') as devnull:
+        process = subprocess.Popen(command, stdout=devnull, stderr=devnull)
 
 def load_router_config(router: Optional[litellm.Router], config_file_path: str):
     global master_key
@@ -243,6 +248,10 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
         print(f"\033[32mLiteLLM: Proxy initialized with Config, Set models:\033[0m")
         for model in model_list:
             print(f"\033[32m    {model.get('model_name', '')}\033[0m")
+            litellm_model_name = model["litellm_params"]["model"]
+            print(f"litellm_model_name: {litellm_model_name}")
+            if "ollama" in litellm_model_name: 
+                run_ollama_serve()
 
     return router, model_list, server_settings
 
