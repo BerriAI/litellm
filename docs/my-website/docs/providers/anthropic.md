@@ -1,5 +1,10 @@
 # Anthropic
-LiteLLM supports Claude-1, 1.2 and Claude-2.
+LiteLLM supports 
+
+- `claude-2.1`
+- `claude-2.1`
+- `claude-instant-1`
+- `claude-instant-1.2`
 
 ## API Keys
 
