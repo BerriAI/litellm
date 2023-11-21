@@ -78,7 +78,7 @@ def test_completion_claude2_1():
         # print("new cost tracking")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_claude2_1()
+# test_completion_claude2_1()
 
 # def test_completion_oobabooga():
 #     try:
@@ -421,7 +421,12 @@ def test_completion_openai():
         litellm.set_verbose=True
         print(f"api key: {os.environ['OPENAI_API_KEY']}")
         litellm.api_key = os.environ['OPENAI_API_KEY']
-        response = completion(model="gpt-3.5-turbo", messages=messages, max_tokens=10, request_timeout=10)
+        response = completion(
+            model="gpt-3.5-turbo", 
+            messages=messages, 
+            max_tokens=10, 
+            request_timeout=0.1
+        )
         print("This is the response object\n", response)
 
         
@@ -439,7 +444,7 @@ def test_completion_openai():
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_completion_openai()
+test_completion_openai()
 
 def test_completion_text_openai():
     try:
