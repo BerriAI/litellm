@@ -44,6 +44,7 @@ def test_pre_call_rule():
         except Exception as e:
             pass
     asyncio.run(test_async_response())
+    litellm.pre_call_rules = []
 
 # test_pre_call_rule() 
 ## Test 2: Post-call rule 
@@ -70,5 +71,7 @@ def test_post_call_rule():
         except Exception as e:
             pass
     asyncio.run(test_async_response())
+    litellm.pre_call_rules = []
+    litellm.post_call_rules = []
 
 # test_post_call_rule() 
