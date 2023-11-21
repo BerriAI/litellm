@@ -18,18 +18,27 @@ For all cases, the exception returned inherits from the original OpenAI Exceptio
 * message - the error message
 * llm_provider - the provider raising the exception
 
-## usage
+## Usage
 
 ```python 
-from openai.error import OpenAIError
-from litellm import completion
+import litellm
+import openai
 
-os.environ["ANTHROPIC_API_KEY"] = "bad-key"
-try: 
-    # some code 
-    completion(model="claude-instant-1", messages=[{"role": "user", "content": "Hey, how's it going?"}])
-except OpenAIError as e:
-    print(e)
+try:
+    response = litellm.completion(
+                model="gpt-4",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": "hello, write a 20 pageg essay"
+                    }
+                ],
+                timeout=0.01, # this will raise a timeout exception
+            )
+except openai.APITimeoutError as e:
+    print("Passed: Raised correct exception. Got openai.APITimeoutError\nGood Job", e)
+    print(type(e))
+    pass
 ```
 
 ## details 
