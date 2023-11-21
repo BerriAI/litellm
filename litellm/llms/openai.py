@@ -309,13 +309,13 @@ class OpenAIChatCompletion(BaseLLM):
         super().embedding()
         exception_mapping_worked = False
         try: 
-            openai_client = OpenAI(api_key=api_key, base_url=api_base, http_client=litellm.client_session, max_retries=data.pop("max_retries", 2))
             model = model
             data = {
                 "model": model,
                 "input": input,
                 **optional_params
             }
+            openai_client = OpenAI(api_key=api_key, base_url=api_base, http_client=litellm.client_session, max_retries=data.pop("max_retries", 2))
 
             ## LOGGING
             logging_obj.pre_call(
