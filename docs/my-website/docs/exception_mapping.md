@@ -44,19 +44,20 @@ except openai.APITimeoutError as e:
 ## Usage - Catching Streaming Exceptions
 ```python
 import litellm
-response = litellm.completion(
-    model="gpt-3.5-turbo",
-    messages=[
-        {
-            "role": "user",
-            "content": "hello, write a 20 pg essay"
-        }
-    ],
-    timeout=0.0001, # this will raise an exception
-    stream=True,
-)
-for chunk in response:
-    print(chunk)
+try:
+    response = litellm.completion(
+        model="gpt-3.5-turbo",
+        messages=[
+            {
+                "role": "user",
+                "content": "hello, write a 20 pg essay"
+            }
+        ],
+        timeout=0.0001, # this will raise an exception
+        stream=True,
+    )
+    for chunk in response:
+        print(chunk)
 except openai.APITimeoutError as e:
     print("Passed: Raised correct exception. Got openai.APITimeoutError\nGood Job", e)
     print(type(e))
