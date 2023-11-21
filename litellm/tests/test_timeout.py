@@ -8,24 +8,29 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import time
-from litellm import timeout
+import litellm
+import openai
+import pytest
 
 
-@timeout(10)
-def stop_after_10_s(force_timeout=60):
-    print("Stopping after 10 seconds")
-    time.sleep(10)
-    return
-
-
-start_time = time.time()
-
-try:
-    stop_after_10_s(force_timeout=1)
-except Exception as e:
-    print(e)
-    pass
-
-end_time = time.time()
-
-print(f"total time: {end_time-start_time}")
+def test_timeout():
+    # this Will Raise a timeout
+    litellm.set_verbose=False
+    try:
+        response = litellm.completion(
+            model="gpt-4",
+            timeout=0.01,
+            messages=[
+                {
+                    "role": "user",
+                    "content": "hello, write a 20 pg essay"
+                }
+            ]
+        )
+    except openai.APITimeoutError as e:
+        print("Passed: Raised correct exception. Got openai.APITimeoutError\nGood Job", e)
+        print(type(e))
+        pass
+    except Exception as e:
+        pytest.fail(f"Did not raise error `openai.APITimeoutError`. Instead raised error type: {type(e)}, Error: {e}")
+test_timeout()
