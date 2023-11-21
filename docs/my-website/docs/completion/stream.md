@@ -10,8 +10,8 @@ LiteLLM supports streaming the model response back by passing `stream=True` as a
 ```python
 from litellm import completion
 response = completion(model="gpt-3.5-turbo", messages=messages, stream=True)
-for chunk in response:
-    print(chunk['choices'][0]['delta'])
+for part in response:
+    print(part.choices[0].delta.content or "")
 
 ```
 
