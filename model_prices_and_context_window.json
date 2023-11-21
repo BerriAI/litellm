@@ -170,6 +170,14 @@
         "litellm_provider": "anthropic",
         "mode": "chat"
     },
+    "claude-2.1": {
+        "max_tokens": 200000,
+        "max_output_tokens": 8191,
+        "input_cost_per_token": 0.00001102,
+        "output_cost_per_token": 0.00003268,
+        "litellm_provider": "anthropic",
+        "mode": "chat"
+    },
     "text-bison": {
         "max_tokens": 8192,
         "input_cost_per_token": 0.000000125,
