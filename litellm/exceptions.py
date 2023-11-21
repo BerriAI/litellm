@@ -134,8 +134,6 @@ class APIResponseValidationError(APIResponseValidationError):  # type: ignore
             message=message
         )
 
-
-
 class OpenAIError(OpenAIError):  # type: ignore
     def __init__(self, original_exception):
         self.status_code = original_exception.http_status

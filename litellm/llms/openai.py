@@ -209,7 +209,10 @@ class OpenAIChatCompletion(BaseLLM):
                     elif optional_params.get("stream", False):
                         return self.streaming(logging_obj=logging_obj, data=data, model=model, api_base=api_base, api_key=api_key, timeout=timeout)
                     else:
-                        openai_client = OpenAI(api_key=api_key, base_url=api_base, http_client=litellm.client_session, timeout=timeout, max_retries=data.pop("max_retries", 2))
+                        max_retries = data.pop("max_retries", 2)
+                        if not isinstance(max_retries, int): 
+                            raise OpenAIError(status_code=422, message="max retries must be an int")
+                        openai_client = OpenAI(api_key=api_key, base_url=api_base, http_client=litellm.client_session, timeout=timeout, max_retries=max_retries)
                         response = openai_client.chat.completions.create(**data) # type: ignore
                         logging_obj.post_call(
                                 input=None,
@@ -317,7 +320,10 @@ class OpenAIChatCompletion(BaseLLM):
                 "input": input,
                 **optional_params
             }
-            openai_client = OpenAI(api_key=api_key, base_url=api_base, http_client=litellm.client_session, max_retries=data.pop("max_retries", 2))
+            max_retries = data.pop("max_retries", 2)
+            if not isinstance(max_retries, int): 
+                raise OpenAIError(status_code=422, message="max retries must be an int")
+            openai_client = OpenAI(api_key=api_key, base_url=api_base, http_client=litellm.client_session, max_retries=max_retries)
 
             ## LOGGING
             logging_obj.pre_call(
