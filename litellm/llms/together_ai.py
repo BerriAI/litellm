@@ -183,7 +183,7 @@ def completion(
         )
         if "finish_reason" in completion_response["output"]["choices"][0]:
             model_response.choices[0].finish_reason = completion_response["output"]["choices"][0]["finish_reason"]
-        model_response["created"] = time.time()
+        model_response["created"] = int(time.time())
         model_response["model"] = model
         usage = Usage(
             prompt_tokens=prompt_tokens,

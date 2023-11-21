@@ -90,7 +90,7 @@ def completion(
         prompt_tokens = len(outputs[0].prompt_token_ids)  
         completion_tokens = len(outputs[0].outputs[0].token_ids)  
 
-        model_response["created"] = time.time()
+        model_response["created"] = int(time.time())
         model_response["model"] = model
         usage = Usage(
             prompt_tokens=prompt_tokens,
@@ -173,7 +173,7 @@ def batch_completions(
         prompt_tokens = len(output.prompt_token_ids)  
         completion_tokens = len(output.outputs[0].token_ids)  
 
-        model_response["created"] = time.time()
+        model_response["created"] = int(time.time())
         model_response["model"] = model
         usage = Usage(
             prompt_tokens=prompt_tokens,
