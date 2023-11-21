@@ -693,6 +693,55 @@ Expected response:
 }
 ```
 
+### Managing Auth - Upgrade/Downgrade Models 
+
+If a user is expected to use a given model (i.e. gpt3-5), and you want to:
+
+- try to upgrade the request (i.e. GPT4)
+- or downgrade it (i.e. Mistral)
+- OR rotate the API KEY (i.e. open AI)
+- OR access the same model through different end points (i.e. openAI vs openrouter vs Azure)
+
+Here's how you can do that: 
+
+**Step 1: Create a model group in config.yaml (save model name, api keys, etc.)**
+
+```yaml
+model_list:
+  - model_name: my-free-tier
+    litellm_params:
+        model: huggingface/HuggingFaceH4/zephyr-7b-beta
+        api_base: http://0.0.0.0:8001
+  - model_name: my-free-tier
+    litellm_params:
+        model: huggingface/HuggingFaceH4/zephyr-7b-beta
+        api_base: http://0.0.0.0:8002
+  - model_name: my-free-tier
+    litellm_params:
+        model: huggingface/HuggingFaceH4/zephyr-7b-beta
+        api_base: http://0.0.0.0:8003
+	- model_name: my-paid-tier
+    litellm_params:
+        model: gpt-4
+				api_key: sk-...
+```
+
+**Step 2: Generate a user key - enabling them access to specific models, custom model aliases, etc.**
+
+```bash
+curl -X POST "https://0.0.0.0:8000/key/generate" \
+-H "Authorization: Bearer sk-1234" \
+-H "Content-Type: application/json" \
+-d '{
+	"models": ["my-free-tier"], 
+	"aliases": {"gpt-3.5-turbo": "my-free-tier"}, 
+	"duration": "30min"
+}'
+```
+
+- **How to upgrade / downgrade request?** Change the alias mapping
+- **How are routing between diff keys/api bases done?** litellm handles this by shuffling between different models in the model list with the same model_name. [**See Code**](https://github.com/BerriAI/litellm/blob/main/litellm/router.py)
+
 ### Save Model-specific params (API Base, API Keys, Temperature, Headers etc.)
 You can use the config to save model-specific information like api_base, api_key, temperature, max_tokens, etc. 
 
