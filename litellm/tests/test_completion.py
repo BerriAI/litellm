@@ -164,7 +164,9 @@ def test_completion_gpt4_vision():
 
 def test_completion_perplexity_api():
     try:
-        # litellm.set_verbose=True
+        litellm.set_verbose=True
+        litellm.num_retries = 0
+        litellm.drop_params = True
         messages=[{
             "role": "system", 
             "content": "You're a good bot"
@@ -178,12 +180,12 @@ def test_completion_perplexity_api():
         response = completion(
             model="mistral-7b-instruct", 
             messages=messages,
-            api_base="https://api.perplexity.ai")
+            api_base="https://api.perplexity.ai", stop="Hello")
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-# test_completion_perplexity_api()
+test_completion_perplexity_api()
 
 def test_completion_perplexity_api_2():
     try:

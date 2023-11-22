@@ -144,7 +144,9 @@ for key, value in model_cost.items():
 
 # known openai compatible endpoints - we'll eventually move this list to the model_prices_and_context_window.json dictionary
 openai_compatible_endpoints: List = [
-    "api.perplexity.ai"
+    "api.perplexity.ai", 
+    "api.endpoints.anyscale.com/v1",
+    "api.deepinfra.com/v1/openai"
 ]
 
 

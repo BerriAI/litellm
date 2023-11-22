@@ -504,13 +504,16 @@ def completion(
         elif (
             model in litellm.open_ai_chat_completion_models
             or custom_llm_provider == "custom_openai"
+            or custom_llm_provider == "deepinfra"
+            or custom_llm_provider == "perplexity"
+            or custom_llm_provider == "anyscale"
             or custom_llm_provider == "openai"
             or "ft:gpt-3.5-turbo" in model  # finetune gpt-3.5-turbo
         ):  # allow user to make an openai call with a custom base
             # note: if a user sets a custom base - we should ensure this works
             # allow for the setting of dynamic and stateful api-bases
             api_base = (
-                api_base
+                api_base # for deepinfra/perplexity/anyscale we check in get_llm_provider and pass in the api base from there
                 or litellm.api_base
                 or get_secret("OPENAI_API_BASE")
                 or "https://api.openai.com/v1"
@@ -522,7 +525,7 @@ def completion(
             )
             # set API KEY
             api_key = (
-                api_key or
+                api_key or # for deepinfra/perplexity/anyscale we check in get_llm_provider and pass in the api key from there
                 dynamic_api_key or # allows us to read env variables for compatible openai api's like perplexity 
                 litellm.api_key or
                 litellm.openai_key or
