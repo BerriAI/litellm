@@ -13,3 +13,4 @@ pyyaml
 rq
 prisma
 celery
+psutil
