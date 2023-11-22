@@ -38,6 +38,7 @@ const sidebars = {
         "completion/model_alias", 
         "completion/batching",
         "completion/mock_requests",
+        "completion/reliable_completions",
       ],
     },
     {

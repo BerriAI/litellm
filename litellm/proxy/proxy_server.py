@@ -139,9 +139,9 @@ worker_config = None
 master_key = None
 prisma_client = None
 ### REDIS QUEUE ### 
-redis_job = None
-redis_connection = None 
-request_queue = None # Redis Queue for handling requests
+async_result = None
+celery_app_conn = None 
+celery_fn = None # Redis Queue for handling requests
 #### HELPER FUNCTIONS ####
 def print_verbose(print_statement):
     global user_debug
@@ -219,15 +219,17 @@ def prisma_setup(database_url: Optional[str]):
         except Exception as e:
             print("Error when initializing prisma, Ensure you run pip install prisma", e)
 
-def rq_setup(use_queue: bool): 
-    global request_queue, redis_connection, redis_job
+def celery_setup(use_queue: bool): 
+    global celery_fn, celery_app_conn, async_result
     print(f"value of use_queue: {use_queue}")
     if use_queue:
+        from litellm.proxy.queue.celery_worker import start_worker
         from litellm.proxy.queue.celery_app import celery_app, process_job
         from celery.result import AsyncResult
-        request_queue = process_job
-        redis_job = AsyncResult
-        redis_connection = celery_app
+        start_worker(os.getcwd())
+        celery_fn = process_job
+        async_result = AsyncResult
+        celery_app_conn = celery_app
 
 def run_ollama_serve():
     command = ['ollama', 'serve']
@@ -266,7 +268,7 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
         prisma_setup(database_url=database_url)
         ### START REDIS QUEUE ###
         use_queue = general_settings.get("use_queue", False)
-        rq_setup(use_queue=use_queue)
+        celery_setup(use_queue=use_queue)
 
     ## LITELLM MODULE SETTINGS (e.g. litellm.drop_params=True,..)
     litellm_settings = config.get('litellm_settings', None)
@@ -356,6 +358,7 @@ def initialize(
     headers,
     save,
     config, 
+    use_queue
 ):
     global user_model, user_api_base, user_debug, user_max_tokens, user_request_timeout, user_temperature, user_telemetry, user_headers, experimental, llm_model_list, llm_router, server_settings
     generate_feedback_box()
@@ -396,6 +399,8 @@ def initialize(
         dynamic_config["general"]["max_budget"] = max_budget
     if debug==True:  # litellm-specific param
         litellm.set_verbose = True
+    if use_queue: 
+        celery_setup(use_queue=use_queue)
     if experimental: 
         pass
     if save:
@@ -588,8 +593,8 @@ async def generate_key_fn(request: Request):
         )
 
 @router.post("/queue/request", dependencies=[Depends(user_api_key_auth)])
-async def async_chat_completions(request: Request): 
-    global request_queue, llm_model_list
+async def async_queue_request(request: Request): 
+    global celery_fn, llm_model_list
     body = await request.body()
     body_str = body.decode()
     try:
@@ -603,19 +608,19 @@ async def async_chat_completions(request: Request):
     )
     data["llm_model_list"] = llm_model_list
     print(f"data: {data}")
-    job = request_queue.apply_async(kwargs=data)
+    job = celery_fn.apply_async(kwargs=data)
     return {"id": job.id, "url": f"/queue/response/{job.id}", "eta": 5, "status": "queued"}
     pass
 
 @router.get("/queue/response/{task_id}", dependencies=[Depends(user_api_key_auth)])
-async def async_chat_completions(request: Request, task_id: str): 
-    global redis_connection, redis_job
+async def async_queue_response(request: Request, task_id: str): 
+    global celery_app_conn, async_result
     try: 
-        job = redis_job(task_id, app=redis_connection)
+        job = async_result(task_id, app=celery_app_conn)
         if job.ready():
             return job.result
         else:
-            return {'status': 'processing'}
+            return {'status': 'queued'}
     except Exception as e: 
         return {"status": "finished", "result": str(e)}
 

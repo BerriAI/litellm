@@ -1,8 +1,26 @@
 from dotenv import load_dotenv
 load_dotenv() 
-import json
-import redis
-from celery import Celery
+import json, subprocess
+import psutil  # Import the psutil library
+import atexit
+try: 
+    ### OPTIONAL DEPENDENCIES ###  - pip install redis and celery only when a user opts into using the async endpoints which require both
+    from celery import Celery
+    import redis
+except: 
+    import sys
+
+    subprocess.check_call(
+        [
+            sys.executable, 
+            "-m", 
+            "pip", 
+            "install", 
+            "redis", 
+            "celery"
+        ]
+    )
+
 import time
 import sys, os
 sys.path.insert(
@@ -11,7 +29,7 @@ sys.path.insert(
 import litellm
 
 # Redis connection setup
-pool = redis.ConnectionPool(host=os.getenv("REDIS_HOST"), port=os.getenv("REDIS_PORT"), password=os.getenv("REDIS_PASSWORD"), db=0, max_connections=10)
+pool = redis.ConnectionPool(host=os.getenv("REDIS_HOST"), port=os.getenv("REDIS_PORT"), password=os.getenv("REDIS_PASSWORD"), db=0, max_connections=5)
 redis_client = redis.Redis(connection_pool=pool)
 
 # Celery setup
@@ -36,4 +54,19 @@ def process_job(*args, **kwargs):
     except Exception as e: 
         print(e)
         raise e
-    
+
+# Ensure Celery workers are terminated when the script exits
+def cleanup():
+    try:
+        # Get a list of all running processes
+        for process in psutil.process_iter(attrs=['pid', 'name']):
+            # Check if the process is a Celery worker process
+            if process.info['name'] == 'celery':
+                print(f"Terminating Celery worker with PID {process.info['pid']}")
+                # Terminate the Celery worker process
+                psutil.Process(process.info['pid']).terminate()
+    except Exception as e:
+        print(f"Error during cleanup: {e}")
+
+# Register the cleanup function to run when the script exits
+atexit.register(cleanup)

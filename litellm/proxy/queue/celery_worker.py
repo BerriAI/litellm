@@ -1,9 +1,12 @@
 import os
 from multiprocessing import Process
 
-def run_worker():
-    os.system("celery worker -A your_project_name.celery_app --concurrency=10 --loglevel=info")
+def run_worker(cwd):
+    os.chdir(cwd)
+    os.system("celery -A celery_app.celery_app worker --concurrency=120 --loglevel=info")
 
-if __name__ == "__main__":
-    worker_process = Process(target=run_worker)
+def start_worker(cwd):
+    cwd += "/queue"
+    worker_process = Process(target=run_worker, args=(cwd,))
     worker_process.start()
+    
