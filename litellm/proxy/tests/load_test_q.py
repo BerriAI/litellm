@@ -6,9 +6,9 @@ load_dotenv()
 
 
 # Set the base URL as needed
-# base_url = "https://api.litellm.ai"
-# Uncomment the line below if you want to switch to the local server
-base_url = "http://0.0.0.0:8000"
+base_url = "https://api.litellm.ai"
+# # Uncomment the line below if you want to switch to the local server
+# base_url = "http://0.0.0.0:8000"
 
 # Step 1 Add a config to the proxy, generate a temp key
 config = {
