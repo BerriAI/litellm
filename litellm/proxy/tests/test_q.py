@@ -9,22 +9,6 @@ base_url = "http://0.0.0.0:8000"
 # Step 1 Add a config to the proxy, generate a temp key
 config = {
   "model_list": [
-    {
-      "model_name": "gpt-3.5-turbo",
-      "litellm_params": {
-        "model": "gpt-3.5-turbo",
-        "api_key": "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"
-      }
-    },
-    {
-      "model_name": "gpt-3.5-turbo",
-      "litellm_params": {
-        "model": "azure/chatgpt-v-2",
-        "api_key": "6314c6dc63f448c9873844297f408c74",
-        "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com/",
-        "api_version": "2023-07-01-preview"
-      }
-    }
   ]
 }
 
@@ -40,11 +24,13 @@ response = requests.post(
 )
 
 print("\nresponse from generating key", response.text)
+print("\n json response from gen key", response.json())
 
 generated_key = response.json()["key"]
 print("\ngenerated key for proxy", generated_key)
 
 # Step 2: Queue a request to the proxy, using your generated_key
+print("Creating a job on the proxy")
 job_response = requests.post(
     url=f"{base_url}/queue/request",
     json={
@@ -57,7 +43,8 @@ job_response = requests.post(
         "Authorization": f"Bearer {generated_key}"
     }
 )
-
+print(job_response.status_code)
+print(job_response.text)
 print("\nResponse from creating job", job_response.text)
 job_response = job_response.json()
 job_id = job_response["id"]
