@@ -139,11 +139,6 @@ def run_server(host, port, api_base, api_version, model, alias, add_key, headers
                     status = polling_response["status"]
                     if status == "finished":
                         llm_response = polling_response["result"]
-                        with open("response_log.txt", "a") as log_file:
-                            log_file.write(
-                                f"Response ID: {llm_response.get('id', 'NA')}\nLLM Response: {llm_response}\nTime: {end_time - start_time:.2f} seconds\n\n"
-                            )
-
                         break
                     print(f"POLLING JOB{polling_url}\nSTATUS: {status}, \n Response {polling_response}")
                     time.sleep(0.5)
@@ -156,7 +151,7 @@ def run_server(host, port, api_base, api_version, model, alias, add_key, headers
 
         # List to store the futures of concurrent calls
         futures = []
-
+        start_time = time.time()
         # Make concurrent calls
         with concurrent.futures.ThreadPoolExecutor(max_workers=concurrent_calls) as executor:
             for _ in range(concurrent_calls):
@@ -175,7 +170,8 @@ def run_server(host, port, api_base, api_version, model, alias, add_key, headers
                     successful_calls += 1
                 else:
                     failed_calls += 1
-
+        end_time = time.time()
+        print(f"Elapsed Time: {end_time-start_time}")
         print(f"Load test Summary:")
         print(f"Total Requests: {concurrent_calls}")
         print(f"Successful Calls: {successful_calls}")
