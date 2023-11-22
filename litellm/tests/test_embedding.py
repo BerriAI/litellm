@@ -19,6 +19,7 @@ def test_openai_embedding():
             model="text-embedding-ada-002", input=["good morning from litellm", "this is another item"]
         )
         litellm_response = dict(response)
+        litellm_response.pop("_response_ms")
         litellm_response_keys = set(litellm_response.keys())
         print(litellm_response_keys)
         print("LiteLLM Response\n")
