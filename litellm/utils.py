@@ -3579,7 +3579,7 @@ def exception_type(
                         )
             elif custom_llm_provider == "anthropic":  # one of the anthropics
                 if hasattr(original_exception, "message"):
-                    if "prompt is too long" in original_exception.message:
+                    if "prompt is too long" in original_exception.message or "prompt: length" in original_exception.message:
                         exception_mapping_worked = True
                         raise ContextWindowExceededError(
                             message=original_exception.message, 
