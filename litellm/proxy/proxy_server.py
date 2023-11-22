@@ -618,7 +618,7 @@ async def async_queue_response(request: Request, task_id: str):
     try: 
         job = async_result(task_id, app=celery_app_conn)
         if job.ready():
-            return job.result
+            return {"status": "finished", "result": job.result}
         else:
             return {'status': 'queued'}
     except Exception as e: 
