@@ -668,13 +668,13 @@ general_settings:
 
 **Step 2: Start litellm**
 
-```bash
+```shell
 litellm --config /path/to/config.yaml
 ```
 
 **Step 3: Generate temporary keys**
 
-```curl 
+```shell 
 curl 'http://0.0.0.0:8000/key/generate' \
 --h 'Authorization: Bearer sk-1234' \
 --d '{"models": ["gpt-3.5-turbo", "gpt-4", "claude-2"], "duration": "20m"}'
