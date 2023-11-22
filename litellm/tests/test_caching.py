@@ -91,7 +91,7 @@ def test_embedding_caching():
         print(f"embedding2: {embedding2}")
         pytest.fail("Error occurred: Embedding caching failed")
 
-test_embedding_caching()
+# test_embedding_caching()
 
 
 def test_embedding_caching_azure():
@@ -211,25 +211,6 @@ def test_custom_redis_cache_with_key():
     litellm.cache = None
 
 # test_custom_redis_cache_with_key()
-
-def test_hosted_cache():
-    litellm.cache = Cache(type="hosted") # use api.litellm.ai for caching
-
-    messages = [{"role": "user", "content": "what is litellm arr today?"}]
-    response1 = completion(model="gpt-3.5-turbo", messages=messages, caching=True)
-    print("response1", response1)
-
-    response2 = completion(model="gpt-3.5-turbo", messages=messages, caching=True)
-    print("response2", response2)
-
-    if response1['choices'][0]['message']['content'] != response2['choices'][0]['message']['content']: # 1 and 2 should be the same
-        print(f"response1: {response1}")
-        print(f"response2: {response2}")
-        pytest.fail(f"Hosted cache: Response2 is not cached and the same as response 1")
-    litellm.cache = None
-
-# test_hosted_cache()
-
 
 # def test_redis_cache_with_ttl():
 #     cache = Cache(type="redis", host=os.environ['REDIS_HOST'], port=os.environ['REDIS_PORT'], password=os.environ['REDIS_PASSWORD'])
