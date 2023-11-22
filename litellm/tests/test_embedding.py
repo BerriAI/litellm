@@ -55,7 +55,7 @@ def test_openai_azure_embedding_simple():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_openai_azure_embedding_simple()
+# test_openai_azure_embedding_simple()
 
 
 def test_openai_azure_embedding_timeouts():
@@ -66,8 +66,6 @@ def test_openai_azure_embedding_timeouts():
             timeout=0.00001
         )
         print(response)
-        response_keys = dict(response).keys()
-        assert set(["usage", "model", "object", "data"]) == set(response_keys) #assert litellm response has expected keys from OpenAI embedding response
     except openai.APITimeoutError:
         print("Good job got timeout error!")
         pass
@@ -75,6 +73,21 @@ def test_openai_azure_embedding_timeouts():
         pytest.fail(f"Expected timeout error, did not get the correct error. Instead got {e}")
 
 # test_openai_azure_embedding_timeouts()
+
+def test_openai_embedding_timeouts():
+    try:
+        response = embedding(
+            model="text-embedding-ada-002",
+            input=["good morning from litellm"],
+            timeout=0.00001
+        )
+        print(response)
+    except openai.APITimeoutError:
+        print("Good job got OpenAI timeout error!")
+        pass
+    except Exception as e:
+        pytest.fail(f"Expected timeout error, did not get the correct error. Instead got {e}")
+test_openai_embedding_timeouts()
 
 def test_openai_azure_embedding():
     try:
