@@ -3,7 +3,7 @@ import json
 from enum import Enum
 import requests
 import time
-from typing import Callable, Optional
+from typing import Callable, List, Optional
 import httpx
 from litellm.utils import ModelResponse, Usage
 import litellm
@@ -24,35 +24,39 @@ class ClovaStudioConfig():
 
     The class `ClovaStudioConfig` provides configuration for the ClovaStudio's API interface. Below are the parameters:
 
-    - `top_k` (int): Selects and samples the top k token candidates with the highest probabilities from the generated token pool. 0-128 (default value: 0)
+    - `topK` (int): Selects and samples the top k token candidates with the highest probabilities from the generated token pool. 0-128 (default value: 0)
 
-    - `include_ai_filters` (bool): Whether to return AI filters in the response.
+    - `includeAiFilters` (bool): Whether to return AI filters in the response.
 
-    - `max_tokens` (int): Maximum number of tokens generated. 0-4096 (default value: 100)
+    - `maxTokens` (int): Maximum number of tokens generated. 0-4096 (default value: 100)
 
     - `temperature` (float): Degree of diversity for generated tokens (higher setting values generate more diverse sentences). 0-1 (default value: 0.5)
 
-    - `stop_before` (List[str]): Character that halts token generation. (default value: [])
+    - `stopBefore` (List[str]): Character that halts token generation. (default value: [])
 
-    - `repeat_penalty` (int): The degree of penalty applied when generating the same token (a higher setting reduces the likelihood of repeatedly generating the same result). 0-10 (default value: 5)
+    - `repeatPenalty` (int): The degree of penalty applied when generating the same token (a higher setting reduces the likelihood of repeatedly generating the same result). 0-10 (default value: 5)
 
-    - `top_p` (float): Samples based on the cumulative probabilities of the generated token candidates. 0-1 (default value: 0.8)
+    - `topP` (float): Samples based on the cumulative probabilities of the generated token candidates. 0 < topP < 1 (default value: 0.8)
 
     Note: Please make sure to modify the default parameters as required for your use case.
     """
+    topK: Optional[int]=None
+    includeAiFilters: Optional[bool]=None
+    maxTokens: Optional[int]=None
     temperature: Optional[float]=None
-    max_output_tokens: Optional[int]=None
-    top_p: Optional[float]=None
-    top_k: Optional[int]=None
+    stopBefore: Optional[List[str]]=None
+    repeatPenalty: Optional[int]=None
+    topP: Optional[float]=None
 
     def __init__(self, 
-                top_k: Optional[int]=None,
-                include_ai_filters: Optional[bool]=None,
-                max_tokens: Optional[int]=None,
+                topK: Optional[int]=None,
+                includeAiFilters: Optional[bool]=None,
+                maxTokens: Optional[int]=None,
                 temperature: Optional[float]=None,
-                stop_before: Optional[list]=None,
-                repeat_penalty: Optional[int]=None,
-                top_p: Optional[float]=None) -> None:        
+                stopBefore: Optional[List[str]]=None,
+                repeatPenalty: Optional[int]=None,
+                topP: Optional[float]=None) -> None:    
+        
         locals_ = locals()
         for key, value in locals_.items():
             if key != 'self' and value is not None:
@@ -103,10 +107,18 @@ def completion(
         )
 
     ## Load Config
-    config = litellm.ClovaStudioConfig.get_config() 
+    config = litellm.ClovaStudioConfig.get_config()
     for k, v in config.items(): 
-        if k not in optional_params: # completion(top_k=3) > togetherai_config(top_k=3) <- allows for dynamic variables to be passed in
+        if k not in optional_params: 
             optional_params[k] = v
+
+    # Check if optional_params is valid for CLOVA Studio
+    for k, v in optional_params.items():
+         if k not in ClovaStudioConfig.__dict__:
+            raise ValueError(
+                f"Invalid parameter: {k} is not a valid parameter for ClovaStudioConfig. Please refer to the documentation for more details. https://api.ncloud-docs.com/docs/en/ai-naver-clovastudio-summary"
+            )
+        
 
     data = {
         "messages": messages,
@@ -172,16 +184,16 @@ async def async_completion(
     headers = validate_environment(clova_studio_api_key, apigw_api_key)
 
     ## Load Config
-    config = litellm.ClovaStudioConfig.get_config() 
+    config = litellm.ClovaStudioConfig.get_config()
     for k, v in config.items(): 
-        if k not in optional_params: # completion(top_k=3) > togetherai_config(top_k=3) <- allows for dynamic variables to be passed in
+        if k not in optional_params: 
             optional_params[k] = v
 
     data = {
         "messages": messages,
         **optional_params,
     }
-
+    
     ## LOGGING
     logging_obj.pre_call(
         input=messages,

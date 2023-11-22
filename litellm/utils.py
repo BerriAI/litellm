@@ -2176,6 +2176,25 @@ def get_optional_params(  # use the openai defaults
             if temperature == 0 and model == "mistralai/Mistral-7B-Instruct-v0.1": # this model does no support temperature == 0
                 temperature = 0.0001 # close to 0
             optional_params["temperature"] = temperature
+    elif custom_llm_provider == "clova-studio":
+        supported_params = ["top_p", "max_tokens", "temperature", "stop"]
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = non_default_params
+        if temperature is not None:
+            optional_params["temperature"] = temperature
+        if top_p is not None:
+            if top_p == 0:
+                top_p = 0.0001 # close to 0
+            elif top_p == 1:
+                top_p = 0.9999 # close to 1
+            optional_params["topP"] = top_p
+            del optional_params["top_p"]
+        if max_tokens is not None:
+            optional_params["maxTokens"] = max_tokens
+            del optional_params["max_tokens"]
+        if stop is not None:
+            optional_params["stopBefore"] = stop
+            del optional_params["stop"]
     else:  # assume passing in params for openai/azure openai
         supported_params = ["functions", "function_call", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "response_format", "seed", "tools", "tool_choice"]
         _check_valid_arg(supported_params=supported_params)
