@@ -12,5 +12,6 @@ model LiteLLM_VerificationToken {
     token      String   @unique
     expires    DateTime
     models     String[]
-    aliases     Json  @default("{}")
+    aliases    Json  @default("{}")
+    config     Json  @default("{}")
 }
