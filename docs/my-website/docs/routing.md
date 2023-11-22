@@ -249,9 +249,9 @@ If you want a server to just route requests to different LLM APIs, use our [Open
 
 ## Queuing (Beta)
 
-This requires a [Redis DB](https://redis.com/) to work. 
+**Never fail a request due to rate limits**
 
-Our implementation uses LiteLLM's proxy server + Celery workers to process up to 100 req./s
+The LiteLLM Queuing endpoints can handle 100+ req/s. We use Celery workers to process requests. 
 
 :::info
 
@@ -280,6 +280,23 @@ REDIS_USERNAME="default" # [OPTIONAL] if self-hosted
 $ litellm --config /path/to/config.yaml --use_queue
 ```
 
+Here's an example config for `gpt-3.5-turbo`
+
+**config.yaml** (This will load balance between OpenAI + Azure endpoints)
+```yaml
+model_list: 
+  - model_name: gpt-3.5-turbo
+    litellm_params: 
+      model: gpt-3.5-turbo
+      api_key: 
+  - model_name: gpt-3.5-turbo
+    litellm_params: 
+      model: azure/chatgpt-v-2 # actual model name
+      api_key: 
+      api_version: 2023-07-01-preview
+      api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
+```
+
 3. Test (in another window) → sends 100 simultaneous requests to the queue 
 
 ```bash
@@ -299,7 +316,7 @@ Queue your LLM API requests to ensure you're under your rate limits
 - Step 3: Poll the request
 
 
-## Step 1 Add a config to the proxy, generate a temp key 
+### Step 1 Add a config to the proxy, generate a temp key 
 ```python
 import requests
 import time
@@ -354,7 +371,7 @@ print("\ngenerated key for proxy", generated_key)
 response from generating key {"key":"sk-...,"expires":"2023-12-22T03:43:57.615000+00:00"}
 ```
 
-# Step 2: Queue a request to the proxy, using your generated_key
+### Step 2: Queue a request to the proxy, using your generated_key
 ```python
 print("Creating a job on the proxy")
 job_response = requests.post(
@@ -385,7 +402,7 @@ Response from creating job
 {"id":"0e3d9e98-5d56-4d07-9cc8-c34b7e6658d7","url":"/queue/response/0e3d9e98-5d56-4d07-9cc8-c34b7e6658d7","eta":5,"status":"queued"}
 ```
 
-# Step 3: Poll the request
+### Step 3: Poll the request
 ```python
 while True:
     try:
