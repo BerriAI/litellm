@@ -444,7 +444,7 @@ def model_list():
     return dict(
         data=[
             {
-                "id": model,
+                "id": model["model_name"],
                 "object": "model",
                 "created": 1677610602,
                 "owned_by": "openai",
