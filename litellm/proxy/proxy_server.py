@@ -582,6 +582,11 @@ async def chat_completion(request: Request, model: Optional[str] = None):
             detail=error_msg
         )
 
+@router.post("/v1/embeddings", dependencies=[Depends(user_api_key_auth)])
+@router.post("/embeddings", dependencies=[Depends(user_api_key_auth)])
+async def embeddings(request: Request): 
+    pass
+
 @router.post("/key/generate", dependencies=[Depends(user_api_key_auth)])
 async def generate_key_fn(request: Request): 
     data = await request.json()
