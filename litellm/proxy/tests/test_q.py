@@ -1,14 +1,25 @@
 import requests
 import time
+import os
+from dotenv import load_dotenv
+load_dotenv()
+
 
 # Set the base URL as needed
-# base_url = "https://litellm-api.onrender.com"
+base_url = "https://api.litellm.ai"
 # Uncomment the line below if you want to switch to the local server
-base_url = "http://0.0.0.0:8000"
+# base_url = "http://0.0.0.0:8000"
 
 # Step 1 Add a config to the proxy, generate a temp key
 config = {
   "model_list": [
+    {
+      "model_name": "gpt-3.5-turbo",
+      "litellm_params": {
+        "model": "gpt-3.5-turbo",
+        "api_key": os.environ['OPENAI_API_KEY'],
+      }
+    }
   ]
 }
 
@@ -19,7 +30,7 @@ response = requests.post(
         "duration": "30d"  # default to 30d, set it to 30m if you want a temp key
     },
     headers={
-        "Authorization": "Bearer sk-1234"
+        "Authorization": "Bearer sk-hosted-litellm"
     }
 )
 
