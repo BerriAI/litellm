@@ -138,6 +138,7 @@ log_file = "api_log.json"
 worker_config = None
 master_key = None
 prisma_client = None
+config_cache = {}
 ### REDIS QUEUE ### 
 async_result = None
 celery_app_conn = None 
@@ -158,13 +159,18 @@ def usage_telemetry(
         ).start()
 
 async def user_api_key_auth(request: Request): 
-    global master_key, prisma_client
+    global master_key, prisma_client, config_cache, llm_model_list
     if master_key is None:
         return 
     try: 
         api_key = await oauth2_scheme(request=request)
         if api_key == master_key: 
             return
+        if api_key in config_cache:
+            model_list = config.get("model_list", [])
+            llm_model_list =  model_list
+            return
+
         if prisma_client: 
             valid_token = await prisma_client.litellm_verificationtoken.find_first(
                 where={
@@ -176,9 +182,9 @@ async def user_api_key_auth(request: Request):
                 litellm.model_alias_map = valid_token.aliases
                 config = valid_token.config
                 if config != {}:
-                    global llm_model_list
                     model_list = config.get("model_list", [])
                     llm_model_list =  model_list
+                    config_cache[api_key] = config
                     print("\n new llm router model list", llm_model_list)
                 if len(valid_token.models) == 0: # assume an empty model list means all models are allowed to be called
                     return
