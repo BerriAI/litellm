@@ -19,3 +19,8 @@ def start_rq_worker():
     except Exception as e:
         print(f"Error setting up worker: {e}")
         exit()
+    
+    with Connection(redis_conn):
+        worker.work()
+
+start_rq_worker()
