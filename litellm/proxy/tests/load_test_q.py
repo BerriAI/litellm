@@ -100,7 +100,7 @@ def create_job_and_poll(request_num):
                 try:
                     with open("load_test_log.txt", "a") as response_file:
                         response_file.write(
-                            f"HI"
+                            f"Response for request: {request_num}\n{llm_response}\n\n"
                         )
                 except Exception as e:
                     print("GOT EXCEPTION", e)
@@ -110,7 +110,7 @@ def create_job_and_poll(request_num):
             print("got exception when polling", e)
 
 # Number of requests
-num_requests = 50
+num_requests = 100
 
 # Use ThreadPoolExecutor for parallel execution
 with concurrent.futures.ThreadPoolExecutor(max_workers=num_requests) as executor:
