@@ -42,7 +42,7 @@ celery_app.conf.update(
 
 
 # Celery task
-@celery_app.task(name='process_job')
+@celery_app.task(name='process_job', max_retries=3)
 def process_job(*args, **kwargs):
     try: 
         llm_router: litellm.Router = litellm.Router(model_list=kwargs.pop("llm_model_list"))
@@ -52,7 +52,6 @@ def process_job(*args, **kwargs):
             return json.loads(response)
         return str(response)
     except Exception as e: 
-        print(e)
         raise e
 
 # Ensure Celery workers are terminated when the script exits
