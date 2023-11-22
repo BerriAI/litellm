@@ -306,11 +306,13 @@ class OpenAIChatCompletion(BaseLLM):
     def embedding(self,
                 model: str,
                 input: list,
+                timeout: float, 
                 api_key: Optional[str] = None,
                 api_base: Optional[str] = None,
                 logging_obj=None,
                 model_response=None,
-                optional_params=None,):
+                optional_params=None,
+                ):
         super().embedding()
         exception_mapping_worked = False
         try: 
@@ -323,7 +325,7 @@ class OpenAIChatCompletion(BaseLLM):
             max_retries = data.pop("max_retries", 2)
             if not isinstance(max_retries, int): 
                 raise OpenAIError(status_code=422, message="max retries must be an int")
-            openai_client = OpenAI(api_key=api_key, base_url=api_base, http_client=litellm.client_session, max_retries=max_retries)
+            openai_client = OpenAI(api_key=api_key, base_url=api_base, http_client=litellm.client_session, max_retries=max_retries, timeout=timeout)
 
             ## LOGGING
             logging_obj.pre_call(
