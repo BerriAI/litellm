@@ -292,23 +292,31 @@ $ litellm --test_async --num_requests 100
 - `/queue/response/{id}` - Returns the status of a job. If completed, returns the response as well. Potential status's are: `queued` and `finished`.
 
 
-## Hosted Router + Request Queing api.litellm.ai
+## Hosted Request Queing api.litellm.ai
 Queue your LLM API requests to ensure you're under your rate limits
-- Step 1: Make a POST request `/queue/request` (this follows the same input format as an openai `/chat/completions` call, and returns a job id).
-- Step 2: Make a GET request, `queue/response` to check if it's completed
+- Step 1: Step 1 Add a config to the proxy, generate a temp key 
+- Step 2: Queue a request to the proxy, using your generated_key
+- Step 3: Poll the request
 
 
 ## Step 1 Add a config to the proxy, generate a temp key 
 ```python
 import requests
 import time
+import os
+
+# Set the base URL as needed
+base_url = "https://api.litellm.ai"
+
+# Step 1 Add a config to the proxy, generate a temp key
+# use the same model_name to load balance
 config = {
   "model_list": [
     {
       "model_name": "gpt-3.5-turbo",
       "litellm_params": {
         "model": "gpt-3.5-turbo",
-        "api_key": "sk-"
+        "api_key": os.environ['OPENAI_API_KEY'],
       }
     },
     {
@@ -324,42 +332,57 @@ config = {
 }
 
 response = requests.post(
-    url = "http://0.0.0.0:8000/key/generate",
+    url=f"{base_url}/key/generate",
     json={
         "config": config,
-        "duration": "30d" # default to 30d, set it to 30m if you want a temp key
+        "duration": "30d"  # default to 30d, set it to 30m if you want a temp 30 minute key
     },
     headers={
-        "Authorization": "Bearer sk-hosted-litellm"
+        "Authorization": "Bearer sk-hosted-litellm" # this is the key to use api.litellm.ai
     }
 )
 
-print("\nresponse from generating key", response.json())
+print("\nresponse from generating key", response.text)
+print("\n json response from gen key", response.json())
 
 generated_key = response.json()["key"]
 print("\ngenerated key for proxy", generated_key)
 ```
 
+#### Output
+```shell
+response from generating key {"key":"sk-...,"expires":"2023-12-22T03:43:57.615000+00:00"}
+```
+
 # Step 2: Queue a request to the proxy, using your generated_key
 ```python
+print("Creating a job on the proxy")
 job_response = requests.post(
-    url = "http://0.0.0.0:8000/queue/request",
+    url=f"{base_url}/queue/request",
     json={
-            'model': 'gpt-3.5-turbo',
-            'messages': [
-                {'role': 'system', 'content': f'You are a helpful assistant. What is your name'},
-            ],
+        'model': 'gpt-3.5-turbo',
+        'messages': [
+            {'role': 'system', 'content': f'You are a helpful assistant. What is your name'},
+        ],
     },
     headers={
         "Authorization": f"Bearer {generated_key}"
     }
 )
-
+print(job_response.status_code)
+print(job_response.text)
+print("\nResponse from creating job", job_response.text)
 job_response = job_response.json()
-job_id  = job_response["id"]
+job_id = job_response["id"]
 polling_url = job_response["url"]
-polling_url = f"http://0.0.0.0:8000{polling_url}"
+polling_url = f"{base_url}{polling_url}"
 print("\nCreated Job, Polling Url", polling_url)
+```
+
+#### Output
+```shell
+Response from creating job 
+{"id":"0e3d9e98-5d56-4d07-9cc8-c34b7e6658d7","url":"/queue/response/0e3d9e98-5d56-4d07-9cc8-c34b7e6658d7","eta":5,"status":"queued"}
 ```
 
 # Step 3: Poll the request
@@ -368,14 +391,14 @@ while True:
     try:
         print("\nPolling URL", polling_url)
         polling_response = requests.get(
-                url=polling_url, 
-                headers={
-                    "Authorization": f"Bearer {generated_key}"
-                }
-            )
+            url=polling_url,
+            headers={
+                "Authorization": f"Bearer {generated_key}"
+            }
+        )
+        print("\nResponse from polling url", polling_response.text)
         polling_response = polling_response.json()
-        print("\nResponse from polling url", polling_response)
-        status = polling_response["status"]
+        status = polling_response.get("status", None)
         if status == "finished":
             llm_response = polling_response["result"]
             print("LLM Response")
@@ -385,5 +408,21 @@ while True:
     except Exception as e:
         print("got exception in polling", e)
         break
+```
+
+#### Output
+```shell
+Polling URL https://api.litellm.ai/queue/response/0e3d9e98-5d56-4d07-9cc8-c34b7e6658d7
+
+Response from polling url {"status":"queued"}
+
+Polling URL https://api.litellm.ai/queue/response/0e3d9e98-5d56-4d07-9cc8-c34b7e6658d7
+
+Response from polling url {"status":"queued"}
+
+Polling URL https://api.litellm.ai/queue/response/0e3d9e98-5d56-4d07-9cc8-c34b7e6658d7
+
+Response from polling url 
+{"status":"finished","result":{"id":"chatcmpl-8NYRce4IeI4NzYyodT3NNp8fk5cSW","choices":[{"finish_reason":"stop","index":0,"message":{"content":"I am an AI assistant and do not have a physical presence or personal identity. You can simply refer to me as \"Assistant.\" How may I assist you today?","role":"assistant"}}],"created":1700624639,"model":"gpt-3.5-turbo-0613","object":"chat.completion","system_fingerprint":null,"usage":{"completion_tokens":33,"prompt_tokens":17,"total_tokens":50}}}
 
 ```
