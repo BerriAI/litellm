@@ -47,6 +47,7 @@ def test_async_response_openai():
         try:
             response = await acompletion(model="gpt-3.5-turbo", messages=messages, timeout=5)
             print(f"response: {response}")
+            print(f"response ms: {response._response_ms}")
         except litellm.Timeout as e: 
             pass
         except Exception as e:
@@ -55,7 +56,7 @@ def test_async_response_openai():
 
     asyncio.run(test_get_response())
 
-# test_async_response_openai()
+test_async_response_openai()
 
 def test_async_response_azure():
     import asyncio
@@ -160,4 +161,4 @@ def test_get_response_non_openai_streaming():
         return response
     asyncio.run(test_async_call())
 
-test_get_response_non_openai_streaming()
+# test_get_response_non_openai_streaming()
