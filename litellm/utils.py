@@ -335,7 +335,7 @@ class ModelResponse(OpenAIObject):
         setattr(self, key, value)
 
 class EmbeddingResponse(OpenAIObject):
-    def __init__(self, id=None, choices=None, created=None, model=None, usage=None, stream=False, response_ms=None):
+    def __init__(self, model=None, usage=None, stream=False, response_ms=None):
         object = "list"
         if response_ms:
             _response_ms = response_ms
@@ -343,7 +343,7 @@ class EmbeddingResponse(OpenAIObject):
             _response_ms = None
         data = []
         model = model
-        super().__init__(id=id, choices=choices, created=created, model=model, object=object, data=data, usage=usage)
+        super().__init__(model=model, object=object, data=data, usage=usage)
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
