@@ -474,7 +474,8 @@ def model_list():
     if server_settings.get("infer_model_from_keys", False):
         all_models = litellm.utils.get_valid_models()
     if llm_model_list: 
-        all_models += llm_model_list
+        print(f"llm model list: {llm_model_list}")
+        all_models += [m["model_name"] for m in llm_model_list]
     if user_model is not None:
         all_models += user_model
     ### CHECK OLLAMA MODELS ### 
@@ -484,7 +485,7 @@ def model_list():
         ollama_models = [m["name"].replace(":latest", "") for m in models]
         all_models.extend(ollama_models)
     except Exception as e: 
-        traceback.print_exc()
+        pass
     return dict(
         data=[
             {
