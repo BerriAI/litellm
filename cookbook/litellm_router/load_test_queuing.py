@@ -13,7 +13,7 @@ import pytest
 from litellm import Router
 import litellm
 litellm.set_verbose=False
-os.environ.pop("AZURE_AD_TOKEN")
+# os.environ.pop("AZURE_AD_TOKEN")
 
 model_list = [{ # list of model deployments 
     "model_name": "gpt-3.5-turbo", # model alias 
@@ -142,10 +142,11 @@ successful_calls = 0
 failed_calls = 0
 
 for future in futures:
-    if future.result() is not None:
-        successful_calls += 1
-    else:
-        failed_calls += 1
+    if future.done(): 
+        if future.result() is not None:
+            successful_calls += 1
+        else:
+            failed_calls += 1
 
 print(f"Load test Summary:")
 print(f"Total Requests: {concurrent_calls}")
