@@ -206,16 +206,17 @@ async def user_api_key_auth(request: Request):
 
 def prisma_setup(database_url: Optional[str]): 
     global prisma_client
-    if database_url: 
-        import os 
-        print("LiteLLM: DATABASE_URL Set in config, trying to 'pip install prisma'")
-        os.environ["DATABASE_URL"] = database_url
-        subprocess.run(['pip', 'install', 'prisma'])
-        subprocess.run(['python3', '-m', 'pip', 'install', 'prisma'])
-        subprocess.run(['prisma', 'db', 'push'])
-        # Now you can import the Prisma Client
-        from prisma import Client
-        prisma_client = Client()
+    if database_url:
+        try: 
+            import os 
+            print("LiteLLM: DATABASE_URL Set in config, trying to 'pip install prisma'")
+            os.environ["DATABASE_URL"] = database_url
+            subprocess.run(['prisma', 'db', 'push'])
+            # Now you can import the Prisma Client
+            from prisma import Client
+            prisma_client = Client()
+        except Exception as e:
+            print("Error when initializing prisma, Ensure you run pip install prisma", e)
 
 def rq_setup(use_queue: bool): 
     global request_queue, redis_connection, redis_job
