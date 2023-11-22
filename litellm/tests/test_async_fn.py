@@ -56,7 +56,7 @@ def test_async_response_openai():
 
     asyncio.run(test_get_response())
 
-test_async_response_openai()
+# test_async_response_openai()
 
 def test_async_response_azure():
     import asyncio
@@ -130,6 +130,7 @@ def test_get_response_streaming():
 def test_get_response_non_openai_streaming():
     import asyncio
     litellm.set_verbose = True
+    litellm.num_retries = 0
     async def test_async_call():
         user_message = "Hello, how are you?"
         messages = [{"content": user_message, "role": "user"}]
@@ -161,4 +162,4 @@ def test_get_response_non_openai_streaming():
         return response
     asyncio.run(test_async_call())
 
-# test_get_response_non_openai_streaming()
+test_get_response_non_openai_streaming()
