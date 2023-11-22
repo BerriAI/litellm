@@ -167,8 +167,7 @@ async def user_api_key_auth(request: Request):
         if api_key == master_key: 
             return
         if api_key in config_cache:
-            model_list = config.get("model_list", [])
-            llm_model_list =  model_list
+            llm_model_list =  config_cache[api_key].get("model_list", [])
             return
 
         if prisma_client: 
