@@ -138,7 +138,7 @@ log_file = "api_log.json"
 worker_config = None
 master_key = None
 prisma_client = None
-config_cache = {}
+config_cache: dict = {}
 ### REDIS QUEUE ### 
 async_result = None
 celery_app_conn = None 
@@ -487,7 +487,7 @@ def model_list():
     try:
         response = requests.get("http://0.0.0.0:11434/api/tags")
         models = response.json()["models"]
-        ollama_models = [m["name"].replace(":latest", "") for m in models]
+        ollama_models = ["ollama/" + m["name"].replace(":latest", "") for m in models]
         all_models.extend(ollama_models)
     except Exception as e: 
         pass
