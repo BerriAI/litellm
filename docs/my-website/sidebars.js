@@ -143,7 +143,6 @@ const sidebars = {
       items: [
         "caching/local_caching",
         "caching/redis_cache",
-        "caching/caching_api",
       ],
     },
     {
