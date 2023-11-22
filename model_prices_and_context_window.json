@@ -776,7 +776,7 @@
         "litellm_provider": "anyscale", 
         "mode": "chat"
       },
-      "anyscale/Zephyr-7b-beta": {
+      "anyscale/HuggingFaceH4/zephyr-7b-beta": {
         "max_tokens": 16384, 
         "input_cost_per_token": 0.00000015, 
         "output_cost_per_token": 0.00000015,
