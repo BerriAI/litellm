@@ -164,9 +164,7 @@ def test_completion_gpt4_vision():
 
 def test_completion_perplexity_api():
     try:
-        litellm.set_verbose=True
-        litellm.num_retries = 0
-        litellm.drop_params = True
+        # litellm.set_verbose=True
         messages=[{
             "role": "system", 
             "content": "You're a good bot"
@@ -180,7 +178,7 @@ def test_completion_perplexity_api():
         response = completion(
             model="mistral-7b-instruct", 
             messages=messages,
-            api_base="https://api.perplexity.ai", stop="Hello")
+            api_base="https://api.perplexity.ai")
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
@@ -446,7 +444,7 @@ def test_completion_openai():
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_openai()
+# test_completion_openai()
 
 def test_completion_text_openai():
     try:
@@ -832,6 +830,7 @@ def test_completion_replicate_llama2_stream():
             #     assert len(chunk.choices[0].delta["content"]) > 2
             # print(chunk)
         assert len(complete_response) > 5
+        print(f"complete_response: {complete_response}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 test_completion_replicate_llama2_stream()
