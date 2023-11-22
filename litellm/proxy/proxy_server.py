@@ -164,8 +164,14 @@ async def user_api_key_auth(request: Request):
         return 
     try: 
         api_key = await oauth2_scheme(request=request)
+        route = request.url.path
+
         if api_key == master_key: 
             return
+        
+        if route == "/key/generate" and api_key != master_key: 
+            raise Exception(f"If master key is set, only master key can be used to generate new keys")
+
         if api_key in config_cache:
             llm_model_list =  config_cache[api_key].get("model_list", [])
             return
@@ -593,6 +599,11 @@ async def generate_key_fn(request: Request):
             detail={"error": "models param must be a list"},
         )
 
+@router.get("/test")
+async def test_endpoint(request: Request): 
+    return {"route": request.url.path}
+
+#### EXPERIMENTAL QUEUING #### 
 @router.post("/queue/request", dependencies=[Depends(user_api_key_auth)])
 async def async_queue_request(request: Request): 
     global celery_fn, llm_model_list
