@@ -52,6 +52,7 @@ class Router:
             self.set_model_list(model_list)
             self.healthy_deployments: List = self.model_list
             self.deployment_latency_map = {}
+            self.cooldown_deployments = {} # {"gpt-3.5-turbo": time.time() when it failed / needed a cooldown} 
             for m in model_list: 
                 self.deployment_latency_map[m["litellm_params"]["model"]] = 0
         
@@ -88,6 +89,11 @@ class Router:
             litellm.success_callback.append(self.deployment_callback)
         else:
             litellm.success_callback = [self.deployment_callback]
+        
+        if type(litellm.failure_callback) == list:
+            litellm.failure_callback.append(self.deployment_callback_on_failure)
+        else:
+            litellm.failure_callback = [self.deployment_callback_on_failure]
 
     def _start_health_check_thread(self):
         """
@@ -156,6 +162,25 @@ class Router:
         """
         Returns the deployment based on routing strategy
         """
+        ## get healthy deployments
+        ### get all deployments 
+        ### filter out the deployments currently cooling down 
+        healthy_deployments = [m for m in self.model_list if m["model_name"] == model]
+        current_time = time.time() 
+        iter = 0
+        deployments_to_remove = [] 
+        ### FIND UNHEALTHY DEPLOYMENTS
+        for deployment in healthy_deployments: 
+            deployment_name = deployment["litellm_params"]["model"]
+            if deployment_name in self.cooldown_deployments: 
+                if current_time >= self.cooldown_deployments[deployment_name] + 60: 
+                    self.cooldown_deployments.pop(deployment_name)
+                else: 
+                    deployments_to_remove.append(deployment)
+            iter += 1
+        ### FILTER OUT UNHEALTHY DEPLOYMENTS
+        for deployment in deployments_to_remove:
+            healthy_deployments.remove(deployment)
         if litellm.model_alias_map and model in litellm.model_alias_map:
             model = litellm.model_alias_map[
                 model
@@ -168,24 +193,15 @@ class Router:
             else: 
                 raise ValueError("No models available.")
         elif self.routing_strategy == "simple-shuffle": 
-            potential_deployments = []
-            for item in self.model_list:
-                if item["model_name"] == model:
-                    potential_deployments.append(item)
-            item = random.choice(potential_deployments)
+            item = random.choice(healthy_deployments)
             return item or item[0]
         elif self.routing_strategy == "latency-based-routing": 
             returned_item = None
             lowest_latency = float('inf')
-            ### get potential deployments
-            potential_deployments = []
-            for item in self.model_list:
-                if item["model_name"] == model:
-                    potential_deployments.append(item)
             ### shuffles with priority for lowest latency
             # items_with_latencies = [('A', 10), ('B', 20), ('C', 30), ('D', 40)]
             items_with_latencies = [] 
-            for item in potential_deployments:
+            for item in healthy_deployments:
                 items_with_latencies.append((item, self.deployment_latency_map[item["litellm_params"]["model"]]))
             returned_item = self.weighted_shuffle_by_latency(items_with_latencies)
             return returned_item
@@ -256,7 +272,7 @@ class Router:
                                             reraise=True,
                                             after=after_callback)
                 
-            return retryer(self.acompletion, *args, **kwargs)
+            return retryer(original_function, *args, **kwargs)
         except Exception as e: 
             raise Exception(f"Error in function_with_retries: {e}\n\nRetry Info: {retry_info}")
 
@@ -406,7 +422,7 @@ class Router:
         custom_llm_provider = kwargs.get("litellm_params", {}).get('custom_llm_provider', None)  # i.e. azure
         if custom_llm_provider:
             model_name = f"{custom_llm_provider}/{model_name}"
-        self.deployment_latency_map[model_name] = float('inf')
+        self.cooldown_deployments[model_name] = time.time() # put deployment in cooldown mode
 
     def get_usage_based_available_deployment(self,
                                model: str,
