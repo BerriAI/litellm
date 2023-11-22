@@ -13,4 +13,4 @@ RUN pip install -r requirements.txt
 WORKDIR /app/litellm/proxy
 
 # Set the command to run when the container starts
-CMD python3 proxy_cli.py --config /../../hosted_config.yaml --port 4000
+CMD python3 proxy_cli.py --config /app/hosted_config.yaml --port 4000
