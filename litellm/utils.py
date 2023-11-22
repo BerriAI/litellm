@@ -1854,7 +1854,7 @@ def get_optional_params(  # use the openai defaults
                 raise UnsupportedParamsError(status_code=500, message=f"Function calling is not supported by {custom_llm_provider}. To add it to the prompt, set `litellm.add_function_to_prompt = True`.")
 
     def _check_valid_arg(supported_params): 
-        print_verbose(f"\nLiteLLM completion() model= {model}")
+        print_verbose(f"\nLiteLLM completion() model= {model}; provider = {custom_llm_provider}")
         print_verbose(f"\nLiteLLM: Params passed to completion() {passed_params}")
         print_verbose(f"\nLiteLLM: Non-Default params passed to completion() {non_default_params}")
         unsupported_params = {}
@@ -1867,7 +1867,6 @@ def get_optional_params(  # use the openai defaults
                     unsupported_params[k] = non_default_params[k]
         if unsupported_params and not litellm.drop_params:
             raise UnsupportedParamsError(status_code=500, message=f"{custom_llm_provider} does not support parameters: {unsupported_params}. To drop these, set `litellm.drop_params=True`.")
-
     ## raise exception if provider doesn't support passed in param 
     if custom_llm_provider == "anthropic":
         ## check if unsupported param passed in 
@@ -2158,7 +2157,7 @@ def get_optional_params(  # use the openai defaults
                 optional_params["presence_penalty"] = presence_penalty
             if stop is not None:
                 optional_params["stop_sequences"] = stop
-    elif model in litellm.aleph_alpha_models:
+    elif custom_llm_provider == "aleph_alpha":
         supported_params = ["max_tokens", "stream", "top_p", "temperature", "presence_penalty", "frequency_penalty", "n", "stop"]
         _check_valid_arg(supported_params=supported_params)
         if max_tokens is not None:
@@ -2193,7 +2192,7 @@ def get_optional_params(  # use the openai defaults
             optional_params["repeat_penalty"] = frequency_penalty
         if stop is not None:
             optional_params["stop_sequences"] = stop
-    elif model in litellm.nlp_cloud_models or custom_llm_provider == "nlp_cloud":
+    elif custom_llm_provider == "nlp_cloud":
         supported_params = ["max_tokens", "stream", "temperature", "top_p", "presence_penalty", "frequency_penalty", "n", "stop"]
         _check_valid_arg(supported_params=supported_params)
 
@@ -2213,7 +2212,7 @@ def get_optional_params(  # use the openai defaults
             optional_params["num_return_sequences"] = n
         if stop is not None:
             optional_params["stop_sequences"] = stop
-    elif model in litellm.petals_models or custom_llm_provider == "petals":
+    elif custom_llm_provider == "petals":
         supported_params = ["max_tokens", "temperature", "top_p", "stream"]
         _check_valid_arg(supported_params=supported_params)
         # max_new_tokens=1,temperature=0.9, top_p=0.6
@@ -2228,11 +2227,59 @@ def get_optional_params(  # use the openai defaults
     elif custom_llm_provider == "deepinfra":
         supported_params = ["temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user"]
         _check_valid_arg(supported_params=supported_params)
+        if temperature is not None:
+            if temperature == 0 and model == "mistralai/Mistral-7B-Instruct-v0.1": # this model does no support temperature == 0
+                temperature = 0.0001 # close to 0
+            optional_params["temperature"] = temperature
+        if top_p:
+            optional_params["top_p"] = top_p
+        if n: 
+            optional_params["n"] = n
+        if stream: 
+            optional_params["stream"] = str
+        if stop: 
+            optional_params["stop"] = stop
+        if max_tokens: 
+            optional_params["max_tokens"] = max_tokens
+        if presence_penalty: 
+            optional_params["presence_penalty"] = presence_penalty
+        if frequency_penalty: 
+            optional_params["frequency_penalty"] = frequency_penalty
+        if logit_bias: 
+            optional_params["logit_bias"] = logit_bias
+        if user: 
+            optional_params["user"] = user
+    elif custom_llm_provider == "perplexity":
+        supported_params = ["temperature", "top_p", "stream", "max_tokens", "presence_penalty", "frequency_penalty"]
+        _check_valid_arg(supported_params=supported_params)
+        if temperature is not None:
+            if temperature == 0 and model == "mistral-7b-instruct": # this model does no support temperature == 0
+                temperature = 0.0001 # close to 0
+            optional_params["temperature"] = temperature
+        if top_p: 
+            optional_params["top_p"] = top_p
+        if stream: 
+            optional_params["stream"] = stream
+        if max_tokens: 
+            optional_params["max_tokens"] = max_tokens
+        if presence_penalty: 
+            optional_params["presence_penalty"] = presence_penalty
+        if frequency_penalty: 
+            optional_params["frequency_penalty"] = frequency_penalty
+    elif custom_llm_provider == "anyscale":
+        supported_params = ["temperature", "top_p", "stream", "max_tokens"]
+        _check_valid_arg(supported_params=supported_params)
         optional_params = non_default_params
         if temperature is not None:
             if temperature == 0 and model == "mistralai/Mistral-7B-Instruct-v0.1": # this model does no support temperature == 0
                 temperature = 0.0001 # close to 0
             optional_params["temperature"] = temperature
+        if top_p: 
+            optional_params["top_p"] = top_p
+        if stream: 
+            optional_params["stream"] = stream
+        if max_tokens: 
+            optional_params["max_tokens"] = max_tokens
     else:  # assume passing in params for openai/azure openai
         supported_params = ["functions", "function_call", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "response_format", "seed", "tools", "tool_choice", "max_retries"]
         _check_valid_arg(supported_params=supported_params)
@@ -2259,26 +2306,29 @@ def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None, api_
                 # perplexity is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.perplexity.ai
                 api_base = "https://api.perplexity.ai"
                 dynamic_api_key = os.getenv("PERPLEXITYAI_API_KEY")
-                custom_llm_provider = "custom_openai"
             elif custom_llm_provider == "anyscale": 
                 # anyscale is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
                 api_base = "https://api.endpoints.anyscale.com/v1"
                 dynamic_api_key = os.getenv("ANYSCALE_API_KEY")
-                custom_llm_provider = "custom_openai"
             elif custom_llm_provider == "deepinfra": 
                 # deepinfra is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
                 api_base = "https://api.deepinfra.com/v1/openai"
                 dynamic_api_key = os.getenv("DEEPINFRA_API_KEY")
-                custom_llm_provider = "custom_openai"
             return model, custom_llm_provider, dynamic_api_key, api_base
 
         # check if api base is a known openai compatible endpoint
         if api_base: 
             for endpoint in litellm.openai_compatible_endpoints:
                 if endpoint in api_base:
-                    custom_llm_provider = "custom_openai"
-                    if endpoint == "api.perplexity.ai": 
+                    if endpoint == "api.perplexity.ai":
+                        custom_llm_provider = "perplexity"
                         dynamic_api_key = os.getenv("PERPLEXITYAI_API_KEY")
+                    elif endpoint == "api.endpoints.anyscale.com/v1":
+                        custom_llm_provider = "anyscale"
+                        dynamic_api_key = os.getenv("ANYSCALE_API_KEY")
+                    elif endpoint == "api.deepinfra.com/v1/openai":
+                        custom_llm_provider = "deepinfra"
+                        dynamic_api_key = os.getenv("DEEPINFRA_API_KEY")
                     return model, custom_llm_provider, dynamic_api_key, api_base
 
         # check if model in known model provider list  -> for huggingface models, raise exception as they don't have a fixed provider (can be togetherai, anyscale, baseten, runpod, et.)
