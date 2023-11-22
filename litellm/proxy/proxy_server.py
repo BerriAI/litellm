@@ -647,5 +647,22 @@ async def retrieve_server_log(request: Request):
 async def home(request: Request):
     return "LiteLLM: RUNNING"
 
+@app.get("/routes")
+async def get_routes():
+    """
+    Get a list of available routes in the FastAPI application.
+    """
+    routes = []
+    for route in app.routes:
+        route_info = {
+            "path": route.path,
+            "methods": route.methods,
+            "name": route.name,
+            "endpoint": route.endpoint.__name__ if route.endpoint else None,
+        }
+        routes.append(route_info)
+
+    return {"routes": routes}
+
 
 app.include_router(router)
