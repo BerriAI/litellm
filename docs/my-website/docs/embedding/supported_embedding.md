@@ -5,10 +5,34 @@
 from litellm import embedding
 import os
 os.environ['OPENAI_API_KEY'] = ""
-response = embedding('text-embedding-ada-002', input=["good morning from litellm"])
+response = embedding(model='text-embedding-ada-002', input=["good morning from litellm"])
 ```
 
-### Expected Output from litellm.embedding()
+### Input Params for `litellm.embedding()`
+### Required Fields
+
+- `model`: *string* - ID of the model to use. `model='text-embedding-ada-002'`
+
+- `input`: *array* - Input text to embed, encoded as a string or array of tokens. To embed multiple inputs in a single request, pass an array of strings or array of token arrays. The input must not exceed the max input tokens for the model (8192 tokens for text-embedding-ada-002), cannot be an empty string, and any array must be 2048 dimensions or less. 
+```
+input=["good morning from litellm"]
+```
+
+### Optional LiteLLM Fields
+
+- `user`: *string (optional)* A unique identifier representing your end-user, 
+
+- `timeout`: *integer* - The maximum time, in seconds, to wait for the API to respond. Defaults to 600 seconds (10 minutes).
+
+- `api_base`: *string (optional)* - The api endpoint you want to call the model with
+
+- `api_version`: *string (optional)* - (Azure-specific) the api version for the call
+
+- `api_key`: *string (optional)* - The API key to authenticate and authorize requests. If not provided, the default API key is used.
+
+- `api_type`: *string (optional)* - The type of API to use.
+
+### Output from `litellm.embedding()`
 
 ```json
 {
