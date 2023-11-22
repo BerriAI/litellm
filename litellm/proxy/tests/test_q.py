@@ -58,9 +58,9 @@ print(job_response.status_code)
 print(job_response.text)
 print("\nResponse from creating job", job_response.text)
 job_response = job_response.json()
-job_id = job_response["id"]
-polling_url = job_response["url"]
-polling_url = f"{base_url}{polling_url}"
+job_id = job_response["id"] # type: ignore 
+polling_url = job_response["url"] # type: ignore 
+polling_url = f"{base_url}{polling_url}" 
 print("\nCreated Job, Polling Url", polling_url)
 
 # Step 3: Poll the request
@@ -75,9 +75,9 @@ while True:
         )
         print("\nResponse from polling url", polling_response.text)
         polling_response = polling_response.json()
-        status = polling_response.get("status", None)
+        status = polling_response.get("status", None) # type: ignore 
         if status == "finished":
-            llm_response = polling_response["result"]
+            llm_response = polling_response["result"] # type: ignore 
             print("LLM Response")
             print(llm_response)
             break
