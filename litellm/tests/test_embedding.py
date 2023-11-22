@@ -39,21 +39,22 @@ def test_openai_embedding():
         print(openai_response_keys)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_openai_embedding()
+# test_openai_embedding()
 
 def test_openai_azure_embedding_simple():
     try:
-
         response = embedding(
             model="azure/azure-embedding-model",
             input=["good morning from litellm"],
         )
         print(response)
+        response_keys = dict(response).keys()
+        assert set(["usage", "model", "object", "data"]) == set(response_keys) #assert litellm response has expected keys from OpenAI embedding response
 
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-# test_openai_azure_embedding_simple()
+test_openai_azure_embedding_simple()
 
 def test_openai_azure_embedding():
     try:
