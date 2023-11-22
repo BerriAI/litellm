@@ -176,15 +176,10 @@ async def user_api_key_auth(request: Request):
                 litellm.model_alias_map = valid_token.aliases
                 config = valid_token.config
                 if config != {}:
-                    global llm_router
+                    global llm_model_list
                     model_list = config.get("model_list", [])
-                    if llm_router == None:
-                        llm_router = litellm.Router(
-                            model_list=model_list
-                        )
-                    else:
-                        llm_router.model_list = model_list
-                    print("\n new llm router model list", llm_router.model_list)
+                    llm_model_list =  model_list
+                    print("\n new llm router model list", llm_model_list)
                 if len(valid_token.models) == 0: # assume an empty model list means all models are allowed to be called
                     return
                 else: 
