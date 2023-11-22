@@ -247,15 +247,23 @@ print(f"response: {response}")
 
 If you want a server to just route requests to different LLM APIs, use our [OpenAI Proxy Server](./simple_proxy.md#multiple-instances-of-1-model)
 
-## Queuing
-
-### Quick Start 
+## Queuing (Beta)
 
 This requires a [Redis DB](https://redis.com/) to work. 
 
 Our implementation uses LiteLLM's proxy server + Celery workers to process up to 100 req./s
 
+:::info
+
+This is pretty new, and might have bugs. Any contributions to improving our implementation are welcome
+
+:::
+
+
 [**See Code**](https://github.com/BerriAI/litellm/blob/fbf9cab5b9e35df524e2c9953180c58d92e4cd97/litellm/proxy/proxy_server.py#L589)
+
+
+### Quick Start 
 
 1. Add Redis credentials in a .env file
 
