@@ -1,0 +1,8 @@
+
+litellm_settings:
+  set_verbose: True
+
+general_settings: 
+  master_key: sk-hosted-litellm
+  use_queue: True
+  database_url: " # [OPTIONAL] use for token-based auth to proxy
