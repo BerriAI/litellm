@@ -194,7 +194,7 @@ def run_server(host, port, api_base, api_version, model, alias, add_key, headers
                 "role": "user",
                 "content": "this is a test request, write a short poem"
             }
-        ])
+        ], max_tokens=256)
         click.echo(f'\nLiteLLM: response from proxy {response}')
 
         print("\n Making streaming request to proxy")
