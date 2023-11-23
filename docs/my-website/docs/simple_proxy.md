@@ -9,9 +9,9 @@ LiteLLM Server manages:
 * Calling 100+ LLMs [Huggingface/Bedrock/TogetherAI/etc.](#other-supported-models) in the OpenAI `ChatCompletions` & `Completions` format
 * Authentication - [Virtual Keys](#managing-auth---virtual-keys)
 * Set custom prompt templates + model-specific configs (`temperature`, `max_tokens`, etc.)
-* Routing between [Multiple Models](#multiple-models---quick-start) + [Deployments of the same model](#multiple-instances-of-1-model)
+* Load balancing - Routing between [Multiple Models](#multiple-models---quick-start) + [Deployments of the same model](#multiple-instances-of-1-model)
 
-[**See code**](https://github.com/BerriAI/litellm/tree/main/litellm/proxy)
+[**See LiteLLM Proxy code**](https://github.com/BerriAI/litellm/tree/main/litellm/proxy)
 
 ## Quick Start 
 View all the supported args for the Proxy CLI [here](https://docs.litellm.ai/docs/simple_proxy#proxy-cli-arguments)
@@ -75,6 +75,7 @@ print(response)
 </Tabs>
 
 ### Supported LLMs
+All LiteLLM supported LLMs are supported on the Proxy. Seel all [supported llms](https://docs.litellm.ai/docs/providers)
 <Tabs>
 <TabItem value="bedrock" label="AWS Bedrock">
 
@@ -589,7 +590,7 @@ general_settings:
   master_key: sk-1234 # [OPTIONAL] Only use this if you to require all calls to contain this key (Authorization: Bearer sk-1234)
 ```
 
-### Multiple Models
+### Config for Multiple Models - GPT-4, Claude-2, etc
 
 Here's how you can use multiple llms with one proxy `config.yaml`. 
 
@@ -796,7 +797,7 @@ model_list:
         model: ollama/llama2
 ```
 
-### Multiple Instances of 1 model
+### Load Balancing - Multiple Instances of 1 model
 
 If you have multiple instances of the same model,
 
