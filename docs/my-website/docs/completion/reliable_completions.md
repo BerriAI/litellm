@@ -1,4 +1,4 @@
-# Reliability
+# Reliability - Retries, Fallbacks
 
 LiteLLM helps prevent failed requests in 2 ways: 
 - Retries
