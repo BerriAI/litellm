@@ -18,7 +18,7 @@ load_dotenv()
 
 def test_multiple_deployments(): 
 	import concurrent, time
-	# litellm.set_verbose=True
+	litellm.set_verbose=True
 	futures = {}
 	model_list = [{ # list of model deployments 
 		"model_name": "gpt-3.5-turbo", # openai model name 
@@ -82,7 +82,7 @@ Who among the mentioned figures from Ancient Greece contributed to the domain of
 	
 	results = [] 
 
-	for _ in range(10): 
+	for _ in range(2): 
 		print(f"starting!!!")
 		response = router.completion(**kwargs)
 		results.append(response)
