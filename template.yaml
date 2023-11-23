@@ -10,36 +10,27 @@ Globals:
   Function:
     Timeout: 600
     MemorySize: 128
+    Environment:
+      Variables:
+        WORKER_CONFIG: !Ref WorkerConfigParameter
 
 Parameters:
   AliasParameter:
     Type: String
     Default: live
+  WorkerConfigParameter:
+    Type: String
+    Description: Sample environment variable
+    Default: '{"model": null, "alias": null, "api_base": null, "api_version": "2023-07-01-preview", "debug": false, "temperature": null, "max_tokens": null, "request_timeout": 600, "max_budget": null, "telemetry": true, "drop_params": false, "add_function_to_prompt": false, "headers": null, "save": false, "config": null, "use_queue": false}'
 
 Resources:
-  LambdaExecutionRole:
-    Type: AWS::IAM::Role
+  MyUrlFunctionPermissions:
+    Type: AWS::Lambda::Permission
     Properties:
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service:
-                - lambda.amazonaws.com
-                - edgelambda.amazonaws.com
-            Action: sts:AssumeRole
-      Policies:
-        - PolicyName: LambdaExecutionPolicy
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - logs:CreateLogGroup
-                  - logs:CreateLogStream
-                  - logs:PutLogEvents
-                Resource: 'arn:aws:logs:*:*:*'
+      FunctionName: !Ref URL
+      Action: lambda:InvokeFunctionUrl
+      Principal: "*"
+      FunctionUrlAuthType: NONE
 
   Function:
     Type: AWS::Serverless::Function
@@ -49,7 +40,6 @@ Resources:
       Handler: proxy/lambda.handler
       Runtime: python3.11
       AutoPublishAlias: !Ref AliasParameter
-      Role: !GetAtt LambdaExecutionRole.Arn
       Architectures:
        - x86_64
       DeploymentPreference:
@@ -81,7 +71,7 @@ Resources:
     Type: AWS::Lambda::Url
     DependsOn: FunctionAliaslive
     Properties:
-      AuthType: AWS_IAM
+      AuthType: NONE
       Qualifier: live
       TargetFunctionArn: !GetAtt Function.Arn
 
