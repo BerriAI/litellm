@@ -35,7 +35,7 @@ Resources:
   Function:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: !Sub "${AWS::StackName}-llmlite"
+      FunctionName: !Sub "${AWS::StackName}-function"
       CodeUri: "./litellm"
       Handler: proxy/lambda.handler
       Runtime: python3.11
