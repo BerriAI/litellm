@@ -122,7 +122,10 @@ class AzureChatCompletion(BaseLLM):
                 input=messages,
                 api_key=api_key,
                 additional_args={
-                    "headers": headers,
+                    "headers": {
+                        "api_key": api_key, 
+                        "azure_ad_token": azure_ad_token
+                    },
                     "api_version": api_version,
                     "api_base": api_base,
                     "complete_input_dict": data,
@@ -302,7 +305,13 @@ class AzureChatCompletion(BaseLLM):
             logging_obj.pre_call(
                     input=input,
                     api_key=api_key,
-                    additional_args={"complete_input_dict": data},
+                    additional_args={
+                        "complete_input_dict": data, 
+                        "headers": {
+                            "api_key": api_key, 
+                            "azure_ad_token": azure_ad_token
+                        }
+                    },
                 )
             ## COMPLETION CALL            
             response = azure_client.embeddings.create(**data) # type: ignore
