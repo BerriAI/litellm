@@ -18,7 +18,8 @@ class VLLMError(Exception):
         )  # Call the base class constructor with the parameters it needs
 
 # check if vllm is installed
-def validate_environment(model: str, llm: Any =None):
+def validate_environment(model: str):
+    global llm
     try: 
         from vllm import LLM, SamplingParams # type: ignore
         if llm is None:
@@ -131,9 +132,8 @@ def batch_completions(
         ]
     )
     """
-    global llm
     try:
-        llm, SamplingParams = validate_environment(model=model, llm=llm)
+        llm, SamplingParams = validate_environment(model=model)
     except Exception as e:
         error_str = str(e)
         if "data parallel group is already initialized" in error_str:
