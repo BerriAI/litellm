@@ -97,6 +97,13 @@
         "litellm_provider": "openai",
         "mode": "chat"
     },
+    "ft:gpt-3.5-turbo": {
+        "max_tokens": 4097,
+        "input_cost_per_token": 0.000012,
+        "output_cost_per_token": 0.000016,
+        "litellm_provider": "openai",
+        "mode": "chat"
+    },
     "azure/gpt-4-32k": {
         "max_tokens": 8192,
         "input_cost_per_token": 0.00006,
