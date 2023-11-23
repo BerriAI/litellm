@@ -116,7 +116,10 @@ print(response)
 ```
 
 ## OpenAI Proxy - ([Docs](https://docs.litellm.ai/docs/simple_proxy))
-**If you want to use non-openai models in an openai code base**, you can use litellm proxy. Create a server to call 100+ LLMs (Huggingface/Bedrock/TogetherAI/etc) in the OpenAI ChatCompletions & Completions format
+LiteLLM Proxy manages:
+* Calling 100+ LLMs Huggingface/Bedrock/TogetherAI/etc. in the OpenAI ChatCompletions & Completions format
+* Authentication & Spend Tracking Virtual Keys
+* Load balancing - Routing between Multiple Models + Deployments of the same model
 
 ### Step 1: Start litellm proxy
 ```shell
