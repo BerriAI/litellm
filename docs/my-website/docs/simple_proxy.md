@@ -894,6 +894,10 @@ LiteLLM requires the following REDIS credentials in your env to enable caching
   REDIS_PORT = ""       # REDIS_PORT='18841'
   REDIS_PASSWORD = ""   # REDIS_PASSWORD='liteLlmIsAmazing'
   ```
+#### Step 3: Run proxy with config
+```shell
+$ litellm --config /path/to/config.yaml
+```
 
 #### Using Caching 
 Send the same request twice:
