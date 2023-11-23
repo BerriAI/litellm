@@ -297,7 +297,7 @@ class AzureChatCompletion(BaseLLM):
                 azure_client_params["api_key"] = api_key
             elif azure_ad_token is not None:
                 azure_client_params["azure_ad_token"] = azure_ad_token
-            azure_client = AzureOpenAI(**azure_client_params)
+            azure_client = AzureOpenAI(**azure_client_params) # type: ignore
             ## LOGGING
             logging_obj.pre_call(
                     input=input,
