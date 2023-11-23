@@ -18,6 +18,6 @@ try:
 #     print("Got openai Timeout Exception. Good job. The proxy mapped to OpenAI exceptions")
 except Exception as e:
     print("\n the proxy did not map to OpenAI exception. Instead got", e)
-    print(e.type)
-    print(e.message)
-    print(e.code)
+    print(e.type) # type: ignore 
+    print(e.message) # type: ignore 
+    print(e.code) # type: ignore 
