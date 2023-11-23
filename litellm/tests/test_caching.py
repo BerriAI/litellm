@@ -13,15 +13,14 @@ import pytest
 import litellm
 from litellm import embedding, completion
 from litellm.caching import Cache
+import random
 # litellm.set_verbose=True
 
 messages = [{"role": "user", "content": "who is ishaan Github?  "}]
 # comment
 
-
-####### Updated Caching as of Aug 28, 2023 ###################
 messages = [{"role": "user", "content": "who is ishaan 5222"}]
-def test_caching_v2():
+def test_caching_v2(): # test in memory cache
     try:
         litellm.cache = Cache()
         response1 = completion(model="gpt-3.5-turbo", messages=messages, caching=True)
@@ -153,13 +152,19 @@ def test_embedding_caching_azure():
 
 
 def test_redis_cache_completion():
-    litellm.set_verbose = True
-    messages = [{"role": "user", "content": "who is ishaan CTO of litellm from litellm 2023"}]
+    litellm.set_verbose = False
+
+    random_number = random.randint(1, 100000) # add a random number to ensure it's always adding / reading from cache
+    messages = [{"role": "user", "content": f"who is ishaan CTO of litellm, call all llm apis{random_number}"}]
     litellm.cache = Cache(type="redis", host=os.environ['REDIS_HOST'], port=os.environ['REDIS_PORT'], password=os.environ['REDIS_PASSWORD'])
     print("test2 for caching")
     response1 = completion(model="gpt-3.5-turbo", messages=messages, caching=True)
     response2 = completion(model="gpt-3.5-turbo", messages=messages, caching=True)
     response3 = completion(model="command-nightly", messages=messages, caching=True)
+
+    print("\nresponse 1", response1)
+    print("\nresponse 2", response2)
+    print("\nresponse 3", response3)
     litellm.cache = None
     if response3['choices'][0]['message']['content'] == response2['choices'][0]['message']['content']:
         # if models are different, it should not return cached response
