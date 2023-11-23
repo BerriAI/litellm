@@ -12,9 +12,7 @@ sys.path.insert(
 try:
     import uvicorn
     import fastapi
-    import tomli as tomllib
     import appdirs
-    import tomli_w
     import backoff
     import yaml
     import rq
@@ -29,9 +27,7 @@ except ImportError:
             "install",
             "uvicorn",
             "fastapi",
-            "tomli",
             "appdirs",
-            "tomli-w",
             "backoff",
             "pyyaml", 
             "rq"
@@ -39,9 +35,7 @@ except ImportError:
     )
     import uvicorn
     import fastapi
-    import tomli as tomllib
     import appdirs
-    import tomli_w
     import backoff
     import yaml
 
@@ -84,8 +78,6 @@ def generate_feedback_box():
         "\033[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new\033[0m"
     )
     print()
-    print("\033[1;34mDocs: https://docs.litellm.ai/docs/simple_proxy\033[0m\n")
-    print(f"\033[32mLiteLLM: Test your local endpoint with: \"litellm --test\" [In a new terminal tab]\033[0m\n")
     print()
 
 import litellm
@@ -122,12 +114,6 @@ user_telemetry = True
 user_config = None
 user_headers = None
 local_logging = True # writes logs to a local api_log.json file for debugging
-config_filename = "litellm.secrets.toml"
-config_dir = os.getcwd()
-config_dir = appdirs.user_config_dir("litellm")
-user_config_path = os.getenv(
-    "LITELLM_CONFIG_PATH", os.path.join(config_dir, config_filename)
-)
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 experimental = False
 #### GLOBAL VARIABLES ####
@@ -280,7 +266,20 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
     litellm_settings = config.get('litellm_settings', None)
     if litellm_settings: 
         for key, value in litellm_settings.items(): 
-            setattr(litellm, key, value)
+            if key == "cache":
+                print("\nSetting Cache on Config\n")
+                from litellm.caching import Cache
+                cache_type = value["type"]
+                cache_host = os.environ.get("REDIS_HOST")
+                cache_port = os.environ.get("REDIS_PORT")
+                cache_password = os.environ.get("REDIS_PASSWORD")
+                litellm.cache = Cache(
+                    type=cache_type,
+                    host=cache_host,
+                    port=cache_port,
+                    password=cache_password
+                )
+                
     ## MODEL LIST
     model_list = config.get('model_list', None)
     if model_list:
@@ -289,10 +288,8 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
         for model in model_list:
             print(f"\033[32m    {model.get('model_name', '')}\033[0m")
             litellm_model_name = model["litellm_params"]["model"]
-            # print(f"litellm_model_name: {litellm_model_name}")
             if "ollama" in litellm_model_name: 
                 run_ollama_serve()
-    print(f"returned general settings: {general_settings}")
     return router, model_list, general_settings
 
 async def generate_key_helper_fn(duration_str: str, models: list, aliases: dict, config: dict):
@@ -409,15 +406,26 @@ def initialize(
         celery_setup(use_queue=use_queue)
     if experimental: 
         pass
-    if save:
-        pass
-        # save_params_to_config(dynamic_config)
-        # with open(user_config_path) as f:
-        #     print(f.read())
-        # print("\033[1;32mDone successfully\033[0m")
     user_telemetry = telemetry
     usage_telemetry(feature="local_proxy_server")
-
+    curl_command = """
+    curl --location 'http://0.0.0.0:8000/chat/completions' \\
+    --header 'Content-Type: application/json' \\
+    --data ' {
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ]
+    }'
+    \n
+    """
+    print()
+    print(f"\033[1;34mLiteLLM: Test your local proxy with: \"litellm --test\" This runs an openai.ChatCompletion request to your proxy [In a new terminal tab]\033[0m\n")
+    print(f"\033[1;34mLiteLLM: Curl Command Test for your local proxy\n {curl_command} \033[0m\n")
+    print("\033[1;34mDocs: https://docs.litellm.ai/docs/simple_proxy\033[0m\n")
 # for streaming
 def data_generator(response):
     print_verbose("inside generator")
