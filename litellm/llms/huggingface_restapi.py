@@ -452,7 +452,7 @@ class Huggingface(BaseLLM):
        response = None
        try:
             async with httpx.AsyncClient() as client:
-                response = await client.post(url=api_base, json=data, headers=headers) 
+                response = await client.post(url=api_base, json=data, headers=headers, timeout=None) 
                 response_json = response.json()
                 if response.status_code != 200:
                     raise HuggingfaceError(status_code=response.status_code, message=response.text, request=response.request, response=response)
