@@ -594,6 +594,9 @@ def test_completion_azure():
         # )
         # Add any assertions here to check the response
         print(response)
+
+        cost = completion_cost(completion_response=response)
+        print("Cost for azure completion request", cost)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
