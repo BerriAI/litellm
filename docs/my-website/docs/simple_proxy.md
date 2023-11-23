@@ -567,10 +567,11 @@ The Config allows you to set the following params
 | Param Name           | Description                                                   |
 |----------------------|---------------------------------------------------------------|
 | `model_list`         | List of supported models on the server, with model-specific configs |
-| `litellm_settings`   | litellm Module settings, example `litellm.drop_params=True`, `litellm.set_verbose=True`, `litellm.api_base` |
+| `litellm_settings`   | litellm Module settings, example `litellm.drop_params=True`, `litellm.set_verbose=True`, `litellm.api_base`, `litellm.cache` |
 | `general_settings`   | Server settings, example setting `master_key: sk-my_special_key` |
+| `environment_variables`   | Environment Variables example, `REDIS_HOST`, `REDIS_PORT` |
 
-### Example Config
+#### Example Config
 ```yaml
 model_list:
   - model_name: zephyr-alpha
@@ -588,6 +589,14 @@ litellm_settings:
 
 general_settings: 
   master_key: sk-1234 # [OPTIONAL] Only use this if you to require all calls to contain this key (Authorization: Bearer sk-1234)
+
+
+environment_variables:
+  OPENAI_API_KEY: sk-123
+  REPLICATE_API_KEY: sk-cohere-is-okay
+  REDIS_HOST: redis-16337.c322.us-east-1-2.ec2.cloud.redislabs.com
+  REDIS_PORT: "16337"
+  REDIS_PASSWORD: 
 ```
 
 ### Config for Multiple Models - GPT-4, Claude-2, etc
@@ -871,7 +880,7 @@ model_list:
 $ litellm --config /path/to/config.yaml
 ```
 
-## Caching Responses 
+### Caching Responses 
 Caching can be enabled by adding the `cache` key in the `config.yaml`
 #### Step 1: Add `cache` to the config.yaml
 ```yaml
