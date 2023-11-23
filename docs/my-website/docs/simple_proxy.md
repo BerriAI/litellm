@@ -872,8 +872,22 @@ $ litellm --config /path/to/config.yaml
 ```
 
 ## Caching Responses 
+Caching can be enabled by adding the `cache` key in the `config.yaml`
+#### Step 1: Add `cache` to the config.yaml
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
 
-Enable caching by adding the following credentials to your server environment
+litellm_settings:
+  set_verbose: True
+  cache:          # init cache
+    type: redis   # tell litellm to use redis caching
+```
+
+#### Step 2: Add Redis Credentials to .env
+LiteLLM requires the following REDIS credentials in your env to enable caching
 
   ```shell
   REDIS_HOST = ""       # REDIS_HOST='redis-18841.c274.us-east-1-3.ec2.cloud.redislabs.com'
