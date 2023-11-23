@@ -89,6 +89,7 @@ const sidebars = {
     "routing",
     "rules",
     "set_keys",
+    "budget_manager",
     "completion/token_usage",
     {
       type: 'category',
@@ -157,7 +158,6 @@ const sidebars = {
       label: 'Extras',
       items: [
         'extras/contributing',
-        "budget_manager",
         "proxy_server",
         {
           type: "category",

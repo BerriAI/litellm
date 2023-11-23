@@ -18,7 +18,7 @@ load_dotenv()
 
 def test_multiple_deployments(): 
 	import concurrent, time
-	litellm.set_verbose=True
+	litellm.set_verbose=False
 	futures = {}
 	model_list = [{ # list of model deployments 
 		"model_name": "gpt-3.5-turbo", # openai model name 
@@ -58,6 +58,7 @@ def test_multiple_deployments():
 				 redis_password=os.getenv("REDIS_PASSWORD"), 
 				 redis_port=int(os.getenv("REDIS_PORT")), 
 				 routing_strategy="simple-shuffle",
+				 set_verbose=False,
 				 num_retries=1) # type: ignore
 	# router = Router(model_list=model_list, redis_host=os.getenv("REDIS_HOST"), redis_password=os.getenv("REDIS_PASSWORD"), redis_port=int(os.getenv("REDIS_PORT"))) # type: ignore
 	kwargs = {
@@ -81,12 +82,13 @@ Who among the mentioned figures from Ancient Greece contributed to the domain of
 	}
 	
 	results = [] 
-
-	for _ in range(2): 
-		print(f"starting!!!")
-		response = router.completion(**kwargs)
-		results.append(response)
 	
+	try:
+		for _ in range(3): 
+			response = router.completion(**kwargs)
+			results.append(response)
+	except Exception as e:
+		raise e	
 	# print(len(results))
 	# with ThreadPoolExecutor(max_workers=100) as executor:
 
