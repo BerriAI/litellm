@@ -47,7 +47,7 @@ Resources:
       FunctionName: !Sub "${AWS::StackName}-llmlite"
       CodeUri: "./"
       Handler: litellm/proxy/lambda.lambda_handler
-      Runtime: python3.9
+      Runtime: python3.11
       AutoPublishAlias: !Ref AliasParameter
       Role: !GetAtt LambdaExecutionRole.Arn
       Architectures:
@@ -80,7 +80,7 @@ Resources:
   URL:
     Type: AWS::Lambda::Url
     DependsOn: FunctionAliaslive
-    Properties: 
+    Properties:
       AuthType: AWS_IAM
       Qualifier: live
       TargetFunctionArn: !GetAtt Function.Arn
