@@ -8,6 +8,9 @@ import TabItem from '@theme/TabItem';
 LiteLLM manages:
 - Load-balance across multiple deployments (e.g. Azure/OpenAI)
 - Prioritizing important requests to ensure they don't fail (i.e. Queueing)
+- Basic reliability logic - cooldowns, fallbacks, timeouts and retries (fixed + exponential backoff) across multiple deployments/providers.
+
+In production, litellm supports using Redis as a way to track cooldown server and usage (managing tpm/rpm limits).
 
 ## Load Balancing
 (s/o [@paulpierre](https://www.linkedin.com/in/paulpierre/) for his contribution to this implementation)
