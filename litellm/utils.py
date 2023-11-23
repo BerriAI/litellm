@@ -1678,7 +1678,7 @@ def completion_cost(
             # get input/output tokens from completion_response
             prompt_tokens = completion_response['usage']['prompt_tokens']
             completion_tokens = completion_response['usage']['completion_tokens']
-            model = completion_response['model'] # get model from completion_response
+            model = model or completion_response['model'] # check if user passed an override for model, if it's none check completion_response['model']
         else:
             prompt_tokens = token_counter(model=model, text=prompt)
             completion_tokens = token_counter(model=model, text=completion)
