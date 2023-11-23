@@ -251,33 +251,39 @@ class Router:
     
     def function_with_retries(self, *args, **kwargs): 
         # we'll backoff exponentially with each retry
+        self.print_verbose(f"Inside function with retries: args - {args}; kwargs - {kwargs}")
         backoff_factor = 1
         original_function = kwargs.pop("original_function")
         num_retries = kwargs.pop("num_retries")
-        for current_attempt in range(num_retries):
-            self.print_verbose(f"retrying request. Current attempt - {current_attempt}; num retries: {num_retries}")
-            try:
-                # if the function call is successful, no exception will be raised and we'll break out of the loop
-                response = original_function(*args, **kwargs)
-                return response
+        try: 
+            # if the function call is successful, no exception will be raised and we'll break out of the loop
+            response = original_function(*args, **kwargs)
+            return response
+        except Exception as e: 
+            for current_attempt in range(num_retries):
+                num_retries -= 1 # decrement the number of retries
+                self.print_verbose(f"retrying request. Current attempt - {current_attempt}; num retries: {num_retries}")
+                try:
+                    # if the function call is successful, no exception will be raised and we'll break out of the loop
+                    response = original_function(*args, **kwargs)
+                    return response
 
-            except openai.RateLimitError as e:
-                if num_retries > 0: 
-                    # on RateLimitError we'll wait for an exponential time before trying again
-                    time.sleep(backoff_factor)
+                except openai.RateLimitError as e:
+                    if num_retries > 0: 
+                        # on RateLimitError we'll wait for an exponential time before trying again
+                        time.sleep(backoff_factor)
 
-                    # increase backoff factor for next run
-                    backoff_factor *= 2
-                else: 
-                    raise e
-                
-            except Exception as e:
-                # for any other exception types, immediately retry
-                if num_retries > 0: 
-                    pass
-                else: 
-                    raise e
-            num_retries -= 1 # decrement the number of retries
+                        # increase backoff factor for next run
+                        backoff_factor *= 2
+                    else: 
+                        raise e
+                    
+                except Exception as e:
+                    # for any other exception types, immediately retry
+                    if num_retries > 0: 
+                        pass
+                    else: 
+                        raise e
 
     ### COMPLETION + EMBEDDING FUNCTIONS
 
@@ -289,12 +295,14 @@ class Router:
         Example usage:
         response = router.completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hey, how's it going?"}]
         """
-
-        kwargs["model"] = model
-        kwargs["messages"] = messages
-        kwargs["original_function"] = self._completion
-        kwargs["num_retries"] = self.num_retries
-        return self.function_with_retries(**kwargs)
+        try: 
+            kwargs["model"] = model
+            kwargs["messages"] = messages
+            kwargs["original_function"] = self._completion
+            kwargs["num_retries"] = self.num_retries
+            return self.function_with_retries(**kwargs)
+        except Exception as e: 
+            raise e
 
     def _completion(
             self, 
