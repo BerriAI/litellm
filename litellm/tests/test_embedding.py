@@ -50,7 +50,7 @@ def test_openai_azure_embedding_simple():
         )
         print(response)
         response_keys = dict(response).keys()
-        assert set(["usage", "model", "object", "data"]) == set(response_keys) #assert litellm response has expected keys from OpenAI embedding response
+        assert set(["usage", "model", "object", "data", "_response_ms"]) == set(response_keys) #assert litellm response has expected keys from OpenAI embedding response
 
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
