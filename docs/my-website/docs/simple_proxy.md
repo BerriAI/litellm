@@ -7,8 +7,7 @@ import TabItem from '@theme/TabItem';
 LiteLLM Server manages:
 
 * Calling 100+ LLMs [Huggingface/Bedrock/TogetherAI/etc.](#other-supported-models) in the OpenAI `ChatCompletions` & `Completions` format
-* Authentication - [Virtual Keys](#managing-auth---virtual-keys)
-* Set custom prompt templates + model-specific configs (`temperature`, `max_tokens`, etc.)
+* Authentication & Spend Tracking [Virtual Keys](#managing-auth---virtual-keys)
 * Load balancing - Routing between [Multiple Models](#multiple-models---quick-start) + [Deployments of the same model](#multiple-instances-of-1-model)
 
 [**See LiteLLM Proxy code**](https://github.com/BerriAI/litellm/tree/main/litellm/proxy)
