@@ -2294,14 +2294,17 @@ def get_optional_params(  # use the openai defaults
             optional_params[k] = passed_params[k]
     return optional_params
 
-def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None, api_base: Optional[str] = None):
+def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None, api_base: Optional[str] = None, api_key: Optional[str] = None):
     try:
         dynamic_api_key = None
         # check if llm provider provided
         
         if custom_llm_provider:
             return model, custom_llm_provider, dynamic_api_key, api_base
-
+        
+        if api_key and api_key.startswith("os.environ/"): 
+            api_key_env_name = api_key.replace("os.environ/", "")
+            dynamic_api_key = os.getenv(api_key_env_name)
         # check if llm provider part of model name
         if model.split("/",1)[0] in litellm.provider_list and model.split("/",1)[0] not in litellm.model_list:
             custom_llm_provider = model.split("/", 1)[0]
