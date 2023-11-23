@@ -871,6 +871,62 @@ model_list:
 $ litellm --config /path/to/config.yaml
 ```
 
+## Caching Responses 
+
+Enable caching by adding the following credentials to your server environment
+
+  ```shell
+  REDIS_HOST = ""       # REDIS_HOST='redis-18841.c274.us-east-1-3.ec2.cloud.redislabs.com'
+  REDIS_PORT = ""       # REDIS_PORT='18841'
+  REDIS_PASSWORD = ""   # REDIS_PASSWORD='liteLlmIsAmazing'
+  ```
+
+#### Using Caching 
+Send the same request twice:
+```shell
+curl http://0.0.0.0:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+     "model": "gpt-3.5-turbo",
+     "messages": [{"role": "user", "content": "write a poem about litellm!"}],
+     "temperature": 0.7
+   }'
+
+curl http://0.0.0.0:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+     "model": "gpt-3.5-turbo",
+     "messages": [{"role": "user", "content": "write a poem about litellm!"}],
+     "temperature": 0.7
+   }'
+```
+
+#### Control caching per completion request
+Caching can be switched on/off per `/chat/completions` request
+- Caching **on** for completion - pass `caching=True`:
+  ```shell
+  curl http://0.0.0.0:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+     "model": "gpt-3.5-turbo",
+     "messages": [{"role": "user", "content": "write a poem about litellm!"}],
+     "temperature": 0.7,
+     "caching": true
+   }'
+  ```
+- Caching **off** for completion - pass `caching=False`:
+  ```shell
+  curl http://0.0.0.0:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+     "model": "gpt-3.5-turbo",
+     "messages": [{"role": "user", "content": "write a poem about litellm!"}],
+     "temperature": 0.7,
+     "caching": false
+   }'
+  ```
+
+
 ## Debugging Proxy 
 Run the proxy with `--debug` to easily view debug logs 
 ```shell
