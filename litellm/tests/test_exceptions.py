@@ -170,6 +170,34 @@ def test_invalid_request_error(model):
     with pytest.raises(BadRequestError):
         completion(model=model, messages=messages, max_tokens="hello world")
 
+
+
+def test_completion_azure_exception():
+    try:
+        import openai
+        print("azure gpt-3.5 test\n\n")
+        litellm.set_verbose=False
+        ## Test azure call
+        old_azure_key = os.environ["AZURE_API_KEY"]
+        os.environ["AZURE_API_KEY"] = ""
+        response = completion(
+            model="azure/chatgpt-v-2",
+            messages=[
+                {
+                    "role": "user",
+                    "content": "hello"
+                }
+            ],
+        )
+        print(f"response: {response}")
+        print(response)
+    except openai.APIConnectionError as e:
+        os.environ["AZURE_API_KEY"] = old_azure_key
+        print("good job got the correct error for azure when key not set")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+test_completion_azure_exception()
+
 # test_invalid_request_error(model="command-nightly")
 # Test 3: Rate Limit Errors
 # def test_model_call(model):
