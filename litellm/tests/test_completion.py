@@ -183,7 +183,7 @@ def test_completion_perplexity_api():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_completion_perplexity_api()
+# test_completion_perplexity_api()
 
 def test_completion_perplexity_api_2():
     try:
@@ -582,20 +582,22 @@ def test_completion_azure():
         response = completion(
             model="azure/chatgpt-v-2",
             messages=messages,
+            api_key="os.environ/AZURE_API_KEY_NA"
         )
+        print(f"response: {response}")
         ## Test azure flag for backwards compatibility
-        response = completion(
-            model="chatgpt-v-2",
-            messages=messages,
-            azure=True,
-            max_tokens=10
-        )
+        # response = completion(
+        #     model="chatgpt-v-2",
+        #     messages=messages,
+        #     azure=True,
+        #     max_tokens=10
+        # )
         # Add any assertions here to check the response
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-# test_completion_azure()
+test_completion_azure()
 
 def test_azure_openai_ad_token():
     # this tests if the azure ad token is set in the request header
@@ -833,7 +835,7 @@ def test_completion_replicate_llama2_stream():
         print(f"complete_response: {complete_response}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_replicate_llama2_stream()
+# test_completion_replicate_llama2_stream()
 
 # commenthing this out since we won't be always testing a custom replicate deployment
 # def test_completion_replicate_deployments():

@@ -371,7 +371,7 @@ def completion(
         if deployment_id != None: # azure llms 
                 model=deployment_id
                 custom_llm_provider="azure"
-        model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base)
+        model, custom_llm_provider, api_key, api_base = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, api_key=api_key)
         custom_prompt_dict = {} # type: ignore
         if initial_prompt_value or roles or final_prompt_value or bos_token or eos_token:
             custom_prompt_dict = {model: {}}
@@ -1709,7 +1709,7 @@ def embedding(
     - exception_type: If an exception occurs during the API call.
     """
     azure = kwargs.get("azure", None)
-    model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base)
+    model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, api_key=api_key)
     try:
         response = None
         logging = litellm_logging_obj
