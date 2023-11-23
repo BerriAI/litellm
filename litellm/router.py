@@ -52,7 +52,7 @@ class Router:
             self.set_model_list(model_list)
             self.healthy_deployments: List = self.model_list
             self.deployment_latency_map = {}
-            self.cooldown_deployments = {} # {"gpt-3.5-turbo": time.time() when it failed / needed a cooldown} 
+            self.cooldown_deployments: dict = {} # {"gpt-3.5-turbo": time.time() when it failed / needed a cooldown} 
             for m in model_list: 
                 self.deployment_latency_map[m["litellm_params"]["model"]] = 0
         
