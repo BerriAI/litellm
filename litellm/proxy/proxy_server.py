@@ -267,12 +267,23 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
     if litellm_settings: 
         for key, value in litellm_settings.items(): 
             if key == "cache":
-                print("\nSetting Cache on Config\n")
+                # ANSI escape code for blue text
+                blue_color_code = "\033[94m"
+                reset_color_code = "\033[0m"
+                print(f"{blue_color_code}\nSetting Cache on Proxy")
                 from litellm.caching import Cache
                 cache_type = value["type"]
                 cache_host = os.environ.get("REDIS_HOST")
                 cache_port = os.environ.get("REDIS_PORT")
                 cache_password = os.environ.get("REDIS_PASSWORD")
+
+                # Assuming cache_type, cache_host, cache_port, and cache_password are strings
+                print(f"{blue_color_code}Cache Type:{reset_color_code} {cache_type}")
+                print(f"{blue_color_code}Cache Host:{reset_color_code} {cache_host}")
+                print(f"{blue_color_code}Cache Port:{reset_color_code} {cache_port}")
+                print(f"{blue_color_code}Cache Password:{reset_color_code} {cache_password}")
+                print()
+
                 litellm.cache = Cache(
                     type=cache_type,
                     host=cache_host,
