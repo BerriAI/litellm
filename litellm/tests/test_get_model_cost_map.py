@@ -55,4 +55,30 @@ def test_cost_ft_gpt_35():
         assert cost == expected_cost
     except Exception as e:
         pytest.fail(f"Cost Calc failed for ft:gpt-3.5. Expected {expected_cost}, Calculated cost {cost}")
-test_cost_ft_gpt_35()
+# test_cost_ft_gpt_35()
+
+def test_cost_azure_gpt_35():
+    try:
+        # this tests if litellm.completion_cost can calculate cost for azure/chatgpt-deployment-2 which maps to azure/gpt-3.5-turbo
+        # for this test we check if passing `model` to completion_cost overrides the completion cost
+        from litellm import ModelResponse, Choices, Message
+        from litellm.utils import Usage
+        resp = ModelResponse(
+            id='chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac', 
+            choices=[Choices(finish_reason=None, index=0, 
+                            message=Message(content=' Sure! Here is a short poem about the sky:\n\nA canvas of blue, a', role='assistant'))], 
+                            model='chatGPT-deployment-LiteLLM-isAMAZING', 
+                            usage=Usage(prompt_tokens=21, completion_tokens=17, total_tokens=38)
+        )
+
+        cost = litellm.completion_cost(completion_response=resp, model="azure/gpt-3.5-turbo")
+        print("\n Calculated Cost for azure/gpt-3.5-turbo", cost)
+        input_cost = model_cost["azure/gpt-3.5-turbo"]["input_cost_per_token"]
+        output_cost = model_cost["azure/gpt-3.5-turbo"]["output_cost_per_token"]
+        expected_cost = (input_cost*resp.usage.prompt_tokens) + (output_cost*resp.usage.completion_tokens)
+        print("\n Excpected cost", expected_cost)
+        assert cost == expected_cost
+    except Exception as e:
+        pytest.fail(f"Cost Calc failed for azure/gpt-3.5-turbo. Expected {expected_cost}, Calculated cost {cost}")
+# test_cost_azure_gpt_35()
+
