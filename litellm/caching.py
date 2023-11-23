@@ -10,6 +10,7 @@
 import litellm
 import time, logging
 import json, traceback, ast
+from typing import Optional
 
 def get_prompt(*args, **kwargs):
     # make this safe checks, it should not throw any exceptions
@@ -102,7 +103,7 @@ class DualCache(BaseCache):
     When data is updated or inserted, it is written to both the in-memory cache + Redis. 
     This ensures that even if Redis hasn't been updated yet, the in-memory cache reflects the most recent data.
     """
-    def __init__(self, in_memory_cache: InMemoryCache =None, redis_cache: RedisCache =None) -> None:
+    def __init__(self, in_memory_cache: Optional[InMemoryCache] =None, redis_cache: Optional[RedisCache] =None) -> None:
         super().__init__()
         # If in_memory_cache is not provided, use the default InMemoryCache
         self.in_memory_cache = in_memory_cache or InMemoryCache()
