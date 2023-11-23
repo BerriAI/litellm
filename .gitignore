@@ -15,3 +15,4 @@ litellm/proxy/api_log.json
 router_config.yaml
 litellm_server/config.yaml
 litellm/proxy/_secret_config.yaml
+.aws-sam/
