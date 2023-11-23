@@ -14,3 +14,4 @@ rq
 prisma
 celery
 psutil
+mangum
