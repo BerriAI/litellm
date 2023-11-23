@@ -303,7 +303,7 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
                 run_ollama_serve()
     return router, model_list, general_settings
 
-async def generate_key_helper_fn(duration_str: str, models: list, aliases: dict, config: dict):
+async def generate_key_helper_fn(duration_str: str, models: list, aliases: dict, config: dict, spend: float):
     token = f"sk-{secrets.token_urlsafe(16)}"
     def _duration_in_seconds(duration: str): 
         match = re.match(r"(\d+)([smhd]?)", duration)
@@ -336,7 +336,8 @@ async def generate_key_helper_fn(duration_str: str, models: list, aliases: dict,
             "expires": expires,
             "models": models,
             "aliases": aliases_json,
-            "config": config_json
+            "config": config_json,
+            "spend": spend
         }
         print(f"verification_token_data: {verification_token_data}")
         new_verification_token = await db.litellm_verificationtoken.create( # type: ignore
@@ -636,8 +637,9 @@ async def generate_key_fn(request: Request):
     models = data.get("models", []) # Default to an empty list (meaning allow token to call all models)
     aliases = data.get("aliases", {}) # Default to an empty dict (no alias mappings, on top of anything in the config.yaml model_list)
     config = data.get("config", {})
+    spend = data.get("spend", 0)
     if isinstance(models, list):
-        response = await generate_key_helper_fn(duration_str=duration_str, models=models, aliases=aliases, config=config)
+        response = await generate_key_helper_fn(duration_str=duration_str, models=models, aliases=aliases, config=config, spend=spend)
         return {"key": response["token"], "expires": response["expires"]}
     else: 
         raise HTTPException(
