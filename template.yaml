@@ -46,7 +46,7 @@ Resources:
     Properties:
       FunctionName: !Sub "${AWS::StackName}-llmlite"
       CodeUri: "./litellm"
-      Handler: proxy/lambda.lambda_handler
+      Handler: proxy/lambda.handler
       Runtime: python3.11
       AutoPublishAlias: !Ref AliasParameter
       Role: !GetAtt LambdaExecutionRole.Arn
