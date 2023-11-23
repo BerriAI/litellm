@@ -530,7 +530,6 @@ def completion(
             # set API KEY
             api_key = (
                 api_key or # for deepinfra/perplexity/anyscale we check in get_llm_provider and pass in the api key from there
-                dynamic_api_key or # allows us to read env variables for compatible openai api's like perplexity 
                 litellm.api_key or
                 litellm.openai_key or
                 get_secret("OPENAI_API_KEY")
