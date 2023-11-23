@@ -45,8 +45,8 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: !Sub "${AWS::StackName}-llmlite"
-      CodeUri: "./"
-      Handler: litellm/proxy/lambda.lambda_handler
+      CodeUri: "./litellm"
+      Handler: proxy/lambda.lambda_handler
       Runtime: python3.11
       AutoPublishAlias: !Ref AliasParameter
       Role: !GetAtt LambdaExecutionRole.Arn
