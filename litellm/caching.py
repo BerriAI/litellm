@@ -9,7 +9,7 @@
 
 import litellm
 import time, logging
-import json, traceback
+import json, traceback, ast
 
 def get_prompt(*args, **kwargs):
     # make this safe checks, it should not throw any exceptions
@@ -53,8 +53,12 @@ class RedisCache(BaseCache):
             if cached_response != None:
                 # cached_response is in `b{} convert it to ModelResponse
                 cached_response = cached_response.decode("utf-8")  # Convert bytes to string
-                cached_response = json.loads(cached_response)  # Convert string to dictionary
-                cached_response['cache'] = True  # set cache-hit flag to True
+                try: 
+                    cached_response = json.loads(cached_response)  # Convert string to dictionary
+                except: 
+                    cached_response = ast.literal_eval(cached_response)
+                if isinstance(cached_response, dict): 
+                    cached_response['cache'] = True  # set cache-hit flag to True
                 return cached_response
         except Exception as e:
             # NON blocking - notify users Redis is throwing an exception
@@ -224,5 +228,5 @@ class Cache:
                 if isinstance(result, litellm.ModelResponse):
                     result = result.model_dump_json()
                 self.cache.set_cache(cache_key, result, **kwargs)
-        except:
+        except Exception as e:
             pass
