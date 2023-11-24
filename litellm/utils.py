@@ -522,7 +522,7 @@ class Logging:
                 headers = {}
             data = additional_args.get("complete_input_dict", {})
             api_base = additional_args.get("api_base", "")
-            masked_headers = {k: v[:-20] + '*' * 20 if len(v) > 20 else v for k, v in headers.items()}
+            masked_headers = {k: (v[:-20] + '*' * 20) if (isinstance(v, str) and len(v) > 20) else v for k, v in headers.items()}
             formatted_headers = " ".join([f"-H '{k}: {v}'" for k, v in masked_headers.items()])
 
             print_verbose(f"PRE-API-CALL ADDITIONAL ARGS: {additional_args}")
