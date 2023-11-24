@@ -2066,14 +2066,14 @@ def config_completion(**kwargs):
             "No config path set, please set a config path using `litellm.config_path = 'path/to/config.json'`"
         )
 
-def stream_chunk_builder(chunks: list):
+def stream_chunk_builder(chunks: list, messages: Optional[list]=None):
     id = chunks[0]["id"]
     object = chunks[0]["object"]
     created = chunks[0]["created"]
     model = chunks[0]["model"]
     role = chunks[0]["choices"][0]["delta"]["role"]
     finish_reason = chunks[-1]["choices"][0]["finish_reason"]
-    
+
     # Initialize the response dictionary
     response = {
         "id": id,
@@ -2105,7 +2105,7 @@ def stream_chunk_builder(chunks: list):
         argument_list = []
         delta = chunks[0]["choices"][0]["delta"]
         function_call = delta.get("function_call", "")
-        function_call_name = function_call.get("name", "")
+        function_call_name = function_call.name
 
         message = response["choices"][0]["message"]
         message["function_call"] = {}
@@ -2120,7 +2120,7 @@ def stream_chunk_builder(chunks: list):
                 # Check if a function call is present
                 if function_call:
                     # Now, function_call is expected to be a dictionary
-                    arguments = function_call.get("arguments", "")
+                    arguments = function_call.arguments
                     argument_list.append(arguments)
 
         combined_arguments = "".join(argument_list)
@@ -2144,5 +2144,8 @@ def stream_chunk_builder(chunks: list):
 
 
     # # Update usage information if needed
+    if messages: 
+        response["usage"]["prompt_tokens"] = litellm.utils.token_counter(model=model, messages=messages)
     response["usage"]["completion_tokens"] = litellm.utils.token_counter(model=model, text=combined_content)
-    return response
+    response["usage"]["total_tokens"] = response["usage"]["prompt_tokens"] + response["usage"]["completion_tokens"]
+    return litellm.utils.convert_to_model_response_object(response_object=response, model_response_object=litellm.ModelResponse())

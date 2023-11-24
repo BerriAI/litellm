@@ -710,7 +710,7 @@ class Logging:
             if self.stream: 
                 if result.choices[0].finish_reason is not None: # if it's the last chunk
                     self.streaming_chunks.append(result)
-                    complete_streaming_response = litellm.stream_chunk_builder(self.streaming_chunks)
+                    complete_streaming_response = litellm.stream_chunk_builder(self.streaming_chunks, messages=self.model_call_details.get("messages", None))
                 else:
                     self.streaming_chunks.append(result)
             elif isinstance(result, OpenAIObject):
@@ -1250,7 +1250,7 @@ def client(original_function):
                     chunks = []
                     for idx, chunk in enumerate(result):
                         chunks.append(chunk)
-                    return litellm.stream_chunk_builder(chunks)
+                    return litellm.stream_chunk_builder(chunks, messages=kwargs.get("messages", None))
                 else: 
                     return result
             elif "acompletion" in kwargs and kwargs["acompletion"] == True: 
@@ -1360,7 +1360,7 @@ def client(original_function):
                     chunks = []
                     for idx, chunk in enumerate(result):
                         chunks.append(chunk)
-                    return litellm.stream_chunk_builder(chunks)
+                    return litellm.stream_chunk_builder(chunks, messages=kwargs.get("messages", None))
                 else: 
                     return result
             
@@ -5012,7 +5012,6 @@ class CustomStreamWrapper:
                     return
                 completion_obj["content"] = response_obj["text"]
                 print_verbose(f"completion obj content: {completion_obj['content']}")
-                print_verbose(f"len(completion_obj['content']: {len(completion_obj['content'])}")
                 if response_obj["is_finished"]: 
                     model_response.choices[0].finish_reason = response_obj["finish_reason"]
             
