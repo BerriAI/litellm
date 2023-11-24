@@ -62,6 +62,10 @@ class InMemoryCache(BaseCache):
                     cached_response['cache'] = True  # set cache-hit flag to True
             return cached_response
         return None
+    
+    def flush_cache(self):
+        self.cache_dict.clear()
+        self.ttl_dict.clear()
 
 
 class RedisCache(BaseCache):
@@ -96,6 +100,9 @@ class RedisCache(BaseCache):
             # NON blocking - notify users Redis is throwing an exception
             traceback.print_exc()
             logging.debug("LiteLLM Caching: get() - Got exception from REDIS: ", e)
+
+    def flush_cache(self):
+        self.redis_client.flushall()
 
 class DualCache(BaseCache): 
     """
@@ -147,6 +154,10 @@ class DualCache(BaseCache):
             return result
         except Exception as e: 
             traceback.print_exc()
+    
+    def flush_cache(self):
+        self.redis_cache.flush_cache()
+        self.in_memory_cache.flush_cache()
 
 #### LiteLLM.Completion Cache ####
 class Cache:
