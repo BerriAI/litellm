@@ -54,6 +54,14 @@ class AnthropicConfig():
                 and not isinstance(v, (types.FunctionType, types.BuiltinFunctionType, classmethod, staticmethod)) 
                 and v is not None}
 
+
+DEFAULT_HEADERS = {
+    "accept": "application/json",
+    "anthropic-version": "2023-06-01",
+    "content-type": "application/json",
+}
+
+
 def completion(
     model: str,
     messages: list,
@@ -69,6 +77,7 @@ def completion(
 ):
     if "headers" in optional_params:
         del optional_params['headers']
+    headers = { **DEFAULT_HEADERS, **headers } 
     prompt = f"{AnthropicConstants.HUMAN_PROMPT.value}"
     for message in messages:
         if "role" in message:
