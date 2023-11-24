@@ -22,7 +22,7 @@ model_list = [{ # list of model deployments
 			"api_base": os.getenv("AZURE_API_BASE")
 		},
 		"tpm": 240000,
-		"rpm": 1800
+		"rpm": 1800,  
 	}, 
 	{
 		"model_name": "gpt-3.5-turbo", # openai model name 

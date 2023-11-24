@@ -57,6 +57,7 @@ request_timeout: Optional[float] = 6000
 num_retries: Optional[int] = None
 fallbacks: Optional[List] = None
 context_window_fallbacks: Optional[List] = None
+allowed_fails: int = 0
 #############################################
 
 def get_model_cost_map(url: str):
