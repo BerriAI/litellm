@@ -3816,6 +3816,23 @@ def exception_type(
                         llm_provider="vertex_ai",
                         response=original_exception.response
                     )
+                if hasattr(original_exception, "status_code"):
+                    if original_exception.status_code == 400:
+                        exception_mapping_worked = True
+                        raise BadRequestError(
+                            message=f"VertexAIException - {error_str}",
+                            model=model,
+                            llm_provider="vertex_ai",
+                            response=original_exception.response
+                        )
+                    if original_exception.status_code == 500: 
+                        exception_mapping_worked = True
+                        raise APIError(
+                            message=f"VertexAIException - {error_str}",
+                            model=model,
+                            llm_provider="vertex_ai",
+                            request=original_exception.request
+                        )
             elif custom_llm_provider == "palm":
                 if "503 Getting metadata" in error_str:
                     # auth errors look like this
