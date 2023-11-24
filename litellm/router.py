@@ -241,7 +241,6 @@ class Router:
                   is_async: Optional[bool] = False,
                   **kwargs) -> Union[List[float], None]:
         # pick the one that is available (lowest TPM/RPM)
-        kwargs.setdefault("metadata", {}).update({"model_group": model})
         deployment = self.get_available_deployment(model=model, input=input)
 
         data = deployment["litellm_params"]
@@ -257,7 +256,6 @@ class Router:
                          is_async: Optional[bool] = True,
                          **kwargs) -> Union[List[float], None]:
         # pick the one that is available (lowest TPM/RPM)
-        kwargs.setdefault("metadata", {}).update({"model_group": model})
         deployment = self.get_available_deployment(model=model, input=input)
 
         data = deployment["litellm_params"]
