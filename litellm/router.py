@@ -762,3 +762,10 @@ class Router:
     
     def flush_cache(self):
         self.cache.flush_cache()
+    
+    def reset(self): 
+        ## clean up on close
+        litellm.success_callback = [] 
+        litellm.failure_callback = [] 
+        self.flush_cache() 
+        

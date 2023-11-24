@@ -65,7 +65,7 @@ def test_exception_raising():
 	except openai.AuthenticationError:
 		print("Test Passed: Caught an OPENAI AUTH Error, Good job. This is what we needed!")
 		os.environ["AZURE_API_KEY"] = old_api_key
-		router.flush_cache()
+		router.reset()
 	except Exception as e:
 		os.environ["AZURE_API_KEY"] = old_api_key
 		print("Got unexpected exception on router!", e)
@@ -112,7 +112,7 @@ def test_reading_key_from_model_list():
 			]
 		)
 		os.environ["AZURE_API_KEY"] = old_api_key
-		router.flush_cache()
+		router.reset()
 	except Exception as e:
 		os.environ["AZURE_API_KEY"] = old_api_key
 		print(f"FAILED TEST")
@@ -161,6 +161,7 @@ def test_function_calling():
 
 	router = Router(model_list=model_list, routing_strategy="latency-based-routing")
 	response = router.completion(model="gpt-3.5-turbo-0613", messages=messages, functions=functions)
+	router.reset()
 	print(response)
 
 def test_acompletion_on_router(): 
@@ -209,6 +210,7 @@ def test_acompletion_on_router():
 			assert len(response1.choices[0].message.content) > 0
 			assert response1.choices[0].message.content == response2.choices[0].message.content
 		asyncio.run(get_response())
+		router.reset()
 	except litellm.Timeout as e: 
 		end_time = time.time()
 		print(f"timeout error occurred: {end_time - start_time}")
@@ -262,6 +264,7 @@ def test_function_calling_on_router():
             ]
 		response = router.completion(model="gpt-3.5-turbo", messages=messages, functions=function1)
 		print(f"final returned response: {response}")
+		router.reset()
 		assert isinstance(response["choices"][0]["message"]["function_call"], dict)
 	except Exception as e: 
 		print(f"An exception occurred: {e}")
@@ -288,6 +291,7 @@ def test_aembedding_on_router():
 				input=["good morning from litellm", "this is another item"],
 			)
 			print(response)
+			router.reset()
 		asyncio.run(embedding_call())
 	except Exception as e:
 		traceback.print_exc()
