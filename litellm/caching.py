@@ -192,17 +192,13 @@ class Cache:
         Returns:
             str: The cache key generated from the arguments, or None if no cache key could be generated.
         """
-        prompt = get_prompt(*args, **kwargs)
-        if prompt is not None:
-            cache_key = prompt
-            if "model" in kwargs:
-                cache_key += kwargs["model"]
-        elif "input" in kwargs:
-            cache_key = " ".join(kwargs["input"])
-            if "model" in kwargs:
-                cache_key += kwargs["model"]
-        else:
-            return None
+        cache_key =""
+        for param in kwargs:
+            # ignore litellm params here
+            if param in set(["litellm_call_id", "litellm_logging_obj"]):
+                continue
+            param_value = kwargs[param]
+            cache_key+= f"{str(param)}: {str(param_value)}"
         return cache_key
 
     def generate_streaming_content(self, content):
