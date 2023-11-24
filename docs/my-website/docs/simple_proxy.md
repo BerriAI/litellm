@@ -791,7 +791,7 @@ Set a model alias for your deployments.
 
 In the `config.yaml` the model_name parameter is the user-facing name to use for your deployment. 
 
-In the config below requests with `model=gpt-4` will route to `ollama/zephyr`
+In the config below requests with `model=gpt-4` will route to `ollama/llama2`
 
 ```yaml
 model_list:
