@@ -3,7 +3,7 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
 
-# Router - Load Balancing, Queueing
+# Router - Load Balancing, Fallbacks
 
 LiteLLM manages:
 - Load-balance across multiple deployments (e.g. Azure/OpenAI)
