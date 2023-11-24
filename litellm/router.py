@@ -182,9 +182,7 @@ class Router:
             kwargs["original_function"] = self._acompletion
             kwargs["num_retries"] = self.num_retries
             kwargs.setdefault("metadata", {}).update({"model_group": model})
-            # Use asyncio.timeout to enforce the timeout
-            async with asyncio.timeout(self.timeout): # type: ignore
-                response = await self.async_function_with_fallbacks(**kwargs)
+            response = await asyncio.wait_for(self.async_function_with_fallbacks(**kwargs), timeout=self.timeout)
 
             return response
         except Exception as e: 
