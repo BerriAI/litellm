@@ -753,6 +753,40 @@ curl -X POST "https://0.0.0.0:8000/key/generate" \
 - **How to upgrade / downgrade request?** Change the alias mapping
 - **How are routing between diff keys/api bases done?** litellm handles this by shuffling between different models in the model list with the same model_name. [**See Code**](https://github.com/BerriAI/litellm/blob/main/litellm/router.py)
 
+### Managing Auth - Tracking Spend 
+
+You can get spend for a key by using the `/key/info` endpoint. 
+
+```bash
+curl 'http://0.0.0.0:8000/key/info?key=<user-key>' \
+     -X GET \
+     -H 'Authorization: Bearer <your-master-key>'
+```
+
+This is automatically updated (in USD) when calls are made to /completions, /chat/completions, /embeddings using litellm's completion_cost() function. [**See Code**](https://github.com/BerriAI/litellm/blob/1a6ea20a0bb66491968907c2bfaabb7fe45fc064/litellm/utils.py#L1654). 
+
+**Sample response**
+
+```python
+{
+    "key": "sk-tXL0wt5-lOOVK9sfY2UacA",
+    "info": {
+        "token": "sk-tXL0wt5-lOOVK9sfY2UacA",
+        "spend": 0.0001065,
+        "expires": "2023-11-24T23:19:11.131000Z",
+        "models": [
+            "gpt-3.5-turbo",
+            "gpt-4",
+            "claude-2"
+        ],
+        "aliases": {
+            "mistral-7b": "gpt-3.5-turbo"
+        },
+        "config": {}
+    }
+}
+```
+
 ### Save Model-specific params (API Base, API Keys, Temperature, Headers etc.)
 You can use the config to save model-specific information like api_base, api_key, temperature, max_tokens, etc. 
 
