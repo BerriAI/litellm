@@ -286,21 +286,6 @@ def hf_test_completion_tgi():
         pytest.fail(f"Error occurred: {e}")
 # hf_test_completion_tgi()
 
-def hf_test_completion_tgi_stream():
-    try:
-        response = completion(
-            model = 'huggingface/HuggingFaceH4/zephyr-7b-beta', 
-            messages = [{ "content": "Hello, how are you?","role": "user"}],
-            stream=True
-        )
-        # Add any assertions here to check the response
-        print(response)
-        for chunk in response:
-            print(chunk["choices"][0]["delta"]["content"])
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-# hf_test_completion_tgi_stream()
-
 # ################### Hugging Face Conversational models ########################
 # def hf_test_completion_conv():
 #     try:

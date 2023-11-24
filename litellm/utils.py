@@ -4538,8 +4538,14 @@ class CustomStreamWrapper:
         if self.logging_obj: 
             self.logging_obj.post_call(text)
     
-    def check_special_tokens(self, chunk: str): 
+    def check_special_tokens(self, chunk: str, finish_reason: Optional[str]): 
         hold = False
+        if finish_reason: 
+            for token in self.special_tokens: 
+                if token in chunk:
+                    chunk = chunk.replace(token, "") 
+            return hold, chunk
+        
         if self.sent_first_chunk is True:
             return hold, chunk
 
@@ -4996,8 +5002,9 @@ class CustomStreamWrapper:
             model_response.model = self.model
             print_verbose(f"model_response: {model_response}; completion_obj: {completion_obj}")
             print_verbose(f"model_response finish reason 3: {model_response.choices[0].finish_reason}")
+
             if len(completion_obj["content"]) > 0: # cannot set content of an OpenAI Object to be an empty string
-                hold, model_response_str = self.check_special_tokens(completion_obj["content"])
+                hold, model_response_str = self.check_special_tokens(chunk=completion_obj["content"], finish_reason=model_response.choices[0].finish_reason)
                 if hold is False: 
                     completion_obj["content"] = model_response_str  
                     if self.sent_first_chunk == False:
