@@ -152,10 +152,11 @@ async def user_api_key_auth(request: Request, api_key: str = fastapi.Security(ap
         return 
     try: 
         route = request.url.path
-        if api_key == master_key or api_key == "Bearer " + master_key:
+        is_master_key_valid = secrets.compare_digest(api_key, master_key) or secrets.compare_digest(api_key == "Bearer " + master_key)
+        if is_master_key_valid:
             return
         
-        if (route == "/key/generate" or route == "/key/delete") and not (api_key == master_key or api_key == "Bearer " + master_key):
+        if (route == "/key/generate" or route == "/key/delete") and not is_master_key_valid:
             raise Exception(f"If master key is set, only master key can be used to generate new keys")
 
         if prisma_client: 
