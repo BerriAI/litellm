@@ -152,7 +152,9 @@ async def user_api_key_auth(request: Request, api_key: str = fastapi.Security(ap
         return 
     try: 
         route = request.url.path
-        is_master_key_valid = secrets.compare_digest(api_key, master_key) or secrets.compare_digest(api_key == "Bearer " + master_key)
+
+        # note: never string compare api keys, this is vulenerable to a time attack. Use secrets.compare_digest instead
+        is_master_key_valid = secrets.compare_digest(api_key, master_key) or secrets.compare_digest(api_key, "Bearer " + master_key)
         if is_master_key_valid:
             return
         
@@ -164,9 +166,11 @@ async def user_api_key_auth(request: Request, api_key: str = fastapi.Security(ap
             valid_token = user_api_key_cache.get_cache(key=api_key)
             if valid_token is None: 
                 ## check db 
+                if "Bearer " in api_key:
+                    cleaned_api_key = api_key[len("Bearer "):]
                 valid_token = await prisma_client.litellm_verificationtoken.find_first(
                     where={
-                        "token": api_key,
+                        "token": cleaned_api_key,
                         "expires": {"gte": datetime.utcnow()}  # Check if the token is not expired
                     }
                 )
