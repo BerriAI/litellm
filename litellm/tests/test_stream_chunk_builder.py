@@ -33,7 +33,6 @@ function_schema = {
 def test_stream_chunk_builder():
     try: 
       litellm.set_verbose = False
-      litellm.api_key = os.environ["OPENAI_API_KEY"]
       response = completion(
           model="gpt-3.5-turbo",
           messages=messages,
