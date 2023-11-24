@@ -147,32 +147,6 @@ class DualCache(BaseCache):
             return result
         except Exception as e: 
             traceback.print_exc()
-    
-#### DEPRECATED ####
-class HostedCache(BaseCache):
-    def set_cache(self, key, value, **kwargs):
-        if "ttl" in kwargs:
-            logging.debug("LiteLLM Caching: TTL is not supported for hosted cache!")
-        # make a post request to api.litellm.ai/set_cache
-        import requests
-        url = f"https://api.litellm.ai/set_cache?key={key}&value={str(value)}"
-        requests.request("POST", url)  # post request to set this in the hosted litellm cache
-
-    def get_cache(self, key, **kwargs):
-        import requests
-        url = f"https://api.litellm.ai/get_cache?key={key}"
-        cached_response = requests.request("GET", url)
-        cached_response = cached_response.text
-        if cached_response == "NONE":  # api.litellm.ai returns "NONE" if it's not a cache hit
-            return None
-        if cached_response != None:
-            try:
-                cached_response = json.loads(cached_response)  # Convert string to dictionary
-                cached_response['cache'] = True  # set cache-hit flag to True
-                return cached_response
-            except:
-                return cached_response
-
 
 #### LiteLLM.Completion Cache ####
 class Cache:
@@ -202,8 +176,6 @@ class Cache:
             self.cache = RedisCache(host, port, password)
         if type == "local":
             self.cache = InMemoryCache()
-        if type == "hosted":
-            self.cache = HostedCache()
         if "cache" not in litellm.input_callback:
             litellm.input_callback.append("cache")
         if "cache" not in litellm.success_callback:
