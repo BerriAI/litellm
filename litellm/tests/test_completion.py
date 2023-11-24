@@ -606,7 +606,7 @@ def test_completion_azure():
         response = completion(
             model="azure/chatgpt-v-2",
             messages=messages,
-            api_key="os.environ/AZURE_API_KEY_NA"
+            api_key="os.environ/AZURE_API_KEY"
         )
         print(f"response: {response}")
         ## Test azure flag for backwards compatibility
