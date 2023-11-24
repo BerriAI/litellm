@@ -371,7 +371,7 @@ def completion(
         if deployment_id != None: # azure llms 
                 model=deployment_id
                 custom_llm_provider="azure"
-        model, custom_llm_provider, api_key, api_base = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, api_key=api_key)
+        model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, api_key=api_key)
         custom_prompt_dict = {} # type: ignore
         if initial_prompt_value or roles or final_prompt_value or bos_token or eos_token:
             custom_prompt_dict = {model: {}}
@@ -391,6 +391,8 @@ def completion(
             custom_llm_provider = "openai" 
             api_key = model_api_key
 
+        if dynamic_api_key is not None:  
+            api_key = dynamic_api_key 
         # check if user passed in any of the OpenAI optional params
         optional_params = get_optional_params(
                 functions=functions,
