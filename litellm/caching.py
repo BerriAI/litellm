@@ -156,8 +156,10 @@ class DualCache(BaseCache):
             traceback.print_exc()
     
     def flush_cache(self):
-        self.redis_cache.flush_cache()
-        self.in_memory_cache.flush_cache()
+        if self.in_memory_cache is not None:
+            self.in_memory_cache.flush_cache()
+        if self.redis_cache is not None:
+            self.redis_cache.flush_cache()
 
 #### LiteLLM.Completion Cache ####
 class Cache:

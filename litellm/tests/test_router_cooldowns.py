@@ -38,9 +38,9 @@ model_list = [{ # list of model deployments
 router = Router(model_list=model_list, 
                 redis_host=os.getenv("REDIS_HOST"), 
                 redis_password=os.getenv("REDIS_PASSWORD"), 
-                redis_port=int(os.getenv("REDIS_PORT")), 
+                redis_port=int(os.getenv("REDIS_PORT")),  # type: ignore
                 routing_strategy="simple-shuffle",
-                set_verbose=True,
+                set_verbose=False,
                 num_retries=1) # type: ignore
 kwargs = {"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "Hey, how's it going?"}],}
 

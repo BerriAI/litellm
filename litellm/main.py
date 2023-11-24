@@ -28,7 +28,9 @@ from litellm.utils import (
     completion_with_fallbacks,
     get_llm_provider,
     get_api_key,
-    mock_completion_streaming_obj
+    mock_completion_streaming_obj, 
+    convert_to_model_response_object, 
+    token_counter
 )
 from .llms import (
     anthropic,
@@ -2145,7 +2147,7 @@ def stream_chunk_builder(chunks: list, messages: Optional[list]=None):
 
     # # Update usage information if needed
     if messages: 
-        response["usage"]["prompt_tokens"] = litellm.utils.token_counter(model=model, messages=messages)
-    response["usage"]["completion_tokens"] = litellm.utils.token_counter(model=model, text=combined_content)
+        response["usage"]["prompt_tokens"] = token_counter(model=model, messages=messages)
+    response["usage"]["completion_tokens"] = token_counter(model=model, text=combined_content)
     response["usage"]["total_tokens"] = response["usage"]["prompt_tokens"] + response["usage"]["completion_tokens"]
-    return litellm.utils.convert_to_model_response_object(response_object=response, model_response_object=litellm.ModelResponse())
+    return convert_to_model_response_object(response_object=response, model_response_object=litellm.ModelResponse())
