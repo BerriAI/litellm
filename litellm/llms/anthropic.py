@@ -11,6 +11,8 @@ class AnthropicConstants(Enum):
     HUMAN_PROMPT = "\n\nHuman: "
     AI_PROMPT = "\n\nAssistant: "
 
+ANTHROPIC_BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
+
 class AnthropicError(Exception):
     def __init__(self, status_code, message):
         self.status_code = status_code
@@ -121,7 +123,7 @@ def completion(
     ## COMPLETION CALL
     if "stream" in optional_params and optional_params["stream"] == True:
         response = requests.post(
-            "https://api.anthropic.com/v1/complete",
+            f"{ANTHROPIC_BASE_URL}/v1/complete",
             headers=headers,
             data=json.dumps(data),
             stream=optional_params["stream"],
@@ -129,7 +131,7 @@ def completion(
         return response.iter_lines()
     else:
         response = requests.post(
-            "https://api.anthropic.com/v1/complete", headers=headers, data=json.dumps(data)
+            f"{ANTHROPIC_BASE_URL}/v1/complete", headers=headers, data=json.dumps(data)
         )
         ## LOGGING
         logging_obj.post_call(
