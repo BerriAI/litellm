@@ -8,7 +8,7 @@
 #  Thank you ! We ❤️ you! - Krrish & Ishaan 
 
 import os, openai, sys, json, inspect, uuid, datetime, threading
-from typing import Any
+from typing import Any, AsyncGenerator
 from functools import partial
 import dotenv, traceback, random, asyncio, time, contextvars
 from copy import deepcopy
@@ -1071,6 +1071,16 @@ def completion(
             # fake streaming
             if "stream" in optional_params and optional_params["stream"] == True:
                 # fake streaming for clova-studio
+                if acompletion:
+                    async def _fake_stream() -> AsyncGenerator[ModelResponse, None]:
+                        resp = await model_response
+                        resp_string = resp["choices"][0]["message"]["content"]
+                        stream_wrapper = CustomStreamWrapper(
+                            resp_string, model, custom_llm_provider="clova-studio", logging_obj=logging
+                        )
+                        async for item in stream_wrapper:
+                            yield item
+                    return _fake_stream()
                 resp_string = model_response["choices"][0]["message"]["content"]
                 response = CustomStreamWrapper(
                     resp_string, model, custom_llm_provider="clova-studio", logging_obj=logging
