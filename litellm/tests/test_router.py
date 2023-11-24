@@ -161,7 +161,54 @@ def test_exception_raising():
 		os.environ["AZURE_API_KEY"] = old_api_key
 	except Exception as e:
 		print("Got unexpected exception on router!", e)
-test_exception_raising()
+# test_exception_raising()
+
+
+def test_reading_key_from_model_list():
+	# this tests if the router raises an exception when invalid params are set
+	# DO NOT REMOVE THIS TEST. It's an IMP ONE. Speak to Ishaan, if you are tring to remove this
+	litellm.set_verbose=True
+	import openai
+	try:
+		print("testing if router raises an exception")
+		old_api_key = os.environ["AZURE_API_KEY"]
+		os.environ.pop("AZURE_API_KEY", None)
+		model_list = [
+			{ 
+				"model_name": "gpt-3.5-turbo", # openai model name 
+				"litellm_params": { # params for litellm completion/embedding call 
+					"model": "azure/chatgpt-v-2", 
+					"api_key": old_api_key,
+					"api_version": os.getenv("AZURE_API_VERSION"),
+					"api_base": os.getenv("AZURE_API_BASE")
+				},
+				"tpm": 240000,
+				"rpm": 1800
+			}
+		]
+
+		router = Router(model_list=model_list, 
+					redis_host=os.getenv("REDIS_HOST"), 
+					redis_password=os.getenv("REDIS_PASSWORD"), 
+					redis_port=int(os.getenv("REDIS_PORT")), 
+					routing_strategy="simple-shuffle",
+					set_verbose=True,
+					num_retries=1) # type: ignore
+		response = router.completion(
+			model="gpt-3.5-turbo",
+			messages=[
+				{
+					"role": "user",
+					"content": "hello this request will fail"
+				}
+			]
+		)
+	except openai.AuthenticationError:
+		print("Test Passed: Caught an OPENAI AUTH Error, Good job. This is what we needed!")
+	except Exception as e:
+		print("Got unexpected exception on router!", e)
+test_reading_key_from_model_list()
+
 
 ### FUNCTION CALLING 
 
