@@ -79,6 +79,7 @@ def test_sync_fallbacks():
         litellm.set_verbose = True
         response = router.completion(**kwargs)
         print(f"response: {response}")
+        router.flush_cache()
     except Exception as e:
         print(e)
 test_sync_fallbacks() 
@@ -96,6 +97,7 @@ def test_async_fallbacks():
             pass
         except Exception as e:
             pytest.fail(f"An exception occurred: {e}")
+        router.flush_cache()
 
     asyncio.run(test_get_response())
 
@@ -110,5 +112,6 @@ def test_sync_context_window_fallbacks():
         print(f"response: {response}")
     except Exception as e:
         print(e)
+    router.flush_cache()
 
 # test_sync_context_window_fallbacks()
