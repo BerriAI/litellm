@@ -157,6 +157,7 @@ class AzureChatCompletion(BaseLLM):
                     azure_client_params["azure_ad_token"] = azure_ad_token
                 azure_client = AzureOpenAI(**azure_client_params)
                 response = azure_client.chat.completions.create(**data) # type: ignore
+                response.model = "azure/" + str(response.model)
                 return convert_to_model_response_object(response_object=json.loads(response.model_dump_json()), model_response_object=model_response)
         except AzureOpenAIError as e: 
             exception_mapping_worked = True
@@ -193,6 +194,7 @@ class AzureChatCompletion(BaseLLM):
                 azure_client_params["azure_ad_token"] = azure_ad_token
             azure_client = AsyncAzureOpenAI(**azure_client_params)
             response = await azure_client.chat.completions.create(**data) 
+            response.model = "azure" + str(response.model)
             return convert_to_model_response_object(response_object=json.loads(response.model_dump_json()), model_response_object=model_response)
        except Exception as e: 
            if isinstance(e,httpx.TimeoutException):
@@ -335,7 +337,7 @@ class AzureChatCompletion(BaseLLM):
                 )
             model_response["object"] = "list"
             model_response["data"] = output_data
-            model_response["model"] = model
+            model_response["model"] = "azure/" + model
             model_response["usage"] = embedding_response["usage"]
             return model_response
         except AzureOpenAIError as e: 

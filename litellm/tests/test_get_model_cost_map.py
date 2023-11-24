@@ -68,7 +68,7 @@ def test_cost_azure_gpt_35():
             id='chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac', 
             choices=[Choices(finish_reason=None, index=0, 
                             message=Message(content=' Sure! Here is a short poem about the sky:\n\nA canvas of blue, a', role='assistant'))], 
-                            model='chatGPT-deployment-LiteLLM-isAMAZING', 
+                            model='azure/gpt-35-turbo',  # azure always has model written like this
                             usage=Usage(prompt_tokens=21, completion_tokens=17, total_tokens=38)
         )
 
