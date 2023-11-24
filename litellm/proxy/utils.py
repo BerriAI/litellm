@@ -5,7 +5,7 @@ from typing import Optional
 
 def track_cost_callback(
     kwargs,                                       # kwargs to completion
-    completion_response: ModelResponse,    # response from completion
+    completion_response: ModelResponse,           # response from completion
     start_time = None,
     end_time = None,                              # start/end time for completion
 ):
