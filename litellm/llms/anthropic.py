@@ -67,6 +67,8 @@ def completion(
     logger_fn=None,
     headers={},
 ):
+    if "headers" in optional_params:
+        del optional_params['headers']
     prompt = f"{AnthropicConstants.HUMAN_PROMPT.value}"
     for message in messages:
         if "role" in message:
