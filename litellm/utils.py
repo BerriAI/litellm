@@ -1587,12 +1587,12 @@ def token_counter(model="", text=None,  messages: Optional[List] = None):
     return num_tokens
 
 
-def cost_per_token(model="gpt-3.5-turbo", prompt_tokens=0, completion_tokens=0):
+def cost_per_token(model="", prompt_tokens=0, completion_tokens=0):
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
 
     Parameters:
-        model (str): The name of the model to use. Default is "gpt-3.5-turbo".
+        model (str): The name of the model to use. Default is ""
         prompt_tokens (int): The number of tokens in the prompt.
         completion_tokens (int): The number of tokens in the completion.
     
@@ -1637,7 +1637,7 @@ def cost_per_token(model="gpt-3.5-turbo", prompt_tokens=0, completion_tokens=0):
 
 def completion_cost(
         completion_response=None,
-        model="gpt-3.5-turbo", 
+        model=None,
         prompt="", 
         messages: List = [],
         completion="",
