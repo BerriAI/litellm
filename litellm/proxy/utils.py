@@ -32,7 +32,40 @@ def track_cost_callback(
         else:
             # we pass the completion_response obj
             if kwargs["stream"] != True:
-                response_cost = litellm.completion_cost(completion_response=completion_response)
+                input_text = kwargs.get("messages", "")
+                if isinstance(input_text, list): 
+                    input_text = "".join(m["content"] for m in input_text)
+                response_cost = litellm.completion_cost(completion_response=completion_response, completion=input_text)
                 print("regular response_cost", response_cost)
     except:
+        pass
+
+def update_prisma_database(token, response_cost):
+    try:
+        # Import your Prisma client
+        from your_prisma_module import prisma
+
+        # Fetch the existing cost for the given token
+        existing_cost = prisma.LiteLLM_VerificationToken.find_unique(
+            where={
+                "token": token
+            }
+        ).cost
+
+        # Calculate the new cost by adding the existing cost and response_cost
+        new_cost = existing_cost + response_cost
+
+        # Update the cost column for the given token
+        prisma_liteLLM_VerificationToken = prisma.LiteLLM_VerificationToken.update(
+            where={
+                "token": token
+            },
+            data={
+                "cost": new_cost
+            }
+        )
+        print(f"Prisma database updated for token {token}. New cost: {new_cost}")
+
+    except Exception as e:
+        print(f"Error updating Prisma database: {e}")
         pass
