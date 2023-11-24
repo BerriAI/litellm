@@ -790,6 +790,8 @@ async def delete_key_fn(request: Request):
 async def info_key_fn(key: str = fastapi.Query(..., description="Key in the request parameters")): 
     global prisma_client
     try: 
+        if prisma_client is None: 
+            raise Exception(f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys")
         key_info = await prisma_client.litellm_verificationtoken.find_unique(
             where={
                 "token": key
