@@ -46,3 +46,55 @@ def test_chat_completion():
 
 # Run the test
 test_chat_completion()
+
+
+def test_chat_completion_azure():
+    try:
+        # Your test data
+        test_data = {
+            "model": "azure/chatgpt-v-2",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "hi"
+                },
+            ],
+            "max_tokens": 10,
+        }
+        print("testing proxy server with Azure Request")
+        response = client.post("/v1/chat/completions", json=test_data)
+
+        assert response.status_code == 200
+        result = response.json()
+        print(f"Received response: {result}")
+    except Exception as e:
+        pytest.fail("LiteLLM Proxy test failed. Exception", e)
+
+# Run the test
+test_chat_completion()
+
+
+# def test_embedding():
+#     try:
+#         # Your test data
+#         test_data = {
+#             "model": "",
+#             "messages": [
+#                 {
+#                     "role": "user",
+#                     "content": "hi"
+#                 },
+#             ],
+#             "max_tokens": 10,
+#         }
+#         print("testing proxy server with OpenAI embedding")
+#         response = client.post("/v1/embeddings", json=test_data)
+
+#         assert response.status_code == 200
+#         result = response.json()
+#         print(f"Received response: {result}")
+#     except Exception as e:
+#         pytest.fail("LiteLLM Proxy test failed. Exception", e)
+
+# # Run the test
+# test_embedding()
