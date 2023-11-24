@@ -64,7 +64,7 @@ class Router:
                  redis_password: Optional[str] = None,
                  cache_responses: bool = False,
                  num_retries: int = 0,
-                 timeout: float = 600,
+                 timeout: Optional[float] = None,
                  default_litellm_params = {}, # default params for Router.chat.completion.create 
                  set_verbose: bool = False,
                  fallbacks: List = [],
@@ -79,12 +79,12 @@ class Router:
             for m in model_list: 
                 self.deployment_latency_map[m["litellm_params"]["model"]] = 0
         
-        self.num_retries = num_retries
-        self.set_verbose = set_verbose
-        self.timeout = timeout
+        self.num_retries = num_retries or litellm.num_retries
+        self.set_verbose = set_verbose 
+        self.timeout = timeout or litellm.request_timeout
         self.routing_strategy = routing_strategy
-        self.fallbacks = fallbacks
-        self.context_window_fallbacks = context_window_fallbacks
+        self.fallbacks = fallbacks or litellm.fallbacks
+        self.context_window_fallbacks = context_window_fallbacks or litellm.context_window_fallbacks
 
         # make Router.chat.completions.create compatible for openai.chat.completions.create
         self.chat = litellm.Chat(params=default_litellm_params)
