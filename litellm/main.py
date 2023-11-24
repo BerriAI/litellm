@@ -583,6 +583,7 @@ def completion(
                 print_verbose=print_verbose,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
+                headers=kwargs.get("headers", {}),
                 logger_fn=logger_fn,
                 encoding=encoding, # for calculating input/output tokens
                 api_key=anthropic_key,
