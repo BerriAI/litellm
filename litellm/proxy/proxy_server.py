@@ -625,8 +625,8 @@ async def embeddings(request: Request):
         router_model_names = [m["model_name"] for m in llm_model_list] if llm_model_list is not None else []
         if llm_router is not None and data["model"] in router_model_names: # model in router model list 
             response = await llm_router.aembedding(**data)
-        else: 
-            response = litellm.aembedding(**data)
+        else:
+            response = await litellm.aembedding(**data)
         return response
     except Exception as e:
         traceback.print_exc()
