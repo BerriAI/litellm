@@ -146,7 +146,7 @@ class Router:
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
                 # Submit the function to the executor with a timeout
                 future = executor.submit(self.function_with_fallbacks, **kwargs)
-                response = future.result(timeout=self.timeout)
+                response = future.result(timeout=self.timeout) # type: ignore
 
             return response
         except Exception as e: 
@@ -182,7 +182,7 @@ class Router:
             kwargs["num_retries"] = self.num_retries
 
             # Use asyncio.timeout to enforce the timeout
-            async with asyncio.timeout(self.timeout):
+            async with asyncio.timeout(self.timeout): # type: ignore
                 response = await self.async_function_with_fallbacks(**kwargs)
 
             return response
