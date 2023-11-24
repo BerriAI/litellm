@@ -355,10 +355,13 @@ async def generate_key_helper_fn(duration_str: str, models: list, aliases: dict,
 async def delete_verification_token(tokens: List[str]):
     global prisma_client
     try: 
-        # Assuming 'db' is your Prisma Client instance
-        deleted_tokens = await prisma_client.litellm_verificationtoken.delete_many(
-            where={"token": {"in": tokens}}
-        )
+        if prisma_client: 
+            # Assuming 'db' is your Prisma Client instance
+            deleted_tokens = await prisma_client.litellm_verificationtoken.delete_many(
+                where={"token": {"in": tokens}}
+            )
+        else: 
+            raise Exception
     except Exception as e: 
         traceback.print_exc()
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -666,7 +669,7 @@ async def generate_key_fn(request: Request):
         )
 
 @router.post("/key/delete", dependencies=[Depends(user_api_key_auth)])
-async def generate_key_fn(request: Request): 
+async def delete_key_fn(request: Request): 
     try: 
         data = await request.json()
 
