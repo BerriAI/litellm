@@ -227,10 +227,15 @@ def celery_setup(use_queue: bool):
         celery_app_conn = celery_app
 
 def run_ollama_serve():
-    command = ['ollama', 'serve']
-    
-    with open(os.devnull, 'w') as devnull:
-        process = subprocess.Popen(command, stdout=devnull, stderr=devnull)
+    try:
+        command = ['ollama', 'serve']
+
+        with open(os.devnull, 'w') as devnull:
+            process = subprocess.Popen(command, stdout=devnull, stderr=devnull)
+    except Exception as e:
+        print(f"""
+            LiteLLM Warning: proxy started with `ollama` model\n`ollama serve` failed with Exception{e}. \nEnsure you run `ollama serve`
+        """)
 
 def load_router_config(router: Optional[litellm.Router], config_file_path: str):
     global master_key
