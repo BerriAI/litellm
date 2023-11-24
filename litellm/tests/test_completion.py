@@ -582,7 +582,7 @@ def test_completion_azure_key_completion_arg():
     os.environ.pop("AZURE_API_KEY", None)
     try:
         print("azure gpt-3.5 test\n\n")
-        litellm.set_verbose=True
+        litellm.set_verbose=False
         ## Test azure call
         response = completion(
             model="azure/chatgpt-v-2",
@@ -591,7 +591,6 @@ def test_completion_azure_key_completion_arg():
             max_tokens=10,
         )
         print(f"response: {response}")
-        print(response)
         os.environ["AZURE_API_KEY"] = old_key
     except Exception as e:
         os.environ["AZURE_API_KEY"] = old_key
@@ -624,7 +623,7 @@ def test_completion_azure():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_completion_azure()
+# test_completion_azure()
 
 def test_azure_openai_ad_token():
     # this tests if the azure ad token is set in the request header
@@ -918,7 +917,7 @@ def test_customprompt_together_ai():
         print(f"ERROR TYPE {type(e)}")
         pytest.fail(f"Error occurred: {e}")
 
-test_customprompt_together_ai()
+# test_customprompt_together_ai()
 
 def test_completion_sagemaker():
     try:
