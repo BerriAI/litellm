@@ -368,14 +368,12 @@ class Router:
         
         try: 
             response = self.function_with_retries(*args, **kwargs)
-            self.print_verbose(f'Response: {response}')
             return response
         except Exception as e: 
             original_exception = e
             self.print_verbose(f"An exception occurs{original_exception}")
             try: 
                 self.print_verbose(f"Trying to fallback b/w models. Initial model group: {model_group}")
-                self.print_verbose(f"Type of exception: {type(e)}; error_message: {str(e)}")
                 if isinstance(e, litellm.ContextWindowExceededError): 
                     self.print_verbose(f"inside context window fallbacks: {self.context_window_fallbacks}")
                     fallback_model_group = None
@@ -419,8 +417,7 @@ class Router:
                         except Exception as e: 
                             pass
             except Exception as e: 
-                self.print_verbose(f"An exception occurred - {str(e)}")
-                traceback.print_exc()
+                raise e
             raise original_exception
             
 
