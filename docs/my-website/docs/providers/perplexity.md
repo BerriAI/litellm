@@ -46,7 +46,10 @@ All models listed here https://docs.perplexity.ai/docs/model-cards are supported
 | llama-2-13b-chat | `completion(model="perplexity/llama-2-13b-chat", messages)` | 
 | llama-2-70b-chat | `completion(model="perplexity/llama-2-70b-chat", messages)` | 
 | mistral-7b-instruct | `completion(model="perplexity/mistral-7b-instruct", messages)` | 
-| replit-code-v1.5-3b | `completion(model="perplexity/replit-code-v1.5-3b", messages)` |
+| openhermes-2-mistral-7b | `completion(model="perplexity/openhermes-2-mistral-7b", messages)` | 
+| openhermes-2.5-mistral-7b | `completion(model="perplexity/openhermes-2.5-mistral-7b", messages)` | 
+| pplx-7b-chat-alpha | `completion(model="perplexity/pplx-7b-chat-alpha", messages)` | 
+| pplx-70b-chat-alpha | `completion(model="perplexity/pplx-70b-chat-alpha", messages)` | 
 
 
 
