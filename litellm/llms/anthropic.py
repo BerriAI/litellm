@@ -54,16 +54,6 @@ class AnthropicConfig():
                 and not isinstance(v, (types.FunctionType, types.BuiltinFunctionType, classmethod, staticmethod)) 
                 and v is not None}
 
-
-# makes headers for API call
-def validate_environment():
-    headers = {
-        "accept": "application/json",
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-    }
-    return headers
-
 def completion(
     model: str,
     messages: list,
@@ -77,7 +67,6 @@ def completion(
     litellm_params=None,
     logger_fn=None,
 ):
-    headers = { **validate_environment(), **headers } 
     prompt = f"{AnthropicConstants.HUMAN_PROMPT.value}"
     for message in messages:
         if "role" in message:
