@@ -853,11 +853,13 @@ curl --location 'http://0.0.0.0:8000/chat/completions' \
 '
 ```
 
-### Fallbacks + Retries + Timeouts 
+### Fallbacks + Cooldowns + Retries + Timeouts 
 
 If a call fails after num_retries, fall back to another model group.
 
 If the error is a context window exceeded error, fall back to a larger model group (if given).
+
+[**See Code**](https://github.com/BerriAI/litellm/blob/main/litellm/router.py)
 
 ```yaml
 model_list:
@@ -887,6 +889,7 @@ litellm_settings:
   request_timeout: 10 # raise Timeout error if call takes longer than 10s
   fallbacks: [{"zephyr-beta": ["gpt-3.5-turbo"]}] # fallback to gpt-3.5-turbo if call fails num_retries 
   context_window_fallbacks: [{"zephyr-beta": ["gpt-3.5-turbo-16k"]}, {"gpt-3.5-turbo": ["gpt-3.5-turbo-16k"]}] # fallback to gpt-3.5-turbo-16k if context window error
+  allowed_fails: 3 # cooldown model if it fails > 1 call in a minute. 
 ```
 
 ### Set Custom Prompt Templates

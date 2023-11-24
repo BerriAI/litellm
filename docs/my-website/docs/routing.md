@@ -188,9 +188,31 @@ from litellm import Router
 model_list = [{...}]
 
 router = Router(model_list=model_list, 
-                timeout=30) # timeout set to 30s 
+                timeout=30) # raise timeout error if call takes > 30s 
 
 print(response)
+```
+
+### Cooldowns
+
+Set the limit for how many calls a model is allowed to fail in a minute, before being cooled down for a minute. 
+
+```python
+from litellm import Router
+
+model_list = [{...}]
+
+router = Router(model_list=model_list, 
+                allowed_fails=1) # cooldown model if it fails > 1 call in a minute. 
+
+user_message = "Hello, whats the weather in San Francisco??"
+messages = [{"content": user_message, "role": "user"}]
+
+# normal call 
+response = router.completion(model="gpt-3.5-turbo", messages=messages)
+
+print(f"response: {response}")
+
 ```
 
 ### Retries
@@ -206,9 +228,9 @@ Here's a quick look at how we can set `num_retries = 3`:
 ```python 
 from litellm import Router
 
-router = Router(model_list=model_list, 
-                cache_responses=True, 
-                timeout=30, 
+model_list = [{...}]
+
+router = Router(model_list=model_list,  
                 num_retries=3)
 
 user_message = "Hello, whats the weather in San Francisco??"
