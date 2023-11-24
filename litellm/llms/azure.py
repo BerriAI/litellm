@@ -194,7 +194,7 @@ class AzureChatCompletion(BaseLLM):
                 azure_client_params["azure_ad_token"] = azure_ad_token
             azure_client = AsyncAzureOpenAI(**azure_client_params)
             response = await azure_client.chat.completions.create(**data) 
-            response.model = "azure" + str(response.model)
+            response.model = "azure/" + str(response.model)
             return convert_to_model_response_object(response_object=json.loads(response.model_dump_json()), model_response_object=model_response)
        except Exception as e: 
            if isinstance(e,httpx.TimeoutException):
