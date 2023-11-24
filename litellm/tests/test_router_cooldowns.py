@@ -40,7 +40,7 @@ router = Router(model_list=model_list,
                 redis_password=os.getenv("REDIS_PASSWORD"), 
                 redis_port=int(os.getenv("REDIS_PORT")),  # type: ignore
                 routing_strategy="simple-shuffle",
-                set_verbose=False,
+                set_verbose=True,
                 num_retries=1) # type: ignore
 kwargs = {"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "Hey, how's it going?"}],}
 
