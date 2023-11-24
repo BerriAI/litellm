@@ -56,12 +56,11 @@ class AnthropicConfig():
 
 
 # makes headers for API call
-def validate_environment(api_key):
+def validate_environment():
     headers = {
         "accept": "application/json",
         "anthropic-version": "2023-06-01",
         "content-type": "application/json",
-        "x-api-key": api_key,
     }
     return headers
 
@@ -78,7 +77,7 @@ def completion(
     litellm_params=None,
     logger_fn=None,
 ):
-    headers = { **validate_environment(api_key), **headers } 
+    headers = { **validate_environment(), **headers } 
     prompt = f"{AnthropicConstants.HUMAN_PROMPT.value}"
     for message in messages:
         if "role" in message:
