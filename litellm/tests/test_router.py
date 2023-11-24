@@ -165,6 +165,7 @@ def test_exception_raising():
 				}
 			]
 		)
+		os.environ["AZURE_API_KEY"] = old_api_key
 	except openai.AuthenticationError:
 		print("Test Passed: Caught an OPENAI AUTH Error, Good job. This is what we needed!")
 		os.environ["AZURE_API_KEY"] = old_api_key
@@ -213,10 +214,10 @@ def test_reading_key_from_model_list():
 				}
 			]
 		)
-	except openai.AuthenticationError:
-		print("Test Passed: Caught an OPENAI AUTH Error, Good job. This is what we needed!")
+		os.environ["AZURE_API_KEY"] = old_api_key
 	except Exception as e:
-		print("Got unexpected exception on router!", e)
+		os.environ["AZURE_API_KEY"] = old_api_key
+		pytest.fail("Got unexpected exception on router!", e)
 # test_reading_key_from_model_list()
 
 
