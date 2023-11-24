@@ -20,7 +20,6 @@ def test_openai_embedding():
             model="text-embedding-ada-002", input=["good morning from litellm", "this is another item"]
         )
         litellm_response = dict(response)
-        litellm_response.pop("_response_ms")
         litellm_response_keys = set(litellm_response.keys())
         print(litellm_response_keys)
         print("LiteLLM Response\n")
@@ -40,7 +39,7 @@ def test_openai_embedding():
         print(openai_response_keys)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_openai_embedding()
+test_openai_embedding()
 
 def test_openai_azure_embedding_simple():
     try:
@@ -50,12 +49,12 @@ def test_openai_azure_embedding_simple():
         )
         print(response)
         response_keys = dict(response).keys()
-        assert set(["usage", "model", "object", "data", "_response_ms"]) == set(response_keys) #assert litellm response has expected keys from OpenAI embedding response
+        assert set(["usage", "model", "object", "data"]) == set(response_keys) #assert litellm response has expected keys from OpenAI embedding response
 
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-# test_openai_azure_embedding_simple()
+test_openai_azure_embedding_simple()
 
 
 def test_openai_azure_embedding_timeouts():
@@ -87,7 +86,7 @@ def test_openai_embedding_timeouts():
         pass
     except Exception as e:
         pytest.fail(f"Expected timeout error, did not get the correct error. Instead got {e}")
-test_openai_embedding_timeouts()
+# test_openai_embedding_timeouts()
 
 def test_openai_azure_embedding():
     try:
@@ -184,5 +183,5 @@ def test_aembedding():
             pass
     asyncio.run(embedding_call())
 
-# test_aembedding()
+test_aembedding()
 
