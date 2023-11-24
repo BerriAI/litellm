@@ -1602,6 +1602,15 @@ def cost_per_token(model="", prompt_tokens=0, completion_tokens=0):
     prompt_tokens_cost_usd_dollar = 0
     completion_tokens_cost_usd_dollar = 0
     model_cost_ref = litellm.model_cost
+
+    # see this https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models
+    azure_llms = {
+        "gpt-35-turbo": "azure/gpt-3.5-turbo",
+        "gpt-35-turbo-16k": "azure/gpt-3.5-turbo-16k",
+        "gpt-35-turbo-instruct": "azure/gpt-3.5-turbo-instruct"
+    }
+    if "azure/" in  model:
+        model = model.replace("azure/", "")
     if model in model_cost_ref:
         prompt_tokens_cost_usd_dollar = (
             model_cost_ref[model]["input_cost_per_token"] * prompt_tokens
@@ -1619,6 +1628,14 @@ def cost_per_token(model="", prompt_tokens=0, completion_tokens=0):
             model_cost_ref["ft:gpt-3.5-turbo"]["output_cost_per_token"] * completion_tokens
         )
         return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
+    elif model in azure_llms:
+        model = azure_llms[model]
+        prompt_tokens_cost_usd_dollar = (
+            model_cost_ref[model]["input_cost_per_token"] * prompt_tokens
+        )
+        completion_tokens_cost_usd_dollar = (
+            model_cost_ref[model]["output_cost_per_token"] * completion_tokens
+        )
     else:
         # calculate average input cost, azure/gpt-deployments can potentially go here if users don't specify, gpt-4, gpt-3.5-turbo. LLMs litellm knows
         input_cost_sum = 0
