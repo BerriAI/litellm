@@ -21,7 +21,6 @@ telemetry = True
 max_tokens = 256  # OpenAI Defaults
 drop_params = False
 retry = True
-request_timeout: Optional[float] = 6000
 api_key: Optional[str] = None
 openai_key: Optional[str] = None
 azure_key: Optional[str] = None
@@ -50,10 +49,14 @@ error_logs: Dict = {}
 add_function_to_prompt: bool = False # if function calling not supported by api, append function call details to system prompt
 client_session: Optional[httpx.Client] = None
 aclient_session: Optional[httpx.AsyncClient] = None
-model_fallbacks: Optional[List] = None
+model_fallbacks: Optional[List] = None # Deprecated for 'litellm.fallbacks'
 model_cost_map_url: str = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
-num_retries: Optional[int] = None
 suppress_debug_info = False
+#### RELIABILITY ####
+request_timeout: Optional[float] = 6000
+num_retries: Optional[int] = None
+fallbacks: Optional[List] = None
+context_window_fallbacks: Optional[List] = None
 #############################################
 
 def get_model_cost_map(url: str):
