@@ -155,7 +155,7 @@ async def user_api_key_auth(request: Request, api_key: str = fastapi.Security(ap
         if api_key == master_key or api_key == "Bearer " + master_key:
             return
         
-        if (route == "/key/generate" or route == "/key/delete") and api_key != master_key: 
+        if (route == "/key/generate" or route == "/key/delete") and not (api_key == master_key or api_key == "Bearer " + master_key):
             raise Exception(f"If master key is set, only master key can be used to generate new keys")
 
         if prisma_client: 
