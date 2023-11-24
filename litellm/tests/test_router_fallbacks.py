@@ -93,11 +93,11 @@ def test_async_fallbacks():
             response = await router.acompletion(**kwargs)
             # response = await response
             print(f"response: {response}")
+            router.flush_cache()
         except litellm.Timeout as e: 
             pass
         except Exception as e:
             pytest.fail(f"An exception occurred: {e}")
-        router.flush_cache()
 
     asyncio.run(test_get_response())
 
@@ -110,8 +110,8 @@ def test_sync_context_window_fallbacks():
         kwargs["messages"] = [{"role": "user", "content": sample_text}]
         response = router.completion(**kwargs)
         print(f"response: {response}")
+        router.flush_cache()
     except Exception as e:
         print(e)
-    router.flush_cache()
 
 # test_sync_context_window_fallbacks()
