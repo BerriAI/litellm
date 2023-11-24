@@ -258,7 +258,7 @@ def completion(
     max_tokens: Optional[float] = None,
     presence_penalty: Optional[float] = None,
     frequency_penalty: Optional[float]=None,
-    logit_bias: dict = None,
+    logit_bias: Optional[dict] = None,
     user: str = "",
     # openai v1.0+ new params
     response_format: Optional[dict] = None,
