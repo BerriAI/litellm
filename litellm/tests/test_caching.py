@@ -155,12 +155,12 @@ def test_redis_cache_completion():
     litellm.set_verbose = False
 
     random_number = random.randint(1, 100000) # add a random number to ensure it's always adding / reading from cache
-    messages = [{"role": "user", "content": f"write a one sentence {random_number}"}]
+    messages = [{"role": "user", "content": f"write a one sentence poem about: {random_number}"}]
     litellm.cache = Cache(type="redis", host=os.environ['REDIS_HOST'], port=os.environ['REDIS_PORT'], password=os.environ['REDIS_PASSWORD'])
     print("test2 for caching")
     response1 = completion(model="gpt-3.5-turbo", messages=messages, caching=True, max_tokens=10, seed=1222)
     response2 = completion(model="gpt-3.5-turbo", messages=messages, caching=True, max_tokens=10, seed=1222)
-    response3 = completion(model="gpt-3.5-turbo", messages=messages, caching=True, temperature=0.1)
+    response3 = completion(model="gpt-3.5-turbo", messages=messages, caching=True, temperature=1)
     response4 = completion(model="command-nightly", messages=messages, caching=True)
 
     print("\nresponse 1", response1)
