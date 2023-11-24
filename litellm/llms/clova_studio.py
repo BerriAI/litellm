@@ -38,6 +38,8 @@ class ClovaStudioConfig():
 
     - `topP` (float): Samples based on the cumulative probabilities of the generated token candidates. 0 < topP < 1 (default value: 0.8)
 
+    - `stream` (bool): Whether to stream the response. (Fake streaming supported by LiteLLM. CLOVA Studio API does not support streaming.)
+
     Note: Please make sure to modify the default parameters as required for your use case.
     """
     topK: Optional[int]=None
@@ -47,6 +49,7 @@ class ClovaStudioConfig():
     stopBefore: Optional[List[str]]=None
     repeatPenalty: Optional[int]=None
     topP: Optional[float]=None
+    stream: Optional[bool]=None # Fake streaming supported by LiteLLM. CLOVA Studio API does not support streaming.
 
     def __init__(self, 
                 topK: Optional[int]=None,

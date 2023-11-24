@@ -1068,6 +1068,14 @@ def completion(
                 logging_obj=logging,
                 acompletion=acompletion, 
             )
+            # fake streaming
+            if "stream" in optional_params and optional_params["stream"] == True:
+                # fake streaming for clova-studio
+                resp_string = model_response["choices"][0]["message"]["content"]
+                response = CustomStreamWrapper(
+                    resp_string, model, custom_llm_provider="clova-studio", logging_obj=logging
+                )
+                return response
             response = model_response
         elif custom_llm_provider == "palm":
             palm_api_key = (
