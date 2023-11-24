@@ -116,7 +116,55 @@ Who among the mentioned figures from Ancient Greece contributed to the domain of
 		# Check results
 
 
-test_multiple_deployments()
+# test_multiple_deployments()
+
+def test_exception_raising():
+	# this tests if the router raises an exception when invalid params are set
+	litellm.set_verbose=True
+	import openai
+	try:
+		print("testing if router raises an exception")
+		old_api_key = os.environ["AZURE_API_KEY"]
+		os.environ["AZURE_API_KEY"] = ""
+		model_list = [
+			{ 
+				"model_name": "gpt-3.5-turbo", # openai model name 
+				"litellm_params": { # params for litellm completion/embedding call 
+					"model": "azure/chatgpt-v-2", 
+					"api_key": "bad-key",
+					"api_version": os.getenv("AZURE_API_VERSION"),
+					"api_base": os.getenv("AZURE_API_BASE")
+				},
+				"tpm": 240000,
+				"rpm": 1800
+			}
+		]
+
+		router = Router(model_list=model_list, 
+					redis_host=os.getenv("REDIS_HOST"), 
+					redis_password=os.getenv("REDIS_PASSWORD"), 
+					redis_port=int(os.getenv("REDIS_PORT")), 
+					routing_strategy="simple-shuffle",
+					set_verbose=False,
+					num_retries=1) # type: ignore
+		response = router.completion(
+			model="gpt-3.5-turbo",
+			messages=[
+				{
+					"role": "user",
+					"content": "hello this request will fail"
+				}
+			]
+		)
+	except openai.AuthenticationError:
+		print("Caught an OPENAI AUTH Error, Good job. This is what we needed!")
+	except Exception as e:
+		os.environ["AZURE_API_KEY"] = old_api_key
+		print("Got exception on router! Good job ", e)
+		print(e)
+	
+# test_exception_raising()
+
 ### FUNCTION CALLING 
 
 def test_function_calling(): 
