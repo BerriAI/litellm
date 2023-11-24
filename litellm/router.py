@@ -365,10 +365,11 @@ class Router:
             self.print_verbose(f'Response: {response}')
             return response
         except Exception as e: 
-            self.print_verbose(f"An exception occurs")
             original_exception = e
+            self.print_verbose(f"An exception occurs{original_exception}")
             try: 
                 self.print_verbose(f"Trying to fallback b/w models")
+                fallback_model_group = []
                 if isinstance(e, litellm.ContextWindowExceededError): 
                     for item in self.context_window_fallback_model_group: # [{"gpt-3.5-turbo": ["gpt-4"]}]
                         if list(item.keys())[0] == model_group:
