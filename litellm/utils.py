@@ -1300,7 +1300,7 @@ def client(original_function):
             end_time = datetime.datetime.now()
             # LOG FAILURE - handle streaming failure logging in the _next_ object, remove `handle_failure` once it's deprecated
             if logging_obj:
-                threading.Thread(target=logging_obj.failure_handler, args=(e, traceback_exception, start_time, end_time)).start()
+                logging_obj.failure_handler(e, traceback_exception, start_time, end_time) # DO NOT MAKE THREADED - router retry fallback relies on this!
                 my_thread = threading.Thread(
                     target=handle_failure,
                     args=(e, traceback_exception, start_time, end_time, args, kwargs),
@@ -1405,9 +1405,8 @@ def client(original_function):
             traceback_exception = traceback.format_exc()
             crash_reporting(*args, **kwargs, exception=traceback_exception)
             end_time = datetime.datetime.now()
-            # LOG FAILURE - handle streaming failure logging in the _next_ object, remove `handle_failure` once it's deprecated
             if logging_obj:
-                threading.Thread(target=logging_obj.failure_handler, args=(e, traceback_exception, start_time, end_time)).start()
+                logging_obj.failure_handler(e, traceback_exception, start_time, end_time) # DO NOT MAKE THREADED - router retry fallback relies on this!
             raise e
 
     # Use httpx to determine if the original function is a coroutine

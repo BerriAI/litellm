@@ -11,9 +11,6 @@ import litellm
 from litellm import Router
 from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
-# import logging
-# logging.basicConfig(level=logging.DEBUG)
-
 load_dotenv()
 
 def test_multiple_deployments(): 
@@ -31,17 +28,6 @@ def test_multiple_deployments():
 		"tpm": 240000,
 		"rpm": 1800
 	}, 
-	# {
-	# 	"model_name": "gpt-3.5-turbo", # openai model name 
-	# 	"litellm_params": { # params for litellm completion/embedding call 
-	# 		"model": "azure/chatgpt-functioncalling", 
-	# 		"api_key": "bad-key",
-	# 		"api_version": os.getenv("AZURE_API_VERSION"),
-	# 		"api_base": os.getenv("AZURE_API_BASE")
-	# 	},
-	# 	"tpm": 240000,
-	# 	"rpm": 1800
-	# }, 
 	{
 		"model_name": "gpt-3.5-turbo", # openai model name 
 		"litellm_params": { # params for litellm completion/embedding call 
@@ -58,27 +44,12 @@ def test_multiple_deployments():
 				 redis_password=os.getenv("REDIS_PASSWORD"), 
 				 redis_port=int(os.getenv("REDIS_PORT")), 
 				 routing_strategy="simple-shuffle",
-				 set_verbose=False,
+				 set_verbose=True,
 				 num_retries=1) # type: ignore
 	# router = Router(model_list=model_list, redis_host=os.getenv("REDIS_HOST"), redis_password=os.getenv("REDIS_PASSWORD"), redis_port=int(os.getenv("REDIS_PORT"))) # type: ignore
 	kwargs = {
 			"model": "gpt-3.5-turbo",
-			"messages": [{"role": "user", "content": """Context:
-
-In the historical era of Ancient Greece, a multitude of significant individuals lived, contributing immensely to various disciplines like science, politics, philosophy, and literature. For instance, Socrates, a renowned philosopher, primarily focused on ethics. His notable method, the Socratic Method, involved acknowledging one's own ignorance to stimulate critical thinking and illuminate ideas. His student, Plato, another prominent figure, founded the Academy in Athens. He proposed theories on justice, beauty, and equality, and also introduced the theory of forms, which is pivotal to understanding his philosophical insights. Another student of Socrates, Xenophon, distinguished himself more in the domain of history and military affairs.
-
-Aristotle, who studied under Plato, led an equally remarkable life. His extensive works have been influential across various domains, including science, logic, metaphysics, ethics, and politics. Perhaps most notably, a substantial portion of the Western intellectual tradition traces back to his writings. He later tutored Alexander the Great who went on to create one of the most vast empires in the world.
-
-In the domain of mathematics, Pythagoras and Euclid made significant contributions. Pythagoras is best known for the Pythagorean theorem, a fundamental principle in geometry, while Euclid, often regarded as the father of geometry, wrote "The Elements", a collection of definitions, axioms, theorems, and proofs. 
-
-Apart from these luminaries, the period also saw a number of influential political figures. Pericles, a prominent and influential Greek statesman, orator, and general of Athens during the Golden Age, specifically between the Persian and Peloponnesian wars, played a significant role in developing the Athenian democracy.
-
-The Ancient Greek era also witnessed extraordinary advancements in arts and literature. Homer, credited with the creation of the epic poems 'The Iliad' and 'The Odyssey,' is considered one of the greatest poets in history. The tragedies of Sophocles, Aeschylus, and Euripides left an indelible mark on the field of drama, and the comedies of Aristophanes remain influential even today.
-
----
-Question: 
-
-Who among the mentioned figures from Ancient Greece contributed to the domain of mathematics and what are their significant contributions?"""}],
+			"messages": [{"role": "user", "content": "Hey, how's it going?"}],
 	}
 	
 	results = [] 
@@ -88,7 +59,7 @@ Who among the mentioned figures from Ancient Greece contributed to the domain of
 			response = router.completion(**kwargs)
 			results.append(response)
 	except Exception as e:
-		raise e	
+		pytest.fail(f"An error occurred - {str(e)}")
 	# print(len(results))
 	# with ThreadPoolExecutor(max_workers=100) as executor:
 
@@ -116,7 +87,7 @@ Who among the mentioned figures from Ancient Greece contributed to the domain of
 		# Check results
 
 
-# test_multiple_deployments()
+test_multiple_deployments()
 
 def test_exception_raising():
 	# this tests if the router raises an exception when invalid params are set
@@ -172,7 +143,7 @@ def test_exception_raising():
 	except Exception as e:
 		os.environ["AZURE_API_KEY"] = old_api_key
 		print("Got unexpected exception on router!", e)
-test_exception_raising()
+# test_exception_raising()
 
 
 def test_reading_key_from_model_list():
