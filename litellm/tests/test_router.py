@@ -120,6 +120,7 @@ Who among the mentioned figures from Ancient Greece contributed to the domain of
 
 def test_exception_raising():
 	# this tests if the router raises an exception when invalid params are set
+	# in this test both deployments have bad keys - Keep this test. It validates if the router raises the most recent exception
 	litellm.set_verbose=True
 	import openai
 	try:
@@ -137,9 +138,17 @@ def test_exception_raising():
 				},
 				"tpm": 240000,
 				"rpm": 1800
+			},
+			{
+				"model_name": "gpt-3.5-turbo", # openai model name 
+				"litellm_params": { #
+					"model": "gpt-3.5-turbo", 
+					"api_key": "bad-key",
+				},
+				"tpm": 240000,
+				"rpm": 1800
 			}
 		]
-
 		router = Router(model_list=model_list, 
 					redis_host=os.getenv("REDIS_HOST"), 
 					redis_password=os.getenv("REDIS_PASSWORD"), 
@@ -160,8 +169,9 @@ def test_exception_raising():
 		print("Test Passed: Caught an OPENAI AUTH Error, Good job. This is what we needed!")
 		os.environ["AZURE_API_KEY"] = old_api_key
 	except Exception as e:
+		os.environ["AZURE_API_KEY"] = old_api_key
 		print("Got unexpected exception on router!", e)
-# test_exception_raising()
+test_exception_raising()
 
 
 def test_reading_key_from_model_list():
@@ -207,7 +217,7 @@ def test_reading_key_from_model_list():
 		print("Test Passed: Caught an OPENAI AUTH Error, Good job. This is what we needed!")
 	except Exception as e:
 		print("Got unexpected exception on router!", e)
-test_reading_key_from_model_list()
+# test_reading_key_from_model_list()
 
 
 ### FUNCTION CALLING 
