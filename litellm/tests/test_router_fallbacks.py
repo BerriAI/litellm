@@ -101,7 +101,7 @@ def test_async_fallbacks():
 
     asyncio.run(test_get_response())
 
-# test_async_fallbacks()
+test_async_fallbacks()
 
 def test_sync_context_window_fallbacks(): 
     try:
