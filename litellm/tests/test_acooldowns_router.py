@@ -35,13 +35,6 @@ model_list = [{ # list of model deployments
 	}
 ]
 
-router = Router(model_list=model_list, 
-                redis_host=os.getenv("REDIS_HOST"), 
-                redis_password=os.getenv("REDIS_PASSWORD"), 
-                redis_port=int(os.getenv("REDIS_PORT")),  # type: ignore
-                routing_strategy="simple-shuffle",
-                set_verbose=True,
-                num_retries=1) # type: ignore
 kwargs = {"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "Hey, how's it going?"}],}
 
 
@@ -49,17 +42,23 @@ def test_multiple_deployments_sync():
 	import concurrent, time
 	litellm.set_verbose=False
 	results = [] 
-	
+	router = Router(model_list=model_list, 
+                redis_host=os.getenv("REDIS_HOST"), 
+                redis_password=os.getenv("REDIS_PASSWORD"), 
+                redis_port=int(os.getenv("REDIS_PORT")),  # type: ignore
+                routing_strategy="simple-shuffle",
+                set_verbose=True,
+                num_retries=1) # type: ignore
 	try:
-		router.flush_cache()
+		router.reset()
 		for _ in range(3): 
 			response = router.completion(**kwargs)
 			results.append(response)
 		print(results)
-		router.flush_cache()
+		router.reset()
 	except Exception as e:
 		print(f"FAILED TEST!")
-		pytest.fail(f"An error occurred - {str(e)}")
+		pytest.fail(f"An error occurred - {traceback.format_exc()}")
 
 # test_multiple_deployments_sync()
 
@@ -69,7 +68,13 @@ def test_multiple_deployments_parallel():
     results = []
     futures = {}
     start_time = time.time()
-    router.flush_cache()
+    router = Router(model_list=model_list, 
+                redis_host=os.getenv("REDIS_HOST"), 
+                redis_password=os.getenv("REDIS_PASSWORD"), 
+                redis_port=int(os.getenv("REDIS_PORT")),  # type: ignore
+                routing_strategy="simple-shuffle",
+                set_verbose=True,
+                num_retries=1) # type: ignore
     # Assuming you have an executor instance defined somewhere in your code
     with concurrent.futures.ThreadPoolExecutor() as executor:
         for _ in range(5):
@@ -96,4 +101,4 @@ def test_multiple_deployments_parallel():
 
 # Assuming litellm, router, and executor are defined somewhere in your code
 
-test_multiple_deployments_parallel()
+# test_multiple_deployments_parallel()
