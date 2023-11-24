@@ -717,7 +717,6 @@ async def chat_completion(request: Request, model: Optional[str] = None):
 async def embeddings(request: Request): 
     try: 
         data = await request.json()
-        print(f"data: {data}")
         data["model"] = (
             general_settings.get("embedding_model", None) # server default
             or user_model # model name passed via cli args
