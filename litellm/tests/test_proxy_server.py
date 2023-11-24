@@ -45,7 +45,7 @@ def test_chat_completion():
         pytest.fail("LiteLLM Proxy test failed. Exception", e)
 
 # Run the test
-test_chat_completion()
+# test_chat_completion()
 
 
 def test_chat_completion_azure():
@@ -56,7 +56,7 @@ def test_chat_completion_azure():
             "messages": [
                 {
                     "role": "user",
-                    "content": "hi"
+                    "content": "write 1 sentence poem"
                 },
             ],
             "max_tokens": 10,
@@ -67,34 +67,29 @@ def test_chat_completion_azure():
         assert response.status_code == 200
         result = response.json()
         print(f"Received response: {result}")
+        assert len(result["choices"][0]["message"]["content"]) > 0 
     except Exception as e:
         pytest.fail("LiteLLM Proxy test failed. Exception", e)
 
 # Run the test
-test_chat_completion()
+# test_chat_completion_azure()
 
 
-# def test_embedding():
-#     try:
-#         # Your test data
-#         test_data = {
-#             "model": "",
-#             "messages": [
-#                 {
-#                     "role": "user",
-#                     "content": "hi"
-#                 },
-#             ],
-#             "max_tokens": 10,
-#         }
-#         print("testing proxy server with OpenAI embedding")
-#         response = client.post("/v1/embeddings", json=test_data)
+def test_embedding():
+    try:
+        test_data = {
+            "model": "azure/azure-embedding-model",
+            "input": ["good morning from litellm"],
+        }
+        print("testing proxy server with OpenAI embedding")
+        response = client.post("/v1/embeddings", json=test_data)
 
-#         assert response.status_code == 200
-#         result = response.json()
-#         print(f"Received response: {result}")
-#     except Exception as e:
-#         pytest.fail("LiteLLM Proxy test failed. Exception", e)
+        assert response.status_code == 200
+        result = response.json()
+        print(len(result["data"][0]["embedding"]))
+        assert len(result["data"][0]["embedding"]) > 10 # this usually has len==1536 so
+    except Exception as e:
+        pytest.fail("LiteLLM Proxy test failed. Exception", e)
 
-# # Run the test
+# Run the test
 # test_embedding()
