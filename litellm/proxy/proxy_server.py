@@ -88,7 +88,7 @@ from fastapi.routing import APIRouter
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import OAuth2PasswordBearer
+from fastapi.security.api_key import APIKeyHeader
 import json
 import logging
 # from litellm.proxy.queue import start_rq_worker_in_background
@@ -115,7 +115,6 @@ user_telemetry = True
 user_config = None
 user_headers = None
 local_logging = True # writes logs to a local api_log.json file for debugging
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 experimental = False
 #### GLOBAL VARIABLES ####
 llm_router: Optional[litellm.Router] = None
@@ -145,17 +144,19 @@ def usage_telemetry(
             target=litellm.utils.litellm_telemetry, args=(data,), daemon=True
         ).start()
 
-async def user_api_key_auth(request: Request): 
+api_key_header = APIKeyHeader(name="Authorization", auto_error=False)
+
+async def user_api_key_auth(request: Request, api_key: str = fastapi.Security(api_key_header)):
     global master_key, prisma_client, llm_model_list
     if master_key is None:
         return 
     try: 
-        api_key = await oauth2_scheme(request=request)
         route = request.url.path
-        if api_key == master_key: 
+        is_master_key_valid = secrets.compare_digest(api_key, master_key) or secrets.compare_digest(api_key == "Bearer " + master_key)
+        if is_master_key_valid:
             return
         
-        if (route == "/key/generate" or route == "/key/delete") and api_key != master_key: 
+        if (route == "/key/generate" or route == "/key/delete") and not is_master_key_valid:
             raise Exception(f"If master key is set, only master key can be used to generate new keys")
 
         if prisma_client: 
