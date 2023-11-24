@@ -50,12 +50,13 @@ def test_cost_ft_gpt_35():
         print("\n Calculated Cost for ft:gpt-3.5", cost)
         input_cost = model_cost["ft:gpt-3.5-turbo"]["input_cost_per_token"]
         output_cost = model_cost["ft:gpt-3.5-turbo"]["output_cost_per_token"]
+        print(input_cost, output_cost)
         expected_cost = (input_cost*resp.usage.prompt_tokens) + (output_cost*resp.usage.completion_tokens)
         print("\n Excpected cost", expected_cost)
         assert cost == expected_cost
     except Exception as e:
         pytest.fail(f"Cost Calc failed for ft:gpt-3.5. Expected {expected_cost}, Calculated cost {cost}")
-# test_cost_ft_gpt_35()
+test_cost_ft_gpt_35()
 
 def test_cost_azure_gpt_35():
     try:
@@ -80,5 +81,5 @@ def test_cost_azure_gpt_35():
         assert cost == expected_cost
     except Exception as e:
         pytest.fail(f"Cost Calc failed for azure/gpt-3.5-turbo. Expected {expected_cost}, Calculated cost {cost}")
-# test_cost_azure_gpt_35()
+test_cost_azure_gpt_35()
 
