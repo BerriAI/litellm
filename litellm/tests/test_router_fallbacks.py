@@ -59,6 +59,7 @@ def test_sync_fallbacks():
         print(e)
 
 def test_async_fallbacks(): 
+    litellm.set_verbose = False
     async def test_get_response():
         user_message = "Hello, how are you?"
         messages = [{"content": user_message, "role": "user"}]
@@ -73,4 +74,4 @@ def test_async_fallbacks():
 
     asyncio.run(test_get_response())
 
-test_async_fallbacks()
+# test_async_fallbacks()
