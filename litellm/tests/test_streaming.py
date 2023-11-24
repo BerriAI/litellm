@@ -631,6 +631,29 @@ def ai21_completion_call_bad_key():
 
 # ai21_completion_call_bad_key()
 
+def hf_test_completion_tgi_stream():
+    try:
+        response = completion(
+            model = 'huggingface/HuggingFaceH4/zephyr-7b-beta', 
+            messages = [{ "content": "Hello, how are you?","role": "user"}],
+            stream=True
+        )
+        # Add any assertions here to check the response
+        print(f"response: {response}")
+        complete_response = ""
+        start_time = time.time()
+        for idx, chunk in enumerate(response):
+            chunk, finished = streaming_format_tests(idx, chunk)
+            complete_response += chunk
+            if finished:
+                break
+        if complete_response.strip() == "": 
+            raise Exception("Empty response received")
+        print(f"completion_response: {complete_response}")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+hf_test_completion_tgi_stream()
+
 # def test_completion_aleph_alpha():
 #     try:
 #         response = completion(
@@ -706,7 +729,7 @@ def test_openai_chat_completion_call():
         print(f"error occurred: {traceback.format_exc()}")
         pass
 
-test_openai_chat_completion_call()
+# test_openai_chat_completion_call()
 
 def test_openai_chat_completion_complete_response_call():
     try:
