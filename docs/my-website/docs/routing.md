@@ -12,6 +12,13 @@ LiteLLM manages:
 
 In production, litellm supports using Redis as a way to track cooldown server and usage (managing tpm/rpm limits).
 
+:::info
+
+If you want a server to load balance across different LLM APIs, use our [OpenAI Proxy Server](./simple_proxy#load-balancing---multiple-instances-of-1-model)
+
+:::
+
+
 ## Load Balancing
 (s/o [@paulpierre](https://www.linkedin.com/in/paulpierre/) for his contribution to this implementation)
 [**See Code**](https://github.com/BerriAI/litellm/blob/main/litellm/router.py)
@@ -169,41 +176,30 @@ print(response)
 </TabItem>
 </Tabs>
 
-#### Caching + Request Timeouts 
+## Basic Reliability
 
-In production, we recommend using a Redis cache. For quickly testing things locally, we also support simple in-memory caching. 
+### Timeouts 
 
-**In-memory Cache + Timeouts**
+The timeout set in router is for the entire length of the call, and is passed down to the completion() call level as well. 
 
 ```python
+from litellm import Router 
+
+model_list = [{...}]
+
 router = Router(model_list=model_list, 
-                cache_responses=True, 
                 timeout=30) # timeout set to 30s 
 
 print(response)
 ```
 
-**Redis Cache + Timeouts**
-```python
-router = Router(model_list=model_list, 
-                redis_host=os.getenv("REDIS_HOST"), 
-                redis_password=os.getenv("REDIS_PASSWORD"), 
-                redis_port=os.getenv("REDIS_PORT"),
-                cache_responses=True, 
-                timeout=30)
-
-print(response)
-```
-
-#### Retry failed requests
+### Retries
 
 For both async + sync functions, we support retrying failed requests. 
 
-If it's a RateLimitError we implement exponential backoffs 
+For RateLimitError we implement exponential backoffs 
 
-If it's a generic OpenAI API Error, we retry immediately 
-
-For any other exception types, we don't retry
+For generic errors, we retry immediately 
 
 Here's a quick look at how we can set `num_retries = 3`: 
 
@@ -224,6 +220,111 @@ response = router.completion(model="gpt-3.5-turbo", messages=messages)
 print(f"response: {response}")
 ```
 
+### Fallbacks 
+
+If a call fails after num_retries, fall back to another model group. 
+
+If the error is a context window exceeded error, fall back to a larger model group (if given). 
+
+```python
+from litellm import Router
+
+model_list = [
+    { # list of model deployments 
+		"model_name": "azure/gpt-3.5-turbo", # openai model name 
+		"litellm_params": { # params for litellm completion/embedding call 
+			"model": "azure/chatgpt-v-2", 
+			"api_key": "bad-key",
+			"api_version": os.getenv("AZURE_API_VERSION"),
+			"api_base": os.getenv("AZURE_API_BASE")
+		},
+		"tpm": 240000,
+		"rpm": 1800
+	}, 
+    { # list of model deployments 
+		"model_name": "azure/gpt-3.5-turbo-context-fallback", # openai model name 
+		"litellm_params": { # params for litellm completion/embedding call 
+			"model": "azure/chatgpt-v-2", 
+			"api_key": "bad-key",
+			"api_version": os.getenv("AZURE_API_VERSION"),
+			"api_base": os.getenv("AZURE_API_BASE")
+		},
+		"tpm": 240000,
+		"rpm": 1800
+	}, 
+	{
+		"model_name": "azure/gpt-3.5-turbo", # openai model name 
+		"litellm_params": { # params for litellm completion/embedding call 
+			"model": "azure/chatgpt-functioncalling", 
+			"api_key": "bad-key",
+			"api_version": os.getenv("AZURE_API_VERSION"),
+			"api_base": os.getenv("AZURE_API_BASE")
+		},
+		"tpm": 240000,
+		"rpm": 1800
+	}, 
+	{
+		"model_name": "gpt-3.5-turbo", # openai model name 
+		"litellm_params": { # params for litellm completion/embedding call 
+			"model": "gpt-3.5-turbo", 
+			"api_key": os.getenv("OPENAI_API_KEY"),
+		},
+		"tpm": 1000000,
+		"rpm": 9000
+	},
+    {
+		"model_name": "gpt-3.5-turbo-16k", # openai model name 
+		"litellm_params": { # params for litellm completion/embedding call 
+			"model": "gpt-3.5-turbo-16k", 
+			"api_key": os.getenv("OPENAI_API_KEY"),
+		},
+		"tpm": 1000000,
+		"rpm": 9000
+	}
+]
+
+
+router = Router(model_list=model_list, 
+                fallbacks=[{"azure/gpt-3.5-turbo": ["gpt-3.5-turbo"]}], 
+                context_window_fallbacks=[{"azure/gpt-3.5-turbo-context-fallback": ["gpt-3.5-turbo-16k"]}, {"gpt-3.5-turbo": ["gpt-3.5-turbo-16k"]}],
+                set_verbose=True)
+
+
+user_message = "Hello, whats the weather in San Francisco??"
+messages = [{"content": user_message, "role": "user"}]
+
+# normal fallback call 
+response = router.completion(model="azure/gpt-3.5-turbo", messages=messages)
+
+# context window fallback call
+response = router.completion(model="azure/gpt-3.5-turbo-context-fallback", messages=messages)
+
+print(f"response: {response}")
+```
+
+### Caching
+
+In production, we recommend using a Redis cache. For quickly testing things locally, we also support simple in-memory caching. 
+
+**In-memory Cache**
+
+```python
+router = Router(model_list=model_list, 
+                cache_responses=True)
+
+print(response)
+```
+
+**Redis Cache**
+```python
+router = Router(model_list=model_list, 
+                redis_host=os.getenv("REDIS_HOST"), 
+                redis_password=os.getenv("REDIS_PASSWORD"), 
+                redis_port=os.getenv("REDIS_PORT"),
+                cache_responses=True)
+
+print(response)
+```
 #### Default litellm.completion/embedding params
 
 You can also set default params for litellm completion/embedding calls. Here's how to do that: 
@@ -246,9 +347,9 @@ print(f"response: {response}")
 ```
 
 
-#### Deploy Router 
+## Deploy Router 
 
-If you want a server to just route requests to different LLM APIs, use our [OpenAI Proxy Server](./simple_proxy.md#multiple-instances-of-1-model)
+If you want a server to load balance across different LLM APIs, use our [OpenAI Proxy Server](./simple_proxy#load-balancing---multiple-instances-of-1-model)
 
 ## Queuing (Beta)
 
