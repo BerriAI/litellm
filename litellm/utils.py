@@ -3829,6 +3829,7 @@ def exception_type(
                         exception_mapping_worked = True
                         raise APIError(
                             message=f"VertexAIException - {error_str}",
+                            status_code=500,
                             model=model,
                             llm_provider="vertex_ai",
                             request=original_exception.request
