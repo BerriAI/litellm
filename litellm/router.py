@@ -178,7 +178,7 @@ class Router:
         try: 
             kwargs["model"] = model
             kwargs["messages"] = messages
-            kwargs["original_function"] = self._completion
+            kwargs["original_function"] = self._acompletion
             kwargs["num_retries"] = self.num_retries
 
             # Use asyncio.timeout to enforce the timeout
@@ -205,14 +205,7 @@ class Router:
             response = await litellm.acompletion(**{**data, "messages": messages, "caching": self.cache_responses, **kwargs})
             return response
         except Exception as e: 
-            if self.num_retries > 0:
-                kwargs["model"] = model
-                kwargs["messages"] = messages
-                kwargs["original_exception"] = e
-                kwargs["original_function"] = self.acompletion
-                return await self.async_function_with_retries(**kwargs)
-            else: 
-                raise e
+            raise e
        
     def text_completion(self,
                         model: str,
@@ -279,7 +272,7 @@ class Router:
         model_group = kwargs.get("model")
         try: 
             response = await self.async_function_with_retries(*args, **kwargs)
-            self.print_verbose(f'Response: {response}')
+            self.print_verbose(f'Async Response: {response}')
             return response
         except Exception as e: 
             self.print_verbose(f"An exception occurs")
@@ -358,6 +351,8 @@ class Router:
                         pass
                     else: 
                         raise e
+            if self.num_retries == 0: 
+                raise e
     
     def function_with_fallbacks(self, *args, **kwargs): 
         """
@@ -695,7 +690,7 @@ class Router:
         return self.model_names
 
     def print_verbose(self, print_statement): 
-        if self.set_verbose: 
+        if self.set_verbose or litellm.set_verbose: 
             print(f"LiteLLM.Router: {print_statement}") # noqa
 
     def get_available_deployment(self,
