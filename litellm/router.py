@@ -81,7 +81,7 @@ class Router:
         
         self.allowed_fails = allowed_fails or litellm.allowed_fails
         self.failed_calls = InMemoryCache() # cache to track failed call per deployment, if num failed calls within 1 minute > allowed fails, then add it to cooldown
-        self.num_retries = num_retries or litellm.num_retries
+        self.num_retries = num_retries or litellm.num_retries or 0
         self.set_verbose = set_verbose 
         self.timeout = timeout or litellm.request_timeout
         self.routing_strategy = routing_strategy
