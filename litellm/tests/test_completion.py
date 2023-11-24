@@ -455,7 +455,8 @@ def test_completion_openai_with_optional_params():
             temperature=0.5,
             top_p=0.1,
             seed=12,
-            response_format={ "type": "json_object" }
+            response_format={ "type": "json_object" },
+            logit_bias=None,
         )
         # Add any assertions here to check the response
         print(response)
