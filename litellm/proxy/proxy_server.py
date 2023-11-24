@@ -267,6 +267,15 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
         ### CONNECT TO DATABASE ###
         database_url = general_settings.get("database_url", None)
         prisma_setup(database_url=database_url)
+        ## Cost Tracking for master key + auth setup ## 
+        if master_key is not None:
+            if isinstance(litellm.success_callback, list):
+                import utils
+                print("setting litellm success callback to track cost")
+                if (utils.track_cost_callback) not in litellm.success_callback:
+                    litellm.success_callback.append(utils.track_cost_callback)
+                else:
+                    litellm.success_callback = utils.track_cost_callback
         ### START REDIS QUEUE ###
         use_queue = general_settings.get("use_queue", False)
         celery_setup(use_queue=use_queue)
@@ -303,7 +312,7 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
     ## MODEL LIST
     model_list = config.get('model_list', None)
     if model_list:
-        router = litellm.Router(model_list=model_list)
+        router = litellm.Router(model_list=model_list, num_retries=2)
         print(f"\033[32mLiteLLM: Proxy initialized with Config, Set models:\033[0m")
         for model in model_list:
             print(f"\033[32m    {model.get('model_name', '')}\033[0m")
