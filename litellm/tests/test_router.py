@@ -83,7 +83,7 @@ def test_multiple_deployments():
 		# Check results
 
 
-test_multiple_deployments()
+# test_multiple_deployments()
 
 def test_exception_raising():
 	# this tests if the router raises an exception when invalid params are set
@@ -237,7 +237,7 @@ def test_function_calling():
 
 def test_acompletion_on_router(): 
 	try:
-		litellm.set_verbose = True
+		litellm.set_verbose = False
 		model_list = [
 			{
 				"model_name": "gpt-3.5-turbo",
@@ -262,7 +262,7 @@ def test_acompletion_on_router():
 		]
 
 		messages = [
-			{"role": "user", "content": f"What is the weather like in Boston {time.time()}?"}
+			{"role": "user", "content": f"write a one sentence poem {time.time()}?"}
 		]
 		start_time = time.time()
 		router = Router(model_list=model_list, 
@@ -278,6 +278,8 @@ def test_acompletion_on_router():
 			response2 = await router.acompletion(model="gpt-3.5-turbo", messages=messages)
 			print(f"response2: {response2}")
 			assert response1.id == response2.id
+			assert len(response1.choices[0].message.content) > 0
+			assert response1.choices[0].message.content == response2.choices[0].message.content
 		asyncio.run(get_response())
 	except litellm.Timeout as e: 
 		end_time = time.time()
