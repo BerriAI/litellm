@@ -157,13 +157,11 @@ def test_exception_raising():
 			]
 		)
 	except openai.AuthenticationError:
-		print("Caught an OPENAI AUTH Error, Good job. This is what we needed!")
-	except Exception as e:
+		print("Test Passed: Caught an OPENAI AUTH Error, Good job. This is what we needed!")
 		os.environ["AZURE_API_KEY"] = old_api_key
-		print("Got exception on router! Good job ", e)
-		print(e)
-	
-# test_exception_raising()
+	except Exception as e:
+		print("Got unexpected exception on router!", e)
+test_exception_raising()
 
 ### FUNCTION CALLING 
 
