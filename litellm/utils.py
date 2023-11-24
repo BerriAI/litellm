@@ -1834,7 +1834,7 @@ def get_optional_params(  # use the openai defaults
     max_tokens=None,
     presence_penalty=None,
     frequency_penalty=0,
-    logit_bias={},
+    logit_bias=None,
     user="",
     model=None,
     custom_llm_provider="",
@@ -1861,7 +1861,7 @@ def get_optional_params(  # use the openai defaults
         "max_tokens":None,
         "presence_penalty":None,
         "frequency_penalty":None,
-        "logit_bias":{},
+        "logit_bias": None,
         "user":"",
         "model":None,
         "custom_llm_provider":"",
@@ -2312,6 +2312,40 @@ def get_optional_params(  # use the openai defaults
     else:  # assume passing in params for openai/azure openai
         supported_params = ["functions", "function_call", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "response_format", "seed", "tools", "tool_choice", "max_retries"]
         _check_valid_arg(supported_params=supported_params)
+        if functions is not None:
+            optional_params["functions"] = functions
+        if function_call is not None:
+            optional_params["function_call"] = function_call
+        if temperature is not None:
+            optional_params["temperature"] = temperature
+        if top_p is not None:
+            optional_params["top_p"] = top_p
+        if n is not None:
+            optional_params["n"] = n
+        if stream is not None:
+            optional_params["stream"] = stream
+        if stop is not None:
+            optional_params["stop"] = stop
+        if max_tokens is not None:
+            optional_params["max_tokens"] = max_tokens
+        if presence_penalty is not None:
+            optional_params["presence_penalty"] = presence_penalty
+        if frequency_penalty is not None:
+            optional_params["frequency_penalty"] = frequency_penalty
+        if logit_bias is not None:
+            optional_params["logit_bias"] = logit_bias
+        if user is not None:
+            optional_params["user"] = user
+        if response_format is not None:
+            optional_params["response_format"] = response_format
+        if seed is not None:
+            optional_params["seed"] = seed
+        if tools is not None:
+            optional_params["tools"] = tools
+        if tool_choice is not None:
+            optional_params["tool_choice"] = tool_choice
+        if max_retries is not None:
+            optional_params["max_retries"] = max_retries
         optional_params = non_default_params
     # if user passed in non-default kwargs for specific providers/models, pass them along 
     for k in passed_params.keys(): 
