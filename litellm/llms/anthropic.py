@@ -57,10 +57,6 @@ class AnthropicConfig():
 
 # makes headers for API call
 def validate_environment(api_key):
-    if api_key is None:
-        raise ValueError(
-            "Missing Anthropic API Key - A call is being made to anthropic but no key is set either in the environment variables or via params"
-        )
     headers = {
         "accept": "application/json",
         "anthropic-version": "2023-06-01",
@@ -77,11 +73,12 @@ def completion(
     encoding,
     api_key,
     logging_obj,
+    headers={},
     optional_params=None,
     litellm_params=None,
     logger_fn=None,
 ):
-    headers = validate_environment(api_key)
+    headers = { **validate_environment(api_key), **headers } 
     prompt = f"{AnthropicConstants.HUMAN_PROMPT.value}"
     for message in messages:
         if "role" in message:
