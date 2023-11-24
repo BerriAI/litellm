@@ -62,10 +62,10 @@ def completion(
     encoding,
     api_key,
     logging_obj,
-    headers={},
     optional_params=None,
     litellm_params=None,
     logger_fn=None,
+    headers={},
 ):
     prompt = f"{AnthropicConstants.HUMAN_PROMPT.value}"
     for message in messages:
