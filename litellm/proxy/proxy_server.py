@@ -2,7 +2,7 @@ import sys, os, platform, time, copy, re, asyncio
 import threading, ast
 import shutil, random, traceback, requests
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, List
 import secrets, subprocess
 messages: list = []
 sys.path.insert(
@@ -155,7 +155,7 @@ async def user_api_key_auth(request: Request):
         if api_key == master_key: 
             return
         
-        if route == "/key/generate" and api_key != master_key: 
+        if (route == "/key/generate" or route == "/key/delete") and api_key != master_key: 
             raise Exception(f"If master key is set, only master key can be used to generate new keys")
 
         if prisma_client: 
@@ -351,6 +351,19 @@ async def generate_key_helper_fn(duration_str: str, models: list, aliases: dict,
         traceback.print_exc()
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
     return {"token": new_verification_token.token, "expires": new_verification_token.expires}
+
+async def delete_verification_token(tokens: List[str]):
+    global prisma_client
+    try: 
+        # Assuming 'db' is your Prisma Client instance
+        deleted_tokens = await prisma_client.litellm_verificationtoken.delete_many(
+            where={"token": {"in": tokens}}
+        )
+    except Exception as e: 
+        traceback.print_exc()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    return deleted_tokens
+
 
 async def generate_key_cli_task(duration_str):
     task = asyncio.create_task(generate_key_helper_fn(duration_str=duration_str))
@@ -650,6 +663,28 @@ async def generate_key_fn(request: Request):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"error": "models param must be a list"},
+        )
+
+@router.post("/key/delete", dependencies=[Depends(user_api_key_auth)])
+async def generate_key_fn(request: Request): 
+    try: 
+        data = await request.json()
+
+        keys = data.get("keys", [])
+
+        if not isinstance(keys, list):
+            if isinstance(keys, str): 
+                keys = [keys]
+            else: 
+                raise Exception(f"keys must be an instance of either a string or a list")
+        
+        deleted_keys = await delete_verification_token(tokens=keys)
+        assert len(keys) == deleted_keys
+        return {"deleted_keys": keys}
+    except Exception as e: 
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": str(e)},
         )
 
 @router.get("/test")
