@@ -162,8 +162,8 @@ async def user_api_key_auth(request: Request, api_key: str = fastapi.Security(ap
                 "api_key": master_key
             }
         
-        if (route == "/key/generate" or route == "/key/delete") and not is_master_key_valid:
-            raise Exception(f"If master key is set, only master key can be used to generate new keys")
+        if (route == "/key/generate" or route == "/key/delete" or route == "/key/info") and not is_master_key_valid:
+            raise Exception(f"If master key is set, only master key can be used to generate, delete or get info for new keys")
 
         if prisma_client: 
             ## check for cache hit (In-Memory Cache)
@@ -785,6 +785,24 @@ async def delete_key_fn(request: Request):
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"error": str(e)},
         )
+
+@router.get("/key/info", dependencies=[Depends(user_api_key_auth)])
+async def info_key_fn(key: str = fastapi.Query(..., description="Key in the request parameters")): 
+    global prisma_client
+    try: 
+        key_info = await prisma_client.litellm_verificationtoken.find_unique(
+            where={
+                "token": key
+            }
+        )
+
+        return {"key": key, "info": key_info}
+    except Exception as e: 
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": str(e)},
+        )
+
 
 @router.get("/test")
 async def test_endpoint(request: Request): 
