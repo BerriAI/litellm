@@ -23,6 +23,17 @@ model_list = [
 		"tpm": 240000,
 		"rpm": 1800
 	}, 
+    { # list of model deployments 
+		"model_name": "azure/gpt-3.5-turbo-context-fallback", # openai model name 
+		"litellm_params": { # params for litellm completion/embedding call 
+			"model": "azure/chatgpt-v-2", 
+			"api_key": "bad-key",
+			"api_version": os.getenv("AZURE_API_VERSION"),
+			"api_base": os.getenv("AZURE_API_BASE")
+		},
+		"tpm": 240000,
+		"rpm": 1800
+	}, 
 	{
 		"model_name": "azure/gpt-3.5-turbo", # openai model name 
 		"litellm_params": { # params for litellm completion/embedding call 
@@ -42,21 +53,35 @@ model_list = [
 		},
 		"tpm": 1000000,
 		"rpm": 9000
+	},
+    {
+		"model_name": "gpt-3.5-turbo-16k", # openai model name 
+		"litellm_params": { # params for litellm completion/embedding call 
+			"model": "gpt-3.5-turbo-16k", 
+			"api_key": os.getenv("OPENAI_API_KEY"),
+		},
+		"tpm": 1000000,
+		"rpm": 9000
 	}
 ]
 
 
 
-router = Router(model_list=model_list, fallbacks=[{"azure/gpt-3.5-turbo": ["gpt-3.5-turbo"]}])
+router = Router(model_list=model_list, 
+                fallbacks=[{"azure/gpt-3.5-turbo": ["gpt-3.5-turbo"]}], 
+                context_window_fallbacks=[{"azure/gpt-3.5-turbo-context-fallback": ["gpt-3.5-turbo-16k"]}, {"gpt-3.5-turbo": ["gpt-3.5-turbo-16k"]}],
+                set_verbose=True)
 
 kwargs = {"model": "azure/gpt-3.5-turbo", "messages": [{"role": "user", "content":"Hey, how's it going?"}]}
 
 def test_sync_fallbacks():        
     try:
+        litellm.set_verbose = True
         response = router.completion(**kwargs)
         print(f"response: {response}")
     except Exception as e:
         print(e)
+test_sync_fallbacks() 
 
 def test_async_fallbacks(): 
     litellm.set_verbose = False
@@ -75,3 +100,15 @@ def test_async_fallbacks():
     asyncio.run(test_get_response())
 
 # test_async_fallbacks()
+
+def test_sync_context_window_fallbacks(): 
+    try:
+        sample_text = "Say error 50 times" * 10000
+        kwargs["model"] = "azure/gpt-3.5-turbo-context-fallback"
+        kwargs["messages"] = [{"role": "user", "content": sample_text}]
+        response = router.completion(**kwargs)
+        print(f"response: {response}")
+    except Exception as e:
+        print(e)
+
+# test_sync_context_window_fallbacks()
