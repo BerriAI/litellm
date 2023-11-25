@@ -354,11 +354,18 @@ class Embedding(OpenAIObject):
         setattr(self, key, value)
 
 class EmbeddingResponse(OpenAIObject):
+    model: Optional[str] = None
+    """The model used for embedding."""
+
     data: Optional[Embedding] = None
     """The actual embedding value"""
 
+    object: str
+    """The object type, which is always "embedding" """
+
     usage: Optional[Usage] = None
-    """Usage statistics for the completion request."""
+    """Usage statistics for the embedding request."""
+
     def __init__(self, model=None, usage=None, stream=False, response_ms=None, data=None):
         object = "list"
         if response_ms:
@@ -3317,8 +3324,8 @@ def convert_to_model_response_object(response_object: Optional[dict]=None, model
                     model_response_object.object = response_object["object"]
 
                 data = []
-                for idx, embedding in enumerate(response_object["data"]): 
-                    embedding_obj = Embedding(
+                for idx, embedding in enumerate(response_object["data"]): # type: ignore
+                    embedding_obj = Embedding( # type: ignore
                         embedding=embedding.get("embedding", None),
                         index = embedding.get("index", idx),
                         object=embedding.get("object", "embedding")
