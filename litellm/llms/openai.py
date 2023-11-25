@@ -199,7 +199,7 @@ class OpenAIChatCompletion(BaseLLM):
                     api_key=api_key,
                     additional_args={"headers": headers, "api_base": api_base, "acompletion": acompletion, "complete_input_dict": data},
                 )
-                
+
                 try: 
                     if acompletion is True: 
                         if optional_params.get("stream", False):
