@@ -866,6 +866,10 @@ model_list:
       api_base: http://0.0.0.0:8001/
 ```
 
+Run the proxy using this config
+```shell
+$ litellm --config /path/to/config.yaml
+```
 
 ### Config for setting Model Aliases
 
