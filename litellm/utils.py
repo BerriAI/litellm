@@ -3330,10 +3330,9 @@ def convert_to_model_response_object(response_object: Optional[dict]=None, model
                         index = embedding.get("index", idx),
                         object=embedding.get("object", "embedding")
                     )
-                    if isinstance(embedding_obj, EmbeddingResponse):
-                        embedding_data.append(embedding_obj)
-                if len(embedding_data) > 0:
-                    model_response_object.data = embedding_data
+                    embedding_data.append(embedding_obj)
+                
+                model_response_object.data = embedding_data
 
                 if "usage" in response_object and response_object["usage"] is not None:
                     model_response_object.usage.completion_tokens = response_object["usage"].get("completion_tokens", 0) # type: ignore
