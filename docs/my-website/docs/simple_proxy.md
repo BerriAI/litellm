@@ -240,68 +240,6 @@ $ litellm --model command-nightly
 LiteLLM allows you to set `openai.api_base` to the proxy server and use all LiteLLM supported LLMs in any OpenAI supported project
 
 <Tabs>
-<TabItem value="lm-harness" label="LM-Harness Evals">
-This tutorial assumes you're using the `big-refactor` branch of LM Harness https://github.com/EleutherAI/lm-evaluation-harness/tree/big-refactor
-
-NOTE: LM Harness has not updated to using `openai 1.0.0+`, in order to deal with this we will run lm harness in a venv
-
-**Step 1: Start the local proxy**
-see supported models [here](https://docs.litellm.ai/docs/simple_proxy)
-```shell
-$ litellm --model huggingface/bigcode/starcoder
-```
-
-Using a custom api base
-
-```shell
-$ export HUGGINGFACE_API_KEY=my-api-key #[OPTIONAL]
-$ litellm --model huggingface/tinyllama --api_base https://k58ory32yinf1ly0.us-east-1.aws.endpoints.huggingface.cloud
-```
-OpenAI Compatible Endpoint at http://0.0.0.0:8000
-
-**Step 2: Create a Virtual Env for LM Harness + Use OpenAI 0.28.1**
-We will now run lm harness with a new virtual env with openai==0.28.1
-
-```shell
-python3 -m venv lmharness 
-source lmharness/bin/activate
-```
-
-Pip install openai==0.28.01 in the venv
-```shell
-pip install openai==0.28.01
-```
-
-**Step 3: Set OpenAI API Base & Key**
-```shell
-$ export OPENAI_API_BASE=http://0.0.0.0:8000
-```
-
-LM Harness requires you to set an OpenAI API key `OPENAI_API_SECRET_KEY` for running benchmarks
-```shell
-export OPENAI_API_SECRET_KEY=anything
-```
-
-**Step 4: Run LM-Eval-Harness**
-```shell
-cd lm-evaluation-harness
-```
-
-pip install lm harness dependencies in venv
-```
-python3 -m pip install -e .
-```
-
-```shell
-python3 -m lm_eval \
-  --model openai-completions \
-  --model_args engine=davinci \
-  --task crows_pairs_english_age
-
-```
-
-
-</TabItem>
 
 <TabItem value="flask evals" label="FLASK Evals">
 FLASK - Fine-grained Language Model Evaluation 
@@ -823,27 +761,6 @@ model_list:
 ```shell
 $ litellm --config /path/to/config.yaml
 ```
-### Model Alias 
-
-Set a model alias for your deployments. 
-
-In the `config.yaml` the model_name parameter is the user-facing name to use for your deployment. 
-
-In the config below requests with `model=gpt-4` will route to `ollama/llama2`
-
-```yaml
-model_list:
-  - model_name: text-davinci-003
-    litellm_params:
-        model: ollama/zephyr
-  - model_name: gpt-4
-    litellm_params:
-        model: ollama/llama2
-  - model_name: gpt-3.5-turbo
-    litellm_params:
-        model: ollama/llama2
-```
-
 ### Load Balancing - Multiple Instances of 1 model
 
 If you have multiple instances of the same model,
@@ -930,33 +847,26 @@ litellm_settings:
   allowed_fails: 3 # cooldown model if it fails > 1 call in a minute. 
 ```
 
-### Set Custom Prompt Templates
+### Model Alias 
 
-LiteLLM by default checks if a model has a [prompt template and applies it](./completion/prompt_formatting.md) (e.g. if a huggingface model has a saved chat template in it's tokenizer_config.json). However, you can also set a custom prompt template on your proxy in the `config.yaml`: 
+Set a model alias for your deployments. 
 
-**Step 1**: Save your prompt template in a `config.yaml`
+In the `config.yaml` the model_name parameter is the user-facing name to use for your deployment. 
+
+In the config below requests with `model=gpt-4` will route to `ollama/llama2`
+
 ```yaml
-# Model-specific parameters
 model_list:
-  - model_name: mistral-7b # model alias
-    litellm_params: # actual params for litellm.completion()
-      model: "huggingface/mistralai/Mistral-7B-Instruct-v0.1" 
-      api_base: "<your-api-base>"
-      api_key: "<your-api-key>" # [OPTIONAL] for hf inference endpoints
-      initial_prompt_value: "\n"
-      roles: {"system":{"pre_message":"<|im_start|>system\n", "post_message":"<|im_end|>"}, "assistant":{"pre_message":"<|im_start|>assistant\n","post_message":"<|im_end|>"}, "user":{"pre_message":"<|im_start|>user\n","post_message":"<|im_end|>"}}
-      final_prompt_value: "\n"
-      bos_token: "<s>"
-      eos_token: "</s>"
-      max_tokens: 4096
+  - model_name: text-davinci-003
+    litellm_params:
+        model: ollama/zephyr
+  - model_name: gpt-4
+    litellm_params:
+        model: ollama/llama2
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+        model: ollama/llama2
 ```
-
-**Step 2**: Start server with config
-
-```shell
-$ litellm --config /path/to/config.yaml
-```
-
 ### Caching Responses 
 Caching can be enabled by adding the `cache` key in the `config.yaml`
 #### Step 1: Add `cache` to the config.yaml
@@ -1030,6 +940,32 @@ Caching can be switched on/off per `/chat/completions` request
    }'
   ```
 
+### Set Custom Prompt Templates
+
+LiteLLM by default checks if a model has a [prompt template and applies it](./completion/prompt_formatting.md) (e.g. if a huggingface model has a saved chat template in it's tokenizer_config.json). However, you can also set a custom prompt template on your proxy in the `config.yaml`: 
+
+**Step 1**: Save your prompt template in a `config.yaml`
+```yaml
+# Model-specific parameters
+model_list:
+  - model_name: mistral-7b # model alias
+    litellm_params: # actual params for litellm.completion()
+      model: "huggingface/mistralai/Mistral-7B-Instruct-v0.1" 
+      api_base: "<your-api-base>"
+      api_key: "<your-api-key>" # [OPTIONAL] for hf inference endpoints
+      initial_prompt_value: "\n"
+      roles: {"system":{"pre_message":"<|im_start|>system\n", "post_message":"<|im_end|>"}, "assistant":{"pre_message":"<|im_start|>assistant\n","post_message":"<|im_end|>"}, "user":{"pre_message":"<|im_start|>user\n","post_message":"<|im_end|>"}}
+      final_prompt_value: "\n"
+      bos_token: "<s>"
+      eos_token: "</s>"
+      max_tokens: 4096
+```
+
+**Step 2**: Start server with config
+
+```shell
+$ litellm --config /path/to/config.yaml
+```
 
 ## Debugging Proxy 
 Run the proxy with `--debug` to easily view debug logs 
