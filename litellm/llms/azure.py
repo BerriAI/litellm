@@ -196,13 +196,11 @@ class AzureChatCompletion(BaseLLM):
             response = await azure_client.chat.completions.create(**data) 
             response.model = "azure/" + str(response.model)
             return convert_to_model_response_object(response_object=json.loads(response.model_dump_json()), model_response_object=model_response)
+       except AzureOpenAIError as e: 
+            exception_mapping_worked = True
+            raise e
        except Exception as e: 
-           if isinstance(e,httpx.TimeoutException):
-                raise AzureOpenAIError(status_code=500, message="Request Timeout Error")
-           elif response is not None and hasattr(response, "text"):
-                raise AzureOpenAIError(status_code=500, message=f"{str(e)}\n\nOriginal Response: {response.text}")
-           else: 
-                raise AzureOpenAIError(status_code=500, message=f"{str(e)}")
+            raise e
 
     def streaming(self,
                   logging_obj,
