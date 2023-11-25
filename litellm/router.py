@@ -371,7 +371,7 @@ class Router:
             return response
         except Exception as e: 
             original_exception = e
-            self.print_verbose(f"An exception occurs{original_exception}")
+            self.print_verbose(f"An exception occurs {original_exception}")
             try: 
                 self.print_verbose(f"Trying to fallback b/w models. Initial model group: {model_group}")
                 if isinstance(e, litellm.ContextWindowExceededError): 
@@ -433,6 +433,7 @@ class Router:
             response = original_function(*args, **kwargs)
             return response
         except Exception as e: 
+            original_exception = e
             self.print_verbose(f"num retries in function with retries: {num_retries}")
             for current_attempt in range(num_retries):
                 self.print_verbose(f"retrying request. Current attempt - {current_attempt}; retries left: {num_retries}")
@@ -457,7 +458,7 @@ class Router:
                         pass
                     else: 
                         raise e
-            raise e
+            raise original_exception
 
     ### HELPER FUNCTIONS
     
@@ -514,6 +515,7 @@ class Router:
         # cooldown deployment 
         current_fails = self.failed_calls.get_cache(key=deployment) or 0
         updated_fails = current_fails + 1
+        self.print_verbose(f"updated_fails: {updated_fails}; self.allowed_fails: {self.allowed_fails}")
         if updated_fails > self.allowed_fails:                
             # get the current cooldown list for that minute
             cooldown_key = f"{current_minute}:cooldown_models" # group cooldown models by minute to reduce number of redis calls
