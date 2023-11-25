@@ -325,21 +325,8 @@ class AzureChatCompletion(BaseLLM):
                     original_response=response,
                 )
 
-            embedding_response = json.loads(response.model_dump_json()) 
-            output_data = []
-            for idx, embedding in enumerate(embedding_response["data"]):
-                output_data.append(
-                    {
-                        "object": embedding["object"],
-                        "index": embedding["index"],
-                        "embedding": embedding["embedding"]
-                    }
-                )
-            model_response["object"] = "list"
-            model_response["data"] = output_data
-            model_response["model"] = "azure/" + model
-            model_response["usage"] = embedding_response["usage"]
-            return model_response
+
+            return convert_to_model_response_object(response_object=json.loads(response.model_dump_json()), model_response_object=model_response, response_type="embedding")
         except AzureOpenAIError as e: 
             exception_mapping_worked = True
             raise e
