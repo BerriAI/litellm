@@ -90,7 +90,7 @@ def test_embedding_caching():
         print(f"embedding2: {embedding2}")
         pytest.fail("Error occurred: Embedding caching failed")
 
-# test_embedding_caching()
+test_embedding_caching()
 
 
 def test_embedding_caching_azure():
