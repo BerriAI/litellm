@@ -761,6 +761,23 @@ model_list:
 ```shell
 $ litellm --config /path/to/config.yaml
 ```
+
+### Load API Keys from Vault 
+
+If you have secrets saved in Azure Vault, etc. and don't want to expose them in the config.yaml, here's how to load model-specific keys from the environment. 
+
+```yaml 
+model_list:
+  - model_name: gpt-4-team1
+    litellm_params: # params for litellm.completion() - https://docs.litellm.ai/docs/completion/input#input---request-body
+      model: azure/chatgpt-v-2
+      api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
+      api_version: "2023-05-15"
+      api_key: os.environ/<MY-AZURE-DEPLOYMENT-KEY>
+```
+
+s/o to [@David Manouchehri](https://www.linkedin.com/in/davidmanouchehri/) for helping with this. 
+
 ### Load Balancing - Multiple Instances of 1 model
 
 If you have multiple instances of the same model,
