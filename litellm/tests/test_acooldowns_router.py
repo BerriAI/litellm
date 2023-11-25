@@ -50,7 +50,6 @@ def test_multiple_deployments_sync():
                 set_verbose=True,
                 num_retries=1) # type: ignore
 	try:
-		router.reset()
 		for _ in range(3): 
 			response = router.completion(**kwargs)
 			results.append(response)
@@ -60,7 +59,7 @@ def test_multiple_deployments_sync():
 		print(f"FAILED TEST!")
 		pytest.fail(f"An error occurred - {traceback.format_exc()}")
 
-# test_multiple_deployments_sync()
+test_multiple_deployments_sync()
 
 
 def test_multiple_deployments_parallel():

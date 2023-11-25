@@ -582,7 +582,7 @@ def test_completion_azure_key_completion_arg():
     except Exception as e:
         os.environ["AZURE_API_KEY"] = old_key
         pytest.fail(f"Error occurred: {e}")
-test_completion_azure_key_completion_arg()
+# test_completion_azure_key_completion_arg()
 
 def test_completion_azure():
     try:
@@ -960,6 +960,7 @@ def test_completion_bedrock_claude():
 
 def test_completion_bedrock_cohere():
     print("calling bedrock cohere")
+    litellm.set_verbose = True
     try:
         response = completion(
             model="bedrock/cohere.command-text-v14", 
@@ -976,7 +977,7 @@ def test_completion_bedrock_cohere():
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_completion_bedrock_cohere()
+test_completion_bedrock_cohere()
 
 
 def test_completion_bedrock_claude_completion_auth():
