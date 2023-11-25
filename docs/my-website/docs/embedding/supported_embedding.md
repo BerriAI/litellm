@@ -103,6 +103,20 @@ print(response)
 
 h/t to [Mikko](https://www.linkedin.com/in/mikkolehtimaki/) for this integration
 
+## OpenAI Compatible Embedding Models
+Use this for calling `/embedding` endpoints on OpenAI Compatible Servers, example https://github.com/xorbitsai/inference
+
+**Note add `openai/` prefix to model so litellm knows to route to OpenAI**
+
+### Usage
+```python
+from litellm import embedding
+response = embedding(
+  model = "openai/<your-llm-name>",     # add `openai/` prefix to model so litellm knows to route to OpenAI
+  api_base="http://0.0.0.0:8000/"       # set API Base of your Custom OpenAI Endpoint
+  input=["good morning from litellm"]
+)
+```
 
 ## Bedrock Embedding
 
