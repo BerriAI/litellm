@@ -198,7 +198,7 @@ def test_completion_azure_exception():
         pytest.fail(f"Error occurred: {e}")
 test_completion_azure_exception()
 
-async def test_completion_azure_exception():
+async def asynctest_completion_azure_exception():
     try:
         import openai
         import litellm
@@ -229,7 +229,7 @@ async def test_completion_azure_exception():
 
 import asyncio
 asyncio.run(
-    test_completion_azure_exception()
+    asynctest_completion_azure_exception()
 )
 
 
