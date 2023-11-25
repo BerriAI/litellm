@@ -232,6 +232,37 @@ asyncio.run(
     test_completion_azure_exception()
 )
 
+
+def test_completion_openai_exception():
+    # test if openai:gpt raises openai.AuthenticationError
+    try:
+        import openai
+        print("openai gpt-3.5 test\n\n")
+        litellm.set_verbose=False
+        ## Test azure call
+        old_azure_key = os.environ["OPENAI_API_KEY"]
+        os.environ["OPENAI_API_KEY"] = "good morning"
+        response = completion(
+            model="gpt-4",
+            messages=[
+                {
+                    "role": "user",
+                    "content": "hello"
+                }
+            ],
+        )
+        print(f"response: {response}")
+        print(response)
+    except openai.AuthenticationError as e:
+        os.environ["OPENAI_API_KEY"] = old_azure_key
+        print("good job got the correct error for openai when key not set")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+# test_completion_openai_exception()
+
+
+
+
 # test_invalid_request_error(model="command-nightly")
 # Test 3: Rate Limit Errors
 # def test_model_call(model):
