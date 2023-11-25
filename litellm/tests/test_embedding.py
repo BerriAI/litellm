@@ -16,8 +16,11 @@ litellm.set_verbose = False
 
 def test_openai_embedding():
     try:
+        litellm.set_verbose=True
         response = embedding(
-            model="text-embedding-ada-002", input=["good morning from litellm", "this is another item"]
+            model="text-embedding-ada-002", 
+            input=["good morning from litellm", "this is another item"], 
+            metadata =  {"anything": "good day"}
         )
         litellm_response = dict(response)
         litellm_response_keys = set(litellm_response.keys())
@@ -42,7 +45,7 @@ def test_openai_embedding():
         print(openai_response_keys)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_openai_embedding()
+# test_openai_embedding()
 
 def test_openai_azure_embedding_simple():
     try:
@@ -58,7 +61,7 @@ def test_openai_azure_embedding_simple():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_openai_azure_embedding_simple()
+# test_openai_azure_embedding_simple()
 
 
 def test_openai_azure_embedding_timeouts():
@@ -188,3 +191,13 @@ def test_aembedding():
     asyncio.run(embedding_call())
 
 # test_aembedding()
+
+# def test_custom_openai_embedding():
+#     litellm.set_verbose=True
+#     response = embedding(
+#             model="openai/custom_embedding", 
+#             input=["good morning from litellm"],
+#             api_base="http://0.0.0.0:8000/"
+#         )
+#     print(response)
+# test_custom_openai_embedding()
