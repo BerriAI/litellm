@@ -309,8 +309,8 @@ class OpenAIChatCompletion(BaseLLM):
                 timeout: float, 
                 api_key: Optional[str] = None,
                 api_base: Optional[str] = None,
+                model_response: litellm.utils.EmbeddingResponse = None,
                 logging_obj=None,
-                model_response=None,
                 optional_params=None,
                 ):
         super().embedding()
@@ -342,21 +342,10 @@ class OpenAIChatCompletion(BaseLLM):
                     additional_args={"complete_input_dict": data},
                     original_response=response,
                 )
-            
-            embedding_response = json.loads(response.model_dump_json())
-            output_data = []
-            for idx, embedding in enumerate(embedding_response["data"]):
-                output_data.append(
-                    {
-                        "object": embedding["object"],
-                        "index": embedding["index"],
-                        "embedding": embedding["embedding"]
-                    }
-                )
-            model_response["object"] = "list"
-            model_response["data"] = output_data
-            model_response["model"] = model
-            model_response["usage"] = embedding_response["usage"]
+            model_response.data = response.data
+            model_response.model = model
+            model_response.usage = response.usage
+            model_response.object = "list"
             return model_response
         except OpenAIError as e: 
             exception_mapping_worked = True
