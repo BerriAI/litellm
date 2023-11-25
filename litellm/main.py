@@ -1711,6 +1711,11 @@ def embedding(
     - exception_type: If an exception occurs during the API call.
     """
     azure = kwargs.get("azure", None)
+    optional_params = {}
+    for param in kwargs:
+        if param != "metadata":                     # filter out metadata from optional_params
+            optional_params[param] = kwargs[param]
+
     model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, api_key=api_key)
     try:
         response = None
@@ -1754,9 +1759,9 @@ def embedding(
                 logging_obj=logging,
                 timeout=timeout,
                 model_response=EmbeddingResponse(), 
-                optional_params=kwargs,
+                optional_params=optional_params,
             )
-        elif model in litellm.open_ai_embedding_models:
+        elif model in litellm.open_ai_embedding_models or custom_llm_provider == "openai":
             api_base = (
                 api_base
                 or litellm.api_base
@@ -1788,7 +1793,7 @@ def embedding(
                 logging_obj=logging,
                 timeout=timeout,
                 model_response=EmbeddingResponse(), 
-                optional_params=kwargs
+                optional_params=optional_params
             )
         elif model in litellm.cohere_embedding_models:
             cohere_key = (
@@ -1801,7 +1806,7 @@ def embedding(
             response = cohere.embedding(
                 model=model,
                 input=input,
-                optional_params=kwargs,
+                optional_params=optional_params,
                 encoding=encoding,
                 api_key=cohere_key,
                 logging_obj=logging,
