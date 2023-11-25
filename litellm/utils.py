@@ -3270,7 +3270,7 @@ def handle_failure(exception, traceback_exception, start_time, end_time, args, k
 
 def convert_to_model_response_object(response_object: Optional[dict]=None, model_response_object: Optional[Union[ModelResponse, EmbeddingResponse]]=None, response_type: Literal["completion", "embedding"] = "completion"):
         try: 
-            if response_type == "completion": 
+            if response_type == "completion" and (model_response_object is None or isinstance(model_response_object, ModelResponse)): 
                 if response_object is None or model_response_object is None:
                     raise Exception("Error in response object format")
                 choice_list=[]
@@ -3303,7 +3303,7 @@ def convert_to_model_response_object(response_object: Optional[dict]=None, model
                 if "model" in response_object: 
                     model_response_object.model = response_object["model"]
                 return model_response_object
-            elif response_type == "embedding": 
+            elif response_type == "embedding" and (model_response_object is None or isinstance(model_response_object, EmbeddingResponse)): 
                 if response_object is None:
                     raise Exception("Error in response object format")
                 
