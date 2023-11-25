@@ -766,6 +766,10 @@ $ litellm --config /path/to/config.yaml
 
 If you have secrets saved in Azure Vault, etc. and don't want to expose them in the config.yaml, here's how to load model-specific keys from the environment. 
 
+```python
+os.environ["AZURE_NORTH_AMERICA_API_KEY"] = "your-azure-api-key"
+```
+
 ```yaml 
 model_list:
   - model_name: gpt-4-team1
@@ -773,8 +777,10 @@ model_list:
       model: azure/chatgpt-v-2
       api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
       api_version: "2023-05-15"
-      api_key: os.environ/<MY-AZURE-DEPLOYMENT-KEY>
+      api_key: os.environ/AZURE_NORTH_AMERICA_API_KEY
 ```
+
+[**See Code**](https://github.com/BerriAI/litellm/blob/c12d6c3fe80e1b5e704d9846b246c059defadce7/litellm/utils.py#L2366)
 
 s/o to [@David Manouchehri](https://www.linkedin.com/in/davidmanouchehri/) for helping with this. 
 
