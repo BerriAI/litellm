@@ -51,7 +51,8 @@ def test_openai_azure_embedding_simple():
             input=["good morning from litellm"],
         )
         print(response)
-        response_keys = dict(response).keys()
+        response_keys = set(dict(response).keys())
+        response_keys.discard('_response_ms')
         assert set(["usage", "model", "object", "data"]) == set(response_keys) #assert litellm response has expected keys from OpenAI embedding response
 
     except Exception as e:
