@@ -1058,7 +1058,7 @@ class Logging:
                     )
                     if capture_exception:  # log this error to sentry for debugging
                         capture_exception(e)
-        except:
+        except Exception as e:
             print_verbose(
                 f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while failure logging {traceback.format_exc()}"
             )
@@ -1970,7 +1970,7 @@ def get_optional_params(  # use the openai defaults
             optional_params["max_tokens"] = max_tokens
         if n is not None:
             optional_params["num_generations"] = n
-        if logit_bias != {}:
+        if logit_bias is not None:
             optional_params["logit_bias"] = logit_bias
         if top_p is not None:
             optional_params["p"] = top_p
@@ -2219,7 +2219,7 @@ def get_optional_params(  # use the openai defaults
                 optional_params["max_tokens"] = max_tokens
             if n is not None:
                 optional_params["num_generations"] = n
-            if logit_bias != {}:
+            if logit_bias is not None:
                 optional_params["logit_bias"] = logit_bias
             if top_p is not None:
                 optional_params["p"] = top_p
