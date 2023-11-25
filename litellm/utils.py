@@ -4642,6 +4642,7 @@ class CustomStreamWrapper:
         self.sent_last_chunk = False
         self.special_tokens = ["<|assistant|>", "<|system|>", "<|user|>", "<s>", "</s>"]
         self.holding_chunk = "" 
+        self.complete_response = ""
         if self.logging_obj:
                 # Log the type of the received item
                 self.logging_obj.post_call(str(type(completion_stream)))
@@ -4652,6 +4653,23 @@ class CustomStreamWrapper:
     def __aiter__(self):
         return self
 
+    def process_chunk(self, chunk: str): 
+        """
+        NLP Cloud streaming returns the entire response, for each chunk. Process this, to only return the delta.
+        """
+        try: 
+            chunk = chunk.strip()
+            self.complete_response = self.complete_response.strip()
+
+            if chunk.startswith(self.complete_response): 
+                # Remove last_sent_chunk only if it appears at the start of the new chunk
+                chunk = chunk[len(self.complete_response):]
+
+            self.complete_response += chunk
+            return chunk 
+        except Exception as e: 
+            raise e
+    
     def logging(self, text):
         if self.logging_obj: 
             self.logging_obj.post_call(text)
@@ -4774,14 +4792,22 @@ class CustomStreamWrapper:
             raise ValueError(f"Unable to parse response. Original response: {chunk}")
     
     def handle_nlp_cloud_chunk(self, chunk):
-        chunk = chunk.decode("utf-8")
-        data_json = json.loads(chunk)
+        text = "" 
+        is_finished = False
+        finish_reason = ""
         try:
-            text = data_json["generated_text"]
-            is_finished = True
-            finish_reason = "stop"
+            if "dolphin" in self.model:
+                chunk = self.process_chunk(chunk=chunk)
+            else: 
+                data_json = json.loads(chunk)
+                chunk = data_json["generated_text"]
+            text = chunk
+            if "[DONE]" in text:
+                text = text.replace("[DONE]", "")
+                is_finished = True
+                finish_reason = "stop"
             return {"text": text, "is_finished": is_finished, "finish_reason": finish_reason}
-        except:
+        except Exception as e:
             raise ValueError(f"Unable to parse response. Original response: {chunk}")
     
     def handle_aleph_alpha_chunk(self, chunk):
@@ -5025,9 +5051,8 @@ class CustomStreamWrapper:
                 completion_obj["content"] = response_obj["text"]
                 if response_obj["is_finished"]: 
                     model_response.choices[0].finish_reason = response_obj["finish_reason"]
-            elif self.model in litellm.nlp_cloud_models or self.custom_llm_provider == "nlp_cloud":
+            elif self.custom_llm_provider == "nlp_cloud":
                 try: 
-
                     response_obj = self.handle_nlp_cloud_chunk(chunk)
                     completion_obj["content"] = response_obj["text"]
                     if response_obj["is_finished"]: 
@@ -5119,9 +5144,9 @@ class CustomStreamWrapper:
             model_response.model = self.model
             print_verbose(f"model_response: {model_response}; completion_obj: {completion_obj}")
             print_verbose(f"model_response finish reason 3: {model_response.choices[0].finish_reason}")
-
             if len(completion_obj["content"]) > 0: # cannot set content of an OpenAI Object to be an empty string
                 hold, model_response_str = self.check_special_tokens(chunk=completion_obj["content"], finish_reason=model_response.choices[0].finish_reason)
+                print_verbose(f"hold - {hold}, model_response_str - {model_response_str}")
                 if hold is False: 
                     completion_obj["content"] = model_response_str  
                     if self.sent_first_chunk == False:
@@ -5130,6 +5155,7 @@ class CustomStreamWrapper:
                     model_response.choices[0].delta = Delta(**completion_obj)
                     # LOGGING
                     threading.Thread(target=self.logging_obj.success_handler, args=(model_response,)).start()
+                    print_verbose(f"model_response: {model_response}")
                     return model_response
                 else: 
                     return 
@@ -5174,7 +5200,7 @@ class CustomStreamWrapper:
                     chunk = next(self.completion_stream)
                 
                 print_verbose(f"chunk in __next__: {chunk}")
-                if chunk is not None:
+                if chunk is not None and chunk != b'':
                     response = self.chunk_creator(chunk=chunk)
                     print_verbose(f"response in __next__: {response}")
                     if response is not None:
