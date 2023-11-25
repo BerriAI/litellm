@@ -343,11 +343,8 @@ class OpenAIChatCompletion(BaseLLM):
                     additional_args={"complete_input_dict": data},
                     original_response=response,
                 )
-            model_response.data = response.data
-            model_response.model = model
-            model_response.usage = response.usage
-            model_response.object = "list"
-            return model_response
+            
+            return convert_to_model_response_object(response_object=json.loads(response.model_dump_json()), model_response_object=model_response, response_type="embedding")
         except OpenAIError as e: 
             exception_mapping_worked = True
             raise e
