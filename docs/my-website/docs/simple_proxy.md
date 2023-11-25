@@ -16,6 +16,10 @@ LiteLLM Server manages:
 View all the supported args for the Proxy CLI [here](https://docs.litellm.ai/docs/simple_proxy#proxy-cli-arguments)
 
 ```shell
+$ pip install litellm
+```
+
+```shell
 $ litellm --model huggingface/bigcode/starcoder
 
 #INFO: Proxy running on http://0.0.0.0:8000
