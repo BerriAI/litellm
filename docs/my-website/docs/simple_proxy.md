@@ -676,7 +676,7 @@ model_list:
 	- model_name: my-paid-tier
     litellm_params:
         model: gpt-4
-				api_key: sk-...
+        api_key: my-api-key
 ```
 
 **Step 2: Generate a user key - enabling them access to specific models, custom model aliases, etc.**
