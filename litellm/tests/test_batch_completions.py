@@ -9,13 +9,14 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 from openai import APITimeoutError as Timeout
 import litellm
-litellm.num_retries = 3
+litellm.num_retries = 0
 from litellm import batch_completion, batch_completion_models, completion, batch_completion_models_all_responses
 # litellm.set_verbose=True
 
 def test_batch_completions():
     messages = [[{"role": "user", "content": "write a short poem"}] for _ in range(3)]
     model = "j2-mid"
+    litellm.set_verbose = True
     try:
         result = batch_completion(
             model=model, 

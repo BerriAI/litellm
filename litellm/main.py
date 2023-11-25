@@ -341,7 +341,6 @@ def completion(
     litellm_params = ["metadata", "acompletion", "caching", "return_async", "mock_response", "api_key", "api_version", "api_base", "force_timeout", "logger_fn", "verbose", "custom_llm_provider", "litellm_logging_obj", "litellm_call_id", "use_client", "id", "fallbacks", "azure", "headers", "model_list", "num_retries", "context_window_fallback_dict", "roles", "final_prompt_value", "bos_token", "eos_token", "request_timeout", "complete_response", "self"]
     default_params = openai_params + litellm_params
     non_default_params = {k: v for k,v in kwargs.items() if k not in default_params} # model-specific params - pass them straight to the model/provider
-    
     if mock_response:
         return mock_completion(model, messages, stream=stream, mock_response=mock_response)
     if timeout is None:
@@ -1447,7 +1446,7 @@ def batch_completion(
     max_tokens: Optional[float] = None,
     presence_penalty: Optional[float] = None,
     frequency_penalty: Optional[float]=None,
-    logit_bias: dict = {},
+    logit_bias: Optional[dict] = None,
     user: str = "",
     deployment_id = None,
     request_timeout: Optional[int] = None,

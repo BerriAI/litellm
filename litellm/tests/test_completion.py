@@ -1353,6 +1353,7 @@ def test_completion_ai21():
         pytest.fail(f"Error occurred: {e}")
 
 # test_completion_ai21()
+# test_completion_ai21()
 ## test deep infra 
 def test_completion_deep_infra():
     litellm.set_verbose = False
