@@ -93,7 +93,7 @@ def test_multiple_deployments_parallel():
                     del futures[future]  # Remove the done future with exception
 
             print(f"Remaining futures: {len(futures)}")
-
+    router.reset()
     end_time = time.time()
     print(results)
     print(f"ELAPSED TIME: {end_time - start_time}")

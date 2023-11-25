@@ -281,7 +281,7 @@ class Router:
             original_exception = e
             try: 
                 self.print_verbose(f"Trying to fallback b/w models")
-                if isinstance(e, litellm.ContextWindowExceededError): 
+                if isinstance(e, litellm.ContextWindowExceededError) and self.context_window_fallbacks is not None: 
                     fallback_model_group = None
                     for item in self.context_window_fallbacks: # [{"gpt-3.5-turbo": ["gpt-4"]}]
                         if list(item.keys())[0] == model_group:
@@ -302,6 +302,8 @@ class Router:
                         except Exception as e: 
                             pass
                 else: 
+                    if self.fallbacks is None: 
+                        raise original_exception
                     self.print_verbose(f"inside model fallbacks: {self.fallbacks}")
                     for item in self.fallbacks:
                         if list(item.keys())[0] == model_group:
@@ -374,9 +376,10 @@ class Router:
             self.print_verbose(f"An exception occurs {original_exception}")
             try: 
                 self.print_verbose(f"Trying to fallback b/w models. Initial model group: {model_group}")
-                if isinstance(e, litellm.ContextWindowExceededError): 
+                if isinstance(e, litellm.ContextWindowExceededError) and self.context_window_fallbacks is not None: 
                     self.print_verbose(f"inside context window fallbacks: {self.context_window_fallbacks}")
                     fallback_model_group = None
+
                     for item in self.context_window_fallbacks: # [{"gpt-3.5-turbo": ["gpt-4"]}]
                         if list(item.keys())[0] == model_group:
                             fallback_model_group = item[model_group]
@@ -396,6 +399,9 @@ class Router:
                         except Exception as e: 
                             pass
                 else: 
+                    if self.fallbacks is None: 
+                        raise original_exception
+
                     self.print_verbose(f"inside model fallbacks: {self.fallbacks}")
                     fallback_model_group = None
                     for item in self.fallbacks:

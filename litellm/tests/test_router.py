@@ -116,7 +116,7 @@ def test_reading_key_from_model_list():
 	except Exception as e:
 		os.environ["AZURE_API_KEY"] = old_api_key
 		print(f"FAILED TEST")
-		pytest.fail("Got unexpected exception on router!", e)
+		pytest.fail(f"Got unexpected exception on router! - {e}")
 # test_reading_key_from_model_list()
 
 
