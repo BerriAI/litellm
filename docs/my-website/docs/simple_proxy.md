@@ -541,7 +541,7 @@ environment_variables:
   REDIS_PASSWORD: 
 ```
 
-### Config for Multiple Models - GPT-4, Claude-2, etc
+### Config for Multiple Models - GPT-4, Claude-2
 
 Here's how you can use multiple llms with one proxy `config.yaml`. 
 
@@ -847,7 +847,27 @@ litellm_settings:
   allowed_fails: 3 # cooldown model if it fails > 1 call in a minute. 
 ```
 
-### Model Alias 
+
+### Config for Embedding Models - xorbitsai/inference
+
+Here's how you can use multiple llms with one proxy `config.yaml`. 
+Here is how [LiteLLM calls OpenAI Compatible Embedding models](https://docs.litellm.ai/docs/embedding/supported_embedding#openai-compatible-embedding-models)
+
+#### Config
+```yaml
+model_list:
+  - model_name: custom_embedding_model
+    litellm_params:
+      model: openai/custom_embedding  # the `openai/` prefix tells litellm it's openai compatible
+      api_base: http://0.0.0.0:8000/
+  - model_name: custom_embedding_model
+    litellm_params:
+      model: openai/custom_embedding  # the `openai/` prefix tells litellm it's openai compatible
+      api_base: http://0.0.0.0:8001/
+```
+
+
+### Config for setting Model Aliases
 
 Set a model alias for your deployments. 
 
