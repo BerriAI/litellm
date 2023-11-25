@@ -331,8 +331,9 @@ class OpenAIChatCompletion(BaseLLM):
             logging_obj.pre_call(
                     input=input,
                     api_key=api_key,
-                    additional_args={"complete_input_dict": data},
+                    additional_args={"complete_input_dict": data, "api_base": api_base},
                 )
+            
             ## COMPLETION CALL
             response = openai_client.embeddings.create(**data) # type: ignore
             ## LOGGING
