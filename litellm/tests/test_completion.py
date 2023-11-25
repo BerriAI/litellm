@@ -410,7 +410,8 @@ def test_completion_openai():
             model="gpt-3.5-turbo", 
             messages=messages, 
             max_tokens=10, 
-            request_timeout=0.1
+            request_timeout=1,
+            metadata = {"hi": "bye"}
         )
         print("This is the response object\n", response)
 
