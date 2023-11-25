@@ -318,7 +318,36 @@ def test_completion_deep_infra_stream():
         print(f"completion_response: {complete_response}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_deep_infra_stream()
+# test_completion_deep_infra_stream()
+
+def test_completion_nlp_cloud_stream():
+    try:
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {
+                "role": "user",
+                "content": "how does a court case get to the Supreme Court?",
+            },
+        ]
+        print("testing nlp cloud streaming")
+        response = completion(
+            model="nlp_cloud/finetuned-llama-2-70b", messages=messages, stream=True, max_tokens=20
+        )
+
+        complete_response = ""
+        # Add any assertions here to check the response
+        for idx, chunk in enumerate(response):
+            chunk, finished = streaming_format_tests(idx, chunk)
+            complete_response += chunk
+            if finished:
+                break
+        if complete_response.strip() == "": 
+            raise Exception("Empty response received")
+        print(f"completion_response: {complete_response}")
+    except Exception as e:
+        print(f"Error occurred: {e}")
+        pytest.fail(f"Error occurred: {e}")
+test_completion_nlp_cloud_stream()
 
 def test_completion_claude_stream_bad_key():
     try:
@@ -652,7 +681,7 @@ def hf_test_completion_tgi_stream():
         print(f"completion_response: {complete_response}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-hf_test_completion_tgi_stream()
+# hf_test_completion_tgi_stream()
 
 # def test_completion_aleph_alpha():
 #     try:
