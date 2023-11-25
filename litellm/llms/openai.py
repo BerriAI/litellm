@@ -309,7 +309,7 @@ class OpenAIChatCompletion(BaseLLM):
                 timeout: float, 
                 api_key: Optional[str] = None,
                 api_base: Optional[str] = None,
-                model_response: litellm.utils.EmbeddingResponse = None,
+                model_response: Optional[litellm.utils.EmbeddingResponse] = None,
                 logging_obj=None,
                 optional_params=None,
                 ):
