@@ -21,11 +21,11 @@ def test_openai_embedding():
         )
         litellm_response = dict(response)
         litellm_response_keys = set(litellm_response.keys())
-        litellm_response_keys.discard('_responses_ms')
-        
+        litellm_response_keys.discard('_response_ms')
+
         print(litellm_response_keys)
         print("LiteLLM Response\n")
-        print(litellm_response)
+        # print(litellm_response)
         
         # same request with OpenAI 1.0+ 
         import openai
@@ -36,6 +36,7 @@ def test_openai_embedding():
 
         response = dict(response)
         openai_response_keys = set(response.keys())
+        print(openai_response_keys)
         assert litellm_response_keys == openai_response_keys # ENSURE the Keys in litellm response is exactly what the openai package returns
         assert len(litellm_response["data"]) == 2 # expect two embedding responses from litellm_response since input had two
         print(openai_response_keys)
@@ -185,4 +186,4 @@ def test_aembedding():
             pass
     asyncio.run(embedding_call())
 
-test_aembedding()
+# test_aembedding()
