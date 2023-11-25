@@ -52,15 +52,15 @@ def make_openai_completion(question):
         return response
     except Exception as e:
         # Log exceptions for failed calls
-        with open("error_log.txt", "a") as error_log_file:
-            error_log_file.write(
-                f"\nException: {str(e)}\n\n"
-            )
+        # with open("error_log.txt", "a") as error_log_file:
+        #     error_log_file.write(
+        #         f"\nException: {str(e)}\n\n"
+        #     )
         return None
 
 start_time = time.time()
 # Number of concurrent calls (you can adjust this)
-concurrent_calls = 50
+concurrent_calls = 500
 
 # List to store the futures of concurrent calls
 futures = []
