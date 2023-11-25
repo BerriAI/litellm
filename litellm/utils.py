@@ -3330,7 +3330,7 @@ def convert_to_model_response_object(response_object: Optional[dict]=None, model
                         index = embedding.get("index", idx),
                         object=embedding.get("object", "embedding")
                     )
-                    data.append(embedding_obj)
+                    data.append(embedding_obj) # type: ignore
                 model_response_object.data = data
 
                 if "usage" in response_object and response_object["usage"] is not None:
