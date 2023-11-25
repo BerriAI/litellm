@@ -21,6 +21,8 @@ def test_openai_embedding():
         )
         litellm_response = dict(response)
         litellm_response_keys = set(litellm_response.keys())
+        litellm_response_keys.discard('_responses_ms')
+        
         print(litellm_response_keys)
         print("LiteLLM Response\n")
         print(litellm_response)
