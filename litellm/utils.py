@@ -2301,7 +2301,7 @@ def get_optional_params(  # use the openai defaults
         if n: 
             optional_params["n"] = n
         if stream: 
-            optional_params["stream"] = str
+            optional_params["stream"] = stream
         if stop: 
             optional_params["stop"] = stop
         if max_tokens: 

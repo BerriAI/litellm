@@ -229,7 +229,7 @@ def test_completion_azure_stream():
         print(f"completion_response: {complete_response}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_azure_stream() 
+# test_completion_azure_stream() 
 
 def test_completion_claude_stream():
     try:
@@ -290,35 +290,35 @@ def test_completion_palm_stream():
         pytest.fail(f"Error occurred: {e}")
 # test_completion_palm_stream()
 
-# def test_completion_deep_infra_stream():
-#     # deep infra currently includes role in the 2nd chunk 
-#     # waiting for them to make a fix on this
-#     try:
-#         messages = [
-#             {"role": "system", "content": "You are a helpful assistant."},
-#             {
-#                 "role": "user",
-#                 "content": "how does a court case get to the Supreme Court?",
-#             },
-#         ]
-#         print("testing deep infra streaming")
-#         response = completion(
-#             model="deepinfra/meta-llama/Llama-2-70b-chat-hf", messages=messages, stream=True, max_tokens=80
-#         )
+def test_completion_deep_infra_stream():
+    # deep infra currently includes role in the 2nd chunk 
+    # waiting for them to make a fix on this
+    try:
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {
+                "role": "user",
+                "content": "how does a court case get to the Supreme Court?",
+            },
+        ]
+        print("testing deep infra streaming")
+        response = completion(
+            model="deepinfra/meta-llama/Llama-2-70b-chat-hf", messages=messages, stream=True, max_tokens=80
+        )
 
-#         complete_response = ""
-#         # Add any assertions here to check the response
-#         for idx, chunk in enumerate(response):
-#             chunk, finished = streaming_format_tests(idx, chunk)
-#             if finished:
-#                 break
-#             complete_response += chunk
-#         if complete_response.strip() == "": 
-#             raise Exception("Empty response received")
-#         print(f"completion_response: {complete_response}")
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
-# test_completion_deep_infra_stream()
+        complete_response = ""
+        # Add any assertions here to check the response
+        for idx, chunk in enumerate(response):
+            chunk, finished = streaming_format_tests(idx, chunk)
+            if finished:
+                break
+            complete_response += chunk
+        if complete_response.strip() == "": 
+            raise Exception("Empty response received")
+        print(f"completion_response: {complete_response}")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+test_completion_deep_infra_stream()
 
 def test_completion_claude_stream_bad_key():
     try:
