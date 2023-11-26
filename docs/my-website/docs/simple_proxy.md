@@ -839,6 +839,7 @@ If the error is a context window exceeded error, fall back to a larger model gro
 
 [**See Code**](https://github.com/BerriAI/litellm/blob/main/litellm/router.py)
 
+**Set via config**
 ```yaml
 model_list:
   - model_name: zephyr-beta
@@ -870,6 +871,26 @@ litellm_settings:
   allowed_fails: 3 # cooldown model if it fails > 1 call in a minute. 
 ```
 
+**Set dynamically**
+
+```bash
+curl --location 'http://0.0.0.0:8000/chat/completions' \
+--header 'Content-Type: application/json' \
+--data ' {
+      "model": "zephyr-beta",
+      "messages": [
+        {
+          "role": "user",
+          "content": "what llm are you"
+        }
+      ],
+      "fallbacks": [{"zephyr-beta": ["gpt-3.5-turbo"]}],
+      "context_window_fallbacks": [{"zephyr-beta": ["gpt-3.5-turbo"]}],
+      "num_retries": 2,
+      "request_timeout": 10
+    }
+'
+```
 
 ### Config for Embedding Models - xorbitsai/inference
 
