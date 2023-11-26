@@ -272,6 +272,8 @@ class Router:
         If it fails after num_retries, fall back to another model group
         """
         model_group = kwargs.get("model")
+        fallbacks = kwargs.pop("fallbacks", self.fallbacks)
+        context_window_fallbacks = kwargs.pop("context_window_fallbacks", self.context_window_fallbacks)
         try: 
             response = await self.async_function_with_retries(*args, **kwargs)
             self.print_verbose(f'Async Response: {response}')
@@ -281,9 +283,9 @@ class Router:
             original_exception = e
             try: 
                 self.print_verbose(f"Trying to fallback b/w models")
-                if isinstance(e, litellm.ContextWindowExceededError) and self.context_window_fallbacks is not None: 
+                if isinstance(e, litellm.ContextWindowExceededError) and context_window_fallbacks is not None: 
                     fallback_model_group = None
-                    for item in self.context_window_fallbacks: # [{"gpt-3.5-turbo": ["gpt-4"]}]
+                    for item in context_window_fallbacks: # [{"gpt-3.5-turbo": ["gpt-4"]}]
                         if list(item.keys())[0] == model_group:
                             fallback_model_group = item[model_group]
                             break
@@ -301,9 +303,9 @@ class Router:
                             return response 
                         except Exception as e: 
                             pass
-                elif self.fallbacks is not None: 
-                    self.print_verbose(f"inside model fallbacks: {self.fallbacks}")
-                    for item in self.fallbacks:
+                elif fallbacks is not None: 
+                    self.print_verbose(f"inside model fallbacks: {fallbacks}")
+                    for item in fallbacks:
                         if list(item.keys())[0] == model_group:
                             fallback_model_group = item[model_group]
                             break
@@ -365,7 +367,8 @@ class Router:
         If it fails after num_retries, fall back to another model group
         """
         model_group = kwargs.get("model")
-        
+        fallbacks = kwargs.pop("fallbacks", self.fallbacks)
+        context_window_fallbacks = kwargs.pop("context_window_fallbacks", self.context_window_fallbacks)
         try: 
             response = self.function_with_retries(*args, **kwargs)
             return response
@@ -374,11 +377,11 @@ class Router:
             self.print_verbose(f"An exception occurs {original_exception}")
             try: 
                 self.print_verbose(f"Trying to fallback b/w models. Initial model group: {model_group}")
-                if isinstance(e, litellm.ContextWindowExceededError) and self.context_window_fallbacks is not None: 
-                    self.print_verbose(f"inside context window fallbacks: {self.context_window_fallbacks}")
+                if isinstance(e, litellm.ContextWindowExceededError) and context_window_fallbacks is not None: 
+                    self.print_verbose(f"inside context window fallbacks: {context_window_fallbacks}")
                     fallback_model_group = None
 
-                    for item in self.context_window_fallbacks: # [{"gpt-3.5-turbo": ["gpt-4"]}]
+                    for item in context_window_fallbacks: # [{"gpt-3.5-turbo": ["gpt-4"]}]
                         if list(item.keys())[0] == model_group:
                             fallback_model_group = item[model_group]
                             break
@@ -396,10 +399,10 @@ class Router:
                             return response 
                         except Exception as e: 
                             pass
-                elif self.fallbacks is not None: 
-                    self.print_verbose(f"inside model fallbacks: {self.fallbacks}")
+                elif fallbacks is not None: 
+                    self.print_verbose(f"inside model fallbacks: {fallbacks}")
                     fallback_model_group = None
-                    for item in self.fallbacks:
+                    for item in fallbacks:
                         if list(item.keys())[0] == model_group:
                             fallback_model_group = item[model_group]
                             break
