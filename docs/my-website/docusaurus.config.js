@@ -67,6 +67,9 @@ const config = {
         },
         docs: {
           sidebarPath: require.resolve('./sidebars.js'),
+          editUrl: ({ docPath }) => {
+            return `https://holocron.so/github/pr/BerriAI/litellm/main/editor/docs/my-website/docs/${docPath}`
+          },
         },
         blog: false, // Optional: disable the blog plugin
         theme: {
