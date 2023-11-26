@@ -340,6 +340,8 @@ cohere_embedding_models: List = [
 ]
 bedrock_embedding_models: List = ["amazon.titan-embed-text-v1"]
 
+all_embedding_models = open_ai_embedding_models + cohere_embedding_models + bedrock_embedding_models
+
 from .timeout import timeout
 from .utils import (
     client,
