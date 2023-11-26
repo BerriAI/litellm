@@ -830,11 +830,6 @@ async def info_key_fn(key: str = fastapi.Query(..., description="Key in the requ
             detail={"error": str(e)},
         )
 
-
-@router.get("/test")
-async def test_endpoint(request: Request): 
-    return {"route": request.url.path}
-
 #### EXPERIMENTAL QUEUING #### 
 @router.post("/queue/request", dependencies=[Depends(user_api_key_auth)])
 async def async_queue_request(request: Request): 
@@ -882,6 +877,28 @@ async def retrieve_server_log(request: Request):
     filepath = os.path.expanduser("~/.ollama/logs/server.log")
     return FileResponse(filepath)
 
+#### BASIC ENDPOINTS #### 
+
+@router.get("/test")
+async def test_endpoint(request: Request): 
+    return {"route": request.url.path}
+
+@app.get("/health", description="Check the health of all the endpoints in config.yaml", tags=["health"])
+async def health_endpoint(request: Request, model: Optional[str] = fastapi.Query(None, description="Specify the model name (optional)")):
+    global llm_model_list
+    healthy_endpoints = []
+    if llm_model_list: 
+        for model_name in llm_model_list: 
+            try: 
+                if model is None or model == model_name["litellm_params"]["model"]: # if model specified, just call that one. 
+                    litellm_params = model_name["litellm_params"]
+                    if litellm_params["model"] not in litellm.all_embedding_models: # filter out embedding models
+                        litellm_params["messages"] = [{"role": "user", "content": "Hey, how's it going?"}]
+                        litellm.completion(**litellm_params)
+                        healthy_endpoints.append(litellm_params["model"])
+            except: 
+                pass
+    return {"healthy_endpoints": healthy_endpoints}
 
 @router.get("/")
 async def home(request: Request):
