@@ -680,6 +680,7 @@ class Logging:
             print_verbose(
                 f"Logging Details Post-API Call: logger_fn - {self.logger_fn} | callable(logger_fn) - {callable(self.logger_fn)}"
             )
+            print_verbose(f"Logging Details Post-API Call: LiteLLM Params: {self.model_call_details}")
             if self.logger_fn and callable(self.logger_fn):
                 try:
                     self.logger_fn(
