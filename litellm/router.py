@@ -301,9 +301,7 @@ class Router:
                             return response 
                         except Exception as e: 
                             pass
-                else: 
-                    if self.fallbacks is None: 
-                        raise original_exception
+                elif self.fallbacks is not None: 
                     self.print_verbose(f"inside model fallbacks: {self.fallbacks}")
                     for item in self.fallbacks:
                         if list(item.keys())[0] == model_group:
@@ -398,10 +396,7 @@ class Router:
                             return response 
                         except Exception as e: 
                             pass
-                else: 
-                    if self.fallbacks is None: 
-                        raise original_exception
-
+                elif self.fallbacks is not None: 
                     self.print_verbose(f"inside model fallbacks: {self.fallbacks}")
                     fallback_model_group = None
                     for item in self.fallbacks:
