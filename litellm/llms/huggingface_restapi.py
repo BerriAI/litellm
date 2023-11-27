@@ -224,7 +224,7 @@ class Huggingface(BaseLLM):
         else: 
             completion_tokens = 0
 
-        model_response["created"] = time.time()
+        model_response["created"] = int(time.time())
         model_response["model"] = model
         usage = Usage(
             prompt_tokens=prompt_tokens,
@@ -405,6 +405,8 @@ class Huggingface(BaseLLM):
                     ## RESPONSE OBJECT
                     try:
                         completion_response = response.json()
+                        if isinstance(completion_response, dict): 
+                            completion_response = [completion_response]
                     except:
                         import traceback
                         raise HuggingfaceError(
@@ -418,7 +420,6 @@ class Huggingface(BaseLLM):
                         message=completion_response["error"],
                         status_code=response.status_code,
                     )
-                
                 return self.convert_to_model_response_object(
                     completion_response=completion_response,
                     model_response=model_response,
@@ -451,7 +452,7 @@ class Huggingface(BaseLLM):
        response = None
        try:
             async with httpx.AsyncClient() as client:
-                response = await client.post(url=api_base, json=data, headers=headers) 
+                response = await client.post(url=api_base, json=data, headers=headers, timeout=None) 
                 response_json = response.json()
                 if response.status_code != 200:
                     raise HuggingfaceError(status_code=response.status_code, message=response.text, request=response.request, response=response)

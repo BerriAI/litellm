@@ -13,15 +13,14 @@ import pytest
 import litellm
 from litellm import embedding, completion
 from litellm.caching import Cache
+import random
 # litellm.set_verbose=True
 
 messages = [{"role": "user", "content": "who is ishaan Github?  "}]
 # comment
 
-
-####### Updated Caching as of Aug 28, 2023 ###################
 messages = [{"role": "user", "content": "who is ishaan 5222"}]
-def test_caching_v2():
+def test_caching_v2(): # test in memory cache
     try:
         litellm.cache = Cache()
         response1 = completion(model="gpt-3.5-turbo", messages=messages, caching=True)
@@ -153,25 +152,45 @@ def test_embedding_caching_azure():
 
 
 def test_redis_cache_completion():
-    litellm.set_verbose = True
-    messages = [{"role": "user", "content": "who is ishaan CTO of litellm from litellm 2023"}]
+    litellm.set_verbose = False
+
+    random_number = random.randint(1, 100000) # add a random number to ensure it's always adding / reading from cache
+    messages = [{"role": "user", "content": f"write a one sentence poem about: {random_number}"}]
     litellm.cache = Cache(type="redis", host=os.environ['REDIS_HOST'], port=os.environ['REDIS_PORT'], password=os.environ['REDIS_PASSWORD'])
     print("test2 for caching")
-    response1 = completion(model="gpt-3.5-turbo", messages=messages, caching=True)
-    response2 = completion(model="gpt-3.5-turbo", messages=messages, caching=True)
-    response3 = completion(model="command-nightly", messages=messages, caching=True)
+    response1 = completion(model="gpt-3.5-turbo", messages=messages, caching=True, max_tokens=10, seed=1222)
+    response2 = completion(model="gpt-3.5-turbo", messages=messages, caching=True, max_tokens=10, seed=1222)
+    response3 = completion(model="gpt-3.5-turbo", messages=messages, caching=True, temperature=1)
+    response4 = completion(model="command-nightly", messages=messages, caching=True)
+
+    print("\nresponse 1", response1)
+    print("\nresponse 2", response2)
+    print("\nresponse 3", response3)
+    print("\nresponse 4", response4)
     litellm.cache = None
-    if response3['choices'][0]['message']['content'] == response2['choices'][0]['message']['content']:
-        # if models are different, it should not return cached response
-        print(f"response2: {response2}")
-        print(f"response3: {response3}")
-        pytest.fail(f"Error occurred:")
+
+    """
+    1 & 2 should be exactly the same 
+    1 & 3 should be different, since input params are diff
+    1 & 4 should be diff, since models are diff
+    """
     if response1['choices'][0]['message']['content'] != response2['choices'][0]['message']['content']: # 1 and 2 should be the same
+        # 1&2 have the exact same input params. This MUST Be a CACHE HIT
         print(f"response1: {response1}")
         print(f"response2: {response2}")
         pytest.fail(f"Error occurred:")
+    if response1['choices'][0]['message']['content'] == response3['choices'][0]['message']['content']:
+        # if input params like seed, max_tokens are diff it should NOT be a cache hit
+        print(f"response1: {response1}")
+        print(f"response3: {response3}")
+        pytest.fail(f"Response 1 == response 3. Same model, diff params shoudl not cache Error occurred:")
+    if response1['choices'][0]['message']['content'] == response4['choices'][0]['message']['content']:
+        # if models are different, it should not return cached response
+        print(f"response1: {response1}")
+        print(f"response4: {response4}")
+        pytest.fail(f"Error occurred:")
 
-# test_redis_cache_completion()
+test_redis_cache_completion()
 
 # redis cache with custom keys
 def custom_get_cache_key(*args, **kwargs):
@@ -211,25 +230,6 @@ def test_custom_redis_cache_with_key():
     litellm.cache = None
 
 # test_custom_redis_cache_with_key()
-
-def test_hosted_cache():
-    litellm.cache = Cache(type="hosted") # use api.litellm.ai for caching
-
-    messages = [{"role": "user", "content": "what is litellm arr today?"}]
-    response1 = completion(model="gpt-3.5-turbo", messages=messages, caching=True)
-    print("response1", response1)
-
-    response2 = completion(model="gpt-3.5-turbo", messages=messages, caching=True)
-    print("response2", response2)
-
-    if response1['choices'][0]['message']['content'] != response2['choices'][0]['message']['content']: # 1 and 2 should be the same
-        print(f"response1: {response1}")
-        print(f"response2: {response2}")
-        pytest.fail(f"Hosted cache: Response2 is not cached and the same as response 1")
-    litellm.cache = None
-
-# test_hosted_cache()
-
 
 # def test_redis_cache_with_ttl():
 #     cache = Cache(type="redis", host=os.environ['REDIS_HOST'], port=os.environ['REDIS_PORT'], password=os.environ['REDIS_PASSWORD'])

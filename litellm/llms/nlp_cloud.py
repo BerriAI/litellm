@@ -131,14 +131,14 @@ def completion(
     logging_obj.pre_call(
             input=text,
             api_key=api_key,
-            additional_args={"complete_input_dict": data},
+            additional_args={"complete_input_dict": data, "headers": headers, "api_base": completion_url},
         )
     ## COMPLETION CALL
     response = requests.post(
         completion_url, headers=headers, data=json.dumps(data), stream=optional_params["stream"] if "stream" in optional_params else False
     )
     if "stream" in optional_params and optional_params["stream"] == True:
-        return response.iter_lines()
+        return clean_and_iterate_chunks(response)
     else:
         ## LOGGING
         logging_obj.post_call(
@@ -169,7 +169,7 @@ def completion(
         prompt_tokens = completion_response["nb_input_tokens"]
         completion_tokens = completion_response["nb_generated_tokens"]
 
-        model_response["created"] = time.time()
+        model_response["created"] = int(time.time())
         model_response["model"] = model
         usage = Usage(
             prompt_tokens=prompt_tokens,
@@ -178,6 +178,34 @@ def completion(
         )
         model_response.usage = usage
         return model_response
+
+
+# def clean_and_iterate_chunks(response):
+#     def process_chunk(chunk):
+#         print(f"received chunk: {chunk}")
+#         cleaned_chunk = chunk.decode("utf-8")
+#         # Perform further processing based on your needs
+#         return cleaned_chunk
+
+#     for line in response.iter_lines():
+#         if line:
+#             yield process_chunk(line)
+def clean_and_iterate_chunks(response):
+    buffer = b''
+
+    for chunk in response.iter_content(chunk_size=1024):
+        if not chunk:
+            break
+
+        buffer += chunk
+        while b'\x00' in buffer:
+            buffer = buffer.replace(b'\x00', b'')
+            yield buffer.decode('utf-8')
+            buffer = b''
+
+    # No more data expected, yield any remaining data in the buffer
+    if buffer:
+        yield buffer.decode('utf-8')
 
 def embedding():
     # logic for parsing in - calling - parsing out model embedding calls

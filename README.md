@@ -5,7 +5,7 @@
         <p align="center">Call all LLM APIs using the OpenAI format [Bedrock, Huggingface, Cohere, TogetherAI, Azure, OpenAI, etc.]
         <br>
     </p>
-<h4 align="center"><a href="https://github.com/BerriAI/litellm/tree/main/litellm/proxy" target="_blank">Evaluate LLMs → OpenAI-Compatible Server</a></h4>
+<h4 align="center"><a href="https://github.com/BerriAI/litellm/tree/main/litellm/proxy" target="_blank">OpenAI-Compatible Server</a></h4>
 <h4 align="center">
     <a href="https://pypi.org/project/litellm/" target="_blank">
         <img src="https://img.shields.io/pypi/v/litellm.svg" alt="PyPI Version">
@@ -28,14 +28,12 @@ LiteLLM manages
 - Translating inputs to the provider's `completion` and `embedding` endpoints
 - Guarantees [consistent output](https://docs.litellm.ai/docs/completion/output), text responses will always be available at `['choices'][0]['message']['content']`
 - Exception mapping - common exceptions across providers are mapped to the OpenAI exception types.
-
-**10/05/2023:** LiteLLM is adopting Semantic Versioning for all commits. [Learn more](https://github.com/BerriAI/litellm/issues/532)  
-**10/16/2023:** **Self-hosted OpenAI-proxy server** [Learn more](https://docs.litellm.ai/docs/simple_proxy)
+- Load-balance across multiple deployments (e.g. Azure/OpenAI) - `Router`
 
 # Usage ([**Docs**](https://docs.litellm.ai/docs/))
 
 > [!IMPORTANT]
-> LiteLLM v1.0.0 is now requires `openai>=1.0.0`. Migration guide [here](https://docs.litellm.ai/docs/migration)
+> LiteLLM v1.0.0 now requires `openai>=1.0.0`. Migration guide [here](https://docs.litellm.ai/docs/migration)
 
 
 <a target="_blank" href="https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/liteLLM_Getting_Started.ipynb">
@@ -70,17 +68,58 @@ Streaming is supported for all models (Bedrock, Huggingface, TogetherAI, Azure, 
 ```python
 from litellm import completion
 response = completion(model="gpt-3.5-turbo", messages=messages, stream=True)
-for chunk in response:
-    print(chunk['choices'][0]['delta'])
+for part in response:
+    print(part.choices[0].delta.content or "")
 
 # claude 2
-result = completion('claude-2', messages, stream=True)
-for chunk in result:
-  print(chunk['choices'][0]['delta'])
+response = completion('claude-2', messages, stream=True)
+for part in response:
+    print(part.choices[0].delta.content or "")
+```
+
+# Router - load balancing([Docs](https://docs.litellm.ai/docs/routing))
+LiteLLM allows you to load balance between multiple deployments (Azure, OpenAI). It picks the deployment which is below rate-limit and has the least amount of tokens used.
+```python
+from litellm import Router
+
+model_list = [{ # list of model deployments 
+    "model_name": "gpt-3.5-turbo", # model alias 
+    "litellm_params": { # params for litellm completion/embedding call 
+        "model": "azure/chatgpt-v-2", # actual model name
+        "api_key": os.getenv("AZURE_API_KEY"),
+        "api_version": os.getenv("AZURE_API_VERSION"),
+        "api_base": os.getenv("AZURE_API_BASE")
+    }
+}, {
+    "model_name": "gpt-3.5-turbo", 
+    "litellm_params": { # params for litellm completion/embedding call 
+        "model": "azure/chatgpt-functioncalling", 
+        "api_key": os.getenv("AZURE_API_KEY"),
+        "api_version": os.getenv("AZURE_API_VERSION"),
+        "api_base": os.getenv("AZURE_API_BASE")
+    }
+}, {
+    "model_name": "gpt-3.5-turbo", 
+    "litellm_params": { # params for litellm completion/embedding call 
+        "model": "gpt-3.5-turbo", 
+        "api_key": os.getenv("OPENAI_API_KEY"),
+    }
+}]
+
+router = Router(model_list=model_list)
+
+# openai.ChatCompletion.create replacement
+response = router.completion(model="gpt-3.5-turbo", 
+                messages=[{"role": "user", "content": "Hey, how's it going?"}])
+
+print(response)
 ```
 
 ## OpenAI Proxy - ([Docs](https://docs.litellm.ai/docs/simple_proxy))
-**If you want to use non-openai models in an openai code base**, you can use litellm proxy. Create a server to call 100+ LLMs (Huggingface/Bedrock/TogetherAI/etc) in the OpenAI ChatCompletions & Completions format
+LiteLLM Proxy manages:
+* Calling 100+ LLMs Huggingface/Bedrock/TogetherAI/etc. in the OpenAI ChatCompletions & Completions format
+* Authentication & Spend Tracking Virtual Keys
+* Load balancing - Routing between Multiple Models + Deployments of the same model
 
 ### Step 1: Start litellm proxy
 ```shell

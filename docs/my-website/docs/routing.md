@@ -3,17 +3,24 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
 
-# Manage Multiple Deployments
+# Router - Load Balancing, Fallbacks
 
-Use this if you're trying to load-balance across multiple deployments (e.g. Azure/OpenAI). 
+LiteLLM manages:
+- Load-balance across multiple deployments (e.g. Azure/OpenAI)
+- Prioritizing important requests to ensure they don't fail (i.e. Queueing)
+- Basic reliability logic - cooldowns, fallbacks, timeouts and retries (fixed + exponential backoff) across multiple deployments/providers.
 
-`Router` prevents failed requests, by picking the deployment which is below rate-limit and has the least amount of tokens used. 
+In production, litellm supports using Redis as a way to track cooldown server and usage (managing tpm/rpm limits).
 
-In production, [Router connects to a Redis Cache](#redis-queue) to track usage across multiple deployments.
+:::info
+
+If you want a server to load balance across different LLM APIs, use our [OpenAI Proxy Server](./simple_proxy#load-balancing---multiple-instances-of-1-model)
+
+:::
 
 
+## Load Balancing
 (s/o [@paulpierre](https://www.linkedin.com/in/paulpierre/) for his contribution to this implementation)
-
 [**See Code**](https://github.com/BerriAI/litellm/blob/main/litellm/router.py)
 
 ### Quick Start
@@ -61,7 +68,8 @@ print(response)
 - `router.aembeddings()` - async embeddings endpoint
 - `router.text_completion()` - completion calls in the old OpenAI `/v1/completions` endpoint format
 
-### Routing Strategies 
+### Advanced
+#### Routing Strategies - Shuffle, Rate Limit Aware
 
 Router provides 2 strategies for routing your calls across multiple deployments: 
 
@@ -168,51 +176,61 @@ print(response)
 </TabItem>
 </Tabs>
 
+## Basic Reliability
 
-### Caching + Request Timeouts 
+### Timeouts 
 
-In production, we recommend using a Redis cache. For quickly testing things locally, we also support simple in-memory caching. 
-
-**In-memory Cache + Timeouts**
+The timeout set in router is for the entire length of the call, and is passed down to the completion() call level as well. 
 
 ```python
+from litellm import Router 
+
+model_list = [{...}]
+
 router = Router(model_list=model_list, 
-                cache_responses=True, 
-                timeout=30) # timeout set to 30s 
+                timeout=30) # raise timeout error if call takes > 30s 
 
 print(response)
 ```
 
-**Redis Cache + Timeouts**
-```python
-router = Router(model_list=model_list, 
-                redis_host=os.getenv("REDIS_HOST"), 
-                redis_password=os.getenv("REDIS_PASSWORD"), 
-                redis_port=os.getenv("REDIS_PORT"),
-                cache_responses=True, 
-                timeout=30)
+### Cooldowns
 
-print(response)
+Set the limit for how many calls a model is allowed to fail in a minute, before being cooled down for a minute. 
+
+```python
+from litellm import Router
+
+model_list = [{...}]
+
+router = Router(model_list=model_list, 
+                allowed_fails=1) # cooldown model if it fails > 1 call in a minute. 
+
+user_message = "Hello, whats the weather in San Francisco??"
+messages = [{"content": user_message, "role": "user"}]
+
+# normal call 
+response = router.completion(model="gpt-3.5-turbo", messages=messages)
+
+print(f"response: {response}")
+
 ```
 
-### Retry failed requests
+### Retries
 
 For both async + sync functions, we support retrying failed requests. 
 
-If it's a RateLimitError we implement exponential backoffs 
+For RateLimitError we implement exponential backoffs 
 
-If it's a generic OpenAI API Error, we retry immediately 
-
-For any other exception types, we don't retry
+For generic errors, we retry immediately 
 
 Here's a quick look at how we can set `num_retries = 3`: 
 
 ```python 
 from litellm import Router
 
-router = Router(model_list=model_list, 
-                cache_responses=True, 
-                timeout=30, 
+model_list = [{...}]
+
+router = Router(model_list=model_list,  
                 num_retries=3)
 
 user_message = "Hello, whats the weather in San Francisco??"
@@ -224,7 +242,112 @@ response = router.completion(model="gpt-3.5-turbo", messages=messages)
 print(f"response: {response}")
 ```
 
-### Default litellm.completion/embedding params
+### Fallbacks 
+
+If a call fails after num_retries, fall back to another model group. 
+
+If the error is a context window exceeded error, fall back to a larger model group (if given). 
+
+```python
+from litellm import Router
+
+model_list = [
+    { # list of model deployments 
+		"model_name": "azure/gpt-3.5-turbo", # openai model name 
+		"litellm_params": { # params for litellm completion/embedding call 
+			"model": "azure/chatgpt-v-2", 
+			"api_key": "bad-key",
+			"api_version": os.getenv("AZURE_API_VERSION"),
+			"api_base": os.getenv("AZURE_API_BASE")
+		},
+		"tpm": 240000,
+		"rpm": 1800
+	}, 
+    { # list of model deployments 
+		"model_name": "azure/gpt-3.5-turbo-context-fallback", # openai model name 
+		"litellm_params": { # params for litellm completion/embedding call 
+			"model": "azure/chatgpt-v-2", 
+			"api_key": "bad-key",
+			"api_version": os.getenv("AZURE_API_VERSION"),
+			"api_base": os.getenv("AZURE_API_BASE")
+		},
+		"tpm": 240000,
+		"rpm": 1800
+	}, 
+	{
+		"model_name": "azure/gpt-3.5-turbo", # openai model name 
+		"litellm_params": { # params for litellm completion/embedding call 
+			"model": "azure/chatgpt-functioncalling", 
+			"api_key": "bad-key",
+			"api_version": os.getenv("AZURE_API_VERSION"),
+			"api_base": os.getenv("AZURE_API_BASE")
+		},
+		"tpm": 240000,
+		"rpm": 1800
+	}, 
+	{
+		"model_name": "gpt-3.5-turbo", # openai model name 
+		"litellm_params": { # params for litellm completion/embedding call 
+			"model": "gpt-3.5-turbo", 
+			"api_key": os.getenv("OPENAI_API_KEY"),
+		},
+		"tpm": 1000000,
+		"rpm": 9000
+	},
+    {
+		"model_name": "gpt-3.5-turbo-16k", # openai model name 
+		"litellm_params": { # params for litellm completion/embedding call 
+			"model": "gpt-3.5-turbo-16k", 
+			"api_key": os.getenv("OPENAI_API_KEY"),
+		},
+		"tpm": 1000000,
+		"rpm": 9000
+	}
+]
+
+
+router = Router(model_list=model_list, 
+                fallbacks=[{"azure/gpt-3.5-turbo": ["gpt-3.5-turbo"]}], 
+                context_window_fallbacks=[{"azure/gpt-3.5-turbo-context-fallback": ["gpt-3.5-turbo-16k"]}, {"gpt-3.5-turbo": ["gpt-3.5-turbo-16k"]}],
+                set_verbose=True)
+
+
+user_message = "Hello, whats the weather in San Francisco??"
+messages = [{"content": user_message, "role": "user"}]
+
+# normal fallback call 
+response = router.completion(model="azure/gpt-3.5-turbo", messages=messages)
+
+# context window fallback call
+response = router.completion(model="azure/gpt-3.5-turbo-context-fallback", messages=messages)
+
+print(f"response: {response}")
+```
+
+### Caching
+
+In production, we recommend using a Redis cache. For quickly testing things locally, we also support simple in-memory caching. 
+
+**In-memory Cache**
+
+```python
+router = Router(model_list=model_list, 
+                cache_responses=True)
+
+print(response)
+```
+
+**Redis Cache**
+```python
+router = Router(model_list=model_list, 
+                redis_host=os.getenv("REDIS_HOST"), 
+                redis_password=os.getenv("REDIS_PASSWORD"), 
+                redis_port=os.getenv("REDIS_PORT"),
+                cache_responses=True)
+
+print(response)
+```
+#### Default litellm.completion/embedding params
 
 You can also set default params for litellm completion/embedding calls. Here's how to do that: 
 
@@ -246,203 +369,203 @@ print(f"response: {response}")
 ```
 
 
-### Deploy Router 
+## Deploy Router 
 
-If you want a server to just route requests to different LLM APIs, use our [OpenAI Proxy Server](./simple_proxy.md#multiple-instances-of-1-model)
+If you want a server to load balance across different LLM APIs, use our [OpenAI Proxy Server](./simple_proxy#load-balancing---multiple-instances-of-1-model)
 
+## Queuing (Beta)
 
-## litellm.completion() 
+**Never fail a request due to rate limits**
 
-If you're calling litellm.completion(), here's the different reliability options you can enable. 
+The LiteLLM Queuing endpoints can handle 100+ req/s. We use Celery workers to process requests. 
 
-## Retry failed requests
+:::info
 
-Call it in completion like this `completion(..num_retries=2)`.
+This is pretty new, and might have bugs. Any contributions to improving our implementation are welcome
 
-
-Here's a quick look at how you can use it: 
-
-```python 
-from litellm import completion
-
-user_message = "Hello, whats the weather in San Francisco??"
-messages = [{"content": user_message, "role": "user"}]
-
-# normal call 
-response = completion(
-            model="gpt-3.5-turbo",
-            messages=messages,
-            num_retries=2
-        )
-```
-
-## Fallbacks 
-
-## Helper utils 
-LiteLLM supports the following functions for reliability:
-* `litellm.longer_context_model_fallback_dict`: Dictionary which has a mapping for those models which have larger equivalents  
-* `num_retries`: use tenacity retries
-* `completion()` with fallbacks: switch between models/keys/api bases in case of errors. 
+:::
 
 
-### Context Window Fallbacks
-```python 
-from litellm import completion
+[**See Code**](https://github.com/BerriAI/litellm/blob/fbf9cab5b9e35df524e2c9953180c58d92e4cd97/litellm/proxy/proxy_server.py#L589)
 
-fallback_dict = {"gpt-3.5-turbo": "gpt-3.5-turbo-16k"}
-messages = [{"content": "how does a court case get to the Supreme Court?" * 500, "role": "user"}]
 
-completion(model="gpt-3.5-turbo", messages=messages, context_window_fallback_dict=fallback_dict)
-```
+### Quick Start 
 
-### Fallbacks - Switch Models/API Keys/API Bases
-
-LLM APIs can be unstable, completion() with fallbacks ensures you'll always get a response from your calls
-
-#### Usage 
-To use fallback models with `completion()`, specify a list of models in the `fallbacks` parameter. 
-
-The `fallbacks` list should include the primary model you want to use, followed by additional models that can be used as backups in case the primary model fails to provide a response.
-
-#### switch models 
-```python
-response = completion(model="bad-model", messages=messages, 
-    fallbacks=["gpt-3.5-turbo" "command-nightly"])
-```
-
-#### switch api keys/bases (E.g. azure deployment)
-Switch between different keys for the same azure deployment, or use another deployment as well. 
+1. Add Redis credentials in a .env file
 
 ```python
-api_key="bad-key"
-response = completion(model="azure/gpt-4", messages=messages, api_key=api_key,
-    fallbacks=[{"api_key": "good-key-1"}, {"api_key": "good-key-2", "api_base": "good-api-base-2"}])
+REDIS_HOST="my-redis-endpoint"
+REDIS_PORT="my-redis-port"
+REDIS_PASSWORD="my-redis-password" # [OPTIONAL] if self-hosted
+REDIS_USERNAME="default" # [OPTIONAL] if self-hosted
 ```
 
-[Check out this section for implementation details](#fallbacks-1)
+2. Start litellm server with your model config
 
-## Implementation Details 
-
-### Fallbacks
-#### Output from calls
+```bash
+$ litellm --config /path/to/config.yaml --use_queue
 ```
-Completion with 'bad-model': got exception Unable to map your input to a model. Check your input - {'model': 'bad-model'
+
+Here's an example config for `gpt-3.5-turbo`
+
+**config.yaml** (This will load balance between OpenAI + Azure endpoints)
+```yaml
+model_list: 
+  - model_name: gpt-3.5-turbo
+    litellm_params: 
+      model: gpt-3.5-turbo
+      api_key: 
+  - model_name: gpt-3.5-turbo
+    litellm_params: 
+      model: azure/chatgpt-v-2 # actual model name
+      api_key: 
+      api_version: 2023-07-01-preview
+      api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
+```
+
+3. Test (in another window) → sends 100 simultaneous requests to the queue 
+
+```bash
+$ litellm --test_async --num_requests 100
+```
 
 
+### Available Endpoints
+- `/queue/request` - Queues a /chat/completions request. Returns a job id. 
+- `/queue/response/{id}` - Returns the status of a job. If completed, returns the response as well. Potential status's are: `queued` and `finished`.
 
-completion call gpt-3.5-turbo
-{
-  "id": "chatcmpl-7qTmVRuO3m3gIBg4aTmAumV1TmQhB",
-  "object": "chat.completion",
-  "created": 1692741891,
-  "model": "gpt-3.5-turbo-0613",
-  "choices": [
+
+## Hosted Request Queing api.litellm.ai
+Queue your LLM API requests to ensure you're under your rate limits
+- Step 1: Step 1 Add a config to the proxy, generate a temp key 
+- Step 2: Queue a request to the proxy, using your generated_key
+- Step 3: Poll the request
+
+
+### Step 1 Add a config to the proxy, generate a temp key 
+```python
+import requests
+import time
+import os
+
+# Set the base URL as needed
+base_url = "https://api.litellm.ai"
+
+# Step 1 Add a config to the proxy, generate a temp key
+# use the same model_name to load balance
+config = {
+  "model_list": [
     {
-      "index": 0,
-      "message": {
-        "role": "assistant",
-        "content": "I apologize, but as an AI, I do not have the capability to provide real-time weather updates. However, you can easily check the current weather in San Francisco by using a search engine or checking a weather website or app."
-      },
-      "finish_reason": "stop"
+      "model_name": "gpt-3.5-turbo",
+      "litellm_params": {
+        "model": "gpt-3.5-turbo",
+        "api_key": os.environ['OPENAI_API_KEY'],
+      }
+    },
+    {
+      "model_name": "gpt-3.5-turbo",
+      "litellm_params": {
+        "model": "azure/chatgpt-v-2",
+        "api_key": "",
+        "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com/",
+        "api_version": "2023-07-01-preview"
+      }
     }
-  ],
-  "usage": {
-    "prompt_tokens": 16,
-    "completion_tokens": 46,
-    "total_tokens": 62
-  }
+  ]
 }
 
+response = requests.post(
+    url=f"{base_url}/key/generate",
+    json={
+        "config": config,
+        "duration": "30d"  # default to 30d, set it to 30m if you want a temp 30 minute key
+    },
+    headers={
+        "Authorization": "Bearer sk-hosted-litellm" # this is the key to use api.litellm.ai
+    }
+)
+
+print("\nresponse from generating key", response.text)
+print("\n json response from gen key", response.json())
+
+generated_key = response.json()["key"]
+print("\ngenerated key for proxy", generated_key)
 ```
 
-#### How does fallbacks work
-
-When you pass `fallbacks` to `completion`, it makes the first `completion` call using the primary model specified as `model` in `completion(model=model)`. If the primary model fails or encounters an error, it automatically tries the `fallbacks` models in the specified order. This ensures a response even if the primary model is unavailable.
-
-
-#### Key components of Model Fallbacks implementation:
-* Looping through `fallbacks`
-* Cool-Downs for rate-limited models
-
-#### Looping through `fallbacks`
-Allow `45seconds` for each request. In the 45s this function tries calling the primary model set as `model`. If model fails it loops through the backup `fallbacks` models and attempts to get a response in the allocated `45s` time set here: 
-```python
-while response == None and time.time() - start_time < 45:
-        for model in fallbacks:
+#### Output
+```shell
+response from generating key {"key":"sk-...,"expires":"2023-12-22T03:43:57.615000+00:00"}
 ```
 
-#### Cool-Downs for rate-limited models
-If a model API call leads to an error - allow it to cooldown for `60s`
+### Step 2: Queue a request to the proxy, using your generated_key
 ```python
-except Exception as e:
-  print(f"got exception {e} for model {model}")
-  rate_limited_models.add(model)
-  model_expiration_times[model] = (
-      time.time() + 60
-  )  # cool down this selected model
-  pass
+print("Creating a job on the proxy")
+job_response = requests.post(
+    url=f"{base_url}/queue/request",
+    json={
+        'model': 'gpt-3.5-turbo',
+        'messages': [
+            {'role': 'system', 'content': f'You are a helpful assistant. What is your name'},
+        ],
+    },
+    headers={
+        "Authorization": f"Bearer {generated_key}"
+    }
+)
+print(job_response.status_code)
+print(job_response.text)
+print("\nResponse from creating job", job_response.text)
+job_response = job_response.json()
+job_id = job_response["id"]
+polling_url = job_response["url"]
+polling_url = f"{base_url}{polling_url}"
+print("\nCreated Job, Polling Url", polling_url)
 ```
 
-Before making an LLM API call we check if the selected model is in `rate_limited_models`, if so skip making the API call
-```python
-if (
-  model in rate_limited_models
-):  # check if model is currently cooling down
-  if (
-      model_expiration_times.get(model)
-      and time.time() >= model_expiration_times[model]
-  ):
-      rate_limited_models.remove(
-          model
-      )  # check if it's been 60s of cool down and remove model
-  else:
-      continue  # skip model
-
+#### Output
+```shell
+Response from creating job 
+{"id":"0e3d9e98-5d56-4d07-9cc8-c34b7e6658d7","url":"/queue/response/0e3d9e98-5d56-4d07-9cc8-c34b7e6658d7","eta":5,"status":"queued"}
 ```
 
-#### Full code of completion with fallbacks()
+### Step 3: Poll the request
 ```python
+while True:
+    try:
+        print("\nPolling URL", polling_url)
+        polling_response = requests.get(
+            url=polling_url,
+            headers={
+                "Authorization": f"Bearer {generated_key}"
+            }
+        )
+        print("\nResponse from polling url", polling_response.text)
+        polling_response = polling_response.json()
+        status = polling_response.get("status", None)
+        if status == "finished":
+            llm_response = polling_response["result"]
+            print("LLM Response")
+            print(llm_response)
+            break
+        time.sleep(0.5)
+    except Exception as e:
+        print("got exception in polling", e)
+        break
+```
 
-    response = None
-    rate_limited_models = set()
-    model_expiration_times = {}
-    start_time = time.time()
-    fallbacks = [kwargs["model"]] + kwargs["fallbacks"]
-    del kwargs["fallbacks"]  # remove fallbacks so it's not recursive
+#### Output
+```shell
+Polling URL https://api.litellm.ai/queue/response/0e3d9e98-5d56-4d07-9cc8-c34b7e6658d7
 
-    while response == None and time.time() - start_time < 45:
-        for model in fallbacks:
-            # loop thru all models
-            try:
-                if (
-                    model in rate_limited_models
-                ):  # check if model is currently cooling down
-                    if (
-                        model_expiration_times.get(model)
-                        and time.time() >= model_expiration_times[model]
-                    ):
-                        rate_limited_models.remove(
-                            model
-                        )  # check if it's been 60s of cool down and remove model
-                    else:
-                        continue  # skip model
+Response from polling url {"status":"queued"}
 
-                # delete model from kwargs if it exists
-                if kwargs.get("model"):
-                    del kwargs["model"]
+Polling URL https://api.litellm.ai/queue/response/0e3d9e98-5d56-4d07-9cc8-c34b7e6658d7
 
-                print("making completion call", model)
-                response = litellm.completion(**kwargs, model=model)
+Response from polling url {"status":"queued"}
 
-                if response != None:
-                    return response
+Polling URL https://api.litellm.ai/queue/response/0e3d9e98-5d56-4d07-9cc8-c34b7e6658d7
 
-            except Exception as e:
-                print(f"got exception {e} for model {model}")
-                rate_limited_models.add(model)
-                model_expiration_times[model] = (
-                    time.time() + 60
-                )  # cool down this selected model
-                pass
-    return response
+Response from polling url 
+{"status":"finished","result":{"id":"chatcmpl-8NYRce4IeI4NzYyodT3NNp8fk5cSW","choices":[{"finish_reason":"stop","index":0,"message":{"content":"I am an AI assistant and do not have a physical presence or personal identity. You can simply refer to me as \"Assistant.\" How may I assist you today?","role":"assistant"}}],"created":1700624639,"model":"gpt-3.5-turbo-0613","object":"chat.completion","system_fingerprint":null,"usage":{"completion_tokens":33,"prompt_tokens":17,"total_tokens":50}}}
+
 ```

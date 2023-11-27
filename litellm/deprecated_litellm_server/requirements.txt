@@ -1,7 +1,7 @@
-openai
-fastapi
-uvicorn
-boto3
-litellm
-python-dotenv
-redis
+# openai
+# fastapi
+# uvicorn
+# boto3
+# litellm
+# python-dotenv
+# redis

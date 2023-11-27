@@ -18,7 +18,8 @@ class VLLMError(Exception):
         )  # Call the base class constructor with the parameters it needs
 
 # check if vllm is installed
-def validate_environment(model: str, llm: Any =None):
+def validate_environment(model: str):
+    global llm
     try: 
         from vllm import LLM, SamplingParams # type: ignore
         if llm is None:
@@ -90,7 +91,7 @@ def completion(
         prompt_tokens = len(outputs[0].prompt_token_ids)  
         completion_tokens = len(outputs[0].outputs[0].token_ids)  
 
-        model_response["created"] = time.time()
+        model_response["created"] = int(time.time())
         model_response["model"] = model
         usage = Usage(
             prompt_tokens=prompt_tokens,
@@ -131,9 +132,8 @@ def batch_completions(
         ]
     )
     """
-    global llm
     try:
-        llm, SamplingParams = validate_environment(model=model, llm=llm)
+        llm, SamplingParams = validate_environment(model=model)
     except Exception as e:
         error_str = str(e)
         if "data parallel group is already initialized" in error_str:
@@ -173,7 +173,7 @@ def batch_completions(
         prompt_tokens = len(output.prompt_token_ids)  
         completion_tokens = len(output.outputs[0].token_ids)  
 
-        model_response["created"] = time.time()
+        model_response["created"] = int(time.time())
         model_response["model"] = model
         usage = Usage(
             prompt_tokens=prompt_tokens,

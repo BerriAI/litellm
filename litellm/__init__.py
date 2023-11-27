@@ -8,6 +8,8 @@ input_callback: List[Union[str, Callable]] = []
 success_callback: List[Union[str, Callable]] = []
 failure_callback: List[Union[str, Callable]] = []
 callbacks: List[Callable] = []
+pre_call_rules: List[Callable] = []
+post_call_rules: List[Callable] = []
 set_verbose = False
 email: Optional[
     str
@@ -19,7 +21,6 @@ telemetry = True
 max_tokens = 256  # OpenAI Defaults
 drop_params = False
 retry = True
-request_timeout: Optional[float] = 6000
 api_key: Optional[str] = None
 openai_key: Optional[str] = None
 azure_key: Optional[str] = None
@@ -51,10 +52,15 @@ error_logs: Dict = {}
 add_function_to_prompt: bool = False # if function calling not supported by api, append function call details to system prompt
 client_session: Optional[httpx.Client] = None
 aclient_session: Optional[httpx.AsyncClient] = None
-model_fallbacks: Optional[List] = None
+model_fallbacks: Optional[List] = None # Deprecated for 'litellm.fallbacks'
 model_cost_map_url: str = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
-num_retries: Optional[int] = None
 suppress_debug_info = False
+#### RELIABILITY ####
+request_timeout: Optional[float] = 6000
+num_retries: Optional[int] = None
+fallbacks: Optional[List] = None
+context_window_fallbacks: Optional[List] = None
+allowed_fails: int = 0
 #############################################
 
 def get_model_cost_map(url: str):
@@ -145,7 +151,9 @@ for key, value in model_cost.items():
 
 # known openai compatible endpoints - we'll eventually move this list to the model_prices_and_context_window.json dictionary
 openai_compatible_endpoints: List = [
-    "api.perplexity.ai"
+    "api.perplexity.ai", 
+    "api.endpoints.anyscale.com/v1",
+    "api.deepinfra.com/v1/openai"
 ]
 
 
@@ -336,6 +344,8 @@ cohere_embedding_models: List = [
 ]
 bedrock_embedding_models: List = ["amazon.titan-embed-text-v1"]
 
+all_embedding_models = open_ai_embedding_models + cohere_embedding_models + bedrock_embedding_models
+
 from .timeout import timeout
 from .utils import (
     client,
@@ -390,7 +400,9 @@ from .exceptions import (
     ContextWindowExceededError,
     BudgetExceededError, 
     APIError,
-    Timeout
+    Timeout,
+    APIConnectionError,
+    APIResponseValidationError
 )
 from .budget_manager import BudgetManager
 from .proxy.proxy_cli import run_server
