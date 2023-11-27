@@ -908,19 +908,33 @@ def test_customprompt_together_ai():
 
 def test_completion_sagemaker():
     try:
+        print("testing sagemaker")
+        litellm.set_verbose=True
         response = completion(
             model="sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b", 
             messages=messages,
             temperature=0.2,
             max_tokens=80,
-            logger_fn=logger_fn
         )
         # Add any assertions here to check the response
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+test_completion_sagemaker()
 
-# test_completion_sagemaker()
+def test_completion_chat_sagemaker():
+    try:
+        print("testing sagemaker")
+        litellm.set_verbose=True
+        response = completion(
+            model="sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b-f", 
+            messages=messages,
+        )
+        # Add any assertions here to check the response
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+test_completion_chat_sagemaker()
 
 def test_completion_bedrock_titan():
     try:
@@ -977,7 +991,7 @@ def test_completion_bedrock_cohere():
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_bedrock_cohere()
+# test_completion_bedrock_cohere()
 
 
 def test_completion_bedrock_claude_completion_auth():
