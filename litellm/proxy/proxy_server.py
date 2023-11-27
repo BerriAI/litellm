@@ -632,7 +632,8 @@ def model_list():
         print(f"llm model list: {llm_model_list}")
         all_models += [m["model_name"] for m in llm_model_list]
     if user_model is not None:
-        all_models += user_model
+        all_models += [user_model]
+    print(f"all_models: {all_models}")
     ### CHECK OLLAMA MODELS ### 
     try:
         response = requests.get("http://0.0.0.0:11434/api/tags")
