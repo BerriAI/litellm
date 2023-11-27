@@ -78,11 +78,12 @@ def is_port_in_use(port):
 @click.option('--max_budget', default=None, type=float, help='Set max budget for API calls - works for hosted models like OpenAI, TogetherAI, Anthropic, etc.`') 
 @click.option('--telemetry', default=True, type=bool, help='Helps us know if people are using this feature. Turn this off by doing `--telemetry False`') 
 @click.option('--logs', flag_value=False, type=int, help='Gets the "n" most recent logs. By default gets most recent log.') 
+@click.option('--health', flag_value=True, help='Make a chat/completions request to all llms in config.yaml')
 @click.option('--test', flag_value=True, help='proxy chat completions url to make a test request to')
 @click.option('--test_async', default=False, is_flag=True, help='Calls async endpoints /queue/requests and /queue/response')
 @click.option('--num_requests', default=10, type=int, help='Number of requests to hit async endpoint with')
 @click.option('--local', is_flag=True, default=False, help='for local debugging')
-def run_server(host, port, api_base, api_version, model, alias, add_key, headers, save, debug, temperature, max_tokens, request_timeout, drop_params, add_function_to_prompt, config, file, max_budget, telemetry, logs, test, local, num_workers, test_async, num_requests, use_queue):
+def run_server(host, port, api_base, api_version, model, alias, add_key, headers, save, debug, temperature, max_tokens, request_timeout, drop_params, add_function_to_prompt, config, file, max_budget, telemetry, logs, test, local, num_workers, test_async, num_requests, use_queue, health):
     global feature_telemetry
     args = locals()
     if local:
@@ -176,6 +177,12 @@ def run_server(host, port, api_base, api_version, model, alias, add_key, headers
         print(f"Total Requests: {concurrent_calls}")
         print(f"Successful Calls: {successful_calls}")
         print(f"Failed Calls: {failed_calls}")
+        return
+    if health != False:
+        import requests
+        print("\nLiteLLM: Health Testing models in config")
+        response = requests.get(url=f"http://{host}:{port}/health")
+        print(json.dumps(response.json(), indent=4))
         return
     if test != False:
         click.echo('\nLiteLLM: Making a test ChatCompletions request to your proxy')
