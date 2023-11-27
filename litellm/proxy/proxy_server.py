@@ -890,6 +890,7 @@ async def test_endpoint(request: Request):
 async def health_endpoint(request: Request, model: Optional[str] = fastapi.Query(None, description="Specify the model name (optional)")):
     global llm_model_list
     healthy_endpoints = []
+    unhealthy_endpoints = []
     if llm_model_list: 
         for model_name in llm_model_list: 
             try: 
@@ -898,10 +899,22 @@ async def health_endpoint(request: Request, model: Optional[str] = fastapi.Query
                     if litellm_params["model"] not in litellm.all_embedding_models: # filter out embedding models
                         litellm_params["messages"] = [{"role": "user", "content": "Hey, how's it going?"}]
                         litellm.completion(**litellm_params)
-                        healthy_endpoints.append(litellm_params["model"])
+                        cleaned_params = {}
+                        for key in litellm_params:
+                            if key != "api_key" and key != "messages":
+                                cleaned_params[key] = litellm_params[key]
+                        healthy_endpoints.append(cleaned_params)
             except: 
+                cleaned_params = {}
+                for key in litellm_params:
+                    if key != "api_key" and key != "messages":
+                        cleaned_params[key] = litellm_params[key]
+                unhealthy_endpoints.append(cleaned_params)
                 pass
-    return {"healthy_endpoints": healthy_endpoints}
+    return {
+        "healthy_endpoints": healthy_endpoints,
+        "unhealthy_endpoints": unhealthy_endpoints
+    }
 
 @router.get("/")
 async def home(request: Request):
