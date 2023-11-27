@@ -991,7 +991,7 @@ def test_completion_bedrock_cohere():
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_bedrock_cohere()
+# test_completion_bedrock_cohere()
 
 
 def test_completion_bedrock_claude_completion_auth():
@@ -1028,7 +1028,7 @@ def test_completion_bedrock_claude_completion_auth():
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_bedrock_claude_completion_auth()
+# test_completion_bedrock_claude_completion_auth()
 
 # def test_completion_bedrock_claude_external_client_auth():
 #     print("calling bedrock claude external client auth")
