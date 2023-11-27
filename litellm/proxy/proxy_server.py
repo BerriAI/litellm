@@ -366,11 +366,11 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
     ## LITELLM MODULE SETTINGS (e.g. litellm.drop_params=True,..)
     litellm_settings = config.get('litellm_settings', None)
     if litellm_settings: 
+        # ANSI escape code for blue text
+        blue_color_code = "\033[94m"
+        reset_color_code = "\033[0m"
         for key, value in litellm_settings.items(): 
             if key == "cache":
-                # ANSI escape code for blue text
-                blue_color_code = "\033[94m"
-                reset_color_code = "\033[0m"
                 print(f"{blue_color_code}\nSetting Cache on Proxy")
                 from litellm.caching import Cache
                 cache_type = value["type"]
@@ -391,6 +391,8 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
                     port=cache_port,
                     password=cache_password
                 )
+            else:
+                setattr(litellm, key, value)
                 
     ## MODEL LIST
     model_list = config.get('model_list', None)
