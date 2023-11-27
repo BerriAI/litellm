@@ -10,6 +10,9 @@ generator client {
 // required for token gen
 model LiteLLM_VerificationToken {
     token      String   @unique
+    spend      Float    @default(0.0)
     expires    DateTime
     models     String[]
+    aliases    Json  @default("{}")
+    config     Json  @default("{}")
 }

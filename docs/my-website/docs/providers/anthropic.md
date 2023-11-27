@@ -1,5 +1,10 @@
 # Anthropic
-LiteLLM supports Claude-1, 1.2 and Claude-2.
+LiteLLM supports 
+
+- `claude-2.1`
+- `claude-2.1`
+- `claude-instant-1`
+- `claude-instant-1.2`
 
 ## API Keys
 
@@ -44,6 +49,7 @@ for chunk in response:
 
 | Model Name       | Function Call                              | Required OS Variables                |
 |------------------|--------------------------------------------|--------------------------------------|
+| claude-2.1  | `completion('claude-2.1', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
+| claude-2  | `completion('claude-2', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
 | claude-instant-1  | `completion('claude-instant-1', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
 | claude-instant-1.2  | `completion('claude-instant-1.2', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
-| claude-2  | `completion('claude-2', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |

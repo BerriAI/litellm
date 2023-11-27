@@ -114,7 +114,7 @@ def completion(
     logging_obj.pre_call(
         input=prompt,
         api_key=api_key,
-        additional_args={"complete_input_dict": data},
+        additional_args={"complete_input_dict": data, "api_base": api_base},
     )
     
     ## COMPLETION CALL
@@ -172,7 +172,7 @@ def completion(
             encoding.encode(model_response["choices"][0]["message"].get("content", ""))
         )  ##[TODO] use the anthropic tokenizer here
 
-        model_response["created"] = time.time()
+        model_response["created"] = int(time.time())
         model_response["model"] = model
         usage = Usage(
             prompt_tokens=prompt_tokens,

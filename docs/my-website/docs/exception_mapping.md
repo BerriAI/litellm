@@ -4,7 +4,7 @@ LiteLLM maps exceptions across all providers to their OpenAI counterparts.
 - Rate Limit Errors
 - Invalid Request Errors
 - Authentication Errors
-- Timeout Errors 
+- Timeout Errors `openai.APITimeoutError`
 - ServiceUnavailableError 
 - APIError 
 - APIConnectionError
@@ -18,21 +18,56 @@ For all cases, the exception returned inherits from the original OpenAI Exceptio
 * message - the error message
 * llm_provider - the provider raising the exception
 
-## usage
+## Usage
 
 ```python 
-from openai.error import OpenAIError
-from litellm import completion
+import litellm
+import openai
 
-os.environ["ANTHROPIC_API_KEY"] = "bad-key"
-try: 
-    # some code 
-    completion(model="claude-instant-1", messages=[{"role": "user", "content": "Hey, how's it going?"}])
-except OpenAIError as e:
-    print(e)
+try:
+    response = litellm.completion(
+                model="gpt-4",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": "hello, write a 20 pageg essay"
+                    }
+                ],
+                timeout=0.01, # this will raise a timeout exception
+            )
+except openai.APITimeoutError as e:
+    print("Passed: Raised correct exception. Got openai.APITimeoutError\nGood Job", e)
+    print(type(e))
+    pass
 ```
 
-## details 
+## Usage - Catching Streaming Exceptions
+```python
+import litellm
+try:
+    response = litellm.completion(
+        model="gpt-3.5-turbo",
+        messages=[
+            {
+                "role": "user",
+                "content": "hello, write a 20 pg essay"
+            }
+        ],
+        timeout=0.0001, # this will raise an exception
+        stream=True,
+    )
+    for chunk in response:
+        print(chunk)
+except openai.APITimeoutError as e:
+    print("Passed: Raised correct exception. Got openai.APITimeoutError\nGood Job", e)
+    print(type(e))
+    pass
+except Exception as e:
+    print(f"Did not raise error `openai.APITimeoutError`. Instead raised error type: {type(e)}, Error: {e}")
+
+```
+
+## Details 
 
 To see how it's implemented - [check out the code](https://github.com/BerriAI/litellm/blob/a42c197e5a6de56ea576c73715e6c7c6b19fa249/litellm/utils.py#L1217)
 
@@ -40,7 +75,7 @@ To see how it's implemented - [check out the code](https://github.com/BerriAI/li
 
 **Note** For OpenAI and Azure we return the original exception (since they're of the OpenAI Error type). But we add the 'llm_provider' attribute to them. [See code](https://github.com/BerriAI/litellm/blob/a42c197e5a6de56ea576c73715e6c7c6b19fa249/litellm/utils.py#L1221)
 
-## custom mapping list
+## Custom mapping list
 
 Base case - we return the original exception.
 

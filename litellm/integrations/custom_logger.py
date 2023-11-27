@@ -33,9 +33,6 @@ class CustomLogger:
 
     def log_input_event(self, model, messages, kwargs, print_verbose, callback_func):
         try: 
-            print_verbose(
-                    f"Custom Logger - Enters logging function for model {kwargs}"
-                )
             kwargs["model"] = model
             kwargs["messages"] = messages
             kwargs["log_event_type"] = "pre_api_call"
@@ -52,9 +49,6 @@ class CustomLogger:
     def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose, callback_func):
         # Method definition
         try:
-            print_verbose(
-                f"Custom Logger - Enters logging function for model {kwargs}"
-            )
             kwargs["log_event_type"] = "post_api_call"
             callback_func(
                 kwargs, # kwargs to func

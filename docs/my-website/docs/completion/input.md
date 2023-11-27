@@ -157,7 +157,7 @@ def completion(
 
 - `user`: *string (optional)* - A unique identifier representing your end-user. This can help OpenAI to monitor and detect abuse.
 
-- `request_timeout`: *int (optional)* - Timeout in seconds for completion requests (Defaults to 600 seconds)
+- `timeout`: *int (optional)* - Timeout in seconds for completion requests (Defaults to 600 seconds)
 
 #### Deprecated Params
 - `functions`: *array* - A list of functions that the model may use to generate JSON inputs. Each function should have the following properties:

@@ -13,9 +13,10 @@ secrets.toml
 .idea/
 router_config.yaml
 **/config.yaml
-router_config.yaml
 .vscode/
 **/api_logs.json
 **/litellm.secrets.toml
 .github/workflows/test/
 litellm/proxy/_secret_config.yaml
+legacy/
+.aws-sam/

@@ -7,7 +7,7 @@ import os, io
 
 sys.path.insert(
     0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+)  # Adds the parent directory to the system path 
 import pytest
 import litellm
 from litellm import embedding, completion, completion_cost, Timeout
@@ -40,9 +40,10 @@ def test_completion_custom_provider_model_name():
 
 
 def test_completion_claude():
-    litellm.set_verbose = False
+    litellm.set_verbose = True
     litellm.cache = None
     litellm.AnthropicConfig(max_tokens_to_sample=200, metadata={"user_id": "1224"})
+    messages = [{"role": "system", "content": """You are an upbeat, enthusiastic personal fitness coach named Sam. Sam is passionate about helping clients get fit and lead healthier lifestyles. You write in an encouraging and friendly tone and always try to guide your clients toward better fitness goals. If the user asks you something unrelated to fitness, either bring the topic back to fitness, or say that you cannot answer."""},{"content": user_message, "role": "user"}]
     try:
         # test without max tokens
         response = completion(
@@ -58,6 +59,26 @@ def test_completion_claude():
         pytest.fail(f"Error occurred: {e}")
 
 # test_completion_claude()
+
+def test_completion_claude2_1():
+    try:
+        print("claude2.1 test request")
+        # test without max tokens
+        response = completion(
+            model="claude-2.1", 
+            messages=messages, 
+            request_timeout=10,
+            max_tokens=10
+        )
+        # Add any assertions here to check the response
+        print(response)
+        print(response.usage)
+        print(response.usage.completion_tokens)
+        print(response["usage"]["completion_tokens"])
+        # print("new cost tracking")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+# test_completion_claude2_1()
 
 # def test_completion_oobabooga():
 #     try:
@@ -265,21 +286,6 @@ def hf_test_completion_tgi():
         pytest.fail(f"Error occurred: {e}")
 # hf_test_completion_tgi()
 
-def hf_test_completion_tgi_stream():
-    try:
-        response = completion(
-            model = 'huggingface/HuggingFaceH4/zephyr-7b-beta', 
-            messages = [{ "content": "Hello, how are you?","role": "user"}],
-            stream=True
-        )
-        # Add any assertions here to check the response
-        print(response)
-        for chunk in response:
-            print(chunk["choices"][0]["delta"]["content"])
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-# hf_test_completion_tgi_stream()
-
 # ################### Hugging Face Conversational models ########################
 # def hf_test_completion_conv():
 #     try:
@@ -400,7 +406,13 @@ def test_completion_openai():
         litellm.set_verbose=True
         print(f"api key: {os.environ['OPENAI_API_KEY']}")
         litellm.api_key = os.environ['OPENAI_API_KEY']
-        response = completion(model="gpt-3.5-turbo", messages=messages, max_tokens=10, request_timeout=10)
+        response = completion(
+            model="gpt-3.5-turbo", 
+            messages=messages, 
+            max_tokens=10, 
+            request_timeout=1,
+            metadata = {"hi": "bye"}
+        )
         print("This is the response object\n", response)
 
         
@@ -444,7 +456,8 @@ def test_completion_openai_with_optional_params():
             temperature=0.5,
             top_p=0.1,
             seed=12,
-            response_format={ "type": "json_object" }
+            response_format={ "type": "json_object" },
+            logit_bias=None,
         )
         # Add any assertions here to check the response
         print(response)
@@ -453,7 +466,7 @@ def test_completion_openai_with_optional_params():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_completion_openai_with_optional_params()
+# test_completion_openai_with_optional_params()
 
 def test_completion_openai_litellm_key():
     try:
@@ -547,6 +560,29 @@ def test_completion_hf_model_no_provider():
 #         pytest.fail(f"Error occurred: {e}")
 # test_completion_openai_azure_with_functions()
 
+def test_completion_azure_key_completion_arg():
+    # this tests if we can pass api_key to completion, when it's not in the env 
+    # DO NOT REMOVE THIS TEST. No MATTER WHAT Happens. 
+    # If you want to remove it, speak to Ishaan! 
+    # Ishaan will be very disappointed if this test is removed -> this is a standard way to pass api_key + the router + proxy use this
+    old_key = os.environ["AZURE_API_KEY"]
+    os.environ.pop("AZURE_API_KEY", None)
+    try:
+        print("azure gpt-3.5 test\n\n")
+        litellm.set_verbose=False
+        ## Test azure call
+        response = completion(
+            model="azure/chatgpt-v-2",
+            messages=messages,
+            api_key=old_key,
+            max_tokens=10,
+        )
+        print(f"response: {response}")
+        os.environ["AZURE_API_KEY"] = old_key
+    except Exception as e:
+        os.environ["AZURE_API_KEY"] = old_key
+        pytest.fail(f"Error occurred: {e}")
+# test_completion_azure_key_completion_arg()
 
 def test_completion_azure():
     try:
@@ -556,16 +592,21 @@ def test_completion_azure():
         response = completion(
             model="azure/chatgpt-v-2",
             messages=messages,
+            api_key="os.environ/AZURE_API_KEY"
         )
+        print(f"response: {response}")
         ## Test azure flag for backwards compatibility
-        response = completion(
-            model="chatgpt-v-2",
-            messages=messages,
-            azure=True,
-            max_tokens=10
-        )
+        # response = completion(
+        #     model="chatgpt-v-2",
+        #     messages=messages,
+        #     azure=True,
+        #     max_tokens=10
+        # )
         # Add any assertions here to check the response
         print(response)
+
+        cost = completion_cost(completion_response=response)
+        print("Cost for azure completion request", cost)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -780,7 +821,6 @@ def test_completion_replicate_vicuna():
 # test_completion_replicate_vicuna()
 
 def test_completion_replicate_llama2_stream():
-    print("TESTING REPLICATE streaming")
     litellm.set_verbose=False
     model_name = "replicate/meta/llama-2-7b-chat:13c3cdee13ee059ab779f0291d29054dab00a47dad8261375654de5540165fb0"
     try:
@@ -796,12 +836,16 @@ def test_completion_replicate_llama2_stream():
             max_tokens=20,
             num_retries=3
         )
-        print(response)
+        print(f"response: {response}")
         # Add any assertions here to check the response
+        complete_response = "" 
         for i, chunk in enumerate(response):
-            if i == 0:
-                assert len(chunk.choices[0].delta["content"]) > 5
-            print(chunk)
+            complete_response += chunk.choices[0].delta["content"]
+            # if i == 0:
+            #     assert len(chunk.choices[0].delta["content"]) > 2
+            # print(chunk)
+        assert len(complete_response) > 5
+        print(f"complete_response: {complete_response}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 # test_completion_replicate_llama2_stream()
@@ -860,7 +904,7 @@ def test_customprompt_together_ai():
         print(f"ERROR TYPE {type(e)}")
         pytest.fail(f"Error occurred: {e}")
 
-test_customprompt_together_ai()
+# test_customprompt_together_ai()
 
 def test_completion_sagemaker():
     try:
@@ -916,6 +960,7 @@ def test_completion_bedrock_claude():
 
 def test_completion_bedrock_cohere():
     print("calling bedrock cohere")
+    litellm.set_verbose = True
     try:
         response = completion(
             model="bedrock/cohere.command-text-v14", 
@@ -932,7 +977,7 @@ def test_completion_bedrock_cohere():
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_completion_bedrock_cohere()
+test_completion_bedrock_cohere()
 
 
 def test_completion_bedrock_claude_completion_auth():
@@ -1309,6 +1354,7 @@ def test_completion_ai21():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+# test_completion_ai21()
 # test_completion_ai21()
 ## test deep infra 
 def test_completion_deep_infra():

@@ -38,6 +38,7 @@ const sidebars = {
         "completion/model_alias", 
         "completion/batching",
         "completion/mock_requests",
+        "completion/reliable_completions",
       ],
     },
     {
@@ -85,9 +86,10 @@ const sidebars = {
       ]
     },
     "simple_proxy",
-    "budget_manager",
     "routing",
+    "rules",
     "set_keys",
+    "budget_manager",
     "completion/token_usage",
     {
       type: 'category',
@@ -142,7 +144,6 @@ const sidebars = {
       items: [
         "caching/local_caching",
         "caching/redis_cache",
-        "caching/caching_api",
       ],
     },
     {

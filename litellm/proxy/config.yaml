@@ -7,11 +7,22 @@ model_list:
     litellm_params:
       model: huggingface/HuggingFaceH4/zephyr-7b-beta
       api_base: https://<my-hosted-endpoint>
+  - model_name: deepseek-coder:latest
+    litellm_params:
+      model: ollama/deepseek-coder:latest
 
 litellm_settings:
   drop_params: True
   set_verbose: True
+  # cache: # optional if you want to use caching
+  #   type: redis   # tell litellm to use redis caching
 
 general_settings: 
-  master_key: sk-1234 # [OPTIONAL] Only use this if you to require all calls to contain this key (Authorization: Bearer sk-1234)
-  database_url: "postgresql://<user>:<password>@<host>:<port>/<dbname>" # [OPTIONAL] use for token-based auth to proxy
+  # master_key: sk-1234 # [OPTIONAL] Only use this if you to require all calls to contain this key (Authorization: Bearer sk-1234)
+  # database_url: "postgresql://<user>:<password>@<host>:<port>/<dbname>" # [OPTIONAL] use for token-based auth to proxy
+
+environment_variables:
+  # settings for using redis caching
+  # REDIS_HOST: redis-16337.c322.us-east-1-2.ec2.cloud.redislabs.com
+  # REDIS_PORT: "16337"
+  # REDIS_PASSWORD: 

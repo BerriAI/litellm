@@ -105,6 +105,8 @@ class UnsupportedParamsError(Exception):
     def __init__(self, status_code, message):
         self.status_code = status_code
         self.message = message
+        self.request = httpx.Request(method="POST", url=" https://openai.api.com/v1/")
+        self.response = httpx.Response(status_code=status_code, request=self.request)
         super().__init__(
             self.message
         )  # Call the base class constructor with the parameters it needs
@@ -186,10 +188,7 @@ class Delta(OpenAIObject):
 class Choices(OpenAIObject):
     def __init__(self, finish_reason=None, index=0, message=None, **params):
         super(Choices, self).__init__(**params)
-        if finish_reason:
-            self.finish_reason = map_finish_reason(finish_reason)
-        else:
-            self.finish_reason = "stop"
+        self.finish_reason = map_finish_reason(finish_reason) # set finish_reason for all responses
         self.index = index
         if message is None:
             self.message = Message(content=None)
@@ -338,16 +337,54 @@ class ModelResponse(OpenAIObject):
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
+class Embedding(OpenAIObject):
+    embedding: list = []
+    index: int
+    object: str
+
+    def get(self, key, default=None):
+        # Custom .get() method to access attributes with a default value if the attribute doesn't exist
+        return getattr(self, key, default)
+    
+    def __getitem__(self, key):
+        # Allow dictionary-style access to attributes
+        return getattr(self, key)
+
+    def __setitem__(self, key, value):
+        # Allow dictionary-style assignment of attributes
+        setattr(self, key, value)
+
 class EmbeddingResponse(OpenAIObject):
-    def __init__(self, id=None, choices=None, created=None, model=None, usage=None, stream=False, response_ms=None):
+    model: Optional[str] = None
+    """The model used for embedding."""
+
+    data: Optional[List] = None
+    """The actual embedding value"""
+
+    object: str
+    """The object type, which is always "embedding" """
+
+    usage: Optional[Usage] = None
+    """Usage statistics for the embedding request."""
+
+    def __init__(self, model=None, usage=None, stream=False, response_ms=None, data=None):
         object = "list"
         if response_ms:
             _response_ms = response_ms
         else:
             _response_ms = None
-        data = []
+        if data: 
+            data = data
+        else: 
+            data = None
+        
+        if usage:
+            usage = usage
+        else:
+            usage = Usage()
+
         model = model
-        super().__init__(id=id, choices=choices, created=created, model=model, object=object, data=data, usage=usage)
+        super().__init__(model=model, object=object, data=data, usage=usage)
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -502,7 +539,8 @@ class Logging:
             "messages": self.messages,
             "optional_params": self.optional_params,
             "litellm_params": self.litellm_params,
-            "start_time": self.start_time
+            "start_time": self.start_time,
+            "stream": self.stream
         }
 
     def pre_call(self, input, api_key, model=None, additional_args={}):
@@ -525,7 +563,7 @@ class Logging:
                 headers = {}
             data = additional_args.get("complete_input_dict", {})
             api_base = additional_args.get("api_base", "")
-            masked_headers = {k: v[:-40] + '*' * 40 if len(v) > 40 else v for k, v in headers.items()}
+            masked_headers = {k: (v[:-20] + '*' * 20) if (isinstance(v, str) and len(v) > 20) else v for k, v in headers.items()}
             formatted_headers = " ".join([f"-H '{k}: {v}'" for k, v in masked_headers.items()])
 
             print_verbose(f"PRE-API-CALL ADDITIONAL ARGS: {additional_args}")
@@ -643,6 +681,7 @@ class Logging:
             print_verbose(
                 f"Logging Details Post-API Call: logger_fn - {self.logger_fn} | callable(logger_fn) - {callable(self.logger_fn)}"
             )
+            print_verbose(f"Logging Details Post-API Call: LiteLLM Params: {self.model_call_details}")
             if self.logger_fn and callable(self.logger_fn):
                 try:
                     self.logger_fn(
@@ -713,7 +752,7 @@ class Logging:
             if self.stream: 
                 if result.choices[0].finish_reason is not None: # if it's the last chunk
                     self.streaming_chunks.append(result)
-                    complete_streaming_response = litellm.stream_chunk_builder(self.streaming_chunks)
+                    complete_streaming_response = litellm.stream_chunk_builder(self.streaming_chunks, messages=self.model_call_details.get("messages", None))
                 else:
                     self.streaming_chunks.append(result)
             elif isinstance(result, OpenAIObject):
@@ -1021,7 +1060,7 @@ class Logging:
                     )
                     if capture_exception:  # log this error to sentry for debugging
                         capture_exception(e)
-        except:
+        except Exception as e:
             print_verbose(
                 f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while failure logging {traceback.format_exc()}"
             )
@@ -1058,10 +1097,48 @@ def exception_logging(
         pass
 
 
+####### RULES ###################
+
+class Rules: 
+    """
+    Fail calls based on the input or llm api output
+
+    Example usage: 
+    import litellm 
+    def my_custom_rule(input): # receives the model response 
+	    if "i don't think i can answer" in input: # trigger fallback if the model refuses to answer 
+		    return False 
+	    return True 
+    
+    litellm.post_call_rules = [my_custom_rule] # have these be functions that can be called to fail a call
+
+    response = litellm.completion(model="gpt-3.5-turbo", messages=[{"role": "user", 
+	"content": "Hey, how's it going?"}], fallbacks=["openrouter/mythomax"])
+    """
+    def __init__(self) -> None:
+        pass
+
+    def pre_call_rules(self, input: str, model: str): 
+        for rule in litellm.pre_call_rules: 
+            if callable(rule): 
+                decision = rule(input)
+                if decision is False:
+                    raise litellm.APIResponseValidationError(message="LLM Response failed post-call-rule check", llm_provider="", model=model) # type: ignore
+        return True 
+
+    def post_call_rules(self, input: str, model: str): 
+        for rule in litellm.post_call_rules: 
+            if callable(rule): 
+                decision = rule(input)
+                if decision is False:
+                    raise litellm.APIResponseValidationError(message="LLM Response failed post-call-rule check", llm_provider="", model=model) # type: ignore
+        return True 
+
 ####### CLIENT ###################
 # make it easy to log if completion/embedding runs succeeded or failed + see what happened | Non-Blocking
 def client(original_function):
     global liteDebuggerClient, get_all_keys
+    rules_obj = Rules()
     def function_setup(
         start_time, *args, **kwargs
     ):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
@@ -1118,18 +1195,28 @@ def client(original_function):
                     messages = args[1] 
                 elif kwargs.get("messages", None):
                     messages = kwargs["messages"]
-                elif kwargs.get("prompt", None):
-                    messages = kwargs["prompt"]
+                ### PRE-CALL RULES ### 
+                rules_obj.pre_call_rules(input="".join(m["content"] for m in messages if isinstance(m["content"], str)), model=model)
             elif call_type == CallTypes.embedding.value:
                 messages = args[1] if len(args) > 1 else kwargs["input"]
             stream = True if "stream" in kwargs and kwargs["stream"] == True else False
             logging_obj = Logging(model=model, messages=messages, stream=stream, litellm_call_id=kwargs["litellm_call_id"], function_id=function_id, call_type=call_type, start_time=start_time)
             return logging_obj
-        except Exception as e:  # DO NOT BLOCK running the function because of this
+        except Exception as e: 
             import logging
             logging.debug(f"[Non-Blocking] {traceback.format_exc()}; args - {args}; kwargs - {kwargs}")
             raise e
     
+    def post_call_processing(original_response, model):
+        try: 
+            call_type = original_function.__name__
+            if call_type == CallTypes.completion.value or call_type == CallTypes.acompletion.value:
+                model_response = original_response['choices'][0]['message']['content']
+                ### POST-CALL RULES ### 
+                rules_obj.post_call_rules(input=model_response, model=model)
+        except Exception as e: 
+            raise e
+
     def crash_reporting(*args, **kwargs):
         if litellm.telemetry:
             try:
@@ -1187,11 +1274,18 @@ def client(original_function):
                     cached_result = litellm.cache.get_cache(*args, **kwargs)
                     if cached_result != None:
                         print_verbose(f"Cache Hit!")
-                        call_type = original_function.__name__
-                        if call_type == CallTypes.completion.value and isinstance(cached_result, dict):
-                            return convert_to_model_response_object(response_object=cached_result, model_response_object=ModelResponse())
-                        else:
-                            return cached_result
+                        if "detail" in cached_result: 
+                            # implies an error occurred 
+                            pass
+                        else: 
+                            call_type = original_function.__name__
+                            print_verbose(f"Cache Response Object routing: call_type - {call_type}; cached_result instace: {type(cached_result)}")
+                            if call_type == CallTypes.completion.value and isinstance(cached_result, dict):
+                                return convert_to_model_response_object(response_object=cached_result, model_response_object=ModelResponse())
+                            elif call_type == CallTypes.embedding.value and isinstance(cached_result, dict):
+                                return convert_to_model_response_object(response_object=cached_result, response_type="embedding")
+                            else: 
+                                return cached_result
             # MODEL CALL
             result = original_function(*args, **kwargs)
             end_time = datetime.datetime.now()
@@ -1201,11 +1295,14 @@ def client(original_function):
                     chunks = []
                     for idx, chunk in enumerate(result):
                         chunks.append(chunk)
-                    return litellm.stream_chunk_builder(chunks)
+                    return litellm.stream_chunk_builder(chunks, messages=kwargs.get("messages", None))
                 else: 
                     return result
             elif "acompletion" in kwargs and kwargs["acompletion"] == True: 
                 return result
+            
+            ### POST-CALL RULES ### 
+            post_call_processing(original_response=result, model=model)
 
             # [OPTIONAL] ADD TO CACHE
             if litellm.caching or litellm.caching_with_models or litellm.cache != None: # user init a cache object
@@ -1248,7 +1345,7 @@ def client(original_function):
             end_time = datetime.datetime.now()
             # LOG FAILURE - handle streaming failure logging in the _next_ object, remove `handle_failure` once it's deprecated
             if logging_obj:
-                threading.Thread(target=logging_obj.failure_handler, args=(e, traceback_exception, start_time, end_time)).start()
+                logging_obj.failure_handler(e, traceback_exception, start_time, end_time) # DO NOT MAKE THREADED - router retry fallback relies on this!
                 my_thread = threading.Thread(
                     target=handle_failure,
                     args=(e, traceback_exception, start_time, end_time, args, kwargs),
@@ -1308,9 +1405,13 @@ def client(original_function):
                     chunks = []
                     for idx, chunk in enumerate(result):
                         chunks.append(chunk)
-                    return litellm.stream_chunk_builder(chunks)
+                    return litellm.stream_chunk_builder(chunks, messages=kwargs.get("messages", None))
                 else: 
                     return result
+            
+            ### POST-CALL RULES ### 
+            post_call_processing(original_response=result, model=model)
+
             # [OPTIONAL] ADD TO CACHE
             if litellm.caching or litellm.caching_with_models or litellm.cache != None: # user init a cache object
                 litellm.cache.add_cache(result, *args, **kwargs)
@@ -1318,6 +1419,8 @@ def client(original_function):
             # LOG SUCCESS - handle streaming success logging in the _next_ object, remove `handle_success` once it's deprecated
             threading.Thread(target=logging_obj.success_handler, args=(result, start_time, end_time)).start()
             # RETURN RESULT
+            if isinstance(result, ModelResponse):
+                result._response_ms = (end_time - start_time).total_seconds() * 1000 # return response latency in ms like openai
             return result
         except Exception as e: 
             call_type = original_function.__name__
@@ -1347,9 +1450,8 @@ def client(original_function):
             traceback_exception = traceback.format_exc()
             crash_reporting(*args, **kwargs, exception=traceback_exception)
             end_time = datetime.datetime.now()
-            # LOG FAILURE - handle streaming failure logging in the _next_ object, remove `handle_failure` once it's deprecated
             if logging_obj:
-                threading.Thread(target=logging_obj.failure_handler, args=(e, traceback_exception, start_time, end_time)).start()
+                logging_obj.failure_handler(e, traceback_exception, start_time, end_time) # DO NOT MAKE THREADED - router retry fallback relies on this!
             raise e
 
     # Use httpx to determine if the original function is a coroutine
@@ -1529,12 +1631,12 @@ def token_counter(model="", text=None,  messages: Optional[List] = None):
     return num_tokens
 
 
-def cost_per_token(model="gpt-3.5-turbo", prompt_tokens=0, completion_tokens=0):
+def cost_per_token(model="", prompt_tokens=0, completion_tokens=0):
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
 
     Parameters:
-        model (str): The name of the model to use. Default is "gpt-3.5-turbo".
+        model (str): The name of the model to use. Default is ""
         prompt_tokens (int): The number of tokens in the prompt.
         completion_tokens (int): The number of tokens in the completion.
     
@@ -1545,6 +1647,15 @@ def cost_per_token(model="gpt-3.5-turbo", prompt_tokens=0, completion_tokens=0):
     prompt_tokens_cost_usd_dollar = 0
     completion_tokens_cost_usd_dollar = 0
     model_cost_ref = litellm.model_cost
+
+    # see this https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models
+    azure_llms = {
+        "gpt-35-turbo": "azure/gpt-3.5-turbo",
+        "gpt-35-turbo-16k": "azure/gpt-3.5-turbo-16k",
+        "gpt-35-turbo-instruct": "azure/gpt-3.5-turbo-instruct"
+    }
+    if "azure/" in  model:
+        model = model.replace("azure/", "")
     if model in model_cost_ref:
         prompt_tokens_cost_usd_dollar = (
             model_cost_ref[model]["input_cost_per_token"] * prompt_tokens
@@ -1553,8 +1664,25 @@ def cost_per_token(model="gpt-3.5-turbo", prompt_tokens=0, completion_tokens=0):
             model_cost_ref[model]["output_cost_per_token"] * completion_tokens
         )
         return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
+    elif "ft:gpt-3.5-turbo" in model:
+        # fuzzy match ft:gpt-3.5-turbo:abcd-id-cool-litellm
+        prompt_tokens_cost_usd_dollar = (
+            model_cost_ref["ft:gpt-3.5-turbo"]["input_cost_per_token"] * prompt_tokens
+        )
+        completion_tokens_cost_usd_dollar = (
+            model_cost_ref["ft:gpt-3.5-turbo"]["output_cost_per_token"] * completion_tokens
+        )
+        return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
+    elif model in azure_llms:
+        model = azure_llms[model]
+        prompt_tokens_cost_usd_dollar = (
+            model_cost_ref[model]["input_cost_per_token"] * prompt_tokens
+        )
+        completion_tokens_cost_usd_dollar = (
+            model_cost_ref[model]["output_cost_per_token"] * completion_tokens
+        )
     else:
-        # calculate average input cost
+        # calculate average input cost, azure/gpt-deployments can potentially go here if users don't specify, gpt-4, gpt-3.5-turbo. LLMs litellm knows
         input_cost_sum = 0
         output_cost_sum = 0
         model_cost_ref = litellm.model_cost
@@ -1570,7 +1698,7 @@ def cost_per_token(model="gpt-3.5-turbo", prompt_tokens=0, completion_tokens=0):
 
 def completion_cost(
         completion_response=None,
-        model="gpt-3.5-turbo", 
+        model=None,
         prompt="", 
         messages: List = [],
         completion="",
@@ -1611,7 +1739,7 @@ def completion_cost(
             # get input/output tokens from completion_response
             prompt_tokens = completion_response['usage']['prompt_tokens']
             completion_tokens = completion_response['usage']['completion_tokens']
-            model = completion_response['model'] # get model from completion_response
+            model = model or completion_response['model'] # check if user passed an override for model, if it's none check completion_response['model']
         else:
             prompt_tokens = token_counter(model=model, text=prompt)
             completion_tokens = token_counter(model=model, text=completion)
@@ -1751,7 +1879,7 @@ def get_optional_params(  # use the openai defaults
     max_tokens=None,
     presence_penalty=None,
     frequency_penalty=0,
-    logit_bias={},
+    logit_bias=None,
     user="",
     model=None,
     custom_llm_provider="",
@@ -1759,6 +1887,7 @@ def get_optional_params(  # use the openai defaults
     seed=None,
     tools=None,
     tool_choice=None,
+    max_retries=None,
     **kwargs
 ):
     # retrieve all parameters passed to the function
@@ -1777,14 +1906,15 @@ def get_optional_params(  # use the openai defaults
         "max_tokens":None,
         "presence_penalty":None,
         "frequency_penalty":None,
-        "logit_bias":{},
+        "logit_bias": None,
         "user":"",
         "model":None,
         "custom_llm_provider":"",
         "response_format": None,
         "seed": None,
         "tools": None,
-        "tool_choice": None
+        "tool_choice": None,
+        "max_retries": None,
     }
     # filter out those parameters that were passed with non-default values
     non_default_params = {k: v for k, v in passed_params.items() if (k != "model" and k != "custom_llm_provider" and k in default_params and v != default_params[k])}
@@ -1798,7 +1928,7 @@ def get_optional_params(  # use the openai defaults
                 raise UnsupportedParamsError(status_code=500, message=f"Function calling is not supported by {custom_llm_provider}. To add it to the prompt, set `litellm.add_function_to_prompt = True`.")
 
     def _check_valid_arg(supported_params): 
-        print_verbose(f"\nLiteLLM completion() model= {model}")
+        print_verbose(f"\nLiteLLM completion() model= {model}; provider = {custom_llm_provider}")
         print_verbose(f"\nLiteLLM: Params passed to completion() {passed_params}")
         print_verbose(f"\nLiteLLM: Non-Default params passed to completion() {non_default_params}")
         unsupported_params = {}
@@ -1811,7 +1941,6 @@ def get_optional_params(  # use the openai defaults
                     unsupported_params[k] = non_default_params[k]
         if unsupported_params and not litellm.drop_params:
             raise UnsupportedParamsError(status_code=500, message=f"{custom_llm_provider} does not support parameters: {unsupported_params}. To drop these, set `litellm.drop_params=True`.")
-
     ## raise exception if provider doesn't support passed in param 
     if custom_llm_provider == "anthropic":
         ## check if unsupported param passed in 
@@ -1843,7 +1972,7 @@ def get_optional_params(  # use the openai defaults
             optional_params["max_tokens"] = max_tokens
         if n is not None:
             optional_params["num_generations"] = n
-        if logit_bias != {}:
+        if logit_bias is not None:
             optional_params["logit_bias"] = logit_bias
         if top_p is not None:
             optional_params["p"] = top_p
@@ -1864,7 +1993,7 @@ def get_optional_params(  # use the openai defaults
             optional_params["temperature"] = temperature
         if max_tokens is not None:
             optional_params["max_tokens"] = max_tokens
-        if logit_bias != {}:
+        if logit_bias is not None:
             optional_params["logit_bias"] = logit_bias
         if top_p is not None:
             optional_params["p"] = top_p
@@ -2092,7 +2221,7 @@ def get_optional_params(  # use the openai defaults
                 optional_params["max_tokens"] = max_tokens
             if n is not None:
                 optional_params["num_generations"] = n
-            if logit_bias != {}:
+            if logit_bias is not None:
                 optional_params["logit_bias"] = logit_bias
             if top_p is not None:
                 optional_params["p"] = top_p
@@ -2102,7 +2231,7 @@ def get_optional_params(  # use the openai defaults
                 optional_params["presence_penalty"] = presence_penalty
             if stop is not None:
                 optional_params["stop_sequences"] = stop
-    elif model in litellm.aleph_alpha_models:
+    elif custom_llm_provider == "aleph_alpha":
         supported_params = ["max_tokens", "stream", "top_p", "temperature", "presence_penalty", "frequency_penalty", "n", "stop"]
         _check_valid_arg(supported_params=supported_params)
         if max_tokens is not None:
@@ -2137,7 +2266,7 @@ def get_optional_params(  # use the openai defaults
             optional_params["repeat_penalty"] = frequency_penalty
         if stop is not None:
             optional_params["stop_sequences"] = stop
-    elif model in litellm.nlp_cloud_models or custom_llm_provider == "nlp_cloud":
+    elif custom_llm_provider == "nlp_cloud":
         supported_params = ["max_tokens", "stream", "temperature", "top_p", "presence_penalty", "frequency_penalty", "n", "stop"]
         _check_valid_arg(supported_params=supported_params)
 
@@ -2157,7 +2286,7 @@ def get_optional_params(  # use the openai defaults
             optional_params["num_return_sequences"] = n
         if stop is not None:
             optional_params["stop_sequences"] = stop
-    elif model in litellm.petals_models or custom_llm_provider == "petals":
+    elif custom_llm_provider == "petals":
         supported_params = ["max_tokens", "temperature", "top_p", "stream"]
         _check_valid_arg(supported_params=supported_params)
         # max_new_tokens=1,temperature=0.9, top_p=0.6
@@ -2172,14 +2301,96 @@ def get_optional_params(  # use the openai defaults
     elif custom_llm_provider == "deepinfra":
         supported_params = ["temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user"]
         _check_valid_arg(supported_params=supported_params)
+        if temperature is not None:
+            if temperature == 0 and model == "mistralai/Mistral-7B-Instruct-v0.1": # this model does no support temperature == 0
+                temperature = 0.0001 # close to 0
+            optional_params["temperature"] = temperature
+        if top_p:
+            optional_params["top_p"] = top_p
+        if n: 
+            optional_params["n"] = n
+        if stream: 
+            optional_params["stream"] = stream
+        if stop: 
+            optional_params["stop"] = stop
+        if max_tokens: 
+            optional_params["max_tokens"] = max_tokens
+        if presence_penalty: 
+            optional_params["presence_penalty"] = presence_penalty
+        if frequency_penalty: 
+            optional_params["frequency_penalty"] = frequency_penalty
+        if logit_bias: 
+            optional_params["logit_bias"] = logit_bias
+        if user: 
+            optional_params["user"] = user
+    elif custom_llm_provider == "perplexity":
+        supported_params = ["temperature", "top_p", "stream", "max_tokens", "presence_penalty", "frequency_penalty"]
+        _check_valid_arg(supported_params=supported_params)
+        if temperature is not None:
+            if temperature == 0 and model == "mistral-7b-instruct": # this model does no support temperature == 0
+                temperature = 0.0001 # close to 0
+            optional_params["temperature"] = temperature
+        if top_p: 
+            optional_params["top_p"] = top_p
+        if stream: 
+            optional_params["stream"] = stream
+        if max_tokens: 
+            optional_params["max_tokens"] = max_tokens
+        if presence_penalty: 
+            optional_params["presence_penalty"] = presence_penalty
+        if frequency_penalty: 
+            optional_params["frequency_penalty"] = frequency_penalty
+    elif custom_llm_provider == "anyscale":
+        supported_params = ["temperature", "top_p", "stream", "max_tokens"]
+        _check_valid_arg(supported_params=supported_params)
         optional_params = non_default_params
         if temperature is not None:
             if temperature == 0 and model == "mistralai/Mistral-7B-Instruct-v0.1": # this model does no support temperature == 0
                 temperature = 0.0001 # close to 0
             optional_params["temperature"] = temperature
+        if top_p: 
+            optional_params["top_p"] = top_p
+        if stream: 
+            optional_params["stream"] = stream
+        if max_tokens: 
+            optional_params["max_tokens"] = max_tokens
     else:  # assume passing in params for openai/azure openai
-        supported_params = ["functions", "function_call", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "response_format", "seed", "tools", "tool_choice"]
+        supported_params = ["functions", "function_call", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "response_format", "seed", "tools", "tool_choice", "max_retries"]
         _check_valid_arg(supported_params=supported_params)
+        if functions is not None:
+            optional_params["functions"] = functions
+        if function_call is not None:
+            optional_params["function_call"] = function_call
+        if temperature is not None:
+            optional_params["temperature"] = temperature
+        if top_p is not None:
+            optional_params["top_p"] = top_p
+        if n is not None:
+            optional_params["n"] = n
+        if stream is not None:
+            optional_params["stream"] = stream
+        if stop is not None:
+            optional_params["stop"] = stop
+        if max_tokens is not None:
+            optional_params["max_tokens"] = max_tokens
+        if presence_penalty is not None:
+            optional_params["presence_penalty"] = presence_penalty
+        if frequency_penalty is not None:
+            optional_params["frequency_penalty"] = frequency_penalty
+        if logit_bias is not None:
+            optional_params["logit_bias"] = logit_bias
+        if user is not None:
+            optional_params["user"] = user
+        if response_format is not None:
+            optional_params["response_format"] = response_format
+        if seed is not None:
+            optional_params["seed"] = seed
+        if tools is not None:
+            optional_params["tools"] = tools
+        if tool_choice is not None:
+            optional_params["tool_choice"] = tool_choice
+        if max_retries is not None:
+            optional_params["max_retries"] = max_retries
         optional_params = non_default_params
     # if user passed in non-default kwargs for specific providers/models, pass them along 
     for k in passed_params.keys(): 
@@ -2187,13 +2398,17 @@ def get_optional_params(  # use the openai defaults
             optional_params[k] = passed_params[k]
     return optional_params
 
-def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None, api_base: Optional[str] = None):
+def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None, api_base: Optional[str] = None, api_key: Optional[str] = None):
     try:
         dynamic_api_key = None
         # check if llm provider provided
+        
         if custom_llm_provider:
             return model, custom_llm_provider, dynamic_api_key, api_base
-
+        
+        if api_key and api_key.startswith("os.environ/"): 
+            api_key_env_name = api_key.replace("os.environ/", "")
+            dynamic_api_key = os.getenv(api_key_env_name)
         # check if llm provider part of model name
         if model.split("/",1)[0] in litellm.provider_list and model.split("/",1)[0] not in litellm.model_list:
             custom_llm_provider = model.split("/", 1)[0]
@@ -2202,26 +2417,29 @@ def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None, api_
                 # perplexity is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.perplexity.ai
                 api_base = "https://api.perplexity.ai"
                 dynamic_api_key = os.getenv("PERPLEXITYAI_API_KEY")
-                custom_llm_provider = "custom_openai"
             elif custom_llm_provider == "anyscale": 
                 # anyscale is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
                 api_base = "https://api.endpoints.anyscale.com/v1"
                 dynamic_api_key = os.getenv("ANYSCALE_API_KEY")
-                custom_llm_provider = "custom_openai"
             elif custom_llm_provider == "deepinfra": 
                 # deepinfra is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
                 api_base = "https://api.deepinfra.com/v1/openai"
                 dynamic_api_key = os.getenv("DEEPINFRA_API_KEY")
-                custom_llm_provider = "custom_openai"
             return model, custom_llm_provider, dynamic_api_key, api_base
 
         # check if api base is a known openai compatible endpoint
         if api_base: 
             for endpoint in litellm.openai_compatible_endpoints:
                 if endpoint in api_base:
-                    custom_llm_provider = "custom_openai"
-                    if endpoint == "api.perplexity.ai": 
+                    if endpoint == "api.perplexity.ai":
+                        custom_llm_provider = "perplexity"
                         dynamic_api_key = os.getenv("PERPLEXITYAI_API_KEY")
+                    elif endpoint == "api.endpoints.anyscale.com/v1":
+                        custom_llm_provider = "anyscale"
+                        dynamic_api_key = os.getenv("ANYSCALE_API_KEY")
+                    elif endpoint == "api.deepinfra.com/v1/openai":
+                        custom_llm_provider = "deepinfra"
+                        dynamic_api_key = os.getenv("DEEPINFRA_API_KEY")
                     return model, custom_llm_provider, dynamic_api_key, api_base
 
         # check if model in known model provider list  -> for huggingface models, raise exception as they don't have a fixed provider (can be togetherai, anyscale, baseten, runpod, et.)
@@ -3059,38 +3277,72 @@ def handle_failure(exception, traceback_exception, start_time, end_time, args, k
         pass
 
 
-def convert_to_model_response_object(response_object: Optional[dict]=None, model_response_object: Optional[ModelResponse]=None):
+def convert_to_model_response_object(response_object: Optional[dict]=None, model_response_object: Optional[Union[ModelResponse, EmbeddingResponse]]=None, response_type: Literal["completion", "embedding"] = "completion"):
         try: 
-            if response_object is None or model_response_object is None:
-                raise Exception("Error in response object format")
-            choice_list=[]
-            for idx, choice in enumerate(response_object["choices"]): 
-                message = Message(
-                    content=choice["message"].get("content", None), 
-                    role=choice["message"]["role"], 
-                    function_call=choice["message"].get("function_call", None), 
-                    tool_calls=choice["message"].get("tool_calls", None)
-                )
-                finish_reason = choice.get("finish_reason", None)
-                if finish_reason == None:
-                    # gpt-4 vision can return 'finish_reason' or 'finish_details'
-                    finish_reason = choice.get("finish_details")
-                choice = Choices(finish_reason=finish_reason, index=idx, message=message)
-                choice_list.append(choice)
-            model_response_object.choices = choice_list
+            if response_type == "completion" and (model_response_object is None or isinstance(model_response_object, ModelResponse)): 
+                if response_object is None or model_response_object is None:
+                    raise Exception("Error in response object format")
+                choice_list=[]
+                for idx, choice in enumerate(response_object["choices"]): 
+                    message = Message(
+                        content=choice["message"].get("content", None), 
+                        role=choice["message"]["role"], 
+                        function_call=choice["message"].get("function_call", None), 
+                        tool_calls=choice["message"].get("tool_calls", None)
+                    )
+                    finish_reason = choice.get("finish_reason", None)
+                    if finish_reason == None:
+                        # gpt-4 vision can return 'finish_reason' or 'finish_details'
+                        finish_reason = choice.get("finish_details")
+                    choice = Choices(finish_reason=finish_reason, index=idx, message=message)
+                    choice_list.append(choice)
+                model_response_object.choices = choice_list
 
-            if "usage" in response_object: 
-                model_response_object.usage = response_object["usage"]
-            
-            if "id" in response_object: 
-                model_response_object.id = response_object["id"]
-            
-            if "system_fingerprint" in response_object:
-                model_response_object.system_fingerprint = response_object["system_fingerprint"]
+                if "usage" in response_object and response_object["usage"] is not None:
+                    model_response_object.usage.completion_tokens = response_object["usage"].get("completion_tokens", 0) # type: ignore
+                    model_response_object.usage.prompt_tokens = response_object["usage"].get("prompt_tokens", 0) # type: ignore
+                    model_response_object.usage.total_tokens = response_object["usage"].get("total_tokens", 0) # type: ignore
 
-            if "model" in response_object: 
-                model_response_object.model = response_object["model"]
-            return model_response_object
+                if "id" in response_object: 
+                    model_response_object.id = response_object["id"]
+                
+                if "system_fingerprint" in response_object:
+                    model_response_object.system_fingerprint = response_object["system_fingerprint"]
+
+                if "model" in response_object: 
+                    model_response_object.model = response_object["model"]
+                return model_response_object
+            elif response_type == "embedding" and (model_response_object is None or isinstance(model_response_object, EmbeddingResponse)): 
+                if response_object is None:
+                    raise Exception("Error in response object format")
+                
+                if model_response_object is None: 
+                    model_response_object = EmbeddingResponse()
+
+                if "model" in response_object: 
+                    model_response_object.model = response_object["model"]
+                
+                if "object" in response_object: 
+                    model_response_object.object = response_object["object"]
+
+                embedding_data = []
+                for idx, embedding in enumerate(response_object["data"]):
+                    embedding_obj = Embedding(
+                        embedding=embedding.get("embedding", None),
+                        index = embedding.get("index", idx),
+                        object=embedding.get("object", "embedding")
+                    )
+                    embedding_data.append(embedding_obj)
+                
+                model_response_object.data = embedding_data
+
+                if "usage" in response_object and response_object["usage"] is not None:
+                    model_response_object.usage.completion_tokens = response_object["usage"].get("completion_tokens", 0) # type: ignore
+                    model_response_object.usage.prompt_tokens = response_object["usage"].get("prompt_tokens", 0) # type: ignore
+                    model_response_object.usage.total_tokens = response_object["usage"].get("total_tokens", 0) # type: ignore
+
+                
+                return model_response_object
         except Exception as e: 
             raise Exception(f"Invalid response object {e}")
 
@@ -3271,7 +3523,7 @@ def register_prompt_template(model: str, roles: dict, initial_prompt_value: str 
     }
     return litellm.custom_prompt_dict
 
-####### [BETA] HOSTED PRODUCT ################ - https://docs.litellm.ai/docs/debugging/hosted_debugging
+####### DEPRECATED ################ 
 
 
 def get_all_keys(llm_provider=None):
@@ -3466,7 +3718,7 @@ def exception_type(
                         )
             elif custom_llm_provider == "anthropic":  # one of the anthropics
                 if hasattr(original_exception, "message"):
-                    if "prompt is too long" in original_exception.message:
+                    if "prompt is too long" in original_exception.message or "prompt: length" in original_exception.message:
                         exception_mapping_worked = True
                         raise ContextWindowExceededError(
                             message=original_exception.message, 
@@ -3691,6 +3943,24 @@ def exception_type(
                         llm_provider="vertex_ai",
                         response=original_exception.response
                     )
+                if hasattr(original_exception, "status_code"):
+                    if original_exception.status_code == 400:
+                        exception_mapping_worked = True
+                        raise BadRequestError(
+                            message=f"VertexAIException - {error_str}",
+                            model=model,
+                            llm_provider="vertex_ai",
+                            response=original_exception.response
+                        )
+                    if original_exception.status_code == 500: 
+                        exception_mapping_worked = True
+                        raise APIError(
+                            message=f"VertexAIException - {error_str}",
+                            status_code=500,
+                            model=model,
+                            llm_provider="vertex_ai",
+                            request=original_exception.request
+                        )
             elif custom_llm_provider == "palm":
                 if "503 Getting metadata" in error_str:
                     # auth errors look like this
@@ -4382,6 +4652,7 @@ class CustomStreamWrapper:
         self.sent_last_chunk = False
         self.special_tokens = ["<|assistant|>", "<|system|>", "<|user|>", "<s>", "</s>"]
         self.holding_chunk = "" 
+        self.complete_response = ""
         if self.logging_obj:
                 # Log the type of the received item
                 self.logging_obj.post_call(str(type(completion_stream)))
@@ -4392,12 +4663,35 @@ class CustomStreamWrapper:
     def __aiter__(self):
         return self
 
+    def process_chunk(self, chunk: str): 
+        """
+        NLP Cloud streaming returns the entire response, for each chunk. Process this, to only return the delta.
+        """
+        try: 
+            chunk = chunk.strip()
+            self.complete_response = self.complete_response.strip()
+
+            if chunk.startswith(self.complete_response): 
+                # Remove last_sent_chunk only if it appears at the start of the new chunk
+                chunk = chunk[len(self.complete_response):]
+
+            self.complete_response += chunk
+            return chunk 
+        except Exception as e: 
+            raise e
+    
     def logging(self, text):
         if self.logging_obj: 
             self.logging_obj.post_call(text)
     
-    def check_special_tokens(self, chunk: str): 
+    def check_special_tokens(self, chunk: str, finish_reason: Optional[str]): 
         hold = False
+        if finish_reason: 
+            for token in self.special_tokens: 
+                if token in chunk:
+                    chunk = chunk.replace(token, "") 
+            return hold, chunk
+        
         if self.sent_first_chunk is True:
             return hold, chunk
 
@@ -4508,14 +4802,22 @@ class CustomStreamWrapper:
             raise ValueError(f"Unable to parse response. Original response: {chunk}")
     
     def handle_nlp_cloud_chunk(self, chunk):
-        chunk = chunk.decode("utf-8")
-        data_json = json.loads(chunk)
+        text = "" 
+        is_finished = False
+        finish_reason = ""
         try:
-            text = data_json["generated_text"]
-            is_finished = True
-            finish_reason = "stop"
+            if "dolphin" in self.model:
+                chunk = self.process_chunk(chunk=chunk)
+            else: 
+                data_json = json.loads(chunk)
+                chunk = data_json["generated_text"]
+            text = chunk
+            if "[DONE]" in text:
+                text = text.replace("[DONE]", "")
+                is_finished = True
+                finish_reason = "stop"
             return {"text": text, "is_finished": is_finished, "finish_reason": finish_reason}
-        except:
+        except Exception as e:
             raise ValueError(f"Unable to parse response. Original response: {chunk}")
     
     def handle_aleph_alpha_chunk(self, chunk):
@@ -4759,9 +5061,8 @@ class CustomStreamWrapper:
                 completion_obj["content"] = response_obj["text"]
                 if response_obj["is_finished"]: 
                     model_response.choices[0].finish_reason = response_obj["finish_reason"]
-            elif self.model in litellm.nlp_cloud_models or self.custom_llm_provider == "nlp_cloud":
+            elif self.custom_llm_provider == "nlp_cloud":
                 try: 
-
                     response_obj = self.handle_nlp_cloud_chunk(chunk)
                     completion_obj["content"] = response_obj["text"]
                     if response_obj["is_finished"]: 
@@ -4847,7 +5148,6 @@ class CustomStreamWrapper:
                     return
                 completion_obj["content"] = response_obj["text"]
                 print_verbose(f"completion obj content: {completion_obj['content']}")
-                print_verbose(f"len(completion_obj['content']: {len(completion_obj['content'])}")
                 if response_obj["is_finished"]: 
                     model_response.choices[0].finish_reason = response_obj["finish_reason"]
             
@@ -4855,7 +5155,8 @@ class CustomStreamWrapper:
             print_verbose(f"model_response: {model_response}; completion_obj: {completion_obj}")
             print_verbose(f"model_response finish reason 3: {model_response.choices[0].finish_reason}")
             if len(completion_obj["content"]) > 0: # cannot set content of an OpenAI Object to be an empty string
-                hold, model_response_str = self.check_special_tokens(completion_obj["content"])
+                hold, model_response_str = self.check_special_tokens(chunk=completion_obj["content"], finish_reason=model_response.choices[0].finish_reason)
+                print_verbose(f"hold - {hold}, model_response_str - {model_response_str}")
                 if hold is False: 
                     completion_obj["content"] = model_response_str  
                     if self.sent_first_chunk == False:
@@ -4864,6 +5165,7 @@ class CustomStreamWrapper:
                     model_response.choices[0].delta = Delta(**completion_obj)
                     # LOGGING
                     threading.Thread(target=self.logging_obj.success_handler, args=(model_response,)).start()
+                    print_verbose(f"model_response: {model_response}")
                     return model_response
                 else: 
                     return 
@@ -4908,7 +5210,7 @@ class CustomStreamWrapper:
                     chunk = next(self.completion_stream)
                 
                 print_verbose(f"chunk in __next__: {chunk}")
-                if chunk is not None:
+                if chunk is not None and chunk != b'':
                     response = self.chunk_creator(chunk=chunk)
                     print_verbose(f"response in __next__: {response}")
                     if response is not None:

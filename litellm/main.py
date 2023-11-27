@@ -28,7 +28,9 @@ from litellm.utils import (
     completion_with_fallbacks,
     get_llm_provider,
     get_api_key,
-    mock_completion_streaming_obj
+    mock_completion_streaming_obj, 
+    convert_to_model_response_object, 
+    token_counter
 )
 from .llms import (
     anthropic,
@@ -165,6 +167,10 @@ async def acompletion(*args, **kwargs):
         if (custom_llm_provider == "openai" 
             or custom_llm_provider == "azure" 
             or custom_llm_provider == "custom_openai"
+            or custom_llm_provider == "anyscale"
+            or custom_llm_provider == "openrouter"
+            or custom_llm_provider == "deepinfra"
+            or custom_llm_provider == "perplexity"
             or custom_llm_provider == "text-completion-openai"
             or custom_llm_provider == "huggingface"): # currently implemented aiohttp calls for just azure and openai, soon all. 
             if kwargs.get("stream", False): 
@@ -228,7 +234,7 @@ def mock_completion(model: str, messages: List, stream: Optional[bool] = False, 
             return response
         
         model_response["choices"][0]["message"]["content"] = mock_response
-        model_response["created"] = time.time()
+        model_response["created"] = int(time.time())
         model_response["model"] = model
         return model_response
 
@@ -252,7 +258,7 @@ def completion(
     max_tokens: Optional[float] = None,
     presence_penalty: Optional[float] = None,
     frequency_penalty: Optional[float]=None,
-    logit_bias: dict = {},
+    logit_bias: Optional[dict] = None,
     user: str = "",
     # openai v1.0+ new params
     response_format: Optional[dict] = None,
@@ -331,20 +337,19 @@ def completion(
     eos_token = kwargs.get("eos_token", None)
     acompletion = kwargs.get("acompletion", False)
     ######## end of unpacking kwargs ###########
-    openai_params = ["functions", "function_call", "temperature", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "request_timeout", "api_base", "api_version", "api_key", "deployment_id", "organization", "base_url", "default_headers", "timeout", "response_format", "seed", "tools", "tool_choice"]
-    litellm_params = ["metadata", "acompletion", "caching", "return_async", "mock_response", "api_key", "api_version", "api_base", "force_timeout", "logger_fn", "verbose", "custom_llm_provider", "litellm_logging_obj", "litellm_call_id", "use_client", "id", "fallbacks", "azure", "headers", "model_list", "num_retries", "context_window_fallback_dict", "roles", "final_prompt_value", "bos_token", "eos_token", "request_timeout", "complete_response", "self", "max_retries"]
+    openai_params = ["functions", "function_call", "temperature", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "request_timeout", "api_base", "api_version", "api_key", "deployment_id", "organization", "base_url", "default_headers", "timeout", "response_format", "seed", "tools", "tool_choice", "max_retries"]
+    litellm_params = ["metadata", "acompletion", "caching", "return_async", "mock_response", "api_key", "api_version", "api_base", "force_timeout", "logger_fn", "verbose", "custom_llm_provider", "litellm_logging_obj", "litellm_call_id", "use_client", "id", "fallbacks", "azure", "headers", "model_list", "num_retries", "context_window_fallback_dict", "roles", "final_prompt_value", "bos_token", "eos_token", "request_timeout", "complete_response", "self"]
     default_params = openai_params + litellm_params
     non_default_params = {k: v for k,v in kwargs.items() if k not in default_params} # model-specific params - pass them straight to the model/provider
-    
     if mock_response:
         return mock_completion(model, messages, stream=stream, mock_response=mock_response)
-    if timeout is None: 
-        timeout = 600 # set timeout for 10 minutes by default 
+    if timeout is None:
+        timeout = kwargs.get("request_timeout", None) or 600 # set timeout for 10 minutes by default 
     timeout = float(timeout)
     try:
-        if base_url: 
+        if base_url is not None: 
             api_base = base_url
-        if max_retries: 
+        if max_retries is not None: # openai allows openai.OpenAI(max_retries=3)
             num_retries = max_retries
         logging = litellm_logging_obj
         fallbacks = (
@@ -357,11 +362,9 @@ def completion(
             deployments = [m["litellm_params"] for m in model_list if m["model_name"] == model]
             return batch_completion_models(deployments=deployments, **args)
         if litellm.model_alias_map and model in litellm.model_alias_map:
-            args["model_alias_map"] = litellm.model_alias_map
             model = litellm.model_alias_map[
                 model
             ]  # update the model to the actual value if an alias has been passed in
-
         model_response = ModelResponse()
 
         if kwargs.get('azure', False) == True: # don't remove flag check, to remain backwards compatible for repos like Codium
@@ -369,7 +372,7 @@ def completion(
         if deployment_id != None: # azure llms 
                 model=deployment_id
                 custom_llm_provider="azure"
-        model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base)
+        model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, api_key=api_key)
         custom_prompt_dict = {} # type: ignore
         if initial_prompt_value or roles or final_prompt_value or bos_token or eos_token:
             custom_prompt_dict = {model: {}}
@@ -388,7 +391,9 @@ def completion(
             api_base = "https://proxy.litellm.ai"
             custom_llm_provider = "openai" 
             api_key = model_api_key
-        
+
+        if dynamic_api_key is not None:  
+            api_key = dynamic_api_key 
         # check if user passed in any of the OpenAI optional params
         optional_params = get_optional_params(
                 functions=functions,
@@ -410,6 +415,7 @@ def completion(
                 seed=seed,
                 tools=tools,
                 tool_choice=tool_choice,
+                max_retries=max_retries,
                 **non_default_params 
             )
         
@@ -505,13 +511,16 @@ def completion(
         elif (
             model in litellm.open_ai_chat_completion_models
             or custom_llm_provider == "custom_openai"
+            or custom_llm_provider == "deepinfra"
+            or custom_llm_provider == "perplexity"
+            or custom_llm_provider == "anyscale"
             or custom_llm_provider == "openai"
             or "ft:gpt-3.5-turbo" in model  # finetune gpt-3.5-turbo
         ):  # allow user to make an openai call with a custom base
             # note: if a user sets a custom base - we should ensure this works
             # allow for the setting of dynamic and stateful api-bases
             api_base = (
-                api_base
+                api_base # for deepinfra/perplexity/anyscale we check in get_llm_provider and pass in the api base from there
                 or litellm.api_base
                 or get_secret("OPENAI_API_BASE")
                 or "https://api.openai.com/v1"
@@ -523,8 +532,7 @@ def completion(
             )
             # set API KEY
             api_key = (
-                api_key or
-                dynamic_api_key or # allows us to read env variables for compatible openai api's like perplexity 
+                api_key or # for deepinfra/perplexity/anyscale we check in get_llm_provider and pass in the api key from there
                 litellm.api_key or
                 litellm.openai_key or
                 get_secret("OPENAI_API_KEY")
@@ -555,7 +563,8 @@ def completion(
                     optional_params=optional_params,
                     litellm_params=litellm_params,
                     logger_fn=logger_fn,
-                    timeout=timeout
+                    timeout=timeout,
+                    custom_prompt_dict=custom_prompt_dict
                 )
             except Exception as e:
                 ## LOGGING - log the original exception returned
@@ -1244,7 +1253,7 @@ def completion(
             
             ## RESPONSE OBJECT
             model_response["choices"][0]["message"]["content"] = response_string
-            model_response["created"] = time.time()
+            model_response["created"] = int(time.time())
             model_response["model"] = "ollama/" + model
             prompt_tokens = len(encoding.encode(prompt)) # type: ignore
             completion_tokens = len(encoding.encode(response_string))
@@ -1370,7 +1379,7 @@ def completion(
             string_response = response_json['data'][0]['output'][0]
             ## RESPONSE OBJECT
             model_response["choices"][0]["message"]["content"] = string_response
-            model_response["created"] = time.time()
+            model_response["created"] = int(time.time())
             model_response["model"] = model
             response = model_response
         else:
@@ -1437,7 +1446,7 @@ def batch_completion(
     max_tokens: Optional[float] = None,
     presence_penalty: Optional[float] = None,
     frequency_penalty: Optional[float]=None,
-    logit_bias: dict = {},
+    logit_bias: Optional[dict] = None,
     user: str = "",
     deployment_id = None,
     request_timeout: Optional[int] = None,
@@ -1665,11 +1674,7 @@ def embedding(
     model, 
     input=[], 
     # Optional params
-    azure=False, 
-    force_timeout=60, 
-    litellm_call_id=None, 
-    litellm_logging_obj=None,
-    logger_fn=None, 
+    timeout=600, # default to 10 minutes 
     # set api_base, api_version, api_key
     api_base: Optional[str] = None,
     api_version: Optional[str] = None,
@@ -1677,6 +1682,9 @@ def embedding(
     api_type: Optional[str] = None,
     caching: bool=False,
     custom_llm_provider=None,
+    litellm_call_id=None, 
+    litellm_logging_obj=None,
+    logger_fn=None, 
     **kwargs
 ):
     """
@@ -1685,8 +1693,7 @@ def embedding(
     Parameters:
     - model: The embedding model to use.
     - input: The input for which embeddings are to be generated.
-    - azure: A boolean indicating whether to use the Azure API for embedding.
-    - force_timeout: The timeout value for the API call.
+    - timeout: The timeout value for the API call, default 10 mins
     - litellm_call_id: The call ID for litellm logging.
     - litellm_logging_obj: The litellm logging object.
     - logger_fn: The logger function.
@@ -1703,11 +1710,17 @@ def embedding(
     Raises:
     - exception_type: If an exception occurs during the API call.
     """
-    model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base)
+    azure = kwargs.get("azure", None)
+    optional_params = {}
+    for param in kwargs:
+        if param != "metadata":                     # filter out metadata from optional_params
+            optional_params[param] = kwargs[param]
+
+    model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, api_key=api_key)
     try:
         response = None
         logging = litellm_logging_obj
-        logging.update_environment_variables(model=model, user="", optional_params={}, litellm_params={"force_timeout": force_timeout, "azure": azure, "litellm_call_id": litellm_call_id, "logger_fn": logger_fn})
+        logging.update_environment_variables(model=model, user="", optional_params={}, litellm_params={"timeout": timeout, "azure": azure, "litellm_call_id": litellm_call_id, "logger_fn": logger_fn})
         if azure == True or custom_llm_provider == "azure":
             # azure configs
             api_type = get_secret("AZURE_API_TYPE") or "azure"
@@ -1744,10 +1757,11 @@ def embedding(
                 api_version=api_version,
                 azure_ad_token=azure_ad_token,
                 logging_obj=logging,
+                timeout=timeout,
                 model_response=EmbeddingResponse(), 
-                optional_params=kwargs
+                optional_params=optional_params,
             )
-        elif model in litellm.open_ai_embedding_models:
+        elif model in litellm.open_ai_embedding_models or custom_llm_provider == "openai":
             api_base = (
                 api_base
                 or litellm.api_base
@@ -1777,8 +1791,9 @@ def embedding(
                 api_base=api_base,
                 api_key=api_key,
                 logging_obj=logging,
+                timeout=timeout,
                 model_response=EmbeddingResponse(), 
-                optional_params=kwargs
+                optional_params=optional_params
             )
         elif model in litellm.cohere_embedding_models:
             cohere_key = (
@@ -1791,7 +1806,7 @@ def embedding(
             response = cohere.embedding(
                 model=model,
                 input=input,
-                optional_params=kwargs,
+                optional_params=optional_params,
                 encoding=encoding,
                 api_key=cohere_key,
                 logging_obj=logging,
@@ -2057,14 +2072,14 @@ def config_completion(**kwargs):
             "No config path set, please set a config path using `litellm.config_path = 'path/to/config.json'`"
         )
 
-def stream_chunk_builder(chunks: list):
+def stream_chunk_builder(chunks: list, messages: Optional[list]=None):
     id = chunks[0]["id"]
     object = chunks[0]["object"]
     created = chunks[0]["created"]
     model = chunks[0]["model"]
     role = chunks[0]["choices"][0]["delta"]["role"]
     finish_reason = chunks[-1]["choices"][0]["finish_reason"]
-    
+
     # Initialize the response dictionary
     response = {
         "id": id,
@@ -2096,7 +2111,7 @@ def stream_chunk_builder(chunks: list):
         argument_list = []
         delta = chunks[0]["choices"][0]["delta"]
         function_call = delta.get("function_call", "")
-        function_call_name = function_call.get("name", "")
+        function_call_name = function_call.name
 
         message = response["choices"][0]["message"]
         message["function_call"] = {}
@@ -2111,7 +2126,7 @@ def stream_chunk_builder(chunks: list):
                 # Check if a function call is present
                 if function_call:
                     # Now, function_call is expected to be a dictionary
-                    arguments = function_call.get("arguments", "")
+                    arguments = function_call.arguments
                     argument_list.append(arguments)
 
         combined_arguments = "".join(argument_list)
@@ -2135,5 +2150,8 @@ def stream_chunk_builder(chunks: list):
 
 
     # # Update usage information if needed
-    response["usage"]["completion_tokens"] = litellm.utils.token_counter(model=model, text=combined_content)
-    return response
+    if messages: 
+        response["usage"]["prompt_tokens"] = token_counter(model=model, messages=messages)
+    response["usage"]["completion_tokens"] = token_counter(model=model, text=combined_content)
+    response["usage"]["total_tokens"] = response["usage"]["prompt_tokens"] + response["usage"]["completion_tokens"]
+    return convert_to_model_response_object(response_object=response, model_response_object=litellm.ModelResponse())

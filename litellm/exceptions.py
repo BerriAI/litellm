@@ -18,6 +18,7 @@ from openai import (
     APIError, 
     APITimeoutError, 
     APIConnectionError, 
+    APIResponseValidationError
 )
 import httpx
 
@@ -114,9 +115,24 @@ class APIConnectionError(APIConnectionError):  # type: ignore
         self.message = message
         self.llm_provider = llm_provider
         self.model = model
+        self.status_code = 500
         super().__init__(
             message=self.message,
             request=request
+        )
+
+# raised if an invalid request (not get, delete, put, post) is made
+class APIResponseValidationError(APIResponseValidationError):  # type: ignore 
+    def __init__(self, message, llm_provider, model):
+        self.message = message
+        self.llm_provider = llm_provider
+        self.model = model
+        request = httpx.Request(method="POST", url="https://api.openai.com/v1")
+        response = httpx.Response(status_code=500, request=request)
+        super().__init__(
+            response=response,
+            body=None,
+            message=message
         )
 
 class OpenAIError(OpenAIError):  # type: ignore

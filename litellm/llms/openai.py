@@ -6,6 +6,7 @@ from litellm.utils import ModelResponse, Choices, Message, CustomStreamWrapper, 
 from typing import Callable, Optional
 import aiohttp, requests
 import litellm
+from .prompt_templates.factory import prompt_factory, custom_prompt
 from openai import OpenAI, AsyncOpenAI
 
 class OpenAIError(Exception):
@@ -172,7 +173,8 @@ class OpenAIChatCompletion(BaseLLM):
                 optional_params=None,
                 litellm_params=None,
                 logger_fn=None,
-                headers: Optional[dict]=None):
+                headers: Optional[dict]=None,
+                custom_prompt_dict: dict={}):
         super().completion()
         exception_mapping_worked = False
         try: 
@@ -197,7 +199,7 @@ class OpenAIChatCompletion(BaseLLM):
                     api_key=api_key,
                     additional_args={"headers": headers, "api_base": api_base, "acompletion": acompletion, "complete_input_dict": data},
                 )
-                
+
                 try: 
                     if acompletion is True: 
                         if optional_params.get("stream", False):
@@ -207,7 +209,10 @@ class OpenAIChatCompletion(BaseLLM):
                     elif optional_params.get("stream", False):
                         return self.streaming(logging_obj=logging_obj, data=data, model=model, api_base=api_base, api_key=api_key, timeout=timeout)
                     else:
-                        openai_client = OpenAI(api_key=api_key, base_url=api_base, http_client=litellm.client_session, timeout=timeout)
+                        max_retries = data.pop("max_retries", 2)
+                        if not isinstance(max_retries, int): 
+                            raise OpenAIError(status_code=422, message="max retries must be an int")
+                        openai_client = OpenAI(api_key=api_key, base_url=api_base, http_client=litellm.client_session, timeout=timeout, max_retries=max_retries)
                         response = openai_client.chat.completions.create(**data) # type: ignore
                         logging_obj.post_call(
                                 input=None,
@@ -249,7 +254,7 @@ class OpenAIChatCompletion(BaseLLM):
                           api_base: Optional[str]=None): 
         response = None
         try: 
-            openai_aclient = AsyncOpenAI(api_key=api_key, base_url=api_base, http_client=litellm.aclient_session, timeout=timeout)
+            openai_aclient = AsyncOpenAI(api_key=api_key, base_url=api_base, http_client=litellm.aclient_session, timeout=timeout, max_retries=data.pop("max_retries", 2))
             response = await openai_aclient.chat.completions.create(**data)
             return convert_to_model_response_object(response_object=json.loads(response.model_dump_json()), model_response_object=model_response)
         except Exception as e: 
@@ -269,7 +274,7 @@ class OpenAIChatCompletion(BaseLLM):
                   api_key: Optional[str]=None,
                   api_base: Optional[str]=None
     ):
-        openai_client = OpenAI(api_key=api_key, base_url=api_base, http_client=litellm.client_session, timeout=timeout)
+        openai_client = OpenAI(api_key=api_key, base_url=api_base, http_client=litellm.client_session, timeout=timeout, max_retries=data.pop("max_retries", 2))
         response = openai_client.chat.completions.create(**data)
         streamwrapper = CustomStreamWrapper(completion_stream=response, model=model, custom_llm_provider="openai",logging_obj=logging_obj)
         for transformed_chunk in streamwrapper:
@@ -284,7 +289,7 @@ class OpenAIChatCompletion(BaseLLM):
                           api_base: Optional[str]=None):
         response = None
         try: 
-            openai_aclient = AsyncOpenAI(api_key=api_key, base_url=api_base, http_client=litellm.aclient_session, timeout=timeout)
+            openai_aclient = AsyncOpenAI(api_key=api_key, base_url=api_base, http_client=litellm.aclient_session, timeout=timeout, max_retries=data.pop("max_retries", 2))
             response = await openai_aclient.chat.completions.create(**data)
             streamwrapper = CustomStreamWrapper(completion_stream=response, model=model, custom_llm_provider="openai",logging_obj=logging_obj)
             async for transformed_chunk in streamwrapper:
@@ -301,28 +306,34 @@ class OpenAIChatCompletion(BaseLLM):
     def embedding(self,
                 model: str,
                 input: list,
+                timeout: float, 
                 api_key: Optional[str] = None,
                 api_base: Optional[str] = None,
+                model_response: Optional[litellm.utils.EmbeddingResponse] = None,
                 logging_obj=None,
-                model_response=None,
-                optional_params=None,):
+                optional_params=None,
+                ):
         super().embedding()
         exception_mapping_worked = False
         try: 
-            openai_client = OpenAI(api_key=api_key, base_url=api_base, http_client=litellm.client_session)
             model = model
             data = {
                 "model": model,
                 "input": input,
                 **optional_params
             }
+            max_retries = data.pop("max_retries", 2)
+            if not isinstance(max_retries, int): 
+                raise OpenAIError(status_code=422, message="max retries must be an int")
+            openai_client = OpenAI(api_key=api_key, base_url=api_base, http_client=litellm.client_session, max_retries=max_retries, timeout=timeout)
 
             ## LOGGING
             logging_obj.pre_call(
                     input=input,
                     api_key=api_key,
-                    additional_args={"complete_input_dict": data},
+                    additional_args={"complete_input_dict": data, "api_base": api_base},
                 )
+            
             ## COMPLETION CALL
             response = openai_client.embeddings.create(**data) # type: ignore
             ## LOGGING
@@ -333,21 +344,7 @@ class OpenAIChatCompletion(BaseLLM):
                     original_response=response,
                 )
             
-            embedding_response = json.loads(response.model_dump_json())
-            output_data = []
-            for idx, embedding in enumerate(embedding_response["data"]):
-                output_data.append(
-                    {
-                        "object": embedding["object"],
-                        "index": embedding["index"],
-                        "embedding": embedding["embedding"]
-                    }
-                )
-            model_response["object"] = "list"
-            model_response["data"] = output_data
-            model_response["model"] = model
-            model_response["usage"] = embedding_response["usage"]
-            return model_response
+            return convert_to_model_response_object(response_object=json.loads(response.model_dump_json()), model_response_object=model_response, response_type="embedding")
         except OpenAIError as e: 
             exception_mapping_worked = True
             raise e

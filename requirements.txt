@@ -10,3 +10,8 @@ uvicorn
 boto3
 redis
 pyyaml
+rq
+prisma
+celery
+psutil
+mangum

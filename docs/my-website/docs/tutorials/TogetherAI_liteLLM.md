@@ -52,7 +52,7 @@ You can create a custom prompt template.
 
 Let's make one for `OpenAssistant/llama2-70b-oasst-sft-v10`!
 
-The accepted template format is: [Reference](https://huggingface.co/OpenAssistant/llama2-70b-oasst-sft-v10-)
+The accepted template format is: [Reference](https://huggingface.co/OpenAssistant/llama2-70b-oasst-sft-v10)
 ```
 """
 <|im_start|>system
