@@ -134,7 +134,7 @@ def completion(
         Body={data},
         CustomAttributes="accept_eula=true",
     )
-    """
+    """ # type: ignore
     logging_obj.pre_call(
             input=prompt,
             api_key="",
