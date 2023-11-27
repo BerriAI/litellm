@@ -127,10 +127,18 @@ def completion(
     }
 
     ## LOGGING
+    request_str = f"""
+    response = client.invoke_endpoint(
+        EndpointName={model},
+        ContentType="application/json",
+        Body={data},
+        CustomAttributes="accept_eula=true",
+    )
+    """
     logging_obj.pre_call(
             input=prompt,
             api_key="",
-            additional_args={"complete_input_dict": data},
+            additional_args={"complete_input_dict": data, "request_str": request_str},
         )
     ## COMPLETION CALL
     response = client.invoke_endpoint(
