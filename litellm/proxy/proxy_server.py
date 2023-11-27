@@ -697,7 +697,7 @@ async def completion(request: Request, model: Optional[str] = None, user_api_key
 @router.post("/chat/completions", dependencies=[Depends(user_api_key_auth)])
 @router.post("/openai/deployments/{model:path}/chat/completions", dependencies=[Depends(user_api_key_auth)]) # azure compatible endpoint
 async def chat_completion(request: Request, model: Optional[str] = None, user_api_key_dict: dict = Depends(user_api_key_auth)):
-    global general_settings
+    global general_settings, user_debug
     try: 
         body = await request.body()
         body_str = body.decode()
@@ -734,6 +734,8 @@ async def chat_completion(request: Request, model: Optional[str] = None, user_ap
         return response
     except Exception as e: 
         print(f"\033[1;31mAn error occurred: {e}\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`")
+        if user_debug: 
+            traceback.print_exc()
         error_traceback = traceback.format_exc()
         error_msg = f"{str(e)}\n\n{error_traceback}"
         try:

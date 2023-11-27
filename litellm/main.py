@@ -154,6 +154,7 @@ async def acompletion(*args, **kwargs):
     model = args[0] if len(args) > 0 else kwargs["model"]
     ### PASS ARGS TO COMPLETION ### 
     kwargs["acompletion"] = True
+    custom_llm_provider = None
     try: 
         # Use a partial function to pass your keyword arguments
         func = partial(completion, *args, **kwargs)
@@ -190,6 +191,7 @@ async def acompletion(*args, **kwargs):
         else: 
             return response
     except Exception as e: 
+        custom_llm_provider = custom_llm_provider or "openai"
         raise exception_type(
                 model=model, custom_llm_provider=custom_llm_provider, original_exception=e, completion_kwargs=args,
             )
