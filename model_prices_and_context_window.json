@@ -645,6 +645,48 @@
         "litellm_provider": "bedrock",
         "mode": "chat"
     },
+    "sagemaker/meta-textgeneration-llama-2-7b": {
+        "max_tokens": 4096, 
+        "input_cost_per_token": 0.000,
+        "output_cost_per_token": 0.000,
+        "litellm_provider": "sagemaker",
+        "mode": "completion"
+    },
+    "sagemaker/meta-textgeneration-llama-2-7b-f": {
+        "max_tokens": 4096, 
+        "input_cost_per_token": 0.000,
+        "output_cost_per_token": 0.000,
+        "litellm_provider": "sagemaker",
+        "mode": "chat"
+    },
+    "sagemaker/meta-textgeneration-llama-2-13b": {
+        "max_tokens": 4096, 
+        "input_cost_per_token": 0.000,
+        "output_cost_per_token": 0.000,
+        "litellm_provider": "sagemaker",
+        "mode": "completion"
+    },
+    "sagemaker/meta-textgeneration-llama-2-13b-f": {
+        "max_tokens": 4096, 
+        "input_cost_per_token": 0.000,
+        "output_cost_per_token": 0.000,
+        "litellm_provider": "sagemaker",
+        "mode": "chat"
+    },
+    "sagemaker/meta-textgeneration-llama-2-70b": {
+        "max_tokens": 4096, 
+        "input_cost_per_token": 0.000,
+        "output_cost_per_token": 0.000,
+        "litellm_provider": "sagemaker",
+        "mode": "completion"
+    },
+    "sagemaker/meta-textgeneration-llama-2-70b-b-f": {
+        "max_tokens": 4096, 
+        "input_cost_per_token": 0.000,
+        "output_cost_per_token": 0.000,
+        "litellm_provider": "sagemaker",
+        "mode": "chat"
+    },
     "together-ai-up-to-3b": {
         "input_cost_per_token": 0.0000001,
         "output_cost_per_token": 0.0000001,
