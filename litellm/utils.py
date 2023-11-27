@@ -572,9 +572,12 @@ class Logging:
             curl_command += f"{api_base} \\\n"
             curl_command += f"{formatted_headers} \\\n" if formatted_headers.strip() != "" else ""
             curl_command += f"-d '{str(data)}'\n"
-            if api_base == "":
+            if additional_args.get("request_str", None) is not None:
+                # print the sagemaker / bedrock client request
+                curl_command = "\nRequest Sent from LiteLLM:\n"
+                curl_command += additional_args.get("request_str", None)
+            elif api_base == "":
                 curl_command = self.model_call_details
-
             print_verbose(f"\033[92m{curl_command}\033[0m\n")
             if self.logger_fn and callable(self.logger_fn):
                 try:
