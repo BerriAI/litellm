@@ -1050,6 +1050,41 @@ https://api.openai.com/v1/chat/completions \
 -d '{"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "this is a test request, write a short poem"}]}'
 ```
 
+## Health Check LLMs on Proxy
+Use this to health check all LLMs defined in your config.yaml
+#### Request
+```shell
+curl --location 'http://0.0.0.0:8000/health'
+```
+
+You can also run `litellm -health` it makes a `get` request to `http://0.0.0.0:8000/health` for you
+```
+litellm --health
+```
+#### Response
+```shell
+{
+    "healthy_endpoints": [
+        {
+            "model": "azure/gpt-35-turbo",
+            "api_base": "https://my-endpoint-canada-berri992.openai.azure.com/"
+        },
+        {
+            "model": "azure/gpt-35-turbo",
+            "api_base": "https://my-endpoint-europe-berri-992.openai.azure.com/"
+        }
+    ],
+    "unhealthy_endpoints": [
+        {
+            "model": "azure/gpt-35-turbo",
+            "api_base": "https://openai-france-1234.openai.azure.com/"
+        }
+    ]
+}
+```
+
+
+
 ## Logging Proxy Input/Output - Langfuse
 We will use the `--config` to set `litellm.success_callback = ["langfuse"]` this will log all successfull LLM calls to langfuse
 
@@ -1154,6 +1189,14 @@ LiteLLM proxy adds **0.00325 seconds** latency as compared to using the Raw Open
    - **Usage:** 
      ```shell
      litellm --test
+     ```
+
+#### --health
+   - **Type:** `bool` (Flag)
+   - Runs a health check on all models in config.yaml
+   - **Usage:** 
+     ```shell
+     litellm --health
      ```
 
 #### --alias
