@@ -104,7 +104,9 @@ class AzureChatCompletion(BaseLLM):
                litellm_params,
                logger_fn,
                acompletion: bool = False,
-               headers: Optional[dict]=None):
+               headers: Optional[dict]=None,
+               azure_client = None,
+               ):
         super().completion()
         exception_mapping_worked = False
         try:
@@ -135,7 +137,7 @@ class AzureChatCompletion(BaseLLM):
                 if optional_params.get("stream", False):
                     return self.async_streaming(logging_obj=logging_obj, api_base=api_base, data=data, model=model, api_key=api_key, api_version=api_version, azure_ad_token=azure_ad_token, timeout=timeout)
                 else:
-                    return self.acompletion(api_base=api_base, data=data, model_response=model_response, api_key=api_key, api_version=api_version, model=model, azure_ad_token=azure_ad_token, timeout=timeout)
+                    return self.acompletion(api_base=api_base, data=data, model_response=model_response, api_key=api_key, api_version=api_version, model=model, azure_ad_token=azure_ad_token, timeout=timeout, azure_client=azure_client)
             elif "stream" in optional_params and optional_params["stream"] == True:
                 return self.streaming(logging_obj=logging_obj, api_base=api_base, data=data, model=model, api_key=api_key, api_version=api_version, azure_ad_token=azure_ad_token, timeout=timeout)
             else:
@@ -173,7 +175,9 @@ class AzureChatCompletion(BaseLLM):
                           data: dict, 
                           timeout: Any,
                           model_response: ModelResponse,
-                          azure_ad_token: Optional[str]=None, ): 
+                          azure_ad_token: Optional[str]=None, 
+                          azure_client = None, # this is the AsyncAzureOpenAI
+                          ): 
        response = None
        try:
             max_retries = data.pop("max_retries", 2)
@@ -192,7 +196,8 @@ class AzureChatCompletion(BaseLLM):
                 azure_client_params["api_key"] = api_key
             elif azure_ad_token is not None:
                 azure_client_params["azure_ad_token"] = azure_ad_token
-            azure_client = AsyncAzureOpenAI(**azure_client_params)
+            if azure_client is None:
+                azure_client = AsyncAzureOpenAI(**azure_client_params)
             response = await azure_client.chat.completions.create(**data) 
             return convert_to_model_response_object(response_object=json.loads(response.model_dump_json()), model_response_object=model_response)
        except AzureOpenAIError as e: 
