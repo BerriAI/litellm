@@ -2109,7 +2109,36 @@ def stream_chunk_builder(chunks: list, messages: Optional[list]=None):
     content_list = []
     combined_content = ""
 
-    if "function_call" in chunks[0]["choices"][0]["delta"] and chunks[0]["choices"][0]["delta"]["function_call"] is not None:
+    if "tool_calls" in chunks[0]["choices"][0]["delta"] and chunks[0]["choices"][0]["delta"]["tool_calls"] is not None:
+        argument_list = []
+        delta = chunks[0]["choices"][0]["delta"]
+        message = response["choices"][0]["message"]
+        message["tool_calls"] = []
+        id = None
+        name = None
+        type = None
+        for chunk in chunks:
+            choices = chunk["choices"]
+            for choice in choices:
+                delta = choice.get("delta", {})
+                tool_calls = delta.get("tool_calls", "")
+                # Check if a tool call is present
+                if tool_calls and tool_calls[0].function is not None:
+                    if tool_calls[0].id:
+                        id = tool_calls[0].id
+                    if tool_calls[0].function.arguments:
+                        # Now, tool_calls is expected to be a dictionary
+                        arguments = tool_calls[0].function.arguments
+                        argument_list.append(arguments)
+                    if tool_calls[0].function.name: 
+                        name = tool_calls[0].function.name
+                    if tool_calls[0].type: 
+                        type = tool_calls[0].type
+
+        combined_arguments = "".join(argument_list)
+        response["choices"][0]["message"]["content"] = None
+        response["choices"][0]["message"]["tool_calls"] = [{"id": id, "function": {"arguments": combined_arguments, "name": name}, "type": type}]
+    elif "function_call" in chunks[0]["choices"][0]["delta"] and chunks[0]["choices"][0]["delta"]["function_call"] is not None:
         argument_list = []
         delta = chunks[0]["choices"][0]["delta"]
         function_call = delta.get("function_call", "")
@@ -2144,16 +2173,20 @@ def stream_chunk_builder(chunks: list, messages: Optional[list]=None):
                     continue # openai v1.0.0 sets content = None for chunks
                 content_list.append(content)
 
-        # Combine the "content" strings into a single string
-        combined_content = "".join(content_list)
+        # Combine the "content" strings into a single string || combine the 'function' strings into a single string
+        combined_content = "".join(combined_arguments)
 
         # Update the "content" field within the response dictionary
         response["choices"][0]["message"]["content"] = combined_content
 
+    if len(combined_content) > 0:
+        completion_output = combined_content
+    elif len(combined_arguments) > 0: 
+        completion_output = combined_arguments
 
     # # Update usage information if needed
     if messages: 
         response["usage"]["prompt_tokens"] = token_counter(model=model, messages=messages)
-    response["usage"]["completion_tokens"] = token_counter(model=model, text=combined_content)
+    response["usage"]["completion_tokens"] = token_counter(model=model, text=completion_output)
     response["usage"]["total_tokens"] = response["usage"]["prompt_tokens"] + response["usage"]["completion_tokens"]
     return convert_to_model_response_object(response_object=response, model_response_object=litellm.ModelResponse())
