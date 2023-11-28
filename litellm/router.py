@@ -182,7 +182,7 @@ class Router:
             if index_of_model_id != -1:
                 data["model"] = original_model_string[:index_of_model_id]
             else:
-                data["model"] = original_model_string)
+                data["model"] = original_model_string
             return litellm.completion(**{**data, "messages": messages, "caching": self.cache_responses, **kwargs})
         except Exception as e: 
             raise e
