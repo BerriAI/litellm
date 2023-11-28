@@ -219,7 +219,7 @@ def test_acompletion_on_router():
 		traceback.print_exc()
 		pytest.fail(f"Error occurred: {e}")
 
-test_acompletion_on_router() 
+# test_acompletion_on_router() 
 
 def test_function_calling_on_router(): 
 	try: 
@@ -272,6 +272,7 @@ def test_function_calling_on_router():
 # test_function_calling_on_router()
 
 def test_aembedding_on_router():
+	litellm.set_verbose = True
 	try:
 		model_list = [
 			{
@@ -296,3 +297,4 @@ def test_aembedding_on_router():
 	except Exception as e:
 		traceback.print_exc()
 		pytest.fail(f"Error occurred: {e}")
+test_aembedding_on_router()
