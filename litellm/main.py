@@ -2108,6 +2108,7 @@ def stream_chunk_builder(chunks: list, messages: Optional[list]=None):
     # Extract the "content" strings from the nested dictionaries within "choices"
     content_list = []
     combined_content = ""
+    combined_arguments = ""
 
     if "tool_calls" in chunks[0]["choices"][0]["delta"] and chunks[0]["choices"][0]["delta"]["tool_calls"] is not None:
         argument_list = []
