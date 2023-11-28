@@ -137,6 +137,30 @@ def streaming_format_tests(idx, chunk):
     print(f"extracted chunk: {extracted_chunk}")
     return extracted_chunk, finished
 
+tools_schema = [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_current_weather",
+        "description": "Get the current weather in a given location",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "location": {
+              "type": "string",
+              "description": "The city and state, e.g. San Francisco, CA"
+            },
+            "unit": {
+              "type": "string",
+              "enum": ["celsius", "fahrenheit"]
+            }
+          },
+          "required": ["location"]
+        }
+      }
+    }
+  ]
+
 # def test_completion_cohere_stream():
 # # this is a flaky test due to the cohere API endpoint being unstable
 #     try:
@@ -230,6 +254,26 @@ def test_completion_azure_stream():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 # test_completion_azure_stream() 
+
+def test_completion_azure_function_calling_stream():
+    try:
+        litellm.set_verbose = False
+        user_message = "What is the current weather in Boston?"
+        messages = [{"content": user_message, "role": "user"}]
+        response = completion(
+            model="azure/chatgpt-functioncalling", messages=messages, stream=True, tools=tools_schema
+        )
+        # Add any assertions here to check the response
+        for chunk in response:
+            print(chunk)
+            if chunk["choices"][0]["finish_reason"] == "stop":
+                break
+            print(chunk["choices"][0]["finish_reason"])
+            print(chunk["choices"][0]["delta"]["content"])
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+test_completion_azure_function_calling_stream()
 
 def test_completion_claude_stream():
     try:
@@ -347,7 +391,7 @@ def test_completion_nlp_cloud_stream():
     except Exception as e:
         print(f"Error occurred: {e}")
         pytest.fail(f"Error occurred: {e}")
-test_completion_nlp_cloud_stream()
+# test_completion_nlp_cloud_stream()
 
 def test_completion_claude_stream_bad_key():
     try:

@@ -4933,7 +4933,6 @@ class CustomStreamWrapper:
                     is_finished = True
                     finish_reason = str_line.choices[0].finish_reason
 
-
             return {
                 "text": text, 
                 "is_finished": is_finished, 
@@ -5173,7 +5172,7 @@ class CustomStreamWrapper:
                 print_verbose(f"completion obj content: {completion_obj['content']}")
                 if response_obj["is_finished"]: 
                     model_response.choices[0].finish_reason = response_obj["finish_reason"]
-            
+
             model_response.model = self.model
             print_verbose(f"model_response: {model_response}; completion_obj: {completion_obj}")
             print_verbose(f"model_response finish reason 3: {model_response.choices[0].finish_reason}")
@@ -5196,11 +5195,14 @@ class CustomStreamWrapper:
                 # enter this branch when no content has been passed in response
                 original_chunk = response_obj.get("original_chunk", None)
                 model_response.id = original_chunk.id
-                try:
-                    delta = dict(original_chunk.choices[0].delta)
-                    model_response.choices[0].delta = Delta(**delta)
-                except:
-                    model_response.choices[0].delta = Delta()
+                if len(original_chunk.choices) > 0:
+                    try:
+                        delta = dict(original_chunk.choices[0].delta)
+                        model_response.choices[0].delta = Delta(**delta)
+                    except Exception as e:
+                        model_response.choices[0].delta = Delta()
+                else: 
+                    return
                 model_response.system_fingerprint = original_chunk.system_fingerprint
                 if self.sent_first_chunk == False:
                     model_response.choices[0].delta["role"] = "assistant"
@@ -5232,10 +5234,8 @@ class CustomStreamWrapper:
                 else:
                     chunk = next(self.completion_stream)
                 
-                print_verbose(f"chunk in __next__: {chunk}")
                 if chunk is not None and chunk != b'':
                     response = self.chunk_creator(chunk=chunk)
-                    print_verbose(f"response in __next__: {response}")
                     if response is not None:
                         return response
         except StopIteration:
