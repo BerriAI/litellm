@@ -13,10 +13,13 @@ litellm_client = AsyncOpenAI(
 async def litellm_completion():
     # Your existing code for litellm_completion goes here
     try:
-        return await litellm_client.chat.completions.create(
+        response  = await litellm_client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": f"This is a test: {uuid.uuid4()}"}],
         )
+        print(response)
+        return response
+
     except Exception as e:
         # If there's an exception, log the error message
         with open("error_log.txt", "a") as error_log:
