@@ -497,7 +497,8 @@ def completion(
                 logger_fn=logger_fn,
                 logging_obj=logging, 
                 acompletion=acompletion, 
-                timeout=timeout
+                timeout=timeout,
+                azure_client=optional_params.pop("azure_client", None)
             )
 
             ## LOGGING
