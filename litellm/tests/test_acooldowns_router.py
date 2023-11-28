@@ -59,7 +59,7 @@ def test_multiple_deployments_sync():
 		print(f"FAILED TEST!")
 		pytest.fail(f"An error occurred - {traceback.format_exc()}")
 
-test_multiple_deployments_sync()
+# test_multiple_deployments_sync()
 
 
 def test_multiple_deployments_parallel():
@@ -101,3 +101,65 @@ def test_multiple_deployments_parallel():
 # Assuming litellm, router, and executor are defined somewhere in your code
 
 # test_multiple_deployments_parallel()
+def test_cooldown_same_model_name():
+    # users could have the same model with different api_base
+    # example 
+    # azure/chatgpt, api_base: 1234
+    # azure/chatgpt, api_base: 1235
+    # if 1234 fails, it should only cooldown 1234 and then try with 1235
+    litellm.set_verbose = False
+    try:
+        print("testing cooldown same model name")
+        model_list = [
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": "BAD_API_BASE",
+                },
+            },
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE")
+                },
+            },
+        ]
+
+        router = Router(
+            model_list=model_list,
+            redis_host=os.getenv("REDIS_HOST"),
+            redis_password=os.getenv("REDIS_PASSWORD"),
+            redis_port=int(os.getenv("REDIS_PORT")),
+            routing_strategy="simple-shuffle",
+            set_verbose=True,
+            num_retries=1
+        )  # type: ignore
+
+        response = router.completion(
+            model="gpt-3.5-turbo",
+            messages=[
+                {
+                    "role": "user",
+                    "content": "hello this request will fail"
+                }
+            ]
+        )
+        print(router.model_list)
+        litellm_model_names = []
+        for model in router.model_list:
+            litellm_model_names.append(model["litellm_params"]["model"])
+        print("\n litellm model names ", litellm_model_names)
+
+        # example litellm_model_names ['azure/chatgpt-v-2-ModelID-64321', 'azure/chatgpt-v-2-ModelID-63960']
+        assert litellm_model_names[0] != litellm_model_names[1] # ensure both models have a uuid added, and they have different names
+        print("\ngot response\n", response)
+    except Exception as e:
+        pytest.fail(f"Got unexpected exception on router! - {e}")
+
+# test_cooldown_same_model_name()
