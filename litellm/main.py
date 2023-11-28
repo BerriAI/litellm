@@ -178,7 +178,7 @@ async def acompletion(*args, **kwargs):
                 response = completion(*args, **kwargs)
             else:
                 # Await normally
-                init_response = completion(*args, **kwargs)
+                init_response = await loop.run_in_executor(None, func_with_context)
                 if isinstance(init_response, dict) or isinstance(init_response, ModelResponse): ## CACHING SCENARIO 
                     response = init_response
                 elif asyncio.iscoroutine(init_response):
