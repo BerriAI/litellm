@@ -15,6 +15,7 @@ from litellm.caching import RedisCache, InMemoryCache, DualCache
 import logging, asyncio
 import inspect, concurrent
 from openai import AsyncOpenAI
+from collections import defaultdict
 
 class Router:
     """
@@ -88,6 +89,10 @@ class Router:
         self.fallbacks = fallbacks or litellm.fallbacks
         self.context_window_fallbacks = context_window_fallbacks or litellm.context_window_fallbacks
         self.model_exception_map: dict = {} # dict to store model: list exceptions. self.exceptions = {"gpt-3.5": ["API KEY Error", "Rate Limit Error", "good morning error"]}
+        self.total_calls: defaultdict = defaultdict(int)            # dict to store total calls made to each model
+        self.fail_calls: defaultdict = defaultdict(int)             # dict to store fail_calls made to each model
+        self.success_calls: defaultdict = defaultdict(int)          # dict to store success_calls  made to each model
+
 
         # make Router.chat.completions.create compatible for openai.chat.completions.create
         self.chat = litellm.Chat(params=default_litellm_params)
@@ -226,9 +231,13 @@ class Router:
                 data["model"] = original_model_string[:index_of_model_id]
             else:
                 data["model"] = original_model_string
+            self.total_calls[original_model_string] +=1
             response = await litellm.acompletion(**{**data, "messages": messages, "caching": self.cache_responses, **kwargs})
+            self.success_calls[original_model_string] +=1
             return response
         except Exception as e: 
+            if original_model_string is not None:
+                self.fail_calls[original_model_string] +=1
             raise e
        
     def text_completion(self,
