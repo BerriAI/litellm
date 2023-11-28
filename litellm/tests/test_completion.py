@@ -591,20 +591,20 @@ async def test_re_use_azure_async_client():
         litellm.set_verbose=True
         import openai
         client = openai.AsyncAzureOpenAI(
-                azure_endpoint="https://openai-france-1234.openai.azure.com",
-                api_key=os.environ["AZURE_FRANCE_API_KEY"],
+                azure_endpoint=os.environ['AZURE_API_BASE'],
+                api_key=os.environ["AZURE_API_KEY"],
                 api_version="2023-07-01-preview",
         )
         ## Test azure call
         for _ in range(3):
             response = await litellm.acompletion(
-                model="azure/gpt-turbo",
+                model="azure/chatgpt-v-2",
                 messages=messages,
-                azure_client=client
+                client=client
             )
             print(f"response: {response}")
     except Exception as e:
-        print("got Exception", e)
+        pytest.fail("got Exception", e)
 
 import asyncio
 asyncio.run(
