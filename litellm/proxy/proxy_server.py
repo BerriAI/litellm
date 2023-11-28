@@ -354,6 +354,9 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
     if general_settings: 
         ### MASTER KEY ###
         master_key = general_settings.get("master_key", None)
+        if master_key and master_key.startswith("os.environ/"): 
+            master_key_env_name = master_key.replace("os.environ/", "")
+            master_key = os.getenv(master_key_env_name)
         ### CONNECT TO DATABASE ###
         database_url = general_settings.get("database_url", None)
         prisma_setup(database_url=database_url)
