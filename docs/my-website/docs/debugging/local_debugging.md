@@ -5,6 +5,7 @@ There's 2 ways to do local debugging - `litellm.set_verbose=True` and by passing
 
 This is good for getting print statements for everything litellm is doing.
 ```python
+import litellm
 from litellm import completion
 
 litellm.set_verbose=True # 👈 this is the 1-line change you need to make
