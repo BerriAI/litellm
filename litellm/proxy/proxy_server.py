@@ -739,6 +739,18 @@ async def chat_completion(request: Request, model: Optional[str] = None, user_ap
         return response
     except Exception as e: 
         print(f"\033[1;31mAn error occurred: {e}\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`")
+        if llm_router is not None and data["model"] in router_model_names: 
+            print("Results from router")
+            print("\nRouter stats")
+            print("\nTotal Calls made")
+            for key, value in llm_router.total_calls.items():
+                print(f"{key}: {value}")
+            print("\nSuccess Calls made")
+            for key, value in llm_router.success_calls.items():
+                print(f"{key}: {value}")
+            print("\nFail Calls made")
+            for key, value in llm_router.fail_calls.items():
+                print(f"{key}: {value}")
         if user_debug: 
             traceback.print_exc()
         error_traceback = traceback.format_exc()
