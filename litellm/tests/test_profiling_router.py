@@ -30,21 +30,21 @@
 #     "model_name": "azure-model",
 #     "litellm_params": {
 #         "model": "azure/gpt-turbo",
-#         "api_key": "6a5ae4c5b2bd4e8088248067799c6899",
+#         "api_key": "os.environ/AZURE_FRANCE_API_KEY",
 #         "api_base": "https://openai-france-1234.openai.azure.com"
 #     }
 # }, {
 #     "model_name": "azure-model",
 #     "litellm_params": {
 #         "model": "azure/gpt-35-turbo",
-#         "api_key": "fe5b390e8990407e8d913f40833b19f7",
+#         "api_key": "os.environ/AZURE_EUROPE_API_KEY",
 #         "api_base": "https://my-endpoint-europe-berri-992.openai.azure.com"
 #     }
 # }, {
 #     "model_name": "azure-model",
 #     "litellm_params": {
 #         "model": "azure/gpt-35-turbo",
-#         "api_key": "6a0f46e99d554e8caad9c2b7c0ba7319",
+#         "api_key": "os.environ/AZURE_CANADA_API_KEY",
 #         "api_base": "https://my-endpoint-canada-berri992.openai.azure.com"
 #     }
 # }]
@@ -64,7 +64,7 @@
 
 # async def loadtest_fn():
 #     start = time.time()
-#     n = 10
+#     n = 100
 #     tasks = [router_completion() for _ in range(n)]
 #     chat_completions = await asyncio.gather(*tasks)
 #     successful_completions = [c for c in chat_completions if c is not None]
