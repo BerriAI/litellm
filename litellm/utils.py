@@ -3719,6 +3719,14 @@ def exception_type(
                             model=model,
                             request=original_exception.request
                         )
+                else:
+                    # if no status code then it is an APIConnectionError: https://github.com/openai/openai-python#handling-errors
+                    raise APIConnectionError(
+                        __cause__=original_exception.__cause__,
+                        llm_provider=custom_llm_provider,
+                        model=model,
+                        request=original_exception.request
+                    )
             elif custom_llm_provider == "anthropic":  # one of the anthropics
                 if hasattr(original_exception, "message"):
                     if "prompt is too long" in original_exception.message or "prompt: length" in original_exception.message:
@@ -4505,6 +4513,14 @@ def exception_type(
                             model=model,
                             request=original_exception.request
                         )
+                else:
+                    # if no status code then it is an APIConnectionError: https://github.com/openai/openai-python#handling-errors
+                    raise APIConnectionError(
+                        __cause__=original_exception.__cause__,
+                        llm_provider="azure",
+                        model=model,
+                        request=original_exception.request
+                    )
         if "BadRequestError.__init__() missing 1 required positional argument: 'param'" in str(original_exception): # deal with edge-case invalid request error bug in openai-python sdk
             exception_mapping_worked = True
             raise BadRequestError(
