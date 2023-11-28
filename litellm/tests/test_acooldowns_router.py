@@ -138,7 +138,7 @@ def test_cooldown_same_model_name():
             redis_port=int(os.getenv("REDIS_PORT")),
             routing_strategy="simple-shuffle",
             set_verbose=True,
-            num_retries=1
+            num_retries=3
         )  # type: ignore
 
         response = router.completion(
@@ -146,7 +146,7 @@ def test_cooldown_same_model_name():
             messages=[
                 {
                     "role": "user",
-                    "content": "hello this request will fail"
+                    "content": "hello this request will pass"
                 }
             ]
         )
@@ -162,4 +162,4 @@ def test_cooldown_same_model_name():
     except Exception as e:
         pytest.fail(f"Got unexpected exception on router! - {e}")
 
-# test_cooldown_same_model_name()
+test_cooldown_same_model_name()
