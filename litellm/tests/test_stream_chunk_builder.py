@@ -95,7 +95,7 @@ def test_stream_chunk_builder_litellm_tool_call():
     try: 
       litellm.set_verbose = False
       response = litellm.completion(
-          model="gpt-3.5-turbo",
+          model="azure/chatgpt-functioncalling",
           messages=messages,
           tools=tools_schema,
           stream=True,
