@@ -1198,7 +1198,8 @@ def client(original_function):
                 elif kwargs.get("messages", None):
                     messages = kwargs["messages"]
                 ### PRE-CALL RULES ### 
-                rules_obj.pre_call_rules(input="".join(m["content"] for m in messages if isinstance(m["content"], str)), model=model)
+                if isinstance(messages, list) and len(messages) > 0 and isinstance(messages[0], dict) and "content" in messages[0]:
+                    rules_obj.pre_call_rules(input="".join(m["content"] for m in messages if isinstance(m["content"], str)), model=model)
             elif call_type == CallTypes.embedding.value:
                 messages = args[1] if len(args) > 1 else kwargs["input"]
             stream = True if "stream" in kwargs and kwargs["stream"] == True else False
