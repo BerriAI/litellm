@@ -460,6 +460,7 @@ def completion(
                 api_key or
                 litellm.api_key or
                 litellm.azure_key or
+                get_secret("AZURE_OPENAI_API_KEY") or
                 get_secret("AZURE_API_KEY")
             )
 
