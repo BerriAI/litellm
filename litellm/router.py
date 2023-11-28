@@ -87,7 +87,7 @@ class Router:
         self.routing_strategy = routing_strategy
         self.fallbacks = fallbacks or litellm.fallbacks
         self.context_window_fallbacks = context_window_fallbacks or litellm.context_window_fallbacks
-        self.model_exception_map = {} # dict to store model: list exceptions. self.exceptions = {"gpt-3.5": ["API KEY Error", "Rate Limit Error", "good morning error"]}
+        self.model_exception_map: dict = {} # dict to store model: list exceptions. self.exceptions = {"gpt-3.5": ["API KEY Error", "Rate Limit Error", "good morning error"]}
 
         # make Router.chat.completions.create compatible for openai.chat.completions.create
         self.chat = litellm.Chat(params=default_litellm_params)
@@ -364,7 +364,7 @@ class Router:
             original_exception = e
             ### CHECK IF RATE LIMIT / CONTEXT WINDOW ERROR
             if ((isinstance(original_exception, litellm.ContextWindowExceededError) and context_window_fallbacks is None) 
-                or (openai.RateLimitError and fallbacks is not None)): 
+                or (isinstance(original_exception, openai.RateLimitError) and fallbacks is not None)): 
                 raise original_exception
             ### RETRY
             for current_attempt in range(num_retries):
