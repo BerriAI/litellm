@@ -23,7 +23,7 @@ async def litellm_completion():
     except Exception as e:
         # If there's an exception, log the error message
         with open("error_log.txt", "a") as error_log:
-            error_log.write(f"Error during completion: {str(e)}. Tracbeack {traceback.format_exc()}\n, load_test ")
+            error_log.write(f"Error during completion: {str(e)}\n")
         pass
     
 
