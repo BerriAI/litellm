@@ -584,6 +584,33 @@ def test_completion_azure_key_completion_arg():
         pytest.fail(f"Error occurred: {e}")
 # test_completion_azure_key_completion_arg()
 
+
+async def test_re_use_azure_async_client():
+    try:
+        print("azure gpt-3.5 ASYNC with clie nttest\n\n")
+        litellm.set_verbose=True
+        import openai
+        client = openai.AsyncAzureOpenAI(
+                azure_endpoint="https://openai-france-1234.openai.azure.com",
+                api_key=os.environ["AZURE_FRANCE_API_KEY"],
+                api_version="2023-07-01-preview",
+        )
+        ## Test azure call
+        for _ in range(3):
+            response = await litellm.acompletion(
+                model="azure/gpt-turbo",
+                messages=messages,
+                azure_client=client
+            )
+            print(f"response: {response}")
+    except Exception as e:
+        print("got Exception", e)
+
+import asyncio
+asyncio.run(
+    test_re_use_azure_async_client()
+)
+
 def test_completion_azure():
     try:
         print("azure gpt-3.5 test\n\n")
