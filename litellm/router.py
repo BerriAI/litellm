@@ -176,7 +176,7 @@ class Router:
             ########## remove -ModelID-XXXX from model ##############
             original_model_string = data["model"]
             # Find the index of "ModelID" in the string
-            self.print_verbose(f"completion model: {original_model_string}"}
+            self.print_verbose(f"completion model: {original_model_string}")
             index_of_model_id = original_model_string.find("-ModelID")
             # Remove everything after "-ModelID" if it exists
             if index_of_model_id != -1:
