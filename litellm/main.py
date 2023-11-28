@@ -2176,16 +2176,15 @@ def stream_chunk_builder(chunks: list, messages: Optional[list]=None):
                 content_list.append(content)
 
         # Combine the "content" strings into a single string || combine the 'function' strings into a single string
-        combined_content = "".join(combined_arguments)
+        combined_content = "".join(content_list)
 
         # Update the "content" field within the response dictionary
         response["choices"][0]["message"]["content"] = combined_content
-
+    
     if len(combined_content) > 0:
         completion_output = combined_content
     elif len(combined_arguments) > 0: 
         completion_output = combined_arguments
-
     # # Update usage information if needed
     if messages: 
         response["usage"]["prompt_tokens"] = token_counter(model=model, messages=messages)
