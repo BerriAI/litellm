@@ -9,10 +9,25 @@ LiteLLM supports streaming the model response back by passing `stream=True` as a
 ### Usage
 ```python
 from litellm import completion
+messages = [{"role": "user", "content": "Hey, how's it going?"}]
 response = completion(model="gpt-3.5-turbo", messages=messages, stream=True)
 for part in response:
     print(part.choices[0].delta.content or "")
+```
 
+### Helper function
+
+LiteLLM also exposes a helper function to rebuild the complete streaming response from the list of chunks. 
+
+```python
+from litellm import completion
+messages = [{"role": "user", "content": "Hey, how's it going?"}]
+response = completion(model="gpt-3.5-turbo", messages=messages, stream=True)
+
+for chunk in response: 
+    chunks.append(chunk)
+
+print(litellm.stream_chunk_builder(chunks, messages=messages))
 ```
 
 ## Async Completion
