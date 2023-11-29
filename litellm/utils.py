@@ -5242,6 +5242,11 @@ class CustomStreamWrapper:
                     return model_response
                 else: 
                     return 
+            elif model_response.choices[0].finish_reason:
+                model_response.choices[0].finish_reason = map_finish_reason(model_response.choices[0].finish_reason) # ensure consistent output to openai
+                # LOGGING
+                threading.Thread(target=self.logging_obj.success_handler, args=(model_response,)).start()
+                return model_response
             elif response_obj is not None and response_obj.get("original_chunk", None) is not None: # function / tool calling branch - only set for openai/azure compatible endpoints
                 # enter this branch when no content has been passed in response
                 original_chunk = response_obj.get("original_chunk", None)
@@ -5262,11 +5267,6 @@ class CustomStreamWrapper:
                     model_response.choices[0].delta["role"] = "assistant"
                     self.sent_first_chunk = True
                 threading.Thread(target=self.logging_obj.success_handler, args=(model_response,)).start() # log response
-                return model_response
-            elif model_response.choices[0].finish_reason:
-                model_response.choices[0].finish_reason = map_finish_reason(model_response.choices[0].finish_reason) # ensure consistent output to openai
-                # LOGGING
-                threading.Thread(target=self.logging_obj.success_handler, args=(model_response,)).start()
                 return model_response
             else: 
                 return
