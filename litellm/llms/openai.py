@@ -293,8 +293,7 @@ class OpenAIChatCompletion(BaseLLM):
             openai_client = client
         response = openai_client.chat.completions.create(**data)
         streamwrapper = CustomStreamWrapper(completion_stream=response, model=model, custom_llm_provider="openai",logging_obj=logging_obj)
-        for transformed_chunk in streamwrapper:
-            yield transformed_chunk
+        return streamwrapper
 
     async def async_streaming(self, 
                           logging_obj,

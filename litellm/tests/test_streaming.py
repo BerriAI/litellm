@@ -273,7 +273,7 @@ def test_completion_azure_function_calling_stream():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_completion_azure_function_calling_stream()
+# test_completion_azure_function_calling_stream()
 
 def test_completion_claude_stream():
     try:
