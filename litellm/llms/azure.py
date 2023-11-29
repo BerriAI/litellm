@@ -221,7 +221,7 @@ class AzureChatCompletion(BaseLLM):
                   timeout: Any,
                   azure_ad_token: Optional[str]=None, 
                   client=None,
-    ):
+    ): 
         max_retries = data.pop("max_retries", 2)
         if not isinstance(max_retries, int): 
             raise AzureOpenAIError(status_code=422, message="max retries must be an int")
@@ -244,8 +244,7 @@ class AzureChatCompletion(BaseLLM):
             azure_client = client
         response = azure_client.chat.completions.create(**data)
         streamwrapper = CustomStreamWrapper(completion_stream=response, model=model, custom_llm_provider="azure",logging_obj=logging_obj)
-        for transformed_chunk in streamwrapper:
-            yield transformed_chunk
+        return streamwrapper
 
     async def async_streaming(self, 
                           logging_obj,
