@@ -2212,6 +2212,7 @@ def stream_chunk_builder(chunks: list, messages: Optional[list]=None):
     try:
         response["usage"]["prompt_tokens"] = token_counter(model=model, messages=messages)
     except: # don't allow this failing to block a complete streaming response from being returned
+        print_verbose(f"token_counter failed, assuming prompt tokens is 0")
         response["usage"]["prompt_tokens"] = 0
     response["usage"]["completion_tokens"] = token_counter(model=model, text=completion_output)
     response["usage"]["total_tokens"] = response["usage"]["prompt_tokens"] + response["usage"]["completion_tokens"]
