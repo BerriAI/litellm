@@ -804,27 +804,50 @@ class Router:
     def set_model_list(self, model_list: list):
         self.model_list = model_list
         # we add api_base/api_key each model so load balancing between azure/gpt on api_base1 and api_base2 works 
+        import os
         for model in self.model_list:
             litellm_params = model.get("litellm_params", {})
             model_name = litellm_params.get("model")
 
+            # glorified / complicated reading of configs
+            # user can pass vars directly or they can pas os.environ/AZURE_API_KEY, in which case we will read the env
+            # we do this here because we init clients for Azure, OpenAI and we need to set the right key 
+            api_key = litellm_params.get("api_key")
+            if api_key and api_key.startswith("os.environ/"):
+                api_key_env_name = api_key.replace("os.environ/", "")
+                api_key = os.getenv(api_key_env_name)
+
+            api_base = litellm_params.get("api_base")
+            if api_base and api_base.startswith("os.environ/"):
+                api_base_env_name = api_base.replace("os.environ/", "")
+                api_base = os.getenv(api_base_env_name)
+
+            api_version = litellm_params.get("api_version")
+            if api_version and api_version.startswith("os.environ/"):
+                api_version_env_name = api_version.replace("os.environ/", "")
+                api_version = os.getenv(api_version_env_name)
+            if api_version is None:
+                api_version = "2023-07-01-preview"
+
             if "azure" in model_name:
                 model["async_client"] = openai.AsyncAzureOpenAI(
-                    api_key=litellm_params.get("api_key"),
-                    azure_endpoint=litellm_params.get("api_base")
+                    api_key=api_key,
+                    azure_endpoint=api_base,
+                    api_version=api_version
                 )
                 model["client"] = openai.AzureOpenAI(
-                    api_key=litellm_params.get("api_key"),
-                    azure_endpoint=litellm_params.get("api_base")
+                    api_key=api_key,
+                    azure_endpoint=api_base,
+                    api_version=api_version
                 )
             elif model_name in litellm.open_ai_chat_completion_models:
                 model["async_client"] = openai.AsyncOpenAI(
-                    api_key=litellm_params.get("api_key"),
-                    base_url=litellm_params.get("api_base")
+                    api_key=api_key,
+                    base_url=api_base,
                 )
                 model["client"] = openai.OpenAI(
-                    api_key=litellm_params.get("api_key"),
-                    base_url=litellm_params.get("api_base")
+                    api_key=api_key,
+                    base_url=api_base,
                 )
             model_id = ""
             for key in model["litellm_params"]:
