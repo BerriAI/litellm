@@ -262,43 +262,42 @@ def test_completion_openai_exception():
 
 
 
-
 # test_invalid_request_error(model="command-nightly")
 # Test 3: Rate Limit Errors
-def test_model_call(model):
-    try:
-        sample_text = "how does a court case get to the Supreme Court?"
-        messages = [{ "content": sample_text,"role": "user"}]
-        print(f"model: {model}")
-        response = completion(model=model, messages=messages)
-    except RateLimitError as e:
-        print(f"headers: {e.response.headers}")
-        return True
-    # except OpenAIError: # is at least an openai error -> in case of random model errors - e.g. overloaded server
-    #     return True
-    except Exception as e:
-        print(f"Uncaught Exception {model}: {type(e).__name__} - {e}")
-        traceback.print_exc()
-        pass
-    return False
-# Repeat each model 500 times
-# extended_models = [model for model in models for _ in range(250)]
-extended_models = ["azure/chatgpt-v-2" for _ in range(250)]
+# def test_model_call(model):
+#     try:
+#         sample_text = "how does a court case get to the Supreme Court?"
+#         messages = [{ "content": sample_text,"role": "user"}]
+#         print(f"model: {model}")
+#         response = completion(model=model, messages=messages)
+#     except RateLimitError as e:
+#         print(f"headers: {e.response.headers}")
+#         return True
+#     # except OpenAIError: # is at least an openai error -> in case of random model errors - e.g. overloaded server
+#     #     return True
+#     except Exception as e:
+#         print(f"Uncaught Exception {model}: {type(e).__name__} - {e}")
+#         traceback.print_exc()
+#         pass
+#     return False
+# # Repeat each model 500 times
+# # extended_models = [model for model in models for _ in range(250)]
+# extended_models = ["azure/chatgpt-v-2" for _ in range(250)]
 
-def worker(model):
-    return test_model_call(model)
+# def worker(model):
+#     return test_model_call(model)
 
-# Create a dictionary to store the results
-counts = {True: 0, False: 0}
+# # Create a dictionary to store the results
+# counts = {True: 0, False: 0}
 
-# Use Thread Pool Executor
-with ThreadPoolExecutor(max_workers=500) as executor:
-    # Use map to start the operation in thread pool
-    results = executor.map(worker, extended_models)
+# # Use Thread Pool Executor
+# with ThreadPoolExecutor(max_workers=500) as executor:
+#     # Use map to start the operation in thread pool
+#     results = executor.map(worker, extended_models)
 
-    # Iterate over results and count True/False
-    for result in results:
-        counts[result] += 1
+#     # Iterate over results and count True/False
+#     for result in results:
+#         counts[result] += 1
 
-accuracy_score = counts[True]/(counts[True] + counts[False])
-print(f"accuracy_score: {accuracy_score}")
+# accuracy_score = counts[True]/(counts[True] + counts[False])
+# print(f"accuracy_score: {accuracy_score}")
