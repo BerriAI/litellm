@@ -606,10 +606,31 @@ async def test_re_use_azure_async_client():
     except Exception as e:
         pytest.fail("got Exception", e)
 
-import asyncio
-asyncio.run(
-    test_re_use_azure_async_client()
-)
+# import asyncio
+# asyncio.run(
+#     test_re_use_azure_async_client()
+# )
+
+
+def test_re_use_openaiClient():
+    try:
+        print("gpt-3.5  with client test\n\n")
+        litellm.set_verbose=True
+        import openai
+        client = openai.OpenAI(
+                api_key=os.environ["OPENAI_API_KEY"],
+        )
+        ## Test OpenAI call
+        for _ in range(2):
+            response = litellm.completion(
+                model="gpt-3.5-turbo",
+                messages=messages,
+                client=client
+            )
+            print(f"response: {response}")
+    except Exception as e:
+        pytest.fail("got Exception", e)
+test_re_use_openaiClient()
 
 def test_completion_azure():
     try:
