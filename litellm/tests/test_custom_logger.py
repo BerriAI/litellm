@@ -37,15 +37,7 @@ def test_chat_openai():
                                   "role": "user",
                                   "content": "Hi 👋 - i'm openai"
                               }],
-                              stream=True, 
-                              complete_response = True)
-        response2 = completion(model="gpt-3.5-turbo",
-                              messages=[{
-                                  "role": "user",
-                                  "content": "Hi 👋 - i'm not openai"
-                              }],
-                              stream=True, 
-                              complete_response = True)
+                              stream=True)
         time.sleep(1)
         assert customHandler.success == True
     except Exception as e:
@@ -53,7 +45,7 @@ def test_chat_openai():
         pass
 
 
-# test_chat_openai()
+test_chat_openai()
 
 def test_completion_azure_stream_moderation_failure():
     try:
@@ -80,7 +72,7 @@ def test_completion_azure_stream_moderation_failure():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_completion_azure_stream_moderation_failure()
+# test_completion_azure_stream_moderation_failure()
 
 
 # def custom_callback(
