@@ -338,9 +338,10 @@ def completion(
     bos_token = kwargs.get("bos_token", None)
     eos_token = kwargs.get("eos_token", None)
     acompletion = kwargs.get("acompletion", False)
+    client = kwargs.get("client", None)
     ######## end of unpacking kwargs ###########
     openai_params = ["functions", "function_call", "temperature", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "request_timeout", "api_base", "api_version", "api_key", "deployment_id", "organization", "base_url", "default_headers", "timeout", "response_format", "seed", "tools", "tool_choice", "max_retries"]
-    litellm_params = ["metadata", "acompletion", "caching", "return_async", "mock_response", "api_key", "api_version", "api_base", "force_timeout", "logger_fn", "verbose", "custom_llm_provider", "litellm_logging_obj", "litellm_call_id", "use_client", "id", "fallbacks", "azure", "headers", "model_list", "num_retries", "context_window_fallback_dict", "roles", "final_prompt_value", "bos_token", "eos_token", "request_timeout", "complete_response", "self"]
+    litellm_params = ["metadata", "acompletion", "caching", "return_async", "mock_response", "api_key", "api_version", "api_base", "force_timeout", "logger_fn", "verbose", "custom_llm_provider", "litellm_logging_obj", "litellm_call_id", "use_client", "id", "fallbacks", "azure", "headers", "model_list", "num_retries", "context_window_fallback_dict", "roles", "final_prompt_value", "bos_token", "eos_token", "request_timeout", "complete_response", "self", "client"]
     default_params = openai_params + litellm_params
     non_default_params = {k: v for k,v in kwargs.items() if k not in default_params} # model-specific params - pass them straight to the model/provider
     if mock_response:
@@ -498,7 +499,7 @@ def completion(
                 logging_obj=logging, 
                 acompletion=acompletion, 
                 timeout=timeout,
-                client=optional_params.pop("client", None) # pass AsyncAzureOpenAI, AzureOpenAI client
+                client=client # pass AsyncAzureOpenAI, AzureOpenAI client
             )
 
             ## LOGGING
@@ -569,7 +570,7 @@ def completion(
                     logger_fn=logger_fn,
                     timeout=timeout,
                     custom_prompt_dict=custom_prompt_dict,
-                    client=optional_params.pop("client", None) # pass AsyncOpenAI, OpenAI client
+                    client=client # pass AsyncOpenAI, OpenAI client
                 )
             except Exception as e:
                 ## LOGGING - log the original exception returned
