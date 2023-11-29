@@ -602,7 +602,6 @@ class Router:
                 self.print_verbose(self.model_exception_map)
                 for model in self.model_exception_map:
                     self.print_verbose(f"Model {model} had {len(self.model_exception_map[model])} exception")
-                self.print_verbose()
             if custom_llm_provider:
                 model_name = f"{custom_llm_provider}/{model_name}"
             
