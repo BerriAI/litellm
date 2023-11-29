@@ -637,7 +637,7 @@ def model_list():
         all_models = list(set(all_models + [m["model_name"] for m in llm_model_list]))
     if user_model is not None:
         all_models += [user_model]
-    print(f"all_models: {all_models}")
+    print_verbose(f"all_models: {all_models}")
     ### CHECK OLLAMA MODELS ### 
     try:
         response = requests.get("http://0.0.0.0:11434/api/tags")
@@ -709,7 +709,7 @@ async def chat_completion(request: Request, model: Optional[str] = None, user_ap
             data = ast.literal_eval(body_str)
         except: 
             data = json.loads(body_str)
-        print(f"receiving data: {data}")
+        print_verbose(f"receiving data: {data}")
         data["model"] = (
             general_settings.get("completion_model", None) # server default
             or user_model # model name passed via cli args
@@ -768,7 +768,7 @@ async def chat_completion(request: Request, model: Optional[str] = None, user_ap
 async def embeddings(request: Request, user_api_key_dict: dict = Depends(user_api_key_auth)): 
     try: 
         data = await request.json()
-        print(f"data: {data}")
+        print_verbose(f"data: {data}")
         data["model"] = (
             general_settings.get("embedding_model", None) # server default
             or user_model # model name passed via cli args
