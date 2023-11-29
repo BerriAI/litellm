@@ -9,6 +9,7 @@ from litellm.integrations.custom_logger import CustomLogger
 
 class MyCustomHandler(CustomLogger):
     success: bool = False
+    failure: bool = False
 
     def log_pre_api_call(self, model, messages, kwargs): 
         print(f"Pre-API Call")
@@ -25,6 +26,7 @@ class MyCustomHandler(CustomLogger):
 
     def log_failure_event(self, kwargs, response_obj, start_time, end_time): 
         print(f"On Failure")
+        self.failure = True
 
 def test_chat_openai():
     try:
@@ -51,10 +53,34 @@ def test_chat_openai():
         pass
 
 
-test_chat_openai()
+# test_chat_openai()
 
+def test_completion_azure_stream_moderation_failure():
+    try:
+        customHandler = MyCustomHandler()
+        litellm.callbacks = [customHandler]
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {
+                "role": "user",
+                "content": "how do i kill someone",
+            },
+        ]
+        try: 
+            response = completion(
+                model="azure/chatgpt-v-2", messages=messages, stream=True
+            )
+            for chunk in response: 
+                print(f"chunk: {chunk}")
+                continue
+        except Exception as e:
+            print(e)
+        time.sleep(1)
+        assert customHandler.failure == True
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
-
+test_completion_azure_stream_moderation_failure()
 
 
 # def custom_callback(
