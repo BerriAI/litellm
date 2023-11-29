@@ -3335,16 +3335,8 @@ def convert_to_model_response_object(response_object: Optional[dict]=None, model
                 if "object" in response_object: 
                     model_response_object.object = response_object["object"]
 
-                embedding_data = []
-                for idx, embedding in enumerate(response_object["data"]):
-                    embedding_obj = Embedding(
-                        embedding=embedding.get("embedding", None),
-                        index = embedding.get("index", idx),
-                        object=embedding.get("object", "embedding")
-                    )
-                    embedding_data.append(embedding_obj)
                 
-                model_response_object.data = embedding_data
+                model_response_object.data = response_object["data"]
 
                 if "usage" in response_object and response_object["usage"] is not None:
                     model_response_object.usage.completion_tokens = response_object["usage"].get("completion_tokens", 0) # type: ignore
