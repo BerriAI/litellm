@@ -55,7 +55,6 @@
 #     try: 
 #         messages=[{"role": "user", "content": f"This is a test: {uuid.uuid4()}"}]
 #         response = await router.acompletion(model="azure-model", messages=messages)
-#         # response = await litellm.acompletion(model="azure/gpt-35-turbo", messages=messages, api_key="6a0f46e99d554e8caad9c2b7c0ba7319", api_base="https://my-endpoint-canada-berri992.openai.azure.com")
 #         return response
 #     except Exception as e: 
 #         print(e, file=sys.stderr)
@@ -64,7 +63,7 @@
 
 # async def loadtest_fn():
 #     start = time.time()
-#     n = 100
+#     n = 1000
 #     tasks = [router_completion() for _ in range(n)]
 #     chat_completions = await asyncio.gather(*tasks)
 #     successful_completions = [c for c in chat_completions if c is not None]
