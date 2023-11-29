@@ -2213,7 +2213,7 @@ def get_optional_params(  # use the openai defaults
             if stream: 
                 optional_params["stream"] = stream
         elif "cohere" in model: # cohere models on bedrock
-            supported_params = ["stream", "temperature", "max_tokens", "logit_bias", "top_p", "frequency_penalty", "presence_penalty", "stop"]
+            supported_params = ["stream", "temperature", "max_tokens"]
             _check_valid_arg(supported_params=supported_params)
             # handle cohere params
             if stream:
