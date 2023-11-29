@@ -232,9 +232,9 @@ class Router:
                 data["model"] = original_model_string[:index_of_model_id]
             else:
                 data["model"] = original_model_string
-            model_client = deployment["client"]
+            model_client = deployment["async_client"]
             self.total_calls[original_model_string] +=1
-            response = await litellm.acompletion(**{**data, "messages": messages, "caching": self.cache_responses, "azure_client": model_client, **kwargs})
+            response = await litellm.acompletion(**{**data, "messages": messages, "caching": self.cache_responses, "client": model_client, **kwargs})
             self.success_calls[original_model_string] +=1
             return response
         except Exception as e: 
@@ -801,15 +801,28 @@ class Router:
         self.model_list = model_list
         # we add api_base/api_key each model so load balancing between azure/gpt on api_base1 and api_base2 works 
         for model in self.model_list:
+            if "azure" in model["litellm_params"]["model"]:
+                model["async_client"] = openai.AsyncAzureOpenAI(
+                    api_key= model["litellm_params"]["api_key"],
+                    azure_endpoint = model["litellm_params"]["api_base"]
+                )
+                model["client"] = openai.AzureOpenAI(
+                    api_key= model["litellm_params"]["api_key"],
+                    azure_endpoint = model["litellm_params"]["api_base"]
+                )
+            elif model["litellm_params"]["model"] in litellm.open_ai_chat_completion_models:
+                model["async_client"] = openai.AsyncOpenAI(
+                    api_key= model["litellm_params"]["api_key"],
+                    base_ur = model["litellm_params"]["api_base"]
+                )
+                model["client"] = openai.OpenAI(
+                    api_key= model["litellm_params"]["api_key"],
+                    base_url = model["litellm_params"]["api_base"]
+                )
             model_id = ""
             for key in model["litellm_params"]:
                 model_id+= str(model["litellm_params"][key])
             model["litellm_params"]["model"] += "-ModelID-" + model_id
-
-            model["client"] = openai.AsyncAzureOpenAI(
-                api_key= model["litellm_params"]["api_key"],
-                azure_endpoint = model["litellm_params"]["api_base"]
-            )
         self.model_names = [m["model_name"] for m in model_list]
 
     def get_model_names(self):
