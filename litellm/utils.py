@@ -1613,6 +1613,7 @@ def token_counter(model="", text=None,  messages: Optional[List] = None):
     # use tiktoken, anthropic, cohere or llama2's tokenizer depending on the model
     if text == None:
         if messages is not None:
+            print_verbose(f"token_counter messages received: {messages}")
             text = "".join([message["content"] for message in messages])
         else:
             raise ValueError("text and messages cannot both be None")
