@@ -1765,6 +1765,7 @@ def embedding(
                 timeout=timeout,
                 model_response=EmbeddingResponse(), 
                 optional_params=optional_params,
+                client=optional_params.pop("client", None)
             )
         elif model in litellm.open_ai_embedding_models or custom_llm_provider == "openai":
             api_base = (
@@ -1798,7 +1799,8 @@ def embedding(
                 logging_obj=logging,
                 timeout=timeout,
                 model_response=EmbeddingResponse(), 
-                optional_params=optional_params
+                optional_params=optional_params,
+                client=optional_params.pop("client", None)
             )
         elif model in litellm.cohere_embedding_models:
             cohere_key = (
