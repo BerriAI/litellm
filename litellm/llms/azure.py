@@ -242,7 +242,7 @@ class AzureChatCompletion(BaseLLM):
             azure_client = AzureOpenAI(**azure_client_params)
         else:
             azure_client = client
-        response = client.chat.completions.create(**data)
+        response = azure_client.chat.completions.create(**data)
         streamwrapper = CustomStreamWrapper(completion_stream=response, model=model, custom_llm_provider="azure",logging_obj=logging_obj)
         for transformed_chunk in streamwrapper:
             yield transformed_chunk
