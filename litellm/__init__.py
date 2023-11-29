@@ -364,7 +364,9 @@ from .utils import (
     completion_with_config,
     register_model,
     encode, 
-    decode
+    decode, 
+    _calculate_retry_after,
+    _should_retry
 )
 from .llms.huggingface_restapi import HuggingfaceConfig
 from .llms.anthropic import AnthropicConfig

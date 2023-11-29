@@ -2735,7 +2735,6 @@ def json_schema_type(python_type_name: str):
 
     return python_to_json_schema_types.get(python_type_name, "string")
 
-
 def function_to_dict(input_function):  # noqa: C901
     """Using type hints and numpy-styled docstring,
     produce a dictionnary usable for OpenAI function calling
@@ -3136,7 +3135,7 @@ def set_callbacks(callback_list, function_id=None):
     except Exception as e:
         raise e
 
-
+# NOTE: DEPRECATING this in favor of using failure_handler() in Logging:
 def handle_failure(exception, traceback_exception, start_time, end_time, args, kwargs):
     global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, llmonitorLogger
     try:
@@ -3472,6 +3471,74 @@ def check_valid_key(model: str, api_key: str):
         return False
     except Exception as e:
         return False
+
+def _should_retry(status_code: int): 
+    """
+    Reimplementation of openai's should retry logic, since that one can't be imported. 
+    https://github.com/openai/openai-python/blob/af67cfab4210d8e497c05390ce14f39105c77519/src/openai/_base_client.py#L639
+    """
+    # If the server explicitly says whether or not to retry, obey.
+    # Retry on request timeouts.
+    if status_code == 408:
+        return True
+
+    # Retry on lock timeouts.
+    if status_code == 409:
+        return True
+
+    # Retry on rate limits.
+    if status_code == 429:
+        return True
+
+    # Retry internal errors.
+    if status_code >= 500:
+        return True
+
+    return False
+
+def _calculate_retry_after(remaining_retries: int, max_retries: int, response_headers: Optional[httpx.Headers]=None):
+    """
+    Reimplementation of openai's calculate retry after, since that one can't be imported.
+    https://github.com/openai/openai-python/blob/af67cfab4210d8e497c05390ce14f39105c77519/src/openai/_base_client.py#L631
+    """
+    try:
+        import email # openai import
+        # About the Retry-After header: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Retry-After
+        #
+        # <http-date>". See https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Retry-After#syntax for
+        # details.
+        if response_headers is not None:
+            retry_header = response_headers.get("retry-after")
+            try:
+                retry_after = int(retry_header)
+            except Exception:
+                retry_date_tuple = email.utils.parsedate_tz(retry_header)
+                if retry_date_tuple is None:
+                    retry_after = -1
+                else:
+                    retry_date = email.utils.mktime_tz(retry_date_tuple)
+                    retry_after = int(retry_date - time.time())
+        else:
+            retry_after = -1
+
+    except Exception:
+        retry_after = -1
+    
+    # If the API asks us to wait a certain amount of time (and it's a reasonable amount), just do what it says.
+    if 0 < retry_after <= 60:
+        return retry_after
+
+    initial_retry_delay = 0.5
+    max_retry_delay = 8.0
+    nb_retries = max_retries - remaining_retries
+
+    # Apply exponential backoff, but not more than the max.
+    sleep_seconds = min(initial_retry_delay * pow(2.0, nb_retries), max_retry_delay)
+
+    # Apply some jitter, plus-or-minus half a second.
+    jitter = 1 - 0.25 * random.random()
+    timeout = sleep_seconds * jitter
+    return timeout if timeout >= 0 else 0
 
 # integration helper function
 def modify_integration(integration_name, integration_params):

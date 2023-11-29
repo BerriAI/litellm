@@ -74,6 +74,8 @@ def test_async_response_azure():
 
     asyncio.run(test_get_response())
 
+# test_async_response_azure()
+
 def test_async_anyscale_response():
     import asyncio
     litellm.set_verbose = True
@@ -162,4 +164,4 @@ def test_get_response_non_openai_streaming():
         return response
     asyncio.run(test_async_call())
 
-test_get_response_non_openai_streaming()
+# test_get_response_non_openai_streaming()

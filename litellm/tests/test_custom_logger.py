@@ -37,7 +37,13 @@ def test_chat_openai():
                               }],
                               stream=True, 
                               complete_response = True)
-        
+        response2 = completion(model="gpt-3.5-turbo",
+                              messages=[{
+                                  "role": "user",
+                                  "content": "Hi 👋 - i'm not openai"
+                              }],
+                              stream=True, 
+                              complete_response = True)
         time.sleep(1)
         assert customHandler.success == True
     except Exception as e:
