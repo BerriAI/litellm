@@ -2222,18 +2222,6 @@ def get_optional_params(  # use the openai defaults
                 optional_params["temperature"] = temperature
             if max_tokens is not None:
                 optional_params["max_tokens"] = max_tokens
-            if n is not None:
-                optional_params["num_generations"] = n
-            if logit_bias is not None:
-                optional_params["logit_bias"] = logit_bias
-            if top_p is not None:
-                optional_params["p"] = top_p
-            if frequency_penalty is not None:
-                optional_params["frequency_penalty"] = frequency_penalty
-            if presence_penalty is not None:
-                optional_params["presence_penalty"] = presence_penalty
-            if stop is not None:
-                optional_params["stop_sequences"] = stop
     elif custom_llm_provider == "aleph_alpha":
         supported_params = ["max_tokens", "stream", "top_p", "temperature", "presence_penalty", "frequency_penalty", "n", "stop"]
         _check_valid_arg(supported_params=supported_params)
