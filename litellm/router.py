@@ -874,7 +874,8 @@ class Router:
             ############ End of initializing Clients for OpenAI/Azure ###################
             model_id = ""
             for key in model["litellm_params"]:
-                model_id+= str(model["litellm_params"][key])
+                if key != "api_key":
+                    model_id+= str(model["litellm_params"][key])
             model["litellm_params"]["model"] += "-ModelID-" + model_id
         self.model_names = [m["model_name"] for m in model_list]
 
