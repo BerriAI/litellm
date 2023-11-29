@@ -262,8 +262,9 @@ def test_completion_openai_exception():
 
 
 
-# test_invalid_request_error(model="command-nightly")
-# Test 3: Rate Limit Errors
+
+# # test_invalid_request_error(model="command-nightly")
+# # Test 3: Rate Limit Errors
 # def test_model_call(model):
 #     try:
 #         sample_text = "how does a court case get to the Supreme Court?"
