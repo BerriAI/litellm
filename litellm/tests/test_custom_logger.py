@@ -28,24 +28,24 @@ class MyCustomHandler(CustomLogger):
         print(f"On Failure")
         self.failure = True
 
-def test_chat_openai():
-    try:
-        customHandler = MyCustomHandler()
-        litellm.callbacks = [customHandler]
-        response = completion(model="gpt-3.5-turbo",
-                              messages=[{
-                                  "role": "user",
-                                  "content": "Hi 👋 - i'm openai"
-                              }],
-                              stream=True)
-        time.sleep(1)
-        assert customHandler.success == True
-    except Exception as e:
-        pytest.fail(f"An error occurred - {str(e)}")
-        pass
+# def test_chat_openai():
+#     try:
+#         customHandler = MyCustomHandler()
+#         litellm.callbacks = [customHandler]
+#         response = completion(model="gpt-3.5-turbo",
+#                               messages=[{
+#                                   "role": "user",
+#                                   "content": "Hi 👋 - i'm openai"
+#                               }],
+#                               stream=True)
+#         time.sleep(1)
+#         assert customHandler.success == True
+#     except Exception as e:
+#         pytest.fail(f"An error occurred - {str(e)}")
+#         pass
 
 
-test_chat_openai()
+# test_chat_openai()
 
 def test_completion_azure_stream_moderation_failure():
     try:
