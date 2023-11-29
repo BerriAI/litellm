@@ -498,7 +498,7 @@ def completion(
                 logging_obj=logging, 
                 acompletion=acompletion, 
                 timeout=timeout,
-                client=optional_params.pop("client", None)
+                client=optional_params.pop("client", None) # pass AsyncAzureOpenAI, AzureOpenAI client
             )
 
             ## LOGGING
@@ -568,7 +568,8 @@ def completion(
                     litellm_params=litellm_params,
                     logger_fn=logger_fn,
                     timeout=timeout,
-                    custom_prompt_dict=custom_prompt_dict
+                    custom_prompt_dict=custom_prompt_dict,
+                    client=optional_params.pop("client", None) # pass AsyncOpenAI, OpenAI client
                 )
             except Exception as e:
                 ## LOGGING - log the original exception returned
