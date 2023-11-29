@@ -634,8 +634,7 @@ def model_list():
     if general_settings.get("infer_model_from_keys", False):
         all_models = litellm.utils.get_valid_models()
     if llm_model_list: 
-        print(f"llm model list: {llm_model_list}")
-        all_models += [m["model_name"] for m in llm_model_list]
+        all_models = list(set(all_models + [m["model_name"] for m in llm_model_list]))
     if user_model is not None:
         all_models += [user_model]
     print(f"all_models: {all_models}")
