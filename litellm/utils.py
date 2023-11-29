@@ -5247,11 +5247,14 @@ class CustomStreamWrapper:
                 original_chunk = response_obj.get("original_chunk", None)
                 model_response.id = original_chunk.id
                 if len(original_chunk.choices) > 0:
-                    try:
-                        delta = dict(original_chunk.choices[0].delta)
-                        model_response.choices[0].delta = Delta(**delta)
-                    except Exception as e:
-                        model_response.choices[0].delta = Delta()
+                    if original_chunk.choices[0].delta.function_call is not None or original_chunk.choices[0].delta.tool_calls is not None: 
+                        try:
+                            delta = dict(original_chunk.choices[0].delta)
+                            model_response.choices[0].delta = Delta(**delta)
+                        except Exception as e:
+                            model_response.choices[0].delta = Delta()
+                    else: 
+                        return
                 else: 
                     return
                 model_response.system_fingerprint = original_chunk.system_fingerprint
@@ -5284,7 +5287,7 @@ class CustomStreamWrapper:
                     chunk = self.completion_stream
                 else:
                     chunk = next(self.completion_stream)
-                
+
                 if chunk is not None and chunk != b'':
                     response = self.chunk_creator(chunk=chunk)
                     if response is not None:
