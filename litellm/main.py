@@ -2209,8 +2209,10 @@ def stream_chunk_builder(chunks: list, messages: Optional[list]=None):
     elif len(combined_arguments) > 0: 
         completion_output = combined_arguments
     # # Update usage information if needed
-    if messages: 
+    try:
         response["usage"]["prompt_tokens"] = token_counter(model=model, messages=messages)
+    except: # don't allow this failing to block a complete streaming response from being returned
+        response["usage"]["prompt_tokens"] = 0
     response["usage"]["completion_tokens"] = token_counter(model=model, text=completion_output)
     response["usage"]["total_tokens"] = response["usage"]["prompt_tokens"] + response["usage"]["completion_tokens"]
     return convert_to_model_response_object(response_object=response, model_response_object=litellm.ModelResponse())
