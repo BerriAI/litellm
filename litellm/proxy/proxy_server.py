@@ -902,7 +902,7 @@ async def retrieve_server_log(request: Request):
 async def test_endpoint(request: Request): 
     return {"route": request.url.path}
 
-@app.get("/health", description="Check the health of all the endpoints in config.yaml", tags=["health"])
+@router.get("/health", description="Check the health of all the endpoints in config.yaml", tags=["health"])
 async def health_endpoint(request: Request, model: Optional[str] = fastapi.Query(None, description="Specify the model name (optional)")):
     global llm_model_list
     healthy_endpoints = []
@@ -946,7 +946,7 @@ async def health_endpoint(request: Request, model: Optional[str] = fastapi.Query
 async def home(request: Request):
     return "LiteLLM: RUNNING"
 
-@app.get("/routes")
+@router.get("/routes")
 async def get_routes():
     """
     Get a list of available routes in the FastAPI application.
