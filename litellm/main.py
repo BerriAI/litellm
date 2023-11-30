@@ -1186,9 +1186,14 @@ def completion(
 
             if "stream" in optional_params and optional_params["stream"] == True:
                 # don't try to access stream object,
-                response = CustomStreamWrapper(
-                    iter(model_response), model, custom_llm_provider="bedrock", logging_obj=logging
-                )
+                if "ai21" in model: 
+                    response = CustomStreamWrapper(
+                        model_response, model, custom_llm_provider="bedrock", logging_obj=logging
+                    )
+                else:
+                    response = CustomStreamWrapper(
+                        iter(model_response), model, custom_llm_provider="bedrock", logging_obj=logging
+                    )
                 return response
 
             ## RESPONSE OBJECT

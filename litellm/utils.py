@@ -5065,14 +5065,22 @@ class CustomStreamWrapper:
             return ""
 
     def handle_bedrock_stream(self, chunk):
-        chunk = chunk.get('chunk')
-        if chunk:
+        if hasattr(chunk, "get"):
+            chunk = chunk.get('chunk')
             chunk_data = json.loads(chunk.get('bytes').decode())
+        else:
+            chunk_data = json.loads(chunk.decode())
+        if chunk_data:
             text = "" 
             is_finished = False
             finish_reason = ""
             if "outputText" in chunk_data: 
                 text = chunk_data['outputText']
+            # ai21 mapping
+            if "ai21" in self.model: # fake ai21 streaming 
+                text = chunk_data.get('completions')[0].get('data').get('text')
+                is_finished = True
+                finish_reason = "stop"
             # anthropic mapping
             elif "completion" in  chunk_data:
                 text = chunk_data['completion'] # bedrock.anthropic
@@ -5295,11 +5303,10 @@ class CustomStreamWrapper:
     def __next__(self):
         try:
             while True: 
-                if isinstance(self.completion_stream, str):
+                if isinstance(self.completion_stream, str) or isinstance(self.completion_stream, bytes):
                     chunk = self.completion_stream
                 else:
                     chunk = next(self.completion_stream)
-
                 if chunk is not None and chunk != b'':
                     response = self.chunk_creator(chunk=chunk)
                     if response is not None:
