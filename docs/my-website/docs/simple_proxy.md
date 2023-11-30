@@ -368,12 +368,14 @@ git clone https://github.com/danny-avila/LibreChat.git
 ```
 
 
-#### 2. Modify `docker-compose.yml`
+#### 2. Modify Librechat's `docker-compose.yml`
 ```yaml
 OPENAI_REVERSE_PROXY=http://host.docker.internal:8000/v1/chat/completions
 ```
 
-#### 3. Save fake OpenAI key in `.env`
+#### 3. Save fake OpenAI key in Librechat's `.env` 
+
+Copy Librechat's `.env.example` to `.env` and overwrite the default OPENAI_API_KEY (by default it requires the user to pass a key).
 ```env
 OPENAI_API_KEY=sk-1234
 ```
