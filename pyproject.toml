@@ -23,7 +23,7 @@ aiohttp = "*"
 litellm = 'litellm:run_server'
 
 [build-system]
-requires = ["poetry-core"]
+requires = ["poetry-core", "wheel"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.commitizen]
