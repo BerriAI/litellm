@@ -2,8 +2,7 @@
 FROM python:3.9-slim
 
 # Install the project dependencies
-COPY requirements.txt /app/litellm/requirements.txt
-RUN pip install -r requirements.txt
+RUN pip install -r /app/litellm/requirements.txt
 
 EXPOSE 4000/tcp
 
