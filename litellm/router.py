@@ -941,7 +941,7 @@ class Router:
             rpm = healthy_deployments[0].get("litellm_params").get("rpm", None)
             if rpm is not None:
                 # use weight-random pick if rpms provided
-                rpms = [m["litellm_params"].get("rpm") for m in healthy_deployments]
+                rpms = [m["litellm_params"].get("rpm", 0) for m in healthy_deployments]
                 self.print_verbose(f"\nrpms {rpms}")
                 total_rpm = sum(rpms)
                 weights = [rpm / total_rpm for rpm in rpms]
@@ -955,7 +955,7 @@ class Router:
             tpm = healthy_deployments[0].get("litellm_params").get("tpm", None)
             if tpm is not None:
                 # use weight-random pick if rpms provided
-                tpms = [m["litellm_params"].get("tpm") for m in healthy_deployments]
+                tpms = [m["litellm_params"].get("tpm", 0) for m in healthy_deployments]
                 self.print_verbose(f"\ntpms {tpms}")
                 total_tpm = sum(tpms)
                 weights = [tpm / total_tpm for tpm in tpms]
