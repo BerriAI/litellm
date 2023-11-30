@@ -631,7 +631,7 @@ def test_completion_bedrock_ai21_stream():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_completion_bedrock_ai21_stream()
+# test_completion_bedrock_ai21_stream()
 
 # def test_completion_sagemaker_stream():
 #     try:
@@ -760,6 +760,17 @@ def hf_test_completion_tgi_stream():
         pytest.fail(f"Error occurred: {e}")
 # hf_test_completion_tgi_stream()
 
+def test_petals(): 
+    print(f"making petals call")
+    response = completion(
+        model="petals/meta-llama/Llama-2-70b-chat-hf", 
+        messages=[{ "content": "Hello, how are you?","role": "user"}], 
+        # stream=True,
+        base_url="https://chat.petals.dev/api/v1/generate"
+    )
+
+    print(f"response: {response}")
+test_petals()
 # def test_completion_aleph_alpha():
 #     try:
 #         response = completion(
