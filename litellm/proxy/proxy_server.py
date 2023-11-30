@@ -679,7 +679,11 @@ async def completion(request: Request, model: Optional[str] = None, user_api_key
         if user_model:
             data["model"] = user_model
         data["call_type"] = "text_completion"
-        data["metadata"] = {"user_api_key": user_api_key_dict["api_key"]}
+        if "metadata" in data:
+            data["metadata"]["user_api_key"] = user_api_key_dict["api_key"]
+        else:
+            data["metadata"] = {"user_api_key": user_api_key_dict["api_key"]}
+
         return litellm_completion(
             **data
         )
@@ -716,7 +720,11 @@ async def chat_completion(request: Request, model: Optional[str] = None, user_ap
             or model # for azure deployments
             or data["model"] # default passed in http request
         )
-        data["metadata"] = {"user_api_key": user_api_key_dict["api_key"]}
+
+        if "metadata" in data:
+            data["metadata"]["user_api_key"] = user_api_key_dict["api_key"]
+        else:
+            data["metadata"] = {"user_api_key": user_api_key_dict["api_key"]}
 
         global user_temperature, user_request_timeout, user_max_tokens, user_api_base
         # override with user settings, these are params passed via cli
@@ -776,7 +784,11 @@ async def embeddings(request: Request, user_api_key_dict: dict = Depends(user_ap
         )
         if user_model:
             data["model"] = user_model
-        data["metadata"] = {"user_api_key": user_api_key_dict["api_key"]}
+        if "metadata" in data:
+            data["metadata"]["user_api_key"] = user_api_key_dict["api_key"]
+        else:
+            data["metadata"] = {"user_api_key": user_api_key_dict["api_key"]}
+
         ## ROUTE TO CORRECT ENDPOINT ##
         router_model_names = [m["model_name"] for m in llm_model_list] if llm_model_list is not None else []
         if llm_router is not None and data["model"] in router_model_names: # model in router model list 
