@@ -8,7 +8,8 @@ WORKDIR /app
 COPY . /app
 
 # Install any needed packages specified in requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip wheel --no-cache-dir --wheel-dir=wheels -r requirements.txt
+RUN pip install --no-cache-dir --find-links=wheels -r requirements.txt
 
 EXPOSE 4000/tcp
 
