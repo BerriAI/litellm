@@ -111,7 +111,7 @@ class AzureChatCompletion(BaseLLM):
         exception_mapping_worked = False
         try:
 
-            if model is None or messages is None:
+            if (model is None or messages is None) and client is None:
                 raise AzureOpenAIError(status_code=422, message=f"Missing model or messages")
         
             data = {
