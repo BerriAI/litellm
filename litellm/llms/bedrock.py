@@ -393,29 +393,55 @@ def completion(
         accept = 'application/json'
         contentType = 'application/json'
         if stream == True:
-            ## LOGGING
-            request_str = f"""
-            response = client.invoke_model_with_response_stream(
-                body={data},
-                modelId={model},
-                accept=accept,
-                contentType=contentType
-            )
-            """
-            logging_obj.pre_call(
+            if provider == "ai21":
+                ## LOGGING
+                request_str = f"""
+                response = client.invoke_model(
+                    body={data},
+                    modelId={model},
+                    accept=accept,
+                    contentType=contentType
+                )
+                """
+                logging_obj.pre_call(
                     input=prompt,
                     api_key="",
                     additional_args={"complete_input_dict": data, "request_str": request_str},
-            )
-            response = client.invoke_model_with_response_stream(
-                body=data,
-                modelId=model,
-                accept=accept,
-                contentType=contentType
-            )
-            response = response.get('body')
-            return response
+                )
 
+                response = client.invoke_model(
+                    body=data,
+                    modelId=model,
+                    accept=accept,
+                    contentType=contentType
+                )
+
+                response = response.get('body').read()
+                return response
+            else:
+                ## LOGGING
+                request_str = f"""
+                response = client.invoke_model_with_response_stream(
+                    body={data},
+                    modelId={model},
+                    accept=accept,
+                    contentType=contentType
+                )
+                """
+                logging_obj.pre_call(
+                        input=prompt,
+                        api_key="",
+                        additional_args={"complete_input_dict": data, "request_str": request_str},
+                )
+                
+                response = client.invoke_model_with_response_stream(
+                    body=data,
+                    modelId=model,
+                    accept=accept,
+                    contentType=contentType
+                )
+                response = response.get('body')
+                return response
         try: 
             ## LOGGING
             request_str = f"""
