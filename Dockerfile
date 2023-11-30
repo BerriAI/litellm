@@ -13,4 +13,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 EXPOSE 4000/tcp
 
 # Start the litellm proxy, using the `litellm` cli command https://docs.litellm.ai/docs/simple_proxy
-CMD litellm --config /app/proxy_server_config.yaml --port 4000
+ENTRYPOINT litellm --config /app/proxy_server_config.yaml --port 4000
