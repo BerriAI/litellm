@@ -335,7 +335,7 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
             with open(config_file_path, 'r') as file:
                 config = yaml.safe_load(file)
         else:
-            raise Exception(f"Path to config does not exist, 'os.path.exists({config_file_path})' returned False")
+            raise Exception(f"Path to config does not exist, Current working directory: {os.getcwd()}, 'os.path.exists({config_file_path})' returned False")
     except Exception as e:
         raise Exception(f"Exception while reading Config: {e}")
     
