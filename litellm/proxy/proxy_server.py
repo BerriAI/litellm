@@ -923,8 +923,6 @@ async def health_endpoint(request: Request, model: Optional[str] = fastapi.Query
                             litellm_params["model"] = original_model_string[:index_of_model_id]
                         else:
                             litellm_params["model"] = original_model_string
-                        litellm_params.pop("tpm", None)
-                        litellm_params.pop("rpm", None)
                         litellm.completion(**litellm_params)
                         cleaned_params = {}
                         for key in litellm_params:
