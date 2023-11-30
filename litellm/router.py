@@ -106,6 +106,14 @@ class Router:
         ### HEALTH CHECK THREAD ###
         if self.routing_strategy == "least-busy":
             self._start_health_check_thread()
+        if self.routing_strategy == "simple-shuffle":
+            # use rpm based shuffle if user provided values of rpm
+            try:
+                rpm = self.model_list[0]["litellm_params"].get("rpm", None)
+                if rpm is not None:
+                    self.routing_strategy = "weighted-shuffle"
+            except:
+                pass
 
         ### CACHING ###
         redis_cache = None
@@ -135,6 +143,7 @@ class Router:
             litellm.failure_callback.append(self.deployment_callback_on_failure)
         else:
             litellm.failure_callback = [self.deployment_callback_on_failure]
+        self.print_verbose(f"Intialized router with Routing strategy: {self.routing_strategy}\n")
 
     
     ### COMPLETION + EMBEDDING FUNCTIONS
