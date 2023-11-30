@@ -190,7 +190,7 @@ def test_aembedding():
             pass
     asyncio.run(embedding_call())
 
-# test_aembedding()
+test_aembedding()
 
 # def test_custom_openai_embedding():
 #     litellm.set_verbose=True
