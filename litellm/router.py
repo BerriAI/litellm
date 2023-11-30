@@ -842,6 +842,8 @@ class Router:
                     api_key = os.getenv(api_key_env_name)
 
                 api_base = litellm_params.get("api_base")
+                base_url = litellm_params.get("base_url")
+                api_base = api_base or base_url # allow users to pass in `api_base` or `base_url` for azure
                 if api_base and api_base.startswith("os.environ/"):
                     api_base_env_name = api_base.replace("os.environ/", "")
                     api_base = os.getenv(api_base_env_name)
