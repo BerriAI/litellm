@@ -684,6 +684,11 @@ def completion(
                 or "https://api.replicate.com/v1"
             )
 
+            custom_prompt_dict = (
+                custom_prompt_dict
+                or litellm.custom_prompt_dict
+            )
+
             model_response = replicate.completion(
                 model=model,
                 messages=messages,
@@ -696,6 +701,7 @@ def completion(
                 encoding=encoding, # for calculating input/output tokens
                 api_key=replicate_key,
                 logging_obj=logging, 
+                custom_prompt_dict=custom_prompt_dict
             )
             if "stream" in optional_params and optional_params["stream"] == True:
                 # don't try to access stream object,
