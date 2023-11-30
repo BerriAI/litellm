@@ -1313,11 +1313,12 @@ def completion(
             or model in litellm.petals_models
         ):
             api_base = (
-                litellm.api_base or
-                api_base 
+                api_base or
+                litellm.api_base 
             )
 
             custom_llm_provider = "petals"
+            stream = optional_params.pop("stream", False)
             model_response = petals.completion(
                 model=model,
                 messages=messages,
