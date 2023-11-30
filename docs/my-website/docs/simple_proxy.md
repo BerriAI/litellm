@@ -237,169 +237,27 @@ $ litellm --model command-nightly
 
 
 ## Using with OpenAI compatible projects
-LiteLLM allows you to set `openai.api_base` to the proxy server and use all LiteLLM supported LLMs in any OpenAI supported project
+Set `base_url` to the LiteLLM Proxy server
 
 <Tabs>
-
-<TabItem value="flask evals" label="FLASK Evals">
-FLASK - Fine-grained Language Model Evaluation 
-Use litellm to evaluate any LLM on FLASK https://github.com/kaistAI/FLASK 
-
-**Step 1: Start the local proxy**
-```shell
-$ litellm --model huggingface/bigcode/starcoder
-```
-
-**Step 2: Set OpenAI API Base & Key**
-```shell
-$ export OPENAI_API_BASE=http://0.0.0.0:8000
-```
-
-**Step 3 Run with FLASK** 
-
-```shell
-git clone https://github.com/kaistAI/FLASK
-```
-```shell
-cd FLASK/gpt_review
-```
-
-Run the eval 
-```shell
-python gpt4_eval.py -q '../evaluation_set/flask_evaluation.jsonl'
-```
-</TabItem>
-
-<TabItem value="FastEval" label="Fast Eval">
-
-**Step 1: Start the local proxy**
-see supported models [here](https://docs.litellm.ai/docs/simple_proxy)
-```shell
-$ litellm --model huggingface/bigcode/starcoder
-```
-
-**Step 2: Set OpenAI API Base & Key**
-```shell
-$ export OPENAI_API_BASE=http://0.0.0.0:8000
-```
-
-Set this to anything since the proxy has the credentials
-```shell
-export OPENAI_API_KEY=anything
-```
-
-**Step 3 Run with FastEval** 
-
-**Clone FastEval**
-```shell
-# Clone this repository, make it the current working directory
-git clone --depth 1 https://github.com/FastEval/FastEval.git
-cd FastEval
-```
-
-**Set API Base on FastEval**
-
-On FastEval make the following **2 line code change** to set `OPENAI_API_BASE`
-
-https://github.com/FastEval/FastEval/pull/90/files
-```python
-try:
-    api_base = os.environ["OPENAI_API_BASE"] #changed: read api base from .env
-    if api_base == None:
-        api_base = "https://api.openai.com/v1"
-    response = await self.reply_two_attempts_with_different_max_new_tokens(
-        conversation=conversation,
-        api_base=api_base, # #changed: pass api_base
-        api_key=os.environ["OPENAI_API_KEY"],
-        temperature=temperature,
-        max_new_tokens=max_new_tokens,
-```
-
-**Run FastEval**
-Set `-b` to the benchmark you want to run. Possible values are `mt-bench`, `human-eval-plus`, `ds1000`, `cot`, `cot/gsm8k`, `cot/math`, `cot/bbh`, `cot/mmlu` and `custom-test-data`
-
-Since LiteLLM provides an OpenAI compatible proxy `-t` and `-m` don't need to change
-`-t` will remain openai
-`-m` will remain gpt-3.5
-
-```shell
-./fasteval -b human-eval-plus -t openai -m gpt-3.5-turbo
-```
-</TabItem>
-<TabItem value="mlflow" label="ML Flow Eval">
-
-MLflow provides an API `mlflow.evaluate()` to help evaluate your LLMs https://mlflow.org/docs/latest/llms/llm-evaluate/index.html
-
-#### Pre Requisites
-```shell
-pip install litellm
-```
-```shell
-pip install mlflow
-```
-
-#### Step 1: Start LiteLLM Proxy on the CLI
-LiteLLM allows you to create an OpenAI compatible server for all supported LLMs. [More information on litellm proxy here](https://docs.litellm.ai/docs/simple_proxy)
-
-```shell
-$ litellm --model huggingface/bigcode/starcoder
-
-#INFO: Proxy running on http://0.0.0.0:8000
-```
-
-#### Step 2: Run ML Flow
-Before running the eval we will set `openai.api_base` to the litellm proxy from Step 1
-
-```python
-openai.api_base = "http://0.0.0.0:8000"
-```
+<TabItem value="openai" label="OpenAI v1.0.0+">
 
 ```python
 import openai
-import pandas as pd
-openai.api_key = "anything"             # this can be anything, we set the key on the proxy
-openai.api_base = "http://0.0.0.0:8000" # set api base to the proxy from step 1
-
-
-import mlflow
-eval_data = pd.DataFrame(
-    {
-        "inputs": [
-            "What is the largest country",
-            "What is the weather in sf?",
-        ],
-        "ground_truth": [
-            "India is a large country",
-            "It's cold in SF today"
-        ],
-    }
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:8000"
 )
 
-with mlflow.start_run() as run:
-    system_prompt = "Answer the following question in two sentences"
-    logged_model_info = mlflow.openai.log_model(
-        model="gpt-3.5",
-        task=openai.ChatCompletion,
-        artifact_path="model",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": "{question}"},
-        ],
-    )
+# request sent to model set on litellm proxy, `litellm --model`
+response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
+    {
+        "role": "user",
+        "content": "this is a test request, write a short poem"
+    }
+])
 
-    # Use predefined question-answering metrics to evaluate our model.
-    results = mlflow.evaluate(
-        logged_model_info.model_uri,
-        eval_data,
-        targets="ground_truth",
-        model_type="question-answering",
-    )
-    print(f"See aggregated evaluation results below: \n{results.metrics}")
-
-    # Evaluation result for each data record is available in `results.tables`.
-    eval_table = results.tables["eval_results_table"]
-    print(f"See evaluation table below: \n{eval_table}")
-
+print(response)
 
 ```
 </TabItem>
