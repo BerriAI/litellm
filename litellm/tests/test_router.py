@@ -10,6 +10,7 @@ sys.path.insert(
 import litellm
 from litellm import Router
 from concurrent.futures import ThreadPoolExecutor
+from collections import defaultdict
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -297,4 +298,55 @@ def test_aembedding_on_router():
 	except Exception as e:
 		traceback.print_exc()
 		pytest.fail(f"Error occurred: {e}")
-test_aembedding_on_router()
+# test_aembedding_on_router()
+
+def test_weighted_selection_router(): 
+	# this tests if load balancing works based on the provided rpms in the router
+	# it's fast test, only tests get_available_deployment
+	# users can pass rpms as a litellm_param
+	try:
+		litellm.set_verbose = False
+		model_list = [
+			{
+				"model_name": "gpt-3.5-turbo",
+				"litellm_params": {
+					"model": "gpt-3.5-turbo-0613",
+					"api_key": os.getenv("OPENAI_API_KEY"),
+					"rpm": 6,
+				},
+			},
+			{
+				"model_name": "gpt-3.5-turbo",
+				"litellm_params": {
+					"model": "azure/chatgpt-v-2",
+					"api_key": os.getenv("AZURE_API_KEY"),
+					"api_base": os.getenv("AZURE_API_BASE"),
+					"api_version": os.getenv("AZURE_API_VERSION"),
+					"rpm": 1440,
+				},
+			}
+		]
+		router = Router(
+			model_list=model_list, 
+		)
+		selection_counts = defaultdict(int)
+
+		# call get_available_deployment 1k times, it should pick azure/chatgpt-v-2 about 90% of the time
+		for _ in range(1000):
+			selected_model = router.get_available_deployment("gpt-3.5-turbo")
+			selected_model_id = selected_model["litellm_params"]["model"]
+			selected_model_name = litellm.utils.remove_model_id(selected_model_id)
+			selection_counts[selected_model_name] +=1
+		print(selection_counts)
+
+		total_requests = sum(selection_counts.values())
+
+		# Assert that 'azure/chatgpt-v-2' has about 90% of the total requests
+		assert selection_counts['azure/chatgpt-v-2'] / total_requests > 0.89, f"Assertion failed: 'azure/chatgpt-v-2' does not have about 90% of the total requests in the weighted load balancer. Selection counts {selection_counts}"
+
+
+		router.reset()
+	except Exception as e:
+		traceback.print_exc()
+		pytest.fail(f"Error occurred: {e}")
+# test_weighted_selection_router()
