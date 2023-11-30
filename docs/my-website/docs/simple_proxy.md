@@ -361,6 +361,13 @@ print(result)
 </TabItem>
 <TabItem value="librechat" label="LibreChat">
 
+### Start the LiteLLM proxy
+```shell
+litellm --model gpt-3.5-turbo
+
+#INFO: Proxy running on http://0.0.0.0:8000
+```
+
 #### 1. Clone the repo
 
 ```shell
@@ -369,6 +376,7 @@ git clone https://github.com/danny-avila/LibreChat.git
 
 
 #### 2. Modify Librechat's `docker-compose.yml`
+LiteLLM Proxy is running on port `8000`, set `8000` as the proxy below
 ```yaml
 OPENAI_REVERSE_PROXY=http://host.docker.internal:8000/v1/chat/completions
 ```
