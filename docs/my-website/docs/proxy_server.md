@@ -13,7 +13,7 @@ Docs outdated. New docs 👉 [here](./simple_proxy.md)
 
 ## Usage 
 ```shell
-pip install litellm
+pip install litellm[proxy]
 ```
 ```shell 
 $ litellm --model ollama/codellama 
