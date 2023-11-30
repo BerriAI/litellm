@@ -2143,6 +2143,7 @@ def stream_chunk_builder(chunks: list, messages: Optional[list]=None):
     object = chunks[0]["object"]
     created = chunks[0]["created"]
     model = chunks[0]["model"]
+    system_fingerprint = chunks[0].get("system_fingerprint", None)
     role = chunks[0]["choices"][0]["delta"]["role"]
     finish_reason = chunks[-1]["choices"][0]["finish_reason"]
 
@@ -2152,6 +2153,7 @@ def stream_chunk_builder(chunks: list, messages: Optional[list]=None):
         "object": object,
         "created": created,
         "model": model,
+        "system_fingerprint": system_fingerprint,
         "choices": [
             {
                 "index": 0,
