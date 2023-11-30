@@ -71,7 +71,7 @@ class Router:
                  fallbacks: List = [],
                  allowed_fails: Optional[int] = None,
                  context_window_fallbacks: List = [], 
-                 routing_strategy: Literal["simple-shuffle", "least-busy", "usage-based-routing", "latency-based-routing", "weighted-shuffle"] = "simple-shuffle") -> None:
+                 routing_strategy: Literal["simple-shuffle", "least-busy", "usage-based-routing", "latency-based-routing"] = "simple-shuffle") -> None:
 
         self.set_verbose = set_verbose 
         if model_list:
@@ -106,15 +106,6 @@ class Router:
         ### HEALTH CHECK THREAD ###
         if self.routing_strategy == "least-busy":
             self._start_health_check_thread()
-        if self.routing_strategy == "simple-shuffle":
-            # use rpm based shuffle if user provided values of rpm
-            try:
-                rpm = self.model_list[0]["litellm_params"].get("rpm", None)
-                if rpm is not None:
-                    self.routing_strategy = "weighted-shuffle"
-            except:
-                pass
-
         ### CACHING ###
         redis_cache = None
         if redis_host is not None and redis_port is not None and redis_password is not None:
@@ -936,20 +927,21 @@ class Router:
             else: 
                 raise ValueError("No models available.")
         elif self.routing_strategy == "simple-shuffle": 
+            rpm = healthy_deployments[0].get("litellm_params").get("rpm", None)
+            if rpm is not None:
+                # use weight-random pick if rpms provided
+                rpms = [m["litellm_params"].get("rpm") for m in healthy_deployments]
+                self.print_verbose(f"\nrpms {rpms}")
+                total_rpm = sum(rpms)
+                weights = [rpm / total_rpm for rpm in rpms]
+                self.print_verbose(f"\n weights {weights}")
+                # Perform weighted random pick
+                selected_index = random.choices(range(len(rpms)), weights=weights)[0]
+                self.print_verbose(f"\n selected index, {selected_index}")
+                deployment = healthy_deployments[selected_index]
+                return deployment or deployment[0]
             item = random.choice(healthy_deployments)
             return item or item[0]
-        elif self.routing_strategy == "weighted-shuffle": 
-            rpms = [m["litellm_params"].get("rpm") for m in healthy_deployments]
-            self.print_verbose(f"\nrpms {rpms}")
-            total_rpm = sum(rpms)
-            weights = [rpm / total_rpm for rpm in rpms]
-            self.print_verbose(f"\n weights {weights}")
-            # Perform weighted random pick
-            selected_index = random.choices(range(len(rpms)), weights=weights)[0]
-            self.print_verbose(f"\n selected index, {selected_index}")
-            deployment = healthy_deployments[selected_index]
-            return deployment or deployment[0]
-
         elif self.routing_strategy == "latency-based-routing": 
             returned_item = None
             lowest_latency = float('inf')
