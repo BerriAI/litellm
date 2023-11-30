@@ -235,7 +235,7 @@ $ litellm --model command-nightly
 
 </Tabs>
 
-<!-- 
+
 ## Using with OpenAI compatible projects
 Set `base_url` to the LiteLLM Proxy server
 
@@ -359,7 +359,31 @@ result = experts(query='How can I be more productive?')
 print(result)
 ```
 </TabItem>
-</Tabs> -->
+<TabItem value="librechat" label="LibreChat">
+
+#### 1. Clone the repo
+
+```shell
+git clone https://github.com/danny-avila/LibreChat.git
+```
+
+
+#### 2. Modify `docker-compose.yml`
+```yaml
+OPENAI_REVERSE_PROXY=http://host.docker.internal:8000/v1/chat/completions
+```
+
+#### 3. Save fake OpenAI key in `.env`
+```env
+OPENAI_API_KEY=sk-1234
+```
+
+#### 4. Run LibreChat: 
+```shell
+docker compose up
+```
+</TabItem>
+</Tabs>
 
 ## Proxy Configs
 The Config allows you to set the following params
