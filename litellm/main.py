@@ -369,7 +369,6 @@ def completion(
                 model
             ]  # update the model to the actual value if an alias has been passed in
         model_response = ModelResponse()
-
         if kwargs.get('azure', False) == True: # don't remove flag check, to remain backwards compatible for repos like Codium
             custom_llm_provider="azure"
         if deployment_id != None: # azure llms 
@@ -1263,6 +1262,7 @@ def completion(
                     response_string+=chunk['content']
             
             ## RESPONSE OBJECT
+            model_response["choices"][0]["finish_reason"] = "stop"
             model_response["choices"][0]["message"]["content"] = response_string
             model_response["created"] = int(time.time())
             model_response["model"] = "ollama/" + model
