@@ -28,7 +28,7 @@ LiteLLM manages
 - Translating inputs to the provider's `completion` and `embedding` endpoints
 - Guarantees [consistent output](https://docs.litellm.ai/docs/completion/output), text responses will always be available at `['choices'][0]['message']['content']`
 - Exception mapping - common exceptions across providers are mapped to the OpenAI exception types.
-- Load-balance across multiple deployments (e.g. Azure/OpenAI) - `Router`
+- Load-balance across multiple deployments (e.g. Azure/OpenAI) - `Router` **1k+ requests/second**
 
 # Usage ([**Docs**](https://docs.litellm.ai/docs/))
 
@@ -118,8 +118,8 @@ print(response)
 ## OpenAI Proxy - ([Docs](https://docs.litellm.ai/docs/simple_proxy))
 LiteLLM Proxy manages:
 * Calling 100+ LLMs Huggingface/Bedrock/TogetherAI/etc. in the OpenAI ChatCompletions & Completions format
+* Load balancing - between Multiple Models + Deployments of the same model LiteLLM proxy can handle 1k+ requests/second during load tests
 * Authentication & Spend Tracking Virtual Keys
-* Load balancing - Routing between Multiple Models + Deployments of the same model
 
 ### Step 1: Start litellm proxy
 ```shell
