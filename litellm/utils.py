@@ -1794,7 +1794,6 @@ def register_model(model_cost: Union[str, dict]):
     for key, value in loaded_model_cost.items():
         ## override / add new keys to the existing model cost dictionary
         litellm.model_cost[key] = loaded_model_cost[key]
-
         # add new model names to provider lists
         if value.get('litellm_provider') == 'openai':
             if key not in litellm.open_ai_chat_completion_models:
