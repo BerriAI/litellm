@@ -64,4 +64,5 @@ jobs:
         with:
           app-name: 'litellm'
           slot-name: 'Production'
+          startup-command: litellm --config /app/proxy_server_config.yaml
           publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_16602C902E0446C894B919CD2F7B6C09 }}
