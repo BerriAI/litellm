@@ -323,7 +323,26 @@ class OpenAIChatCompletion(BaseLLM):
                     raise OpenAIError(status_code=408, message=f"{type(e).__name__}")
                 else:
                     raise OpenAIError(status_code=500, message=f"{str(e)}")
-                
+    async def aembedding(
+            self, 
+            data: dict, 
+            model_response: ModelResponse, 
+            timeout: float,
+            api_key: Optional[str]=None,
+            api_base: Optional[str]=None,
+            client=None,
+            max_retries=None,
+        ): 
+        response = None
+        try: 
+            if client is None:
+                openai_aclient = AsyncOpenAI(api_key=api_key, base_url=api_base, http_client=litellm.aclient_session, timeout=timeout, max_retries=max_retries)
+            else:
+                openai_aclient = client
+            response = await openai_aclient.embeddings.create(**data)
+            return convert_to_model_response_object(response_object=json.loads(response.model_dump_json()), model_response_object=model_response, response_type="embedding")
+        except Exception as e:
+            raise e
     def embedding(self,
                 model: str,
                 input: list,
@@ -334,6 +353,7 @@ class OpenAIChatCompletion(BaseLLM):
                 logging_obj=None,
                 optional_params=None,
                 client=None,
+                aembedding=None,
                 ):
         super().embedding()
         exception_mapping_worked = False
@@ -347,6 +367,9 @@ class OpenAIChatCompletion(BaseLLM):
             max_retries = data.pop("max_retries", 2)
             if not isinstance(max_retries, int): 
                 raise OpenAIError(status_code=422, message="max retries must be an int")
+            if aembedding == True:
+                response =  self.aembedding(data=data, model_response=model_response, api_base=api_base, api_key=api_key, timeout=timeout, client=client, max_retries=max_retries)
+                return response
             if client is None:
                 openai_client = OpenAI(api_key=api_key, base_url=api_base, http_client=litellm.client_session, timeout=timeout, max_retries=max_retries)
             else:

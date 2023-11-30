@@ -1668,17 +1668,43 @@ async def aembedding(*args, **kwargs):
     - `response` (Any): The response returned by the `embedding` function.
     """
     loop = asyncio.get_event_loop()
+    model = args[0] if len(args) > 0 else kwargs["model"]
+    ### PASS ARGS TO Embedding ### 
+    kwargs["aembedding"] = True
+    custom_llm_provider = None
+    try: 
+        # Use a partial function to pass your keyword arguments
+        func = partial(embedding, *args, **kwargs)
 
-    # Use a partial function to pass your keyword arguments
-    func = partial(embedding, *args, **kwargs)
+        # Add the context to the function
+        ctx = contextvars.copy_context()
+        func_with_context = partial(ctx.run, func)
 
-    # Add the context to the function
-    ctx = contextvars.copy_context()
-    func_with_context = partial(ctx.run, func)
+        _, custom_llm_provider, _, _ = get_llm_provider(model=model, api_base=kwargs.get("api_base", None))
 
-    # Call the synchronous function using run_in_executor
-    response =  await loop.run_in_executor(None, func_with_context)
-    return response
+        if (custom_llm_provider == "openai" 
+            or custom_llm_provider == "azure" 
+            or custom_llm_provider == "custom_openai"
+            or custom_llm_provider == "anyscale"
+            or custom_llm_provider == "openrouter"
+            or custom_llm_provider == "deepinfra"
+            or custom_llm_provider == "perplexity"
+            or custom_llm_provider == "huggingface"): # currently implemented aiohttp calls for just azure and openai, soon all. 
+            # Await normally
+            init_response = await loop.run_in_executor(None, func_with_context)
+            if isinstance(init_response, dict) or isinstance(init_response, ModelResponse): ## CACHING SCENARIO 
+                response = init_response
+            elif asyncio.iscoroutine(init_response):
+                response = await init_response
+        else: 
+            # Call the synchronous function using run_in_executor
+            response =  await loop.run_in_executor(None, func_with_context)
+        return response
+    except Exception as e: 
+        custom_llm_provider = custom_llm_provider or "openai"
+        raise exception_type(
+                model=model, custom_llm_provider=custom_llm_provider, original_exception=e, completion_kwargs=args,
+            )
 
 @client
 def embedding(
@@ -1725,6 +1751,7 @@ def embedding(
     client = kwargs.pop("client", None)
     rpm = kwargs.pop("rpm", None)
     tpm = kwargs.pop("tpm", None)
+    aembedding = kwargs.pop("aembedding", None)
 
     optional_params = {}
     for param in kwargs:
@@ -1809,7 +1836,8 @@ def embedding(
                 timeout=timeout,
                 model_response=EmbeddingResponse(), 
                 optional_params=optional_params,
-                client=client
+                client=client,
+                aembedding=aembedding,
             )
         elif model in litellm.cohere_embedding_models:
             cohere_key = (
