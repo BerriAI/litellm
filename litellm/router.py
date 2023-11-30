@@ -71,7 +71,7 @@ class Router:
                  fallbacks: List = [],
                  allowed_fails: Optional[int] = None,
                  context_window_fallbacks: List = [], 
-                 routing_strategy: Literal["simple-shuffle", "least-busy", "usage-based-routing", "latency-based-routing"] = "simple-shuffle") -> None:
+                 routing_strategy: Literal["simple-shuffle", "least-busy", "usage-based-routing", "latency-based-routing", "weighted-shuffle"] = "simple-shuffle") -> None:
 
         self.set_verbose = set_verbose 
         if model_list:
@@ -635,13 +635,13 @@ class Router:
                 else: 
                     cached_value = cached_value + [deployment]
                     # save updated value
-                    self.cache.set_cache(value=cached_value, key=cooldown_key, ttl=60) 
+                    self.cache.set_cache(value=cached_value, key=cooldown_key, ttl=1) 
             except:
                 cached_value = [deployment]
                 # save updated value
-                self.cache.set_cache(value=cached_value, key=cooldown_key, ttl=60) 
+                self.cache.set_cache(value=cached_value, key=cooldown_key, ttl=1) 
         else:
-            self.failed_calls.set_cache(key=deployment, value=updated_fails, ttl=60) 
+            self.failed_calls.set_cache(key=deployment, value=updated_fails, ttl=1) 
 
     def _get_cooldown_deployments(self):
         """
@@ -929,6 +929,18 @@ class Router:
         elif self.routing_strategy == "simple-shuffle": 
             item = random.choice(healthy_deployments)
             return item or item[0]
+        elif self.routing_strategy == "weighted-shuffle": 
+            rpms = [m["litellm_params"].get("rpm") for m in healthy_deployments]
+            self.print_verbose(f"\nrpms {rpms}")
+            total_rpm = sum(rpms)
+            weights = [rpm / total_rpm for rpm in rpms]
+            self.print_verbose(f"\n weights {weights}")
+            # Perform weighted random pick
+            selected_index = random.choices(range(len(rpms)), weights=weights)[0]
+            self.print_verbose(f"\n selected index, {selected_index}")
+            deployment = healthy_deployments[selected_index]
+            return deployment or deployment[0]
+
         elif self.routing_strategy == "latency-based-routing": 
             returned_item = None
             lowest_latency = float('inf')
