@@ -854,34 +854,35 @@ async def info_key_fn(key: str = fastapi.Query(..., description="Key in the requ
 #### MODEL MANAGEMENT #### 
 
 #### [BETA] - This is a beta endpoint, format might change based on user feedback. - https://github.com/BerriAI/litellm/issues/933
-@router.get("/model/info", description="Provides more info about each model in /models, including config.yaml descriptions", tags=["model management"], dependencies=[Depends(user_api_key_auth)])
+@router.get("/model/info", description="Provides more info about each model in /models, including config.yaml descriptions (except api key and api base)", tags=["model management"], dependencies=[Depends(user_api_key_auth)])
 async def model_info(request: Request):
     global llm_model_list, general_settings   
     all_models = [] 
-    for m in llm_model_list: 
-        model_dict = {} 
-        model_name = m["model_name"]
-        model_params = {}
-        for k,v in m["litellm_params"].items():
-            if k == "api_key" or k == "api_base": # don't send the api key or api base
-                continue 
-            
-            if k == "model": 
-                ########## remove -ModelID-XXXX from model ##############
-                original_model_string = v
-                # Find the index of "ModelID" in the string
-                index_of_model_id = original_model_string.find("-ModelID")
-                # Remove everything after "-ModelID" if it exists
-                if index_of_model_id != -1:
-                    v = original_model_string[:index_of_model_id]
-                else:
-                    v = original_model_string
-            
-            model_params[k] = v
+    if llm_model_list is not None:
+        for m in llm_model_list: 
+            model_dict = {} 
+            model_name = m["model_name"]
+            model_params = {}
+            for k,v in m["litellm_params"].items():
+                if k == "api_key" or k == "api_base": # don't send the api key or api base
+                    continue 
+                
+                if k == "model": 
+                    ########## remove -ModelID-XXXX from model ##############
+                    original_model_string = v
+                    # Find the index of "ModelID" in the string
+                    index_of_model_id = original_model_string.find("-ModelID")
+                    # Remove everything after "-ModelID" if it exists
+                    if index_of_model_id != -1:
+                        v = original_model_string[:index_of_model_id]
+                    else:
+                        v = original_model_string
+                
+                model_params[k] = v
 
-        model_dict["model_name"] = model_name
-        model_dict["model_params"] = model_params
-        all_models.append(model_dict)
+            model_dict["model_name"] = model_name
+            model_dict["model_params"] = model_params
+            all_models.append(model_dict)
     # all_models = list(set([m["model_name"] for m in llm_model_list]))
     print_verbose(f"all_models: {all_models}")
     return dict(
