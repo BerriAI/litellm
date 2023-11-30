@@ -1796,7 +1796,6 @@ def register_model(model_cost: Union[str, dict]):
         if key in litellm.model_cost:
             for k,v in loaded_model_cost[key].items(): 
                 litellm.model_cost[key][k] = v
-        # litellm.model_cost[key] = loaded_model_cost[key]
         # add new model names to provider lists
         if value.get('litellm_provider') == 'openai':
             if key not in litellm.open_ai_chat_completion_models:
@@ -5291,6 +5290,7 @@ class CustomStreamWrapper:
                 if self.sent_first_chunk == False:
                     model_response.choices[0].delta["role"] = "assistant"
                     self.sent_first_chunk = True
+                # LOGGING
                 threading.Thread(target=self.logging_obj.success_handler, args=(model_response,)).start() # log response
                 return model_response
             else: 
