@@ -1,12 +1,6 @@
 # Base image
 FROM python:3.9-slim
 
-# Copy the project files to the working directory
-COPY litellm /app/litellm
-
-# Set the working directory
-WORKDIR /app/litellm
-
 # Install the project dependencies
 COPY requirements.txt /app/litellm/requirements.txt
 RUN pip install -r requirements.txt
