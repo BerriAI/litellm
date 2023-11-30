@@ -133,6 +133,7 @@ class AzureChatCompletion(BaseLLM):
                     "complete_input_dict": data,
                 },
             )
+            max_retries = data.pop("max_retries", 2)
             if acompletion is True: 
                 if optional_params.get("stream", False):
                     return self.async_streaming(logging_obj=logging_obj, api_base=api_base, data=data, model=model, api_key=api_key, api_version=api_version, azure_ad_token=azure_ad_token, timeout=timeout, client=client)
@@ -141,7 +142,6 @@ class AzureChatCompletion(BaseLLM):
             elif "stream" in optional_params and optional_params["stream"] == True:
                 return self.streaming(logging_obj=logging_obj, api_base=api_base, data=data, model=model, api_key=api_key, api_version=api_version, azure_ad_token=azure_ad_token, timeout=timeout, client=client)
             else:
-                max_retries = data.pop("max_retries", 2)
                 if not isinstance(max_retries, int): 
                     raise AzureOpenAIError(status_code=422, message="max retries must be an int")
                 # init AzureOpenAI Client
