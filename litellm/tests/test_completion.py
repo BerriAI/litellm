@@ -1334,7 +1334,7 @@ def test_azure_cloudflare_api():
         response = completion(model="azure/gpt-turbo", messages=messages, base_url=os.getenv("CLOUDFLARE_AZURE_BASE_URL"), api_key=os.getenv("AZURE_FRANCE_API_KEY"))
         print(f"response: {response}")
     except Exception as e: 
-        print(e)
+        traceback.print_exc()
         pass
 
 test_azure_cloudflare_api() 
