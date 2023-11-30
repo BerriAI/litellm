@@ -17,27 +17,10 @@ try:
     import yaml
     import rq
 except ImportError:
-    import sys
-
-    subprocess.check_call(
-        [
-            sys.executable,
-            "-m",
-            "pip",
-            "install",
-            "uvicorn",
-            "fastapi",
-            "appdirs",
-            "backoff",
-            "pyyaml", 
-            "rq"
-        ]
+    raise ImportError(
+        "Running `litellm proxy` requires installing via `pip install litellm[proxy]`"
     )
-    import uvicorn
-    import fastapi
-    import appdirs
-    import backoff
-    import yaml
+
 
 import random
 
