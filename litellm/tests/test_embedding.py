@@ -177,18 +177,20 @@ def test_hf_embedding():
 
 # test async embeddings
 def test_aembedding():
-    import asyncio
-    async def embedding_call():
-        try:
-            response = await litellm.aembedding(
-                model="text-embedding-ada-002", 
-                input=["good morning from litellm", "this is another item"]
-            )
-            print(response)
-        except:
-            print(f"error occurred: {traceback.format_exc()}")
-            pass
-    asyncio.run(embedding_call())
+    try:
+        import asyncio
+        async def embedding_call():
+            try:
+                response = await litellm.aembedding(
+                    model="text-embedding-ada-002", 
+                    input=["good morning from litellm", "this is another item"]
+                )
+                print(response)
+            except Exception as e:
+                pytest.fail(f"Error occurred: {e}")
+        asyncio.run(embedding_call())
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 test_aembedding()
 
