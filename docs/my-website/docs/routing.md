@@ -78,6 +78,8 @@ Router provides 2 strategies for routing your calls across multiple deployments:
 
 **Default** Picks a deployment based on the provided **Requests per minute (rpm) or Tokens per minute (tpm)**
 
+If `rpm` or `tpm` is not provided, it randomly picks a deployment
+
 ```python
 from litellm import Router 
 import asyncio
