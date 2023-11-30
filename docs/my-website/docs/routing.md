@@ -20,7 +20,7 @@ If you want a server to load balance across different LLM APIs, use our [OpenAI 
 
 
 ## Load Balancing
-(s/o [@paulpierre](https://www.linkedin.com/in/paulpierre/) for his contribution to this implementation)
+(s/o [@paulpierre](https://www.linkedin.com/in/paulpierre/) and [sweep proxy](https://docs.sweep.dev/blogs/openai-proxy) for their contributions to this implementation)
 [**See Code**](https://github.com/BerriAI/litellm/blob/main/litellm/router.py)
 
 ### Quick Start
