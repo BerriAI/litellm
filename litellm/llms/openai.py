@@ -339,7 +339,7 @@ class OpenAIChatCompletion(BaseLLM):
                 openai_aclient = AsyncOpenAI(api_key=api_key, base_url=api_base, http_client=litellm.aclient_session, timeout=timeout, max_retries=max_retries)
             else:
                 openai_aclient = client
-            response = await openai_aclient.embeddings.create(**data)
+            response = await openai_aclient.embeddings.create(**data) # type: ignore
             return convert_to_model_response_object(response_object=json.loads(response.model_dump_json()), model_response_object=model_response, response_type="embedding")
         except Exception as e:
             raise e
@@ -368,7 +368,7 @@ class OpenAIChatCompletion(BaseLLM):
             if not isinstance(max_retries, int): 
                 raise OpenAIError(status_code=422, message="max retries must be an int")
             if aembedding == True:
-                response =  self.aembedding(data=data, model_response=model_response, api_base=api_base, api_key=api_key, timeout=timeout, client=client, max_retries=max_retries)
+                response =  self.aembedding(data=data, model_response=model_response, api_base=api_base, api_key=api_key, timeout=timeout, client=client, max_retries=max_retries) # type: ignore
                 return response
             if client is None:
                 openai_client = OpenAI(api_key=api_key, base_url=api_base, http_client=litellm.client_session, timeout=timeout, max_retries=max_retries)
@@ -391,7 +391,7 @@ class OpenAIChatCompletion(BaseLLM):
                     original_response=response,
                 )
             
-            return convert_to_model_response_object(response_object=json.loads(response.model_dump_json()), model_response_object=model_response, response_type="embedding")
+            return convert_to_model_response_object(response_object=json.loads(response.model_dump_json()), model_response_object=model_response, response_type="embedding") # type: ignore
         except OpenAIError as e: 
             exception_mapping_worked = True
             raise e
