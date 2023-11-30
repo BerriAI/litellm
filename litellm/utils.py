@@ -1303,6 +1303,8 @@ def client(original_function):
                     return result
             elif "acompletion" in kwargs and kwargs["acompletion"] == True: 
                 return result
+            elif "aembedding" in kwargs and kwargs["aembedding"] == True: 
+                return result
             
             ### POST-CALL RULES ### 
             post_call_processing(original_response=result, model=model)
