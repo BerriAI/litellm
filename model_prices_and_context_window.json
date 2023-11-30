@@ -818,10 +818,31 @@
         "litellm_provider": "deepinfra",
         "mode": "chat"
       },
-      "perplexity/codellama-34b-instruct": { 
+      "perplexity/pplx-7b-chat": { 
+        "max_tokens": 8192, 
+        "input_cost_per_token": 0.0000000, 
+        "output_cost_per_token": 0.000000, 
+        "litellm_provider": "perplexity", 
+        "mode": "chat" 
+      },
+      "perplexity/pplx-70b-chat": { 
         "max_tokens": 4096, 
         "input_cost_per_token": 0.0000000, 
         "output_cost_per_token": 0.000000, 
+        "litellm_provider": "perplexity", 
+        "mode": "chat" 
+      },
+      "perplexity/pplx-7b-online": { 
+        "max_tokens": 4096, 
+        "input_cost_per_token": 0.0000000, 
+        "output_cost_per_token": 0.0005, 
+        "litellm_provider": "perplexity", 
+        "mode": "chat" 
+      },
+      "perplexity/pplx-70b-online": { 
+        "max_tokens": 4096, 
+        "input_cost_per_token": 0.0000000, 
+        "output_cost_per_token": 0.0005, 
         "litellm_provider": "perplexity", 
         "mode": "chat" 
       },
