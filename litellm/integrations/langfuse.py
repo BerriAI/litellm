@@ -36,7 +36,7 @@ class LangFuseLogger:
             print_verbose(
                 f"Langfuse Logging - Enters logging function for model {kwargs}"
             )
-            metadata = kwargs.get("metadata", {})
+            metadata = kwargs["litellm_params"].get("metadata", {})
             prompt = [kwargs.get('messages')]
             optional_params = kwargs.get("optional_params", {})
 
@@ -50,7 +50,6 @@ class LangFuseLogger:
                         pass
  
             # end of processing langfuse ########################
-
             self.Langfuse.generation(InitialGeneration(
                 name=metadata.get("generation_name", "litellm-completion"),
                 startTime=start_time,
