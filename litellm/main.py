@@ -494,6 +494,31 @@ def completion(
                 if k not in optional_params: # completion(top_k=3) > azure_config(top_k=3) <- allows for dynamic variables to be passed in
                     optional_params[k] = v
 
+            ### CHECK IF CLOUDFLARE AI GATEWAY ###
+            ### if so - set the model as part of the base url 
+            if "gateway.ai.cloudflare.com" in api_base and client is None: 
+                ## build base url - assume api base includes resource name
+                if not api_base.endswith("/"): 
+                    api_base += "/"
+                api_base += f"{model}"
+                
+                azure_client_params = {
+                    "api_version": api_version,
+                    "base_url": f"{api_base}",
+                    "http_client": litellm.client_session,
+                    "max_retries": max_retries,
+                    "timeout": timeout
+                }
+                if api_key is not None:
+                    azure_client_params["api_key"] = api_key
+                elif azure_ad_token is not None:
+                    azure_client_params["azure_ad_token"] = azure_ad_token
+                if acompletion is True:
+                    client = openai.AsyncAzureOpenAI(**azure_client_params)
+                else:
+                    client = openai.AzureOpenAI(**azure_client_params)
+                model = None
+
             ## COMPLETION CALL
             response = azure_chat_completions.completion(
                 model=model,
