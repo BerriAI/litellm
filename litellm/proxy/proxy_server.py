@@ -4,6 +4,7 @@ import shutil, random, traceback, requests
 from datetime import datetime, timedelta
 from typing import Optional, List
 import secrets, subprocess
+import warnings
 messages: list = []
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -17,10 +18,31 @@ try:
     import yaml
     import rq
 except ImportError:
-    raise ImportError(
-        "Running `litellm proxy` requires installing via `pip install litellm[proxy]`"
-    )
+    import sys
 
+    subprocess.check_call(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "uvicorn",
+            "fastapi",
+            "appdirs",
+            "backoff",
+            "pyyaml", 
+            "rq"
+        ]
+    )
+    import uvicorn
+    import fastapi
+    import appdirs
+    import backoff
+    import yaml
+
+    warnings.warn(
+        "Installed runtime dependencies for proxy server. Specify these dependencies explicitly with `pip install litellm[proxy]`"
+    )
 
 import random
 
