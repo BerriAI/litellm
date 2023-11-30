@@ -327,7 +327,7 @@ class Router:
             data["model"] = original_model_string[:index_of_model_id]
         else:
             data["model"] = original_model_string
-        model_client = deployment.get("async_client", None)
+        model_client = deployment.get("client", None)
         
         return await litellm.aembedding(**{**data, "input": input, "caching": self.cache_responses, "client": model_client, **kwargs})
 
@@ -830,6 +830,7 @@ class Router:
                 or custom_llm_provider == "openai"
                 or custom_llm_provider == "azure"
                 or "ft:gpt-3.5-turbo" in model_name
+                or model_name in litellm.open_ai_embedding_models
             ):
                 # glorified / complicated reading of configs
                 # user can pass vars directly or they can pas os.environ/AZURE_API_KEY, in which case we will read the env
