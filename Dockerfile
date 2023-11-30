@@ -1,5 +1,8 @@
 # Base image
-FROM python:3.9-slim
+ARG LITELLM_BASE_IMAGE=python:3.9-slim
+
+# allow users to specify, else use python 3.9-slim
+FROM $LITELLM_BASE_IMAGE
 
 # Set the working directory to /app
 WORKDIR /app
