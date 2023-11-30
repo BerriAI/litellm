@@ -30,7 +30,7 @@ async def litellm_completion():
 
 async def main():
     start = time.time()
-    n = 500  # Number of concurrent tasks
+    n = 1000  # Number of concurrent tasks
     tasks = [litellm_completion() for _ in range(n)]
 
     chat_completions = await asyncio.gather(*tasks)
