@@ -630,7 +630,7 @@ def test_re_use_openaiClient():
             print(f"response: {response}")
     except Exception as e:
         pytest.fail("got Exception", e)
-test_re_use_openaiClient()
+# test_re_use_openaiClient()
 
 def test_completion_azure():
     try:
@@ -845,7 +845,7 @@ def test_completion_azure_deployment_id():
 
 def test_completion_replicate_vicuna():
     print("TESTING REPLICATE")
-    litellm.set_verbose=False
+    litellm.set_verbose=True
     model_name = "replicate/vicuna-13b:6282abe6a492de4145d7bb601023762212f9ddbbe78278bd6771c8b3b2f2a13b"
     try:
         response = completion(
@@ -897,6 +897,43 @@ def test_completion_replicate_llama2_stream():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 # test_completion_replicate_llama2_stream()
+
+def test_replicate_custom_prompt_dict(): 
+    litellm.set_verbose = True
+    model_name = "replicate/meta/llama-2-7b-chat:13c3cdee13ee059ab779f0291d29054dab00a47dad8261375654de5540165fb0"
+    litellm.register_prompt_template(
+        model="replicate/meta/llama-2-7b-chat:13c3cdee13ee059ab779f0291d29054dab00a47dad8261375654de5540165fb0",
+        initial_prompt_value="You are a good assistant", # [OPTIONAL]
+        roles={
+            "system": {
+                "pre_message": "[INST] <<SYS>>\n", # [OPTIONAL]
+                "post_message": "\n<</SYS>>\n [/INST]\n" # [OPTIONAL]
+            },
+            "user": { 
+                "pre_message": "[INST] ", # [OPTIONAL]
+                "post_message": " [/INST]" # [OPTIONAL]
+            }, 
+            "assistant": {
+                "pre_message": "\n", # [OPTIONAL]
+                "post_message": "\n" # [OPTIONAL]
+            }
+        },
+        final_prompt_value="Now answer as best you can:" # [OPTIONAL]
+    )
+    response = completion(
+            model=model_name, 
+            messages=[
+                {
+                    "role": "user",
+                    "content": "what is yc write 1 paragraph",
+                }
+            ],
+            num_retries=3
+    )
+    print(f"response: {response}")
+    litellm.custom_prompt_dict = {} # reset 
+
+test_replicate_custom_prompt_dict() 
 
 # commenthing this out since we won't be always testing a custom replicate deployment
 # def test_completion_replicate_deployments():
