@@ -111,14 +111,47 @@ class AzureChatCompletion(BaseLLM):
         exception_mapping_worked = False
         try:
 
-            if (model is None or messages is None) and client is None:
+            if model is None or messages is None:
                 raise AzureOpenAIError(status_code=422, message=f"Missing model or messages")
-        
-            data = {
-                "model": model,
-                "messages": messages, 
-                **optional_params
-            }
+            
+            max_retries = optional_params.pop("max_retries", 2)
+
+            ### CHECK IF CLOUDFLARE AI GATEWAY ###
+            ### if so - set the model as part of the base url 
+            if "gateway.ai.cloudflare.com" in api_base and client is None: 
+                ## build base url - assume api base includes resource name
+                if not api_base.endswith("/"): 
+                    api_base += "/"
+                api_base += f"{model}"
+                
+                azure_client_params = {
+                    "api_version": api_version,
+                    "base_url": f"{api_base}",
+                    "http_client": litellm.client_session,
+                    "max_retries": max_retries,
+                    "timeout": timeout
+                }
+                if api_key is not None:
+                    azure_client_params["api_key"] = api_key
+                elif azure_ad_token is not None:
+                    azure_client_params["azure_ad_token"] = azure_ad_token
+
+                if acompletion is True:
+                    client = AsyncAzureOpenAI(**azure_client_params)
+                else:
+                    client = AzureOpenAI(**azure_client_params)
+                
+                data = {
+                    "model": None,
+                    "messages": messages, 
+                    **optional_params
+                }
+            else: 
+                data = {
+                    "model": model, # type: ignore
+                    "messages": messages, 
+                    **optional_params
+                }
             ## LOGGING
             logging_obj.pre_call(
                 input=messages,
@@ -133,7 +166,7 @@ class AzureChatCompletion(BaseLLM):
                     "complete_input_dict": data,
                 },
             )
-            max_retries = data.pop("max_retries", 2)
+            
             if acompletion is True: 
                 if optional_params.get("stream", False):
                     return self.async_streaming(logging_obj=logging_obj, api_base=api_base, data=data, model=model, api_key=api_key, api_version=api_version, azure_ad_token=azure_ad_token, timeout=timeout, client=client)
