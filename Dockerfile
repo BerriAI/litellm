@@ -13,5 +13,5 @@ RUN pip install -r requirements.txt
 
 EXPOSE 4000/tcp
 
-# Set the command to run when the container starts
+# Start the litellm proxy, using the `litellm cli` https://docs.litellm.ai/docs/simple_proxy
 CMD litellm --config /app/proxy_server_config.yaml --port 4000
