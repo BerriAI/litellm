@@ -7,7 +7,7 @@
 #
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
-import sys
+import sys, re
 import dotenv, json, traceback, threading
 import subprocess, os
 import litellm, openai
@@ -1945,6 +1945,24 @@ def get_optional_params(  # use the openai defaults
                     unsupported_params[k] = non_default_params[k]
         if unsupported_params and not litellm.drop_params:
             raise UnsupportedParamsError(status_code=500, message=f"{custom_llm_provider} does not support parameters: {unsupported_params}. To drop these, set `litellm.drop_params=True`.")
+    
+    def _map_and_modify_arg(supported_params: dict, provider: str, model: str):
+        """
+        filter params to fit the required provider format, drop those that don't fit if user sets `litellm.drop_params = True`.
+        """
+        filtered_stop = None
+        if "stop" in supported_params and litellm.drop_params: 
+            if provider == "bedrock" and "amazon" in model: 
+                filtered_stop = []
+                if isinstance(stop, list): 
+                    for s in stop: 
+                        if re.match(r'^(\|+|User:)$', s):
+                            filtered_stop.append(s)                     
+        if filtered_stop is not None: 
+            supported_params["stop"] = filtered_stop
+
+        return supported_params
+
     ## raise exception if provider doesn't support passed in param 
     if custom_llm_provider == "anthropic":
         ## check if unsupported param passed in 
@@ -2196,7 +2214,8 @@ def get_optional_params(  # use the openai defaults
             if temperature is not None:
                 optional_params["temperature"] = temperature
             if stop is not None:
-                optional_params["stopSequences"] = stop
+                filtered_stop = _map_and_modify_arg({"stop": stop}, provider="bedrock", model=model)
+                optional_params["stopSequences"] = filtered_stop["stop"]
             if top_p is not None:
                 optional_params["topP"] = top_p
             if stream: 
