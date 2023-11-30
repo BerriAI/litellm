@@ -328,7 +328,7 @@ class Router:
             data["model"] = original_model_string[:index_of_model_id]
         else:
             data["model"] = original_model_string
-        model_client = deployment.get("client", None)
+        model_client = deployment.get("async_client", None)
         
         return await litellm.aembedding(**{**data, "input": input, "caching": self.cache_responses, "client": model_client, **kwargs})
 
