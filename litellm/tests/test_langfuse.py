@@ -79,6 +79,7 @@ def test_langfuse_logging_stream():
 
 def test_langfuse_logging_custom_generation_name():
     try:
+        litellm.set_verbose=True
         response = completion(model="gpt-3.5-turbo",
                               messages=[{
                                   "role": "user",
@@ -86,18 +87,19 @@ def test_langfuse_logging_custom_generation_name():
                               }],
                               max_tokens=10,
                               metadata = {
-                                "generation_name": "litellm-ishaan-gen", # set langfuse generation name
-                                # custom metadata fields
-                                "project": "litellm-proxy" 
-                              }
+                                    "langfuse/foo": "bar", 
+                                    "langsmith/fizz": "buzz", 
+                                    "prompt_hash": "asdf98u0j9131123"
+                                }
         )
         print(response)
     except litellm.Timeout as e: 
         pass
     except Exception as e:
+        pytest.fail(f"An exception occurred - {e}")
         print(e)
 
-# test_langfuse_logging_custom_generation_name()
+test_langfuse_logging_custom_generation_name()
 
 def test_langfuse_logging_function_calling():
     function1 = [
