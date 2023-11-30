@@ -31,21 +31,24 @@
 #     "litellm_params": {
 #         "model": "azure/gpt-turbo",
 #         "api_key": "os.environ/AZURE_FRANCE_API_KEY",
-#         "api_base": "https://openai-france-1234.openai.azure.com"
+#         "api_base": "https://openai-france-1234.openai.azure.com",
+#         "rpm": 1440,
 #     }
 # }, {
 #     "model_name": "azure-model",
 #     "litellm_params": {
 #         "model": "azure/gpt-35-turbo",
 #         "api_key": "os.environ/AZURE_EUROPE_API_KEY",
-#         "api_base": "https://my-endpoint-europe-berri-992.openai.azure.com"
+#         "api_base": "https://my-endpoint-europe-berri-992.openai.azure.com",
+#         "rpm": 6
 #     }
 # }, {
 #     "model_name": "azure-model",
 #     "litellm_params": {
 #         "model": "azure/gpt-35-turbo",
 #         "api_key": "os.environ/AZURE_CANADA_API_KEY",
-#         "api_base": "https://my-endpoint-canada-berri992.openai.azure.com"
+#         "api_base": "https://my-endpoint-canada-berri992.openai.azure.com",
+#         "rpm": 6
 #     }
 # }]
 
