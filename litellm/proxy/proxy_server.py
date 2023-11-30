@@ -914,13 +914,25 @@ async def health_endpoint(request: Request, model: Optional[str] = fastapi.Query
                     litellm_params = model_name["litellm_params"]
                     if litellm_params["model"] not in litellm.all_embedding_models: # filter out embedding models
                         litellm_params["messages"] = [{"role": "user", "content": "Hey, how's it going?"}]
+                        ########## remove -ModelID-XXXX from model ##############
+                        original_model_string = litellm_params["model"]
+                        # Find the index of "ModelID" in the string
+                        index_of_model_id = original_model_string.find("-ModelID")
+                        # Remove everything after "-ModelID" if it exists
+                        if index_of_model_id != -1:
+                            litellm_params["model"] = original_model_string[:index_of_model_id]
+                        else:
+                            litellm_params["model"] = original_model_string
+                        litellm_params.pop("tpm", None)
+                        litellm_params.pop("rpm", None)
                         litellm.completion(**litellm_params)
                         cleaned_params = {}
                         for key in litellm_params:
                             if key != "api_key" and key != "messages":
                                 cleaned_params[key] = litellm_params[key]
                         healthy_endpoints.append(cleaned_params)
-            except: 
+            except Exception as e:
+                print("Got Exception", e) 
                 cleaned_params = {}
                 for key in litellm_params:
                     if key != "api_key" and key != "messages":
