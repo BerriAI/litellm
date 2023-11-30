@@ -1660,8 +1660,6 @@ def cost_per_token(model="", prompt_tokens=0, completion_tokens=0):
         "gpt-35-turbo-16k": "azure/gpt-3.5-turbo-16k",
         "gpt-35-turbo-instruct": "azure/gpt-3.5-turbo-instruct"
     }
-    if "azure/" in  model:
-        model = model.replace("azure/", "")
     if model in model_cost_ref:
         prompt_tokens_cost_usd_dollar = (
             model_cost_ref[model]["input_cost_per_token"] * prompt_tokens
@@ -1741,7 +1739,7 @@ def completion_cost(
         # Handle Inputs to completion_cost
         prompt_tokens = 0
         completion_tokens = 0
-        if completion_response != None:
+        if completion_response is not None:
             # get input/output tokens from completion_response
             prompt_tokens = completion_response['usage']['prompt_tokens']
             completion_tokens = completion_response['usage']['completion_tokens']

@@ -863,7 +863,7 @@ async def model_info(request: Request):
         model_name = m["model_name"]
         model_params = {}
         for k,v in m["litellm_params"].items():
-            if k == "api_key": # don't send the api key
+            if k == "api_key" or k == "api_base": # don't send the api key or api base
                 continue 
             
             if k == "model": 
