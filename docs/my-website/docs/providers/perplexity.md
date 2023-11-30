@@ -42,6 +42,10 @@ All models listed here https://docs.perplexity.ai/docs/model-cards are supported
 
 | Model Name               | Function Call                                                                                                                                                      |
 |--------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| pplx-7b-chat | `completion(model="perplexity/pplx-7b-chat", messages)` | 
+| pplx-70b-chat | `completion(model="perplexity/pplx-70b-chat", messages)` | 
+| pplx-7b-online | `completion(model="perplexity/pplx-7b-online", messages)` | 
+| pplx-70b-online | `completion(model="perplexity/pplx-70b-online", messages)` | 
 | codellama-34b-instruct | `completion(model="perplexity/codellama-34b-instruct", messages)` | 
 | llama-2-13b-chat | `completion(model="perplexity/llama-2-13b-chat", messages)` | 
 | llama-2-70b-chat | `completion(model="perplexity/llama-2-70b-chat", messages)` | 
@@ -50,6 +54,7 @@ All models listed here https://docs.perplexity.ai/docs/model-cards are supported
 | openhermes-2.5-mistral-7b | `completion(model="perplexity/openhermes-2.5-mistral-7b", messages)` | 
 | pplx-7b-chat-alpha | `completion(model="perplexity/pplx-7b-chat-alpha", messages)` | 
 | pplx-70b-chat-alpha | `completion(model="perplexity/pplx-70b-chat-alpha", messages)` | 
+
 
 
 
