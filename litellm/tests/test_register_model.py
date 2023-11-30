@@ -33,4 +33,15 @@ def test_update_model_cost_map_url():
     except Exception as e:
         pytest.fail(f"An error occurred: {e}")
 
-test_update_model_cost_map_url()
+# test_update_model_cost_map_url()
+
+def test_update_model_cost_via_completion(): 
+    try:
+        response = litellm.completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hey, how's it going?"}], input_cost_per_token=0.3, output_cost_per_token=0.4)
+        print(f"litellm.model_cost for gpt-3.5-turbo: {litellm.model_cost['gpt-3.5-turbo']}")
+        assert litellm.model_cost["gpt-3.5-turbo"]["input_cost_per_token"] == 0.3
+        assert litellm.model_cost["gpt-3.5-turbo"]["output_cost_per_token"] == 0.4
+    except Exception as e: 
+        pytest.fail(f"An error occurred: {e}")
+
+test_update_model_cost_via_completion()
