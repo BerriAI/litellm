@@ -99,8 +99,8 @@ class Router:
 
         # default litellm args
         self.default_litellm_params = default_litellm_params
-        self.default_litellm_params["timeout"] = timeout
-        self.default_litellm_params["max_retries"] = 0
+        self.default_litellm_params.setdefault("timeout", timeout)
+        self.default_litellm_params.setdefault("max_retries", 0)
 
 
         ### HEALTH CHECK THREAD ###
@@ -204,7 +204,8 @@ class Router:
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
             timeout = kwargs.get("request_timeout", self.timeout)
             kwargs.setdefault("metadata", {}).update({"model_group": model})
-            response = await asyncio.wait_for(self.async_function_with_fallbacks(**kwargs), timeout=timeout)
+            # response = await asyncio.wait_for(self.async_function_with_fallbacks(**kwargs), timeout=timeout)
+            response = await self.async_function_with_fallbacks(**kwargs)
 
             return response
         except Exception as e: 
@@ -402,7 +403,7 @@ class Router:
             # if the function call is successful, no exception will be raised and we'll break out of the loop
             response = await original_function(*args, **kwargs)
             return response
-        except Exception as e: 
+        except (Exception, asyncio.CancelledError) as e: 
             original_exception = e
             ### CHECK IF RATE LIMIT / CONTEXT WINDOW ERROR w/ fallbacks available
             if ((isinstance(original_exception, litellm.ContextWindowExceededError) and context_window_fallbacks is None) 
@@ -410,7 +411,10 @@ class Router:
                 raise original_exception
             ### RETRY
             #### check if it should retry + back-off if required
-            if hasattr(original_exception, "status_code") and hasattr(original_exception, "response") and litellm._should_retry(status_code=original_exception.status_code):
+            if isinstance(original_exception, asyncio.CancelledError):
+                timeout = 0 # immediately retry
+                await asyncio.sleep(timeout)
+            elif hasattr(original_exception, "status_code") and hasattr(original_exception, "response") and litellm._should_retry(status_code=original_exception.status_code):
                 if hasattr(original_exception.response, "headers"):
                     timeout = litellm._calculate_retry_after(remaining_retries=num_retries, max_retries=num_retries, response_headers=original_exception.response.headers)
                 else:
@@ -428,8 +432,11 @@ class Router:
                         response = await response
                     return response
                 
-                except Exception as e: 
-                    if hasattr(e, "status_code") and hasattr(e, "response") and litellm._should_retry(status_code=e.status_code):
+                except (Exception, asyncio.CancelledError) as e: 
+                    if isinstance(original_exception, asyncio.CancelledError):
+                        timeout = 0 # immediately retry
+                        await asyncio.sleep(timeout)
+                    elif hasattr(e, "status_code") and hasattr(e, "response") and litellm._should_retry(status_code=e.status_code):
                         remaining_retries = num_retries - current_attempt
                         if hasattr(e.response, "headers"):
                             timeout = litellm._calculate_retry_after(remaining_retries=num_retries, max_retries=num_retries, response_headers=e.response.headers)
