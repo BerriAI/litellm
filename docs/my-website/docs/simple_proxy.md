@@ -235,7 +235,7 @@ $ litellm --model command-nightly
 
 </Tabs>
 
-
+<!-- 
 ## Using with OpenAI compatible projects
 Set `base_url` to the LiteLLM Proxy server
 
@@ -359,7 +359,7 @@ result = experts(query='How can I be more productive?')
 print(result)
 ```
 </TabItem>
-</Tabs>
+</Tabs> -->
 
 ## Proxy Configs
 The Config allows you to set the following params
@@ -374,14 +374,24 @@ The Config allows you to set the following params
 #### Example Config
 ```yaml
 model_list:
-  - model_name: zephyr-alpha
-    litellm_params: # params for litellm.completion() - https://docs.litellm.ai/docs/completion/input#input---request-body
-      model: huggingface/HuggingFaceH4/zephyr-7b-alpha
-      api_base: http://0.0.0.0:8001
-  - model_name: zephyr-beta
+  - model_name: gpt-3.5-turbo
     litellm_params:
-      model: huggingface/HuggingFaceH4/zephyr-7b-beta
-      api_base: https://<my-hosted-endpoint>
+      model: azure/gpt-turbo-small-eu
+      api_base: https://my-endpoint-europe-berri-992.openai.azure.com/
+      api_key: 
+      rpm: 6      # Rate limit for this deployment: in requests per minute (rpm)
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: azure/gpt-turbo-small-ca
+      api_base: https://my-endpoint-canada-berri992.openai.azure.com/
+      api_key: 
+      rpm: 6
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: azure/gpt-turbo-large
+      api_base: https://openai-france-1234.openai.azure.com/
+      api_key: 
+      rpm: 1440
 
 litellm_settings:
   drop_params: True
