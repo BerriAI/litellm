@@ -163,7 +163,7 @@ class AzureChatCompletion(BaseLLM):
                         "azure_ad_token": azure_ad_token
                     },
                     "api_version": api_version,
-                    "api_base": client.base_url,
+                    "api_base": api_base,
                     "complete_input_dict": data,
                 },
             )
