@@ -192,7 +192,26 @@ def test_aembedding():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_aembedding()
+# test_aembedding()
+
+
+def test_aembedding_azure():
+    try:
+        import asyncio
+        async def embedding_call():
+            try:
+                response = await litellm.aembedding(
+                    model="azure/azure-embedding-model", 
+                    input=["good morning from litellm", "this is another item"]
+                )
+                print(response)
+            except Exception as e:
+                pytest.fail(f"Error occurred: {e}")
+        asyncio.run(embedding_call())
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+# test_aembedding_azure()
 
 # def test_custom_openai_embedding():
 #     litellm.set_verbose=True

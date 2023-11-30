@@ -1801,7 +1801,8 @@ def embedding(
                 timeout=timeout,
                 model_response=EmbeddingResponse(), 
                 optional_params=optional_params,
-                client=client
+                client=client,
+                aembedding=aembedding
             )
         elif model in litellm.open_ai_embedding_models or custom_llm_provider == "openai":
             api_base = (
