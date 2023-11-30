@@ -856,16 +856,32 @@ class Router:
                 if "azure" in model_name:
                     if api_version is None:
                         api_version = "2023-07-01-preview"
-                    model["async_client"] = openai.AsyncAzureOpenAI(
-                        api_key=api_key,
-                        azure_endpoint=api_base,
-                        api_version=api_version
-                    )
-                    model["client"] = openai.AzureOpenAI(
-                        api_key=api_key,
-                        azure_endpoint=api_base,
-                        api_version=api_version
-                    )
+                    if "gateway.ai.cloudflare.com" in api_base: 
+                        if not api_base.endswith("/"): 
+                            api_base += "/"
+                        azure_model = model_name.replace("azure/", "")
+                        api_base += f"{azure_model}"
+                        model["async_client"] = openai.AsyncAzureOpenAI(
+                            api_key=api_key,
+                            base_url=api_base,
+                            api_version=api_version
+                        )
+                        model["client"] = openai.AzureOpenAI(
+                            api_key=api_key,
+                            base_url=api_base,
+                            api_version=api_version
+                        )
+                    else:
+                        model["async_client"] = openai.AsyncAzureOpenAI(
+                            api_key=api_key,
+                            azure_endpoint=api_base,
+                            api_version=api_version
+                        )
+                        model["client"] = openai.AzureOpenAI(
+                            api_key=api_key,
+                            azure_endpoint=api_base,
+                            api_version=api_version
+                        )
                 else:
                     model["async_client"] = openai.AsyncOpenAI(
                         api_key=api_key,

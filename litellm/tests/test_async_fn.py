@@ -65,7 +65,7 @@ def test_async_response_azure():
         user_message = "What do you know?"
         messages = [{"content": user_message, "role": "user"}]
         try:
-            response = await acompletion(model="azure/chatgpt-v-2", messages=messages, timeout=5)
+            response = await acompletion(model="azure/gpt-turbo", messages=messages, base_url=os.getenv("CLOUDFLARE_AZURE_BASE_URL"), api_key=os.getenv("AZURE_FRANCE_API_KEY"))
             print(f"response: {response}")
         except litellm.Timeout as e: 
             pass
@@ -75,6 +75,7 @@ def test_async_response_azure():
     asyncio.run(test_get_response())
 
 # test_async_response_azure()
+
 
 def test_async_anyscale_response():
     import asyncio
