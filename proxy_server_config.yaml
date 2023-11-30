@@ -5,24 +5,23 @@ model_list:
       api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
       api_version: "2023-05-15"
       api_key: 
+      rpm: 200
   - model_name: gpt-4
     litellm_params:
       model: azure/gpt-4
       api_key: 
       api_base: https://openai-gpt-4-test-v-2.openai.azure.com/
+      rpm: 100
   - model_name: gpt-4
     litellm_params:
       model: azure/gpt-4
       api_key: 
       api_base: https://openai-gpt-4-test-v-2.openai.azure.com/
-
-
+      rpm: 10
 
 litellm_settings:
   drop_params: True
   set_verbose: True
-  # cache: # optional if you want to use caching
-  #   type: redis   # tell litellm to use redis caching
 
 general_settings: 
   # master_key: sk-1234 # [OPTIONAL] Only use this if you to require all calls to contain this key (Authorization: Bearer sk-1234)
