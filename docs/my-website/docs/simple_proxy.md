@@ -460,12 +460,10 @@ curl --location 'http://0.0.0.0:8000/chat/completions' \
 ```
 
 ### Load Balancing - Multiple Instances of 1 model
-**LiteLLM Proxy can handle 1k+ requests/second**. Use this config to load balance between multiple instances of the same model.
+Use this config to load balance between multiple instances of the same model. The proxy will handle routing requests (using LiteLLM's Router). **Set `rpm` in the config if you want maximize throughput**
 
-The proxy will handle routing requests (using LiteLLM's Router). 
-
-In the config below requests with `model=gpt-3.5-turbo` will be routed across multiple instances of `azure/gpt-3.5-turbo`
-
+#### Example config
+requests with `model=gpt-3.5-turbo` will be routed across multiple instances of `azure/gpt-3.5-turbo`
 ```yaml
 model_list:
   - model_name: gpt-3.5-turbo
