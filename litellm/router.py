@@ -411,7 +411,10 @@ class Router:
                 raise original_exception
             ### RETRY
             #### check if it should retry + back-off if required
-            if hasattr(original_exception, "status_code") and hasattr(original_exception, "response") and litellm._should_retry(status_code=original_exception.status_code):
+            if "No models available" in str(e): 
+                timeout = litellm._calculate_retry_after(remaining_retries=num_retries, max_retries=num_retries)
+                await asyncio.sleep(timeout)
+            elif hasattr(original_exception, "status_code") and hasattr(original_exception, "response") and litellm._should_retry(status_code=original_exception.status_code):
                 if hasattr(original_exception.response, "headers"):
                     timeout = litellm._calculate_retry_after(remaining_retries=num_retries, max_retries=num_retries, response_headers=original_exception.response.headers)
                 else:
@@ -430,13 +433,15 @@ class Router:
                     return response
                 
                 except Exception as e: 
-                    if hasattr(e, "status_code") and hasattr(e, "response") and litellm._should_retry(status_code=e.status_code):
-                        remaining_retries = num_retries - current_attempt
+                    remaining_retries = num_retries - current_attempt
+                    if "No models available" in str(e): 
+                        timeout = litellm._calculate_retry_after(remaining_retries=remaining_retries, max_retries=num_retries, min_timeout=1)
+                        await asyncio.sleep(timeout)
+                    elif hasattr(e, "status_code") and hasattr(e, "response") and litellm._should_retry(status_code=e.status_code):
                         if hasattr(e.response, "headers"):
-                            timeout = litellm._calculate_retry_after(remaining_retries=num_retries, max_retries=num_retries, response_headers=e.response.headers)
+                            timeout = litellm._calculate_retry_after(remaining_retries=remaining_retries, max_retries=num_retries, response_headers=e.response.headers)
                         else:
-                            timeout = litellm._calculate_retry_after(remaining_retries=num_retries, max_retries=num_retries)
-                        timeout = litellm._calculate_retry_after(remaining_retries=remaining_retries, max_retries=num_retries)
+                            timeout = litellm._calculate_retry_after(remaining_retries=remaining_retries, max_retries=num_retries)
                         await asyncio.sleep(timeout)
                     else: 
                         raise e
