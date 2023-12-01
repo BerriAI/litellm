@@ -17,6 +17,7 @@ try:
     import backoff
     import yaml
     import rq
+    import orjson
 except ImportError:
     import sys
 
@@ -32,6 +33,7 @@ except ImportError:
             "backoff",
             "pyyaml", 
             "rq"
+            "orjson"
         ]
     )
     import uvicorn
@@ -39,6 +41,7 @@ except ImportError:
     import appdirs
     import backoff
     import yaml
+    import orjson
 
     warnings.warn(
         "Installed runtime dependencies for proxy server. Specify these dependencies explicitly with `pip install litellm[proxy]`"
@@ -780,8 +783,11 @@ async def chat_completion(request: Request, model: Optional[str] = None, user_ap
 @router.post("/embeddings", dependencies=[Depends(user_api_key_auth)])
 async def embeddings(request: Request, user_api_key_dict: dict = Depends(user_api_key_auth)): 
     try: 
-        data = await request.json()
-        print_verbose(f"data: {data}")
+
+        # Use orjson to parse JSON data, orjson speeds up requests significantly
+        data_bytes = await request.body()
+        data = orjson.loads(data_bytes.decode('utf-8'))
+
         data["model"] = (
             general_settings.get("embedding_model", None) # server default
             or user_model # model name passed via cli args
