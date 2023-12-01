@@ -715,6 +715,7 @@ async def completion(request: Request, model: Optional[str] = None, user_api_key
 async def chat_completion(request: Request, model: Optional[str] = None, user_api_key_dict: dict = Depends(user_api_key_auth)):
     global general_settings, user_debug
     try: 
+        data = {}
         body = await request.body()
         body_str = body.decode()
         try:
@@ -754,7 +755,8 @@ async def chat_completion(request: Request, model: Optional[str] = None, user_ap
         return response
     except Exception as e: 
         print(f"\033[1;31mAn error occurred: {e}\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`")
-        if llm_router is not None and data["model"] in router_model_names: 
+        router_model_names = [m["model_name"] for m in llm_model_list] if llm_model_list is not None else []
+        if llm_router is not None and data.get("model", "") in router_model_names: 
             print("Results from router")
             print("\nRouter stats")
             print("\nTotal Calls made")
