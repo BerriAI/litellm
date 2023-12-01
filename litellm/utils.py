@@ -3507,7 +3507,7 @@ def _should_retry(status_code: int):
 
     return False
 
-def _calculate_retry_after(remaining_retries: int, max_retries: int, response_headers: Optional[httpx.Headers]=None):
+def _calculate_retry_after(remaining_retries: int, max_retries: int, response_headers: Optional[httpx.Headers]=None, min_timeout: int = 0):
     """
     Reimplementation of openai's calculate retry after, since that one can't be imported.
     https://github.com/openai/openai-python/blob/af67cfab4210d8e497c05390ce14f39105c77519/src/openai/_base_client.py#L631
@@ -3549,7 +3549,7 @@ def _calculate_retry_after(remaining_retries: int, max_retries: int, response_he
     # Apply some jitter, plus-or-minus half a second.
     jitter = 1 - 0.25 * random.random()
     timeout = sleep_seconds * jitter
-    return timeout if timeout >= 0 else 0
+    return timeout if timeout >= min_timeout else min_timeout
 
 # integration helper function
 def modify_integration(integration_name, integration_params):
