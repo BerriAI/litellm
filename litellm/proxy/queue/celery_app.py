@@ -7,7 +7,8 @@ try:
     ### OPTIONAL DEPENDENCIES ###  - pip install redis and celery only when a user opts into using the async endpoints which require both
     from celery import Celery
     import redis
-except: 
+    from litellm._redis import get_redis_pool, get_redis_url_from_environment
+except ImportError: 
     import sys
 
     subprocess.check_call(
@@ -29,11 +30,13 @@ sys.path.insert(
 import litellm
 
 # Redis connection setup
-pool = redis.ConnectionPool(host=os.getenv("REDIS_HOST"), port=os.getenv("REDIS_PORT"), password=os.getenv("REDIS_PASSWORD"), db=0, max_connections=5)
+pool = get_redis_pool()
 redis_client = redis.Redis(connection_pool=pool)
 
 # Celery setup
-celery_app = Celery('tasks', broker=f"redis://default:{os.getenv('REDIS_PASSWORD')}@{os.getenv('REDIS_HOST')}:{os.getenv('REDIS_PORT')}", backend=f"redis://default:{os.getenv('REDIS_PASSWORD')}@{os.getenv('REDIS_HOST')}:{os.getenv('REDIS_PORT')}")
+redis_url = get_redis_url_from_environment()
+
+celery_app = Celery('tasks', broker=redis_url, backend=redis_url)
 celery_app.conf.update(
     broker_pool_limit = None,
     broker_transport_options = {'connection_pool': pool},
