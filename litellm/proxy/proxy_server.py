@@ -126,7 +126,7 @@ class ProxyChatCompletionRequest(BaseModel):
     n: Optional[int] = None
     stream: Optional[bool] = None
     stop: Optional[List[str]] = None
-    max_tokens: Optional[float] = None
+    max_tokens: Optional[Union[float, int]] = None
     presence_penalty: Optional[float] = None
     frequency_penalty: Optional[float] = None
     logit_bias: Optional[Dict[str, float]] = None
@@ -752,7 +752,7 @@ async def completion(request: Request, model: Optional[str] = None, user_api_key
 @router.post("/v1/chat/completions", dependencies=[Depends(user_api_key_auth)], tags=["chat/completions"])
 @router.post("/chat/completions", dependencies=[Depends(user_api_key_auth)], tags=["chat/completions"])
 @router.post("/openai/deployments/{model:path}/chat/completions", dependencies=[Depends(user_api_key_auth)], tags=["chat/completions"]) # azure compatible endpoint
-async def chat_completion(request: ProxyChatCompletionRequest, model: Optional[str] = None, user_api_key_dict: dict = Depends(user_api_key_auth)) -> Union[litellm.ModelResponse, StreamingResponse]:
+async def chat_completion(request: ProxyChatCompletionRequest, model: Optional[str] = None, user_api_key_dict: dict = Depends(user_api_key_auth)):
     global general_settings, user_debug
     try: 
         data = {}
