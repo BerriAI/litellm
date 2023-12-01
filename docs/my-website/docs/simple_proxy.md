@@ -863,6 +863,10 @@ LiteLLM requires the following REDIS credentials in your env to enable caching
   REDIS_HOST = ""       # REDIS_HOST='redis-18841.c274.us-east-1-3.ec2.cloud.redislabs.com'
   REDIS_PORT = ""       # REDIS_PORT='18841'
   REDIS_PASSWORD = ""   # REDIS_PASSWORD='liteLlmIsAmazing'
+
+  # OR specify url. Useful for applications requiring SSL
+
+  REDIS_URL = ""        # REDIS_URL='rediss://my_redis:6379/0'
   ```
 #### Step 3: Run proxy with config
 ```shell
