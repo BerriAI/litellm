@@ -11,6 +11,23 @@ import time
 from litellm import token_counter, encode, decode
 
 
+def test_token_counter_normal_plus_function_calling(): 
+    try: 
+        messages = [
+            {'role': 'system', 'content': "System prompt"}, 
+            {'role': 'user', 'content': 'content1'}, 
+            {'role': 'assistant', 'content': 'content2'}, 
+            {'role': 'user', 'content': 'conten3'}, 
+            {'role': 'assistant', 'content': None, 'tool_calls': [{'id': 'call_E0lOb1h6qtmflUyok4L06TgY', 'function': {'arguments': '{"query":"search query","domain":"google.ca","gl":"ca","hl":"en"}', 'name': 'SearchInternet'}, 'type': 'function'}]}, 
+            {'tool_call_id': 'call_E0lOb1h6qtmflUyok4L06TgY', 'role': 'tool', 'name': 'SearchInternet', 'content': 'tool content'}
+        ]
+        tokens = token_counter(model="gpt-3.5-turbo", messages=messages)
+        print(f"tokens: {tokens}")
+    except Exception as e: 
+        pytest.fail(f"An exception occurred - {str(e)}")
+
+test_token_counter_normal_plus_function_calling() 
+
 def test_tokenizers():
     try: 
         ### test the openai, claude, cohere and llama2 tokenizers. 
@@ -69,4 +86,4 @@ def test_encoding_and_decoding():
     except Exception as e: 
         pytest.fail(f'An exception occured: {e}')
 
-test_encoding_and_decoding() 
+# test_encoding_and_decoding() 
