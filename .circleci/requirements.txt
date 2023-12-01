@@ -9,3 +9,4 @@ redis
 anthropic
 boto3
 appdirs
+orjson
