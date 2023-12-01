@@ -756,7 +756,7 @@ async def chat_completion(request: ProxyChatCompletionRequest, model: Optional[s
     global general_settings, user_debug
     try: 
         data = {}
-        request_items = request.model_dump() # type: ignore pydantic throws a weird error for this 
+        request_items = request.model_dump() # type: ignore 
         data = {key: value for key, value in request_items.items() if value is not None} # pydantic sets all values to None, filter out None values here
         
         print_verbose(f"receiving data: {data}")
