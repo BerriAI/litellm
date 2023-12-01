@@ -10,12 +10,16 @@
 from datetime import datetime
 from typing import Dict, List, Optional, Union, Literal
 import random, threading, time, traceback
+import warnings
 import litellm, openai
 from litellm.caching import RedisCache, InMemoryCache, DualCache, CachingProviders
 import logging, asyncio
 import inspect, concurrent
 from openai import AsyncOpenAI
 from collections import defaultdict
+from litellm._warnings import LiteLLMDeprecationWarning
+
+ShuffleStrategy = Literal["simple-shuffle", "least-busy", "usage-based-routing", "latency-based-routing"]
 
 class Router:
     """
@@ -60,7 +64,7 @@ class Router:
 
     def __init__(self,
                  model_list: Optional[list] = None,
-                 cache_provider: Optional[CachingProviders] = {},
+                 cache_provider: Optional[CachingProviders] = None,
                  cache_provider_config: dict = {},
                  cache_responses: bool = False,
                  num_retries: int = 0,
@@ -70,7 +74,11 @@ class Router:
                  fallbacks: List = [],
                  allowed_fails: Optional[int] = None,
                  context_window_fallbacks: List = [], 
-                 routing_strategy: Literal["simple-shuffle", "least-busy", "usage-based-routing", "latency-based-routing"] = "simple-shuffle") -> None:
+                 routing_strategy: ShuffleStrategy = "simple-shuffle",
+                 redis_host: Optional[str] = None,
+                 redis_port: Optional[int] = None,
+                 redis_password: Optional[str] = None,
+                 ) -> None:
 
         self.set_verbose = set_verbose 
         if model_list:
@@ -111,6 +119,16 @@ class Router:
         redis_cache = None
 
         if cache_provider == "redis":
+            if any([redis_host, redis_port, redis_password]):
+                warnings.warn("redis_host, redis_port, redis_password are deprecated in Router. Please use cache_provider_config or environment variables instead.", category=LiteLLMDeprecationWarning)
+
+                cache_provider_config = {
+                    "host": redis_host,
+                    "port": redis_port,
+                    "password": redis_password,
+                    **cache_provider_config,
+                }
+
             cache_provider_instance = RedisCache(**cache_provider_config)
             redis_cache = cache_provider_instance
         else:
