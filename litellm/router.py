@@ -61,7 +61,7 @@ class Router:
     def __init__(self,
                  model_list: Optional[list] = None,
                  cache_provider: Optional[CachingProviders] = {},
-                 cache_provider_config: Optional[dict] = None,
+                 cache_provider_config: dict = {},
                  cache_responses: bool = False,
                  num_retries: int = 0,
                  timeout: Optional[float] = None,
