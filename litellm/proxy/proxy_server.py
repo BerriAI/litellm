@@ -785,8 +785,8 @@ async def embeddings(request: Request, user_api_key_dict: dict = Depends(user_ap
     try: 
 
         # Use orjson to parse JSON data, orjson speeds up requests significantly
-        data_bytes = await request.body()
-        data = orjson.loads(data_bytes.decode('utf-8'))
+        body = await request.body()
+        data = orjson.loads(body)
 
         data["model"] = (
             general_settings.get("embedding_model", None) # server default
