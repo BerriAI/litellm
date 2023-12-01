@@ -32,7 +32,7 @@ except ImportError:
             "appdirs",
             "backoff",
             "pyyaml", 
-            "rq"
+            "rq",
             "orjson"
         ]
     )
