@@ -8,9 +8,9 @@ sys.path.insert(
 
 def start_rq_worker(): 
     from rq import Worker, Queue, Connection
-    from redis import Redis
+    from litellm._redis import get_redis_client
     # Set up RQ connection
-    redis_conn = Redis(host=os.getenv("REDIS_HOST"), port=os.getenv("REDIS_PORT"), password=os.getenv("REDIS_PASSWORD"))
+    redis_conn = get_redis_client()
     print(redis_conn.ping())  # Should print True if connected successfully
     # Create a worker and add the queue
     try:

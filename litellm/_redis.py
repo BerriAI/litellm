@@ -12,9 +12,16 @@ def _get_redis_kwargs():
         "retry",
     }
 
-    return [
-        x for x in arg_spec.args if x not in exclude_args
+    
+    include_args = [
+        "url"
     ]
+
+    available_args = [
+        x for x in arg_spec.args if x not in exclude_args
+    ] + include_args
+
+    return available_args
 
 def _get_redis_env_kwarg_mapping():
     PREFIX = "REDIS_"
