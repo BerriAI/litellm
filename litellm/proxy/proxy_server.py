@@ -94,7 +94,7 @@ litellm.suppress_debug_info = True
 from fastapi import FastAPI, Request, HTTPException, status, Depends
 from fastapi.routing import APIRouter
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.responses import StreamingResponse, FileResponse, ORJSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security.api_key import APIKeyHeader
 import json
@@ -779,8 +779,8 @@ async def chat_completion(request: Request, model: Optional[str] = None, user_ap
             detail=error_msg
         )
 
-@router.post("/v1/embeddings", dependencies=[Depends(user_api_key_auth)])
-@router.post("/embeddings", dependencies=[Depends(user_api_key_auth)])
+@router.post("/v1/embeddings", dependencies=[Depends(user_api_key_auth)], response_class=ORJSONResponse)
+@router.post("/embeddings", dependencies=[Depends(user_api_key_auth)], response_class=ORJSONResponse)
 async def embeddings(request: Request, user_api_key_dict: dict = Depends(user_api_key_auth)): 
     try: 
 
