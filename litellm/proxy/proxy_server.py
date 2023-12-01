@@ -99,6 +99,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security.api_key import APIKeyHeader
 import json
 import logging
+from typing import Union
 # from litellm.proxy.queue import start_rq_worker_in_background
 
 app = FastAPI(docs_url="/", title="LiteLLM API")
@@ -115,9 +116,9 @@ app.add_middleware(
 
 
 from typing import Dict
-from pydantic import BaseModel, Extra         
+from pydantic import BaseModel         
 ######### Request Class Definition ######
-class ChatCompletionRequest(BaseModel):
+class ProxyChatCompletionRequest(BaseModel):
     model: str
     messages: List[Dict[str, str]]
     temperature: Optional[float] = None
@@ -151,7 +152,6 @@ class ChatCompletionRequest(BaseModel):
 
     class Config:
         extra='allow' # allow params not defined here, these fall in litellm.completion(**kwargs)
-        
 
 user_api_base = None
 user_model = None
@@ -752,7 +752,7 @@ async def completion(request: Request, model: Optional[str] = None, user_api_key
 @router.post("/v1/chat/completions", dependencies=[Depends(user_api_key_auth)], tags=["chat/completions"])
 @router.post("/chat/completions", dependencies=[Depends(user_api_key_auth)], tags=["chat/completions"])
 @router.post("/openai/deployments/{model:path}/chat/completions", dependencies=[Depends(user_api_key_auth)], tags=["chat/completions"]) # azure compatible endpoint
-async def chat_completion(request: ChatCompletionRequest, model: Optional[str] = None, user_api_key_dict: dict = Depends(user_api_key_auth)) -> litellm.ModelResponse:
+async def chat_completion(request: ProxyChatCompletionRequest, model: Optional[str] = None, user_api_key_dict: dict = Depends(user_api_key_auth)) -> Union[litellm.ModelResponse, StreamingResponse]:
     global general_settings, user_debug
     try: 
         data = {}
