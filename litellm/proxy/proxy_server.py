@@ -134,7 +134,7 @@ class ChatCompletionRequest(BaseModel):
     seed: Optional[int] = None
     tools: Optional[List[str]] = None
     tool_choice: Optional[str] = None
-    functions: List[str] = None  # soon to be deprecated
+    functions: Optional[List[str]] = None  # soon to be deprecated
     function_call: Optional[str] = None # soon to be deprecated
 
     # Optional LiteLLM params
