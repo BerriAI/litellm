@@ -340,7 +340,7 @@ class OpenAIChatCompletion(BaseLLM):
             else:
                 openai_aclient = client
             response = await openai_aclient.embeddings.create(**data) # type: ignore
-            return convert_to_model_response_object(response_object=json.loads(response.model_dump_json()), model_response_object=model_response, response_type="embedding")
+            return response
         except Exception as e:
             raise e
     def embedding(self,
