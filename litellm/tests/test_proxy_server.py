@@ -45,7 +45,7 @@ def test_chat_completion():
         pytest.fail("LiteLLM Proxy test failed. Exception", e)
 
 # Run the test
-# test_chat_completion()
+test_chat_completion()
 
 
 def test_chat_completion_azure():
