@@ -709,10 +709,10 @@ async def completion(request: Request, model: Optional[str] = None, user_api_key
         )
                               
 
-@router.post("/v1/chat/completions", dependencies=[Depends(user_api_key_auth)])
-@router.post("/chat/completions", dependencies=[Depends(user_api_key_auth)])
-@router.post("/openai/deployments/{model:path}/chat/completions", dependencies=[Depends(user_api_key_auth)]) # azure compatible endpoint
-async def chat_completion(request: Request, model: Optional[str] = None, user_api_key_dict: dict = Depends(user_api_key_auth)):
+@router.post("/v1/chat/completions", dependencies=[Depends(user_api_key_auth)], tags=["chat/completions"])
+@router.post("/chat/completions", dependencies=[Depends(user_api_key_auth)], tags=["chat/completions"])
+@router.post("/openai/deployments/{model:path}/chat/completions", dependencies=[Depends(user_api_key_auth)], tags=["chat/completions"]) # azure compatible endpoint
+async def chat_completion(request: Request, model: Optional[str] = None, user_api_key_dict: dict = Depends(user_api_key_auth)) -> litellm.ModelResponse:
     global general_settings, user_debug
     try: 
         data = {}
