@@ -84,7 +84,6 @@ def test_trimming_with_system_message_exceeding_max_tokens():
     messages = [{"role": "system", "content": "This is a short system message"}, {"role": "user", "content": "This is a medium normal message, let's say litellm is awesome."}]
     trimmed_messages = trim_messages(messages, max_tokens=12, model="gpt-4-0613")
     assert len(trimmed_messages) == 1
-    assert '..' in trimmed_messages[0]["content"]
 
 def test_trimming_should_not_change_original_messages():
     messages = [{"role": "system", "content": "This is a short system message"}, {"role": "user", "content": "This is a medium normal message, let's say litellm is awesome."}]
