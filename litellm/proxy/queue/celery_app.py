@@ -46,7 +46,7 @@ celery_app.conf.update(
 def process_job(*args, **kwargs):
     try: 
         llm_router: litellm.Router = litellm.Router(model_list=kwargs.pop("llm_model_list"))
-        response = llm_router.completion(*args, **kwargs)
+        response = llm_router.completion(*args, **kwargs) # type: ignore
         if isinstance(response, litellm.ModelResponse): 
             response = response.model_dump_json()
             return json.loads(response)
