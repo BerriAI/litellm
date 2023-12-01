@@ -10,7 +10,10 @@
 import litellm
 import time, logging
 import json, traceback, ast
-from typing import Optional
+from typing import Optional, Literal
+
+
+CachingProviders = Literal["redis", "local"]
 
 def get_prompt(*args, **kwargs):
     # make this safe checks, it should not throw any exceptions
@@ -27,6 +30,16 @@ def get_prompt(*args, **kwargs):
 def print_verbose(print_statement):
     if litellm.set_verbose:
         print(print_statement) # noqa
+
+
+def get_cache_provider(type: CachingProviders, **provider_kwargs):
+    if type == "redis":
+        return RedisCache(**provider_kwargs)
+    elif type == "local":
+        return InMemoryCache()
+    else:
+        raise ValueError(f"Invalid cache type: {type}")
+
 
 class BaseCache:
     def set_cache(self, key, value, **kwargs):
@@ -69,10 +82,10 @@ class InMemoryCache(BaseCache):
 
 
 class RedisCache(BaseCache):
-    def __init__(self, host, port, password):
-        import redis
-        # if users don't provider one, use the default litellm cache
-        self.redis_client = redis.Redis(host=host, port=port, password=password)
+    def __init__(self, **redis_kwargs):
+        from ._redis import get_redis_client
+
+        self.redis_client = get_redis_client(**redis_kwargs)
 
     def set_cache(self, key, value, **kwargs):
         ttl = kwargs.get("ttl", None)
@@ -165,10 +178,7 @@ class DualCache(BaseCache):
 class Cache:
     def __init__(
             self,
-            type="local",
-            host=None,
-            port=None,
-            password=None
+            provider: Optional[BaseCache] = None,
     ):
         """
         Initializes the cache based on the given type.
@@ -185,10 +195,10 @@ class Cache:
         Returns:
             None
         """
-        if type == "redis":
-            self.cache = RedisCache(host, port, password)
-        if type == "local":
-            self.cache = InMemoryCache()
+        provider = provider or InMemoryCache()
+
+        self.cache = provider
+
         if "cache" not in litellm.input_callback:
             litellm.input_callback.append("cache")
         if "cache" not in litellm.success_callback:

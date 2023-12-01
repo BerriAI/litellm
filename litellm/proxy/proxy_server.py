@@ -86,7 +86,7 @@ def generate_feedback_box():
     print()
 
 import litellm
-from litellm.caching import DualCache
+from litellm.caching import DualCache, get_cache_provider
 litellm.suppress_debug_info = True
 from fastapi import FastAPI, Request, HTTPException, status, Depends
 from fastapi.routing import APIRouter
@@ -382,6 +382,8 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
                 print(f"{blue_color_code}\nSetting Cache on Proxy")
                 from litellm.caching import Cache
                 cache_type = value["type"]
+
+
                 cache_host = os.environ.get("REDIS_HOST")
                 cache_port = os.environ.get("REDIS_PORT")
                 cache_password = os.environ.get("REDIS_PASSWORD")
@@ -393,11 +395,10 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
                 print(f"{blue_color_code}Cache Password:{reset_color_code} {cache_password}")
                 print()
 
+                provider = get_cache_provider(cache_type)
+
                 litellm.cache = Cache(
-                    type=cache_type,
-                    host=cache_host,
-                    port=cache_port,
-                    password=cache_password
+                    provider=provider,
                 )
             else:
                 setattr(litellm, key, value)

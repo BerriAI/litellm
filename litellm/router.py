@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import Dict, List, Optional, Union, Literal
 import random, threading, time, traceback
 import litellm, openai
-from litellm.caching import RedisCache, InMemoryCache, DualCache
+from litellm.caching import RedisCache, InMemoryCache, DualCache, CachingProviders
 import logging, asyncio
 import inspect, concurrent
 from openai import AsyncOpenAI
@@ -60,9 +60,8 @@ class Router:
 
     def __init__(self,
                  model_list: Optional[list] = None,
-                 redis_host: Optional[str] = None,
-                 redis_port: Optional[int] = None,
-                 redis_password: Optional[str] = None,
+                 cache_provider: Optional[CachingProviders] = {},
+                 cache_provider_config: Optional[dict] = None,
                  cache_responses: bool = False,
                  num_retries: int = 0,
                  timeout: Optional[float] = None,
@@ -106,23 +105,22 @@ class Router:
         ### HEALTH CHECK THREAD ###
         if self.routing_strategy == "least-busy":
             self._start_health_check_thread()
+
+
         ### CACHING ###
         redis_cache = None
-        if redis_host is not None and redis_port is not None and redis_password is not None:
-            cache_config = {
-                    'type': 'redis',
-                    'host': redis_host,
-                    'port': redis_port,
-                    'password': redis_password
-            }
-            redis_cache = RedisCache(host=redis_host, port=redis_port, password=redis_password)
-        else: # use an in-memory cache
-            cache_config = {
-                "type": "local"
-            }
+
+        if cache_provider == "redis":
+            cache_provider_instance = RedisCache(**cache_provider_config)
+            redis_cache = cache_provider_instance
+        else:
+            cache_provider_instance = InMemoryCache(**cache_provider_config)
+
+
         if cache_responses:
-            litellm.cache = litellm.Cache(**cache_config) # use Redis for caching completion requests
+            litellm.cache = litellm.Cache(cache_provider_instance)
             self.cache_responses = cache_responses
+
         self.cache = DualCache(redis_cache=redis_cache, in_memory_cache=InMemoryCache()) # use a dual cache (Redis+In-Memory) for tracking cooldowns, usage, etc.
         ## USAGE TRACKING ## 
         if isinstance(litellm.success_callback, list):
