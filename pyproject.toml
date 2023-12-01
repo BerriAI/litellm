@@ -29,7 +29,8 @@ proxy = [
     "uvicorn",
     "fastapi",
     "backoff",
-    "rq"
+    "rq",
+    "orjson",
 ]
 
 [tool.poetry.scripts]
