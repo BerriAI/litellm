@@ -44,7 +44,12 @@ jobs:
           echo "GHCR_TOKEN=${{ secrets.GHCR_TOKEN }}"
           echo "REPO_NAME=${{ env.REPO_NAME }}"
           echo "ACTOR=${{ github.actor }}"
-
+      - name: Build and push container image to registry
+        uses: docker/build-push-action@v2
+        with:
+          push: true
+          tags: ghcr.io/${{ env.REPO }}:${{ github.sha }}
+          file: ./Dockerfile`
       - name: Build and release Docker images
         uses: docker/build-push-action@v5
         with:
@@ -55,3 +60,4 @@ jobs:
             ${{ steps.tag.outputs.versioned }}
           labels: ${{ steps.meta.outputs.labels }}
           push: true
+
