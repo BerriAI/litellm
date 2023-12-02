@@ -1070,6 +1070,13 @@ general_settings:
 
 ```
 
+#### Set OTEL collector endpoint
+LiteLLM will read the `OTEL_ENDPOINT` environment variable to send data to your OTEL collector 
+
+```python
+os.environ['OTEL_ENDPOINT'] # defauls to 127.0.0.1:4317 if not provided
+```
+
 #### Start LiteLLM Proxy
 ```shell
 litellm -config config.yaml
