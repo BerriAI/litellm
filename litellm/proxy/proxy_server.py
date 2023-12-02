@@ -465,7 +465,7 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
     
     ## PRINT YAML FOR CONFIRMING IT WORKS 
     printed_yaml = copy.deepcopy(config)
-    printed_yaml.pop("environment_variables")
+    printed_yaml.pop("environment_variables", None)
     for model in printed_yaml["model_list"]:
         model["litellm_params"].pop("api_key", None)
 
