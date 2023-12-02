@@ -216,10 +216,9 @@ async def user_api_key_auth(request: Request, api_key: str = fastapi.Security(ap
         if prisma_client: 
             ## check for cache hit (In-Memory Cache)
             valid_token = user_api_key_cache.get_cache(key=api_key)
-            if valid_token is None: 
+            if valid_token is None and "Bearer " in api_key: 
                 ## check db 
-                if "Bearer " in api_key:
-                    cleaned_api_key = api_key[len("Bearer "):]
+                cleaned_api_key = api_key[len("Bearer "):]
                 valid_token = await prisma_client.litellm_verificationtoken.find_first(
                     where={
                         "token": cleaned_api_key,
@@ -228,7 +227,7 @@ async def user_api_key_auth(request: Request, api_key: str = fastapi.Security(ap
                 )
                 ## save to cache for 60s
                 user_api_key_cache.set_cache(key=api_key, value=valid_token, ttl=60)
-            else: 
+            elif valid_token is not None: 
                 print(f"API Key Cache Hit!")
             if valid_token:
                 litellm.model_alias_map = valid_token.aliases
