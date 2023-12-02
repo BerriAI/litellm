@@ -6,7 +6,7 @@ Grant other's temporary access to your proxy, with keys that expire after a set 
 
 Requirements: 
 
-- Need to a postgres database (e.g. [Supabase](https://supabase.com/))
+- Need to a postgres database (e.g. [Supabase](https://supabase.com/), [Neon](https://neon.tech/), etc)
 
 You can then generate temporary keys by hitting the `/key/generate` endpoint.
 
