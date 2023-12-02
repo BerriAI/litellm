@@ -1066,7 +1066,7 @@ model_list:
       rpm: 6      # Rate limit for this deployment: in requests per minute (rpm)
 
 general_settings: 
-  otel: True
+  otel: True      # set OpenTelemetry=True, on litellm Proxy
 
 ```
 
