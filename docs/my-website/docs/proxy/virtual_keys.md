@@ -1,5 +1,6 @@
 
 # Cost Tracking & Virtual Keys
+Track Spend and create virtual keys for the proxy
 
 Grant other's temporary access to your proxy, with keys that expire after a set duration.
 

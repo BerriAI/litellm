@@ -1,5 +1,5 @@
-# Config.yaml
-The Config allows you to set the following params
+# Proxy Config.yaml
+Set model list, `api_base`, `api_key`, `temperature` & proxy server settings (`maaster-key`)
 
 | Param Name           | Description                                                   |
 |----------------------|---------------------------------------------------------------|

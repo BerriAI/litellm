@@ -1,6 +1,8 @@
 
 # Load Balancing - Multiple Instances of 1 model
-Use this config to load balance between multiple instances of the same model. The proxy will handle routing requests (using LiteLLM's Router). **Set `rpm` in the config if you want maximize throughput**
+Load balance multiple instances of the same model
+
+The proxy will handle routing requests (using LiteLLM's Router). **Set `rpm` in the config if you want maximize throughput**
 
 #### Example config
 requests with `model=gpt-3.5-turbo` will be routed across multiple instances of `azure/gpt-3.5-turbo`
