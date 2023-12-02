@@ -28,7 +28,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ env.REPO_NAME }}
+          images: ghcr.io/berriai/litellm
       - name: Get tag to build
         id: tag
         run: |
