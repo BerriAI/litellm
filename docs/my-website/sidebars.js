@@ -90,6 +90,7 @@ const sidebars = {
     "rules",
     "set_keys",
     "budget_manager",
+    "secret",
     "completion/token_usage",
     {
       type: 'category',
