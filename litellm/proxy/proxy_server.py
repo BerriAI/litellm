@@ -91,7 +91,7 @@ def generate_feedback_box():
 import litellm
 from litellm.caching import DualCache
 litellm.suppress_debug_info = True
-from fastapi import FastAPI, Request, HTTPException, status, Depends
+from fastapi import FastAPI, Request, HTTPException, status, Depends, BackgroundTasks
 from fastapi.routing import APIRouter
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse, FileResponse, ORJSONResponse
@@ -113,7 +113,44 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+def log_input_output(request, response):  
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+    from opentelemetry import trace
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+    from opentelemetry.sdk.resources import Resource
 
+    # Initialize OpenTelemetry components
+    otlp_exporter = OTLPSpanExporter(endpoint="localhost:4317", insecure=True)
+    resource = Resource.create({
+        "service.name": "my_app",
+    })
+    trace.set_tracer_provider(TracerProvider(resource=resource))
+    tracer = trace.get_tracer(__name__)
+    span_processor = SimpleSpanProcessor(otlp_exporter)
+    trace.get_tracer_provider().add_span_processor(span_processor)
+    with tracer.start_as_current_span("litellm-completion") as current_span:
+        input_event_attributes = {f"{key}": str(value) for key, value in dict(request).items() if value is not None}
+        # Log the input event with attributes
+        current_span.add_event(
+            name="LiteLLM: Request Input",
+            attributes=input_event_attributes
+        )
+        event_headers = {f"{key}": str(value) for key, value in dict(request.headers).items() if value is not None}
+        current_span.add_event(
+            name="LiteLLM: Request Headers",
+            attributes=event_headers
+        )
+
+        input_event_attributes.update(event_headers)
+
+        input_event_attributes.update({f"{key}": str(value) for key, value in dict(response).items()})
+        current_span.add_event(
+            name="LiteLLM: Request Outpu",
+            attributes=input_event_attributes
+        )
+        return True
 
 from typing import Dict
 from pydantic import BaseModel         
@@ -796,12 +833,11 @@ async def completion(request: Request, model: Optional[str] = None, user_api_key
 @router.post("/v1/chat/completions", dependencies=[Depends(user_api_key_auth)], tags=["chat/completions"])
 @router.post("/chat/completions", dependencies=[Depends(user_api_key_auth)], tags=["chat/completions"])
 @router.post("/openai/deployments/{model:path}/chat/completions", dependencies=[Depends(user_api_key_auth)], tags=["chat/completions"]) # azure compatible endpoint
-async def chat_completion(request: ProxyChatCompletionRequest, model: Optional[str] = None, user_api_key_dict: dict = Depends(user_api_key_auth)):
+async def chat_completion(request: Request, model: Optional[str] = None, user_api_key_dict: dict = Depends(user_api_key_auth), background_tasks: BackgroundTasks = None):
     global general_settings, user_debug
     try: 
         data = {}
-        request_items = request.dict() # type: ignore 
-        data = {key: value for key, value in request_items.items() if value is not None} # pydantic sets all values to None, filter out None values here
+        data = await request.json() # type: ignore 
         
         print_verbose(f"receiving data: {data}")
         data["model"] = (
@@ -833,6 +869,7 @@ async def chat_completion(request: ProxyChatCompletionRequest, model: Optional[s
             response = await litellm.acompletion(**data)
         if 'stream' in data and data['stream'] == True: # use generate_responses to stream responses
             return StreamingResponse(async_data_generator(response), media_type='text/event-stream')
+        background_tasks.add_task(log_input_output, request, response) # background task for logging to OTEL 
         return response
     except Exception as e: 
         print(f"\033[1;31mAn error occurred: {e}\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`")
