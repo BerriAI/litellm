@@ -1,6 +1,6 @@
 # Logging - OpenTelemetry, Langfuse, ElasticSearch 
 Log Proxy Input, Output, Exceptions to Langfuse, OpenTelemetry
-## Logging Proxy Input/Output - OpenTelemetry
+## OpenTelemetry, ElasticSearch
 
 ### Step 1 Start OpenTelemetry Collecter Docker Container
 This container sends logs to your selected destination 
