@@ -286,6 +286,44 @@ def celery_setup(use_queue: bool):
         async_result = AsyncResult
         celery_app_conn = celery_app
 
+def load_from_azure_key_vault(use_azure_key_vault: bool = False): 
+    if use_azure_key_vault is False:
+        return
+    
+    try: 
+        from azure.keyvault.secrets import SecretClient
+        from azure.identity import ClientSecretCredential
+
+        # Set your Azure Key Vault URI
+        KVUri = os.getenv("AZURE_KEY_VAULT_URI")
+
+        # Set your Azure AD application/client ID, client secret, and tenant ID
+        client_id = os.getenv("AZURE_CLIENT_ID")
+        client_secret = os.getenv("AZURE_CLIENT_SECRET")
+        tenant_id = os.getenv("AZURE_TENANT_ID") 
+
+        # Initialize the ClientSecretCredential
+        credential = ClientSecretCredential(client_id=client_id, client_secret=client_secret, tenant_id=tenant_id)
+
+        # Create the SecretClient using the credential
+        client = SecretClient(vault_url=KVUri, credential=credential)
+        
+        litellm.secret_manager_client = client
+        # # Retrieve all secrets
+        # secrets = client.get_secrets()
+
+        # # Load secrets into environment variables
+        # for secret in secrets:
+        #     secret_name = secret.name
+        #     secret_value = client.get_secret(secret_name).value
+        #     os.environ[secret_name] = secret_value
+
+        print(f"test key - : {litellm.get_secret('test-3')}")
+    except Exception as e: 
+        print(e)
+        print("Error when loading keys from Azure Key Vault. Ensure you run `pip install azure-identity azure-keyvault-secrets`")
+
+
 def cost_tracking(): 
     global prisma_client, master_key
     if prisma_client is not None and master_key is not None:
@@ -412,6 +450,9 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
         ### START REDIS QUEUE ###
         use_queue = general_settings.get("use_queue", False)
         celery_setup(use_queue=use_queue)
+        ### LOAD FROM AZURE KEY VAULT ###
+        use_azure_key_vault = general_settings.get("use_azure_key_vault", False)
+        load_from_azure_key_vault(use_azure_key_vault=use_azure_key_vault)
 
     ## LITELLM MODULE SETTINGS (e.g. litellm.drop_params=True,..)
     litellm_settings = config.get('litellm_settings', None)
