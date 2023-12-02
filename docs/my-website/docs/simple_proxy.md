@@ -1050,7 +1050,7 @@ docker run -p 4317:4317 \
 
 #### Pip install opentelemetry
 ```shell
-pip install opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp opentelemetry-sdk-resources
+pip install opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp -U
 ```
 
 #### Set (OpenTelemetry) `otel=True` on the proxy `config.yaml`
