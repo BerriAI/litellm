@@ -51,9 +51,7 @@ jobs:
         uses: docker/build-push-action@v2
         with:
           push: true
-          tags: |
-            ${{ steps.tag.outputs.latest }}
-            ${{ steps.tag.outputs.versioned }}
+          tags: ghcr.io/${{ env.REPO_NAME }}:${{ github.sha }}
           file: ./Dockerfile`
       - name: Build and release Docker images
         uses: docker/build-push-action@v5
