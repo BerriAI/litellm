@@ -124,7 +124,7 @@ def log_input_output(request, response):
     # Initialize OpenTelemetry components
     otlp_exporter = OTLPSpanExporter(endpoint="localhost:4317", insecure=True)
     resource = Resource.create({
-        "service.name": "my_app",
+        "service.name": "LiteLLM Proxy",
     })
     trace.set_tracer_provider(TracerProvider(resource=resource))
     tracer = trace.get_tracer(__name__)
