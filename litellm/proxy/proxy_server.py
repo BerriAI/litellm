@@ -323,7 +323,6 @@ def prisma_setup(database_url: Optional[str]):
 
 def celery_setup(use_queue: bool): 
     global celery_fn, celery_app_conn, async_result
-    print(f"value of use_queue: {use_queue}")
     if use_queue:
         from litellm.proxy.queue.celery_worker import start_worker
         from litellm.proxy.queue.celery_app import celery_app, process_job
