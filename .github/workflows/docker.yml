@@ -38,6 +38,12 @@ jobs:
           else
             echo "versioned=ghcr.io/${{ env.REPO_NAME }}:${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
           fi
+      - name: Debug Info
+        run: |
+          echo "GHCR_TOKEN=${{ secrets.GHCR_TOKEN }}"
+          echo "REPO_NAME=${{ env.REPO_NAME }}"
+          echo "ACTOR=${{ github.actor }}"
+
       - name: Build and release Docker images
         uses: docker/build-push-action@v5
         with:
