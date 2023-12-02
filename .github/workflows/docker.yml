@@ -52,7 +52,7 @@ jobs:
         with:
           push: true
           tags: ghcr.io/${{ env.REPO_NAME }}:${{ github.sha }}
-          file: ./Dockerfile`
+          file: ./Dockerfile
       - name: Build and release Docker images
         uses: docker/build-push-action@v5
         with:
