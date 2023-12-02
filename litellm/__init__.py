@@ -58,6 +58,8 @@ num_retries: Optional[int] = None
 fallbacks: Optional[List] = None
 context_window_fallbacks: Optional[List] = None
 allowed_fails: int = 0
+####### SECRET MANAGERS #####################
+secret_manager_client = None # list of instantiated key management clients - e.g. azure kv, infisical, etc. 
 #############################################
 
 def get_model_cost_map(url: str):
@@ -95,8 +97,6 @@ headers = None
 api_version = None
 organization = None
 config_path = None
-####### Secret Manager #####################
-secret_manager_client = None
 ####### COMPLETION MODELS ###################
 open_ai_chat_completion_models: List = []
 open_ai_text_completion_models: List = []
@@ -366,7 +366,8 @@ from .utils import (
     encode, 
     decode, 
     _calculate_retry_after,
-    _should_retry
+    _should_retry,
+    get_secret
 )
 from .llms.huggingface_restapi import HuggingfaceConfig
 from .llms.anthropic import AnthropicConfig

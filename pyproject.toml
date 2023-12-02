@@ -33,6 +33,12 @@ proxy = [
     "orjson",
 ]
 
+extra_proxy = [
+    "prisma",
+    "azure-identity",
+    "azure-keyvault-secrets"
+]
+
 [tool.poetry.scripts]
 litellm = 'litellm:run_server'
 

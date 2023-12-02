@@ -844,19 +844,19 @@ class Router:
                 api_key = litellm_params.get("api_key")
                 if api_key and api_key.startswith("os.environ/"):
                     api_key_env_name = api_key.replace("os.environ/", "")
-                    api_key = os.getenv(api_key_env_name)
+                    api_key = litellm.get_secret(api_key_env_name)
 
                 api_base = litellm_params.get("api_base")
                 base_url = litellm_params.get("base_url")
                 api_base = api_base or base_url # allow users to pass in `api_base` or `base_url` for azure
                 if api_base and api_base.startswith("os.environ/"):
                     api_base_env_name = api_base.replace("os.environ/", "")
-                    api_base = os.getenv(api_base_env_name)
+                    api_base = litellm.get_secret(api_base_env_name)
 
                 api_version = litellm_params.get("api_version")
                 if api_version and api_version.startswith("os.environ/"):
                     api_version_env_name = api_version.replace("os.environ/", "")
-                    api_version = os.getenv(api_version_env_name)
+                    api_version = litellm.get_secret(api_version_env_name)
                 self.print_verbose(f"Initializing OpenAI Client for {model_name}, {str(api_base)}")
                 if "azure" in model_name:
                     if api_version is None:

@@ -2421,7 +2421,7 @@ def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None, api_
         
         if api_key and api_key.startswith("os.environ/"): 
             api_key_env_name = api_key.replace("os.environ/", "")
-            dynamic_api_key = os.getenv(api_key_env_name)
+            dynamic_api_key = get_secret(api_key_env_name)
         # check if llm provider part of model name
         if model.split("/",1)[0] in litellm.provider_list and model.split("/",1)[0] not in litellm.model_list:
             custom_llm_provider = model.split("/", 1)[0]
@@ -2429,15 +2429,15 @@ def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None, api_
             if custom_llm_provider == "perplexity":
                 # perplexity is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.perplexity.ai
                 api_base = "https://api.perplexity.ai"
-                dynamic_api_key = os.getenv("PERPLEXITYAI_API_KEY")
+                dynamic_api_key = get_secret("PERPLEXITYAI_API_KEY")
             elif custom_llm_provider == "anyscale": 
                 # anyscale is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
                 api_base = "https://api.endpoints.anyscale.com/v1"
-                dynamic_api_key = os.getenv("ANYSCALE_API_KEY")
+                dynamic_api_key = get_secret("ANYSCALE_API_KEY")
             elif custom_llm_provider == "deepinfra": 
                 # deepinfra is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
                 api_base = "https://api.deepinfra.com/v1/openai"
-                dynamic_api_key = os.getenv("DEEPINFRA_API_KEY")
+                dynamic_api_key = get_secret("DEEPINFRA_API_KEY")
             return model, custom_llm_provider, dynamic_api_key, api_base
 
         # check if api base is a known openai compatible endpoint
@@ -2446,13 +2446,13 @@ def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None, api_
                 if endpoint in api_base:
                     if endpoint == "api.perplexity.ai":
                         custom_llm_provider = "perplexity"
-                        dynamic_api_key = os.getenv("PERPLEXITYAI_API_KEY")
+                        dynamic_api_key = get_secret("PERPLEXITYAI_API_KEY")
                     elif endpoint == "api.endpoints.anyscale.com/v1":
                         custom_llm_provider = "anyscale"
-                        dynamic_api_key = os.getenv("ANYSCALE_API_KEY")
+                        dynamic_api_key = get_secret("ANYSCALE_API_KEY")
                     elif endpoint == "api.deepinfra.com/v1/openai":
                         custom_llm_provider = "deepinfra"
-                        dynamic_api_key = os.getenv("DEEPINFRA_API_KEY")
+                        dynamic_api_key = get_secret("DEEPINFRA_API_KEY")
                     return model, custom_llm_provider, dynamic_api_key, api_base
 
         # check if model in known model provider list  -> for huggingface models, raise exception as they don't have a fixed provider (can be togetherai, anyscale, baseten, runpod, et.)
@@ -4715,13 +4715,17 @@ def litellm_telemetry(data):
 # checks if user has passed in a secret manager client
 # if passed in then checks the secret there
 def get_secret(secret_name):
-    if litellm.secret_manager_client != None:
+    if litellm.secret_manager_client is not None:
         # TODO: check which secret manager is being used
         # currently only supports Infisical
         try:
-            secret = litellm.secret_manager_client.get_secret(secret_name).secret_value
-        except:
-            secret = None
+            client = litellm.secret_manager_client
+            if type(client).__module__ + '.' + type(client).__name__ == 'azure.keyvault.secrets._client.SecretClient': # support Azure Secret Client - from azure.keyvault.secrets import SecretClient
+                secret = retrieved_secret = client.get_secret(secret_name).value
+            else: # assume the default is infisicial client
+                secret = client.get_secret(secret_name).secret_value
+        except: # check if it's in os.environ
+            secret = os.environ.get(secret_name)
         return secret
     else:
         return os.environ.get(secret_name)
