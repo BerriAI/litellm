@@ -153,6 +153,10 @@ class ProxyChatCompletionRequest(BaseModel):
     class Config:
         extra='allow' # allow params not defined here, these fall in litellm.completion(**kwargs)
 
+class ModelParams(BaseModel):
+    model_name: str
+    litellm_params: dict
+
 user_api_base = None
 user_model = None
 user_debug = False
@@ -162,6 +166,7 @@ user_temperature = None
 user_telemetry = True
 user_config = None
 user_headers = None
+user_config_file_path = None
 local_logging = True # writes logs to a local api_log.json file for debugging
 experimental = False
 #### GLOBAL VARIABLES ####
@@ -315,7 +320,6 @@ def load_from_azure_key_vault(use_azure_key_vault: bool = False):
     except Exception as e: 
         print("Error when loading keys from Azure Key Vault. Ensure you run `pip install azure-identity azure-keyvault-secrets`")
 
-
 def cost_tracking(): 
     global prisma_client, master_key
     if prisma_client is not None and master_key is not None:
@@ -405,10 +409,11 @@ def run_ollama_serve():
         """)
 
 def load_router_config(router: Optional[litellm.Router], config_file_path: str):
-    global master_key
+    global master_key, user_config_file_path
     config = {}
     try: 
         if os.path.exists(config_file_path):
+            user_config_file_path = config_file_path
             with open(config_file_path, 'r') as file:
                 config = yaml.safe_load(file)
         else:
@@ -947,36 +952,46 @@ async def info_key_fn(key: str = fastapi.Query(..., description="Key in the requ
 
 #### MODEL MANAGEMENT #### 
 
+#### [BETA] - This is a beta endpoint, format might change based on user feedback. - https://github.com/BerriAI/litellm/issues/964
+@router.post("/model/new", description="Allows adding new models to the model list in the config.yaml", tags=["model management"], dependencies=[Depends(user_api_key_auth)])
+async def add_new_model(model_params: ModelParams):
+    global llm_router, llm_model_list, general_settings
+    try:
+        # Load existing config
+        with open(user_config_file_path, "r") as config_file:
+            config = yaml.safe_load(config_file)
+
+        # Add the new model to the config
+        config['model_list'].append({
+            'model_name': model_params.model_name,
+            'litellm_params': model_params.litellm_params
+        })
+
+        # Save the updated config
+        with open(user_config_file_path, "w") as config_file:
+            yaml.dump(config, config_file, default_flow_style=False)
+
+        # update Router 
+        llm_router, llm_model_list, general_settings = load_router_config(router=llm_router, config_file_path=config)
+
+
+        return {"message": "Model added successfully"}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
+
 #### [BETA] - This is a beta endpoint, format might change based on user feedback. - https://github.com/BerriAI/litellm/issues/933
 @router.get("/model/info", description="Provides more info about each model in /models, including config.yaml descriptions (except api key and api base)", tags=["model management"], dependencies=[Depends(user_api_key_auth)])
 async def model_info(request: Request):
     global llm_model_list, general_settings   
-    all_models = [] 
-    if llm_model_list is not None:
-        for m in llm_model_list: 
-            model_dict = {} 
-            model_name = m["model_name"]
-            model_params = {}
-            for k,v in m["litellm_params"].items():
-                if k == "api_key" or k == "api_base": # don't send the api key or api base
-                    continue 
-                
-                if k == "model": 
-                    ########## remove -ModelID-XXXX from model ##############
-                    original_model_string = v
-                    # Find the index of "ModelID" in the string
-                    index_of_model_id = original_model_string.find("-ModelID")
-                    # Remove everything after "-ModelID" if it exists
-                    if index_of_model_id != -1:
-                        v = original_model_string[:index_of_model_id]
-                    else:
-                        v = original_model_string
-                
-                model_params[k] = v
+    # Load existing config
+    with open(user_config_file_path, "r") as config_file:
+        config = yaml.safe_load(config_file)
+    all_models = config['model_list']
 
-            model_dict["model_name"] = model_name
-            model_dict["model_params"] = model_params
-            all_models.append(model_dict)
+    for model in all_models:
+        # don't return the api key
+        model["litellm_params"].pop("api_key", None)
     # all_models = list(set([m["model_name"] for m in llm_model_list]))
     print_verbose(f"all_models: {all_models}")
     return dict(
@@ -991,7 +1006,6 @@ async def model_info(request: Request):
         ],
         object="list",
     )
-    pass
 #### EXPERIMENTAL QUEUING #### 
 @router.post("/queue/request", dependencies=[Depends(user_api_key_auth)])
 async def async_queue_request(request: Request): 
