@@ -114,6 +114,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 def log_input_output(request, response):  
+    global otel_logging
+    if otel_logging != True:
+        return
     from opentelemetry import trace
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -214,6 +217,7 @@ general_settings: dict = {}
 log_file = "api_log.json"
 worker_config = None
 master_key = None
+otel_logging = False
 prisma_client = None
 user_api_key_cache = DualCache()
 ### REDIS QUEUE ### 
@@ -447,7 +451,7 @@ def run_ollama_serve():
         """)
 
 def load_router_config(router: Optional[litellm.Router], config_file_path: str):
-    global master_key, user_config_file_path
+    global master_key, user_config_file_path, otel_logging
     config = {}
     try: 
         if os.path.exists(config_file_path):
@@ -494,6 +498,11 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
         ### LOAD FROM AZURE KEY VAULT ###
         use_azure_key_vault = general_settings.get("use_azure_key_vault", False)
         load_from_azure_key_vault(use_azure_key_vault=use_azure_key_vault)
+
+        #### OpenTelemetry Logging (OTEL) ########
+        otel_logging =  general_settings.get("otel", False)
+        if otel_logging == True:
+            print("\nOpenTelemetry Logging Activated")
 
     ## LITELLM MODULE SETTINGS (e.g. litellm.drop_params=True,..)
     litellm_settings = config.get('litellm_settings', None)
