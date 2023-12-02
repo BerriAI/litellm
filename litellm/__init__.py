@@ -59,7 +59,7 @@ fallbacks: Optional[List] = None
 context_window_fallbacks: Optional[List] = None
 allowed_fails: int = 0
 ####### SECRET MANAGERS #####################
-secret_manager_client = None # list of instantiated key management clients - e.g. azure kv, infisical, etc. 
+secret_manager_client: Optional[Any] = None # list of instantiated key management clients - e.g. azure kv, infisical, etc. 
 #############################################
 
 def get_model_cost_map(url: str):
