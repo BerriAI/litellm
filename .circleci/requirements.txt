@@ -10,3 +10,4 @@ anthropic
 boto3
 appdirs
 orjson
+pydantic
