@@ -1,5 +1,5 @@
 # Proxy Config.yaml
-Set model list, `api_base`, `api_key`, `temperature` & proxy server settings (`maaster-key`)
+Set model list, `api_base`, `api_key`, `temperature` & proxy server settings (`master-key`) on the config.yaml. 
 
 | Param Name           | Description                                                   |
 |----------------------|---------------------------------------------------------------|
