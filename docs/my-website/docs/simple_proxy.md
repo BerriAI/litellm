@@ -263,7 +263,7 @@ print(response)
 </TabItem>
 <TabItem value="librechat" label="LibreChat">
 
-### Start the LiteLLM proxy
+#### Start the LiteLLM proxy
 ```shell
 litellm --model gpt-3.5-turbo
 
