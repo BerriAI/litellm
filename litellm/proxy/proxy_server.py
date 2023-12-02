@@ -114,7 +114,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 def log_input_output(request, response):  
-    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
     from opentelemetry import trace
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -122,7 +121,8 @@ def log_input_output(request, response):
     from opentelemetry.sdk.resources import Resource
 
     # Initialize OpenTelemetry components
-    otlp_exporter = OTLPSpanExporter(endpoint="localhost:4317", insecure=True)
+    otlp_host = os.environ.get("OTEL_ENDPOINT", "localhost:4317")
+    otlp_exporter = OTLPSpanExporter(endpoint=otlp_host, insecure=True)
     resource = Resource.create({
         "service.name": "LiteLLM Proxy",
     })
@@ -838,7 +838,7 @@ async def chat_completion(request: Request, model: Optional[str] = None, user_ap
     try: 
         data = {}
         data = await request.json() # type: ignore 
-        
+
         print_verbose(f"receiving data: {data}")
         data["model"] = (
             general_settings.get("completion_model", None) # server default
