@@ -93,3 +93,30 @@ def test_embedding():
 
 # Run the test
 # test_embedding()
+
+
+def test_add_new_model(): 
+    try: 
+        test_data = {
+            "model_name": "test_openai_models",
+            "litellm_params": {
+                "model": "gpt-3.5-turbo", 
+            },
+            "model_info": {
+                "description": "this is a test openai model"
+            }
+        }
+        client.post("/model/new", json=test_data)
+        response = client.get("/model/info")
+        assert response.status_code == 200
+        result = response.json() 
+        print(f"response: {result}")
+        model_info = None
+        for m in result["data"]:
+            if m["id"]["model_name"] == "test_openai_models":
+                model_info = m["id"]["model_info"]
+        assert model_info["description"] == "this is a test openai model"
+    except Exception as e: 
+        pytest.fail(f"LiteLLM Proxy test failed. Exception {str(e)}")
+
+test_add_new_model()
