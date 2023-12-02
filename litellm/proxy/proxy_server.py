@@ -196,7 +196,7 @@ class ProxyChatCompletionRequest(BaseModel):
 class ModelParams(BaseModel):
     model_name: str
     litellm_params: dict
-    model_info: dict
+    model_info: Optional[dict]
 
 user_api_base = None
 user_model = None
@@ -207,7 +207,7 @@ user_temperature = None
 user_telemetry = True
 user_config = None
 user_headers = None
-user_config_file_path = None
+user_config_file_path = f"config_{time.time()}.yaml"
 local_logging = True # writes logs to a local api_log.json file for debugging
 experimental = False
 #### GLOBAL VARIABLES ####
@@ -605,10 +605,6 @@ async def delete_verification_token(tokens: List[str]):
         traceback.print_exc()
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
     return deleted_tokens
-
-async def generate_key_cli_task(duration_str):
-    task = asyncio.create_task(generate_key_helper_fn(duration_str=duration_str))
-    await task
 
 def save_worker_config(**data): 
     import json
@@ -1011,13 +1007,16 @@ async def add_new_model(model_params: ModelParams):
     global llm_router, llm_model_list, general_settings, user_config_file_path
     try:
         # Load existing config
-        with open(f"{user_config_file_path}", "r") as config_file:
-            config = yaml.safe_load(config_file)
-
+        if os.path.exists(f"{user_config_file_path}"):
+            with open(f"{user_config_file_path}", "r") as config_file:
+                config = yaml.safe_load(config_file)
+        else: 
+            config = {"model_list": []} 
         # Add the new model to the config
         config['model_list'].append({
             'model_name': model_params.model_name,
-            'litellm_params': model_params.litellm_params
+            'litellm_params': model_params.litellm_params,
+            'model_info': model_params.model_info
         })
 
         # Save the updated config
