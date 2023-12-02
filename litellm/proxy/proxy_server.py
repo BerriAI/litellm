@@ -901,7 +901,7 @@ async def chat_completion(request: Request, model: Optional[str] = None, user_ap
 
 @router.post("/v1/embeddings", dependencies=[Depends(user_api_key_auth)], response_class=ORJSONResponse)
 @router.post("/embeddings", dependencies=[Depends(user_api_key_auth)], response_class=ORJSONResponse)
-async def embeddings(request: Request, user_api_key_dict: dict = Depends(user_api_key_auth)): 
+async def embeddings(request: Request, user_api_key_dict: dict = Depends(user_api_key_auth), background_tasks: BackgroundTasks = BackgroundTasks()): 
     try: 
 
         # Use orjson to parse JSON data, orjson speeds up requests significantly
@@ -926,6 +926,7 @@ async def embeddings(request: Request, user_api_key_dict: dict = Depends(user_ap
             response = await llm_router.aembedding(**data)
         else:
             response = await litellm.aembedding(**data)
+        background_tasks.add_task(log_input_output, request, response) # background task for logging to OTEL 
         return response
     except Exception as e:
         traceback.print_exc()
