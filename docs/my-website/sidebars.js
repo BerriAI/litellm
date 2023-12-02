@@ -85,7 +85,26 @@ const sidebars = {
         "providers/petals",
       ]
     },
-    "simple_proxy",
+    {
+      type: "category",
+      label: "💥 OpenAI Proxy",
+      link: {
+        type: 'generated-index',
+        title: '💥 OpenAI Proxy Server',
+        description: `Proxy Server to call 100+ LLMs in a unified interface, load balance deployments, track costs per user`,
+        slug: '/simple_proxy',
+      },
+      items: [
+        "proxy/quick_start", 
+        "proxy/configs", 
+        "proxy/load_balancing", 
+        "proxy/virtual_keys",
+        "proxy/caching",
+        "proxy/logging", 
+        "proxy/cli", 
+        "proxy/deploy", 
+      ]
+    },
     "routing",
     "rules",
     "set_keys",
@@ -107,7 +126,6 @@ const sidebars = {
         'tutorials/finetuned_chat_gpt',
         'tutorials/sagemaker_llms',
         'tutorials/text_completion',
-        // 'tutorials/litellm_Test_Multiple_Providers',
         "tutorials/first_playground",
         'tutorials/compare_llms',
         "tutorials/model_fallbacks",
