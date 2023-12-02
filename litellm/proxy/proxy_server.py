@@ -955,10 +955,10 @@ async def info_key_fn(key: str = fastapi.Query(..., description="Key in the requ
 #### [BETA] - This is a beta endpoint, format might change based on user feedback. - https://github.com/BerriAI/litellm/issues/964
 @router.post("/model/new", description="Allows adding new models to the model list in the config.yaml", tags=["model management"], dependencies=[Depends(user_api_key_auth)])
 async def add_new_model(model_params: ModelParams):
-    global llm_router, llm_model_list, general_settings
+    global llm_router, llm_model_list, general_settings, user_config_file_path
     try:
         # Load existing config
-        with open(user_config_file_path, "r") as config_file:
+        with open(f"{user_config_file_path}", "r") as config_file:
             config = yaml.safe_load(config_file)
 
         # Add the new model to the config
@@ -968,7 +968,7 @@ async def add_new_model(model_params: ModelParams):
         })
 
         # Save the updated config
-        with open(user_config_file_path, "w") as config_file:
+        with open(f"{user_config_file_path}", "w") as config_file:
             yaml.dump(config, config_file, default_flow_style=False)
 
         # update Router 
@@ -983,9 +983,9 @@ async def add_new_model(model_params: ModelParams):
 #### [BETA] - This is a beta endpoint, format might change based on user feedback. - https://github.com/BerriAI/litellm/issues/933
 @router.get("/model/info", description="Provides more info about each model in /models, including config.yaml descriptions (except api key and api base)", tags=["model management"], dependencies=[Depends(user_api_key_auth)])
 async def model_info(request: Request):
-    global llm_model_list, general_settings   
+    global llm_model_list, general_settings, user_config_file_path
     # Load existing config
-    with open(user_config_file_path, "r") as config_file:
+    with open(f"{user_config_file_path}", "r") as config_file:
         config = yaml.safe_load(config_file)
     all_models = config['model_list']
 
