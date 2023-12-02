@@ -156,6 +156,7 @@ class ProxyChatCompletionRequest(BaseModel):
 class ModelParams(BaseModel):
     model_name: str
     litellm_params: dict
+    model_info: dict
 
 user_api_base = None
 user_model = None
@@ -421,6 +422,7 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
     except Exception as e:
         raise Exception(f"Exception while reading Config: {e}")
     
+    ## PRINT YAML FOR CONFIRMING IT WORKS 
     printed_yaml = copy.deepcopy(config)
     printed_yaml.pop("environment_variables")
     for model in printed_yaml["model_list"]:
