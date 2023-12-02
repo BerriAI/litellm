@@ -4,6 +4,9 @@ on:
     inputs:
       tag:
         description: "The tag version you want to build"
+permissions:
+  contents: read
+  packages: write
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -48,7 +51,9 @@ jobs:
         uses: docker/build-push-action@v2
         with:
           push: true
-          tags: ghcr.io/${{ env.REPO }}:${{ github.sha }}
+          tags: |
+            ${{ steps.tag.outputs.latest }}
+            ${{ steps.tag.outputs.versioned }}
           file: ./Dockerfile`
       - name: Build and release Docker images
         uses: docker/build-push-action@v5
