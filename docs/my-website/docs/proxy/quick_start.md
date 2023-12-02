@@ -3,6 +3,7 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
 # Quick Start
+Use the cli to run and test the proxy
 
 LiteLLM Server manages:
 
