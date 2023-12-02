@@ -4,12 +4,12 @@ on:
     inputs:
       tag:
         description: "The tag version you want to build"
-permissions:
-  contents: read
-  packages: write
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+        contents: read
+        packages: write
     env:
       REPO_NAME: ${{ github.repository }}
     steps:
