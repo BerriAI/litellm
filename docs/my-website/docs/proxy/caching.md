@@ -1,4 +1,6 @@
 # Caching 
+Cache LLM Responses
+
 Caching can be enabled by adding the `cache` key in the `config.yaml`
 #### Step 1: Add `cache` to the config.yaml
 ```yaml
