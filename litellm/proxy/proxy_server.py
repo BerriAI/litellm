@@ -421,7 +421,12 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
     except Exception as e:
         raise Exception(f"Exception while reading Config: {e}")
     
-    print(f"Loaded config YAML:\n{json.dumps(config, indent=2)}")
+    printed_yaml = copy.deepcopy(config)
+    printed_yaml.pop("environment_variables")
+    for model in printed_yaml["model_list"]:
+        model["litellm_params"].pop("api_key", None)
+
+    print(f"Loaded config YAML (api_key and environment_variables are not shown):\n{json.dumps(printed_yaml, indent=2)}")
 
     ## ENVIRONMENT VARIABLES
     environment_variables = config.get('environment_variables', None)
