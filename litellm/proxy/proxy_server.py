@@ -126,7 +126,7 @@ class ProxyChatCompletionRequest(BaseModel):
     n: Optional[int] = None
     stream: Optional[bool] = None
     stop: Optional[List[str]] = None
-    max_tokens: Optional[Union[float, int]] = None
+    max_tokens: Optional[int] = None
     presence_penalty: Optional[float] = None
     frequency_penalty: Optional[float] = None
     logit_bias: Optional[Dict[str, float]] = None
