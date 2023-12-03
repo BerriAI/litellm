@@ -3,7 +3,7 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
 # Quick Start
-Use the cli to run and test the proxy
+Quick start CLI, Config, Docker
 
 LiteLLM Server manages:
 
@@ -20,6 +20,9 @@ View all the supported args for the Proxy CLI [here](https://docs.litellm.ai/doc
 $ pip install litellm[proxy]
 ```
 
+## Quick Start - LiteLLM Proxy CLI
+
+Run the following command to start the litellm proxy
 ```shell
 $ litellm --model huggingface/bigcode/starcoder
 
@@ -77,6 +80,53 @@ print(response)
 </TabItem>
 
 </Tabs>
+
+## Quick Start - LiteLLM Proxy + Config.yaml
+
+### Create a Config for LiteLLM Proxy
+Example
+
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: azure/<your-deployment-name>
+      api_base: <your-azure-api-endpoint>
+      api_key: <your-azure-api-key>
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: azure/gpt-turbo-small-ca
+      api_base: https://my-endpoint-canada-berri992.openai.azure.com/
+      api_key: <your-azure-api-key>
+```
+
+### Run proxy with config
+
+```shell
+litellm --config your_config.yaml
+```
+
+## Quick Start Docker Image
+
+### Pull the litellm ghcr docker image
+See the latest available ghcr docker image here:
+https://github.com/berriai/litellm/pkgs/container/litellm
+
+```shell
+docker pull ghcr.io/berriai/litellm:main-v1.10.1
+```
+
+### Run the Docker Image
+```shell
+docker run ghcr.io/berriai/litellm:main-v1.10.0
+```
+
+#### Run the Docker Image with LiteLLM CLI args
+
+Here's how you can run the docker image and pass your config to `litellm`
+```shell
+docker run ghcr.io/berriai/litellm:main-v1.10.0 --config your_config.yaml
+```
 
 ### Server Endpoints
 - POST `/chat/completions` - chat completions endpoint to call 100+ LLMs
