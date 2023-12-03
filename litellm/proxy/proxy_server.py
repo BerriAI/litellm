@@ -201,6 +201,8 @@ class ModelParams(BaseModel):
     model_name: str
     litellm_params: dict
     model_info: Optional[dict]
+    class Config:
+        protected_namespaces = ()
 
 class GenerateKeyRequest(BaseModel):
     duration: str = "1h"
