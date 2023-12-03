@@ -65,7 +65,7 @@ class PrismaClient:
             where={
                 "token": hashed_token
             },
-            data={**data}
+            data={**data} # type: ignore 
         )
         return {"token": token, "data": data}
 
