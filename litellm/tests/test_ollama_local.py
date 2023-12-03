@@ -1,35 +1,35 @@
-##### THESE TESTS CAN ONLY RUN LOCALLY WITH THE OLLAMA SERVER RUNNING ######
-# https://ollama.ai/
+# ##### THESE TESTS CAN ONLY RUN LOCALLY WITH THE OLLAMA SERVER RUNNING ######
+# # https://ollama.ai/
 
-import sys, os
-import traceback
-from dotenv import load_dotenv
-load_dotenv()
-import os
-sys.path.insert(0, os.path.abspath('../..'))  # Adds the parent directory to the system path
-import pytest
-import litellm
-from litellm import embedding, completion
-import asyncio
+# import sys, os
+# import traceback
+# from dotenv import load_dotenv
+# load_dotenv()
+# import os
+# sys.path.insert(0, os.path.abspath('../..'))  # Adds the parent directory to the system path
+# import pytest
+# import litellm
+# from litellm import embedding, completion
+# import asyncio
 
 
-user_message = "respond in 20 words. who are you?"
-messages = [{ "content": user_message,"role": "user"}]
+# user_message = "respond in 20 words. who are you?"
+# messages = [{ "content": user_message,"role": "user"}]
 
-def test_completion_ollama():
-    try:
-        response = completion(
-            model="ollama/llama2", 
-            messages=messages, 
-            max_tokens=200,
-            request_timeout = 10,
+# def test_completion_ollama():
+#     try:
+#         response = completion(
+#             model="ollama/llama2", 
+#             messages=messages, 
+#             max_tokens=200,
+#             request_timeout = 10,
 
-        )
-        print(response)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
+#         )
+#         print(response)
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
 
-test_completion_ollama()
+# test_completion_ollama()
 
 # def test_completion_ollama_with_api_base():
 #     try:
