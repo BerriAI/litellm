@@ -1093,8 +1093,11 @@ async def model_info(request: Request):
         data = copy.deepcopy(model["litellm_params"])
         data["messages"] = [{"role": "user", "content": "Hey, how's it going?"}]
         data["max_tokens"] = 10
+        print(f"data going to litellm acompletion: {data}")
         response = await litellm.acompletion(**data)
-        litellm_model_info = litellm.model_cost.get(response["model"], {})
+        response_model = response["model"]
+        print(f"response model: {response_model}; response - {response}")
+        litellm_model_info = litellm.get_model_info(response_model)
         model_info = model.get("model_info", {})
         for k, v in litellm_model_info.items(): 
             if k not in model_info: 
