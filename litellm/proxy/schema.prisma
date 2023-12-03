@@ -15,4 +15,5 @@ model LiteLLM_VerificationToken {
     models     String[]
     aliases    Json  @default("{}")
     config     Json  @default("{}")
+    user_id    String?
 }

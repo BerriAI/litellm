@@ -5,7 +5,7 @@ import traceback
 
 
 litellm_client = AsyncOpenAI(
-    api_key="test",
+    api_key="sk-1234",
     base_url="http://0.0.0.0:8000"
 )
 
@@ -17,7 +17,6 @@ async def litellm_completion():
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": f"This is a test: {uuid.uuid4()}"}],
         )
-        print(response)
         return response
 
     except Exception as e:
