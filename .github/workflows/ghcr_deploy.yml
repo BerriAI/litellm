@@ -2,9 +2,10 @@
 name: Create and publish a Docker image
 
 on:
-  push:
-    branches:
-      - 'main'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "The tag version you want to build"
 
 # Defines two custom environment variables for the workflow. Used for the Container registry domain, and a name for the Docker image that this workflow builds.
 env:
