@@ -103,16 +103,11 @@ class Completions():
   
   def __init__(self, model, params):
     self.params = params
-    self.model = model 
 
   def create(self, messages, model=None, **kwargs):
-    if model is None:
-        if self.model is not None:
-            model = self.model
-        else:
-            raise ValueError("a value for `model` is required)
     for k, v in kwargs.items():
         self.params[k] = v
+    model = model or self.params.get('model')
     response = completion(model=model, messages=messages, **self.params)
     return response  
 
