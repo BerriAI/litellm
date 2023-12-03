@@ -1086,8 +1086,21 @@ async def model_info(request: Request):
     all_models = config['model_list']
 
     for model in all_models:
+        # get the model cost map info 
+        ## make an api call
+        data = copy.deepcopy(model["litellm_params"])
+        data["messages"] = [{"role": "user", "content": "Hey, how's it going?"}]
+        data["max_tokens"] = 10
+        response = await litellm.acompletion(**data)
+        litellm_model_info = litellm.model_cost.get(response["model"], {})
+        model_info = model.get("model_info", {})
+        for k, v in litellm_model_info.items(): 
+            if k not in model_info: 
+                model_info[k] = v
+        model["model_info"] = model_info
         # don't return the api key
         model["litellm_params"].pop("api_key", None)
+        
     # all_models = list(set([m["model_name"] for m in llm_model_list]))
     print_verbose(f"all_models: {all_models}")
     return dict(
