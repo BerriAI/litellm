@@ -1,6 +1,5 @@
 #
-name: Create and publish a Docker image
-
+name: Build & Publich to GHCR
 on:
   workflow_dispatch:
     inputs:
