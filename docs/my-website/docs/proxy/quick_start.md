@@ -20,6 +20,12 @@ View all the supported args for the Proxy CLI [here](https://docs.litellm.ai/doc
 $ pip install litellm[proxy]
 ```
 
+If this fails try running
+
+```shell
+$ pip install 'litellm[proxy]'
+```
+
 ## Quick Start - LiteLLM Proxy CLI
 
 Run the following command to start the litellm proxy
@@ -126,6 +132,12 @@ docker run ghcr.io/berriai/litellm:main-v1.10.0
 Here's how you can run the docker image and pass your config to `litellm`
 ```shell
 docker run ghcr.io/berriai/litellm:main-v1.10.0 --config your_config.yaml
+```
+
+Here's how you can run the docker image and pass your host, port to `litellm`
+Start litellm on port 8002
+```shell
+docker run ghcr.io/berriai/litellm:main-v1.10.0 --port 8002 --num_workers 8
 ```
 
 ### Server Endpoints
