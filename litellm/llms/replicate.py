@@ -201,15 +201,18 @@ def completion(
         if k not in optional_params: # completion(top_k=3) > replicate_config(top_k=3) <- allows for dynamic variables to be passed in
             optional_params[k] = v
 
-    # extract system prompt
-    system_prompt = ""
-    prompt_messages = []
-    for message in messages:
-        if message["role"] == "system":
-            system_prompt = message["content"]
-        else:
-            prompt_messages += [message]
-            
+    if "llama-2" in model and "chat" in model: 
+        # extract system prompt
+        system_prompt = ""
+        prompt_messages = []
+        for message in messages:
+            if message["role"] == "system":
+                system_prompt = message["content"]
+            else:
+                prompt_messages += [message]
+    else:
+        prompt_messages = messages
+        
     # apply template if provided 
     if model in custom_prompt_dict:
         # check if the model has a registered custom prompt
@@ -225,11 +228,12 @@ def completion(
     else:
         prompt = prompt_factory(model=model, messages=prompt_messages)
 
-    input_data = {
-        "system_prompt": system_prompt, 
+    input_data = { 
         "prompt": prompt,
         **optional_params
     }
+    if "llama-2" in model and "chat" in model:
+        input_data["system_prompt"] = system_prompt
 
 
     ## COMPLETION CALL
