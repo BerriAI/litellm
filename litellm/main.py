@@ -262,7 +262,7 @@ def completion(
     presence_penalty: Optional[float] = None,
     frequency_penalty: Optional[float]=None,
     logit_bias: Optional[dict] = None,
-    user: str = "",
+    user: Optional[str] = None,
     # openai v1.0+ new params
     response_format: Optional[dict] = None,
     seed: Optional[int] = None,
