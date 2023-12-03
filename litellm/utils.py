@@ -2703,6 +2703,13 @@ def get_model_info(model: str):
         except requests.exceptions.RequestException as e:
             return None
     try:
+        azure_llms = {
+            "gpt-35-turbo": "azure/gpt-3.5-turbo",
+            "gpt-35-turbo-16k": "azure/gpt-3.5-turbo-16k",
+            "gpt-35-turbo-instruct": "azure/gpt-3.5-turbo-instruct"
+        }
+        if model in azure_llms: 
+            model = azure_llms[model]
         if model in litellm.model_cost:
             return litellm.model_cost[model]
         model, custom_llm_provider, _, _ =  get_llm_provider(model=model)
