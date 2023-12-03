@@ -98,17 +98,23 @@ class Chat():
   def __init__(self, params):
     self.params = params
     self.completions = Completions(self.params)
-
+      
 class Completions():
   
-  def __init__(self, params):
+  def __init__(self, model, params):
     self.params = params
+    self.model = model 
 
-  def create(self, model, messages, **kwargs):
+  def create(self, messages, model=None, **kwargs):
+    if model is None:
+        if self.model is not None:
+            model = self.model
+        else:
+            raise ValueError("a value for `model` is required)
     for k, v in kwargs.items():
         self.params[k] = v
     response = completion(model=model, messages=messages, **self.params)
-    return response
+    return response  
 
 @client
 async def acompletion(*args, **kwargs):
