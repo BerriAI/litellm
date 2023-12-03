@@ -837,7 +837,7 @@ async def completion(request: Request, model: Optional[str] = None, user_api_key
         except: 
             data = json.loads(body_str)
         
-        data["user_id"] = user_api_key_dict.get("user_id", None)
+        data["user"] = user_api_key_dict.get("user_id", None)
         data["model"] = (
             general_settings.get("completion_model", None) # server default
             or user_model # model name passed via cli args
@@ -886,7 +886,7 @@ async def chat_completion(request: Request, model: Optional[str] = None, user_ap
             or data["model"] # default passed in http request
         )
 
-        data["user_id"] = user_api_key_dict.get("user_id", None)
+        data["user"] = user_api_key_dict.get("user_id", None)
 
         if "metadata" in data:
             data["metadata"]["user_api_key"] = user_api_key_dict["api_key"]
@@ -949,7 +949,7 @@ async def embeddings(request: Request, user_api_key_dict: dict = Depends(user_ap
         body = await request.body()
         data = orjson.loads(body)
 
-        data["user_id"] = user_api_key_dict.get("user_id", None)
+        data["user"] = user_api_key_dict.get("user_id", None)
         data["model"] = (
             general_settings.get("embedding_model", None) # server default
             or user_model # model name passed via cli args
