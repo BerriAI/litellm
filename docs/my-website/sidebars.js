@@ -87,7 +87,7 @@ const sidebars = {
     },
     {
       type: "category",
-      label: "💥 OpenAI Proxy",
+      label: "💥 OpenAI Proxy Server",
       link: {
         type: 'generated-index',
         title: '💥 OpenAI Proxy Server',
