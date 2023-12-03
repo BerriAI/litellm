@@ -101,7 +101,7 @@ class Chat():
       
 class Completions():
   
-  def __init__(self, model, params):
+  def __init__(self, params):
     self.params = params
 
   def create(self, messages, model=None, **kwargs):
