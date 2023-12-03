@@ -201,6 +201,8 @@ class ModelParams(BaseModel):
     model_name: str
     litellm_params: dict
     model_info: Optional[dict]
+    class Config:
+        protected_namespaces = ()
 
 class GenerateKeyRequest(BaseModel):
     duration: str = "1h"
@@ -1086,8 +1088,24 @@ async def model_info(request: Request):
     all_models = config['model_list']
 
     for model in all_models:
+        # get the model cost map info 
+        ## make an api call
+        data = copy.deepcopy(model["litellm_params"])
+        data["messages"] = [{"role": "user", "content": "Hey, how's it going?"}]
+        data["max_tokens"] = 10
+        print(f"data going to litellm acompletion: {data}")
+        response = await litellm.acompletion(**data)
+        response_model = response["model"]
+        print(f"response model: {response_model}; response - {response}")
+        litellm_model_info = litellm.get_model_info(response_model)
+        model_info = model.get("model_info", {})
+        for k, v in litellm_model_info.items(): 
+            if k not in model_info: 
+                model_info[k] = v
+        model["model_info"] = model_info
         # don't return the api key
         model["litellm_params"].pop("api_key", None)
+        
     # all_models = list(set([m["model_name"] for m in llm_model_list]))
     print_verbose(f"all_models: {all_models}")
     return dict(
