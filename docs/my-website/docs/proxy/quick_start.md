@@ -177,7 +177,7 @@ Run the command `docker-compose up` or `docker compose up` as per your docker in
 > Use `-d` flag to run the container in detached mode (background) e.g. `docker compose up -d`
 
 
-Your LiteLLM container should be running now.
+Your LiteLLM container should be running now on the defined port e.g. `8000`.
 
 ## Server Endpoints
 - POST `/chat/completions` - chat completions endpoint to call 100+ LLMs
