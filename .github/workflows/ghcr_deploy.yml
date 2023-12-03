@@ -45,5 +45,5 @@ jobs:
         with:
           context: .
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          tags: ${{ steps.meta.outputs.tags }}-${{ github.event.inputs.tag }}  # Add the input tag to the image tags
           labels: ${{ steps.meta.outputs.labels }}
