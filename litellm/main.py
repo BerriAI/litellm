@@ -1476,7 +1476,7 @@ def batch_completion(
     presence_penalty: Optional[float] = None,
     frequency_penalty: Optional[float]=None,
     logit_bias: Optional[dict] = None,
-    user: str = "",
+    user: Optional[str] = None,
     deployment_id = None,
     request_timeout: Optional[int] = None,
     # Optional liteLLM function params
