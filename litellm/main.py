@@ -30,7 +30,8 @@ from litellm.utils import (
     get_api_key,
     mock_completion_streaming_obj, 
     convert_to_model_response_object, 
-    token_counter
+    token_counter, 
+    Usage
 )
 from .llms import (
     anthropic,
@@ -1288,11 +1289,7 @@ def completion(
             model_response["model"] = "ollama/" + model
             prompt_tokens = len(encoding.encode(prompt)) # type: ignore
             completion_tokens = len(encoding.encode(response_string))
-            model_response["usage"] = {
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "total_tokens": prompt_tokens + completion_tokens,
-            }
+            model_response["usage"] = Usage(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens, total_tokens=prompt_tokens + completion_tokens)
             response = model_response
         elif (
             custom_llm_provider == "baseten"
