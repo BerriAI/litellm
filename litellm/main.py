@@ -1736,6 +1736,7 @@ def embedding(
     api_key: Optional[str] = None,
     api_type: Optional[str] = None,
     caching: bool=False,
+    user: Optional[str]=None,
     custom_llm_provider=None,
     litellm_call_id=None, 
     litellm_logging_obj=None,
