@@ -22,4 +22,9 @@ RUN pip install --no-cache-dir --find-links=wheels -r requirements.txt
 EXPOSE 4000/tcp
 
 # Start the litellm proxy, using the `litellm` cli command https://docs.litellm.ai/docs/simple_proxy
-CMD ["litellm", "--port", "4000"]
+
+# Start the litellm proxy with default options
+CMD ["--port", "4000"]
+
+# Allow users to override the CMD when running the container, allows users to pass litellm args 
+ENTRYPOINT ["litellm"]
