@@ -411,7 +411,7 @@ def track_cost_callback(
             response_cost = litellm.completion_cost(completion_response=completion_response, completion=input_text)
             print("regular response_cost", response_cost)
         user_api_key = kwargs["litellm_params"]["metadata"].get("user_api_key", None)
-        if user_api_key: 
+        if user_api_key and prisma_client: 
             # asyncio.run(update_prisma_database(user_api_key, response_cost))
             # Create new event loop for async function execution in the new thread
             new_loop = asyncio.new_event_loop()
@@ -565,7 +565,12 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
                 run_ollama_serve()
     return router, model_list, general_settings
 
-async def generate_key_helper_fn(duration_str: Optional[str], models: list, aliases: dict, config: dict, spend: float, token: Optional[str], user_id: Optional[str]=None):
+async def generate_key_helper_fn(duration_str: Optional[str], models: list, aliases: dict, config: dict, spend: float, token: Optional[str]=None, user_id: Optional[str]=None):
+    global prisma_client
+
+    if prisma_client is None: 
+        raise Exception(f"Connect Proxy to database to generate keys - https://docs.litellm.ai/docs/proxy/virtual_keys ")
+    
     if token is None:
         token = f"sk-{secrets.token_urlsafe(16)}"
     
@@ -1006,13 +1011,7 @@ async def delete_key_fn(request: Request, data: DeleteKeyRequest):
     try: 
         data = await request.json()
 
-        keys = data.get("keys", [])
-
-        if not isinstance(keys, list):
-            if isinstance(keys, str): 
-                keys = [keys]
-            else: 
-                raise Exception(f"keys must be an instance of either a string or a list")
+        keys = data.keys
         
         deleted_keys = await delete_verification_token(tokens=keys)
         assert len(keys) == deleted_keys
