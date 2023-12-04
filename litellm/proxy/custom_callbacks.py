@@ -1,5 +1,8 @@
 from litellm.integrations.custom_logger import CustomLogger
 import litellm
+
+# This file includes the custom callbacks for LiteLLM Proxy
+# Once defined, these can be passed in proxy_config.yaml
 class MyCustomHandler(CustomLogger):
     def log_pre_api_call(self, model, messages, kwargs): 
         print(f"Pre-API Call")
@@ -11,14 +14,17 @@ class MyCustomHandler(CustomLogger):
         print(f"On Stream")
         
     def log_success_event(self, kwargs, response_obj, start_time, end_time): 
-        print(f"On Success")
         # log: key, user, model, prompt, response, tokens, cost
+        print("\nOn Success\n")
         print("\n kwargs\n")
         print(kwargs)
         ### Access kwargs passed to litellm.completion()
         model = kwargs["model"]
         messages = kwargs["messages"]
-        user = kwargs.get("user")
+        user = kwargs.get("user", None)
+
+        litellm_params = kwargs.get("litellm_params", {})
+        metadata = litellm_params.get("metadata", {})   # headers passed to LiteLLM proxy, can be found here
         #################################################
 
         ### Calculate cost #######################
@@ -35,6 +41,7 @@ class MyCustomHandler(CustomLogger):
                 Usage: {usage},
                 Cost: {cost},
                 Response: {response}
+                Proxy Metadata: {metadata}
             """
         )
 
