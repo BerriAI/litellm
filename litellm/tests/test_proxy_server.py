@@ -164,4 +164,17 @@ def test_chat_completion_optional_params():
         pytest.fail("LiteLLM Proxy test failed. Exception", e)
 
 # Run the test
-test_chat_completion_optional_params()
+# test_chat_completion_optional_params()
+
+# Test Reading config.yaml file 
+from litellm.proxy.proxy_server import load_router_config
+
+def test_load_router_config():
+    try:
+        print("testing reading config")
+        result = load_router_config(router=None, config_file_path="../proxy/example_config_yaml/simple_config.yaml")
+        print(result)
+        assert len(result[1]) == 1
+    except Exception as e:
+        pytest.fail("Proxy: Got exception reading config", e)
+# test_load_router_config()
