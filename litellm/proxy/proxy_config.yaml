@@ -3,6 +3,9 @@ model_list:
     litellm_params:
       model: gpt-3.5-turbo
 
+litellm_settings:
+  callbacks: [custom_logger.customHandler] # sets litellm.callbacks = [module.module_variable]
+
 general_settings: 
   # otel: True          # OpenTelemetry Logger
   # master_key: sk-1234 # [OPTIONAL] Only use this if you to require all calls to contain this key (Authorization: Bearer sk-1234)
