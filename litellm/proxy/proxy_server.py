@@ -117,7 +117,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-def log_input_output(request, response):  
+def log_input_output(request, response, custom_logger=None):  
+    if custom_logger is not None:
+        custom_logger(request, response)
     global otel_logging
     if otel_logging != True:
         return
