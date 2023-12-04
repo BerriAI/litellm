@@ -28,23 +28,20 @@ class MyCustomHandler(CustomLogger):
         print(f"On Stream")
         
     def log_success_event(self, kwargs, response_obj, start_time, end_time): 
-        # log: key, user, model, prompt, response, tokens, cost
+        # Logging key details: key, user, model, prompt, response, tokens, cost
         print("\nOn Success")
-        ### Access kwargs passed to litellm.completion()
+        # Access kwargs passed to litellm.completion()
         model = kwargs.get("model", None)
         messages = kwargs.get("messages", None)
         user = kwargs.get("user", None)
 
-        #### Access litellm_params passed to litellm.completion(), example access `metadata`
+        # Access litellm_params passed to litellm.completion(), example access `metadata`
         litellm_params = kwargs.get("litellm_params", {})
-        metadata = litellm_params.get("metadata", {})   # headers passed to LiteLLM proxy, can be found here
-        #################################################
+        metadata = litellm_params.get("metadata", {}) # Headers passed to LiteLLM proxy
 
-        ##### Calculate cost using  litellm.completion_cost() #######################
+        # Calculate cost using litellm.completion_cost()
         cost = litellm.completion_cost(completion_response=response_obj)
-        response = response_obj
-        # tokens used in response 
-        usage = response_obj["usage"]
+        usage = response_obj["usage"] # Tokens used in response
 
         print(
             f"""
@@ -64,6 +61,7 @@ class MyCustomHandler(CustomLogger):
 
 proxy_handler_instance = MyCustomHandler()
 
+# Set litellm.callbacks = [proxy_handler_instance] on the proxy
 # need to set litellm.callbacks = [proxy_handler_instance] # on the proxy
 ```
 
