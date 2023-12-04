@@ -544,7 +544,8 @@ class Logging:
             "optional_params": self.optional_params,
             "litellm_params": self.litellm_params,
             "start_time": self.start_time,
-            "stream": self.stream
+            "stream": self.stream,
+            **self.optional_params
         }
 
     def pre_call(self, input, api_key, model=None, additional_args={}):
