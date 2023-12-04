@@ -5125,7 +5125,7 @@ class CustomStreamWrapper:
     def chunk_creator(self, chunk):
         model_response = ModelResponse(stream=True, model=self.model)
         model_response.choices[0].finish_reason = None
-        response_obj = None
+        response_obj = {}
         try:
             # return this for all models
             completion_obj = {"content": ""}
