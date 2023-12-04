@@ -1053,9 +1053,12 @@ def test_completion_chat_sagemaker():
         response = completion(
             model="sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b-f", 
             messages=messages,
+            stream=True,
         )
         # Add any assertions here to check the response
         print(response)
+        for chunk in response:
+            print(chunk)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 # test_completion_chat_sagemaker()
