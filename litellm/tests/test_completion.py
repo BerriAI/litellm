@@ -505,7 +505,7 @@ def test_completion_openai_with_optional_params():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_completion_openai_with_optional_params()
+# test_completion_openai_with_optional_params()
 
 def test_completion_openai_litellm_key():
     try:
