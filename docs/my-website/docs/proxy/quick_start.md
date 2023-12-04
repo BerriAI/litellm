@@ -87,69 +87,8 @@ print(response)
 
 </Tabs>
 
-## Quick Start - LiteLLM Proxy + Config.yaml
-The config allows you to create a model list and set `api_base`, `max_tokens` (all litellm params). See more details about the config [here](https://docs.litellm.ai/docs/proxy/configs)
 
-### Create a Config for LiteLLM Proxy
-Example config
-
-```yaml
-model_list:
-  - model_name: gpt-3.5-turbo
-    litellm_params:
-      model: azure/<your-deployment-name>
-      api_base: <your-azure-api-endpoint>
-      api_key: <your-azure-api-key>
-  - model_name: gpt-3.5-turbo
-    litellm_params:
-      model: azure/gpt-turbo-small-ca
-      api_base: https://my-endpoint-canada-berri992.openai.azure.com/
-      api_key: <your-azure-api-key>
-```
-
-### Run proxy with config
-
-```shell
-litellm --config your_config.yaml
-```
-
-## Quick Start Docker Image: Github Container Registry
-
-### Pull the litellm ghcr docker image
-See the latest available ghcr docker image here:
-https://github.com/berriai/litellm/pkgs/container/litellm
-
-```shell
-docker pull ghcr.io/berriai/litellm:main-v1.10.1
-```
-
-### Run the Docker Image
-```shell
-docker run ghcr.io/berriai/litellm:main-v1.10.0
-```
-
-#### Run the Docker Image with LiteLLM CLI args
-
-See all supported CLI args [here](https://docs.litellm.ai/docs/proxy/cli): 
-
-Here's how you can run the docker image and pass your config to `litellm`
-```shell
-docker run ghcr.io/berriai/litellm:main-v1.10.0 --config your_config.yaml
-```
-
-Here's how you can run the docker image and start litellm on port 8002 with `num_workers=8`
-```shell
-docker run ghcr.io/berriai/litellm:main-v1.10.0 --port 8002 --num_workers 8
-```
-
-## Server Endpoints
-- POST `/chat/completions` - chat completions endpoint to call 100+ LLMs
-- POST `/completions` - completions endpoint
-- POST `/embeddings` - embedding endpoint for Azure, OpenAI, Huggingface endpoints
-- GET `/models` - available models on server
-- POST `/key/generate` - generate a key to access the proxy
-
-## Supported LLMs
+### Supported LLMs
 All LiteLLM supported LLMs are supported on the Proxy. Seel all [supported llms](https://docs.litellm.ai/docs/providers)
 <Tabs>
 <TabItem value="bedrock" label="AWS Bedrock">
@@ -300,6 +239,68 @@ $ litellm --model command-nightly
 
 </Tabs>
 
+
+## Quick Start - LiteLLM Proxy + Config.yaml
+The config allows you to create a model list and set `api_base`, `max_tokens` (all litellm params). See more details about the config [here](https://docs.litellm.ai/docs/proxy/configs)
+
+### Create a Config for LiteLLM Proxy
+Example config
+
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: azure/<your-deployment-name>
+      api_base: <your-azure-api-endpoint>
+      api_key: <your-azure-api-key>
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: azure/gpt-turbo-small-ca
+      api_base: https://my-endpoint-canada-berri992.openai.azure.com/
+      api_key: <your-azure-api-key>
+```
+
+### Run proxy with config
+
+```shell
+litellm --config your_config.yaml
+```
+
+## Quick Start Docker Image: Github Container Registry
+
+### Pull the litellm ghcr docker image
+See the latest available ghcr docker image here:
+https://github.com/berriai/litellm/pkgs/container/litellm
+
+```shell
+docker pull ghcr.io/berriai/litellm:main-v1.10.1
+```
+
+### Run the Docker Image
+```shell
+docker run ghcr.io/berriai/litellm:main-v1.10.0
+```
+
+#### Run the Docker Image with LiteLLM CLI args
+
+See all supported CLI args [here](https://docs.litellm.ai/docs/proxy/cli): 
+
+Here's how you can run the docker image and pass your config to `litellm`
+```shell
+docker run ghcr.io/berriai/litellm:main-v1.10.0 --config your_config.yaml
+```
+
+Here's how you can run the docker image and start litellm on port 8002 with `num_workers=8`
+```shell
+docker run ghcr.io/berriai/litellm:main-v1.10.0 --port 8002 --num_workers 8
+```
+
+## Server Endpoints
+- POST `/chat/completions` - chat completions endpoint to call 100+ LLMs
+- POST `/completions` - completions endpoint
+- POST `/embeddings` - embedding endpoint for Azure, OpenAI, Huggingface endpoints
+- GET `/models` - available models on server
+- POST `/key/generate` - generate a key to access the proxy
 
 ## Using with OpenAI compatible projects
 Set `base_url` to the LiteLLM Proxy server
