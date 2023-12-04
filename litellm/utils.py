@@ -5266,14 +5266,32 @@ class CustomStreamWrapper:
             print_verbose(f"model_response: {model_response}; completion_obj: {completion_obj}")
             print_verbose(f"model_response finish reason 3: {model_response.choices[0].finish_reason}")
             if len(completion_obj["content"]) > 0: # cannot set content of an OpenAI Object to be an empty string
-                hold, model_response_str = self.check_special_tokens(chunk=completion_obj["content"], finish_reason=model_response.choices[0].finish_reason)
+                hold, model_response_str = self.check_special_tokens(chunk=completion_obj["content"], finish_reason=model_response.choices[0].finish_reason) # filter out bos/eos tokens from openai-compatible hf endpoints
                 print_verbose(f"hold - {hold}, model_response_str - {model_response_str}")
                 if hold is False: 
-                    completion_obj["content"] = model_response_str  
-                    if self.sent_first_chunk == False:
-                        completion_obj["role"] = "assistant"
-                        self.sent_first_chunk = True
-                    model_response.choices[0].delta = Delta(**completion_obj)
+                    ## check if openai/azure chunk 
+                    original_chunk = response_obj.get("original_chunk", None)
+                    if original_chunk: 
+                        model_response.id = original_chunk.id
+                        if len(original_chunk.choices) > 0:
+                            try:
+                                delta = dict(original_chunk.choices[0].delta)
+                                model_response.choices[0].delta = Delta(**delta)
+                            except Exception as e:
+                                model_response.choices[0].delta = Delta()
+                        else: 
+                            return 
+                        model_response.system_fingerprint = original_chunk.system_fingerprint
+                        if self.sent_first_chunk == False:
+                            model_response.choices[0].delta["role"] = "assistant"
+                            self.sent_first_chunk = True
+                    else: 
+                        ## else 
+                        completion_obj["content"] = model_response_str  
+                        if self.sent_first_chunk == False:
+                            completion_obj["role"] = "assistant"
+                            self.sent_first_chunk = True
+                        model_response.choices[0].delta = Delta(**completion_obj)
                     # LOGGING
                     threading.Thread(target=self.logging_obj.success_handler, args=(model_response,)).start()
                     print_verbose(f"model_response: {model_response}")
