@@ -923,9 +923,10 @@ async def chat_completion(request: Request, model: Optional[str] = None, user_ap
 
         if "metadata" in data:
             data["metadata"]["user_api_key"] = user_api_key_dict["api_key"]
+            data["metadata"]["headers"] = request.headers
         else:
             data["metadata"] = {"user_api_key": user_api_key_dict["api_key"]}
-
+            data["metadata"]["headers"] = request.headers
         global user_temperature, user_request_timeout, user_max_tokens, user_api_base
         # override with user settings, these are params passed via cli
         if user_temperature: 
