@@ -4,7 +4,7 @@ model_list:
       model: gpt-3.5-turbo
 
 litellm_settings:
-  callbacks: [custom_logger.customHandler] # sets litellm.callbacks = [module.module_variable]
+  callbacks: custom_logger.proxy_handler_instance # sets litellm.callbacks = [module.module_variable]
 
 general_settings: 
   # otel: True          # OpenTelemetry Logger
