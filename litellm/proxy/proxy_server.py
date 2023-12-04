@@ -908,8 +908,10 @@ async def chat_completion(request: Request, model: Optional[str] = None, user_ap
             or model # for azure deployments
             or data["model"] # default passed in http request
         )
+
         # users can pass in 'user' param to /chat/completions. Don't override it
-        if data["user"] is None:
+        if data.get("user", None) is None:
+            # if users are using user_api_key_auth, set `user` in `data`
             data["user"] = user_api_key_dict.get("user_id", None)
 
         if "metadata" in data:
