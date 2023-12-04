@@ -1,4 +1,4 @@
-# Logging - Custom Callbacks, OpenTelemetry, Langfuse, ElasticSearch 
+# Logging - Custom Callbacks, OpenTelemetry, Langfuse
 Log Proxy Input, Output, Exceptions using Custom Callbacks, Langfuse, OpenTelemetry
 
 ## Custom Callbacks
@@ -64,9 +64,7 @@ class MyCustomHandler(CustomLogger):
 
 proxy_handler_instance = MyCustomHandler()
 
-# need to set litellm.callbacks = [customHandler] # on the proxy
-
-
+# need to set litellm.callbacks = [proxy_handler_instance] # on the proxy
 ```
 
 ### Step 2 - Pass your custom callback class in `config.yaml`
@@ -83,7 +81,7 @@ model_list:
       model: gpt-3.5-turbo
 
 litellm_settings:
-  callbacks: custom_callbacks.proxy_handler_instance # sets litellm.callbacks = [module.module_variable]
+  callbacks: custom_callbacks.proxy_handler_instance # sets litellm.callbacks = [proxy_handler_instance]
 
 ```
 
