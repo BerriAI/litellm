@@ -2421,8 +2421,7 @@ def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None, api_
             return model, custom_llm_provider, dynamic_api_key, api_base
         
         if api_key and api_key.startswith("os.environ/"): 
-            api_key_env_name = api_key.replace("os.environ/", "")
-            dynamic_api_key = get_secret(api_key_env_name)
+            dynamic_api_key = get_secret(api_key)
         # check if llm provider part of model name
         if model.split("/",1)[0] in litellm.provider_list and model.split("/",1)[0] not in litellm.model_list:
             custom_llm_provider = model.split("/", 1)[0]
@@ -4722,7 +4721,9 @@ def litellm_telemetry(data):
 ######### Secret Manager ############################
 # checks if user has passed in a secret manager client
 # if passed in then checks the secret there
-def get_secret(secret_name):
+def get_secret(secret_name: str):
+    if secret_name.startswith("os.environ/"): 
+        secret_name = secret_name.replace("os.environ/", "")
     if litellm.secret_manager_client is not None:
         # TODO: check which secret manager is being used
         # currently only supports Infisical
