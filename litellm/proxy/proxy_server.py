@@ -6,6 +6,7 @@ from typing import Optional, List
 import secrets, subprocess
 import hashlib, uuid
 import warnings
+import importlib
 messages: list = []
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -556,6 +557,24 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
                     port=cache_port,
                     password=cache_password
                 )
+            elif key == "callbacks":
+                print(f"{blue_color_code}\nSetting custom callbacks on Proxy")
+                print()
+                passed_module, instance_name = value.split(".") 
+                
+                # Dynamically import the module
+                module = importlib.import_module(passed_module)
+                # Get the instance from the module
+                instance = getattr(module, instance_name)
+
+                methods = [method for method in dir(instance) if callable(getattr(instance, method))]
+                # Print the methods
+                print("Methods in the instance:")
+                for method in methods:
+                    print(method)
+
+                litellm.callbacks = [instance]
+
             else:
                 setattr(litellm, key, value)
                 
