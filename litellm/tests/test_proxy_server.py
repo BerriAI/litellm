@@ -173,16 +173,20 @@ def test_load_router_config():
     try:
         print("testing reading config")
         # this is a basic config.yaml with only a model
-        result = load_router_config(router=None, config_file_path="../proxy/example_config_yaml/simple_config.yaml")
+        result = load_router_config(router=None, config_file_path="example_config_yaml/simple_config.yaml")
         print(result)
         assert len(result[1]) == 1
 
         # this is a load balancing config yaml
-        result = load_router_config(router=None, config_file_path="../proxy/example_config_yaml/azure_config.yaml")
+        result = load_router_config(router=None, config_file_path="example_config_yaml/azure_config.yaml")
         print(result)
         assert len(result[1]) == 2
 
+        # config with general settings - custom callbacks
+        result = load_router_config(router=None, config_file_path="example_config_yaml/azure_config.yaml")
+        print(result)
+        assert len(result[1]) == 2
 
     except Exception as e:
         pytest.fail("Proxy: Got exception reading config", e)
-test_load_router_config()
+# test_load_router_config()
