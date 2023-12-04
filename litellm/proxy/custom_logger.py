@@ -15,8 +15,13 @@ class MyCustomHandler(CustomLogger):
         # log: key, user, model, prompt, response, tokens, cost
         print("\n kwargs\n")
         print(kwargs)
+        ### Access kwargs passed to litellm.completion()
         model = kwargs["model"]
         messages = kwargs["messages"]
+        user = kwargs.get("user")
+        #################################################
+
+        ### Calculate cost #######################
         cost = litellm.completion_cost(completion_response=response_obj)
         response = response_obj
         # tokens used in response 
@@ -26,6 +31,7 @@ class MyCustomHandler(CustomLogger):
             f"""
                 Model: {model},
                 Messages: {messages},
+                User: {user},
                 Usage: {usage},
                 Cost: {cost},
                 Response: {response}
