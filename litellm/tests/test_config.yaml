@@ -1,0 +1,7 @@
+litellm_settings:
+  drop_params: True
+  set_verbose: True
+
+general_settings:
+  master_key: "os.environ/PROXY_MASTER_KEY"
+  database_url: "os.environ/PROXY_DATABASE_URL" # [OPTIONAL] use for token-based auth to proxy

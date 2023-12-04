@@ -5,8 +5,18 @@ class PrismaClient:
     def __init__(self, database_url: str):
         print("LiteLLM: DATABASE_URL Set in config, trying to 'pip install prisma'")
         os.environ["DATABASE_URL"] = database_url
-        subprocess.run(['prisma', 'generate'])
-        subprocess.run(['prisma', 'db', 'push', '--accept-data-loss']) # this looks like a weird edge case when prisma just wont start on render. we need to have the --accept-data-loss
+        # Save the current working directory
+        original_dir = os.getcwd()
+        # set the working directory to where this script is
+        abspath = os.path.abspath(__file__)
+        dname = os.path.dirname(abspath)
+        os.chdir(dname)
+
+        try:
+            subprocess.run(['prisma', 'generate'])
+            subprocess.run(['prisma', 'db', 'push', '--accept-data-loss']) # this looks like a weird edge case when prisma just wont start on render. we need to have the --accept-data-loss
+        finally:
+            os.chdir(original_dir)
         # Now you can import the Prisma Client
         from prisma import Client
         self.db = Client()  #Client to connect to Prisma db
