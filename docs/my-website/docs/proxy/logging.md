@@ -67,10 +67,14 @@ proxy_handler_instance = MyCustomHandler()
 
 ### Step 2 - Pass your custom callback class in `config.yaml`
 We pass the custom callback class defined in **Step1** to the config.yaml. 
-
 Set `callbacks` to `python_filename.logger_instance_name`
 
-In the config below, the custom callback is defined in a file`custom_callbacks.py` and has an instance of `proxy_handler_instance = MyCustomHandler()`. 
+In the config below, we pass
+- python_filename: `custom_callbacks.py`
+- logger_instance_name: `proxy_handler_instance`. This is defined in Step 1
+
+`callbacks: custom_callbacks.proxy_handler_instance`
+
 
 ```yaml
 model_list:
