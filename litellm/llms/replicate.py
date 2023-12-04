@@ -100,7 +100,7 @@ def start_prediction(version_id, input_data, api_token, api_base, logging_obj, p
     logging_obj.pre_call(
             input=input_data["prompt"],
             api_key="",
-            additional_args={"complete_input_dict": initial_prediction_data, "headers": headers},
+            additional_args={"complete_input_dict": initial_prediction_data, "headers": headers, "api_base": base_url},
     )
 
     response = requests.post(f"{base_url}/predictions", json=initial_prediction_data, headers=headers)
