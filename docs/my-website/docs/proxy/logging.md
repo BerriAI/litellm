@@ -1,5 +1,125 @@
-# Logging - OpenTelemetry, Langfuse, ElasticSearch 
-Log Proxy Input, Output, Exceptions to Langfuse, OpenTelemetry
+# Logging - Custom Callbacks, OpenTelemetry, Langfuse, ElasticSearch 
+Log Proxy Input, Output, Exceptions using Custom Callbacks, Langfuse, OpenTelemetry
+
+## Custom Callbacks
+Use this when you want to run custom callbacks in `python`
+
+### Step 1 - Create your custom `litellm` callback class
+We use `litellm.integrations.custom_logger` for this, **more details about litellm custom callbacks [here](https://docs.litellm.ai/docs/observability/custom_callback)**
+
+Define your custom callback class in a python file.
+
+Here's an example custom logger for tracking `key, user, model, prompt, response, tokens, cost`. We create a file called `custom_callbacks.py` and initialize `proxy_handler_instance` 
+
+```python
+from litellm.integrations.custom_logger import CustomLogger
+import litellm
+
+# This file includes the custom callbacks for LiteLLM Proxy
+# Once defined, these can be passed in proxy_config.yaml
+class MyCustomHandler(CustomLogger):
+    def log_pre_api_call(self, model, messages, kwargs): 
+        print(f"Pre-API Call")
+    
+    def log_post_api_call(self, kwargs, response_obj, start_time, end_time): 
+        print(f"Post-API Call")
+
+    def log_stream_event(self, kwargs, response_obj, start_time, end_time):
+        print(f"On Stream")
+        
+    def log_success_event(self, kwargs, response_obj, start_time, end_time): 
+        # log: key, user, model, prompt, response, tokens, cost
+        print("\nOn Success")
+        ### Access kwargs passed to litellm.completion()
+        model = kwargs.get("model", None)
+        messages = kwargs.get("messages", None)
+        user = kwargs.get("user", None)
+
+        #### Access litellm_params passed to litellm.completion(), example access `metadata`
+        litellm_params = kwargs.get("litellm_params", {})
+        metadata = litellm_params.get("metadata", {})   # headers passed to LiteLLM proxy, can be found here
+        #################################################
+
+        ##### Calculate cost using  litellm.completion_cost() #######################
+        cost = litellm.completion_cost(completion_response=response_obj)
+        response = response_obj
+        # tokens used in response 
+        usage = response_obj["usage"]
+
+        print(
+            f"""
+                Model: {model},
+                Messages: {messages},
+                User: {user},
+                Usage: {usage},
+                Cost: {cost},
+                Response: {response}
+                Proxy Metadata: {metadata}
+            """
+        )
+        return
+
+    def log_failure_event(self, kwargs, response_obj, start_time, end_time): 
+        print(f"On Failure")
+
+proxy_handler_instance = MyCustomHandler()
+
+# need to set litellm.callbacks = [customHandler] # on the proxy
+
+
+```
+
+### Step 2 - Pass your custom callback class in `config.yaml`
+We pass the custom callback class defined in **Step1** to the config.yaml. 
+
+Set `callbacks` to `python_filename.logger_instance_name`
+
+In the config below, the custom callback is defined in a file`custom_callbacks.py` and has an instance of `proxy_handler_instance = MyCustomHandler()`. 
+
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+
+litellm_settings:
+  callbacks: custom_callbacks.proxy_handler_instance # sets litellm.callbacks = [module.module_variable]
+
+```
+
+### Step 3 - Start proxy + test request
+```shell
+litellm --config proxy_config.yaml
+```
+
+```shell
+curl --location 'http://0.0.0.0:8000/chat/completions' \
+    --header 'Authorization: Bearer sk-1234' \
+    --data ' {
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "good morning good sir"
+        }
+    ],
+    "user": "ishaan-app",
+    "temperature": 0.2
+    }'
+```
+
+#### Resulting Log on Proxy
+```shell
+On Success
+    Model: gpt-3.5-turbo,
+    Messages: [{'role': 'user', 'content': 'good morning good sir'}],
+    User: ishaan-app,
+    Usage: {'completion_tokens': 10, 'prompt_tokens': 11, 'total_tokens': 21},
+    Cost: 3.65e-05,
+    Response: {'id': 'chatcmpl-8S8avKJ1aVBg941y5xzGMSKrYCMvN', 'choices': [{'finish_reason': 'stop', 'index': 0, 'message': {'content': 'Good morning! How can I assist you today?', 'role': 'assistant'}}], 'created': 1701716913, 'model': 'gpt-3.5-turbo-0613', 'object': 'chat.completion', 'system_fingerprint': None, 'usage': {'completion_tokens': 10, 'prompt_tokens': 11, 'total_tokens': 21}}
+    Proxy Metadata: {'user_api_key': None, 'headers': Headers({'host': '0.0.0.0:8000', 'user-agent': 'curl/7.88.1', 'accept': '*/*', 'authorization': 'Bearer sk-1234', 'content-length': '199', 'content-type': 'application/x-www-form-urlencoded'}), 'model_group': 'gpt-3.5-turbo', 'deployment': 'gpt-3.5-turbo-ModelID-gpt-3.5-turbo'}
+```
+
 ## OpenTelemetry, ElasticSearch
 
 ### Step 1 Start OpenTelemetry Collecter Docker Container

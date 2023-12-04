@@ -15,19 +15,18 @@ class MyCustomHandler(CustomLogger):
         
     def log_success_event(self, kwargs, response_obj, start_time, end_time): 
         # log: key, user, model, prompt, response, tokens, cost
-        print("\nOn Success\n")
-        print("\n kwargs\n")
-        print(kwargs)
+        print("\nOn Success")
         ### Access kwargs passed to litellm.completion()
-        model = kwargs["model"]
-        messages = kwargs["messages"]
+        model = kwargs.get("model", None)
+        messages = kwargs.get("messages", None)
         user = kwargs.get("user", None)
 
+        #### Access litellm_params passed to litellm.completion(), example access `metadata`
         litellm_params = kwargs.get("litellm_params", {})
         metadata = litellm_params.get("metadata", {})   # headers passed to LiteLLM proxy, can be found here
         #################################################
 
-        ### Calculate cost #######################
+        ##### Calculate cost using  litellm.completion_cost() #######################
         cost = litellm.completion_cost(completion_response=response_obj)
         response = response_obj
         # tokens used in response 
@@ -44,9 +43,7 @@ class MyCustomHandler(CustomLogger):
                 Proxy Metadata: {metadata}
             """
         )
-
-        print(usage)
-
+        return
 
     def log_failure_event(self, kwargs, response_obj, start_time, end_time): 
         print(f"On Failure")
