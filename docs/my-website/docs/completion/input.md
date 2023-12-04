@@ -6,7 +6,7 @@ import TabItem from '@theme/TabItem';
 ## Common Params 
 LiteLLM accepts and translates the [OpenAI Chat Completion params](https://platform.openai.com/docs/api-reference/chat/create) across all providers. 
 
-### usage
+### Usage
 ```python
 import litellm
 
@@ -23,7 +23,7 @@ response = litellm.completion(
 print(response)
 ```
 
-### translated OpenAI params
+### Translated OpenAI params
 This is a list of openai params we translate across providers.
 
 This list is constantly being updated.
