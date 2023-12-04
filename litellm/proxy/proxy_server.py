@@ -564,7 +564,6 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
                 )
             elif key == "callbacks":
                 print(f"{blue_color_code}\nSetting custom callbacks on Proxy")
-                print()
                 passed_module, instance_name = value.split(".") 
                 
                 # Dynamically import the module
@@ -574,11 +573,12 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
 
                 methods = [method for method in dir(instance) if callable(getattr(instance, method))]
                 # Print the methods
-                print("Methods in the instance:")
+                print("Methods in the custom callbacks instance:")
                 for method in methods:
                     print(method)
 
                 litellm.callbacks = [instance]
+                print()
 
             else:
                 setattr(litellm, key, value)
