@@ -40,7 +40,7 @@ This list is constantly being updated.
 |AI21| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |   |
 |VertexAI| ✅ | ✅ |  | ✅ |  |  |  |  |  |   |
 |Bedrock| ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |  |   |
-|Sagemaker| ✅ | ✅ |  | ✅ |  |  |  |  |  |   |
+|Sagemaker| ✅ | ✅ (only `jumpstart llama2`) |  | ✅ |  |  |  |  |  |   |
 |TogetherAI| ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |  |   |
 |AlephAlpha| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |   |  |   |
 |Palm| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |  |   |
