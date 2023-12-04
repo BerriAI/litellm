@@ -5232,6 +5232,7 @@ class CustomStreamWrapper:
                 time.sleep(0.05)
             elif self.custom_llm_provider == "palm":
                 # fake streaming
+                response_obj = {}
                 if len(self.completion_stream)==0:
                     if self.sent_last_chunk: 
                         raise StopIteration
