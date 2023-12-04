@@ -182,6 +182,17 @@ response = embedding(
     input=["good morning from litellm"]
 )
 ```
+### Usage - Custom API Base
+```python
+from litellm import embedding
+import os
+os.environ['HUGGINGFACE_API_KEY'] = ""
+response = embedding(
+    model='huggingface/microsoft/codebert-base', 
+    input=["good morning from litellm"],
+    api_base = "https://p69xlsj6rpno5drq.us-east-1.aws.endpoints.huggingface.cloud"
+)
+```
 
 | Model Name            | Function Call | Required OS Variables                        |
 |-----------------------|--------------------------------------------------------------|-------------------------------------------------|
