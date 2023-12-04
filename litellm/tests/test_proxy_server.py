@@ -45,7 +45,7 @@ def test_chat_completion():
         pytest.fail("LiteLLM Proxy test failed. Exception", e)
 
 # Run the test
-test_chat_completion()
+# test_chat_completion()
 
 
 def test_chat_completion_azure():
@@ -119,4 +119,49 @@ def test_add_new_model():
     except Exception as e: 
         pytest.fail(f"LiteLLM Proxy test failed. Exception {str(e)}")
 
-test_add_new_model()
+# test_add_new_model()
+
+from litellm.integrations.custom_logger import CustomLogger
+class MyCustomHandler(CustomLogger):
+    def log_pre_api_call(self, model, messages, kwargs): 
+        print(f"Pre-API Call")
+
+    def log_success_event(self, kwargs, response_obj, start_time, end_time): 
+        print(f"On Success")
+        assert kwargs["user"] == "proxy-user"
+        assert kwargs["model"] == "gpt-3.5-turbo"
+        assert kwargs["max_tokens"] == 10
+
+customHandler = MyCustomHandler()
+
+
+def test_chat_completion_optional_params():
+    # [PROXY: PROD TEST] - DO NOT DELETE
+    # This tests if all the /chat/completion params are passed to litellm
+
+    try:
+        # Your test data
+        litellm.set_verbose=True
+        test_data = {
+            "model": "gpt-3.5-turbo",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "hi"
+                },
+            ],
+            "max_tokens": 10,
+            "user": "proxy-user"
+        }
+        
+        litellm.callbacks = [customHandler]
+        print("testing proxy server: optional params")
+        response = client.post("/v1/chat/completions", json=test_data)
+        assert response.status_code == 200
+        result = response.json()
+        print(f"Received response: {result}")
+    except Exception as e:
+        pytest.fail("LiteLLM Proxy test failed. Exception", e)
+
+# Run the test
+test_chat_completion_optional_params()
