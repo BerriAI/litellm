@@ -74,7 +74,8 @@ def test_exception_raising():
 
 
 def test_reading_key_from_model_list():
-	# this tests if the router raises an exception when invalid params are set
+	# [PROD TEST CASE]
+	# this tests if the router can read key from model list and make completion call, and completion + stream call. This is 90% of the router use case
 	# DO NOT REMOVE THIS TEST. It's an IMP ONE. Speak to Ishaan, if you are tring to remove this
 	litellm.set_verbose=False
 	import openai
@@ -112,6 +113,23 @@ def test_reading_key_from_model_list():
 				}
 			]
 		)
+		print("\n response", response)
+
+		print("\n Testing streaming response")
+		response = router.completion(
+			model="gpt-3.5-turbo",
+			messages=[
+				{
+					"role": "user",
+					"content": "hello this request will fail"
+				}
+			],
+			stream=True
+		)
+		for chunk in response:
+			if chunk is not None:
+				print(chunk)
+		print("\n Passed Streaming")
 		os.environ["AZURE_API_KEY"] = old_api_key
 		router.reset()
 	except Exception as e:
