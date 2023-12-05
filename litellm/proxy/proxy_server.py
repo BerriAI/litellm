@@ -219,7 +219,6 @@ async def user_api_key_auth(request: Request, api_key: str = fastapi.Security(ap
         if isinstance(api_key, str): 
             assert api_key.startswith("Bearer ") # ensure Bearer token passed in
             api_key = api_key.replace("Bearer ", "") # extract the token
-        print(f"api_key: {api_key}; master_key: {master_key}; user_custom_auth: {user_custom_auth}")
         ### USER-DEFINED AUTH FUNCTION ###
         if user_custom_auth:
             response = await user_custom_auth(request=request, api_key=api_key)
