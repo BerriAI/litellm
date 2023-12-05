@@ -43,7 +43,7 @@ litellm --test
 
 This will now automatically route any requests for gpt-3.5-turbo to bigcode starcoder, hosted on huggingface inference endpoints. 
 
-### Using LiteLLM Proxy - Curl Request, OpenAI Package
+### Using LiteLLM Proxy - Curl Request, OpenAI Package, Langchain, Langchain JS
 
 <Tabs>
 <TabItem value="Curl" label="Curl Request">
@@ -84,7 +84,38 @@ print(response)
 
 ```
 </TabItem>
+<TabItem value="langchain" label="Langchain">
 
+```python
+from langchain.chat_models import ChatOpenAI
+from langchain.prompts.chat import (
+    ChatPromptTemplate,
+    HumanMessagePromptTemplate,
+    SystemMessagePromptTemplate,
+)
+from langchain.schema import HumanMessage, SystemMessage
+
+chat = ChatOpenAI(
+    openai_api_base="http://0.0.0.0:8000",
+    model = "gpt-3.5-turbo",
+    temperature=0.1
+)
+
+messages = [
+    SystemMessage(
+        content="You are a helpful assistant that im using to make a test request to."
+    ),
+    HumanMessage(
+        content="test from litellm. tell me why it's amazing in 1 sentence"
+    ),
+]
+response = chat(messages)
+
+print(response)
+
+```
+
+</TabItem>
 </Tabs>
 
 
@@ -474,37 +505,4 @@ curl -X POST \
 https://api.openai.com/v1/chat/completions \
 -H 'content-type: application/json' -H 'Authorization: Bearer sk-qnWGUIW9****************************************' \
 -d '{"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "this is a test request, write a short poem"}]}'
-```
-
-## Health Check LLMs on Proxy
-Use this to health check all LLMs defined in your config.yaml
-#### Request
-```shell
-curl --location 'http://0.0.0.0:8000/health'
-```
-
-You can also run `litellm -health` it makes a `get` request to `http://0.0.0.0:8000/health` for you
-```
-litellm --health
-```
-#### Response
-```shell
-{
-    "healthy_endpoints": [
-        {
-            "model": "azure/gpt-35-turbo",
-            "api_base": "https://my-endpoint-canada-berri992.openai.azure.com/"
-        },
-        {
-            "model": "azure/gpt-35-turbo",
-            "api_base": "https://my-endpoint-europe-berri-992.openai.azure.com/"
-        }
-    ],
-    "unhealthy_endpoints": [
-        {
-            "model": "azure/gpt-35-turbo",
-            "api_base": "https://openai-france-1234.openai.azure.com/"
-        }
-    ]
-}
 ```
