@@ -1,11 +1,11 @@
 # Base image
-ARG LITELLM_BASE_IMAGE=python:3.9
+ARG LITELLM_BUILD_IMAGE=python:3.9
 
 # Runtime image
 ARG LITELLM_RUNTIME_IMAGE=python:3.9-slim
 
 # allow users to specify, else use python 3.9
-FROM $LITELLM_BASE_IMAGE as builder
+FROM $LITELLM_BUILD_IMAGE as builder
 
 # Set the working directory to /app
 WORKDIR /app
