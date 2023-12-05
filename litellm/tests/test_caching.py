@@ -90,7 +90,7 @@ def test_embedding_caching():
         print(f"embedding2: {embedding2}")
         pytest.fail("Error occurred: Embedding caching failed")
 
-test_embedding_caching()
+# test_embedding_caching()
 
 
 def test_embedding_caching_azure():
@@ -190,7 +190,7 @@ def test_redis_cache_completion():
         print(f"response4: {response4}")
         pytest.fail(f"Error occurred:")
 
-test_redis_cache_completion()
+# test_redis_cache_completion()
 
 # redis cache with custom keys
 def custom_get_cache_key(*args, **kwargs):
@@ -230,6 +230,29 @@ def test_custom_redis_cache_with_key():
     litellm.cache = None
 
 # test_custom_redis_cache_with_key()
+
+
+def test_custom_redis_cache_params():
+    # test if we can init redis with **kwargs
+    try:
+        litellm.cache = Cache(
+            type="redis",
+            host=os.environ['REDIS_HOST'],
+            port=os.environ['REDIS_PORT'],
+            password=os.environ['REDIS_PASSWORD'],
+            db = 0,
+            ssl=True,
+            ssl_certfile="./redis_user.crt",
+            ssl_keyfile="./redis_user_private.key",
+            ssl_ca_certs="./redis_ca.pem",
+        )
+
+        print(litellm.cache.cache.redis_client) 
+        litellm.cache = None
+    except Exception as e:
+        pytest.fail(f"Error occurred:", e)
+
+# test_custom_redis_cache_params()
 
 # def test_redis_cache_with_ttl():
 #     cache = Cache(type="redis", host=os.environ['REDIS_HOST'], port=os.environ['REDIS_PORT'], password=os.environ['REDIS_PASSWORD'])
