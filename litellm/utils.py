@@ -414,7 +414,7 @@ class TextChoices(OpenAIObject):
         else:
             self.finish_reason = "stop"
         self.index = index
-        if text:
+        if text is not None:
             self.text = text
         else:
             self.text = None
