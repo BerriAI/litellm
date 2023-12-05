@@ -124,7 +124,7 @@ class Router:
                 cache_config['host'] = redis_host
 
             if redis_port is not None:
-                cache_config['port'] = int(redis_port)
+                cache_config['port'] = str(redis_port) # type: ignore
 
             if redis_password is not None:
                 cache_config['password'] = redis_password
