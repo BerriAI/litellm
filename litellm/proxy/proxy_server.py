@@ -279,10 +279,13 @@ async def user_api_key_auth(request: Request, api_key: str = fastapi.Security(ap
                 raise Exception(f"Invalid token")
     except Exception as e: 
         print(f"An exception occurred - {traceback.format_exc()}")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="invalid user key",
-        )
+        if isinstance(e, HTTPException): 
+            raise e
+        else: 
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="invalid user key",
+            )
 
 def prisma_setup(database_url: Optional[str]): 
     global prisma_client
