@@ -857,6 +857,23 @@ class Router:
                 if api_version and api_version.startswith("os.environ/"):
                     api_version_env_name = api_version.replace("os.environ/", "")
                     api_version = litellm.get_secret(api_version_env_name)
+                
+                timeout = litellm_params.get("timeout")
+                if timeout and timeout.startswith("os.environ/"):
+                    timeout_env_name = api_version.replace("os.environ/", "")
+                    timeout = litellm.get_secret(timeout_env_name)
+
+                stream_timeout = litellm_params.get("stream_timeout")
+                if stream_timeout and stream_timeout.startswith("os.environ/"):
+                    stream_timeout_env_name = api_version.replace("os.environ/", "")
+                    stream_timeout = litellm.get_secret(stream_timeout_env_name)
+                
+                max_retries = litellm_params.get("max_retries")
+                if max_retries and max_retries.startswith("os.environ/"):
+                    max_retries_env_name = api_version.replace("os.environ/", "")
+                    max_retries = litellm.get_secret(max_retries_env_name)
+                
+                
                 self.print_verbose(f"Initializing OpenAI Client for {model_name}, {str(api_base)}")
                 if "azure" in model_name:
                     if api_version is None:
@@ -869,32 +886,44 @@ class Router:
                         model["async_client"] = openai.AsyncAzureOpenAI(
                             api_key=api_key,
                             base_url=api_base,
-                            api_version=api_version
+                            api_version=api_version,
+                            timeout=timeout,
+                            max_retries=max_retries
                         )
                         model["client"] = openai.AzureOpenAI(
                             api_key=api_key,
                             base_url=api_base,
-                            api_version=api_version
+                            api_version=api_version,
+                            timeout=timeout,
+                            max_retries=max_retries
                         )
                     else:
                         model["async_client"] = openai.AsyncAzureOpenAI(
                             api_key=api_key,
                             azure_endpoint=api_base,
-                            api_version=api_version
+                            api_version=api_version,
+                            timeout=timeout,
+                            max_retries=max_retries
                         )
                         model["client"] = openai.AzureOpenAI(
                             api_key=api_key,
                             azure_endpoint=api_base,
-                            api_version=api_version
+                            api_version=api_version,
+                            timeout=timeout,
+                            max_retries=max_retries
                         )
                 else:
                     model["async_client"] = openai.AsyncOpenAI(
                         api_key=api_key,
                         base_url=api_base,
+                        timeout=timeout,
+                        max_retries=max_retries
                     )
                     model["client"] = openai.OpenAI(
                         api_key=api_key,
                         base_url=api_base,
+                        timeout=timeout,
+                        max_retries=max_retries
                     )
             ############ End of initializing Clients for OpenAI/Azure ###################
             model_id = ""
