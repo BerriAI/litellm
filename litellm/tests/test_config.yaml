@@ -12,7 +12,7 @@ model_list:
   - model_name: "azure-model"
     litellm_params:
       model: "azure/gpt-turbo"
-      api_key: "os.environ/AZURE-FRANCE-API-KEY"
+      api_key: "os.environ/AZURE_FRANCE_API_KEY"
       api_base: "https://openai-france-1234.openai.azure.com"
 
 litellm_settings:
