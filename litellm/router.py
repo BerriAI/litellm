@@ -1011,14 +1011,14 @@ class Router:
         """
         if client_type == "async":
             if kwargs.get("stream") == True:
-                return deployment["stream_async_client"]
+                return deployment.get("stream_async_client", None)
             else:
-                return deployment["async_client"]
+                return deployment.get("async_client", None)
         else:
             if kwargs.get("stream") == True:
-                return deployment["stream_client"]
+                return deployment.get("stream_client", None)
             else:
-                return deployment["client"]
+                return deployment.get("client", None)
 
     def print_verbose(self, print_statement): 
         if self.set_verbose or litellm.set_verbose: 
