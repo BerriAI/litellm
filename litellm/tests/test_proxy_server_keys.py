@@ -59,6 +59,7 @@ def test_add_new_key(client):
         print(f"response: {response.text}")
         assert response.status_code == 200
         result = response.json()
+        assert result["key"].startswith("sk-")
         print(f"Received response: {result}")
     except Exception as e:
         pytest.fail("LiteLLM Proxy test failed. Exception", e)
