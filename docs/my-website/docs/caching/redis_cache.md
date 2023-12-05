@@ -1,11 +1,14 @@
 # Redis Cache
+
+[**See Code**](https://github.com/BerriAI/litellm/blob/4d7ff1b33b9991dcf38d821266290631d9bcd2dd/litellm/caching.py#L71)
+
 ### Pre-requisites
 Install redis
 ```
 pip install redis
 ```
 For the hosted version you can setup your own Redis DB here: https://app.redislabs.com/
-### Usage
+### Quick Start
 ```python
 import litellm
 from litellm import completion
@@ -54,6 +57,11 @@ litellm.cache = cache # set litellm.cache to your cache
 
 ### Detecting Cached Responses
 For resposes that were returned as cache hit, the response includes a param `cache` = True 
+
+:::info
+
+Only valid for OpenAI <= 0.28.1 [Let us know if you still need this](https://github.com/BerriAI/litellm/issues/new?assignees=&labels=bug&projects=&template=bug_report.yml&title=%5BBug%5D%3A+)
+:::
 
 Example response with cache hit
 ```python
