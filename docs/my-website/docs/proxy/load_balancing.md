@@ -111,3 +111,31 @@ curl --location 'http://0.0.0.0:8000/chat/completions' \
     }
 '
 ```
+
+## Custom Timeouts, Stream Timeouts - Per Model
+For each model you can set `timeout` & `stream_timeout` under `litellm_params`
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: azure/gpt-turbo-small-eu
+      api_base: https://my-endpoint-europe-berri-992.openai.azure.com/
+      api_key: <your-key>
+      timeout: 0.1                      # timeout in (seconds)
+      stream_timeout: 0.01              # timeout stream requests (seconds)
+      max_retries: 5
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: azure/gpt-turbo-small-ca
+      api_base: https://my-endpoint-canada-berri992.openai.azure.com/
+      api_key: 
+      timeout: 0.1                      # timeout in (seconds)
+      stream_timeout: 0.01              # timeout stream requests (seconds)
+      max_retries: 5
+
+```
+
+#### Start Proxy 
+```shell
+$ litellm --config /path/to/config.yaml
+```
