@@ -1,6 +1,9 @@
 # Base image
 ARG LITELLM_BASE_IMAGE=python:3.9
 
+# Runtime image
+ARG LITELLM_RUNTIME_IMAGE=python:3.9-slim
+
 # allow users to specify, else use python 3.9
 FROM $LITELLM_BASE_IMAGE as builder
 
@@ -25,9 +28,6 @@ ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
 ###############################################################################
-# Runtime image
-ARG LITELLM_RUNTIME_IMAGE=python:3.9-slim
-
 FROM $LITELLM_RUNTIME_IMAGE as runtime
 
 WORKDIR /app
