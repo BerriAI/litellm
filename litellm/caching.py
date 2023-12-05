@@ -69,10 +69,22 @@ class InMemoryCache(BaseCache):
 
 
 class RedisCache(BaseCache):
-    def __init__(self, host, port, password, **kwargs):
+    def __init__(self, host=None, port=None, password=None, **kwargs):
         import redis
         # if users don't provider one, use the default litellm cache
-        self.redis_client = redis.Redis(host=host, port=port, password=password, **kwargs)
+        from ._redis import get_redis_client
+
+        redis_kwargs = {}
+        if host is not None: 
+            redis_kwargs["host"] = host
+        if port is not None:
+            redis_kwargs["port"] = port
+        if password is not None: 
+            redis_kwargs["password"] = password
+        
+        redis_kwargs.update(kwargs)
+
+        self.redis_client = get_redis_client(**redis_kwargs)
 
     def set_cache(self, key, value, **kwargs):
         ttl = kwargs.get("ttl", None)
