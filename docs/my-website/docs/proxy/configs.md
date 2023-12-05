@@ -139,7 +139,7 @@ print(response)
 ```
 
 </TabItem>
-<TabItem value="langchain" label="Langchain">
+<TabItem value="langchain" label="Langchain Python">
 
 ```python
 from langchain.chat_models import ChatOpenAI
@@ -150,12 +150,6 @@ from langchain.prompts.chat import (
 )
 from langchain.schema import HumanMessage, SystemMessage
 
-chat = ChatOpenAI(
-    openai_api_base="http://0.0.0.0:8000", # set openai_api_base to the LiteLLM Proxy
-    model = "gpt-3.5-turbo",
-    temperature=0.1
-)
-
 messages = [
     SystemMessage(
         content="You are a helpful assistant that im using to make a test request to."
@@ -164,8 +158,25 @@ messages = [
         content="test from litellm. tell me why it's amazing in 1 sentence"
     ),
 ]
-response = chat(messages)
 
+# Sends request to model where `model_name=gpt-3.5-turbo` on config.yaml. 
+chat = ChatOpenAI(
+    openai_api_base="http://0.0.0.0:8000",  # set openai base to the proxy
+    model = "gpt-3.5-turbo",                
+    temperature=0.1
+)
+
+response = chat(messages)
+print(response)
+
+# Sends request to model where `model_name=bedrock-claude-v1` on config.yaml. 
+claude_chat = ChatOpenAI(
+    openai_api_base="http://0.0.0.0:8000", # set openai base to the proxy
+    model = "bedrock-claude-v1",                   
+    temperature=0.1
+)
+
+response = claude_chat(messages)
 print(response)
 ```
 
