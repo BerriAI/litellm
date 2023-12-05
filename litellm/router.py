@@ -877,8 +877,6 @@ class Router:
                     max_retries_env_name = api_version.replace("os.environ/", "")
                     max_retries = litellm.get_secret(max_retries_env_name)
                 
-                
-                self.print_verbose(f"Initializing OpenAI Client for {model_name}, {str(api_base)}")
                 if "azure" in model_name:
                     if api_base is None:
                         raise ValueError("api_base is required for Azure OpenAI. Set it on your config")
