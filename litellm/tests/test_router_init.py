@@ -55,7 +55,7 @@ def test_init_clients():
         traceback.print_exc()
         pytest.fail(f"Error occurred: {e}")
 
-test_init_clients()
+# test_init_clients()
 
 
 def test_init_clients_basic():
@@ -86,5 +86,105 @@ def test_init_clients_basic():
         traceback.print_exc()
         pytest.fail(f"Error occurred: {e}")
 
-test_init_clients_basic()
+# test_init_clients_basic()
+
+
+def test_timeouts_router():
+    """
+    Test the timeouts of the router with multiple clients. This HASas to raise a timeout error  
+    """
+    import openai
+    litellm.set_verbose = True
+    try:
+        print("testing init 4 clients with diff timeouts")
+        model_list = [
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                    "timeout": 0.000001,
+                    "stream_timeout": 0.000_001,
+                },
+            },
+        ]
+        router = Router(model_list=model_list)
+        
+        print("PASSED !")
+        async def test():
+            try:
+                await router.acompletion(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": "hello, write a 20 pg essay"
+                        }
+                    ],
+                )
+            except Exception as e:
+                raise e
+        asyncio.run(test())
+    except openai.APITimeoutError as e:
+        print("Passed: Raised correct exception. Got openai.APITimeoutError\nGood Job", e)
+        print(type(e))
+        pass
+    except Exception as e:
+        pytest.fail(f"Did not raise error `openai.APITimeoutError`. Instead raised error type: {type(e)}, Error: {e}")
+
+# test_timeouts_router()
+
+
+def test_stream_timeouts_router():
+    """
+    Test the stream timeouts router. See if it selected the correct client with stream timeout
+    """
+    import openai
+    
+    litellm.set_verbose = True
+    try:
+        print("testing init 4 clients with diff timeouts")
+        model_list = [
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                    "timeout": 200, # regular calls will not timeout, stream calls will
+                    "stream_timeout": 0.000_001,
+                },
+            },
+        ]
+        router = Router(model_list=model_list)
+        
+        print("PASSED !")
+        selected_client = router._get_client(
+            deployment=router.model_list[0],
+            kwargs={
+                "model": "gpt-3.5-turbo",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "hello, write a 20 pg essay"
+                    }
+                ],
+                "stream": True
+            },
+            client_type=None
+        )
+        print("Select client timeout", selected_client.timeout)
+        assert selected_client.timeout ==  0.000_001
+    except openai.APITimeoutError as e:
+        print("Passed: Raised correct exception. Got openai.APITimeoutError\nGood Job", e)
+        print(type(e))
+        pass
+    except Exception as e:
+        pytest.fail(f"Did not raise error `openai.APITimeoutError`. Instead raised error type: {type(e)}, Error: {e}")
+
+test_stream_timeouts_router()
+
 
