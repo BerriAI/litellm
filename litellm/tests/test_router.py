@@ -400,7 +400,10 @@ def test_aembedding_on_router():
 # test_aembedding_on_router()
 
 
-def test_azure_aembedding_on_router():
+def test_azure_embedding_on_router():
+	"""
+	[PROD Use Case] - Makes an aembedding call + embedding call
+	"""
 	litellm.set_verbose = True
 	try:
 		model_list = [
@@ -415,20 +418,28 @@ def test_azure_aembedding_on_router():
 				"rpm": 10000,
 			},
 		]
+		router = Router(model_list=model_list)
 
 		async def embedding_call():
-			router = Router(model_list=model_list)
 			response = await router.aembedding(
 				model="text-embedding-ada-002",
 				input=["good morning from litellm"]
 			)
 			print(response)
-			router.reset()
 		asyncio.run(embedding_call())
+
+		print("\n Making sync Azure Embedding call\n")
+
+		response = router.embedding(
+				model="text-embedding-ada-002",
+				input=["test 2 from litellm. async embedding"]
+		)
+		print(response)
+		router.reset()
 	except Exception as e:
 		traceback.print_exc()
 		pytest.fail(f"Error occurred: {e}")
-# test_azure_aembedding_on_router()
+test_azure_embedding_on_router()
 
 
 def test_bedrock_on_router():
