@@ -1,3 +1,7 @@
+import Image from '@theme/IdealImage';
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # Proxy Config.yaml
 Set model list, `api_base`, `api_key`, `temperature` & proxy server settings (`master-key`) on the config.yaml. 
 
@@ -26,6 +30,9 @@ model_list:
       api_base: https://my-endpoint-europe-berri-992.openai.azure.com/
       api_key: "os.environ/AZURE_API_KEY_EU" # does os.getenv("AZURE_API_KEY_EU")
       rpm: 6      # Rate limit for this deployment: in requests per minute (rpm)
+  - model_name: bedrock-claude-v1 
+    litellm_params:
+      model: bedrock/anthropic.claude-instant-v1
   - model_name: gpt-3.5-turbo
     litellm_params:
       model: azure/gpt-turbo-small-ca
@@ -54,13 +61,18 @@ general_settings:
 $ litellm --config /path/to/config.yaml
 ```
 
-#### Step 3: Use proxy
-Curl Command
+
+### Using Proxy - Curl Request, OpenAI Package, Langchain, Langchain JS
+Calling a model group 
+
+<Tabs>
+<TabItem value="Curl" label="Curl Request">
+
 ```shell
 curl --location 'http://0.0.0.0:8000/chat/completions' \
 --header 'Content-Type: application/json' \
 --data ' {
-      "model": "zephyr-alpha",
+      "model": "gpt-3.5-turbo",
       "messages": [
         {
           "role": "user",
@@ -70,6 +82,63 @@ curl --location 'http://0.0.0.0:8000/chat/completions' \
     }
 '
 ```
+</TabItem>
+<TabItem value="openai" label="OpenAI v1.0.0+">
+
+```python
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:8000"
+)
+
+# request sent to model set on litellm proxy, `litellm --model`
+response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
+    {
+        "role": "user",
+        "content": "this is a test request, write a short poem"
+    }
+])
+
+print(response)
+
+
+```
+
+</TabItem>
+<TabItem value="langchain" label="Langchain">
+
+```python
+from langchain.chat_models import ChatOpenAI
+from langchain.prompts.chat import (
+    ChatPromptTemplate,
+    HumanMessagePromptTemplate,
+    SystemMessagePromptTemplate,
+)
+from langchain.schema import HumanMessage, SystemMessage
+
+chat = ChatOpenAI(
+    openai_api_base="http://0.0.0.0:8000", # set openai_api_base to the LiteLLM Proxy
+    model = "gpt-3.5-turbo",
+    temperature=0.1
+)
+
+messages = [
+    SystemMessage(
+        content="You are a helpful assistant that im using to make a test request to."
+    ),
+    HumanMessage(
+        content="test from litellm. tell me why it's amazing in 1 sentence"
+    ),
+]
+response = chat(messages)
+
+print(response)
+```
+
+</TabItem>
+</Tabs>
+
 
 ## Save Model-specific params (API Base, API Keys, Temperature, Headers etc.)
 You can use the config to save model-specific information like api_base, api_key, temperature, max_tokens, etc. 
