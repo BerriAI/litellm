@@ -123,6 +123,15 @@ def map_finish_reason(finish_reason: str): # openai supports 5 stop sequences - 
     # anthropic mapping
     if finish_reason == "stop_sequence":
         return "stop"
+    # cohere mapping - https://docs.cohere.com/reference/generate
+    elif finish_reason == "COMPLETE": 
+        return "stop"
+    elif finish_reason == "MAX_TOKENS":
+        return "length"
+    elif finish_reason == "ERROR_TOXIC": 
+        return "content_filter"
+    elif finish_reason == "ERROR": # openai currently doesn't support an 'error' finish reason
+        return "stop"
     return finish_reason
 
 class FunctionCall(OpenAIObject):
