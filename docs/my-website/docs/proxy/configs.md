@@ -68,11 +68,35 @@ Calling a model group
 <Tabs>
 <TabItem value="Curl" label="Curl Request">
 
+Sends request to model where `model_name=gpt-3.5-turbo` on config.yaml. 
+
+If multiple with `model_name=gpt-3.5-turbo` does [Load Balancing](https://docs.litellm.ai/docs/proxy/load_balancing)
+
 ```shell
 curl --location 'http://0.0.0.0:8000/chat/completions' \
 --header 'Content-Type: application/json' \
 --data ' {
       "model": "gpt-3.5-turbo",
+      "messages": [
+        {
+          "role": "user",
+          "content": "what llm are you"
+        }
+      ],
+    }
+'
+```
+</TabItem>
+
+<TabItem value="Curl2" label="Curl Request: Bedrock">
+
+Sends this request to model where `model_name=bedrock-claude-v1` on config.yaml
+
+```shell
+curl --location 'http://0.0.0.0:8000/chat/completions' \
+--header 'Content-Type: application/json' \
+--data ' {
+      "model": "bedrock-claude-v1",
       "messages": [
         {
           "role": "user",
@@ -92,7 +116,7 @@ client = openai.OpenAI(
     base_url="http://0.0.0.0:8000"
 )
 
-# request sent to model set on litellm proxy, `litellm --model`
+# Sends request to model where `model_name=gpt-3.5-turbo` on config.yaml. 
 response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
     {
         "role": "user",
@@ -102,6 +126,15 @@ response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
 
 print(response)
 
+# Sends this request to model where `model_name=bedrock-claude-v1` on config.yaml
+response = client.chat.completions.create(model="bedrock-claude-v1", messages = [
+    {
+        "role": "user",
+        "content": "this is a test request, write a short poem"
+    }
+])
+
+print(response)
 
 ```
 
