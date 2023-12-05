@@ -1,24 +1,27 @@
-model_list: 
-  - model_name: "azure-model"
-    litellm_params: 
-      model: "azure/gpt-35-turbo"
-      api_key: "os.environ/AZURE_EUROPE_API_KEY"
-      api_base: "https://my-endpoint-europe-berri-992.openai.azure.com/"
-  - model_name: "azure-model"
-    litellm_params:
-      model: "azure/gpt-35-turbo"
-      api_key: "os.environ/AZURE_CANADA_API_KEY"
-      api_base: "https://my-endpoint-canada-berri992.openai.azure.com"
-  - model_name: "azure-model"
-    litellm_params:
-      model: "azure/gpt-turbo"
-      api_key: "os.environ/AZURE_FRANCE_API_KEY"
-      api_base: "https://openai-france-1234.openai.azure.com"
-
-litellm_settings:
-  drop_params: True
-  set_verbose: True
-
 general_settings:
-  master_key: "os.environ/PROXY_MASTER_KEY"
-  database_url: "os.environ/PROXY_DATABASE_URL" # [OPTIONAL] use for token-based auth to proxy
+  database_url: os.environ/PROXY_DATABASE_URL
+  master_key: os.environ/PROXY_MASTER_KEY
+litellm_settings:
+  drop_params: true
+  set_verbose: true
+model_list:
+- litellm_params:
+    api_base: https://my-endpoint-europe-berri-992.openai.azure.com/
+    api_key: os.environ/AZURE_EUROPE_API_KEY
+    model: azure/gpt-35-turbo
+  model_name: azure-model
+- litellm_params:
+    api_base: https://my-endpoint-canada-berri992.openai.azure.com
+    api_key: os.environ/AZURE_CANADA_API_KEY
+    model: azure/gpt-35-turbo
+  model_name: azure-model
+- litellm_params:
+    api_base: https://openai-france-1234.openai.azure.com
+    api_key: os.environ/AZURE_FRANCE_API_KEY
+    model: azure/gpt-turbo
+  model_name: azure-model
+- litellm_params:
+    model: gpt-3.5-turbo
+  model_info:
+    description: this is a test openai model
+  model_name: test_openai_models
