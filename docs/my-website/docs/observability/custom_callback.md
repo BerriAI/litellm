@@ -85,6 +85,43 @@ print(response)
 
 ```
 
+## Async Callback Functions 
+
+LiteLLM currently supports just async success callback functions for async completion/embedding calls. 
+
+```python
+import asyncio, litellm 
+
+async def async_test_logging_fn(kwargs, completion_obj, start_time, end_time):
+    print(f"On Async Success!")
+
+async def test_chat_openai():
+    try:
+        # litellm.set_verbose = True
+        litellm.success_callback = [async_test_logging_fn]
+        response = await litellm.acompletion(model="gpt-3.5-turbo",
+                              messages=[{
+                                  "role": "user",
+                                  "content": "Hi 👋 - i'm openai"
+                              }],
+                              stream=True)
+        async for chunk in response: 
+            continue
+    except Exception as e:
+        print(e)
+        pytest.fail(f"An error occurred - {str(e)}")
+
+asyncio.run(test_chat_openai())
+```
+
+:::info
+
+We're actively trying to expand this to other event types. [Tell us if you need this!](https://github.com/BerriAI/litellm/issues/1007)
+
+
+
+:::
+
 ## What's in kwargs? 
 
 Notice we pass in a kwargs argument to custom callback. 
