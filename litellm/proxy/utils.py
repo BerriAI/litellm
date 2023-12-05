@@ -139,7 +139,7 @@ def get_instance_fn(value: str, config_file_path: Optional[str] = None) -> Any:
             if spec is None:
                 raise ImportError(f"Could not find a module specification for {module_file_path}")
             module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
+            spec.loader.exec_module(module) # type: ignore
         else:
             # Dynamically import the module
             module = importlib.import_module(module_name)
@@ -149,7 +149,7 @@ def get_instance_fn(value: str, config_file_path: Optional[str] = None) -> Any:
         
         return instance
     except ImportError as e:
-        # Print the error message for easier debugging
-        print(e)
         # Re-raise the exception with a user-friendly message
         raise ImportError(f"Could not import {instance_name} from {module_name}") from e
+    except Exception as e: 
+        raise e
