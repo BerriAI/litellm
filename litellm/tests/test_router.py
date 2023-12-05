@@ -489,3 +489,90 @@ def test_bedrock_on_router():
 		traceback.print_exc()
 		pytest.fail(f"Error occurred: {e}")
 # test_bedrock_on_router()
+
+
+def test_openai_completion_on_router():
+	# [PROD Use Case] - Makes an acompletion call + async acompletion call, and sync acompletion call, sync completion + stream
+	# 4 LLM API calls made here. If it fails, add retries. Do not remove this test.
+	litellm.set_verbose = True
+	print("\n Testing OpenAI on router\n")
+	try:
+		model_list = [
+			{
+				"model_name": "gpt-3.5-turbo",
+				"litellm_params": {
+					"model": "gpt-3.5-turbo",
+				},
+			},
+		]
+		router = Router(model_list=model_list)
+
+		async def test():
+			response = await router.acompletion(
+				model="gpt-3.5-turbo",
+				messages=[
+					{
+						"role": "user",
+						"content": "hello from litellm test",
+					}
+				]
+			)
+			print(response)
+			assert len(response.choices[0].message.content) > 0
+
+			print("\n streaming + acompletion test")
+			response = await router.acompletion(
+				model="gpt-3.5-turbo",
+				messages=[
+					{
+						"role": "user",
+						"content": "hello from litellm test",
+					}
+				],
+				stream=True
+			)
+			complete_response = ""
+			print(response)
+			async for chunk in response:
+				print(chunk)
+				complete_response += chunk.choices[0].delta.content or ""
+			print("\n complete response: ", complete_response)
+			assert len(complete_response) > 0
+			
+		asyncio.run(test())
+		print("\n Testing Sync completion calls \n")
+		response = router.completion(
+				model="gpt-3.5-turbo",
+				messages=[
+					{
+						"role": "user",
+						"content": "hello from litellm test2",
+					}
+				]
+			)
+		print(response)
+		assert len(response.choices[0].message.content) > 0
+
+		print("\n streaming + completion test")
+		response = router.completion(
+			model="gpt-3.5-turbo",
+			messages=[
+				{
+					"role": "user",
+					"content": "hello from litellm test3",
+				}
+			],
+			stream=True
+		)
+		complete_response = ""
+		print(response)
+		for chunk in response:
+			print(chunk)
+			complete_response += chunk.choices[0].delta.content or ""
+		print("\n complete response: ", complete_response)
+		assert len(complete_response) > 0
+		router.reset()
+	except Exception as e:
+		traceback.print_exc()
+		pytest.fail(f"Error occurred: {e}")
+# test_openai_completion_on_router()
