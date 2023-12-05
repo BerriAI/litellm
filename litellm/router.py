@@ -116,13 +116,21 @@ class Router:
         cache_config = {} 
         if redis_url is not None or (redis_host is not None and redis_port is not None and redis_password is not None):
             cache_type = "redis"
-            cache_config = {
-                    'url': redis_url,
-                    'host': redis_host,
-                    'port': redis_port,
-                    'password': redis_password,
-                    **cache_kwargs
-            }
+
+            if redis_url is not None:
+                cache_config['url'] = redis_url
+
+            if redis_host is not None:
+                cache_config['host'] = redis_host
+
+            if redis_port is not None:
+                cache_config['port'] = redis_port
+
+            if redis_password is not None:
+                cache_config['password'] = redis_password
+
+            # Add additional key-value pairs from cache_kwargs
+            cache_config.update(cache_kwargs)
             redis_cache = RedisCache(**cache_config)
         if cache_responses:
             litellm.cache = litellm.Cache(type=cache_type, **cache_config)
