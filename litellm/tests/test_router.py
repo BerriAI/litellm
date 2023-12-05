@@ -398,20 +398,26 @@ def test_aembedding_on_router():
 				"rpm": 10000,
 			},
 		]
-
+		router = Router(model_list=model_list)
 		async def embedding_call():
-			router = Router(model_list=model_list)
 			response = await router.aembedding(
 				model="text-embedding-ada-002",
 				input=["good morning from litellm", "this is another item"],
 			)
 			print(response)
-			router.reset()
 		asyncio.run(embedding_call())
+
+		print("\n Making sync Embedding call\n")
+		response = router.embedding(
+			model="text-embedding-ada-002",
+			input=["good morning from litellm 2"],
+		)
+		print("sync embedding response: ", response)
+		router.reset()
 	except Exception as e:
 		traceback.print_exc()
 		pytest.fail(f"Error occurred: {e}")
-# test_aembedding_on_router()
+test_aembedding_on_router()
 
 
 def test_azure_embedding_on_router():
