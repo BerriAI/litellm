@@ -36,7 +36,7 @@ def test_caching_v2(): # test in memory cache
         print(f"error occurred: {traceback.format_exc()}")
         pytest.fail(f"Error occurred: {e}")
 
-# test_caching_v2()
+test_caching_v2()
 
 
 
