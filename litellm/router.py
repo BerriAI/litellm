@@ -936,7 +936,7 @@ class Router:
                         # streaming clients should have diff timeouts
                         model["stream_async_client"] = openai.AsyncAzureOpenAI(
                             api_key=api_key,
-                            base_url=api_base,
+                            azure_endpoint=api_base,
                             api_version=api_version,
                             timeout=stream_timeout,
                             max_retries=max_retries
@@ -944,7 +944,7 @@ class Router:
 
                         model["stream_client"] = openai.AzureOpenAI(
                             api_key=api_key,
-                            base_url=api_base,
+                            azure_endpoint=api_base,
                             api_version=api_version,
                             timeout=stream_timeout,
                             max_retries=max_retries
