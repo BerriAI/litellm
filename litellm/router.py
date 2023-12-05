@@ -876,6 +876,7 @@ class Router:
                 
                 self.print_verbose(f"Initializing OpenAI Client for {model_name}, {str(api_base)}")
                 if "azure" in model_name:
+                    self.print_verbose(f"Initializing Azure OpenAI Client for {model_name}, {str(api_base)}, {api_key}")
                     if api_version is None:
                         api_version = "2023-07-01-preview"
                     if "gateway.ai.cloudflare.com" in api_base: 
@@ -913,6 +914,7 @@ class Router:
                             max_retries=max_retries
                         )
                 else:
+                    self.print_verbose(f"Initializing OpenAI Client for {model_name}, {str(api_base)}")
                     model["async_client"] = openai.AsyncOpenAI(
                         api_key=api_key,
                         base_url=api_base,
