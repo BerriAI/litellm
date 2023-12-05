@@ -107,7 +107,7 @@ model_list:
 
 litellm_settings:
   num_retries: 3 # retry call 3 times on each model_name (e.g. zephyr-beta)
-  request_timeout: 10 # raise Timeout error if call takes longer than 10s
+  request_timeout: 10 # raise Timeout error if call takes longer than 10s. Sets litellm.request_timeout 
   fallbacks: [{"zephyr-beta": ["gpt-3.5-turbo"]}] # fallback to gpt-3.5-turbo if call fails num_retries 
   context_window_fallbacks: [{"zephyr-beta": ["gpt-3.5-turbo-16k"]}, {"gpt-3.5-turbo": ["gpt-3.5-turbo-16k"]}] # fallback to gpt-3.5-turbo-16k if context window error
   allowed_fails: 3 # cooldown model if it fails > 1 call in a minute. 
@@ -129,7 +129,7 @@ curl --location 'http://0.0.0.0:8000/chat/completions' \
       "fallbacks": [{"zephyr-beta": ["gpt-3.5-turbo"]}],
       "context_window_fallbacks": [{"zephyr-beta": ["gpt-3.5-turbo"]}],
       "num_retries": 2,
-      "request_timeout": 10
+      "timeout": 10
     }
 '
 ```
@@ -160,4 +160,40 @@ model_list:
 #### Start Proxy 
 ```shell
 $ litellm --config /path/to/config.yaml
+```
+
+
+
+## Health Check LLMs on Proxy
+Use this to health check all LLMs defined in your config.yaml
+#### Request
+Make a GET Request to `/health` on the proxy
+```shell
+curl --location 'http://0.0.0.0:8000/health'
+```
+
+You can also run `litellm -health` it makes a `get` request to `http://0.0.0.0:8000/health` for you
+```
+litellm --health
+```
+#### Response
+```shell
+{
+    "healthy_endpoints": [
+        {
+            "model": "azure/gpt-35-turbo",
+            "api_base": "https://my-endpoint-canada-berri992.openai.azure.com/"
+        },
+        {
+            "model": "azure/gpt-35-turbo",
+            "api_base": "https://my-endpoint-europe-berri-992.openai.azure.com/"
+        }
+    ],
+    "unhealthy_endpoints": [
+        {
+            "model": "azure/gpt-35-turbo",
+            "api_base": "https://openai-france-1234.openai.azure.com/"
+        }
+    ]
+}
 ```
