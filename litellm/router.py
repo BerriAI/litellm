@@ -880,6 +880,8 @@ class Router:
                 
                 self.print_verbose(f"Initializing OpenAI Client for {model_name}, {str(api_base)}")
                 if "azure" in model_name:
+                    if api_base is None:
+                        raise ValueError("api_base is required for Azure OpenAI. Set it on your config")
                     self.print_verbose(f"Initializing Azure OpenAI Client for {model_name}, {str(api_base)}, {api_key}")
                     if api_version is None:
                         api_version = "2023-07-01-preview"
