@@ -96,7 +96,7 @@ from langchain.prompts.chat import (
 from langchain.schema import HumanMessage, SystemMessage
 
 chat = ChatOpenAI(
-    openai_api_base="http://0.0.0.0:8000",
+    openai_api_base="http://0.0.0.0:8000", # set openai_api_base to the LiteLLM Proxy
     model = "gpt-3.5-turbo",
     temperature=0.1
 )
@@ -112,7 +112,6 @@ messages = [
 response = chat(messages)
 
 print(response)
-
 ```
 
 </TabItem>
