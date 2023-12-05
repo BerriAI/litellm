@@ -477,9 +477,9 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
                 print(f"{blue_color_code}\nSetting Cache on Proxy")
                 from litellm.caching import Cache
                 cache_type = value["type"]
-                cache_host = litellm.get_secret("REDIS_HOST")
-                cache_port = litellm.get_secret("REDIS_PORT")
-                cache_password = litellm.get_secret("REDIS_PASSWORD")
+                cache_host = litellm.get_secret("REDIS_HOST", None)
+                cache_port = litellm.get_secret("REDIS_PORT", None)
+                cache_password = litellm.get_secret("REDIS_PASSWORD", None)
 
                 # Assuming cache_type, cache_host, cache_port, and cache_password are strings
                 print(f"{blue_color_code}Cache Type:{reset_color_code} {cache_type}")
@@ -488,6 +488,7 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
                 print(f"{blue_color_code}Cache Password:{reset_color_code} {cache_password}")
                 print()
 
+                ## to pass a complete url, just set it as `os.environ[REDIS_URL] = <your-redis-url>`, _redis.py checks for REDIS specific environment variables
                 litellm.cache = Cache(
                     type=cache_type,
                     host=cache_host,

@@ -60,10 +60,14 @@ class Router:
 
     def __init__(self,
                  model_list: Optional[list] = None,
+                 ## CACHING ## 
+                 redis_url: Optional[str] = None,
                  redis_host: Optional[str] = None,
                  redis_port: Optional[int] = None,
                  redis_password: Optional[str] = None,
                  cache_responses: bool = False,
+                 cache_kwargs: dict = {}, # additional kwargs to pass to RedisCache (see caching.py)
+                 ## RELIABILITY ## 
                  num_retries: int = 0,
                  timeout: Optional[float] = None,
                  default_litellm_params = {}, # default params for Router.chat.completion.create 
@@ -107,21 +111,21 @@ class Router:
         if self.routing_strategy == "least-busy":
             self._start_health_check_thread()
         ### CACHING ###
+        cache_type = "local" # default to an in-memory cache
         redis_cache = None
-        if redis_host is not None and redis_port is not None and redis_password is not None:
+        cache_config = {} 
+        if redis_url is not None or (redis_host is not None and redis_port is not None and redis_password is not None):
+            cache_type = "redis"
             cache_config = {
-                    'type': 'redis',
+                    'url': redis_url,
                     'host': redis_host,
                     'port': redis_port,
-                    'password': redis_password
+                    'password': redis_password,
+                    **cache_kwargs
             }
-            redis_cache = RedisCache(host=redis_host, port=redis_port, password=redis_password)
-        else: # use an in-memory cache
-            cache_config = {
-                "type": "local"
-            }
+            redis_cache = RedisCache(**cache_config)
         if cache_responses:
-            litellm.cache = litellm.Cache(**cache_config) # use Redis for caching completion requests
+            litellm.cache = litellm.Cache(type=cache_type, **cache_config)
             self.cache_responses = cache_responses
         self.cache = DualCache(redis_cache=redis_cache, in_memory_cache=InMemoryCache()) # use a dual cache (Redis+In-Memory) for tracking cooldowns, usage, etc.
         ## USAGE TRACKING ## 
