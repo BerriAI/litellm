@@ -8,6 +8,7 @@ input_callback: List[Union[str, Callable]] = []
 success_callback: List[Union[str, Callable]] = []
 failure_callback: List[Union[str, Callable]] = []
 callbacks: List[Callable] = []
+_async_success_callback: List[Callable] = [] # internal variable - async custom callbacks are routed here. 
 pre_call_rules: List[Callable] = []
 post_call_rules: List[Callable] = []
 set_verbose = False
