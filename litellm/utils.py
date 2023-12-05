@@ -4763,23 +4763,27 @@ def litellm_telemetry(data):
 ######### Secret Manager ############################
 # checks if user has passed in a secret manager client
 # if passed in then checks the secret there
-def get_secret(secret_name: str):
+def get_secret(secret_name: str, default_value: Optional[str]=None):
     if secret_name.startswith("os.environ/"): 
         secret_name = secret_name.replace("os.environ/", "")
-    if litellm.secret_manager_client is not None:
-        # TODO: check which secret manager is being used
-        # currently only supports Infisical
-        try:
-            client = litellm.secret_manager_client
-            if type(client).__module__ + '.' + type(client).__name__ == 'azure.keyvault.secrets._client.SecretClient': # support Azure Secret Client - from azure.keyvault.secrets import SecretClient
-                secret = retrieved_secret = client.get_secret(secret_name).value
-            else: # assume the default is infisicial client
-                secret = client.get_secret(secret_name).secret_value
-        except: # check if it's in os.environ
-            secret = os.environ.get(secret_name)
-        return secret
-    else:
-        return os.environ.get(secret_name)
+    try: 
+        if litellm.secret_manager_client is not None:
+            try:
+                client = litellm.secret_manager_client
+                if type(client).__module__ + '.' + type(client).__name__ == 'azure.keyvault.secrets._client.SecretClient': # support Azure Secret Client - from azure.keyvault.secrets import SecretClient
+                    secret = retrieved_secret = client.get_secret(secret_name).value
+                else: # assume the default is infisicial client
+                    secret = client.get_secret(secret_name).secret_value
+            except: # check if it's in os.environ
+                secret = os.environ.get(secret_name)
+            return secret
+        else:
+            return os.environ.get(secret_name)
+    except Exception as e: 
+        if default_value is not None: 
+            return default_value
+        else: 
+            raise e
 
 
 ######## Streaming Class ############################
