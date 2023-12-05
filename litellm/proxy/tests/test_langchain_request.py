@@ -24,5 +24,16 @@ response = chat(messages)
 
 print(response)
 
+claude_chat = ChatOpenAI(
+    openai_api_base="http://0.0.0.0:8000",
+    model = "claude-v1",
+    temperature=0.1
+)
+
+response = claude_chat(messages)
+
+print(response)
+
+
 
 
