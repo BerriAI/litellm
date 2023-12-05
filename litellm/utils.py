@@ -1985,6 +1985,8 @@ def get_optional_params(  # use the openai defaults
             if k not in supported_params:
                 if k == "n" and n == 1: # langchain sends n=1 as a default value
                     pass
+                if k == "max_retries": # TODO: This is a patch. We support max retries for OpenAI, Azure. For non OpenAI LLMs we need to add support for max retries
+                    pass
                 # Always keeps this in elif code blocks
                 else: 
                     unsupported_params[k] = non_default_params[k]
