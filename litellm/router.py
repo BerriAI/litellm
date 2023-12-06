@@ -959,7 +959,7 @@ class Router:
                         )
                         
                 else:
-                    self.print_verbose(f"Initializing OpenAI Client for {model_name}, {str(api_base)}")
+                    self.print_verbose(f"Initializing OpenAI Client for {model_name}, {str(api_base)}, {api_key}")
                     model["async_client"] = openai.AsyncOpenAI(
                         api_key=api_key,
                         base_url=api_base,
