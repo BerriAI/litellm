@@ -2,6 +2,7 @@
 import threading, requests
 from typing import Callable, List, Optional, Dict, Union, Any
 from litellm.caching import Cache
+from litellm._logging import set_verbose
 import httpx
 
 input_callback: List[Union[str, Callable]] = []
@@ -11,7 +12,6 @@ callbacks: List[Callable] = []
 _async_success_callback: List[Callable] = [] # internal variable - async custom callbacks are routed here. 
 pre_call_rules: List[Callable] = []
 post_call_rules: List[Callable] = []
-set_verbose = False
 email: Optional[
     str
 ] = None  # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
