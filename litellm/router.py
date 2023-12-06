@@ -184,7 +184,7 @@ class Router:
         
         try: 
             # pick the one that is available (lowest TPM/RPM)
-            deployment = self.get_available_deployment(model=model, messages=messages)
+            deployment = self.get_available_deployment(model=model, messages=messages, specific_deployment=kwargs.pop("specific_deployment", None))
             kwargs.setdefault("metadata", {}).update({"deployment": deployment["litellm_params"]["model"]})
             data = deployment["litellm_params"].copy()
             for k, v in self.default_litellm_params.items(): 
@@ -232,7 +232,7 @@ class Router:
         try: 
             self.print_verbose(f"Inside _acompletion()- model: {model}; kwargs: {kwargs}")
             original_model_string = None # set a default for this variable
-            deployment = self.get_available_deployment(model=model, messages=messages)
+            deployment = self.get_available_deployment(model=model, messages=messages, specific_deployment=kwargs.pop("specific_deployment", None))
             kwargs.setdefault("metadata", {}).update({"deployment": deployment["litellm_params"]["model"]})
             data = deployment["litellm_params"].copy()
             for k, v in self.default_litellm_params.items(): 
@@ -268,7 +268,7 @@ class Router:
             kwargs.setdefault("metadata", {}).update({"model_group": model})
             messages=[{"role": "user", "content": prompt}]
             # pick the one that is available (lowest TPM/RPM)
-            deployment = self.get_available_deployment(model=model, messages=messages)
+            deployment = self.get_available_deployment(model=model, messages=messages, specific_deployment=kwargs.pop("specific_deployment", None))
 
             data = deployment["litellm_params"].copy()
             for k, v in self.default_litellm_params.items(): 
@@ -301,7 +301,7 @@ class Router:
                   is_async: Optional[bool] = False,
                   **kwargs) -> Union[List[float], None]:
         # pick the one that is available (lowest TPM/RPM)
-        deployment = self.get_available_deployment(model=model, input=input)
+        deployment = self.get_available_deployment(model=model, input=input, specific_deployment=kwargs.pop("specific_deployment", None))
         kwargs.setdefault("metadata", {}).update({"deployment": deployment["litellm_params"]["model"]})
         data = deployment["litellm_params"].copy()
         for k, v in self.default_litellm_params.items(): 
@@ -326,7 +326,7 @@ class Router:
                          is_async: Optional[bool] = True,
                          **kwargs) -> Union[List[float], None]:
         # pick the one that is available (lowest TPM/RPM)
-        deployment = self.get_available_deployment(model=model, input=input)
+        deployment = self.get_available_deployment(model=model, input=input, specific_deployment=kwargs.pop("specific_deployment", None))
         kwargs.setdefault("metadata", {}).update({"deployment": deployment["litellm_params"]["model"]})
         data = deployment["litellm_params"].copy()
         for k, v in self.default_litellm_params.items(): 
@@ -358,7 +358,7 @@ class Router:
             self.print_verbose(f'Async Response: {response}')
             return response
         except Exception as e: 
-            self.print_verbose(f"An exception occurs")
+            self.print_verbose(f"An exception occurs: {e}")
             original_exception = e
             try: 
                 self.print_verbose(f"Trying to fallback b/w models")
@@ -1031,6 +1031,8 @@ class Router:
                     model_id+= str(model["litellm_params"][key])
             model["litellm_params"]["model"] += "-ModelID-" + model_id
 
+            self.print_verbose(f"\n Initialized Model List {self.model_list}")
+
             ############ Users can either pass tpm/rpm as a litellm_param or a router param ###########
             # for get_available_deployment, we use the litellm_param["rpm"]
             # in this snippet we also set rpm to be a litellm_param
@@ -1074,16 +1076,32 @@ class Router:
     def get_available_deployment(self,
                                model: str,
                                messages: Optional[List[Dict[str, str]]] = None,
-                               input: Optional[Union[str, List]] = None):
+                               input: Optional[Union[str, List]] = None,
+                               specific_deployment: Optional[bool] = False
+                            ):
         """
         Returns the deployment based on routing strategy
         """
+
+        # users need to explicitly call a specific deployment, by setting `specific_deployment = True` as completion()/embedding() kwarg
+        # When this was no explicit we had several issues with fallbacks timing out
+        if specific_deployment == True:
+            # users can also specify a specific deployment name. At this point we should check if they are just trying to call a specific deployment
+            for deployment in self.model_list: 
+                cleaned_model = litellm.utils.remove_model_id(deployment.get("litellm_params").get("model"))
+                if cleaned_model == model: 
+                    # User Passed a specific deployment name on their config.yaml, example azure/chat-gpt-v-2
+                    # return the first deployment where the `model` matches the specificed deployment name
+                    return deployment
+            raise ValueError(f"LiteLLM Router: Trying to call specific deployment, but Model:{model} does not exist in Model List: {self.model_list}")
+
         ## get healthy deployments
         ### get all deployments 
         ### filter out the deployments currently cooling down 
         healthy_deployments = [m for m in self.model_list if m["model_name"] == model]
         if len(healthy_deployments) == 0: 
             # check if the user sent in a deployment name instead 
+            
             healthy_deployments = [m for m in self.model_list if m["litellm_params"]["model"] == model]
         self.print_verbose(f"initial list of deployments: {healthy_deployments}")
         deployments_to_remove = [] 
@@ -1099,13 +1117,6 @@ class Router:
             healthy_deployments.remove(deployment)
         self.print_verbose(f"healthy deployments: length {len(healthy_deployments)} {healthy_deployments}")
         if len(healthy_deployments) == 0: 
-            # users can also specify a specific deployment name. At this point we should check if they are just trying to call a specific deployment
-            for deployment in self.model_list: 
-                cleaned_model = litellm.utils.remove_model_id(deployment.get("litellm_params").get("model"))
-                if cleaned_model == model: 
-                    # User Passed a specific deployment name on their config.yaml, example azure/chat-gpt-v-2
-                    # return the first deployment where the `model` matches the specificed deployment name
-                    return deployment
             raise ValueError("No models available")
         if litellm.model_alias_map and model in litellm.model_alias_map:
             model = litellm.model_alias_map[
