@@ -60,4 +60,3 @@ def test_timeout_streaming():
         pass
     except Exception as e:
         pytest.fail(f"Did not raise error `openai.APITimeoutError`. Instead raised error type: {type(e)}, Error: {e}")
-test_timeout_streaming()

@@ -131,5 +131,3 @@ def test_stream_chunk_builder_litellm_tool_call_regular_message():
       assert response.system_fingerprint is not None
     except Exception as e: 
        pytest.fail(f"An exception occurred - {str(e)}")
-
-test_stream_chunk_builder_litellm_tool_call_regular_message()

@@ -33,5 +33,3 @@ def test_model_alias_map():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
         
-
-test_model_alias_map()

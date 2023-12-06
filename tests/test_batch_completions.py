@@ -33,7 +33,6 @@ def test_batch_completions():
         pass
     except Exception as e:
         pytest.fail(f"An error occurred: {e}")
-test_batch_completions()
 
 def test_batch_completions_models():
     try:

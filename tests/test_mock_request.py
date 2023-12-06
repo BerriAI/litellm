@@ -32,5 +32,3 @@ def test_streaming_mock_request():
             raise Exception("Empty response received")
     except:
         traceback.print_exc()
-
-test_streaming_mock_request()

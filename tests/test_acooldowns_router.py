@@ -161,5 +161,3 @@ def test_cooldown_same_model_name():
         print("\ngot response\n", response)
     except Exception as e:
         pytest.fail(f"Got unexpected exception on router! - {e}")
-
-test_cooldown_same_model_name()

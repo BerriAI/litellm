@@ -167,4 +167,3 @@ def test_text_completion_stream():
     except Exception as e:
         pytest.fail(f"GOT exception for HF In streaming{e}")
 
-test_text_completion_stream()

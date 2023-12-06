@@ -51,7 +51,6 @@ def test_langfuse_logging():
     except Exception as e:
         print(e)
 
-test_langfuse_logging()
 
 
 def test_langfuse_logging_stream():

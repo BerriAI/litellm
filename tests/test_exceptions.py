@@ -196,7 +196,6 @@ def test_completion_azure_exception():
         print("good job got the correct error for azure when key not set")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_azure_exception()
 
 async def asynctest_completion_azure_exception():
     try:
