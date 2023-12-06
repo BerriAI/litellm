@@ -42,6 +42,27 @@ response = completion(
 )
 ```
 
+### Specifying HF Model Name 
+To apply the correct prompt template for your sagemaker deployment, pass in it's hf model name as well. 
+
+```python
+import os 
+from litellm import completion
+
+os.environ["AWS_ACCESS_KEY_ID"] = ""
+os.environ["AWS_SECRET_ACCESS_KEY"] = ""
+os.environ["AWS_REGION_NAME"] = ""
+
+response = completion(
+            model="sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b", 
+            messages=messages,
+            temperature=0.2,
+            max_tokens=80,
+            hf_model_name="meta-llama/Llama-2-7b",
+        )
+```
+
+
 ### Usage - Streaming
 Sagemaker currently does not support streaming - LiteLLM fakes streaming by returning chunks of the response string
 
