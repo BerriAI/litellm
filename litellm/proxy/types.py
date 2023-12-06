@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Extra
-from typing import Optional, List, Union, Dict
+from typing import Optional, List, Union, Dict, Literal
 from datetime import datetime
 import uuid
 ######### Request Class Definition ######
@@ -40,7 +40,11 @@ class ProxyChatCompletionRequest(BaseModel):
 
 class ModelInfo(BaseModel):
     id: Optional[str]
-    mode: Optional[str]
+    mode: Optional[Literal['embedding', 'chat', 'completion']]
+    input_cost_per_token: Optional[float]
+    output_cost_per_token: Optional[float]
+    max_tokens: Optional[int]
+    base_model: Optional[Literal['gpt-4-1106-preview', 'gpt-4-32k', 'gpt-4', 'gpt-3.5-turbo-16k', 'gpt-3.5-turbo']]
 
     class Config:
         extra = Extra.allow  # Allow extra fields
