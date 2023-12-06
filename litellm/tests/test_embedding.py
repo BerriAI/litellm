@@ -214,7 +214,14 @@ def test_aembedding_azure():
 
 # test_aembedding_azure()
 
-# def test_custom_openai_embedding():
+def test_sagemaker_embeddings(): 
+    try: 
+        response = litellm.embedding(model="sagemaker/berri-benchmarking-gpt-j-6b-fp16", input=["good morning from litellm", "this is another item"])
+        print(f"response: {response}")
+    except Exception as e: 
+        pytest.fail(f"Error occurred: {e}")
+test_sagemaker_embeddings()
+# def local_proxy_embeddings():
 #     litellm.set_verbose=True
 #     response = embedding(
 #             model="openai/custom_embedding", 
@@ -222,4 +229,5 @@ def test_aembedding_azure():
 #             api_base="http://0.0.0.0:8000/"
 #         )
 #     print(response)
-# test_custom_openai_embedding()
+
+# local_proxy_embeddings()

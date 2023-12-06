@@ -1906,6 +1906,16 @@ def embedding(
                 optional_params=kwargs,
                 model_response= EmbeddingResponse()
             )
+        elif custom_llm_provider == "sagemaker": 
+            response = sagemaker.embedding(
+                model=model,
+                input=input,
+                encoding=encoding,
+                logging_obj=logging,
+                optional_params=kwargs,
+                model_response= EmbeddingResponse(),
+                print_verbose=print_verbose
+            )
         else:
             args = locals()
             raise ValueError(f"No valid embedding model args passed in - {args}")
