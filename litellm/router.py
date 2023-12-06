@@ -78,6 +78,7 @@ class Router:
                  routing_strategy: Literal["simple-shuffle", "least-busy", "usage-based-routing", "latency-based-routing"] = "simple-shuffle") -> None:
 
         self.set_verbose = set_verbose 
+        self.deployment_names = [] # names of models under litellm_params. ex. azure/chatgpt-v-2
         if model_list:
             self.set_model_list(model_list)
             self.healthy_deployments: List = self.model_list
@@ -990,6 +991,7 @@ class Router:
                     )
 
             ############ End of initializing Clients for OpenAI/Azure ###################
+            self.deployment_names.append(model["litellm_params"]["model"])
             model_id = ""
             for key in model["litellm_params"]:
                 if key != "api_key":
