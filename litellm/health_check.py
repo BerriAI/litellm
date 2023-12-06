@@ -1,3 +1,5 @@
+# This file runs a health check for the LLM, used on litellm/proxy
+
 import asyncio
 import random
 from typing import Optional
@@ -42,27 +44,44 @@ async def _perform_health_check(model_list: list):
     """
     Perform a health check for each model in the list.
     """
+    async def _check_embedding_model(model_params: dict):
+        model_params.pop("messages", None)
+        model_params["input"] = ["test from litellm"]
+        try:
+            await litellm.aembedding(**model_params)
+        except Exception as e:
+            print_verbose("\n\n Got Exception, ", e)
+            print_verbose(f"Health check failed for model {model_params['model']}. Error: {e}")
+            return False
+        return True
+
 
     async def _check_model(model_params: dict):
         try:
             await litellm.acompletion(**model_params)
         except Exception as e:
+            print_verbose("\n\n Got Exception, ", e)
+            error_str = (str(e))
+            if "This is not a chat model" in error_str or "The chatCompletion operation does not work with the specified model" in error_str:
+                    return await _check_embedding_model(model_params)
+                
             print_verbose(f"Health check failed for model {model_params['model']}. Error: {e}")
             return False
         
         return True
 
     prepped_params = []
-
+    tasks = []
     for model in model_list:
         litellm_params = model["litellm_params"]
         litellm_params["model"] = litellm.utils.remove_model_id(litellm_params["model"])
         litellm_params["messages"] = _get_random_llm_message()
 
         prepped_params.append(litellm_params)
-
-    
-    tasks = [_check_model(x) for x in prepped_params]
+        if "embedding" in litellm_params["model"]:
+            tasks.append(_check_embedding_model(litellm_params))
+        else:
+            tasks.append(_check_model(litellm_params))
 
     results = await asyncio.gather(*tasks)
 
@@ -94,19 +113,6 @@ async def perform_health_check(model_list: list, model: Optional[str] = None):
 
     if model is not None:
         model_list = [x for x in model_list if x["litellm_params"]["model"] == model]
-
-    models_to_check = []
-
-    for model in model_list:
-        litellm_params = model["litellm_params"]
-        model_name = litellm.utils.remove_model_id(litellm_params["model"])
-
-        if model_name in litellm.all_embedding_models:
-            continue # Skip embedding models
-
-
-        models_to_check.append(model)
-
 
     healthy_endpoints, unhealthy_endpoints = await _perform_health_check(model_list)
 
