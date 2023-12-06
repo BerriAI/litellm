@@ -326,7 +326,7 @@ def test_router_azure_acompletion():
 		os.environ["AZURE_API_KEY"] = old_api_key
 		print(f"FAILED TEST")
 		pytest.fail(f"Got unexpected exception on router! - {e}")
-test_router_azure_acompletion()
+# test_router_azure_acompletion()
 
 ### FUNCTION CALLING 
 
@@ -511,7 +511,7 @@ def test_aembedding_on_router():
 	except Exception as e:
 		traceback.print_exc()
 		pytest.fail(f"Error occurred: {e}")
-test_aembedding_on_router()
+# test_aembedding_on_router()
 
 
 def test_azure_embedding_on_router():
@@ -553,7 +553,7 @@ def test_azure_embedding_on_router():
 	except Exception as e:
 		traceback.print_exc()
 		pytest.fail(f"Error occurred: {e}")
-test_azure_embedding_on_router()
+# test_azure_embedding_on_router()
 
 
 def test_bedrock_on_router():
@@ -676,3 +676,37 @@ def test_openai_completion_on_router():
 		traceback.print_exc()
 		pytest.fail(f"Error occurred: {e}")
 # test_openai_completion_on_router()
+
+
+def test_reading_keys_os_environ():
+	try:
+		model_list = [
+				{
+					"model_name": "gpt-3.5-turbo",
+					"litellm_params": {
+						"model": "gpt-3.5-turbo",
+						"api_key": "os.environ/AZURE_API_KEY",
+						"api_base": "os.environ/AZURE_API_BASE",
+						"api_version": "os.environ/AZURE_API_VERSION",
+						"timeout": "os.environ/AZURE_TIMEOUT",
+						"stream_timeout": "os.environ/AZURE_STREAM_TIMEOUT",
+						"max_retries": "os.environ/AZURE_MAX_RETRIES",
+					},
+				},
+			]
+		
+		router = Router(model_list=model_list)
+		for model in router.model_list:
+			assert model["litellm_params"]["api_key"] == os.environ["AZURE_API_KEY"], f"{model['litellm_params']['api_key']} vs {os.environ['AZURE_API_KEY']}"
+			assert model["litellm_params"]["api_base"] == os.environ["AZURE_API_BASE"], f"{model['litellm_params']['api_base']} vs {os.environ['AZURE_API_BASE']}"
+			assert model["litellm_params"]["api_version"] == os.environ["AZURE_API_VERSION"], f"{model['litellm_params']['api_version']} vs {os.environ['AZURE_API_VERSION']}"
+			assert float(model["litellm_params"]["timeout"]) == float(os.environ["AZURE_TIMEOUT"]), f"{model['litellm_params']['timeout']} vs {os.environ['AZURE_TIMEOUT']}"
+			assert float(model["litellm_params"]["stream_timeout"]) == float(os.environ["AZURE_STREAM_TIMEOUT"]), f"{model['litellm_params']['stream_timeout']} vs {os.environ['AZURE_STREAM_TIMEOUT']}"
+			assert int(model["litellm_params"]["max_retries"]) == int(os.environ["AZURE_MAX_RETRIES"]), f"{model['litellm_params']['max_retries']} vs {os.environ['AZURE_MAX_RETRIES']}"
+		
+		router.reset()
+	except Exception as e:
+		traceback.print_exc()
+		pytest.fail(f"Error occurred: {e}")
+
+# test_reading_keys_os_environ()
