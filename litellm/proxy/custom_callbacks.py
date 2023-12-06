@@ -88,7 +88,6 @@ async def async_on_succes_logger(kwargs, response_obj, start_time, end_time):
 
 async def async_on_fail_logger(kwargs, response_obj, start_time, end_time):
     print(f"On Async Failure!")
-    print(kwargs)
 
     # Access kwargs passed to litellm.completion()
     model = kwargs.get("model", None)
