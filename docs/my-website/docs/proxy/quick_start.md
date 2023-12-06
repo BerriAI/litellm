@@ -144,7 +144,7 @@ $ litellm --model azure/my-deployment-name
 ```
 
 </TabItem>
-<TabItem value="openai-proxy" label="OpenAI">
+<TabItem value="openai" label="OpenAI">
 
 ```shell
 $ export OPENAI_API_KEY=my-api-key
@@ -154,13 +154,23 @@ $ export OPENAI_API_KEY=my-api-key
 $ litellm --model gpt-3.5-turbo
 ```
 </TabItem>
+<TabItem value="openai-proxy" label="OpenAI Compatible Endpoint">
+
+```shell
+$ export OPENAI_API_KEY=my-api-key
+```
+
+```shell
+$ litellm --model openai/<your model name> --api_base <your-api-base> # e.g. http://0.0.0.0:3000
+```
+</TabItem>
 <TabItem value="huggingface" label="Huggingface (TGI) Deployed">
 
 ```shell
 $ export HUGGINGFACE_API_KEY=my-api-key #[OPTIONAL]
 ```
 ```shell
-$ litellm --model huggingface/<your model name> --api_base https://k58ory32yinf1ly0.us-east-1.aws.endpoints.huggingface.cloud
+$ litellm --model huggingface/<your model name> --api_base <your-api-base> # e.g. http://0.0.0.0:3000
 ```
 
 </TabItem>
@@ -270,6 +280,8 @@ $ litellm --model command-nightly
 </Tabs>
 
 
+
+
 ## Quick Start - LiteLLM Proxy + Config.yaml
 The config allows you to create a model list and set `api_base`, `max_tokens` (all litellm params). See more details about the config [here](https://docs.litellm.ai/docs/proxy/configs)
 
@@ -277,9 +289,9 @@ The config allows you to create a model list and set `api_base`, `max_tokens` (a
 Example config
 
 ```yaml
-model_list:
-  - model_name: gpt-3.5-turbo
-    litellm_params:
+model_list: 
+  - model_name: gpt-3.5-turbo # user-facing model alias
+    litellm_params: # all params accepted by litellm.completion() - https://docs.litellm.ai/docs/completion/input
       model: azure/<your-deployment-name>
       api_base: <your-azure-api-endpoint>
       api_key: <your-azure-api-key>
@@ -288,6 +300,10 @@ model_list:
       model: azure/gpt-turbo-small-ca
       api_base: https://my-endpoint-canada-berri992.openai.azure.com/
       api_key: <your-azure-api-key>
+  - model_name: vllm-model
+    litellm_params:
+      model: openai/<your-model-name>
+      api_base: <your-api-base> # e.g. http://0.0.0.0:3000
 ```
 
 ### Run proxy with config
@@ -295,6 +311,8 @@ model_list:
 ```shell
 litellm --config your_config.yaml
 ```
+
+[**More Info**](./configs.md)
 
 ## Quick Start Docker Image: Github Container Registry
 
