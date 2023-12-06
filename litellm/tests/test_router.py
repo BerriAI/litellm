@@ -679,6 +679,7 @@ def test_openai_completion_on_router():
 
 
 def test_reading_keys_os_environ():
+	import openai
 	try:
 		model_list = [
 				{
@@ -703,10 +704,13 @@ def test_reading_keys_os_environ():
 			assert float(model["litellm_params"]["timeout"]) == float(os.environ["AZURE_TIMEOUT"]), f"{model['litellm_params']['timeout']} vs {os.environ['AZURE_TIMEOUT']}"
 			assert float(model["litellm_params"]["stream_timeout"]) == float(os.environ["AZURE_STREAM_TIMEOUT"]), f"{model['litellm_params']['stream_timeout']} vs {os.environ['AZURE_STREAM_TIMEOUT']}"
 			assert int(model["litellm_params"]["max_retries"]) == int(os.environ["AZURE_MAX_RETRIES"]), f"{model['litellm_params']['max_retries']} vs {os.environ['AZURE_MAX_RETRIES']}"
-		
+			print("passed testing of reading keys from os.environ")
+			async_client: openai.AsyncAzureOpenAI = model["async_client"]
+			assert async_client.api_key == os.environ["AZURE_API_KEY"]
+			assert async_client.base_url == os.environ["AZURE_API_BASE"]		
 		router.reset()
 	except Exception as e:
 		traceback.print_exc()
 		pytest.fail(f"Error occurred: {e}")
 
-# test_reading_keys_os_environ()
+test_reading_keys_os_environ()
