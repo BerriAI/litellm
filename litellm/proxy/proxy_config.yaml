@@ -5,6 +5,14 @@ model_list:
       api_base: os.environ/AZURE_API_BASE
       api_key: os.environ/AZURE_API_KEY
       api_version: "2023-07-01-preview"
+    model_info:
+      mode: chat
+  - model_name: openai-gpt-3.5
+    litellm_params:
+      model: gpt-3.5-turbo
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      mode: chat
   - model_name: azure-embedding-model
     litellm_params:
       model: azure/azure-embedding-model
@@ -13,16 +21,18 @@ model_list:
       api_version: "2023-07-01-preview"
     model_info:
       mode: embedding
-  - model_name: openai-gpt-3.5
-    litellm_params:
-      model: gpt-3.5-turbo
-      api_key: os.environ/OPENAI_API_KEY
   - model_name: text-embedding-ada-002
     litellm_params:
       model: text-embedding-ada-002
       api_key: os.environ/OPENAI_API_KEY
     model_info:
       mode: embedding
+  - model_name: text-davinci-003
+    litellm_params:
+      model: text-davinci-003
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      mode: completion
 
 
 litellm_settings:
