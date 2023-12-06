@@ -104,6 +104,13 @@
         "litellm_provider": "openai",
         "mode": "chat"
     },
+    "text-embedding-ada-002": {
+        "max_tokens": 8191,
+        "input_cost_per_token": 0.0000001,
+        "output_cost_per_token": 0.000000,
+        "litellm_provider": "openai",
+        "mode": "embedding"
+    },
     "azure/gpt-4-1106-preview": {
         "max_tokens": 128000,
         "input_cost_per_token": 0.00001,
