@@ -843,6 +843,7 @@ async def chat_completion(request: Request, model: Optional[str] = None, user_ap
             data["user"] = user_api_key_dict.user_id
 
         if "metadata" in data:
+            print(f'received metadata: {data["metadata"]}')
             data["metadata"]["user_api_key"] = user_api_key_dict.api_key
             data["metadata"]["headers"] = request.headers
         else:

@@ -339,7 +339,7 @@ cohere_embedding_models: List = [
     "embed-english-light-v2.0", 
     "embed-multilingual-v2.0", 
 ]
-bedrock_embedding_models: List = ["amazon.titan-embed-text-v1"]
+bedrock_embedding_models: List = ["amazon.titan-embed-text-v1", "cohere.embed-english-v3", "cohere.embed-multilingual-v3"]
 
 all_embedding_models = open_ai_embedding_models + cohere_embedding_models + bedrock_embedding_models
 

@@ -151,7 +151,7 @@ def test_cohere_embedding3():
 
 # test_cohere_embedding3()
 
-def test_bedrock_embedding():
+def test_bedrock_embedding_titan():
     try:
         response = embedding(
             model="amazon.titan-embed-text-v1", input=["good morning from litellm, attempting to embed data",
@@ -161,6 +161,19 @@ def test_bedrock_embedding():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 # test_bedrock_embedding()
+
+def test_bedrock_embedding_cohere():
+    try:
+        # litellm.set_verbose=True
+        response = embedding(
+            model="cohere.embed-multilingual-v3", input=["good morning from litellm, attempting to embed data", "lets test a second string for good measure"],
+            aws_region_name="os.environ/AWS_REGION_NAME_2"
+        )
+        # print(f"response:", response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+test_bedrock_embedding_cohere()
 
 # comment out hf tests - since hf endpoints are unstable
 def test_hf_embedding():
