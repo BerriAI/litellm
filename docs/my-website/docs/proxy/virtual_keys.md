@@ -3,6 +3,8 @@ Track Spend and create virtual keys for the proxy
 
 Grant other's temporary access to your proxy, with keys that expire after a set duration.
 
+## Quick Start
+
 Requirements: 
 
 - Need to a postgres database (e.g. [Supabase](https://supabase.com/), [Neon](https://neon.tech/), etc)
@@ -54,7 +56,7 @@ Expected response:
 }
 ```
 
-### Managing Auth - Upgrade/Downgrade Models 
+## Managing Auth - Upgrade/Downgrade Models 
 
 If a user is expected to use a given model (i.e. gpt3-5), and you want to:
 
@@ -103,7 +105,7 @@ curl -X POST "https://0.0.0.0:8000/key/generate" \
 - **How to upgrade / downgrade request?** Change the alias mapping
 - **How are routing between diff keys/api bases done?** litellm handles this by shuffling between different models in the model list with the same model_name. [**See Code**](https://github.com/BerriAI/litellm/blob/main/litellm/router.py)
 
-### Managing Auth - Tracking Spend 
+## Managing Auth - Tracking Spend 
 
 You can get spend for a key by using the `/key/info` endpoint. 
 
@@ -136,3 +138,53 @@ This is automatically updated (in USD) when calls are made to /completions, /cha
     }
 }
 ```
+
+## Custom Auth 
+
+You can now override the default api key auth. 
+
+Here's how: 
+
+### 1. Create a custom auth file. 
+
+Make sure the response type follows the `UserAPIKeyAuth` pydantic object. This is used by for logging usage specific to that user key.
+
+```python
+from litellm.proxy.types import UserAPIKeyAuth
+
+async def user_api_key_auth(request: Request, api_key: str) -> UserAPIKeyAuth: 
+    try: 
+        modified_master_key = "sk-my-master-key"
+        if api_key == modified_master_key:
+            return UserAPIKeyAuth(api_key=api_key)
+        raise Exception
+    except: 
+        raise Exception
+```
+
+### 2. Pass the filepath (relative to the config.yaml)
+
+Pass the filepath to the config.yaml 
+
+e.g. if they're both in the same dir - `./config.yaml` and `./custom_auth.py`, this is what it looks like:
+```yaml 
+model_list: 
+  - model_name: "openai-model"
+    litellm_params: 
+      model: "gpt-3.5-turbo"
+
+litellm_settings:
+  drop_params: True
+  set_verbose: True
+
+general_settings:
+  custom_auth: custom_auth.user_api_key_auth
+```
+
+[**Implementation Code**](https://github.com/BerriAI/litellm/blob/caf2a6b279ddbe89ebd1d8f4499f65715d684851/litellm/proxy/utils.py#L122)
+
+### 3. Start the proxy
+```bash
+$ litellm --config /path/to/config.yaml 
+```
+
