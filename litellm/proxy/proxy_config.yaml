@@ -11,6 +11,7 @@ model_list:
       api_base: os.environ/AZURE_API_BASE
       api_key: os.environ/AZURE_API_KEY
       api_version: "2023-07-01-preview"
+    mode: embedding
   - model_name: openai-gpt-3.5
     litellm_params:
       model: gpt-3.5-turbo
@@ -19,6 +20,7 @@ model_list:
     litellm_params:
       model: text-embedding-ada-002
       api_key: os.environ/OPENAI_API_KEY
+    mode: embedding
 
 
 litellm_settings:
