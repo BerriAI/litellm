@@ -1113,6 +1113,36 @@ class Logging:
                 f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while failure logging {traceback.format_exc()}"
             )
             pass
+    async def async_failure_handler(self, exception, traceback_exception, start_time=None, end_time=None):
+        """
+        Implementing async callbacks, to handle asyncio event loop issues when custom integrations need to use async functions.
+        """
+        # on some exceptions, model_call_details is not always initialized, this ensures that we still log those exceptions
+        if not hasattr(self, "model_call_details"):
+            self.model_call_details = {}
+
+        self.model_call_details["log_event_type"] = "failed_api_call"
+        self.model_call_details["exception"] = exception
+        self.model_call_details["traceback_exception"] = traceback_exception
+        self.model_call_details["end_time"] = end_time
+        result = {} # result sent to all loggers, init this to None incase it's not created 
+
+        for callback in litellm._async_failure_callback:
+            try: 
+                if callable(callback): # custom logger functions
+                    await customLogger.async_log_failure_event(
+                        kwargs=self.model_call_details,
+                        response_obj=result,
+                        start_time=start_time,
+                        end_time=end_time,
+                        print_verbose=print_verbose,
+                        callback_func=callback
+                    )
+            except: 
+                print_verbose(
+                    f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while success logging {traceback.format_exc()}"
+                )
+
 
 
 def exception_logging(
@@ -1231,6 +1261,17 @@ def client(original_function):
                 for index, callback in enumerate(litellm.success_callback): 
                     if inspect.iscoroutinefunction(callback): 
                         litellm._async_success_callback.append(callback)
+                        removed_async_items.append(index)
+
+                # Pop the async items from success_callback in reverse order to avoid index issues
+                for index in reversed(removed_async_items):
+                    litellm.success_callback.pop(index)
+            
+            if len(litellm.failure_callback) > 0: 
+                removed_async_items = []
+                for index, callback in enumerate(litellm.failure_callback): 
+                    if inspect.iscoroutinefunction(callback): 
+                        litellm._async_failure_callback.append(callback)
                         removed_async_items.append(index)
 
                 # Pop the async items from success_callback in reverse order to avoid index issues
@@ -1513,6 +1554,7 @@ def client(original_function):
             end_time = datetime.datetime.now()
             if logging_obj:
                 logging_obj.failure_handler(e, traceback_exception, start_time, end_time) # DO NOT MAKE THREADED - router retry fallback relies on this!
+                asyncio.create_task(logging_obj.async_failure_handler(e, traceback_exception, start_time, end_time))
             raise e
 
     is_coroutine = inspect.iscoroutinefunction(original_function)
