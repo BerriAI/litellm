@@ -10,6 +10,8 @@ model_list:
       input_cost_per_token: 0.0.00006
       output_cost_per_token: 0.00003
       max_tokens: 4096
+      base_model: gpt-35-turbo
+  
   - model_name: openai-gpt-3.5
     litellm_params:
       model: gpt-3.5-turbo
