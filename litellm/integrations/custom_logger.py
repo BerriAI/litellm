@@ -81,3 +81,23 @@ class CustomLogger: # https://docs.litellm.ai/docs/observability/custom_callback
             # traceback.print_exc()
             print_verbose(f"Custom Logger Error - {traceback.format_exc()}")
             pass
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time, print_verbose, callback_func):
+        # Method definition
+        try:
+            kwargs["log_event_type"] = "post_api_call"
+            await callback_func(
+                kwargs, # kwargs to func
+                response_obj,
+                start_time,
+                end_time,
+            )
+            print_verbose(
+                f"Custom Logger - final response object: {response_obj}"
+            )
+        except:
+            # traceback.print_exc()
+            print_verbose(f"Custom Logger Error - {traceback.format_exc()}")
+            pass
+    
+    
