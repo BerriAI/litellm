@@ -609,6 +609,8 @@ def initialize(
     generate_feedback_box()
     user_model = model
     user_debug = debug
+    if debug==True:  # this needs to be first, so users can see Router init debugg
+        litellm.set_verbose = True
     dynamic_config = {"general": {}, user_model: {}}
     if config:
         llm_router, llm_model_list, general_settings = load_router_config(router=llm_router, config_file_path=config)
@@ -646,8 +648,6 @@ def initialize(
     if max_budget:  # litellm-specific param
         litellm.max_budget = max_budget
         dynamic_config["general"]["max_budget"] = max_budget
-    if debug==True:  # litellm-specific param
-        litellm.set_verbose = True
     if use_queue: 
         celery_setup(use_queue=use_queue)
     if experimental: 
