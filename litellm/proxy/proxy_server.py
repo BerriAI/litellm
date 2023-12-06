@@ -7,6 +7,8 @@ import secrets, subprocess
 import hashlib, uuid
 import warnings
 import importlib
+
+from litellm.health_check import perform_health_check
 messages: list = []
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -1173,34 +1175,14 @@ async def test_endpoint(request: Request):
 @router.get("/health", description="Check the health of all the endpoints in config.yaml", tags=["health"])
 async def health_endpoint(request: Request, model: Optional[str] = fastapi.Query(None, description="Specify the model name (optional)")):
     global llm_model_list
-    healthy_endpoints = []
-    unhealthy_endpoints = []
-    if llm_model_list: 
-        for model_name in llm_model_list: 
-            try: 
-                if model is None or model == model_name["litellm_params"]["model"]: # if model specified, just call that one. 
-                    litellm_params = model_name["litellm_params"]
-                    model_name = litellm.utils.remove_model_id(litellm_params["model"]) # removes, ids set by litellm.router
-                    if model_name not in litellm.all_embedding_models: # filter out embedding models
-                        litellm_params["messages"] = [{"role": "user", "content": "Hey, how's it going?"}]
-                        litellm_params["model"] = model_name
-                        litellm.completion(**litellm_params)
-                        cleaned_params = {}
-                        for key in litellm_params:
-                            if key != "api_key" and key != "messages":
-                                cleaned_params[key] = litellm_params[key]
-                        healthy_endpoints.append(cleaned_params)
-            except Exception as e:
-                print("Got Exception", e) 
-                cleaned_params = {}
-                for key in litellm_params:
-                    if key != "api_key" and key != "messages":
-                        cleaned_params[key] = litellm_params[key]
-                unhealthy_endpoints.append(cleaned_params)
-                pass
+
+    healthy_endpoints, unhealthy_endpoints = await perform_health_check(llm_model_list, model)
+
     return {
         "healthy_endpoints": healthy_endpoints,
-        "unhealthy_endpoints": unhealthy_endpoints
+        "unhealthy_endpoints": unhealthy_endpoints,
+        "healthy_count": len(healthy_endpoints),
+        "unhealthy_count": len(unhealthy_endpoints),
     }
 
 @router.get("/")
