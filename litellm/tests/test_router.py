@@ -184,7 +184,7 @@ def test_call_one_endpoint():
 				"rpm": 10000,
 			},
 		]
-
+		litellm.set_verbose=True
 		router = Router(model_list=model_list, 
 					routing_strategy="simple-shuffle",
 					set_verbose=True,
@@ -200,6 +200,7 @@ def test_call_one_endpoint():
 						"content": "hello this request will pass"
 					}
 				],
+				specific_deployment=True
 			)
 			print("\n response", response)
 
@@ -212,6 +213,7 @@ def test_call_one_endpoint():
 						"content": "hello this request will pass"
 					}
 				],
+				specific_deployment=True
 			)
 
 			print("\n response", response)
@@ -219,7 +221,8 @@ def test_call_one_endpoint():
 		async def call_azure_embedding():
 			response = await router.aembedding(
 				model="azure/azure-embedding-model",
-				input = ["good morning from litellm"]
+				input = ["good morning from litellm"],
+				specific_deployment=True
 			)
 
 			print("\n response", response)
