@@ -8,7 +8,7 @@
 #  Thank you ! We ❤️ you! - Krrish & Ishaan 
 
 from datetime import datetime
-from typing import Dict, List, Optional, Union, Literal
+from typing import Dict, List, Optional, Union, Literal, Any
 import random, threading, time, traceback
 import litellm, openai
 from litellm.caching import RedisCache, InMemoryCache, DualCache
@@ -651,10 +651,10 @@ class Router:
                 if k != "metadata":
                     previous_model[k] = v
                 elif k == "metadata" and isinstance(v, dict): 
-                    previous_model[k] = {}
+                    previous_model["metadata"] = {} # type: ignore
                     for metadata_k, metadata_v in kwargs['metadata'].items(): 
                         if metadata_k != "previous_models": 
-                            previous_model[k][metadata_k] = metadata_v
+                            previous_model[k][metadata_k] = metadata_v # type: ignore
             self.previous_models.append(previous_model)
             kwargs["metadata"]["previous_models"] = self.previous_models
             return kwargs
