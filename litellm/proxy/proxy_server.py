@@ -510,6 +510,18 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
                     else:
                         litellm.success_callback.append(callback)
                 print_verbose(f"{blue_color_code} Initialized Success Callbacks - {litellm.success_callback} {reset_color_code}")
+            elif key == "failure_callback":
+                litellm.failure_callback = []
+                
+                # intialize success callbacks
+                for callback in value:
+                    # user passed custom_callbacks.async_on_succes_logger. They need us to import a function
+                    if "." in callback: 
+                        litellm.failure_callback.append(get_instance_fn(value=callback))
+                    # these are litellm callbacks - "langfuse", "sentry", "wandb"
+                    else:
+                        litellm.failure_callback.append(callback)
+                print_verbose(f"{blue_color_code} Initialized Success Callbacks - {litellm.failure_callback} {reset_color_code}")
             else:
                 setattr(litellm, key, value)
                 
