@@ -35,6 +35,7 @@ jobs:
             pip install numpydoc
             pip install traceloop-sdk==0.0.69
             pip install openai
+            pip install prisma
       - save_cache:
           paths:
             - ./venv
@@ -44,7 +45,7 @@ jobs:
           command: |
             cd litellm
             python -m pip install types-requests types-setuptools types-redis
-            if ! python -m mypy . --ignore-missing-imports --explicit-package-bases; then
+            if ! python -m mypy . --ignore-missing-imports; then
               echo "mypy detected errors"
               exit 1
             fi

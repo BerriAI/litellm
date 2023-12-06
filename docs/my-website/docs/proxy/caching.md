@@ -12,17 +12,27 @@ model_list:
 litellm_settings:
   set_verbose: True
   cache:          # init cache
-    type: redis   # tell litellm to use redis caching
+    type: redis   # tell litellm to use redis caching (Also: `pip install redis`)
 ```
 
 #### Step 2: Add Redis Credentials to .env
-LiteLLM requires the following REDIS credentials in your env to enable caching
+Set either `REDIS_URL` or the `REDIS_HOST` in your os environment, to enable caching.
 
   ```shell
+  REDIS_URL = ""        # REDIS_URL='redis://username:password@hostname:port/database'
+  ## OR ## 
   REDIS_HOST = ""       # REDIS_HOST='redis-18841.c274.us-east-1-3.ec2.cloud.redislabs.com'
   REDIS_PORT = ""       # REDIS_PORT='18841'
   REDIS_PASSWORD = ""   # REDIS_PASSWORD='liteLlmIsAmazing'
   ```
+
+**Additional kwargs**  
+You can pass in any additional redis.Redis arg, by storing the variable + value in your os environment, like this: 
+```shell
+REDIS_<redis-kwarg-name> = ""
+``` 
+
+[**See how it's read from the environment**](https://github.com/BerriAI/litellm/blob/4d7ff1b33b9991dcf38d821266290631d9bcd2dd/litellm/_redis.py#L40)
 #### Step 3: Run proxy with config
 ```shell
 $ litellm --config /path/to/config.yaml

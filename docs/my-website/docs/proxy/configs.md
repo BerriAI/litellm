@@ -1,3 +1,7 @@
+import Image from '@theme/IdealImage';
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # Proxy Config.yaml
 Set model list, `api_base`, `api_key`, `temperature` & proxy server settings (`master-key`) on the config.yaml. 
 
@@ -8,70 +12,48 @@ Set model list, `api_base`, `api_key`, `temperature` & proxy server settings (`m
 | `general_settings`   | Server settings, example setting `master_key: sk-my_special_key` |
 | `environment_variables`   | Environment Variables example, `REDIS_HOST`, `REDIS_PORT` |
 
-#### Example Config
+## Quick Start 
+
+Set a model alias for your deployments. 
+
+In the `config.yaml` the model_name parameter is the user-facing name to use for your deployment. 
+
+In the config below requests with:
+- `model=vllm-models` will route to `openai/facebook/opt-125m`. 
+- `model=gpt-3.5-turbo` will load balance between `azure/gpt-turbo-small-eu` and `azure/gpt-turbo-small-ca`
+
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
-    litellm_params:
+  - model_name: gpt-3.5-turbo # user-facing model alias
+    litellm_params: # all params accepted by litellm.completion() - https://docs.litellm.ai/docs/completion/input
       model: azure/gpt-turbo-small-eu
       api_base: https://my-endpoint-europe-berri-992.openai.azure.com/
-      api_key: 
+      api_key: "os.environ/AZURE_API_KEY_EU" # does os.getenv("AZURE_API_KEY_EU")
       rpm: 6      # Rate limit for this deployment: in requests per minute (rpm)
+  - model_name: bedrock-claude-v1 
+    litellm_params:
+      model: bedrock/anthropic.claude-instant-v1
   - model_name: gpt-3.5-turbo
     litellm_params:
       model: azure/gpt-turbo-small-ca
       api_base: https://my-endpoint-canada-berri992.openai.azure.com/
-      api_key: 
+      api_key: "os.environ/AZURE_API_KEY_CA"
       rpm: 6
-  - model_name: gpt-3.5-turbo
+  - model_name: vllm-models
     litellm_params:
-      model: azure/gpt-turbo-large
-      api_base: https://openai-france-1234.openai.azure.com/
-      api_key: 
+      model: openai/facebook/opt-125m # the `openai/` prefix tells litellm it's openai compatible
+      api_base: http://0.0.0.0:8000
       rpm: 1440
+    model_info: 
+      version: 2
 
-litellm_settings:
+litellm_settings: # module level litellm settings - https://github.com/BerriAI/litellm/blob/main/litellm/__init__.py
   drop_params: True
   set_verbose: True
 
 general_settings: 
   master_key: sk-1234 # [OPTIONAL] Only use this if you to require all calls to contain this key (Authorization: Bearer sk-1234)
-
-
-environment_variables:
-  OPENAI_API_KEY: sk-123
-  REPLICATE_API_KEY: sk-cohere-is-okay
-  REDIS_HOST: redis-16337.c322.us-east-1-2.ec2.cloud.redislabs.com
-  REDIS_PORT: "16337"
-  REDIS_PASSWORD: 
 ```
-
-### Config for Multiple Models - GPT-4, Claude-2
-
-Here's how you can use multiple llms with one proxy `config.yaml`. 
-
-#### Step 1: Setup Config
-```yaml
-model_list:
-  - model_name: zephyr-alpha # the 1st model is the default on the proxy
-    litellm_params: # params for litellm.completion() - https://docs.litellm.ai/docs/completion/input#input---request-body
-      model: huggingface/HuggingFaceH4/zephyr-7b-alpha
-      api_base: http://0.0.0.0:8001
-  - model_name: gpt-4
-    litellm_params:
-      model: gpt-4
-      api_key: sk-1233
-  - model_name: claude-2
-    litellm_params:
-      model: claude-2
-      api_key: sk-claude    
-```
-
-:::info
-
-The proxy uses the first model in the config as the default model - in this config the default model is `zephyr-alpha`
-:::
-
 
 #### Step 2: Start Proxy with config
 
@@ -79,13 +61,22 @@ The proxy uses the first model in the config as the default model - in this conf
 $ litellm --config /path/to/config.yaml
 ```
 
-#### Step 3: Use proxy
-Curl Command
+
+### Using Proxy - Curl Request, OpenAI Package, Langchain, Langchain JS
+Calling a model group 
+
+<Tabs>
+<TabItem value="Curl" label="Curl Request">
+
+Sends request to model where `model_name=gpt-3.5-turbo` on config.yaml. 
+
+If multiple with `model_name=gpt-3.5-turbo` does [Load Balancing](https://docs.litellm.ai/docs/proxy/load_balancing)
+
 ```shell
 curl --location 'http://0.0.0.0:8000/chat/completions' \
 --header 'Content-Type: application/json' \
 --data ' {
-      "model": "zephyr-alpha",
+      "model": "gpt-3.5-turbo",
       "messages": [
         {
           "role": "user",
@@ -95,32 +86,108 @@ curl --location 'http://0.0.0.0:8000/chat/completions' \
     }
 '
 ```
+</TabItem>
 
-### Config for Embedding Models - xorbitsai/inference
+<TabItem value="Curl2" label="Curl Request: Bedrock">
 
-Here's how you can use multiple llms with one proxy `config.yaml`. 
-Here is how [LiteLLM calls OpenAI Compatible Embedding models](https://docs.litellm.ai/docs/embedding/supported_embedding#openai-compatible-embedding-models)
+Sends this request to model where `model_name=bedrock-claude-v1` on config.yaml
 
-#### Config
-```yaml
-model_list:
-  - model_name: custom_embedding_model
-    litellm_params:
-      model: openai/custom_embedding  # the `openai/` prefix tells litellm it's openai compatible
-      api_base: http://0.0.0.0:8000/
-  - model_name: custom_embedding_model
-    litellm_params:
-      model: openai/custom_embedding  # the `openai/` prefix tells litellm it's openai compatible
-      api_base: http://0.0.0.0:8001/
-```
-
-Run the proxy using this config
 ```shell
-$ litellm --config /path/to/config.yaml
+curl --location 'http://0.0.0.0:8000/chat/completions' \
+--header 'Content-Type: application/json' \
+--data ' {
+      "model": "bedrock-claude-v1",
+      "messages": [
+        {
+          "role": "user",
+          "content": "what llm are you"
+        }
+      ],
+    }
+'
+```
+</TabItem>
+<TabItem value="openai" label="OpenAI v1.0.0+">
+
+```python
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:8000"
+)
+
+# Sends request to model where `model_name=gpt-3.5-turbo` on config.yaml. 
+response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
+    {
+        "role": "user",
+        "content": "this is a test request, write a short poem"
+    }
+])
+
+print(response)
+
+# Sends this request to model where `model_name=bedrock-claude-v1` on config.yaml
+response = client.chat.completions.create(model="bedrock-claude-v1", messages = [
+    {
+        "role": "user",
+        "content": "this is a test request, write a short poem"
+    }
+])
+
+print(response)
+
 ```
 
-### Save Model-specific params (API Base, API Keys, Temperature, Headers etc.)
+</TabItem>
+<TabItem value="langchain" label="Langchain Python">
+
+```python
+from langchain.chat_models import ChatOpenAI
+from langchain.prompts.chat import (
+    ChatPromptTemplate,
+    HumanMessagePromptTemplate,
+    SystemMessagePromptTemplate,
+)
+from langchain.schema import HumanMessage, SystemMessage
+
+messages = [
+    SystemMessage(
+        content="You are a helpful assistant that im using to make a test request to."
+    ),
+    HumanMessage(
+        content="test from litellm. tell me why it's amazing in 1 sentence"
+    ),
+]
+
+# Sends request to model where `model_name=gpt-3.5-turbo` on config.yaml. 
+chat = ChatOpenAI(
+    openai_api_base="http://0.0.0.0:8000",  # set openai base to the proxy
+    model = "gpt-3.5-turbo",                
+    temperature=0.1
+)
+
+response = chat(messages)
+print(response)
+
+# Sends request to model where `model_name=bedrock-claude-v1` on config.yaml. 
+claude_chat = ChatOpenAI(
+    openai_api_base="http://0.0.0.0:8000", # set openai base to the proxy
+    model = "bedrock-claude-v1",                   
+    temperature=0.1
+)
+
+response = claude_chat(messages)
+print(response)
+```
+
+</TabItem>
+</Tabs>
+
+
+## Save Model-specific params (API Base, API Keys, Temperature, Headers etc.)
 You can use the config to save model-specific information like api_base, api_key, temperature, max_tokens, etc. 
+
+[**All input params**](https://docs.litellm.ai/docs/completion/input#input-params-1)
 
 **Step 1**: Create a `config.yaml` file
 ```yaml
@@ -152,9 +219,11 @@ model_list:
 $ litellm --config /path/to/config.yaml
 ```
 
-### Load API Keys from Vault 
+## Load API Keys
 
-If you have secrets saved in Azure Vault, etc. and don't want to expose them in the config.yaml, here's how to load model-specific keys from the environment. 
+### Load API Keys from Environment 
+
+If you have secrets saved in your environment, and don't want to expose them in the config.yaml, here's how to load model-specific keys from the environment. 
 
 ```python
 os.environ["AZURE_NORTH_AMERICA_API_KEY"] = "your-azure-api-key"
@@ -174,30 +243,42 @@ model_list:
 
 s/o to [@David Manouchehri](https://www.linkedin.com/in/davidmanouchehri/) for helping with this. 
 
-### Config for setting Model Aliases
+### Load API Keys from Azure Vault 
 
-Set a model alias for your deployments. 
+1. Install Proxy dependencies 
+```bash
+$ pip install litellm[proxy] litellm[extra_proxy]
+```
 
-In the `config.yaml` the model_name parameter is the user-facing name to use for your deployment. 
+2. Save Azure details in your environment
+```bash 
+export["AZURE_CLIENT_ID"]="your-azure-app-client-id"
+export["AZURE_CLIENT_SECRET"]="your-azure-app-client-secret"
+export["AZURE_TENANT_ID"]="your-azure-tenant-id"
+export["AZURE_KEY_VAULT_URI"]="your-azure-key-vault-uri"
+```
 
-In the config below requests with `model=gpt-4` will route to `ollama/llama2`
-
+3. Add to proxy config.yaml 
 ```yaml
-model_list:
-  - model_name: text-davinci-003
-    litellm_params:
-        model: ollama/zephyr
-  - model_name: gpt-4
-    litellm_params:
-        model: ollama/llama2
-  - model_name: gpt-3.5-turbo
-    litellm_params:
-        model: ollama/llama2
+model_list: 
+    - model_name: "my-azure-models" # model alias 
+        litellm_params:
+            model: "azure/<your-deployment-name>"
+            api_key: "os.environ/AZURE-API-KEY" # reads from key vault - get_secret("AZURE_API_KEY")
+            api_base: "os.environ/AZURE-API-BASE" # reads from key vault - get_secret("AZURE_API_BASE")
+
+general_settings:
+  use_azure_key_vault: True
+```
+
+You can now test this by starting your proxy: 
+```bash
+litellm --config /path/to/config.yaml
 ```
 
 ### Set Custom Prompt Templates
 
-LiteLLM by default checks if a model has a [prompt template and applies it](./completion/prompt_formatting.md) (e.g. if a huggingface model has a saved chat template in it's tokenizer_config.json). However, you can also set a custom prompt template on your proxy in the `config.yaml`: 
+LiteLLM by default checks if a model has a [prompt template and applies it](../completion/prompt_formatting.md) (e.g. if a huggingface model has a saved chat template in it's tokenizer_config.json). However, you can also set a custom prompt template on your proxy in the `config.yaml`: 
 
 **Step 1**: Save your prompt template in a `config.yaml`
 ```yaml
