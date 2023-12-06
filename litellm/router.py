@@ -78,7 +78,7 @@ class Router:
                  routing_strategy: Literal["simple-shuffle", "least-busy", "usage-based-routing", "latency-based-routing"] = "simple-shuffle") -> None:
 
         self.set_verbose = set_verbose 
-        self.deployment_names = [] # names of models under litellm_params. ex. azure/chatgpt-v-2
+        self.deployment_names: List = [] # names of models under litellm_params. ex. azure/chatgpt-v-2
         if model_list:
             self.set_model_list(model_list)
             self.healthy_deployments: List = self.model_list
