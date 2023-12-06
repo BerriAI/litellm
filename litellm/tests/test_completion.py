@@ -1053,10 +1053,11 @@ def test_completion_chat_sagemaker():
         print("testing sagemaker")
         litellm.set_verbose=True
         response = completion(
-            model="sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b-f", 
+            model="sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b-chat", 
             messages=messages,
             max_tokens=100,
             stream=True,
+            n=2,
             hf_model_name="meta-llama/Llama-2-7b-chat-hf",
         )
         # Add any assertions here to check the response
