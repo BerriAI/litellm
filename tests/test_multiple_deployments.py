@@ -49,5 +49,3 @@ def test_multiple_deployments():
     except Exception as e:
         traceback.print_exc()
         pytest.fail(f"An exception occurred: {e}")
-
-test_multiple_deployments()

@@ -109,8 +109,6 @@ def test_parallel_function_call():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_parallel_function_call()
-
 
 
 
@@ -193,5 +191,3 @@ def test_parallel_function_call_stream():
             return second_response
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-
-test_parallel_function_call_stream()

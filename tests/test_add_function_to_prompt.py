@@ -40,8 +40,6 @@ def test_function_call_non_openai_model():
         print(e)
         pass
 
-test_function_call_non_openai_model()
-
 ## case 2: add_function_to_prompt set 
 def test_function_call_non_openai_model_litellm_mod_set():
     litellm.add_function_to_prompt = True

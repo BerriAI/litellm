@@ -232,7 +232,6 @@ def test_router_azure_acompletion():
 		os.environ["AZURE_API_KEY"] = old_api_key
 		print(f"FAILED TEST")
 		pytest.fail(f"Got unexpected exception on router! - {e}")
-test_router_azure_acompletion()
 
 ### FUNCTION CALLING 
 
@@ -417,7 +416,6 @@ def test_aembedding_on_router():
 	except Exception as e:
 		traceback.print_exc()
 		pytest.fail(f"Error occurred: {e}")
-test_aembedding_on_router()
 
 
 def test_azure_embedding_on_router():
@@ -459,7 +457,6 @@ def test_azure_embedding_on_router():
 	except Exception as e:
 		traceback.print_exc()
 		pytest.fail(f"Error occurred: {e}")
-test_azure_embedding_on_router()
 
 
 def test_bedrock_on_router():

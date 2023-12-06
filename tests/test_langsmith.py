@@ -26,8 +26,6 @@ def test_langsmith_logging():
     except Exception as e:
         print(e)
 
-test_langsmith_logging()
-
 
 def test_langsmith_logging_with_metadata():
     try:
@@ -47,4 +45,3 @@ def test_langsmith_logging_with_metadata():
     except Exception as e:
         print(e)
 
-test_langsmith_logging_with_metadata()

@@ -24,7 +24,16 @@ fastapi = {version = "^0.104.1", optional = true}
 backoff = {version = "*", optional = true}
 rq = {version = "*", optional = true}
 
+# Dev dependencies
+pytest = {version = "^7.4.3", optional = true}
+pytest-cov = {version = "^4.1.0", optional = true}
+
 [tool.poetry.extras]
+dev = [
+    "pytest",
+    "pytest-cov"
+]
+
 proxy = [
     "uvicorn",
     "fastapi",
@@ -60,3 +69,8 @@ version_files = [
     "pyproject.toml:^version"
 ]
 
+
+[tool.pytest.ini_options]
+addopts = "--cov=litellm --cov-report=term-missing --cov-report=xml --cov-report=html --cov-fail-under=25 --cov-context=test"
+testpaths = "tests"
+python_files = "test_*.py"

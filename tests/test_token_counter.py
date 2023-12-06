@@ -26,8 +26,6 @@ def test_token_counter_normal_plus_function_calling():
     except Exception as e: 
         pytest.fail(f"An exception occurred - {str(e)}")
 
-test_token_counter_normal_plus_function_calling() 
-
 def test_tokenizers():
     try: 
         ### test the openai, claude, cohere and llama2 tokenizers. 

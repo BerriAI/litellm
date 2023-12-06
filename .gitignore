@@ -16,6 +16,10 @@ router_config.yaml
 litellm_server/config.yaml
 litellm/proxy/_secret_config.yaml
 .aws-sam/
-litellm/tests/aiologs.log
-litellm/tests/exception_data.txt
-litellm/tests/config_*.yaml
+tests/aiologs.log
+tests/exception_data.txt
+tests/config_*.yaml
+
+# Coverage
+.coverage*
+coverage.xml

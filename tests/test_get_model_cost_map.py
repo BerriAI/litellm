@@ -14,21 +14,19 @@ def test_get_gpt3_tokens():
     print(max_tokens)
     assert max_tokens==4097
     # print(results)
-test_get_gpt3_tokens()
 
 def test_get_palm_tokens():
     # # 🦄🦄🦄🦄🦄🦄🦄🦄
     max_tokens = get_max_tokens("palm/chat-bison")
     assert max_tokens == 4096
     print(max_tokens)
-test_get_palm_tokens()
+
 
 def test_zephyr_hf_tokens():
     max_tokens = get_max_tokens("huggingface/HuggingFaceH4/zephyr-7b-beta")
     print(max_tokens)
     assert max_tokens == 32768
 
-test_zephyr_hf_tokens()
 
 def test_cost_ft_gpt_35():
     try:
@@ -56,7 +54,6 @@ def test_cost_ft_gpt_35():
         assert cost == expected_cost
     except Exception as e:
         pytest.fail(f"Cost Calc failed for ft:gpt-3.5. Expected {expected_cost}, Calculated cost {cost}")
-test_cost_ft_gpt_35()
 
 def test_cost_azure_gpt_35():
     try:
@@ -81,5 +78,4 @@ def test_cost_azure_gpt_35():
         assert cost == expected_cost
     except Exception as e:
         pytest.fail(f"Cost Calc failed for azure/gpt-3.5-turbo. Expected {expected_cost}, Calculated cost {cost}")
-test_cost_azure_gpt_35()
 
