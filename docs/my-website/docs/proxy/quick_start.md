@@ -328,14 +328,16 @@ docker run ghcr.io/berriai/litellm:main-v1.10.0 --port 8002 --num_workers 8
 
 **Step 1**
 
-(Recommended) Use the `docker-compose.yml` given in the project root. e.g. https://github.com/BerriAI/litellm/blob/main/docker-compose.yml
+- (Recommended) Use the example file `docker-compose.example.yml` given in the project root. e.g. https://github.com/BerriAI/litellm/blob/main/docker-compose.example.yml
+
+- Rename the file `docker-compose.example.yml` to `docker-compose.yml`.
 
 Here's an example `docker-compose.yml` file
 ```yaml
 version: "3.9"
 services:
   litellm:
-    image: ghcr.io/berriai/litellm:main-v1.10.3
+    image: ghcr.io/berriai/litellm:main
     ports:
       - "8000:8000" # Map the container port to the host, change the host port if necessary
     volumes:
