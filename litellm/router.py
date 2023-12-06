@@ -97,7 +97,7 @@ class Router:
         self.total_calls: defaultdict = defaultdict(int)            # dict to store total calls made to each model
         self.fail_calls: defaultdict = defaultdict(int)             # dict to store fail_calls made to each model
         self.success_calls: defaultdict = defaultdict(int)          # dict to store success_calls  made to each model
-
+        self.previous_models: List = [] # list to store failed calls (passed in as metadata to next call)
 
         # make Router.chat.completions.create compatible for openai.chat.completions.create
         self.chat = litellm.Chat(params=default_litellm_params)
@@ -393,6 +393,8 @@ class Router:
                         Iterate through the model groups and try calling that deployment
                         """
                         try:
+                            ## LOGGING
+                            kwargs = self.log_retry(kwargs=kwargs, e=original_exception)
                             kwargs["model"] = mg
                             kwargs["metadata"]["model_group"] = mg
                             response = await self.async_function_with_retries(*args, **kwargs)
@@ -436,6 +438,10 @@ class Router:
             else: 
                 raise original_exception
             
+            ## LOGGING
+            if len(num_retries) > 0:
+                kwargs = self.log_retry(kwargs=kwargs, e=original_exception)
+            
             for current_attempt in range(num_retries):
                 self.print_verbose(f"retrying request. Current attempt - {current_attempt}; num retries: {num_retries}")
                 try:
@@ -446,6 +452,8 @@ class Router:
                     return response
                 
                 except Exception as e: 
+                    ## LOGGING
+                    kwargs = self.log_retry(kwargs=kwargs, e=e)
                     remaining_retries = num_retries - current_attempt
                     if "No models available" in str(e): 
                         timeout = litellm._calculate_retry_after(remaining_retries=remaining_retries, max_retries=num_retries, min_timeout=1)
@@ -471,13 +479,12 @@ class Router:
         try: 
             response = self.function_with_retries(*args, **kwargs)
             return response
-        except Exception as e: 
+        except Exception as e:
             original_exception = e
             self.print_verbose(f"An exception occurs {original_exception}")
             try: 
                 self.print_verbose(f"Trying to fallback b/w models. Initial model group: {model_group}")
                 if isinstance(e, litellm.ContextWindowExceededError) and context_window_fallbacks is not None: 
-                    self.print_verbose(f"inside context window fallbacks: {context_window_fallbacks}")
                     fallback_model_group = None
 
                     for item in context_window_fallbacks: # [{"gpt-3.5-turbo": ["gpt-4"]}]
@@ -493,6 +500,8 @@ class Router:
                         Iterate through the model groups and try calling that deployment
                         """
                         try:
+                            ## LOGGING
+                            kwargs = self.log_retry(kwargs=kwargs, e=original_exception)
                             kwargs["model"] = mg
                             response = self.function_with_fallbacks(*args, **kwargs)
                             return response 
@@ -514,11 +523,13 @@ class Router:
                         Iterate through the model groups and try calling that deployment
                         """
                         try:
+                            ## LOGGING
+                            kwargs = self.log_retry(kwargs=kwargs, e=original_exception)
                             kwargs["model"] = mg
                             response = self.function_with_fallbacks(*args, **kwargs)
                             return response 
                         except Exception as e: 
-                            pass
+                            raise e
             except Exception as e: 
                 raise e
             raise original_exception
@@ -528,7 +539,6 @@ class Router:
         Try calling the model 3 times. Shuffle between available deployments. 
         """
         self.print_verbose(f"Inside function with retries: args - {args}; kwargs - {kwargs}")
-        backoff_factor = 1
         original_function = kwargs.pop("original_function")
         num_retries = kwargs.pop("num_retries")
         fallbacks = kwargs.pop("fallbacks", self.fallbacks)
@@ -544,6 +554,9 @@ class Router:
             if ((isinstance(original_exception, litellm.ContextWindowExceededError) and context_window_fallbacks is None) 
                 or (isinstance(original_exception, openai.RateLimitError) and fallbacks is not None)): 
                 raise original_exception
+            ## LOGGING
+            if len(num_retries) > 0:
+                kwargs = self.log_retry(kwargs=kwargs, e=original_exception)
             ### RETRY
             for current_attempt in range(num_retries):
                 self.print_verbose(f"retrying request. Current attempt - {current_attempt}; retries left: {num_retries}")
@@ -552,19 +565,19 @@ class Router:
                     response = original_function(*args, **kwargs)
                     return response
 
-                except openai.RateLimitError as e:
-                    if num_retries > 0: 
-                        remaining_retries = num_retries - current_attempt
-                        timeout = litellm._calculate_retry_after(remaining_retries=remaining_retries, max_retries=num_retries)
-                        # on RateLimitError we'll wait for an exponential time before trying again
+                except Exception as e: 
+                    ## LOGGING
+                    kwargs = self.log_retry(kwargs=kwargs, e=e)
+                    remaining_retries = num_retries - current_attempt
+                    if "No models available" in str(e): 
+                        timeout = litellm._calculate_retry_after(remaining_retries=remaining_retries, max_retries=num_retries, min_timeout=1)
                         time.sleep(timeout)
-                    else: 
-                        raise e
-                    
-                except Exception as e:
-                    # for any other exception types, immediately retry
-                    if num_retries > 0: 
-                        pass
+                    elif hasattr(e, "status_code") and hasattr(e, "response") and litellm._should_retry(status_code=e.status_code):
+                        if hasattr(e.response, "headers"):
+                            timeout = litellm._calculate_retry_after(remaining_retries=remaining_retries, max_retries=num_retries, response_headers=e.response.headers)
+                        else:
+                            timeout = litellm._calculate_retry_after(remaining_retries=remaining_retries, max_retries=num_retries)
+                        time.sleep(timeout)
                     else: 
                         raise e
             raise original_exception
@@ -627,6 +640,26 @@ class Router:
         except Exception as e:
             raise e
 
+    def log_retry(self, kwargs: dict, e: Exception) -> dict: 
+        """
+        When a retry or fallback happens, log the details of the just failed model call - similar to Sentry breadcrumbing
+        """
+        try: 
+            # Log failed model as the previous model
+            previous_model = {"exception_type": type(e).__name__, "exception_string": str(e)} 
+            for k, v in kwargs.items(): # log everything in kwargs except the old previous_models value - prevent nesting 
+                if k != "metadata":
+                    previous_model[k] = v
+                elif k == "metadata" and isinstance(v, dict): 
+                    previous_model[k] = {}
+                    for metadata_k, metadata_v in kwargs['metadata'].items(): 
+                        if metadata_k != "previous_models": 
+                            previous_model[k][metadata_k] = metadata_v
+            self.previous_models.append(previous_model)
+            kwargs["metadata"]["previous_models"] = self.previous_models
+            return kwargs
+        except Exception as e: 
+            raise e
     def _set_cooldown_deployments(self, 
                                   deployment: str):
         """
@@ -994,7 +1027,7 @@ class Router:
             self.deployment_names.append(model["litellm_params"]["model"])
             model_id = ""
             for key in model["litellm_params"]:
-                if key != "api_key":
+                if key != "api_key" and key != "metadata":
                     model_id+= str(model["litellm_params"][key])
             model["litellm_params"]["model"] += "-ModelID-" + model_id
 
