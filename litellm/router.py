@@ -909,19 +909,19 @@ class Router:
 
                 timeout = litellm_params.pop("timeout", None)
                 if isinstance(timeout, str) and timeout.startswith("os.environ/"):
-                    timeout_env_name = api_version.replace("os.environ/", "")
+                    timeout_env_name = timeout.replace("os.environ/", "")
                     timeout = litellm.get_secret(timeout_env_name)
                     litellm_params["timeout"] = timeout
 
                 stream_timeout = litellm_params.pop("stream_timeout", timeout) # if no stream_timeout is set, default to timeout
                 if isinstance(stream_timeout, str) and stream_timeout.startswith("os.environ/"):
-                    stream_timeout_env_name = api_version.replace("os.environ/", "")
+                    stream_timeout_env_name = stream_timeout.replace("os.environ/", "")
                     stream_timeout = litellm.get_secret(stream_timeout_env_name)
                     litellm_params["stream_timeout"] = stream_timeout
 
                 max_retries = litellm_params.pop("max_retries", 2)
                 if isinstance(max_retries, str) and max_retries.startswith("os.environ/"):
-                    max_retries_env_name = api_version.replace("os.environ/", "")
+                    max_retries_env_name = max_retries.replace("os.environ/", "")
                     max_retries = litellm.get_secret(max_retries_env_name)
                     litellm_params["max_retries"] = max_retries
                 
@@ -1107,7 +1107,7 @@ class Router:
         healthy_deployments = [m for m in self.model_list if m["model_name"] == model]
         if len(healthy_deployments) == 0: 
             # check if the user sent in a deployment name instead 
-            
+
             healthy_deployments = [m for m in self.model_list if m["litellm_params"]["model"] == model]
         self.print_verbose(f"initial list of deployments: {healthy_deployments}")
         deployments_to_remove = [] 
