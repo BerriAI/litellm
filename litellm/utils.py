@@ -4065,6 +4065,14 @@ def exception_type(
                         llm_provider="sagemaker",
                         response=original_exception.response
                     )
+                elif "Input validation error: `best_of` must be > 0 and <= 2" in error_str: 
+                    exception_mapping_worked = True
+                    raise BadRequestError(
+                        message=f"SagemakerException - the value of 'n' must be > 0 and <= 2 for sagemaker endpoints", 
+                        model=model, 
+                        llm_provider="sagemaker",
+                        response=original_exception.response
+                    )
             elif custom_llm_provider == "vertex_ai":
                 if "Vertex AI API has not been used in project" in error_str or "Unable to find your project" in error_str:
                     exception_mapping_worked = True

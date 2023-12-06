@@ -149,12 +149,15 @@ def completion(
             additional_args={"complete_input_dict": data, "request_str": request_str},
         )
     ## COMPLETION CALL
-    response = client.invoke_endpoint(
-        EndpointName=model,
-        ContentType="application/json",
-        Body=data,
-        CustomAttributes="accept_eula=true",
-    )
+    try: 
+        response = client.invoke_endpoint(
+            EndpointName=model,
+            ContentType="application/json",
+            Body=data,
+            CustomAttributes="accept_eula=true",
+        )
+    except Exception as e: 
+        raise SagemakerError(status_code=500, message=f"{str(e)}")
     response = response["Body"].read().decode("utf8")
     ## LOGGING
     logging_obj.post_call(
