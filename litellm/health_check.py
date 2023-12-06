@@ -50,7 +50,6 @@ async def _perform_health_check(model_list: list):
         try:
             await litellm.aembedding(**model_params)
         except Exception as e:
-            print_verbose(f"\n\n Got Exception, {e}")
             print_verbose(f"Health check failed for model {model_params['model']}. Error: {e}")
             return False
         return True
@@ -59,12 +58,7 @@ async def _perform_health_check(model_list: list):
     async def _check_model(model_params: dict):
         try:
             await litellm.acompletion(**model_params)
-        except Exception as e:
-            print_verbose(f"\n\n Got Exception, {e}")
-            error_str = (str(e))
-            if "This is not a chat model" in error_str or "The chatCompletion operation does not work with the specified model" in error_str:
-                    return await _check_embedding_model(model_params)
-                
+        except Exception as e:            
             print_verbose(f"Health check failed for model {model_params['model']}. Error: {e}")
             return False
         
@@ -78,7 +72,8 @@ async def _perform_health_check(model_list: list):
         litellm_params["messages"] = _get_random_llm_message()
 
         prepped_params.append(litellm_params)
-        if "embedding" in litellm_params["model"]:
+        if model.get("mode", None) == "embedding":
+            # this is an embedding model
             tasks.append(_check_embedding_model(litellm_params))
         else:
             tasks.append(_check_model(litellm_params))

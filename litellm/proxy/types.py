@@ -40,6 +40,7 @@ class ProxyChatCompletionRequest(BaseModel):
 
 class ModelInfo(BaseModel):
     id: Optional[str]
+    mode: Optional[str]
 
     class Config:
         extra = Extra.allow  # Allow extra fields
