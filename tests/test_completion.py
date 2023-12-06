@@ -1039,6 +1039,7 @@ def test_completion_sagemaker():
             messages=messages,
             temperature=0.2,
             max_tokens=80,
+            hf_model_name="meta-llama/Llama-2-7b",
         )
         # Add any assertions here to check the response
         print(response)
@@ -1048,20 +1049,25 @@ def test_completion_sagemaker():
 
 def test_completion_chat_sagemaker():
     try:
+        messages = [{"role": "user", "content": "Hey, how's it going?"}]
         print("testing sagemaker")
         litellm.set_verbose=True
         response = completion(
             model="sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b-f", 
             messages=messages,
+            max_tokens=100,
             stream=True,
+            hf_model_name="meta-llama/Llama-2-7b-chat-hf",
         )
         # Add any assertions here to check the response
-        print(response)
+        complete_response = "" 
         for chunk in response:
-            print(chunk)
+            complete_response += chunk.choices[0].delta.content or "" 
+        print(f"complete_response: {complete_response}")
+        assert len(complete_response) > 0
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_completion_chat_sagemaker()
+test_completion_chat_sagemaker()
 
 def test_completion_bedrock_titan():
     try:

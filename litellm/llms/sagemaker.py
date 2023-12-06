@@ -9,6 +9,7 @@ from litellm.utils import ModelResponse, get_secret, Usage
 import sys
 from copy import deepcopy
 import httpx
+from .prompt_templates.factory import prompt_factory, custom_prompt
 
 class SagemakerError(Exception):
     def __init__(self, status_code, message):
@@ -61,6 +62,8 @@ def completion(
     print_verbose: Callable,
     encoding,
     logging_obj,
+    custom_prompt_dict={},
+    hf_model_name=None,
     optional_params=None,
     litellm_params=None,
     logger_fn=None,
@@ -107,19 +110,18 @@ def completion(
             inference_params[k] = v
 
     model = model
-    prompt = ""
-    for message in messages:
-        if "role" in message:
-            if message["role"] == "user":
-                prompt += (
-                    f"{message['content']}"
-                )
-            else:
-                prompt += (
-                    f"{message['content']}"
-                )
-        else:
-            prompt += f"{message['content']}"
+    if model in custom_prompt_dict:
+        # check if the model has a registered custom prompt
+        model_prompt_details = custom_prompt_dict[model]
+        prompt = custom_prompt(
+            role_dict=model_prompt_details.get("roles", None), 
+            initial_prompt_value=model_prompt_details.get("initial_prompt_value", ""),  
+            final_prompt_value=model_prompt_details.get("final_prompt_value", ""), 
+            messages=messages
+        )
+    else:
+        hf_model_name = hf_model_name or model # pass in hf model name for pulling it's prompt template - (e.g. `hf_model_name="meta-llama/Llama-2-7b-chat-hf` applies the llama2 chat template to the prompt)
+        prompt = prompt_factory(model=hf_model_name, messages=messages)
 
     data = json.dumps({
         "inputs": prompt,
