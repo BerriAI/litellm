@@ -121,8 +121,7 @@ On Success
 ```
 
 ## Async Custom Callback Functions
-
-Set custom async functions for `litellm.success_callback` and `litellm.failure_callback`. 
+Use this if you just want to use a function as a custom callback with the proxy. Set custom async functions for `litellm.success_callback` and `litellm.failure_callback`. 
 
 ### Step 1 Define Custom Callback functions
 
