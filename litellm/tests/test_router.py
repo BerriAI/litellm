@@ -743,3 +743,73 @@ def test_reading_keys_os_environ():
 		pytest.fail(f"Error occurred: {e}")
 
 test_reading_keys_os_environ()
+
+
+def test_reading_openai_keys_os_environ():
+	import openai
+	try:
+		model_list = [
+				{
+					"model_name": "gpt-3.5-turbo",
+					"litellm_params": {
+						"model": "gpt-3.5-turbo",
+						"api_key": "os.environ/OPENAI_API_KEY",
+						"timeout": "os.environ/AZURE_TIMEOUT",
+						"stream_timeout": "os.environ/AZURE_STREAM_TIMEOUT",
+						"max_retries": "os.environ/AZURE_MAX_RETRIES",
+					},
+				},
+				{
+					"model_name": "text-embedding-ada-002",
+					"litellm_params": {
+						"model": "text-embedding-ada-002",
+						"api_key": "os.environ/OPENAI_API_KEY",
+						"timeout": "os.environ/AZURE_TIMEOUT",
+						"stream_timeout": "os.environ/AZURE_STREAM_TIMEOUT",
+						"max_retries": "os.environ/AZURE_MAX_RETRIES",
+					},
+				},
+
+			]
+		
+		router = Router(model_list=model_list)
+		for model in router.model_list:
+			assert model["litellm_params"]["api_key"] == os.environ["OPENAI_API_KEY"], f"{model['litellm_params']['api_key']} vs {os.environ['AZURE_API_KEY']}"
+			assert float(model["litellm_params"]["timeout"]) == float(os.environ["AZURE_TIMEOUT"]), f"{model['litellm_params']['timeout']} vs {os.environ['AZURE_TIMEOUT']}"
+			assert float(model["litellm_params"]["stream_timeout"]) == float(os.environ["AZURE_STREAM_TIMEOUT"]), f"{model['litellm_params']['stream_timeout']} vs {os.environ['AZURE_STREAM_TIMEOUT']}"
+			assert int(model["litellm_params"]["max_retries"]) == int(os.environ["AZURE_MAX_RETRIES"]), f"{model['litellm_params']['max_retries']} vs {os.environ['AZURE_MAX_RETRIES']}"
+			print("passed testing of reading keys from os.environ")
+			async_client: openai.AsyncOpenAI = model["async_client"] # type: ignore
+			assert async_client.api_key == os.environ["OPENAI_API_KEY"]
+			assert async_client.max_retries == (os.environ["AZURE_MAX_RETRIES"]), f"{async_client.max_retries} vs {os.environ['AZURE_MAX_RETRIES']}"
+			assert async_client.timeout == (os.environ["AZURE_TIMEOUT"]), f"{async_client.timeout} vs {os.environ['AZURE_TIMEOUT']}"
+			print("async client set correctly!")
+
+			print("\n Testing async streaming client")
+
+			stream_async_client: openai.AsyncOpenAI = model["stream_async_client"] # type: ignore
+			assert stream_async_client.api_key == os.environ["OPENAI_API_KEY"]
+			assert stream_async_client.max_retries == (os.environ["AZURE_MAX_RETRIES"]), f"{stream_async_client.max_retries} vs {os.environ['AZURE_MAX_RETRIES']}"
+			assert stream_async_client.timeout == (os.environ["AZURE_STREAM_TIMEOUT"]), f"{stream_async_client.timeout} vs {os.environ['AZURE_TIMEOUT']}"
+			print("async stream client set correctly!")
+
+			print("\n Testing sync client")
+			client: openai.AzureOpenAI = model["client"] # type: ignore
+			assert client.api_key == os.environ["OPENAI_API_KEY"]
+			assert client.max_retries == (os.environ["AZURE_MAX_RETRIES"]), f"{client.max_retries} vs {os.environ['AZURE_MAX_RETRIES']}"
+			assert client.timeout == (os.environ["AZURE_TIMEOUT"]), f"{client.timeout} vs {os.environ['AZURE_TIMEOUT']}"
+			print("sync client set correctly!")
+
+			print("\n Testing sync stream client")
+			stream_client: openai.AzureOpenAI = model["stream_client"] # type: ignore
+			assert stream_client.api_key == os.environ["OPENAI_API_KEY"]
+			assert stream_client.max_retries == (os.environ["AZURE_MAX_RETRIES"]), f"{stream_client.max_retries} vs {os.environ['AZURE_MAX_RETRIES']}"
+			assert stream_client.timeout == (os.environ["AZURE_STREAM_TIMEOUT"]), f"{stream_client.timeout} vs {os.environ['AZURE_TIMEOUT']}"
+			print("sync stream client set correctly!")
+
+		router.reset()
+	except Exception as e:
+		traceback.print_exc()
+		pytest.fail(f"Error occurred: {e}")
+
+# test_reading_openai_keys_os_environ()
