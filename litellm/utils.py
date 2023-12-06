@@ -123,6 +123,15 @@ def map_finish_reason(finish_reason: str): # openai supports 5 stop sequences - 
     # anthropic mapping
     if finish_reason == "stop_sequence":
         return "stop"
+    # cohere mapping - https://docs.cohere.com/reference/generate
+    elif finish_reason == "COMPLETE": 
+        return "stop"
+    elif finish_reason == "MAX_TOKENS":
+        return "length"
+    elif finish_reason == "ERROR_TOXIC": 
+        return "content_filter"
+    elif finish_reason == "ERROR": # openai currently doesn't support an 'error' finish reason
+        return "stop"
     return finish_reason
 
 class FunctionCall(OpenAIObject):
@@ -414,7 +423,7 @@ class TextChoices(OpenAIObject):
         else:
             self.finish_reason = "stop"
         self.index = index
-        if text:
+        if text is not None:
             self.text = text
         else:
             self.text = None
@@ -544,7 +553,8 @@ class Logging:
             "optional_params": self.optional_params,
             "litellm_params": self.litellm_params,
             "start_time": self.start_time,
-            "stream": self.stream
+            "stream": self.stream,
+            **self.optional_params
         }
 
     def pre_call(self, input, api_key, model=None, additional_args={}):
@@ -740,13 +750,9 @@ class Logging:
                 f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging {traceback.format_exc()}"
             )
             pass
-
     
-    def success_handler(self, result=None, start_time=None, end_time=None, **kwargs):
-        print_verbose(
-                f"Logging Details LiteLLM-Success Call"
-            )
-        try:
+    def _success_handler_helper_fn(self, result=None, start_time=None, end_time=None): 
+        try: 
             if start_time is None:
                 start_time = self.start_time
             if end_time is None:
@@ -774,6 +780,18 @@ class Logging:
                 time_diff = (end_time - start_time).total_seconds()
                 float_diff = float(time_diff)
                 litellm._current_cost += litellm.completion_cost(model=self.model, prompt="", completion=result["content"], total_time=float_diff)
+
+            return start_time, end_time, result, complete_streaming_response
+        except: 
+            pass
+
+    def success_handler(self, result=None, start_time=None, end_time=None, **kwargs):
+        print_verbose(
+                f"Logging Details LiteLLM-Success Call"
+            )
+        try:
+            start_time, end_time, result, complete_streaming_response = self._success_handler_helper_fn(start_time=start_time, end_time=end_time, result=result)
+            print_verbose(f"success callbacks: {litellm.success_callback}")
 
             for callback in litellm.success_callback:
                 try:
@@ -967,6 +985,29 @@ class Logging:
                 f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while success logging {traceback.format_exc()}"
             )
             pass
+
+    async def async_success_handler(self, result=None, start_time=None, end_time=None, **kwargs):
+        """
+        Implementing async callbacks, to handle asyncio event loop issues when custom integrations need to use async functions.
+        """
+        start_time, end_time, result, complete_streaming_response = self._success_handler_helper_fn(start_time=start_time, end_time=end_time, result=result)
+        print_verbose(f"success callbacks: {litellm.success_callback}")
+
+        for callback in litellm._async_success_callback:
+            try: 
+                if callable(callback): # custom logger functions
+                    await customLogger.async_log_event(
+                        kwargs=self.model_call_details,
+                        response_obj=result,
+                        start_time=start_time,
+                        end_time=end_time,
+                        print_verbose=print_verbose,
+                        callback_func=callback
+                    )
+            except: 
+                print_verbose(
+                    f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while success logging {traceback.format_exc()}"
+                )
 
     def failure_handler(self, exception, traceback_exception, start_time=None, end_time=None):
         print_verbose(
@@ -1184,6 +1225,17 @@ def client(original_function):
                     callback_list=callback_list,
                     function_id=function_id
                 )
+            ## ASYNC CALLBACKS
+            if len(litellm.success_callback) > 0: 
+                removed_async_items = []
+                for index, callback in enumerate(litellm.success_callback): 
+                    if inspect.iscoroutinefunction(callback): 
+                        litellm._async_success_callback.append(callback)
+                        removed_async_items.append(index)
+
+                # Pop the async items from success_callback in reverse order to avoid index issues
+                for index in reversed(removed_async_items):
+                    litellm.success_callback.pop(index)
             if add_breadcrumb:
                 add_breadcrumb(
                     category="litellm.llm_call",
@@ -1372,7 +1424,6 @@ def client(original_function):
         start_time = datetime.datetime.now()
         result = None
         logging_obj = kwargs.get("litellm_logging_obj", None)
-
         # only set litellm_call_id if its not in kwargs
         if "litellm_call_id" not in kwargs:
             kwargs["litellm_call_id"] = str(uuid.uuid4())
@@ -1425,8 +1476,8 @@ def client(original_function):
             # [OPTIONAL] ADD TO CACHE
             if litellm.caching or litellm.caching_with_models or litellm.cache != None: # user init a cache object
                 litellm.cache.add_cache(result, *args, **kwargs)
-
-            # LOG SUCCESS - handle streaming success logging in the _next_ object, remove `handle_success` once it's deprecated
+            # LOG SUCCESS - handle streaming success logging in the _next_ object
+            asyncio.create_task(logging_obj.async_success_handler(result, start_time, end_time))
             threading.Thread(target=logging_obj.success_handler, args=(result, start_time, end_time)).start()
             # RETURN RESULT
             if isinstance(result, ModelResponse):
@@ -1464,7 +1515,6 @@ def client(original_function):
                 logging_obj.failure_handler(e, traceback_exception, start_time, end_time) # DO NOT MAKE THREADED - router retry fallback relies on this!
             raise e
 
-    # Use httpx to determine if the original function is a coroutine
     is_coroutine = inspect.iscoroutinefunction(original_function)
 
     # Return the appropriate wrapper based on the original function type
@@ -1943,7 +1993,9 @@ def get_optional_params(  # use the openai defaults
         for k in non_default_params.keys():
             if k not in supported_params:
                 if k == "n" and n == 1: # langchain sends n=1 as a default value
-                    pass
+                    continue # skip this param
+                if k == "max_retries": # TODO: This is a patch. We support max retries for OpenAI, Azure. For non OpenAI LLMs we need to add support for max retries
+                    continue # skip this param
                 # Always keeps this in elif code blocks
                 else: 
                     unsupported_params[k] = non_default_params[k]
@@ -2154,30 +2206,31 @@ def get_optional_params(  # use the openai defaults
         if max_tokens is not None:
             optional_params["max_output_tokens"] = max_tokens
     elif custom_llm_provider == "sagemaker":
-        if "llama-2" in model:
-            # llama-2 models on sagemaker support the following args
-            """
-            max_new_tokens: Model generates text until the output length (excluding the input context length) reaches max_new_tokens. If specified, it must be a positive integer.
-            temperature: Controls the randomness in the output. Higher temperature results in output sequence with low-probability words and lower temperature results in output sequence with high-probability words. If temperature -> 0, it results in greedy decoding. If specified, it must be a positive float.
-            top_p: In each step of text generation, sample from the smallest possible set of words with cumulative probability top_p. If specified, it must be a float between 0 and 1.
-            return_full_text: If True, input text will be part of the output generated text. If specified, it must be boolean. The default value for it is False.
-            """
-            ## check if unsupported param passed in 
-            supported_params = ["temperature", "max_tokens", "stream"]
-            _check_valid_arg(supported_params=supported_params)
-            
-            if max_tokens is not None:
-                optional_params["max_new_tokens"] = max_tokens
-            if temperature is not None:
-                optional_params["temperature"] = temperature
-            if top_p is not None:
-                optional_params["top_p"] = top_p
-            if stream:
-                optional_params["stream"] = stream
-        else:
-            ## check if unsupported param passed in 
-            supported_params = []
-            _check_valid_arg(supported_params=supported_params)
+        ## check if unsupported param passed in 
+        supported_params = ["stream", "temperature", "max_tokens", "top_p", "stop", "n"]
+        _check_valid_arg(supported_params=supported_params)
+        # temperature, top_p, n, stream, stop, max_tokens, n, presence_penalty default to None
+        if temperature is not None:
+            if temperature == 0.0 or temperature == 0:
+                # hugging face exception raised when temp==0
+                # Failed: Error occurred: HuggingfaceException - Input validation error: `temperature` must be strictly positive
+                temperature = 0.01
+            optional_params["temperature"] = temperature
+        if top_p is not None:
+            optional_params["top_p"] = top_p
+        if n is not None:
+            optional_params["best_of"] = n
+            optional_params["do_sample"] = True  # Need to sample if you want best of for hf inference endpoints
+        if stream is not None:
+            optional_params["stream"] = stream
+        if stop is not None:
+            optional_params["stop"] = stop
+        if max_tokens is not None:
+            # HF TGI raises the following exception when max_new_tokens==0
+            # Failed: Error occurred: HuggingfaceException - Input validation error: `max_new_tokens` must be strictly positive
+            if max_tokens == 0:
+                max_tokens = 1
+            optional_params["max_new_tokens"] = max_tokens
     elif custom_llm_provider == "bedrock":
         if "ai21" in model:
             supported_params = ["max_tokens", "temperature", "top_p", "stream"]
@@ -2420,8 +2473,7 @@ def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None, api_
             return model, custom_llm_provider, dynamic_api_key, api_base
         
         if api_key and api_key.startswith("os.environ/"): 
-            api_key_env_name = api_key.replace("os.environ/", "")
-            dynamic_api_key = get_secret(api_key_env_name)
+            dynamic_api_key = get_secret(api_key)
         # check if llm provider part of model name
         if model.split("/",1)[0] in litellm.provider_list and model.split("/",1)[0] not in litellm.model_list:
             custom_llm_provider = model.split("/", 1)[0]
@@ -4013,6 +4065,14 @@ def exception_type(
                         llm_provider="sagemaker",
                         response=original_exception.response
                     )
+                elif "Input validation error: `best_of` must be > 0 and <= 2" in error_str: 
+                    exception_mapping_worked = True
+                    raise BadRequestError(
+                        message=f"SagemakerException - the value of 'n' must be > 0 and <= 2 for sagemaker endpoints", 
+                        model=model, 
+                        llm_provider="sagemaker",
+                        response=original_exception.response
+                    )
             elif custom_llm_provider == "vertex_ai":
                 if "Vertex AI API has not been used in project" in error_str or "Unable to find your project" in error_str:
                     exception_mapping_worked = True
@@ -4721,21 +4781,27 @@ def litellm_telemetry(data):
 ######### Secret Manager ############################
 # checks if user has passed in a secret manager client
 # if passed in then checks the secret there
-def get_secret(secret_name):
-    if litellm.secret_manager_client is not None:
-        # TODO: check which secret manager is being used
-        # currently only supports Infisical
-        try:
-            client = litellm.secret_manager_client
-            if type(client).__module__ + '.' + type(client).__name__ == 'azure.keyvault.secrets._client.SecretClient': # support Azure Secret Client - from azure.keyvault.secrets import SecretClient
-                secret = retrieved_secret = client.get_secret(secret_name).value
-            else: # assume the default is infisicial client
-                secret = client.get_secret(secret_name).secret_value
-        except: # check if it's in os.environ
-            secret = os.environ.get(secret_name)
-        return secret
-    else:
-        return os.environ.get(secret_name)
+def get_secret(secret_name: str, default_value: Optional[str]=None):
+    if secret_name.startswith("os.environ/"): 
+        secret_name = secret_name.replace("os.environ/", "")
+    try: 
+        if litellm.secret_manager_client is not None:
+            try:
+                client = litellm.secret_manager_client
+                if type(client).__module__ + '.' + type(client).__name__ == 'azure.keyvault.secrets._client.SecretClient': # support Azure Secret Client - from azure.keyvault.secrets import SecretClient
+                    secret = retrieved_secret = client.get_secret(secret_name).value
+                else: # assume the default is infisicial client
+                    secret = client.get_secret(secret_name).secret_value
+            except: # check if it's in os.environ
+                secret = os.environ.get(secret_name)
+            return secret
+        else:
+            return os.environ.get(secret_name)
+    except Exception as e: 
+        if default_value is not None: 
+            return default_value
+        else: 
+            raise e
 
 
 ######## Streaming Class ############################
@@ -5123,7 +5189,7 @@ class CustomStreamWrapper:
     def chunk_creator(self, chunk):
         model_response = ModelResponse(stream=True, model=self.model)
         model_response.choices[0].finish_reason = None
-        response_obj = None
+        response_obj = {}
         try:
             # return this for all models
             completion_obj = {"content": ""}
@@ -5211,11 +5277,9 @@ class CustomStreamWrapper:
                     else:
                         model_response.choices[0].finish_reason = "stop"
                         self.sent_last_chunk = True
-                chunk_size = 30
-                new_chunk = self.completion_stream[:chunk_size]
+                new_chunk = self.completion_stream
                 completion_obj["content"] = new_chunk
-                self.completion_stream = self.completion_stream[chunk_size:]
-                time.sleep(0.05)
+                self.completion_stream = self.completion_stream[len(self.completion_stream):]
             elif self.custom_llm_provider == "petals":
                 if len(self.completion_stream)==0:
                     if self.sent_last_chunk: 
@@ -5230,6 +5294,7 @@ class CustomStreamWrapper:
                 time.sleep(0.05)
             elif self.custom_llm_provider == "palm":
                 # fake streaming
+                response_obj = {}
                 if len(self.completion_stream)==0:
                     if self.sent_last_chunk: 
                         raise StopIteration
@@ -5264,14 +5329,32 @@ class CustomStreamWrapper:
             print_verbose(f"model_response: {model_response}; completion_obj: {completion_obj}")
             print_verbose(f"model_response finish reason 3: {model_response.choices[0].finish_reason}")
             if len(completion_obj["content"]) > 0: # cannot set content of an OpenAI Object to be an empty string
-                hold, model_response_str = self.check_special_tokens(chunk=completion_obj["content"], finish_reason=model_response.choices[0].finish_reason)
+                hold, model_response_str = self.check_special_tokens(chunk=completion_obj["content"], finish_reason=model_response.choices[0].finish_reason) # filter out bos/eos tokens from openai-compatible hf endpoints
                 print_verbose(f"hold - {hold}, model_response_str - {model_response_str}")
                 if hold is False: 
-                    completion_obj["content"] = model_response_str  
-                    if self.sent_first_chunk == False:
-                        completion_obj["role"] = "assistant"
-                        self.sent_first_chunk = True
-                    model_response.choices[0].delta = Delta(**completion_obj)
+                    ## check if openai/azure chunk 
+                    original_chunk = response_obj.get("original_chunk", None)
+                    if original_chunk: 
+                        model_response.id = original_chunk.id
+                        if len(original_chunk.choices) > 0:
+                            try:
+                                delta = dict(original_chunk.choices[0].delta)
+                                model_response.choices[0].delta = Delta(**delta)
+                            except Exception as e:
+                                model_response.choices[0].delta = Delta()
+                        else: 
+                            return 
+                        model_response.system_fingerprint = original_chunk.system_fingerprint
+                        if self.sent_first_chunk == False:
+                            model_response.choices[0].delta["role"] = "assistant"
+                            self.sent_first_chunk = True
+                    else: 
+                        ## else 
+                        completion_obj["content"] = model_response_str  
+                        if self.sent_first_chunk == False:
+                            completion_obj["role"] = "assistant"
+                            self.sent_first_chunk = True
+                        model_response.choices[0].delta = Delta(**completion_obj)
                     # LOGGING
                     threading.Thread(target=self.logging_obj.success_handler, args=(model_response,)).start()
                     print_verbose(f"model_response: {model_response}")
@@ -5349,6 +5432,8 @@ class CustomStreamWrapper:
                     processed_chunk = self.chunk_creator(chunk=chunk)
                     if processed_chunk is None: 
                         continue
+                    ## LOGGING
+                    asyncio.create_task(self.logging_obj.async_success_handler(processed_chunk,))
                     return processed_chunk
                 raise StopAsyncIteration
             else: # temporary patch for non-aiohttp async calls

@@ -356,6 +356,16 @@ router = Router(model_list=model_list,
 
 print(response)
 ```
+
+**Pass in Redis URL, additional kwargs** 
+```python 
+router = Router(model_list: Optional[list] = None,
+                 ## CACHING ## 
+                 redis_url=os.getenv("REDIS_URL")",
+				 cache_kwargs= {}, # additional kwargs to pass to RedisCache (see caching.py)
+				 cache_responses=True)
+```
+
 #### Default litellm.completion/embedding params
 
 You can also set default params for litellm completion/embedding calls. Here's how to do that: 
