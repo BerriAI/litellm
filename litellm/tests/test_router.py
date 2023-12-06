@@ -707,7 +707,36 @@ def test_reading_keys_os_environ():
 			print("passed testing of reading keys from os.environ")
 			async_client: openai.AsyncAzureOpenAI = model["async_client"]
 			assert async_client.api_key == os.environ["AZURE_API_KEY"]
-			assert async_client.base_url == os.environ["AZURE_API_BASE"]		
+			assert async_client.base_url == os.environ["AZURE_API_BASE"]	
+			assert async_client.max_retries == (os.environ["AZURE_MAX_RETRIES"]), f"{async_client.max_retries} vs {os.environ['AZURE_MAX_RETRIES']}"
+			assert async_client.timeout == (os.environ["AZURE_TIMEOUT"]), f"{async_client.timeout} vs {os.environ['AZURE_TIMEOUT']}"
+			print("async client set correctly!")
+
+			print("\n Testing async streaming client")
+
+			stream_async_client: openai.AsyncAzureOpenAI = model["stream_async_client"]
+			assert stream_async_client.api_key == os.environ["AZURE_API_KEY"]
+			assert stream_async_client.base_url == os.environ["AZURE_API_BASE"]	
+			assert stream_async_client.max_retries == (os.environ["AZURE_MAX_RETRIES"]), f"{stream_async_client.max_retries} vs {os.environ['AZURE_MAX_RETRIES']}"
+			assert stream_async_client.timeout == (os.environ["AZURE_STREAM_TIMEOUT"]), f"{stream_async_client.timeout} vs {os.environ['AZURE_TIMEOUT']}"
+			print("async stream client set correctly!")
+
+			print("\n Testing sync client")
+			client: openai.AzureOpenAI = model["client"]
+			assert client.api_key == os.environ["AZURE_API_KEY"]
+			assert client.base_url == os.environ["AZURE_API_BASE"]	
+			assert client.max_retries == (os.environ["AZURE_MAX_RETRIES"]), f"{client.max_retries} vs {os.environ['AZURE_MAX_RETRIES']}"
+			assert client.timeout == (os.environ["AZURE_TIMEOUT"]), f"{client.timeout} vs {os.environ['AZURE_TIMEOUT']}"
+			print("sync client set correctly!")
+
+			print("\n Testing sync stream client")
+			stream_client: openai.AzureOpenAI = model["stream_client"]
+			assert stream_client.api_key == os.environ["AZURE_API_KEY"]
+			assert stream_client.base_url == os.environ["AZURE_API_BASE"]	
+			assert stream_client.max_retries == (os.environ["AZURE_MAX_RETRIES"]), f"{stream_client.max_retries} vs {os.environ['AZURE_MAX_RETRIES']}"
+			assert stream_client.timeout == (os.environ["AZURE_STREAM_TIMEOUT"]), f"{stream_client.timeout} vs {os.environ['AZURE_TIMEOUT']}"
+			print("sync stream client set correctly!")
+
 		router.reset()
 	except Exception as e:
 		traceback.print_exc()
