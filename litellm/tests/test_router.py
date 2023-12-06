@@ -259,7 +259,7 @@ def test_router_azure_acompletion():
 		
 		async def test1():
 
-			response: litellm.ModelResponse = await router.acompletion(
+			response = await router.acompletion(
 				model="gpt-3.5-turbo",
 				messages=[
 					{
