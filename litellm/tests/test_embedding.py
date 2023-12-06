@@ -153,6 +153,7 @@ def test_cohere_embedding3():
 
 def test_bedrock_embedding_titan():
     try:
+        litellm.set_verbose=True
         response = embedding(
             model="amazon.titan-embed-text-v1", input=["good morning from litellm, attempting to embed data",
                                                        "lets test a second string for good measure"]
@@ -160,7 +161,7 @@ def test_bedrock_embedding_titan():
         print(f"response:", response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_bedrock_embedding()
+test_bedrock_embedding_titan()
 
 def test_bedrock_embedding_cohere():
     try:
@@ -173,7 +174,7 @@ def test_bedrock_embedding_cohere():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_bedrock_embedding_cohere()
+# test_bedrock_embedding_cohere()
 
 # comment out hf tests - since hf endpoints are unstable
 def test_hf_embedding():

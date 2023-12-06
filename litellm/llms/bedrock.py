@@ -552,8 +552,8 @@ def _embedding_func_single(
     ## FORMAT EMBEDDING INPUT ## 
     provider = model.split(".")[0]
     inference_params = copy.deepcopy(optional_params)
+    input = input.replace(os.linesep, " ")
     if provider == "amazon":
-        input = input.replace(os.linesep, " ")
         data = {"inputText": input, **inference_params}
         # data = json.dumps(data)
     elif provider == "cohere":
@@ -577,7 +577,7 @@ def _embedding_func_single(
     try:
         response = client.invoke_model(
             body=body,
-            modelId="cohere.embed-multilingual-v3",
+            modelId=model,
             accept="*/*",
             contentType="application/json",
         )
