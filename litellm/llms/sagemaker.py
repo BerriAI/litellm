@@ -120,8 +120,8 @@ def completion(
         )
     else:
         hf_model_name = model
-        if "jumpstart-dft-meta-textgeneration-llama" in model: # llama2 model 
-            if model.endswith("-f") or "-f-" in model: # sagemaker default for a chat model
+        if "jumpstart-dft-meta-textgeneration-llama" in model or "meta-textgenerationneuron-llama-2-7b" in model: # llama2 model 
+            if model.endswith("-f") or "-f-" in model or "chat" in model: # sagemaker default for a chat model
                 hf_model_name = "meta-llama/Llama-2-7b-chat" # apply the prompt template for a llama2 chat model 
             else:
                 hf_model_name = "meta-llama/Llama-2-7b" # apply the normal prompt template
