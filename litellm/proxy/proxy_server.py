@@ -7,8 +7,6 @@ import secrets, subprocess
 import hashlib, uuid
 import warnings
 import importlib
-
-from litellm.health_check import perform_health_check
 messages: list = []
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -100,6 +98,7 @@ from litellm.proxy.utils import (
 import pydantic
 from litellm.proxy.types import *
 from litellm.caching import DualCache
+from litellm.health_check import perform_health_check
 litellm.suppress_debug_info = True
 from fastapi import FastAPI, Request, HTTPException, status, Depends, BackgroundTasks
 from fastapi.routing import APIRouter
