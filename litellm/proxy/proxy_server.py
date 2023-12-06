@@ -1027,12 +1027,15 @@ async def info_key_fn(key: str = fastapi.Query(..., description="Key in the requ
 async def add_new_model(model_params: ModelParams):
     global llm_router, llm_model_list, general_settings, user_config_file_path
     try:
+        print("User config path: ", user_config_file_path)
         # Load existing config
         if os.path.exists(f"{user_config_file_path}"):
             with open(f"{user_config_file_path}", "r") as config_file:
                 config = yaml.safe_load(config_file)
         else: 
             config = {"model_list": []} 
+        
+        print("Loaded config: ", config)
         # Add the new model to the config
         config['model_list'].append({
             'model_name': model_params.model_name,
@@ -1045,7 +1048,7 @@ async def add_new_model(model_params: ModelParams):
             yaml.dump(config, config_file, default_flow_style=False)
 
         # update Router 
-        llm_router, llm_model_list, general_settings = load_router_config(router=llm_router, config_file_path=config)
+        llm_router, llm_model_list, general_settings = load_router_config(router=llm_router, config_file_path=user_config_file_path)
 
 
         return {"message": "Model added successfully"}
