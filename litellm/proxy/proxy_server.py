@@ -728,9 +728,9 @@ async def startup_event():
     global prisma_client, master_key
     import json
     worker_config = json.loads(os.getenv("WORKER_CONFIG"))
-    print(f"worker_config: {worker_config}")
+    print_verbose(f"worker_config: {worker_config}")
     initialize(**worker_config)
-    print(f"prisma client - {prisma_client}")
+    print_verbose(f"prisma client - {prisma_client}")
     if prisma_client: 
         await prisma_client.connect()
     
