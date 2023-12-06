@@ -145,6 +145,75 @@ def test_reading_key_from_model_list():
 		pytest.fail(f"Got unexpected exception on router! - {e}")
 # test_reading_key_from_model_list()
 
+def test_call_one_endpoint():
+	# [PROD TEST CASE]
+	# user passes one deployment they want to call on the router, we call the specified one
+	# this test makes a completion calls azure/chatgpt-v-2, it should work
+	try:
+		print("Testing calling a specific deployment")
+		old_api_key = os.environ["AZURE_API_KEY"]
+
+		model_list = [
+			{ 
+				"model_name": "gpt-3.5-turbo", # openai model name 
+				"litellm_params": { # params for litellm completion/embedding call 
+					"model": "azure/chatgpt-v-2", 
+					"api_key": old_api_key,
+					"api_version": os.getenv("AZURE_API_VERSION"),
+					"api_base": os.getenv("AZURE_API_BASE")
+				},
+				"tpm": 240000,
+				"rpm": 1800
+			},
+			{
+				"model_name": "claude-v1",
+				"litellm_params": {
+					"model": "bedrock/anthropic.claude-instant-v1",
+				},
+				"tpm": 100000,
+				"rpm": 10000,
+			}
+		]
+
+		router = Router(model_list=model_list, 
+					routing_strategy="simple-shuffle",
+					set_verbose=True,
+					num_retries=1) # type: ignore
+		old_api_base = os.environ.pop("AZURE_API_BASE", None)
+
+
+		response = router.completion(
+			model="azure/chatgpt-v-2",
+			messages=[
+				{
+					"role": "user",
+					"content": "hello this request will pass"
+				}
+			],
+		)
+		print("\n response", response)
+
+
+		response = router.completion(
+			model="bedrock/anthropic.claude-instant-v1",
+			messages=[
+				{
+					"role": "user",
+					"content": "hello this request will pass"
+				}
+			],
+		)
+
+		print("\n response", response)
+
+		os.environ["AZURE_API_BASE"] = old_api_base
+		os.environ["AZURE_API_KEY"] = old_api_key
+	except Exception as e:
+		print(f"FAILED TEST")
+		pytest.fail(f"Got unexpected exception on router! - {e}")
+
+test_call_one_endpoint()
+
 
 
 def test_router_azure_acompletion():
