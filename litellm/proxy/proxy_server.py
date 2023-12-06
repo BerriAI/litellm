@@ -1032,6 +1032,47 @@ async def add_new_model(model_params: ModelParams):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
 
+def get_litellm_model_info(model: dict = {}):
+    model_info = model.get("model_info", {})
+    model_to_lookup = model.get("litellm_params", {}).get("model", None)
+    try:
+        if "azure" in model_to_lookup:
+            model_to_lookup = model_info.get("base_model", None)
+        litellm_model_info = litellm.get_model_info(model_to_lookup)
+        return litellm_model_info
+    except:
+        # this should not block returning on /model/info
+        # if litellm does not have info on the model it should return {}
+        return {}
+
+#### [BETA] - This is a beta endpoint, format might change based on user feedback https://github.com/BerriAI/litellm/issues/933. If you need a stable endpoint use /model/info
+@router.get("/v1/model/info", description="Provides more info about each model in /models, including config.yaml descriptions (except api key and api base)", tags=["model management"], dependencies=[Depends(user_api_key_auth)])
+async def model_info(request: Request):
+    global llm_model_list, general_settings, user_config_file_path
+    # Load existing config
+    with open(f"{user_config_file_path}", "r") as config_file:
+        config = yaml.safe_load(config_file)
+    all_models = config['model_list']
+    for model in all_models:
+        # provided model_info in config.yaml
+        model_info = model.get("model_info", {})
+
+        # read litellm model_prices_and_context_window.json to get the following:
+        # input_cost_per_token, output_cost_per_token, max_tokens
+        litellm_model_info = get_litellm_model_info(model=model)
+        for k, v in litellm_model_info.items(): 
+            if k not in model_info: 
+                model_info[k] = v
+        model["model_info"] = model_info
+        # don't return the api key
+        model["litellm_params"].pop("api_key", None)
+
+    print_verbose(f"all_models: {all_models}")
+    return {
+        "data": all_models
+    }
+
+
 #### [BETA] - This is a beta endpoint, format might change based on user feedback. - https://github.com/BerriAI/litellm/issues/933
 @router.get("/model/info", description="Provides more info about each model in /models, including config.yaml descriptions (except api key and api base)", tags=["model management"], dependencies=[Depends(user_api_key_auth)])
 async def model_info(request: Request):
