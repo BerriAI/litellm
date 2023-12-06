@@ -121,10 +121,10 @@ def completion(
         )
     else:
         if hf_model_name is None:
-            if "llama2" in model.lower(): # llama2 model
-                if "chat" in model.lower():
+            if "llama-2" in model.lower(): # llama-2 model
+                if "chat" in model.lower(): # apply llama2 chat template
                     hf_model_name = "meta-llama/Llama-2-7b-chat-hf"
-                else:
+                else: # apply regular llama2 template
                     hf_model_name = "meta-llama/Llama-2-7b"
         hf_model_name = hf_model_name or model # pass in hf model name for pulling it's prompt template - (e.g. `hf_model_name="meta-llama/Llama-2-7b-chat-hf` applies the llama2 chat template to the prompt)
         prompt = prompt_factory(model=hf_model_name, messages=messages)
@@ -146,7 +146,7 @@ def completion(
     logging_obj.pre_call(
             input=prompt,
             api_key="",
-            additional_args={"complete_input_dict": data, "request_str": request_str},
+            additional_args={"complete_input_dict": data, "request_str": request_str, "hf_model_name": hf_model_name},
         )
     ## COMPLETION CALL
     try: 
