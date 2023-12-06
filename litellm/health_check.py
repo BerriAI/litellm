@@ -4,7 +4,7 @@ from typing import Optional
 
 import litellm
 import logging
-from concurrent.futures import ThreadPoolExecutor
+from litellm._logging import print_verbose
 
 
 logger = logging.getLogger(__name__)
@@ -47,7 +47,7 @@ async def _perform_health_check(model_list: list):
         try:
             await litellm.acompletion(**model_params)
         except Exception as e:
-            logger.exception("Health check failed for model %s", model_params["model"])
+            print_verbose(f"Health check failed for model {model_params['model']}. Error: {e}")
             return False
         
         return True
