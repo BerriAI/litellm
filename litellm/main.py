@@ -1166,6 +1166,7 @@ def completion(
                 print_verbose=print_verbose,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
+                custom_prompt_dict=custom_prompt_dict,
                 logger_fn=logger_fn,
                 encoding=encoding,
                 logging_obj=logging
