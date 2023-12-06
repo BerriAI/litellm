@@ -861,7 +861,7 @@ async def chat_completion(request: Request, model: Optional[str] = None, user_ap
         if llm_router is not None and data["model"] in router_model_names: # model in router model list 
                 response = await llm_router.acompletion(**data)
         elif llm_router is not None and data["model"] in llm_router.deployment_names: # model in router deployments, calling a specific deployment on the router
-            response = await llm_router.acompletion(**data)
+            response = await llm_router.acompletion(**data, specific_deployment = True)
         else: # router is not set
             response = await litellm.acompletion(**data)
         if 'stream' in data and data['stream'] == True: # use generate_responses to stream responses
@@ -923,7 +923,7 @@ async def embeddings(request: Request, user_api_key_dict: UserAPIKeyAuth = Depen
         if llm_router is not None and data["model"] in router_model_names: # model in router model list 
             response = await llm_router.aembedding(**data)
         elif llm_router is not None and data["model"] in llm_router.deployment_names: # model in router deployments, calling a specific deployment on the router
-            response = await llm_router.aembedding(**data)
+            response = await llm_router.aembedding(**data, specific_deployment = True)
         else:
             response = await litellm.aembedding(**data)
         background_tasks.add_task(log_input_output, request, response) # background task for logging to OTEL 
