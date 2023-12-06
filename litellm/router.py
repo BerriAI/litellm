@@ -439,7 +439,7 @@ class Router:
                 raise original_exception
             
             ## LOGGING
-            if len(num_retries) > 0:
+            if num_retries > 0:
                 kwargs = self.log_retry(kwargs=kwargs, e=original_exception)
             
             for current_attempt in range(num_retries):
@@ -555,7 +555,7 @@ class Router:
                 or (isinstance(original_exception, openai.RateLimitError) and fallbacks is not None)): 
                 raise original_exception
             ## LOGGING
-            if len(num_retries) > 0:
+            if num_retries > 0:
                 kwargs = self.log_retry(kwargs=kwargs, e=original_exception)
             ### RETRY
             for current_attempt in range(num_retries):
