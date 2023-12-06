@@ -44,7 +44,19 @@ class ModelInfo(BaseModel):
     input_cost_per_token: Optional[float]
     output_cost_per_token: Optional[float]
     max_tokens: Optional[int]
-    base_model: Optional[Literal['gpt-4-1106-preview', 'gpt-4-32k', 'gpt-4', 'gpt-3.5-turbo-16k', 'gpt-3.5-turbo']]
+
+    # for azure models we need users to specify the base model, one azure you can call deployments - azure/my-random-model
+    # we look up the base model in model_prices_and_context_window.json
+    base_model: Optional[Literal
+                         [
+                             'gpt-4-1106-preview', 
+                             'gpt-4-32k', 
+                             'gpt-4', 
+                             'gpt-3.5-turbo-16k', 
+                             'gpt-3.5-turbo',
+                             'text-embedding-ada-002',
+                         ]
+                        ]
 
     class Config:
         extra = Extra.allow  # Allow extra fields
