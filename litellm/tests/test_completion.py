@@ -1039,6 +1039,7 @@ def test_completion_sagemaker():
             messages=messages,
             temperature=0.2,
             max_tokens=80,
+            hf_model_name="meta-llama/Llama-2-7b",
         )
         # Add any assertions here to check the response
         print(response)
@@ -1056,6 +1057,7 @@ def test_completion_chat_sagemaker():
             messages=messages,
             max_tokens=100,
             stream=True,
+            hf_model_name="meta-llama/Llama-2-7b-chat-hf",
         )
         # Add any assertions here to check the response
         complete_response = "" 
