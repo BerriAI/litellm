@@ -42,7 +42,11 @@ model_list:
 
 
 litellm_settings:
+  # setting callback class
   # callbacks: custom_callbacks.proxy_handler_instance # sets litellm.callbacks = [proxy_handler_instance]
+
+  # setting a callback function
+  success_callback: [custom_callbacks.async_on_succes_logger]
 
 general_settings: 
   # otel: True          # OpenTelemetry Logger

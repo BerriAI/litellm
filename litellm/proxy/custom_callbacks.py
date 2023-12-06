@@ -51,3 +51,39 @@ class MyCustomHandler(CustomLogger):
 proxy_handler_instance = MyCustomHandler()
 
 # need to set litellm.callbacks = [customHandler] # on the proxy
+
+## setting only one function 
+async def async_on_succes_logger(kwargs, response_obj, start_time, end_time):
+    print(f"On Async Success!")
+    # log: key, user, model, prompt, response, tokens, cost
+    print("\nOn Success")
+    ### Access kwargs passed to litellm.completion()
+    model = kwargs.get("model", None)
+    messages = kwargs.get("messages", None)
+    user = kwargs.get("user", None)
+
+    #### Access litellm_params passed to litellm.completion(), example access `metadata`
+    litellm_params = kwargs.get("litellm_params", {})
+    metadata = litellm_params.get("metadata", {})   # headers passed to LiteLLM proxy, can be found here
+    #################################################
+
+    ##### Calculate cost using  litellm.completion_cost() #######################
+    cost = litellm.completion_cost(completion_response=response_obj)
+    response = response_obj
+    # tokens used in response 
+    usage = response_obj["usage"]
+
+    print(
+        f"""
+            Model: {model},
+            Messages: {messages},
+            User: {user},
+            Usage: {usage},
+            Cost: {cost},
+            Response: {response}
+            Proxy Metadata: {metadata}
+        """
+    )
+    return
+
+# litellm.success_callback = [async_on_succes_logger]
