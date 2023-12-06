@@ -5,7 +5,7 @@ import requests
 import time
 from typing import Callable, Optional
 import litellm
-from litellm.utils import ModelResponse, get_secret, Usage
+from litellm.utils import ModelResponse, EmbeddingResponse, get_secret, Usage
 import sys
 from copy import deepcopy
 import httpx
@@ -198,7 +198,7 @@ def completion(
 
 def embedding(model: str,
         input: list,
-        model_response: ModelResponse,
+        model_response: EmbeddingResponse,
         print_verbose: Callable,
         encoding,
         logging_obj,
@@ -262,7 +262,7 @@ def embedding(model: str,
         ContentType="application/json",
         Body={data},
         CustomAttributes="accept_eula=true",
-    )"""
+    )""" # type: ignore
     logging_obj.pre_call(
             input=input,
             api_key="",

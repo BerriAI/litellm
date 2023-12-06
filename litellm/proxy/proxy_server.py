@@ -1175,6 +1175,11 @@ async def test_endpoint(request: Request):
 async def health_endpoint(request: Request, model: Optional[str] = fastapi.Query(None, description="Specify the model name (optional)")):
     global llm_model_list
 
+    if llm_model_list is None: 
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": "Model list not initialized"},
+        )
     healthy_endpoints, unhealthy_endpoints = await perform_health_check(llm_model_list, model)
 
     return {
