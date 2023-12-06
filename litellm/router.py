@@ -889,7 +889,7 @@ class Router:
                 if "azure" in model_name:
                     if api_base is None:
                         raise ValueError("api_base is required for Azure OpenAI. Set it on your config")
-                    self.print_verbose(f"Initializing Azure OpenAI Client for {model_name}, {str(api_base)}, {api_key}")
+                    self.print_verbose(f"Initializing Azure OpenAI Client for {model_name}, Api Base: {str(api_base)}, Api Key:{api_key}")
                     if api_version is None:
                         api_version = "2023-07-01-preview"
                     if "gateway.ai.cloudflare.com" in api_base: 
@@ -960,7 +960,7 @@ class Router:
                         )
                         
                 else:
-                    self.print_verbose(f"Initializing OpenAI Client for {model_name}, {str(api_base)}, {api_key}")
+                    self.print_verbose(f"Initializing OpenAI Client for {model_name}, Api Base:{str(api_base)}, Api Key:{api_key}")
                     model["async_client"] = openai.AsyncOpenAI(
                         api_key=api_key,
                         base_url=api_base,
