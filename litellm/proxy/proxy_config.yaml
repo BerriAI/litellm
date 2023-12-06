@@ -7,6 +7,9 @@ model_list:
       api_version: "2023-07-01-preview"
     model_info:
       mode: chat
+      input_cost_per_token: 0.0.00006
+      output_cost_per_token: 0.00003
+      max_tokens: 4096
   - model_name: openai-gpt-3.5
     litellm_params:
       model: gpt-3.5-turbo
