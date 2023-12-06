@@ -1,7 +1,7 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Extra
 from typing import Optional, List, Union, Dict
 from datetime import datetime
-
+import uuid
 ######### Request Class Definition ######
 class ProxyChatCompletionRequest(BaseModel):
     model: str
@@ -38,10 +38,21 @@ class ProxyChatCompletionRequest(BaseModel):
     class Config:
         extra='allow' # allow params not defined here, these fall in litellm.completion(**kwargs)
 
+class ModelInfo(BaseModel):
+    id: Optional[str]
+
+    class Config:
+        extra = Extra.allow  # Allow extra fields
+        protected_namespaces = ()
+
+class ModelInfoDelete(BaseModel):
+    id: Optional[str]
+
 class ModelParams(BaseModel):
     model_name: str
     litellm_params: dict
-    model_info: Optional[dict]
+    model_info: Optional[ModelInfo]=None
+ 
     class Config:
         protected_namespaces = ()
 

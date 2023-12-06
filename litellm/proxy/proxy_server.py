@@ -999,7 +999,7 @@ async def info_key_fn(key: str = fastapi.Query(..., description="Key in the requ
         )
 
 #### MODEL MANAGEMENT #### 
-
+        
 #### [BETA] - This is a beta endpoint, format might change based on user feedback. - https://github.com/BerriAI/litellm/issues/964
 @router.post("/model/new", description="Allows adding new models to the model list in the config.yaml", tags=["model management"], dependencies=[Depends(user_api_key_auth)])
 async def add_new_model(model_params: ModelParams):
@@ -1073,6 +1073,48 @@ async def model_info(request: Request):
         ],
         object="list",
     )
+
+#### [BETA] - This is a beta endpoint, format might change based on user feedback. - https://github.com/BerriAI/litellm/issues/964
+@router.post("/model/delete", description="Allows deleting models in the model list in the config.yaml", tags=["model management"], dependencies=[Depends(user_api_key_auth)])
+async def delete_model(model_info: ModelInfoDelete):
+    global llm_router, llm_model_list, general_settings, user_config_file_path
+    try:
+        if not os.path.exists(user_config_file_path):
+            raise HTTPException(status_code=404, detail="Config file does not exist.")
+
+        with open(user_config_file_path, "r") as config_file:
+            config = yaml.safe_load(config_file)
+
+        # If model_list is not in the config, nothing can be deleted
+        if 'model_list' not in config:
+            raise HTTPException(status_code=404, detail="No model list available in the config.")
+
+        # Check if the model with the specified model_id exists
+        model_to_delete = None
+        for model in config['model_list']:
+            if model.get('model_info', {}).get('id', None) == model_info.id:
+                model_to_delete = model
+                break
+
+        # If the model was not found, return an error
+        if model_to_delete is None:
+            raise HTTPException(status_code=404, detail="Model with given model_id not found.")
+
+        # Remove model from the list and save the updated config
+        config['model_list'].remove(model_to_delete)
+        with open(user_config_file_path, "w") as config_file:
+            yaml.dump(config, config_file, default_flow_style=False)
+
+        # Update Router
+        llm_router, llm_model_list, general_settings = load_router_config(router=llm_router, config_file_path=user_config_file_path)
+
+        return {"message": "Model deleted successfully"}
+
+    except HTTPException as e:
+        # Re-raise the HTTP exceptions to be handled by FastAPI
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
 
 #### EXPERIMENTAL QUEUING #### 
 @router.post("/queue/request", dependencies=[Depends(user_api_key_auth)])
