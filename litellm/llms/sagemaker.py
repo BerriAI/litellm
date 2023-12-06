@@ -120,6 +120,12 @@ def completion(
             messages=messages
         )
     else:
+        if hf_model_name is None:
+            if "llama2" in model.lower(): # llama2 model
+                if "chat" in model.lower():
+                    hf_model_name = "meta-llama/Llama-2-7b-chat-hf"
+                else:
+                    hf_model_name = "meta-llama/Llama-2-7b"
         hf_model_name = hf_model_name or model # pass in hf model name for pulling it's prompt template - (e.g. `hf_model_name="meta-llama/Llama-2-7b-chat-hf` applies the llama2 chat template to the prompt)
         prompt = prompt_factory(model=hf_model_name, messages=messages)
 
