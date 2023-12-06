@@ -74,7 +74,6 @@ def is_port_in_use(port):
 @click.option('--drop_params', is_flag=True, help='Drop any unmapped params') 
 @click.option('--add_function_to_prompt', is_flag=True, help='If function passed but unsupported, pass it as prompt') 
 @click.option('--config', '-c', default=None, help='Configure Litellm')  
-@click.option('--file', '-f', help='Path to config file')
 @click.option('--max_budget', default=None, type=float, help='Set max budget for API calls - works for hosted models like OpenAI, TogetherAI, Anthropic, etc.`') 
 @click.option('--telemetry', default=True, type=bool, help='Helps us know if people are using this feature. Turn this off by doing `--telemetry False`') 
 @click.option('--logs', flag_value=False, type=int, help='Gets the "n" most recent logs. By default gets most recent log.') 
@@ -83,7 +82,7 @@ def is_port_in_use(port):
 @click.option('--test_async', default=False, is_flag=True, help='Calls async endpoints /queue/requests and /queue/response')
 @click.option('--num_requests', default=10, type=int, help='Number of requests to hit async endpoint with')
 @click.option('--local', is_flag=True, default=False, help='for local debugging')
-def run_server(host, port, api_base, api_version, model, alias, add_key, headers, save, debug, temperature, max_tokens, request_timeout, drop_params, add_function_to_prompt, config, file, max_budget, telemetry, logs, test, local, num_workers, test_async, num_requests, use_queue, health):
+def run_server(host, port, api_base, api_version, model, alias, add_key, headers, save, debug, temperature, max_tokens, request_timeout, drop_params, add_function_to_prompt, config, max_budget, telemetry, logs, test, local, num_workers, test_async, num_requests, use_queue, health):
     global feature_telemetry
     args = locals()
     if local:
