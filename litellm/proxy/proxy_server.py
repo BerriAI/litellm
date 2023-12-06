@@ -863,7 +863,9 @@ async def chat_completion(request: Request, model: Optional[str] = None, user_ap
         router_model_names = [m["model_name"] for m in llm_model_list] if llm_model_list is not None else []
         if llm_router is not None and data["model"] in router_model_names: # model in router model list 
                 response = await llm_router.acompletion(**data)
-        else: 
+        elif llm_router is not None and data["model"] in llm_router.deployment_names: # model in router deployments, calling a specific deployment on the router
+            response = await llm_router.acompletion(**data)
+        else: # router is not set
             response = await litellm.acompletion(**data)
         if 'stream' in data and data['stream'] == True: # use generate_responses to stream responses
             return StreamingResponse(async_data_generator(response), media_type='text/event-stream')
