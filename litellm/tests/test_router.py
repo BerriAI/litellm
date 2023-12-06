@@ -172,7 +172,17 @@ def test_call_one_endpoint():
 				},
 				"tpm": 100000,
 				"rpm": 10000,
-			}
+			},
+			{
+				"model_name": "text-embedding-ada-002",
+				"litellm_params": {
+					"model": "azure/azure-embedding-model",
+					"api_key":os.environ['AZURE_API_KEY'],
+					"api_base": os.environ['AZURE_API_BASE']
+				},
+				"tpm": 100000,
+				"rpm": 10000,
+			},
 		]
 
 		router = Router(model_list=model_list, 
@@ -181,38 +191,50 @@ def test_call_one_endpoint():
 					num_retries=1) # type: ignore
 		old_api_base = os.environ.pop("AZURE_API_BASE", None)
 
+		async def call_azure_completion():
+			response = await router.acompletion(
+				model="azure/chatgpt-v-2",
+				messages=[
+					{
+						"role": "user",
+						"content": "hello this request will pass"
+					}
+				],
+			)
+			print("\n response", response)
 
-		response = router.completion(
-			model="azure/chatgpt-v-2",
-			messages=[
-				{
-					"role": "user",
-					"content": "hello this request will pass"
-				}
-			],
-		)
-		print("\n response", response)
+		async def call_bedrock_claude():
+			response = await router.acompletion(
+				model="bedrock/anthropic.claude-instant-v1",
+				messages=[
+					{
+						"role": "user",
+						"content": "hello this request will pass"
+					}
+				],
+			)
 
+			print("\n response", response)
+		
+		async def call_azure_embedding():
+			response = await router.aembedding(
+				model="azure/azure-embedding-model",
+				input = ["good morning from litellm"]
+			)
 
-		response = router.completion(
-			model="bedrock/anthropic.claude-instant-v1",
-			messages=[
-				{
-					"role": "user",
-					"content": "hello this request will pass"
-				}
-			],
-		)
+			print("\n response", response)
 
-		print("\n response", response)
-
+		asyncio.run(call_azure_completion())
+		asyncio.run(call_bedrock_claude())
+		asyncio.run(call_azure_embedding())
+		
 		os.environ["AZURE_API_BASE"] = old_api_base
 		os.environ["AZURE_API_KEY"] = old_api_key
 	except Exception as e:
 		print(f"FAILED TEST")
 		pytest.fail(f"Got unexpected exception on router! - {e}")
 
-test_call_one_endpoint()
+# test_call_one_endpoint()
 
 
 
