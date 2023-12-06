@@ -1064,6 +1064,13 @@ class Router:
             healthy_deployments.remove(deployment)
         self.print_verbose(f"healthy deployments: length {len(healthy_deployments)} {healthy_deployments}")
         if len(healthy_deployments) == 0: 
+            # users can also specify a specific deployment name. At this point we should check if they are just trying to call a specific deployment
+            for deployment in self.model_list: 
+                cleaned_model = litellm.utils.remove_model_id(deployment.get("litellm_params").get("model"))
+                if cleaned_model == model: 
+                    # User Passed a specific deployment name on their config.yaml, example azure/chat-gpt-v-2
+                    # return the first deployment where the `model` matches the specificed deployment name
+                    return deployment
             raise ValueError("No models available")
         if litellm.model_alias_map and model in litellm.model_alias_map:
             model = litellm.model_alias_map[
