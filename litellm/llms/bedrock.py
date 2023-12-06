@@ -558,7 +558,7 @@ def _embedding_func_single(
         # data = json.dumps(data)
     elif provider == "cohere":
         inference_params["input_type"] = inference_params.get("input_type", "search_document") # aws bedrock example default - https://us-east-1.console.aws.amazon.com/bedrock/home?region=us-east-1#/providers?model=cohere.embed-english-v3
-        data = {"texts": [input], **inference_params}
+        data = {"texts": [input], **inference_params} # type: ignore
     body = json.dumps(data).encode("utf-8") 
     ## LOGGING
     request_str = f"""
