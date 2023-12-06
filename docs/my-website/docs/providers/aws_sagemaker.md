@@ -1,5 +1,5 @@
 # AWS Sagemaker
-LiteLLM supports Llama2 on Sagemaker
+LiteLLM supports All Sagemaker Huggingface Jumpstart Models
 
 ### API KEYS
 ```python
