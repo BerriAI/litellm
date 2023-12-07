@@ -1051,7 +1051,7 @@ def test_completion_sagemaker():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_sagemaker() 
+# test_completion_sagemaker() 
 
 def test_completion_chat_sagemaker():
     try:
@@ -1318,43 +1318,6 @@ def test_completion_bedrock_claude_completion_auth():
 #         pytest.fail(f"Error occurred: {e}")
 
 # test_completion_custom_api_base()
-
-# def test_vertex_ai():
-#     test_models = ["codechat-bison"] + litellm.vertex_chat_models + litellm.vertex_code_chat_models + litellm.vertex_text_models + litellm.vertex_code_text_models
-#     # test_models = ["chat-bison"]
-#     for model in test_models:
-#         try:
-#             if model in ["code-gecko@001", "code-gecko@latest"]:
-#                 # our account does not have access to this model
-#                 continue
-#             print("making request", model)
-#             response = completion(model=model, messages=[{'role': 'user', 'content': 'hi'}])
-#             print(response)
-
-#             print(response.usage.completion_tokens)
-#             print(response['usage']['completion_tokens'])
-#             assert type(response.choices[0].message.content) == str
-#         except Exception as e:
-#             pytest.fail(f"Error occurred: {e}")
-# test_vertex_ai()
-
-# def test_vertex_ai_stream():
-#     litellm.set_verbose=False
-#     test_models = litellm.vertex_chat_models + litellm.vertex_code_chat_models + litellm.vertex_text_models + litellm.vertex_code_text_models
-#     for model in test_models:
-#         try:
-#             if model in ["code-gecko@001", "code-gecko@latest"]:
-#                 # our account does not have access to this model
-#                 continue
-#             print("making request", model)
-#             response = completion(model=model, messages=[{"role": "user", "content": "write 100 line code code for saying hi"}], stream=True)
-#             for chunk in response:
-#                 print(chunk)
-#                 # pass
-#         except Exception as e:
-#             pytest.fail(f"Error occurred: {e}")
-# test_vertex_ai_stream() 
-
 
 def test_completion_with_fallbacks():
     print(f"RUNNING TEST COMPLETION WITH FALLBACKS -  test_completion_with_fallbacks")
