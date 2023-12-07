@@ -2580,10 +2580,10 @@ def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None, api_
         elif model in litellm.anthropic_models:
             custom_llm_provider = "anthropic"
         ## cohere
-        elif model in litellm.cohere_models:
+        elif model in litellm.cohere_models or model in litellm.cohere_embedding_models:
             custom_llm_provider = "cohere"
         ## replicate
-        elif model in litellm.replicate_models or ":" in model:
+        elif model in litellm.replicate_models or (":" in model and len(model)>64):
             model_parts = model.split(":")
             if len(model_parts) > 1 and len(model_parts[1])==64: ## checks if model name has a 64 digit code - e.g. "meta/llama-2-70b-chat:02e509c789964a7ea8736978a43525956ef40397be9033abf9fd2badfe68c9e3"
                 custom_llm_provider = "replicate"
@@ -2619,17 +2619,11 @@ def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None, api_
         elif model in litellm.petals_models:
             custom_llm_provider = "petals"
         ## bedrock
-        elif model in litellm.bedrock_models:
+        elif model in litellm.bedrock_models or model in litellm.bedrock_embedding_models:
             custom_llm_provider = "bedrock"
         # openai embeddings
         elif model in litellm.open_ai_embedding_models:
             custom_llm_provider = "openai"
-        # cohere embeddings
-        elif model in litellm.cohere_embedding_models:
-            custom_llm_provider = "cohere"
-        elif model in litellm.bedrock_embedding_models:
-            custom_llm_provider = "bedrock"
-
         if custom_llm_provider is None or custom_llm_provider=="":
             print() # noqa
             print("\033[1;31mProvider List: https://docs.litellm.ai/docs/providers\033[0m") # noqa
