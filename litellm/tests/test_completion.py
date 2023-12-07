@@ -1001,8 +1001,13 @@ def test_replicate_custom_prompt_dict():
 
 ######## Test TogetherAI ######## 
 def test_completion_together_ai():
-    model_name = "together_ai/togethercomputer/llama-2-70b-chat"
+    model_name = "together_ai/togethercomputer/CodeLlama-13b-Instruct"
     try:
+        messages =[
+            {"role": "user", "content": "Who are you"},
+            {"role": "assistant", "content": "I am your helpful assistant."},
+            {"role": "user", "content": "Tell me a joke"},
+        ]
         response = completion(model=model_name, messages=messages, max_tokens=256, n=1, logger_fn=logger_fn)
         # Add any assertions here to check the response
         print(response)
