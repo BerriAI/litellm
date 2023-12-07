@@ -522,6 +522,7 @@ class CallTypes(Enum):
     embedding = 'embedding'
     completion = 'completion'
     acompletion = 'acompletion'
+    aembedding = 'aembedding'
 
 # Logging function -> log the exact model details + what's being sent | Non-Blocking
 class Logging:
@@ -1317,7 +1318,7 @@ def client(original_function):
                 ### PRE-CALL RULES ### 
                 if isinstance(messages, list) and len(messages) > 0 and isinstance(messages[0], dict) and "content" in messages[0]:
                     rules_obj.pre_call_rules(input="".join(m["content"] for m in messages if isinstance(m["content"], str)), model=model)
-            elif call_type == CallTypes.embedding.value:
+            elif call_type == CallTypes.embedding.value or call_type == CallTypes.aembedding.value:
                 messages = args[1] if len(args) > 1 else kwargs["input"]
             stream = True if "stream" in kwargs and kwargs["stream"] == True else False
             logging_obj = Logging(model=model, messages=messages, stream=stream, litellm_call_id=kwargs["litellm_call_id"], function_id=function_id, call_type=call_type, start_time=start_time)
