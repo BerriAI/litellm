@@ -1104,7 +1104,7 @@ class Router:
         # check if aliases set on litellm model alias map
         if model in litellm.model_group_alias_map:
             self.print_verbose(f"Using a model alias. Got Request for {model}, sending requests to {litellm.model_group_alias_map.get(model)}")
-            model = litellm.model_group_alias_map.get(model)
+            model = litellm.model_group_alias_map[model]
 
         ## get healthy deployments
         ### get all deployments 
