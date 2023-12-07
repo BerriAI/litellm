@@ -1775,16 +1775,20 @@ def embedding(
     rpm = kwargs.pop("rpm", None)
     tpm = kwargs.pop("tpm", None)
     aembedding = kwargs.pop("aembedding", None)
-
+    openai_params = ["functions", "function_call", "temperature", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "request_timeout", "api_base", "api_version", "api_key", "deployment_id", "organization", "base_url", "default_headers", "timeout", "response_format", "seed", "tools", "tool_choice", "max_retries", "encoding_format"]
+    litellm_params = ["metadata", "acompletion", "caching", "return_async", "mock_response", "api_key", "api_version", "api_base", "force_timeout", "logger_fn", "verbose", "custom_llm_provider", "litellm_logging_obj", "litellm_call_id", "use_client", "id", "fallbacks", "azure", "headers", "model_list", "num_retries", "context_window_fallback_dict", "roles", "final_prompt_value", "bos_token", "eos_token", "request_timeout", "complete_response", "self", "client", "rpm", "tpm", "input_cost_per_token", "output_cost_per_token", "hf_model_name"]
+    default_params = openai_params + litellm_params
+    non_default_params = {k: v for k,v in kwargs.items() if k not in default_params} # model-specific params - pass them straight to the model/provider
     optional_params = {}
-    for param in kwargs:
-        if param != "metadata":                     # filter out metadata from optional_params
-            optional_params[param] = kwargs[param]
+    for param in non_default_params:
+        optional_params[param] = kwargs[param]
     model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, api_key=api_key)
+    
+
     try:
         response = None
         logging = litellm_logging_obj
-        logging.update_environment_variables(model=model, user="", optional_params={}, litellm_params={"timeout": timeout, "azure": azure, "litellm_call_id": litellm_call_id, "logger_fn": logger_fn})
+        logging.update_environment_variables(model=model, user="", optional_params=optional_params, litellm_params={"timeout": timeout, "azure": azure, "litellm_call_id": litellm_call_id, "logger_fn": logger_fn})
         if azure == True or custom_llm_provider == "azure":
             # azure configs
             api_type = get_secret("AZURE_API_TYPE") or "azure"
@@ -1903,7 +1907,7 @@ def embedding(
                 input=input,
                 encoding=encoding,
                 logging_obj=logging,
-                optional_params=kwargs,
+                optional_params=optional_params,
                 model_response= EmbeddingResponse()
             )
         elif custom_llm_provider == "sagemaker": 
@@ -1912,7 +1916,7 @@ def embedding(
                 input=input,
                 encoding=encoding,
                 logging_obj=logging,
-                optional_params=kwargs,
+                optional_params=optional_params,
                 model_response= EmbeddingResponse(),
                 print_verbose=print_verbose
             )

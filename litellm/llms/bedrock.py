@@ -552,8 +552,8 @@ def _embedding_func_single(
     ## FORMAT EMBEDDING INPUT ## 
     provider = model.split(".")[0]
     inference_params = copy.deepcopy(optional_params)
-    input = input.replace(os.linesep, " ")
     if provider == "amazon":
+        input = input.replace(os.linesep, " ")
         data = {"inputText": input, **inference_params}
         # data = json.dumps(data)
     elif provider == "cohere":
@@ -590,7 +590,10 @@ def _embedding_func_single(
                 original_response=response_body,
             )
         if provider == "cohere":
-            return response_body.get("embeddings")
+            response = response_body.get("embeddings")
+            # flatten list
+            response = [item for sublist in response for item in sublist]
+            return response
         elif provider == "amazon":
             return response_body.get("embedding")
     except Exception as e:
