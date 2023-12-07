@@ -284,4 +284,54 @@ def test_weighted_selection_router_no_rpm_set():
 	except Exception as e:
 		traceback.print_exc()
 		pytest.fail(f"Error occurred: {e}")
-test_weighted_selection_router_no_rpm_set()
+# test_weighted_selection_router_no_rpm_set()
+
+
+
+def test_model_group_aliases(): 
+	try:
+		litellm.set_verbose = False
+		litellm.model_group_alias_map = {"gpt-4": "gpt-3.5-turbo"}
+		model_list = [
+			{
+				"model_name": "gpt-3.5-turbo",
+				"litellm_params": {
+					"model": "gpt-3.5-turbo-0613",
+					"api_key": os.getenv("OPENAI_API_KEY"),
+					"rpm": 6,
+				},
+			},
+			{
+				"model_name": "gpt-3.5-turbo",
+				"litellm_params": {
+					"model": "azure/chatgpt-v-2",
+					"api_key": os.getenv("AZURE_API_KEY"),
+					"api_base": os.getenv("AZURE_API_BASE"),
+					"api_version": os.getenv("AZURE_API_VERSION"),
+					"rpm": 1440,
+				},
+			},
+			{
+				"model_name": "claude-1",
+				"litellm_params": {
+					"model": "bedrock/claude1.2",
+					"rpm": 1440,
+				},
+			}
+		]
+		router = Router(
+			model_list=model_list, 
+		)
+
+		for _ in range(20):
+			selected_model = router.get_available_deployment("gpt-4")
+			print("\n selected model", selected_model)
+			selected_model_name = selected_model.get("model_name")
+			if selected_model_name is not "gpt-3.5-turbo":
+				pytest.fail(f"Selected model {selected_model_name} is not gpt-3.5-turbo")
+				
+		router.reset()
+	except Exception as e:
+		traceback.print_exc()
+		pytest.fail(f"Error occurred: {e}")
+# test_model_group_aliases()
