@@ -350,7 +350,7 @@ def prompt_factory(model: str, messages: list, custom_llm_provider: Optional[str
         elif "mosaicml/mpt" in model:
             if "chat" in model:
                 return mpt_chat_pt(messages=messages)
-        elif "codellama/codellama" in model:
+        elif "codellama/codellama" in model or "togethercomputer/codellama" in model:
             if "instruct" in model:
                 return llama_2_chat_pt(messages=messages) # https://huggingface.co/blog/codellama#conversational-instructions
         elif "wizardlm/wizardcoder" in model:
