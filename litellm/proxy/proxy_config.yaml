@@ -40,14 +40,11 @@ model_list:
     model_info:
       mode: completion
 
-
 litellm_settings:
   # setting callback class
   # callbacks: custom_callbacks.proxy_handler_instance # sets litellm.callbacks = [proxy_handler_instance]
+  model_group_alias_map: {"gpt-4": "openai-gpt-3.5"} # all requests with gpt-4 model_name, get sent to openai-gpt-3.5
 
-  # setting a callback function for success and failure
-  success_callback: [custom_callbacks.async_on_succes_logger]
-  failure_callback: [custom_callbacks.async_on_fail_logger]
 
 general_settings: 
   # otel: True          # OpenTelemetry Logger
