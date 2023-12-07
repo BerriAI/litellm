@@ -10,21 +10,28 @@ import os, io
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path 
-import pytest
+import pytest, logging
 import litellm
 from litellm import embedding, completion, completion_cost, Timeout
 from litellm import RateLimitError
+# Configure logging
+logging.basicConfig(
+    level=logging.DEBUG,  # Set the desired logging level
+    format="%(asctime)s - %(levelname)s - %(message)s",
+)
 
 # test /chat/completion request to the proxy
 from fastapi.testclient import TestClient
 from fastapi import FastAPI
-from litellm.proxy.proxy_server import router, save_worker_config, initialize  # Replace with the actual module where your FastAPI router is defined
-save_worker_config(config=None, model=None, alias=None, api_base=None, api_version=None, debug=False, temperature=None, max_tokens=None, request_timeout=600, max_budget=None, telemetry=False, drop_params=True, add_function_to_prompt=False, headers=None, save=False, use_queue=False)
+from litellm.proxy.proxy_server import router, save_worker_config, startup_event  # Replace with the actual module where your FastAPI router is defined
+filepath = os.path.dirname(os.path.abspath(__file__))
+config_fp = f"{filepath}/test_configs/test_config_no_auth.yaml"
+save_worker_config(config=config_fp, model=None, alias=None, api_base=None, api_version=None, debug=False, temperature=None, max_tokens=None, request_timeout=600, max_budget=None, telemetry=False, drop_params=True, add_function_to_prompt=False, headers=None, save=False, use_queue=False)
 app = FastAPI()
 app.include_router(router)  # Include your router in the test app
 @app.on_event("startup")
-async def wrapper_startup_event(): # required to reset config on app init - b/c pytest collects across multiple files - which sets the fastapi client + WORKER CONFIG to whatever was collected last
-    initialize(config=None, model=None, alias=None, api_base=None, api_version=None, debug=False, temperature=None, max_tokens=None, request_timeout=600, max_budget=None, telemetry=False, drop_params=True, add_function_to_prompt=False, headers=None, save=False, use_queue=False)
+async def wrapper_startup_event():
+    await startup_event()
 
 # Here you create a fixture that will be used by your tests
 # Make sure the fixture returns TestClient(app)
