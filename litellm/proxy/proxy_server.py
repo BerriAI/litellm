@@ -234,7 +234,8 @@ async def user_api_key_auth(request: Request, api_key: str = fastapi.Security(ap
                 return UserAPIKeyAuth()
             
         if api_key is None: # only require api key if master key is set
-            raise Exception("No api key passed in.")
+            raise Exception(f"No api key passed in.")
+
         route = request.url.path
 
         # note: never string compare api keys, this is vulenerable to a time attack. Use secrets.compare_digest instead
@@ -816,11 +817,12 @@ async def startup_event():
 
 @router.on_event("shutdown")
 async def shutdown_event():
-    global prisma_client
+    global prisma_client, master_key, user_custom_auth
     if prisma_client:
         print("Disconnecting from Prisma")
         await prisma_client.disconnect()
-
+    master_key = None
+    user_custom_auth = None
 #### API ENDPOINTS ####
 @router.get("/v1/models", dependencies=[Depends(user_api_key_auth)])
 @router.get("/models", dependencies=[Depends(user_api_key_auth)])  # if project requires model list
