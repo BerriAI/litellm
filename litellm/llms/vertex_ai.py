@@ -93,45 +93,58 @@ def completion(
         prompt = " ".join([message["content"] for message in messages])
 
         mode = "" 
+
+        request_str = ""
         if model in litellm.vertex_chat_models:
             chat_model = ChatModel.from_pretrained(model)
             mode = "chat"
+            request_str += f"chat_model = ChatModel.from_pretrained({model})\n"
         elif model in litellm.vertex_text_models:
             text_model = TextGenerationModel.from_pretrained(model)
             mode = "text"
+            request_str += f"text_model = TextGenerationModel.from_pretrained({model})\n"
         elif model in litellm.vertex_code_text_models:
             text_model = CodeGenerationModel.from_pretrained(model)
             mode = "text"
+            request_str += f"text_model = CodeGenerationModel.from_pretrained({model})\n"
         else: # vertex_code_chat_models
             chat_model = CodeChatModel.from_pretrained(model)
             mode = "chat"
+            request_str += f"chat_model = CodeChatModel.from_pretrained({model})\n"
         
         if mode == "chat":
             chat = chat_model.start_chat()
+            request_str+= f"chat = chat_model.start_chat()\n"
 
             ## LOGGING
-            logging_obj.pre_call(input=prompt, api_key=None, additional_args={"complete_input_dict": optional_params})
+            
 
             if "stream" in optional_params and optional_params["stream"] == True:
                 # NOTE: VertexAI does not accept stream=True as a param and raises an error,
                 # we handle this by removing 'stream' from optional params and sending the request
                 # after we get the response we add optional_params["stream"] = True, since main.py needs to know it's a streaming response to then transform it for the OpenAI format
                 optional_params.pop("stream", None) # vertex ai raises an error when passing stream in optional params
+                request_str += f"chat.send_message_streaming({prompt}, **{optional_params})\n"
+                logging_obj.pre_call(input=prompt, api_key=None, additional_args={"complete_input_dict": optional_params, "request_str": request_str})
                 model_response = chat.send_message_streaming(prompt, **optional_params)
                 optional_params["stream"] = True
                 return model_response
 
+            request_str += f"chat.send_message({prompt}, **{optional_params}).text\n"
+            logging_obj.pre_call(input=prompt, api_key=None, additional_args={"complete_input_dict": optional_params, "request_str": request_str})
             completion_response = chat.send_message(prompt, **optional_params).text
         elif mode == "text":
-            ## LOGGING
-            logging_obj.pre_call(input=prompt, api_key=None)
 
             if "stream" in optional_params and optional_params["stream"] == True:
                 optional_params.pop("stream", None) # See note above on handling streaming for vertex ai 
+                request_str += f"text_model.predict_streaming({prompt}, **{optional_params})\n"
+                logging_obj.pre_call(input=prompt, api_key=None, additional_args={"complete_input_dict": optional_params, "request_str": request_str})
                 model_response = text_model.predict_streaming(prompt, **optional_params)
                 optional_params["stream"] = True
                 return model_response
 
+            request_str += f"text_model.predict({prompt}, **{optional_params}).text\n"
+            logging_obj.pre_call(input=prompt, api_key=None, additional_args={"complete_input_dict": optional_params, "request_str": request_str})
             completion_response = text_model.predict(prompt, **optional_params).text
             
         ## LOGGING
