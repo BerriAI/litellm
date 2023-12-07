@@ -322,7 +322,7 @@ def test_model_group_aliases():
 		router = Router(
 			model_list=model_list, 
 		)
-
+		litellm.model_group_alias_map = {}
 		for _ in range(20):
 			selected_model = router.get_available_deployment("gpt-4")
 			print("\n selected model", selected_model)
