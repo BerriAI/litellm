@@ -989,6 +989,7 @@ async def embeddings(request: Request, user_api_key_dict: UserAPIKeyAuth = Depen
         body = await request.body()
         data = orjson.loads(body)
 
+        
         data["user"] = user_api_key_dict.user_id
         data["model"] = (
             general_settings.get("embedding_model", None) # server default
@@ -1001,9 +1002,24 @@ async def embeddings(request: Request, user_api_key_dict: UserAPIKeyAuth = Depen
             data["metadata"]["user_api_key"] = user_api_key_dict.api_key
         else:
             data["metadata"] = {"user_api_key": user_api_key_dict.api_key}
+        router_model_names = [m["model_name"] for m in llm_model_list] if llm_model_list is not None else []
+        print(f"received data: {data['input']}")
+        if "input" in data and isinstance(data['input'], list) and isinstance(data['input'][0], list) and isinstance(data['input'][0][0], int): # check if array of tokens passed in
+            # check if non-openai/azure model called - e.g. for langchain integration
+            if data["model"] in router_model_names: 
+                for m in llm_model_list: 
+                    if m["model_name"] == data["model"] and (m["litellm_params"]["model"] in litellm.open_ai_embedding_models 
+                                                             or m["litellm_params"]["model"].startswith("azure/")):
+                        pass
+                    else: 
+                        # non-openai/azure embedding model called with token input
+                        input_list = []
+                        for i in data["input"]: 
+                            input_list.append(litellm.decode(model="gpt-3.5-turbo", tokens=i))
+                        data["input"] = input_list
+                        break
 
         ## ROUTE TO CORRECT ENDPOINT ##
-        router_model_names = [m["model_name"] for m in llm_model_list] if llm_model_list is not None else []
         if llm_router is not None and data["model"] in router_model_names: # model in router model list 
             response = await llm_router.aembedding(**data)
         elif llm_router is not None and data["model"] in llm_router.deployment_names: # model in router deployments, calling a specific deployment on the router
