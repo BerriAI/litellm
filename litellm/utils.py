@@ -993,11 +993,12 @@ class Logging:
         Implementing async callbacks, to handle asyncio event loop issues when custom integrations need to use async functions.
         """
         start_time, end_time, result, complete_streaming_response = self._success_handler_helper_fn(start_time=start_time, end_time=end_time, result=result)
-        print_verbose(f"success callbacks: {litellm.success_callback}")
+        print_verbose(f"Async success callbacks: {litellm._async_success_callback}")
 
         for callback in litellm._async_success_callback:
             try: 
                 if isinstance(callback, CustomLogger): # custom logger class 
+                    print_verbose(f"Async success callbacks: CustomLogger")
                     await callback.async_log_success_event(
                         kwargs=self.model_call_details,
                         response_obj=result,
@@ -1005,6 +1006,7 @@ class Logging:
                         end_time=end_time,
                     )
                 if callable(callback): # custom logger functions
+                    print_verbose(f"Async success callbacks: async_log_event")
                     await customLogger.async_log_event(
                         kwargs=self.model_call_details,
                         response_obj=result,
