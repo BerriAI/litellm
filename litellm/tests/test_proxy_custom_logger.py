@@ -44,25 +44,12 @@ def test_chat_completion(client):
          # Your test data
         print("initialized proxy")
         # import the initialized custom logger
-        my_custom_logger = importlib.util.spec_from_file_location("my_custom_logger", python_file_path)
-        print("my_custom_logger", my_custom_logger)
+        print(litellm.callbacks)
 
-        blue_color_code = "\033[94m"
-        reset_color_code = "\033[0m"
-        print(f"{blue_color_code}Initialized LiteLLM custom logger")
-        try:
-            print(f"Logger Initialized with following methods:")
-            methods = [method for method in dir(my_custom_logger) if inspect.ismethod(getattr(my_custom_logger, method))]
-            
-            # Pretty print the methods
-            for method in methods:
-                print(f" - {method}")
-            print(f"{reset_color_code}")
-        except:
-            pass
+        assert len(litellm.callbacks) == 1 # assert litellm is initialized with 1 callback
+        my_custom_logger = litellm.callbacks[0]
+        assert my_custom_logger.async_success == False
 
-        for attribute in dir(my_custom_logger):
-            print(f"{attribute}: {getattr(my_custom_logger, attribute)}")
         test_data = {
             "model": "litellm-test-model",
             "messages": [
@@ -77,6 +64,9 @@ def test_chat_completion(client):
 
         response = client.post("/chat/completions", json=test_data)
         print("made request", response.status_code, response.text)
+        assert my_custom_logger.async_success == True                   # checks if the status of async_success is True, only the async_log_success_event can set this to true
+        assert my_custom_logger.async_completion_kwargs["model"] == "gpt-3.5-turbo" # checks if kwargs passed to async_log_success_event are correct
+        
         result = response.json()
         print(f"Received response: {result}")
     except Exception as e:
