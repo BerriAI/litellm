@@ -57,8 +57,11 @@ class MyCustomHandler(CustomLogger):
         self.async_failure = True
         print("Value of async failure: ", self.async_failure)
         print("\n kwargs: ", kwargs)
+        if kwargs.get("model") == "text-embedding-ada-002":
+            self.async_failure_embedding = True
+            self.async_embedding_kwargs_fail = kwargs
+        
         self.async_completion_kwargs_fail = kwargs
-
 
 async def async_test_logging_fn(kwargs, completion_obj, start_time, end_time):
     global async_success
@@ -165,7 +168,28 @@ def test_async_custom_handler():
         assert customHandler2.async_success_embedding == True, "async_success_embedding is not set to True even after success"
         assert customHandler2.async_embedding_kwargs.get("model") == "text-embedding-ada-002"
         assert customHandler2.async_embedding_response["usage"]["prompt_tokens"] ==2
-        print("Passed setting async success")
+        print("Passed setting async success: Embedding")
+
+
+        print("Testing custom failure callback for embedding")
+
+        async def test_4():
+            try:
+                response = await litellm.aembedding(
+                    model="text-embedding-ada-002", 
+                    input = ["hello world"],
+                    api_key="test",
+                )
+            except:
+                pass
+
+        assert customHandler2.async_failure_embedding == False 
+        asyncio.run(test_4())
+        assert customHandler2.async_failure_embedding == True, "async failure embedding is not set to True even after failure"        
+        assert customHandler2.async_embedding_kwargs_fail.get("model") == "text-embedding-ada-002"
+        assert len(str(customHandler2.async_embedding_kwargs_fail.get("exception"))) > 10 # exppect APIError("OpenAIException - Error code: 401 - {'error': {'message': 'Incorrect API key provided: test. You can find your API key at https://platform.openai.com/account/api-keys.', 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_api_key'}}"), 'traceback_exception': 'Traceback (most recent call last):\n  File "/Users/ishaanjaffer/Github/litellm/litellm/llms/openai.py", line 269, in acompletion\n    response = await openai_aclient.chat.completions.create(**data)\n  File "/Library/Frameworks/Python.framework/Versions/3.10/lib/python3.10/site-packages/openai/resources/chat/completions.py", line 119
+        print("Passed setting async failure")
+
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 test_async_custom_handler()
