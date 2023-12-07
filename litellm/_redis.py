@@ -70,7 +70,7 @@ def get_redis_url_from_environment():
 def get_redis_client(**env_overrides):
     ### check if "os.environ/<key-name>" passed in
     for k, v in env_overrides.items(): 
-        if v.startswith("os.environ/"): 
+        if isinstance(v, str) and v.startswith("os.environ/"): 
             v = v.replace("os.environ/", "")
             value = litellm.get_secret(v)
             env_overrides[k] = value
