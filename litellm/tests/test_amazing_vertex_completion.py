@@ -51,10 +51,15 @@ def load_vertex_ai_credentials():
     service_account_key_data["private_key_id"] = private_key_id
     service_account_key_data["private_key"] = private_key
 
+    for key in service_account_key_data:
+        if key not in ["private_key_id", "private_key"]:
+            print(f"Key: {key}, Value: {service_account_key_data[key]}")
+
     # Create a temporary file
     with tempfile.NamedTemporaryFile(mode='w+', delete=False) as temp_file:
         # Write the updated content to the temporary file
         json.dump(service_account_key_data, temp_file, indent=2)
+    
 
     # Export the temporary file as GOOGLE_APPLICATION_CREDENTIALS
     os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = os.path.abspath(temp_file.name)
