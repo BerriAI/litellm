@@ -10,19 +10,19 @@ from litellm.integrations.custom_logger import CustomLogger
 async_success = False
 class MyCustomHandler(CustomLogger):
     def __init__(self):
-        self.success: bool = False
-        self.failure: bool = False
-        self.async_success: bool = False
-        self.async_success_embedding: bool = False
-        self.async_failure: bool = False
-        self.async_failure_embedding: bool = False
+        self.success: bool = False                  # type: ignore
+        self.failure: bool = False                  # type: ignore
+        self.async_success: bool = False            # type: ignore
+        self.async_success_embedding: bool = False  # type: ignore
+        self.async_failure: bool = False            # type: ignore
+        self.async_failure_embedding: bool = False  # type: ignore
 
-        self.async_completion_kwargs = None # test if the kwargs are available, for async_succcess for completion/embedding 
-        self.async_embedding_kwargs = None
-        self.async_embedding_response = None
+        self.async_completion_kwargs = None         # type: ignore
+        self.async_embedding_kwargs = None          # type: ignore
+        self.async_embedding_response = None        # type: ignore
 
-        self.async_completion_kwargs_fail = None
-        self.async_embedding_kwargs_fail = None
+        self.async_completion_kwargs_fail = None    # type: ignore
+        self.async_embedding_kwargs_fail = None     # type: ignore
 
     def log_pre_api_call(self, model, messages, kwargs): 
         print(f"Pre-API Call")
