@@ -63,6 +63,7 @@ def test_completion_claude():
 def test_completion_claude2_1():
     try:
         print("claude2.1 test request")
+        messages=[{'role': 'system', 'content': 'Your goal is generate a joke on the topic user gives'}, {'role': 'assistant', 'content': 'Hi, how can i assist you today?'}, {'role': 'user', 'content': 'Generate a 3 liner joke for me'}]
         # test without max tokens
         response = completion(
             model="claude-2.1", 
