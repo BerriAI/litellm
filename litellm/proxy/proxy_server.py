@@ -1281,7 +1281,7 @@ async def retrieve_server_log(request: Request):
 async def test_endpoint(request: Request): 
     return {"route": request.url.path}
 
-@router.get("/health", description="Check the health of all the endpoints in config.yaml", tags=["health"])
+@router.get("/health", description="Check the health of all the endpoints in config.yaml", tags=["health"], dependencies=[Depends(user_api_key_auth)])
 async def health_endpoint(request: Request, model: Optional[str] = fastapi.Query(None, description="Specify the model name (optional)")):
     global llm_model_list
 
