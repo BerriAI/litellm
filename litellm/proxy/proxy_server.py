@@ -416,7 +416,7 @@ def run_ollama_serve():
         """)
 
 def load_router_config(router: Optional[litellm.Router], config_file_path: str):
-    global master_key, user_config_file_path, otel_logging, user_custom_auth
+    global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path
     config = {}
     try: 
         if os.path.exists(config_file_path):
@@ -492,7 +492,7 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
                 print(f"{blue_color_code}Cache Password:{reset_color_code} {cache_password}")
                 print()
 
-                ## to pass a complete url, just set it as `os.environ[REDIS_URL] = <your-redis-url>`, _redis.py checks for REDIS specific environment variables
+                ## to pass a complete url, or set ssl=True, etc. just set it as `os.environ[REDIS_URL] = <your-redis-url>`, _redis.py checks for REDIS specific environment variables
                 litellm.cache = Cache(
                     type=cache_type,
                     host=cache_host,
@@ -929,6 +929,7 @@ async def chat_completion(request: Request, model: Optional[str] = None, user_ap
         else:
             data["metadata"] = {"user_api_key": user_api_key_dict.api_key}
             data["metadata"]["headers"] = dict(request.headers)
+        
         global user_temperature, user_request_timeout, user_max_tokens, user_api_base
         # override with user settings, these are params passed via cli
         if user_temperature: 
