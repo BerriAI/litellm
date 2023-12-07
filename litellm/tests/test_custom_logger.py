@@ -13,10 +13,13 @@ class MyCustomHandler(CustomLogger):
         self.success: bool = False
         self.failure: bool = False
         self.async_success: bool = False
+        self.async_success_embedding: bool = False
         self.async_failure: bool = False
+        self.async_failure_embedding: bool = False
 
         self.async_completion_kwargs = None # test if the kwargs are available, for async_succcess for completion/embedding 
         self.async_embedding_kwargs = None
+        self.async_embedding_response = None
 
         self.async_completion_kwargs_fail = None
         self.async_embedding_kwargs_fail = None
@@ -43,6 +46,10 @@ class MyCustomHandler(CustomLogger):
         self.async_success = True
         print("Value of async success: ", self.async_success)
         print("\n kwargs: ", kwargs)
+        if kwargs.get("model") == "text-embedding-ada-002":
+            self.async_success_embedding = True
+            self.async_embedding_kwargs = kwargs
+            self.async_embedding_response = response_obj
         self.async_completion_kwargs = kwargs
     
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time): 
@@ -107,6 +114,7 @@ def test_async_custom_handler():
     try:
         customHandler2 = MyCustomHandler()
         litellm.callbacks = [customHandler2]
+        litellm.set_verbose = True
         messages = [
             {"role": "system", "content": "You are a helpful assistant."},
             {
@@ -134,7 +142,10 @@ def test_async_custom_handler():
         async def test_2():
             response = await litellm.acompletion(
                 model="gpt-3.5-turbo", 
-                messages=messages
+                messages=[{
+                    "role": "user",
+                    "content": "hello from litellm test",
+                }]
             )
             print("\n response", response)
         assert customHandler2.async_success == False
@@ -142,6 +153,18 @@ def test_async_custom_handler():
         assert customHandler2.async_success == True, "async success is not set to True even after success"
         assert customHandler2.async_completion_kwargs.get("model") == "gpt-3.5-turbo"
 
+
+        async def test_3():
+            response = await litellm.aembedding(
+                model="text-embedding-ada-002", 
+                input = ["hello world"],
+            )
+            print("\n response", response)
+        assert customHandler2.async_success_embedding == False
+        asyncio.run(test_3())
+        assert customHandler2.async_success_embedding == True, "async_success_embedding is not set to True even after success"
+        assert customHandler2.async_embedding_kwargs.get("model") == "text-embedding-ada-002"
+        assert customHandler2.async_embedding_response["usage"]["prompt_tokens"] ==2
         print("Passed setting async success")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
