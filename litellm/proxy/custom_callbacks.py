@@ -31,19 +31,21 @@ class MyCustomHandler(CustomLogger):
         print(f"On Stream")
         
     def log_success_event(self, kwargs, response_obj, start_time, end_time): 
+        print("On Success!")
+    
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        print(f"On Async Success!")
         # log: key, user, model, prompt, response, tokens, cost
-        print("\nOn Success")
-        ### Access kwargs passed to litellm.completion()
+        # Access kwargs passed to litellm.completion()
         model = kwargs.get("model", None)
         messages = kwargs.get("messages", None)
         user = kwargs.get("user", None)
 
-        #### Access litellm_params passed to litellm.completion(), example access `metadata`
+        # Access litellm_params passed to litellm.completion(), example access `metadata`
         litellm_params = kwargs.get("litellm_params", {})
         metadata = litellm_params.get("metadata", {})   # headers passed to LiteLLM proxy, can be found here
-        #################################################
 
-        ##### Calculate cost using  litellm.completion_cost() #######################
+        # Calculate cost using  litellm.completion_cost()
         cost = litellm.completion_cost(completion_response=response_obj)
         response = response_obj
         # tokens used in response 
@@ -98,41 +100,6 @@ class MyCustomHandler(CustomLogger):
         except Exception as e:
             print(f"Exception: {e}")
 
-
-
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        print(f"On Async Success!")
-        # log: key, user, model, prompt, response, tokens, cost
-        print("\nOn Success")
-        # Access kwargs passed to litellm.completion()
-        model = kwargs.get("model", None)
-        messages = kwargs.get("messages", None)
-        user = kwargs.get("user", None)
-
-        # Access litellm_params passed to litellm.completion(), example access `metadata`
-        litellm_params = kwargs.get("litellm_params", {})
-        metadata = litellm_params.get("metadata", {})   # headers passed to LiteLLM proxy, can be found here
-
-        # Calculate cost using  litellm.completion_cost()
-        cost = litellm.completion_cost(completion_response=response_obj)
-        response = response_obj
-        # tokens used in response 
-        usage = response_obj["usage"]
-
-        print(
-            f"""
-                Model: {model},
-                Messages: {messages},
-                User: {user},
-                Usage: {usage},
-                Cost: {cost},
-                Response: {response}
-                Proxy Metadata: {metadata}
-            """
-        )
-        return
-
-        
 
 proxy_handler_instance = MyCustomHandler()
 
