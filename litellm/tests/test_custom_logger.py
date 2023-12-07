@@ -9,8 +9,11 @@ from litellm.integrations.custom_logger import CustomLogger
 
 async_success = False
 class MyCustomHandler(CustomLogger):
-    success: bool = False
-    failure: bool = False
+    def __init__(self):
+        self.success: bool = False
+        self.failure: bool = False
+        self.async_success: bool = False
+        self.async_failure: bool = False
 
     def log_pre_api_call(self, model, messages, kwargs): 
         print(f"Pre-API Call")
@@ -28,6 +31,16 @@ class MyCustomHandler(CustomLogger):
     def log_failure_event(self, kwargs, response_obj, start_time, end_time): 
         print(f"On Failure")
         self.failure = True
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time): 
+        print(f"On Async success")
+        self.async_success = True
+        print("Value of async success: ", self.async_success)
+    
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time): 
+        print(f"On Async Failure")
+        self.async_failure = True
+        print("Value of async failure: ", self.async_failure)
 
 
 async def async_test_logging_fn(kwargs, completion_obj, start_time, end_time):
@@ -52,6 +65,7 @@ async def test_chat_openai():
     except Exception as e:
         print(e)
         pytest.fail(f"An error occurred - {str(e)}")
+# test_chat_openai()
 
 def test_completion_azure_stream_moderation_failure():
     try:
@@ -77,3 +91,43 @@ def test_completion_azure_stream_moderation_failure():
         assert customHandler.failure == True
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
+def test_async_custom_handler():
+    try:
+        customHandler2 = MyCustomHandler()
+        litellm.callbacks = [customHandler2]
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {
+                "role": "user",
+                "content": "how do i kill someone",
+            },
+        ]
+        async def test_1():
+            try:
+                response = await litellm.acompletion(
+                    model="gpt-3.5", 
+                    messages=messages
+                )
+            except:
+                pass
+
+        assert customHandler2.async_failure == False 
+        asyncio.run(test_1())
+        assert customHandler2.async_failure == True, "async failure is not set to True even after failure"
+        print("Passed setting async failure")
+
+        async def test_2():
+            response = await litellm.acompletion(
+                model="gpt-3.5-turbo", 
+                messages=messages
+            )
+            print("\n response", response)
+        assert customHandler2.async_success == False
+        asyncio.run(test_2())
+        assert customHandler2.async_success == True, "async success is not set to True even after success"
+        print("Passed setting async success")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+# test_async_custom_handler()
