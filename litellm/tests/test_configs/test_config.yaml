@@ -4,6 +4,8 @@ general_settings:
 litellm_settings:
   drop_params: true
   set_verbose: true
+  success_callback: ["langfuse"]
+  
 model_list:
 - litellm_params:
     api_base: https://my-endpoint-europe-berri-992.openai.azure.com/
