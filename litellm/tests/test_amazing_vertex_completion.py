@@ -50,13 +50,16 @@ def load_vertex_ai_credentials():
     # Update the service_account_key_data with environment variables
     private_key_id = os.environ.get("VERTEX_AI_PRIVATE_KEY_ID", "")
     private_key = os.environ.get("VERTEX_AI_PRIVATE_KEY", "")
+    private_key = private_key.replace("\\n", "\n")
+
+    # from infisical import InfisicalClient
+    # client = InfisicalClient(token=os.getenv("INFISICAL_TOKEN"))
+    # private_key = (client.get_secret(secret_name="VERTEX_AI_PRIVATE_KEY", environment="prod").secret_value)
+    # private_key = private_key.replace("\\n", "\n")
 
     service_account_key_data["private_key_id"] = private_key_id
     service_account_key_data["private_key"] = private_key
 
-    for key in service_account_key_data:
-        if key not in ["private_key_id", "private_key"]:
-            print(f"Key: {key}, Value: {service_account_key_data[key][:10]}...{service_account_key_data[key][:-10]}")
 
     # Create a temporary file
     with tempfile.NamedTemporaryFile(mode='w+', delete=False) as temp_file:
