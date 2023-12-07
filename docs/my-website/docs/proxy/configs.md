@@ -12,6 +12,9 @@ Set model list, `api_base`, `api_key`, `temperature` & proxy server settings (`m
 | `general_settings`   | Server settings, example setting `master_key: sk-my_special_key` |
 | `environment_variables`   | Environment Variables example, `REDIS_HOST`, `REDIS_PORT` |
 
+**Complete List:** Check the Swagger UI docs on `<your-proxy-url>/#/config.yaml` (e.g. http://0.0.0.0:8000/#/config.yaml), for everything you can pass in the config.yaml.
+
+
 ## Quick Start 
 
 Set a model alias for your deployments. 
@@ -302,3 +305,17 @@ model_list:
 ```shell
 $ litellm --config /path/to/config.yaml
 ```
+
+## Max Parallel Requests
+
+To rate limit a user based on the number of parallel requests, e.g.: 
+if user's parallel requests > x, send a 429 error
+if user's parallel requests <= x, let them use the API freely.
+
+set the max parallel request limit on the config.yaml (note: this expects the user to be passing in an api key).
+
+```yaml
+general_settings:
+  max_parallel_requests: 100 # max parallel requests for a user = 100
+```
+

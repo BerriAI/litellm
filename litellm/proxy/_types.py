@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Extra
+from pydantic import BaseModel, Extra, Field
 from typing import Optional, List, Union, Dict, Literal
 from datetime import datetime
 import uuid
@@ -38,6 +38,10 @@ class ProxyChatCompletionRequest(BaseModel):
     class Config:
         extra='allow' # allow params not defined here, these fall in litellm.completion(**kwargs)
 
+class ModelInfoDelete(BaseModel):
+    id: Optional[str]
+
+
 class ModelInfo(BaseModel):
     id: Optional[str]
     mode: Optional[Literal['embedding', 'chat', 'completion']]
@@ -62,8 +66,6 @@ class ModelInfo(BaseModel):
         extra = Extra.allow  # Allow extra fields
         protected_namespaces = ()
 
-class ModelInfoDelete(BaseModel):
-    id: Optional[str]
 
 class ModelParams(BaseModel):
     model_name: str
@@ -96,3 +98,24 @@ class DeleteKeyRequest(BaseModel):
 class UserAPIKeyAuth(BaseModel): # the expected response object for user api key auth
     api_key: Optional[str] = None
     user_id: Optional[str] = None
+
+class ConfigGeneralSettings(BaseModel):
+    """
+    Documents all the fields supported by `general_settings` in config.yaml
+    """
+    completion_model: Optional[str] = Field(None, description="proxy level default model for all chat completion calls") 
+    use_azure_key_vault: Optional[bool] = Field(None, description="load keys from azure key vault")
+    master_key: Optional[str] = Field(None, description="require a key for all calls to proxy")
+    database_url: Optional[str] = Field(None, description="connect to a postgres db - needed for generating temporary keys + tracking spend / key")
+    otel: Optional[bool] = Field(None, description="[BETA] OpenTelemetry support - this might change, use with caution.")
+    custom_auth: Optional[str] = Field(None, description="override user_api_key_auth with your own auth script - https://docs.litellm.ai/docs/proxy/virtual_keys#custom-auth")
+    max_parallel_requests: Optional[int] = Field(None, description="maximum parallel requests for each api key")
+    infer_model_from_keys: Optional[bool] = Field(None, description="for `/models` endpoint, infers available model based on environment keys (e.g. OPENAI_API_KEY)")
+
+class ConfigYAML(BaseModel):
+    """
+    Documents all the fields supported by the config.yaml
+    """
+    model_list: Optional[List[ModelParams]] = Field(None, description="List of supported models on the server, with model-specific configs")
+    litellm_settings: Optional[dict] = Field(None, description="litellm Module settings. See __init__.py for all, example litellm.drop_params=True, litellm.set_verbose=True, litellm.api_base, litellm.cache")
+    general_settings: Optional[ConfigGeneralSettings] = None
