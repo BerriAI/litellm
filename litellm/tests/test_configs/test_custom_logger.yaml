@@ -1,0 +1,9 @@
+model_list: 
+  - model_name: "litellm-test-model"
+    litellm_params: 
+      model: "gpt-3.5-turbo"
+
+litellm_settings:
+  drop_params: True
+  set_verbose: True
+  callbacks: custom_callbacks.my_custom_logger

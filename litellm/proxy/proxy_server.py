@@ -500,7 +500,7 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
                     password=cache_password
                 )
             elif key == "callbacks":
-                litellm.callbacks = [get_instance_fn(value=value)]
+                litellm.callbacks = [get_instance_fn(value=value, config_file_path=config_file_path)]
                 print_verbose(f"{blue_color_code} Initialized Callbacks - {litellm.callbacks} {reset_color_code}")
             elif key == "success_callback":
                 litellm.success_callback = []
