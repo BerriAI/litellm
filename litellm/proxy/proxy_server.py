@@ -1006,7 +1006,7 @@ async def embeddings(request: Request, user_api_key_dict: UserAPIKeyAuth = Depen
         print(f"received data: {data['input']}")
         if "input" in data and isinstance(data['input'], list) and isinstance(data['input'][0], list) and isinstance(data['input'][0][0], int): # check if array of tokens passed in
             # check if non-openai/azure model called - e.g. for langchain integration
-            if data["model"] in router_model_names: 
+            if llm_model_list is not None and data["model"] in router_model_names: 
                 for m in llm_model_list: 
                     if m["model_name"] == data["model"] and (m["litellm_params"]["model"] in litellm.open_ai_embedding_models 
                                                              or m["litellm_params"]["model"].startswith("azure/")):
