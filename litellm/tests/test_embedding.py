@@ -161,20 +161,23 @@ def test_bedrock_embedding_titan():
         print(f"response:", response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_bedrock_embedding_titan()
+# test_bedrock_embedding_titan()
 
 def test_bedrock_embedding_cohere():
     try:
-        # litellm.set_verbose=True
+        litellm.set_verbose=False
         response = embedding(
             model="cohere.embed-multilingual-v3", input=["good morning from litellm, attempting to embed data", "lets test a second string for good measure"],
             aws_region_name="os.environ/AWS_REGION_NAME_2"
         )
+        assert isinstance(response['data'][0]['embedding'], list), "Expected response to be a list"
+        print(f"type of first embedding:", type(response['data'][0]['embedding'][0]))
+        assert all(isinstance(x, float) for x in response['data'][0]['embedding']), "Expected response to be a list of floats"
         # print(f"response:", response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-# test_bedrock_embedding_cohere()
+test_bedrock_embedding_cohere()
 
 # comment out hf tests - since hf endpoints are unstable
 def test_hf_embedding():
@@ -234,7 +237,7 @@ def test_sagemaker_embeddings():
         print(f"response: {response}")
     except Exception as e: 
         pytest.fail(f"Error occurred: {e}")
-test_sagemaker_embeddings()
+# test_sagemaker_embeddings()
 # def local_proxy_embeddings():
 #     litellm.set_verbose=True
 #     response = embedding(
