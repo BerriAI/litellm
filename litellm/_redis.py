@@ -11,6 +11,7 @@
 import os
 import inspect
 import redis, litellm
+from typing import List, Optional
 
 def _get_redis_kwargs():
     arg_spec = inspect.getfullargspec(redis.Redis)
@@ -67,6 +68,13 @@ def get_redis_url_from_environment():
     return f"redis://{redis_password}{os.environ['REDIS_HOST']}:{os.environ['REDIS_PORT']}"
 
 def get_redis_client(**env_overrides):
+    ### check if "os.environ/<key-name>" passed in
+    for k, v in env_overrides.items(): 
+        if v.startswith("os.environ/"): 
+            v = v.replace("os.environ/", "")
+            value = litellm.get_secret(v)
+            env_overrides[k] = value
+
     redis_kwargs = {
         **_redis_kwargs_from_environment(),
         **env_overrides,
@@ -81,5 +89,5 @@ def get_redis_client(**env_overrides):
         return redis.Redis.from_url(**redis_kwargs)
     elif "host" not in redis_kwargs or redis_kwargs['host'] is None:
         raise ValueError("Either 'host' or 'url' must be specified for redis.")
-
+    litellm.print_verbose(f"redis_kwargs: {redis_kwargs}")
     return redis.Redis(**redis_kwargs)
