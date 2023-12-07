@@ -1297,6 +1297,27 @@ async def retrieve_server_log(request: Request):
 
 #### BASIC ENDPOINTS #### 
 
+@router.get("/config/yaml", tags=["config.yaml"])
+async def config_yaml_endpoint(config_info: ConfigYAML): 
+    """
+    This is a mock endpoint, to show what you can set in config.yaml details in the Swagger UI. 
+
+    Parameters:
+
+    The config.yaml object has the following attributes:
+    - **model_list**: *Optional[List[ModelParams]]* - A list of supported models on the server, along with model-specific configurations. ModelParams includes "model_name" (name of the model), "litellm_params" (litellm-specific parameters for the model), and "model_info" (additional info about the model such as id, mode, cost per token, etc). 
+
+    - **litellm_settings**: *Optional[dict]*: Settings for the litellm module. You can specify multiple properties like "drop_params", "set_verbose", "api_base", "cache".
+    
+    - **general_settings**: *Optional[ConfigGeneralSettings]*: General settings for the server like "completion_model" (default model for chat completion calls), "use_azure_key_vault" (option to load keys from azure key vault), "master_key" (key required for all calls to proxy), and others. 
+
+    Please, refer to each class's description for a better understanding of the specific attributes within them.
+
+    Note: This is a mock endpoint primarily meant for demonstration purposes, and does not actually provide or change any configurations.
+    """
+    return {"hello": "world"}
+
+
 @router.get("/test")
 async def test_endpoint(request: Request): 
     return {"route": request.url.path}
