@@ -1,7 +1,7 @@
 # Logging - Custom Callbacks, OpenTelemetry, Langfuse
 Log Proxy Input, Output, Exceptions using Custom Callbacks, Langfuse, OpenTelemetry
 
-## Custom Callback Class
+## Custom Callback Class [Async]
 Use this when you want to run custom callbacks in `python`
 
 ### Step 1 - Create your custom `litellm` callback class
@@ -28,8 +28,14 @@ class MyCustomHandler(CustomLogger):
         print(f"On Stream")
         
     def log_success_event(self, kwargs, response_obj, start_time, end_time): 
-        # Logging key details: key, user, model, prompt, response, tokens, cost
-        print("\nOn Success")
+        print("On Success")
+
+    def log_failure_event(self, kwargs, response_obj, start_time, end_time): 
+        print(f"On Failure")
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        print(f"On Async Success!")
+        # log: key, user, model, prompt, response, tokens, cost
         # Access kwargs passed to litellm.completion()
         model = kwargs.get("model", None)
         messages = kwargs.get("messages", None)
@@ -37,11 +43,13 @@ class MyCustomHandler(CustomLogger):
 
         # Access litellm_params passed to litellm.completion(), example access `metadata`
         litellm_params = kwargs.get("litellm_params", {})
-        metadata = litellm_params.get("metadata", {}) # Headers passed to LiteLLM proxy
+        metadata = litellm_params.get("metadata", {})   # headers passed to LiteLLM proxy, can be found here
 
-        # Calculate cost using litellm.completion_cost()
+        # Calculate cost using  litellm.completion_cost()
         cost = litellm.completion_cost(completion_response=response_obj)
-        usage = response_obj["usage"] # Tokens used in response
+        response = response_obj
+        # tokens used in response 
+        usage = response_obj["usage"]
 
         print(
             f"""
@@ -56,8 +64,41 @@ class MyCustomHandler(CustomLogger):
         )
         return
 
-    def log_failure_event(self, kwargs, response_obj, start_time, end_time): 
-        print(f"On Failure")
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time): 
+        try:
+            print(f"On Async Failure !")
+            print("\nkwargs", kwargs)
+            # Access kwargs passed to litellm.completion()
+            model = kwargs.get("model", None)
+            messages = kwargs.get("messages", None)
+            user = kwargs.get("user", None)
+
+            # Access litellm_params passed to litellm.completion(), example access `metadata`
+            litellm_params = kwargs.get("litellm_params", {})
+            metadata = litellm_params.get("metadata", {})   # headers passed to LiteLLM proxy, can be found here
+
+            # Acess Exceptions & Traceback
+            exception_event = kwargs.get("exception", None)
+            traceback_event = kwargs.get("traceback_exception", None)
+
+            # Calculate cost using  litellm.completion_cost()
+            cost = litellm.completion_cost(completion_response=response_obj)
+            print("now checking response obj")
+            
+            print(
+                f"""
+                    Model: {model},
+                    Messages: {messages},
+                    User: {user},
+                    Cost: {cost},
+                    Response: {response_obj}
+                    Proxy Metadata: {metadata}
+                    Exception: {exception_event}
+                    Traceback: {traceback_event}
+                """
+            )
+        except Exception as e:
+            print(f"Exception: {e}")
 
 proxy_handler_instance = MyCustomHandler()
 
@@ -119,7 +160,7 @@ On Success
     Response: {'id': 'chatcmpl-8S8avKJ1aVBg941y5xzGMSKrYCMvN', 'choices': [{'finish_reason': 'stop', 'index': 0, 'message': {'content': 'Good morning! How can I assist you today?', 'role': 'assistant'}}], 'created': 1701716913, 'model': 'gpt-3.5-turbo-0613', 'object': 'chat.completion', 'system_fingerprint': None, 'usage': {'completion_tokens': 10, 'prompt_tokens': 11, 'total_tokens': 21}}
     Proxy Metadata: {'user_api_key': None, 'headers': Headers({'host': '0.0.0.0:8000', 'user-agent': 'curl/7.88.1', 'accept': '*/*', 'authorization': 'Bearer sk-1234', 'content-length': '199', 'content-type': 'application/x-www-form-urlencoded'}), 'model_group': 'gpt-3.5-turbo', 'deployment': 'gpt-3.5-turbo-ModelID-gpt-3.5-turbo'}
 ```
-
+<!-- 
 ## Async Custom Callback Functions
 Use this if you just want to use a function as a custom callback with the proxy. Set custom async functions for `litellm.success_callback` and `litellm.failure_callback`. 
 
@@ -253,16 +294,9 @@ curl --location 'http://0.0.0.0:8000/chat/completions' \
 
 #### Resulting Log on Proxy
 ```shell
-On Success
-    Model: gpt-3.5-turbo,
-    Messages: [{'role': 'user', 'content': 'good morning good sir'}],
-    User: ishaan-app,
-    Usage: {'completion_tokens': 10, 'prompt_tokens': 11, 'total_tokens': 21},
-    Cost: 3.65e-05,
-    Response: {'id': 'chatcmpl-8S8avKJ1aVBg941y5xzGMSKrYCMvN', 'choices': [{'finish_reason': 'stop', 'index': 0, 'message': {'content': 'Good morning! How can I assist you today?', 'role': 'assistant'}}], 'created': 1701716913, 'model': 'gpt-3.5-turbo-0613', 'object': 'chat.completion', 'system_fingerprint': None, 'usage': {'completion_tokens': 10, 'prompt_tokens': 11, 'total_tokens': 21}}
-    Proxy Metadata: {'user_api_key': None, 'headers': Headers({'host': '0.0.0.0:8000', 'user-agent': 'curl/7.88.1', 'accept': '*/*', 'authorization': 'Bearer sk-1234', 'content-length': '199', 'content-type': 'application/x-www-form-urlencoded'}), 'model_group': 'gpt-3.5-turbo', 'deployment': 'gpt-3.5-turbo-ModelID-gpt-3.5-turbo'}
-```
 
+```
+ -->
 
 
 ## OpenTelemetry, ElasticSearch
