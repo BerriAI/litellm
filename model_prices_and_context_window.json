@@ -631,24 +631,24 @@
     "anthropic.claude-v1": {
         "max_tokens": 100000, 
         "max_output_tokens": 8191,
-        "input_cost_per_token": 0.00001102,
-        "output_cost_per_token": 0.00003268,
+        "input_cost_per_token": 0.000008,
+        "output_cost_per_token": 0.000024,
         "litellm_provider": "bedrock",
         "mode": "chat"
     },
     "anthropic.claude-v2": {
         "max_tokens": 100000, 
         "max_output_tokens": 8191,
-        "input_cost_per_token": 0.00001102,
-        "output_cost_per_token": 0.00003268,
+        "input_cost_per_token": 0.000008,
+        "output_cost_per_token": 0.000024,
         "litellm_provider": "bedrock",
         "mode": "chat"
     },
     "anthropic.claude-v2:1": {
         "max_tokens": 200000, 
         "max_output_tokens": 8191,
-        "input_cost_per_token": 0.00001102,
-        "output_cost_per_token": 0.00003268,
+        "input_cost_per_token": 0.000008,
+        "output_cost_per_token": 0.000024,
         "litellm_provider": "bedrock",
         "mode": "chat"
     },
