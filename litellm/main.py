@@ -1677,7 +1677,7 @@ def batch_completion_models_all_responses(*args, **kwargs):
     return responses
 
 ### EMBEDDING ENDPOINTS ####################
-
+@client
 async def aembedding(*args, **kwargs):
     """
     Asynchronously calls the `embedding` function with the given arguments and keyword arguments.
