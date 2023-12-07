@@ -45,6 +45,7 @@ caching: bool = False # Not used anymore, will be removed in next MAJOR release 
 caching_with_models: bool = False  # # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
 cache: Optional[Cache] = None # cache object <- use this - https://docs.litellm.ai/docs/caching
 model_alias_map: Dict[str, str] = {}
+model_group_alias_map: Dict[str, str] = {}
 max_budget: float = 0.0 # set the max budget across all providers
 _current_cost = 0 # private variable, used if max budget is set 
 error_logs: Dict = {}
