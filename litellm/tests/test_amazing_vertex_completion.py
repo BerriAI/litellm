@@ -25,12 +25,15 @@ messages = [{"content": user_message, "role": "user"}]
 
 def load_vertex_ai_credentials():
     # Define the path to the vertex_key.json file
-    vertex_key_path = os.getcwd() + '/vertex_key.json'
+    print("loading vertex ai credentials")
+    filepath = os.path.dirname(os.path.abspath(__file__))
+    vertex_key_path = filepath + '/vertex_key.json'
 
     # Read the existing content of the file or create an empty dictionary
     try:
         with open(vertex_key_path, 'r') as file:
             # Read the file content
+            print("Read vertexai file path")
             content = file.read()
 
             # If the file is empty or not valid JSON, create an empty dictionary
