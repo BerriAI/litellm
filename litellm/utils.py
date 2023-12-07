@@ -995,6 +995,13 @@ class Logging:
 
         for callback in litellm._async_success_callback:
             try: 
+                if isinstance(callback, CustomLogger): # custom logger class 
+                    await callback.async_log_success_event(
+                        kwargs=self.model_call_details,
+                        response_obj=result,
+                        start_time=start_time,
+                        end_time=end_time,
+                    )
                 if callable(callback): # custom logger functions
                     await customLogger.async_log_event(
                         kwargs=self.model_call_details,
@@ -1129,15 +1136,22 @@ class Logging:
 
         for callback in litellm._async_failure_callback:
             try: 
+                if isinstance(callback, CustomLogger): # custom logger class 
+                    await callback.async_log_failure_event(
+                        kwargs=self.model_call_details,
+                        response_obj=result,
+                        start_time=start_time,
+                        end_time=end_time,
+                    )
                 if callable(callback): # custom logger functions
-                    await customLogger.async_log_failure_event(
+                    await customLogger.async_log_event(
                         kwargs=self.model_call_details,
                         response_obj=result,
                         start_time=start_time,
                         end_time=end_time,
                         print_verbose=print_verbose,
                         callback_func=callback
-                    )
+                    )              
             except: 
                 print_verbose(
                     f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while success logging {traceback.format_exc()}"
@@ -1239,6 +1253,10 @@ def client(original_function):
                         litellm.success_callback.append(callback)
                     if callback not in litellm.failure_callback:
                         litellm.failure_callback.append(callback)
+                    if callback not in litellm._async_success_callback:
+                        litellm._async_success_callback.append(callback)
+                    if callback not in litellm._async_failure_callback:
+                        litellm._async_failure_callback.append(callback)
             if (
                 len(litellm.input_callback) > 0
                 or len(litellm.success_callback) > 0
