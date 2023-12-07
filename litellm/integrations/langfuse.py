@@ -37,7 +37,7 @@ class LangFuseLogger:
                 f"Langfuse Logging - Enters logging function for model {kwargs}"
             )
             litellm_params = kwargs.get("litellm_params", {})
-            metadata = litellm_params.get("metadata", {})
+            metadata = litellm_params.get("metadata", {}) or {} # if litellm_params['metadata'] == None 
             prompt = [kwargs.get('messages')]
             optional_params = kwargs.get("optional_params", {})
 
