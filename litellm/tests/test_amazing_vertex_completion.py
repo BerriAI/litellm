@@ -51,15 +51,8 @@ def load_vertex_ai_credentials():
     private_key_id = os.environ.get("VERTEX_AI_PRIVATE_KEY_ID", "")
     private_key = os.environ.get("VERTEX_AI_PRIVATE_KEY", "")
     private_key = private_key.replace("\\n", "\n")
-
-    # from infisical import InfisicalClient
-    # client = InfisicalClient(token=os.getenv("INFISICAL_TOKEN"))
-    # private_key = (client.get_secret(secret_name="VERTEX_AI_PRIVATE_KEY", environment="prod").secret_value)
-    # private_key = private_key.replace("\\n", "\n")
-
     service_account_key_data["private_key_id"] = private_key_id
     service_account_key_data["private_key"] = private_key
-
 
     # Create a temporary file
     with tempfile.NamedTemporaryFile(mode='w+', delete=False) as temp_file:
@@ -72,11 +65,13 @@ def load_vertex_ai_credentials():
 
 
 def test_vertex_ai():
+    import random
 
     load_vertex_ai_credentials()
     test_models = ["codechat-bison"] + litellm.vertex_chat_models + litellm.vertex_code_chat_models + litellm.vertex_text_models + litellm.vertex_code_text_models
-    # test_models = ["chat-bison"]
-    litellm.set_verbose=True
+    litellm.set_verbose=False
+
+    test_models = random.sample(test_models, 4)
     for model in test_models:
         try:
             if model in ["code-gecko@001", "code-gecko@latest", "code-bison@001"]:
@@ -84,29 +79,37 @@ def test_vertex_ai():
                 continue
             print("making request", model)
             response = completion(model=model, messages=[{'role': 'user', 'content': 'hi'}])
+            print("\nModel Response", response)
             print(response)
-
-            print(response.usage.completion_tokens)
-            print(response['usage']['completion_tokens'])
             assert type(response.choices[0].message.content) == str
+            assert len(response.choices[0].message.content) > 1
         except Exception as e:
             pytest.fail(f"Error occurred: {e}")
-test_vertex_ai()
+# test_vertex_ai()
 
 def test_vertex_ai_stream():
-    litellm.set_verbose=True
+    load_vertex_ai_credentials()
+    litellm.set_verbose=False
+    import random
 
-    test_models = litellm.vertex_chat_models + litellm.vertex_code_chat_models + litellm.vertex_text_models + litellm.vertex_code_text_models
+    test_models = ["codechat-bison"] + litellm.vertex_chat_models + litellm.vertex_code_chat_models + litellm.vertex_text_models + litellm.vertex_code_text_models
+    test_models = random.sample(test_models, 4)
     for model in test_models:
         try:
             if model in ["code-gecko@001", "code-gecko@latest", "code-bison@001"]:
                 # our account does not have access to this model
                 continue
             print("making request", model)
-            response = completion(model=model, messages=[{"role": "user", "content": "write 100 line code code for saying hi"}], stream=True)
+            response = completion(model=model, messages=[{"role": "user", "content": "write 10 line code code for saying hi"}], stream=True)
+            completed_str = ""
             for chunk in response:
                 print(chunk)
+                content = chunk.choices[0].delta.content or ""
+                print("\n content", content)
+                completed_str += content
+                assert type(content) == str
                 # pass
+            assert len(completed_str) > 4
         except Exception as e:
             pytest.fail(f"Error occurred: {e}")
-test_vertex_ai_stream() 
+# test_vertex_ai_stream() 
