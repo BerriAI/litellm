@@ -51,7 +51,7 @@ def test_chat_completion(client):
         assert my_custom_logger.async_success == False
 
         test_data = {
-            "model": "litellm-test-model",
+            "model": "Azure OpenAI GPT-4 Canada",
             "messages": [
                 {
                     "role": "user",
@@ -65,7 +65,34 @@ def test_chat_completion(client):
         response = client.post("/chat/completions", json=test_data)
         print("made request", response.status_code, response.text)
         assert my_custom_logger.async_success == True                   # checks if the status of async_success is True, only the async_log_success_event can set this to true
-        assert my_custom_logger.async_completion_kwargs["model"] == "gpt-3.5-turbo" # checks if kwargs passed to async_log_success_event are correct
+        assert my_custom_logger.async_completion_kwargs["model"] == "chatgpt-v-2" # checks if kwargs passed to async_log_success_event are correct
+        
+        result = response.json()
+        print(f"Received response: {result}")
+    except Exception as e:
+        pytest.fail("LiteLLM Proxy test failed. Exception", e)
+
+
+
+def test_embedding(client):
+    try:
+         # Your test data
+        print("initialized proxy")
+        # import the initialized custom logger
+        print(litellm.callbacks)
+
+        assert len(litellm.callbacks) == 1 # assert litellm is initialized with 1 callback
+        my_custom_logger = litellm.callbacks[0]
+        assert my_custom_logger.async_success_embedding == False
+
+        test_data = {
+            "model": "azure-embedding-model",
+            "input": ["hello"]
+        }
+        response = client.post("/embeddings", json=test_data)
+        print("made request", response.status_code, response.text)
+        assert my_custom_logger.async_success_embedding == True                             # checks if the status of async_success is True, only the async_log_success_event can set this to true
+        assert my_custom_logger.async_embedding_kwargs["model"] == "azure-embedding-model"  # checks if kwargs passed to async_log_success_event are correct
         
         result = response.json()
         print(f"Received response: {result}")
