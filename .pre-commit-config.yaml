@@ -6,3 +6,12 @@ repos:
        exclude: ^litellm/tests/|^litellm/proxy/|^litellm/integrations/
        additional_dependencies: [flake8-print]
        files: litellm/.*\.py
+-   repo: local
+    hooks:
+    -   id: mypy
+        name: mypy
+        entry: python3 -m mypy --ignore-missing-imports
+        language: system
+        types: [python]
+        files: ^litellm/
+        exclude: ^litellm/tests/
