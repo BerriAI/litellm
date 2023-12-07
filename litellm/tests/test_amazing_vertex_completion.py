@@ -56,7 +56,7 @@ def load_vertex_ai_credentials():
 
     for key in service_account_key_data:
         if key not in ["private_key_id", "private_key"]:
-            print(f"Key: {key}, Value: {service_account_key_data[key]}")
+            print(f"Key: {key}, Value: {service_account_key_data[key][:10]}...{service_account_key_data[key][:-10]}")
 
     # Create a temporary file
     with tempfile.NamedTemporaryFile(mode='w+', delete=False) as temp_file:
