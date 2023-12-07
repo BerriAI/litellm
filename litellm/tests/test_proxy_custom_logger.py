@@ -37,6 +37,12 @@ def client():
     with TestClient(app) as client:
         yield client
 
+# Your bearer token
+token = os.getenv("PROXY_MASTER_KEY")
+
+headers = {
+    "Authorization": f"Bearer {token}"
+}
 
 
 def test_chat_completion(client):
@@ -62,7 +68,7 @@ def test_chat_completion(client):
         }
 
 
-        response = client.post("/chat/completions", json=test_data)
+        response = client.post("/chat/completions", json=test_data, headers=headers)
         print("made request", response.status_code, response.text)
         assert my_custom_logger.async_success == True                   # checks if the status of async_success is True, only the async_log_success_event can set this to true
         assert my_custom_logger.async_completion_kwargs["model"] == "chatgpt-v-2" # checks if kwargs passed to async_log_success_event are correct
@@ -89,7 +95,7 @@ def test_embedding(client):
             "model": "azure-embedding-model",
             "input": ["hello"]
         }
-        response = client.post("/embeddings", json=test_data)
+        response = client.post("/embeddings", json=test_data, headers=headers)
         print("made request", response.status_code, response.text)
         assert my_custom_logger.async_success_embedding == True                             # checks if the status of async_success is True, only the async_log_success_event can set this to true
         assert my_custom_logger.async_embedding_kwargs["model"] == "azure-embedding-model"  # checks if kwargs passed to async_log_success_event are correct
