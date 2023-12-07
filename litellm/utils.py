@@ -554,6 +554,7 @@ class Logging:
             "litellm_params": self.litellm_params,
             "start_time": self.start_time,
             "stream": self.stream,
+            "user": user,
             **self.optional_params
         }
 
