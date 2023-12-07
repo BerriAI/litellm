@@ -74,7 +74,7 @@ def ollama_pt(model, messages): # https://github.com/jmorganca/ollama/blob/af4cf
             messages=messages
         )
     else: 
-        prompt = "".join(m["content"] for m in messages)
+        prompt = "".join(m["content"] if isinstance(m['content'], str) is str else "".join(m['content']) for m in messages)
     return prompt
 
 def mistral_instruct_pt(messages): 
