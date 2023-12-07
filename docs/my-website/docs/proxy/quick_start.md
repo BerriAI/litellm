@@ -348,6 +348,21 @@ litellm --config your_config.yaml
 
 [**More Info**](./configs.md)
 
+## Server Endpoints
+- POST `/chat/completions` - chat completions endpoint to call 100+ LLMs
+- POST `/completions` - completions endpoint
+- POST `/embeddings` - embedding endpoint for Azure, OpenAI, Huggingface endpoints
+- GET `/models` - available models on server
+- POST `/key/generate` - generate a key to access the proxy
+
+## Gunicorn + Proxy 
+
+Command: 
+```python
+cmd = f"gunicorn litellm.proxy.proxy_server:app --workers {num_workers} --worker-class uvicorn.workers.UvicornWorker --bind {host}:{port}"
+```
+
+[**Code**](https://github.com/BerriAI/litellm/blob/077f6b1298101079b72396bdf04f8ca0cf737720/litellm/tests/test_proxy_gunicorn.py#L4)
 ## Quick Start Docker Image: Github Container Registry
 
 ### Pull the litellm ghcr docker image
@@ -416,12 +431,6 @@ Run the command `docker-compose up` or `docker compose up` as per your docker in
 
 Your LiteLLM container should be running now on the defined port e.g. `8000`.
 
-## Server Endpoints
-- POST `/chat/completions` - chat completions endpoint to call 100+ LLMs
-- POST `/completions` - completions endpoint
-- POST `/embeddings` - embedding endpoint for Azure, OpenAI, Huggingface endpoints
-- GET `/models` - available models on server
-- POST `/key/generate` - generate a key to access the proxy
 
 ## Using with OpenAI compatible projects
 Set `base_url` to the LiteLLM Proxy server
