@@ -215,6 +215,7 @@ def usage_telemetry(
 def _get_bearer_token(api_key: str): 
     assert api_key.startswith("Bearer ") # ensure Bearer token passed in
     api_key = api_key.replace("Bearer ", "") # extract the token
+    return api_key
 
 async def user_api_key_auth(request: Request, api_key: str = fastapi.Security(api_key_header)) -> UserAPIKeyAuth:
     global master_key, prisma_client, llm_model_list, user_custom_auth
@@ -908,10 +909,10 @@ async def chat_completion(request: Request, model: Optional[str] = None, user_ap
         if "metadata" in data:
             print(f'received metadata: {data["metadata"]}')
             data["metadata"]["user_api_key"] = user_api_key_dict.api_key
-            data["metadata"]["headers"] = request.headers
+            data["metadata"]["headers"] = dict(request.headers)
         else:
             data["metadata"] = {"user_api_key": user_api_key_dict.api_key}
-            data["metadata"]["headers"] = request.headers
+            data["metadata"]["headers"] = dict(request.headers)
         global user_temperature, user_request_timeout, user_max_tokens, user_api_base
         # override with user settings, these are params passed via cli
         if user_temperature: 
