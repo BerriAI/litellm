@@ -5311,8 +5311,15 @@ class CustomStreamWrapper:
                         self.sent_last_chunk = True
             elif self.custom_llm_provider and self.custom_llm_provider == "vertex_ai":
                 try:
-
-                    completion_obj["content"] = str(chunk)
+                    # print(chunk)
+                    if hasattr(chunk, 'text'):
+                        # vertexAI chunks return 
+                        # MultiCandidateTextGenerationResponse(text=' ```python\n# This Python code says "Hi" 100 times.\n\n# Create', _prediction_response=Prediction(predictions=[{'candidates': [{'content': ' ```python\n# This Python code says "Hi" 100 times.\n\n# Create', 'author': '1'}], 'citationMetadata': [{'citations': None}], 'safetyAttributes': [{'blocked': False, 'scores': None, 'categories': None}]}], deployed_model_id='', model_version_id=None, model_resource_name=None, explanations=None), is_blocked=False, safety_attributes={}, candidates=[ ```python
+                        # This Python code says "Hi" 100 times.
+                        # Create])
+                        completion_obj["content"] = chunk.text
+                    else:
+                        completion_obj["content"] = str(chunk)
                 except StopIteration as e:
                     if self.sent_last_chunk: 
                         raise e 
