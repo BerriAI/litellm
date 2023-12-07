@@ -159,6 +159,9 @@ def test_bedrock_embedding_titan():
                                                        "lets test a second string for good measure"]
         )
         print(f"response:", response)
+        assert isinstance(response['data'][0]['embedding'], list), "Expected response to be a list"
+        print(f"type of first embedding:", type(response['data'][0]['embedding'][0]))
+        assert all(isinstance(x, float) for x in response['data'][0]['embedding']), "Expected response to be a list of floats"
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 # test_bedrock_embedding_titan()
@@ -177,7 +180,7 @@ def test_bedrock_embedding_cohere():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_bedrock_embedding_cohere()
+# test_bedrock_embedding_cohere()
 
 # comment out hf tests - since hf endpoints are unstable
 def test_hf_embedding():
