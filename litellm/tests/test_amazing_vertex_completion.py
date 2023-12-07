@@ -25,7 +25,7 @@ messages = [{"content": user_message, "role": "user"}]
 
 def load_vertex_ai_credentials():
     # Define the path to the vertex_key.json file
-    vertex_key_path = 'vertex_key.json'
+    vertex_key_path = os.getcwd + '/vertex_key.json'
 
     # Read the existing content of the file or create an empty dictionary
     try:
