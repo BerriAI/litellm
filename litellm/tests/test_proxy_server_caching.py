@@ -18,6 +18,8 @@ from litellm import embedding, completion
 from litellm.caching import Cache
 
 messages = [{"role": "user", "content": f"who is ishaan {time.time()}"}]
+
+@pytest.mark.skip(reason="local proxy test")
 def test_caching_v2(): # test in memory cache
     try:
         response1 = completion(model="openai/gpt-3.5-turbo", messages=messages, api_base="http://0.0.0.0:8000")
