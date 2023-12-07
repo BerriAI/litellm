@@ -53,7 +53,7 @@ class Router:
     ```
     """
     model_names: List = []
-    cache_responses: bool = False
+    cache_responses: Optional[bool] = None
     default_cache_time_seconds: int = 1 * 60 * 60  # 1 hour
     num_retries: int = 0
     tenacity = None
@@ -65,7 +65,7 @@ class Router:
                  redis_host: Optional[str] = None,
                  redis_port: Optional[int] = None,
                  redis_password: Optional[str] = None,
-                 cache_responses: bool = False,
+                 cache_responses: Optional[bool] = None,
                  cache_kwargs: dict = {}, # additional kwargs to pass to RedisCache (see caching.py)
                  ## RELIABILITY ## 
                  num_retries: int = 0,
