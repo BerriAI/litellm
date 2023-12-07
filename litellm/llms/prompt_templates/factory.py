@@ -231,12 +231,20 @@ def hf_chat_template(model: str, messages: list):
 
 # Anthropic template 
 def claude_2_1_pt(messages: list): # format - https://docs.anthropic.com/claude/docs/how-to-use-system-prompts
+    """
+    Claude v2.1 allows system prompts (no Human: needed), but requires it be followed by Human: 
+    - you can't just pass a system message
+    - you can't pass a system message and follow that with an assistant message 
+    if system message is passed in, you can only do system, human, assistant or system, human
+
+    if a system message is passed in and followed by an assistant message, insert a blank human message between them. 
+    """
     class AnthropicConstants(Enum):
         HUMAN_PROMPT = "\n\nHuman: "
         AI_PROMPT = "\n\nAssistant: "
     
     prompt = "" 
-    for idx, message in enumerate(messages): # needs to start with `\n\nHuman: ` and end with `\n\nAssistant: `
+    for idx, message in enumerate(messages): 
         if message["role"] == "user":
             prompt += (
                 f"{AnthropicConstants.HUMAN_PROMPT.value}{message['content']}"
@@ -245,13 +253,13 @@ def claude_2_1_pt(messages: list): # format - https://docs.anthropic.com/claude/
             prompt += (
                 f"{message['content']}"
             )
-        else:
+        elif message["role"] == "assistant":
+            if idx > 0 and messages[idx - 1]["role"] == "system": 
+                prompt += f"{AnthropicConstants.HUMAN_PROMPT.value}" # Insert a blank human message
             prompt += (
                 f"{AnthropicConstants.AI_PROMPT.value}{message['content']}"
             )
-        if idx == 0 and message["role"] == "assistant": # ensure the prompt always starts with `\n\nHuman: `
-            prompt = f"{AnthropicConstants.HUMAN_PROMPT.value}" + prompt
-    prompt += f"{AnthropicConstants.AI_PROMPT.value}"
+    prompt += f"{AnthropicConstants.AI_PROMPT.value}" # prompt must end with \"\n\nAssistant: " turn
     return prompt
 
 def anthropic_pt(messages: list): # format - https://docs.anthropic.com/claude/reference/complete_post
