@@ -97,27 +97,6 @@ class PrismaClient:
         await self.db.disconnect()
 
 # ### CUSTOM FILE ###
-# def get_instance_fn(value: str, config_file_path: Optional[str]=None):
-#     try:
-#         # Split the path by dots to separate module from instance
-#         parts = value.split(".")
-#         # The module path is all but the last part, and the instance is the last part
-#         module_path = ".".join(parts[:-1])
-#         instance_name = parts[-1]
-        
-#         if config_file_path is not None: 
-#             directory = os.path.dirname(config_file_path)
-#             module_path = os.path.join(directory, module_path)
-#         # Dynamically import the module
-#         module = importlib.import_module(module_path)
-        
-#         # Get the instance from the module
-#         instance = getattr(module, instance_name)
-        
-#         return instance
-#     except ImportError as e:
-#         print(e)
-#         raise ImportError(f"Could not import file at {value}")
 
 def get_instance_fn(value: str, config_file_path: Optional[str] = None) -> Any:
     try:
