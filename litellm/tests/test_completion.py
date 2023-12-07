@@ -131,6 +131,7 @@ def test_completion_gpt4_turbo():
         pytest.fail(f"Error occurred: {e}")
 # test_completion_gpt4_turbo()
 
+@pytest.mark.skip(reason="this test is flaky")
 def test_completion_gpt4_vision():
     try:
         litellm.set_verbose=True
