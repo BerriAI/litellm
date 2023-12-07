@@ -500,6 +500,7 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
                 )
             elif key == "callbacks":
                 litellm.callbacks = [get_instance_fn(value=value)]
+                print_verbose(f"{blue_color_code} Initialized Callbacks - {litellm.callbacks} {reset_color_code}")
             elif key == "success_callback":
                 litellm.success_callback = []
                 
