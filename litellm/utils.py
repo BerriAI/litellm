@@ -999,12 +999,21 @@ class Logging:
             try: 
                 if isinstance(callback, CustomLogger): # custom logger class 
                     print_verbose(f"Async success callbacks: CustomLogger")
-                    await callback.async_log_success_event(
-                        kwargs=self.model_call_details,
-                        response_obj=result,
-                        start_time=start_time,
-                        end_time=end_time,
-                    )
+                    if self.stream:
+                        if "complete_streaming_response" in self.model_call_details:
+                            await callback.async_log_success_event(
+                                kwargs=self.model_call_details,
+                                response_obj=self.model_call_details["complete_streaming_response"],
+                                start_time=start_time,
+                                end_time=end_time,
+                            )
+                    else:
+                        await callback.async_log_success_event(
+                            kwargs=self.model_call_details,
+                            response_obj=result,
+                            start_time=start_time,
+                            end_time=end_time,
+                        )
                 if callable(callback): # custom logger functions
                     print_verbose(f"Async success callbacks: async_log_event")
                     await customLogger.async_log_event(
