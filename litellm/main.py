@@ -327,6 +327,8 @@ def completion(
     litellm_logging_obj = kwargs.get('litellm_logging_obj', None)
     id = kwargs.get('id', None)
     metadata = kwargs.get('metadata', None)
+    model_info = kwargs.get('model_info', None)
+    proxy_server_request = kwargs.get('proxy_server_request', None)
     fallbacks = kwargs.get('fallbacks', None)
     headers = kwargs.get("headers", None)
     num_retries = kwargs.get("num_retries", None) ## deprecated
@@ -347,7 +349,7 @@ def completion(
     client = kwargs.get("client", None)
     ######## end of unpacking kwargs ###########
     openai_params = ["functions", "function_call", "temperature", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "request_timeout", "api_base", "api_version", "api_key", "deployment_id", "organization", "base_url", "default_headers", "timeout", "response_format", "seed", "tools", "tool_choice", "max_retries"]
-    litellm_params = ["metadata", "acompletion", "caching", "return_async", "mock_response", "api_key", "api_version", "api_base", "force_timeout", "logger_fn", "verbose", "custom_llm_provider", "litellm_logging_obj", "litellm_call_id", "use_client", "id", "fallbacks", "azure", "headers", "model_list", "num_retries", "context_window_fallback_dict", "roles", "final_prompt_value", "bos_token", "eos_token", "request_timeout", "complete_response", "self", "client", "rpm", "tpm", "input_cost_per_token", "output_cost_per_token", "hf_model_name"]
+    litellm_params = ["metadata", "acompletion", "caching", "return_async", "mock_response", "api_key", "api_version", "api_base", "force_timeout", "logger_fn", "verbose", "custom_llm_provider", "litellm_logging_obj", "litellm_call_id", "use_client", "id", "fallbacks", "azure", "headers", "model_list", "num_retries", "context_window_fallback_dict", "roles", "final_prompt_value", "bos_token", "eos_token", "request_timeout", "complete_response", "self", "client", "rpm", "tpm", "input_cost_per_token", "output_cost_per_token", "hf_model_name", "model_info", "proxy_server_request"]
     default_params = openai_params + litellm_params
     non_default_params = {k: v for k,v in kwargs.items() if k not in default_params} # model-specific params - pass them straight to the model/provider
     if mock_response:
@@ -454,7 +456,9 @@ def completion(
             litellm_call_id=kwargs.get('litellm_call_id', None),
             model_alias_map=litellm.model_alias_map,
             completion_call_id=id,
-            metadata=metadata
+            metadata=metadata,
+            model_info=model_info,
+            proxy_server_request=proxy_server_request
         )
         logging.update_environment_variables(model=model, user=user, optional_params=optional_params, litellm_params=litellm_params)
         if custom_llm_provider == "azure":

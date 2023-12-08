@@ -967,6 +967,14 @@ async def chat_completion(request: Request, model: Optional[str] = None, user_ap
         data = {}
         data = await request.json() # type: ignore 
 
+        # Include original request and headers in the data
+        data["proxy_server_request"] = {
+            "url": str(request.url),
+            "method": request.method,
+            "headers": dict(request.headers),
+            "body": copy.copy(data)  # use copy instead of deepcopy
+        }
+
         print_verbose(f"receiving data: {data}")
         data["model"] = (
             general_settings.get("completion_model", None) # server default
@@ -1059,7 +1067,14 @@ async def embeddings(request: Request, user_api_key_dict: UserAPIKeyAuth = Depen
         body = await request.body()
         data = orjson.loads(body)
 
-        
+         # Include original request and headers in the data
+        data["proxy_server_request"] = {
+            "url": str(request.url),
+            "method": request.method,
+            "headers": dict(request.headers),
+            "body": copy.copy(data)  # use copy instead of deepcopy
+        }
+
         data["user"] = user_api_key_dict.user_id
         data["model"] = (
             general_settings.get("embedding_model", None) # server default
