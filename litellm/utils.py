@@ -1858,8 +1858,6 @@ def completion_cost(
         - If an error occurs during execution, the function returns 0.0 without blocking the user's execution path.
     """
     try:
-        if messages != []:
-            prompt = " ".join([message["content"] for message in messages])
         # Handle Inputs to completion_cost
         prompt_tokens = 0
         completion_tokens = 0
@@ -1869,7 +1867,10 @@ def completion_cost(
             completion_tokens = completion_response['usage']['completion_tokens']
             model = model or completion_response['model'] # check if user passed an override for model, if it's none check completion_response['model']
         else:
-            prompt_tokens = token_counter(model=model, text=prompt)
+            if len(messages) > 0:
+                prompt_tokens = token_counter(model=model, messages=messages)
+            elif len(prompt) > 0: 
+                prompt_tokens = token_counter(model=model, text=prompt)
             completion_tokens = token_counter(model=model, text=completion)
         
         # Calculate cost based on prompt_tokens, completion_tokens
