@@ -70,11 +70,19 @@ def test_chat_completion(client):
 
         response = client.post("/chat/completions", json=test_data, headers=headers)
         print("made request", response.status_code, response.text)
-        assert my_custom_logger.async_success == True                   # checks if the status of async_success is True, only the async_log_success_event can set this to true
+        assert my_custom_logger.async_success == True                             # checks if the status of async_success is True, only the async_log_success_event can set this to true
         assert my_custom_logger.async_completion_kwargs["model"] == "chatgpt-v-2" # checks if kwargs passed to async_log_success_event are correct
+        print("\n\n Custom Logger Async Completion args", my_custom_logger.async_completion_kwargs)           
         
+        litellm_params = my_custom_logger.async_completion_kwargs.get("litellm_params")
+        config_model_info = litellm_params.get("model_info")
+        proxy_server_request_object = litellm_params.get("proxy_server_request")
+
+        assert config_model_info == {'mode': 'chat', 'input_cost_per_token': 0.0002}
+        assert proxy_server_request_object == {'url': 'http://testserver/chat/completions', 'method': 'POST', 'headers': {'host': 'testserver', 'accept': '*/*', 'accept-encoding': 'gzip, deflate', 'connection': 'keep-alive', 'user-agent': 'testclient', 'authorization': 'Bearer None', 'content-length': '105', 'content-type': 'application/json'}, 'body': {'model': 'Azure OpenAI GPT-4 Canada', 'messages': [{'role': 'user', 'content': 'hi'}], 'max_tokens': 10}}
         result = response.json()
         print(f"Received response: {result}")
+        print("\nPassed /chat/completions with Custom Logger!")
     except Exception as e:
         pytest.fail("LiteLLM Proxy test failed. Exception", e)
 
@@ -82,7 +90,7 @@ def test_chat_completion(client):
 
 def test_embedding(client):
     try:
-         # Your test data
+        # Your test data
         print("initialized proxy")
         # import the initialized custom logger
         print(litellm.callbacks)
@@ -100,6 +108,12 @@ def test_embedding(client):
         assert my_custom_logger.async_success_embedding == True                             # checks if the status of async_success is True, only the async_log_success_event can set this to true
         assert my_custom_logger.async_embedding_kwargs["model"] == "azure-embedding-model"  # checks if kwargs passed to async_log_success_event are correct
         
+        kwargs = my_custom_logger.async_embedding_kwargs
+        litellm_params = kwargs.get("litellm_params")
+        proxy_server_request = litellm_params.get("proxy_server_request")
+        model_info = litellm_params.get("model_info")
+        assert proxy_server_request == {'url': 'http://testserver/embeddings', 'method': 'POST', 'headers': {'host': 'testserver', 'accept': '*/*', 'accept-encoding': 'gzip, deflate', 'connection': 'keep-alive', 'user-agent': 'testclient', 'authorization': 'Bearer None', 'content-length': '54', 'content-type': 'application/json'}, 'body': {'model': 'azure-embedding-model', 'input': ['hello']}}
+        assert model_info == {'input_cost_per_token': 0.002, 'mode': 'embedding'}
         result = response.json()
         print(f"Received response: {result}")
     except Exception as e:
