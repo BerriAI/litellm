@@ -94,7 +94,8 @@ import litellm
 from litellm.proxy.utils import (
     PrismaClient, 
     get_instance_fn, 
-    CallHooks
+    CallHooks, 
+    ProxyLogging
 )
 import pydantic
 from litellm.proxy._types import *
@@ -198,6 +199,7 @@ use_background_health_checks = None
 health_check_interval = None
 health_check_results = {}
 call_hooks = CallHooks()
+proxy_logging_obj: Optional[ProxyLogging] = None
 ### REDIS QUEUE ### 
 async_result = None
 celery_app_conn = None 
@@ -300,10 +302,10 @@ async def user_api_key_auth(request: Request, api_key: str = fastapi.Security(ap
             )
 
 def prisma_setup(database_url: Optional[str]): 
-    global prisma_client
-    if database_url:
+    global prisma_client, proxy_logging_obj
+    if database_url is not None and proxy_logging_obj is not None:
         try: 
-            prisma_client = PrismaClient(database_url=database_url)
+            prisma_client = PrismaClient(database_url=database_url, proxy_logging_obj=proxy_logging_obj)
         except Exception as e:
             print("Error when initializing prisma, Ensure you run pip install prisma", e)
 
@@ -839,11 +841,13 @@ async def rate_limit_per_token(request: Request, call_next):
 
 @router.on_event("startup")
 async def startup_event():
-    global prisma_client, master_key, use_background_health_checks
+    global prisma_client, master_key, use_background_health_checks, proxy_logging_obj
     import json
+    ### INITIALIZE GLOBAL LOGGING OBJECT ###
+    proxy_logging_obj = ProxyLogging()
 
+    ### LOAD CONFIG ### 
     worker_config = litellm.get_secret("WORKER_CONFIG")
-    print(f"worker_config: {worker_config}")
     print_verbose(f"worker_config: {worker_config}")
     # check if it's a valid file path
     if os.path.isfile(worker_config):
