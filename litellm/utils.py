@@ -1127,6 +1127,7 @@ class Logging:
                 f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while failure logging {traceback.format_exc()}"
             )
             pass
+
     async def async_failure_handler(self, exception, traceback_exception, start_time=None, end_time=None):
         """
         Implementing async callbacks, to handle asyncio event loop issues when custom integrations need to use async functions.
