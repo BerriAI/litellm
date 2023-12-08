@@ -75,7 +75,7 @@ def test_vertex_ai():
     test_models = random.sample(test_models, 4)
     for model in test_models:
         try:
-            if model in ["code-gecko@001", "code-gecko@latest", "code-bison@001"]:
+            if model in ["code-gecko@001", "code-gecko@latest", "code-bison@001", "text-bison@001"]:
                 # our account does not have access to this model
                 continue
             print("making request", model)
@@ -98,7 +98,7 @@ def test_vertex_ai_stream():
     test_models = random.sample(test_models, 4)
     for model in test_models:
         try:
-            if model in ["code-gecko@001", "code-gecko@latest", "code-bison@001"]:
+            if model in ["code-gecko@001", "code-gecko@latest", "code-bison@001", "text-bison@001"]:
                 # our account does not have access to this model
                 continue
             print("making request", model)
