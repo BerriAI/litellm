@@ -5,12 +5,18 @@ model_list:
       api_base: os.environ/AZURE_API_BASE
       api_key: os.environ/AZURE_API_KEY
       api_version: "2023-07-01-preview"
+    model_info:
+      mode: chat
+      input_cost_per_token: 0.0002
   - model_name: azure-embedding-model
     litellm_params:
       model: azure/azure-embedding-model
       api_base: os.environ/AZURE_API_BASE
       api_key: os.environ/AZURE_API_KEY
       api_version: "2023-07-01-preview"
+    model_info:
+      mode: embedding
+      input_cost_per_token: 0.002
 
 litellm_settings:
   drop_params: True
