@@ -512,8 +512,11 @@ class TextCompletionResponse(OpenAIObject):
 
 ############################################################
 def print_verbose(print_statement):
-    if litellm.set_verbose:
-        print(print_statement) # noqa
+    try:
+        if litellm.set_verbose:
+            print(print_statement) # noqa
+    except:
+        pass
 
 ####### LOGGING ###################
 from enum import Enum

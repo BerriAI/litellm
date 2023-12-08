@@ -1076,8 +1076,11 @@ class Router:
                 return deployment.get("client", None)
 
     def print_verbose(self, print_statement): 
-        if self.set_verbose or litellm.set_verbose: 
-            print(f"LiteLLM.Router: {print_statement}") # noqa
+        try:
+            if self.set_verbose or litellm.set_verbose: 
+                print(f"LiteLLM.Router: {print_statement}") # noqa
+        except:
+            pass
 
     def get_available_deployment(self,
                                model: str,

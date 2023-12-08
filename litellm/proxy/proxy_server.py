@@ -199,9 +199,12 @@ celery_app_conn = None
 celery_fn = None # Redis Queue for handling requests
 #### HELPER FUNCTIONS ####
 def print_verbose(print_statement):
-    global user_debug
-    if user_debug:
-        print(print_statement)
+    try:
+        global user_debug
+        if user_debug:
+            print(print_statement)
+    except:
+        pass
 
 def usage_telemetry(
     feature: str,
