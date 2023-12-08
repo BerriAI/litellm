@@ -460,6 +460,9 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
 
     print_verbose(f"Loaded config YAML (api_key and environment_variables are not shown):\n{json.dumps(printed_yaml, indent=2)}")
 
+    ## ROUTER CONFIG
+    cache_responses = False
+
     ## ENVIRONMENT VARIABLES
     environment_variables = config.get('environment_variables', None)
     if environment_variables: 
@@ -514,6 +517,7 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
                 print(f"{blue_color_code}\nSetting Cache on Proxy")
                 from litellm.caching import Cache
                 cache_type = value["type"]
+                cache_responses = True
                 cache_host = litellm.get_secret("REDIS_HOST", None)
                 cache_port = litellm.get_secret("REDIS_PORT", None)
                 cache_password = litellm.get_secret("REDIS_PASSWORD", None)
@@ -565,7 +569,7 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
     ## MODEL LIST
     model_list = config.get('model_list', None)
     if model_list:
-        router = litellm.Router(model_list=model_list, num_retries=3)
+        router = litellm.Router(model_list=model_list, num_retries=3, cache_responses=cache_responses)
         print(f"\033[32mLiteLLM: Proxy initialized with Config, Set models:\033[0m")
         for model in model_list:
             print(f"\033[32m    {model.get('model_name', '')}\033[0m")
