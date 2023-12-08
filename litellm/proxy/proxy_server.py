@@ -303,7 +303,10 @@ async def user_api_key_auth(request: Request, api_key: str = fastapi.Security(ap
 
 def prisma_setup(database_url: Optional[str]): 
     global prisma_client, proxy_logging_obj
-    if database_url is not None and proxy_logging_obj is not None:
+    ### INITIALIZE GLOBAL LOGGING OBJECT ###
+    proxy_logging_obj = ProxyLogging()
+
+    if database_url is not None:
         try: 
             prisma_client = PrismaClient(database_url=database_url, proxy_logging_obj=proxy_logging_obj)
         except Exception as e:
@@ -474,41 +477,6 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
         for key, value in environment_variables.items(): 
             os.environ[key] = value
 
-    ## GENERAL SERVER SETTINGS (e.g. master key,..)
-    general_settings = config.get("general_settings", {})
-    if general_settings is None: 
-        general_settings = {}
-    if general_settings: 
-        ### LOAD FROM AZURE KEY VAULT ###
-        use_azure_key_vault = general_settings.get("use_azure_key_vault", False)
-        load_from_azure_key_vault(use_azure_key_vault=use_azure_key_vault)
-        ### CONNECT TO DATABASE ###
-        database_url = general_settings.get("database_url", None)
-        if database_url and database_url.startswith("os.environ/"): 
-            database_url = litellm.get_secret(database_url)
-        prisma_setup(database_url=database_url)
-        ## COST TRACKING ## 
-        cost_tracking()
-        ### START REDIS QUEUE ###
-        use_queue = general_settings.get("use_queue", False)
-        celery_setup(use_queue=use_queue)
-        ### MASTER KEY ###
-        master_key = general_settings.get("master_key", None)
-        if master_key and master_key.startswith("os.environ/"): 
-            master_key = litellm.get_secret(master_key)
-        #### OpenTelemetry Logging (OTEL) ########
-        otel_logging =  general_settings.get("otel", False)
-        if otel_logging == True:
-            print("\nOpenTelemetry Logging Activated")
-        ### CUSTOM API KEY AUTH ###
-        custom_auth = general_settings.get("custom_auth", None)
-        if custom_auth:
-            user_custom_auth = get_instance_fn(value=custom_auth, config_file_path=config_file_path)
-        ### BACKGROUND HEALTH CHECKS ###
-        # Enable background health checks
-        use_background_health_checks = general_settings.get("background_health_checks", False)
-        health_check_interval = general_settings.get("health_check_interval", 300)
-
     ## LITELLM MODULE SETTINGS (e.g. litellm.drop_params=True,..)
     litellm_settings = config.get('litellm_settings', None)
     if litellm_settings is None: 
@@ -570,7 +538,42 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
                 print_verbose(f"{blue_color_code} Initialized Success Callbacks - {litellm.failure_callback} {reset_color_code}")
             else:
                 setattr(litellm, key, value)
-                
+
+    ## GENERAL SERVER SETTINGS (e.g. master key,..) # do this after initializing litellm, to ensure sentry logging works for proxylogging
+    general_settings = config.get("general_settings", {})
+    if general_settings is None: 
+        general_settings = {}
+    if general_settings: 
+        ### LOAD FROM AZURE KEY VAULT ###
+        use_azure_key_vault = general_settings.get("use_azure_key_vault", False)
+        load_from_azure_key_vault(use_azure_key_vault=use_azure_key_vault)
+        ### CONNECT TO DATABASE ###
+        database_url = general_settings.get("database_url", None)
+        if database_url and database_url.startswith("os.environ/"): 
+            database_url = litellm.get_secret(database_url)
+        prisma_setup(database_url=database_url)
+        ## COST TRACKING ## 
+        cost_tracking()
+        ### START REDIS QUEUE ###
+        use_queue = general_settings.get("use_queue", False)
+        celery_setup(use_queue=use_queue)
+        ### MASTER KEY ###
+        master_key = general_settings.get("master_key", None)
+        if master_key and master_key.startswith("os.environ/"): 
+            master_key = litellm.get_secret(master_key)
+        #### OpenTelemetry Logging (OTEL) ########
+        otel_logging =  general_settings.get("otel", False)
+        if otel_logging == True:
+            print("\nOpenTelemetry Logging Activated")
+        ### CUSTOM API KEY AUTH ###
+        custom_auth = general_settings.get("custom_auth", None)
+        if custom_auth:
+            user_custom_auth = get_instance_fn(value=custom_auth, config_file_path=config_file_path)
+        ### BACKGROUND HEALTH CHECKS ###
+        # Enable background health checks
+        use_background_health_checks = general_settings.get("background_health_checks", False)
+        health_check_interval = general_settings.get("health_check_interval", 300)
+
     ## MODEL LIST
     model_list = config.get('model_list', None)
     if model_list:
@@ -841,10 +844,8 @@ async def rate_limit_per_token(request: Request, call_next):
 
 @router.on_event("startup")
 async def startup_event():
-    global prisma_client, master_key, use_background_health_checks, proxy_logging_obj
+    global prisma_client, master_key, use_background_health_checks
     import json
-    ### INITIALIZE GLOBAL LOGGING OBJECT ###
-    proxy_logging_obj = ProxyLogging()
 
     ### LOAD CONFIG ### 
     worker_config = litellm.get_secret("WORKER_CONFIG")
@@ -856,6 +857,7 @@ async def startup_event():
         # if not, assume it's a json string
         worker_config = json.loads(os.getenv("WORKER_CONFIG"))
         initialize(**worker_config)
+    
     
     if use_background_health_checks:
         asyncio.create_task(_run_background_health_check()) # start the background health check coroutine. 
