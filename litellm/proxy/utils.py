@@ -31,11 +31,12 @@ class ProxyLogging:
                     litellm._async_success_callback.append(callback)
                 if callback not in litellm._async_failure_callback:
                     litellm._async_failure_callback.append(callback)
+        
         if (
             len(litellm.input_callback) > 0
             or len(litellm.success_callback) > 0
             or len(litellm.failure_callback) > 0
-        ) and len(callback_list) == 0:
+        ):
             callback_list = list(
                 set(
                     litellm.input_callback
@@ -59,7 +60,6 @@ class ProxyLogging:
 
         Currently only logs exceptions to sentry
         """
-        print(f"reaches failure handler logging - {original_exception}; sentry: {litellm.utils.capture_exception}")
         if litellm.utils.capture_exception: 
             litellm.utils.capture_exception(error=original_exception)
    
@@ -68,6 +68,9 @@ class ProxyLogging:
 class PrismaClient:
     def __init__(self, database_url: str, proxy_logging_obj: ProxyLogging):
         print("LiteLLM: DATABASE_URL Set in config, trying to 'pip install prisma'")
+        ## init logging object
+        self.proxy_logging_obj = proxy_logging_obj
+
         os.environ["DATABASE_URL"] = database_url
         # Save the current working directory
         original_dir = os.getcwd()
@@ -85,8 +88,7 @@ class PrismaClient:
         from prisma import Client # type: ignore
         self.db = Client()  #Client to connect to Prisma db
 
-        ## init logging object
-        self.proxy_logging_obj = proxy_logging_obj
+        
 
     def hash_token(self, token: str):
         # Hash the string using SHA-256
@@ -122,7 +124,6 @@ class PrismaClient:
             token = data["token"]
             hashed_token = self.hash_token(token=token)
             data["token"] = hashed_token
-            print(f"passed in data: {data}; hashed_token: {hashed_token}")
 
             new_verification_token = await self.db.litellm_verificationtoken.upsert( # type: ignore
                 where={
