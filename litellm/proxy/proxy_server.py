@@ -366,6 +366,7 @@ async def track_cost_callback(
     global prisma_client
     try:
         # check if it has collected an entire stream response
+        print(f"kwargs stream: {kwargs.get('stream', None)} + complete streaming response: {kwargs.get('complete_streaming_response', None)}")
         if "complete_streaming_response" in kwargs:
             # for tracking streaming cost we pass the "messages" and the output_text to litellm.completion_cost 
             completion_response=kwargs["complete_streaming_response"]
@@ -377,16 +378,16 @@ async def track_cost_callback(
                 completion=output_text
             )
             print("streaming response_cost", response_cost)
-        # for non streaming responses
-        elif kwargs["stream"] is False: # regular response
+        elif kwargs["stream"] == False: # for non streaming responses
             input_text = kwargs.get("messages", "")
+            print(f"type of input_text: {type(input_text)}")
             if isinstance(input_text, list): 
                 response_cost = litellm.completion_cost(completion_response=completion_response, messages=input_text)
             elif isinstance(input_text, str):
                 response_cost = litellm.completion_cost(completion_response=completion_response, prompt=input_text)
             print(f"received completion response: {completion_response}")
             
-            print("regular response_cost", response_cost)
+            print(f"regular response_cost: {response_cost}")
         user_api_key = kwargs["litellm_params"]["metadata"].get("user_api_key", None)
         print(f"user_api_key - {user_api_key}; prisma_client - {prisma_client}")
         if user_api_key and prisma_client: 
