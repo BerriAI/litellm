@@ -223,13 +223,17 @@ class Cache:
             str: The cache key generated from the arguments, or None if no cache key could be generated.
         """
         cache_key =""
-        for param in kwargs:
+        # sort kwargs by keys, since model: [gpt-4, temperature: 0.2, max_tokens: 200] == [temperature: 0.2, max_tokens: 200, model: gpt-4]
+        completion_kwargs = ["model", "messages", "temperature", "top_p", "n", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "response_format", "seed", "tools", "tool_choice"]
+        for param in completion_kwargs:
             # ignore litellm params here
-            if param in set(["model", "messages", "temperature", "top_p", "n", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "response_format", "seed", "tools", "tool_choice"]):
+            if param in kwargs:
                 # check if param == model and model_group is passed in, then override model with model_group
                 if param == "model" and kwargs.get("metadata", None) is not None and kwargs["metadata"].get("model_group", None) is not None:
                     param_value = kwargs["metadata"].get("model_group", None) # for litellm.Router use model_group for caching over `model`
                 else:
+                    if kwargs[param] is None:
+                        continue # ignore None params
                     param_value = kwargs[param]
                 cache_key+= f"{str(param)}: {str(param_value)}"
         return cache_key
