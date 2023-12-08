@@ -142,8 +142,8 @@ def test_async_custom_handler():
         assert len(str(customHandler2.async_completion_kwargs_fail.get("exception"))) > 10 # exppect APIError("OpenAIException - Error code: 401 - {'error': {'message': 'Incorrect API key provided: test. You can find your API key at https://platform.openai.com/account/api-keys.', 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_api_key'}}"), 'traceback_exception': 'Traceback (most recent call last):\n  File "/Users/ishaanjaffer/Github/litellm/litellm/llms/openai.py", line 269, in acompletion\n    response = await openai_aclient.chat.completions.create(**data)\n  File "/Library/Frameworks/Python.framework/Versions/3.10/lib/python3.10/site-packages/openai/resources/chat/completions.py", line 119
         print("Passed setting async failure")
 
-        async def test_2():
-            response = await litellm.acompletion(
+        def test_2():
+            response = litellm.completion(
                 model="gpt-3.5-turbo", 
                 messages=[{
                     "role": "user",
@@ -152,7 +152,7 @@ def test_async_custom_handler():
             )
             print("\n response", response)
         assert customHandler2.async_success == False
-        asyncio.run(test_2())
+        test_2()
         assert customHandler2.async_success == True, "async success is not set to True even after success"
         assert customHandler2.async_completion_kwargs.get("model") == "gpt-3.5-turbo"
 
