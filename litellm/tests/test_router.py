@@ -626,13 +626,14 @@ def test_openai_completion_on_router():
 				messages=[
 					{
 						"role": "user",
-						"content": "hello from litellm test",
+						"content": f"hello from litellm test {time.time()}",
 					}
 				],
 				stream=True
 			)
 			complete_response = ""
 			print(response)
+			# if you want to see all the attributes and methods
 			async for chunk in response:
 				print(chunk)
 				complete_response += chunk.choices[0].delta.content or ""
@@ -675,7 +676,7 @@ def test_openai_completion_on_router():
 	except Exception as e:
 		traceback.print_exc()
 		pytest.fail(f"Error occurred: {e}")
-# test_openai_completion_on_router()
+test_openai_completion_on_router()
 
 
 def test_reading_keys_os_environ():
@@ -742,7 +743,7 @@ def test_reading_keys_os_environ():
 		traceback.print_exc()
 		pytest.fail(f"Error occurred: {e}")
 
-test_reading_keys_os_environ()
+# test_reading_keys_os_environ()
 
 
 def test_reading_openai_keys_os_environ():
