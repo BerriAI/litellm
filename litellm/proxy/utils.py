@@ -128,6 +128,7 @@ class PrismaClient:
             return response
         except Exception as e: 
             asyncio.create_task(self.proxy_logging_obj.failure_handler(original_exception=e))
+            raise e
 
     # Define a retrying strategy with exponential backoff
     @backoff.on_exception(
@@ -193,6 +194,7 @@ class PrismaClient:
             print()
             print()
             print()
+            raise e
 
 
     # Define a retrying strategy with exponential backoff
@@ -215,18 +217,37 @@ class PrismaClient:
             return {"deleted_keys": tokens}
         except Exception as e: 
             asyncio.create_task(self.proxy_logging_obj.failure_handler(original_exception=e))
+            raise e
     
+    # Define a retrying strategy with exponential backoff
+    @backoff.on_exception(
+        backoff.expo,
+        Exception,        # base exception to catch for the backoff
+        max_tries=3,      # maximum number of retries
+        max_time=10,      # maximum total time to retry for
+        on_backoff=on_backoff,  # specifying the function to call on backoff
+    )
     async def connect(self): 
         try:
             await self.db.connect()
         except Exception as e: 
             asyncio.create_task(self.proxy_logging_obj.failure_handler(original_exception=e))
+            raise e
 
+    # Define a retrying strategy with exponential backoff
+    @backoff.on_exception(
+        backoff.expo,
+        Exception,        # base exception to catch for the backoff
+        max_tries=3,      # maximum number of retries
+        max_time=10,      # maximum total time to retry for
+        on_backoff=on_backoff,  # specifying the function to call on backoff
+    )
     async def disconnect(self): 
         try:
             await self.db.disconnect()
         except Exception as e: 
             asyncio.create_task(self.proxy_logging_obj.failure_handler(original_exception=e))
+            raise e
 
 ### CUSTOM FILE ###
 def get_instance_fn(value: str, config_file_path: Optional[str] = None) -> Any:
