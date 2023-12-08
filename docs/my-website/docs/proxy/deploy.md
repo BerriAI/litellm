@@ -73,3 +73,13 @@ Your LiteLLM container should be running now on the defined port e.g. `8000`.
 
 <iframe width="840" height="500" src="https://www.loom.com/embed/805964b3c8384b41be180a61442389a3" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
 
+
+## LiteLLM Proxy Performance
+
+### Throughput - 30% Increase
+LiteLLM proxy + Load Balancer gives **30% increase** in throughput compared to Raw OpenAI API
+<Image img={require('../img/throughput.png')} />
+
+### Latency Added - 0.00325 seconds
+LiteLLM proxy adds **0.00325 seconds** latency as compared to using the Raw OpenAI API
+<Image img={require('../img/latency.png')} />
