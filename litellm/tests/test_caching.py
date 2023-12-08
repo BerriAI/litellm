@@ -36,7 +36,7 @@ def test_caching_v2(): # test in memory cache
         print(f"error occurred: {traceback.format_exc()}")
         pytest.fail(f"Error occurred: {e}")
 
-test_caching_v2()
+# test_caching_v2()
 
 
 
@@ -158,9 +158,9 @@ def test_redis_cache_completion():
     messages = [{"role": "user", "content": f"write a one sentence poem about: {random_number}"}]
     litellm.cache = Cache(type="redis", host=os.environ['REDIS_HOST'], port=os.environ['REDIS_PORT'], password=os.environ['REDIS_PASSWORD'])
     print("test2 for caching")
-    response1 = completion(model="gpt-3.5-turbo", messages=messages, caching=True, max_tokens=10, seed=1222)
-    response2 = completion(model="gpt-3.5-turbo", messages=messages, caching=True, max_tokens=10, seed=1222)
-    response3 = completion(model="gpt-3.5-turbo", messages=messages, caching=True, temperature=1)
+    response1 = completion(model="gpt-3.5-turbo", messages=messages, caching=True, max_tokens=20)
+    response2 = completion(model="gpt-3.5-turbo", messages=messages, caching=True, max_tokens=20)
+    response3 = completion(model="gpt-3.5-turbo", messages=messages, caching=True, temperature=0.5)
     response4 = completion(model="command-nightly", messages=messages, caching=True)
 
     print("\nresponse 1", response1)
@@ -191,6 +191,39 @@ def test_redis_cache_completion():
         pytest.fail(f"Error occurred:")
 
 # test_redis_cache_completion()
+
+def test_redis_cache_completion_stream():
+    try:
+        litellm.set_verbose = False
+        random_number = random.randint(1, 100000) # add a random number to ensure it's always adding / reading from cache
+        messages = [{"role": "user", "content": f"write a one sentence poem about: {random_number}"}]
+        litellm.cache = Cache(type="redis", host=os.environ['REDIS_HOST'], port=os.environ['REDIS_PORT'], password=os.environ['REDIS_PASSWORD'])
+        print("test for caching, streaming + completion")
+        response1 = completion(model="gpt-3.5-turbo", messages=messages, max_tokens=40, temperature=0.2, stream=True)
+        response_1_content = ""
+        for chunk in response1:
+            print(chunk)
+            response_1_content += chunk.choices[0].delta.content or ""
+        print(response_1_content)
+        time.sleep(0.5)
+        response2 = completion(model="gpt-3.5-turbo", messages=messages, max_tokens=40, temperature=0.2, stream=True)
+        response_2_content = ""
+        for chunk in response2:
+            print(chunk)
+            response_2_content += chunk.choices[0].delta.content or ""
+        print("\nresponse 1", response_1_content)
+        print("\nresponse 2", response_2_content)
+        assert response_1_content == response_2_content, f"Response 1 != Response 2. Same params, Response 1{response_1_content} != Response 2{response_2_content}"
+        litellm.cache = None
+    except Exception as e:
+        print(e)
+        raise e
+    """
+
+    1 & 2 should be exactly the same 
+    """
+# test_redis_cache_completion_stream()
+
 
 # redis cache with custom keys
 def custom_get_cache_key(*args, **kwargs):
