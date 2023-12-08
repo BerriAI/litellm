@@ -20,7 +20,7 @@ from litellm.caching import Cache
 messages = [{"role": "user", "content": f"who is ishaan {time.time()}"}]
 def test_caching_v2(): # test in memory cache
     try:
-        litellm.cache = Cache(type="redis", host="os.environ/REDIS_HOST_2", port="os.environ/REDIS_PORT_2", password="os.environ/REDIS_PASSWORD_2", ssl="os.environ/REDIS_SSL")
+        litellm.cache = Cache(type="redis", host="os.environ/REDIS_HOST_2", port="os.environ/REDIS_PORT_2", password="os.environ/REDIS_PASSWORD_2", ssl="os.environ/REDIS_SSL_2")
         response1 = completion(model="gpt-3.5-turbo", messages=messages, caching=True)
         response2 = completion(model="gpt-3.5-turbo", messages=messages, caching=True)
         print(f"response1: {response1}")
@@ -55,7 +55,7 @@ def test_caching_router():
                     "rpm": 1800
                 }
             ]
-        litellm.cache = Cache(type="redis", host="os.environ/REDIS_HOST_2", port="os.environ/REDIS_PORT_2", password="os.environ/REDIS_PASSWORD_2", ssl="os.environ/REDIS_SSL")
+        litellm.cache = Cache(type="redis", host="os.environ/REDIS_HOST_2", port="os.environ/REDIS_PORT_2", password="os.environ/REDIS_PASSWORD_2", ssl="os.environ/REDIS_SSL_2")
         router = Router(model_list=model_list, 
                     routing_strategy="simple-shuffle",
                     set_verbose=False,
@@ -71,4 +71,4 @@ def test_caching_router():
         print(f"error occurred: {traceback.format_exc()}")
         pytest.fail(f"Error occurred: {e}")
 
-test_caching_router()
+# test_caching_router()
