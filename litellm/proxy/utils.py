@@ -70,15 +70,25 @@ class PrismaClient:
         """
         Update existing data
         """
-        hashed_token = self.hash_token(token=token)
-        data["token"] = hashed_token
-        await self.db.litellm_verificationtoken.update(
-            where={
-                "token": hashed_token
-            },
-            data={**data} # type: ignore 
-        )
-        return {"token": token, "data": data}
+        try: 
+            hashed_token = self.hash_token(token=token)
+            data["token"] = hashed_token
+            await self.db.litellm_verificationtoken.update(
+                where={
+                    "token": hashed_token
+                },
+                data={**data} # type: ignore 
+            )
+            print("\033[91m" + f"DB write succeeded" + "\033[0m")
+            return {"token": token, "data": data}
+        except Exception as e: 
+            print()
+            print()
+            print()
+            print("\033[91m" + f"DB write failed: {e}" + "\033[0m")
+            print()
+            print()
+            print()
 
     async def delete_data(self, tokens: List):
         """
@@ -96,8 +106,7 @@ class PrismaClient:
     async def disconnect(self): 
         await self.db.disconnect()
 
-# ### CUSTOM FILE ###
-
+### CUSTOM FILE ###
 def get_instance_fn(value: str, config_file_path: Optional[str] = None) -> Any:
     try:
         print(f"value: {value}")
@@ -134,7 +143,6 @@ def get_instance_fn(value: str, config_file_path: Optional[str] = None) -> Any:
         raise e
 
 ### CALL HOOKS ###
-
 class CallHooks: 
     """
     Allows users to modify the incoming request / output to the proxy, without having to deal with parsing Request body.
