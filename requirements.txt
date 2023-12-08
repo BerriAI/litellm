@@ -16,4 +16,5 @@ prisma
 celery
 psutil
 mangum
-google-generativeai
+google-generativeai 
+async_generator # for ollama 

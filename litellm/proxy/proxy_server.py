@@ -381,9 +381,11 @@ async def track_cost_callback(
         elif kwargs["stream"] is False: # regular response
             input_text = kwargs.get("messages", "")
             if isinstance(input_text, list): 
-                input_text = "".join(m["content"] for m in input_text)
+                response_cost = litellm.completion_cost(completion_response=completion_response, messages=input_text)
+            elif isinstance(input_text, str):
+                response_cost = litellm.completion_cost(completion_response=completion_response, prompt=input_text)
             print(f"received completion response: {completion_response}")
-            response_cost = litellm.completion_cost(completion_response=completion_response, completion=input_text)
+            
             print("regular response_cost", response_cost)
         user_api_key = kwargs["litellm_params"]["metadata"].get("user_api_key", None)
         print(f"user_api_key - {user_api_key}; prisma_client - {prisma_client}")
