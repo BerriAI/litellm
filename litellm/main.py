@@ -2141,8 +2141,11 @@ def moderation(input: str, api_key: Optional[str]=None):
 ####### HELPER FUNCTIONS ################
 ## Set verbose to true -> ```litellm.set_verbose = True```
 def print_verbose(print_statement):
-    if litellm.set_verbose:
-        print(print_statement) # noqa
+    try:
+        if litellm.set_verbose:
+            print(print_statement) # noqa
+    except:
+        pass
 
 def config_completion(**kwargs):
     if litellm.config_path != None:

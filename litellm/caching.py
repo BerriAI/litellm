@@ -25,8 +25,11 @@ def get_prompt(*args, **kwargs):
     return None
 
 def print_verbose(print_statement):
-    if litellm.set_verbose:
-        print(print_statement) # noqa
+    try:
+        if litellm.set_verbose:
+            print(print_statement) # noqa
+    except:
+        pass
 
 class BaseCache:
     def set_cache(self, key, value, **kwargs):
