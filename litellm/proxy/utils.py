@@ -1,6 +1,6 @@
 from typing import Optional, List, Any, Literal
 import os, subprocess, hashlib, importlib, asyncio
-import litellm
+import litellm, backoff
 
 ### LOGGING ### 
 class ProxyLogging: 
@@ -65,6 +65,12 @@ class ProxyLogging:
    
 
 ### DB CONNECTOR ###
+# Define the retry decorator with backoff strategy
+# Function to be called whenever a retry is about to happen
+def on_backoff(details):
+    # The 'tries' key in the details dictionary contains the number of completed tries
+    print(f"Backing off... this was attempt #{details['tries']}")
+
 class PrismaClient:
     def __init__(self, database_url: str, proxy_logging_obj: ProxyLogging):
         print("LiteLLM: DATABASE_URL Set in config, trying to 'pip install prisma'")
@@ -96,6 +102,13 @@ class PrismaClient:
         
         return hashed_token
 
+    @backoff.on_exception(
+        backoff.expo,
+        Exception,        # base exception to catch for the backoff
+        max_tries=3,      # maximum number of retries
+        max_time=10,      # maximum total time to retry for
+        on_backoff=on_backoff,  # specifying the function to call on backoff
+    )
     async def get_data(self, token: str, expires: Optional[Any]=None):
         try: 
             hashed_token = self.hash_token(token=token)
@@ -116,6 +129,14 @@ class PrismaClient:
         except Exception as e: 
             asyncio.create_task(self.proxy_logging_obj.failure_handler(original_exception=e))
 
+    # Define a retrying strategy with exponential backoff
+    @backoff.on_exception(
+        backoff.expo,
+        Exception,        # base exception to catch for the backoff
+        max_tries=3,      # maximum number of retries
+        max_time=10,      # maximum total time to retry for
+        on_backoff=on_backoff,  # specifying the function to call on backoff
+    )
     async def insert_data(self, data: dict):
         """
         Add a key to the database. If it already exists, do nothing. 
@@ -138,7 +159,16 @@ class PrismaClient:
             return new_verification_token
         except Exception as e:
             asyncio.create_task(self.proxy_logging_obj.failure_handler(original_exception=e))
+            raise e
 
+    # Define a retrying strategy with exponential backoff
+    @backoff.on_exception(
+        backoff.expo,
+        Exception,        # base exception to catch for the backoff
+        max_tries=3,      # maximum number of retries
+        max_time=10,      # maximum total time to retry for
+        on_backoff=on_backoff,  # specifying the function to call on backoff
+    )
     async def update_data(self, token: str, data: dict):
         """
         Update existing data
@@ -165,6 +195,14 @@ class PrismaClient:
             print()
 
 
+    # Define a retrying strategy with exponential backoff
+    @backoff.on_exception(
+        backoff.expo,
+        Exception,        # base exception to catch for the backoff
+        max_tries=3,      # maximum number of retries
+        max_time=10,      # maximum total time to retry for
+        on_backoff=on_backoff,  # specifying the function to call on backoff
+    )
     async def delete_data(self, tokens: List):
         """
         Allow user to delete a key(s)
