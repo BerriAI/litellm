@@ -160,144 +160,71 @@ On Success
     Response: {'id': 'chatcmpl-8S8avKJ1aVBg941y5xzGMSKrYCMvN', 'choices': [{'finish_reason': 'stop', 'index': 0, 'message': {'content': 'Good morning! How can I assist you today?', 'role': 'assistant'}}], 'created': 1701716913, 'model': 'gpt-3.5-turbo-0613', 'object': 'chat.completion', 'system_fingerprint': None, 'usage': {'completion_tokens': 10, 'prompt_tokens': 11, 'total_tokens': 21}}
     Proxy Metadata: {'user_api_key': None, 'headers': Headers({'host': '0.0.0.0:8000', 'user-agent': 'curl/7.88.1', 'accept': '*/*', 'authorization': 'Bearer sk-1234', 'content-length': '199', 'content-type': 'application/x-www-form-urlencoded'}), 'model_group': 'gpt-3.5-turbo', 'deployment': 'gpt-3.5-turbo-ModelID-gpt-3.5-turbo'}
 ```
-<!-- 
-## Async Custom Callback Functions
-Use this if you just want to use a function as a custom callback with the proxy. Set custom async functions for `litellm.success_callback` and `litellm.failure_callback`. 
 
-### Step 1 Define Custom Callback functions
+### Logging Proxy Request Object, Header, Url
 
-Define your custom callback functions in a python file.
-
-We create a file called `custom_callbacks.py` and define `async_on_succes_logger()` and `async_on_fail_logger`
-
-Example on success callback
-```python
-async def async_on_succes_logger(kwargs, response_obj, start_time, end_time):
-    print(f"On Async Success!")
-    # log: key, user, model, prompt, response, tokens, cost
-    print("\nOn Success")
-    # Access kwargs passed to litellm.completion()
-    model = kwargs.get("model", None)
-    messages = kwargs.get("messages", None)
-    user = kwargs.get("user", None)
-
-    # Access litellm_params passed to litellm.completion(), example access `metadata`
-    litellm_params = kwargs.get("litellm_params", {})
-    metadata = litellm_params.get("metadata", {})   # headers passed to LiteLLM proxy, can be found here
-
-    # Calculate cost using  litellm.completion_cost()
-    cost = litellm.completion_cost(completion_response=response_obj)
-    response = response_obj
-    # tokens used in response 
-    usage = response_obj["usage"]
-
-    print(
-        f"""
-            Model: {model},
-            Messages: {messages},
-            User: {user},
-            Usage: {usage},
-            Cost: {cost},
-            Response: {response}
-            Proxy Metadata: {metadata}
-        """
-    )
-    return
-```
-
-
-Example on fail callback
+Here's how you can access the `url`, `headers`, `request body` sent to the proxy for each request
 
 ```python
-async def async_on_fail_logger(kwargs, response_obj, start_time, end_time):
-    print(f"On Async Failure!")
+class MyCustomHandler(CustomLogger):
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        print(f"On Async Success!")
 
-    # Access kwargs passed to litellm.completion()
-    model = kwargs.get("model", None)
-    messages = kwargs.get("messages", None)
-    user = kwargs.get("user", None)
-
-    # Access litellm_params passed to litellm.completion(), example access `metadata`
-    litellm_params = kwargs.get("litellm_params", {})
-    metadata = litellm_params.get("metadata", {})   # headers passed to LiteLLM proxy, can be found here
-
-    # Acess Exceptions & Traceback
-    exception_event = kwargs.get("exception", None)
-    traceback_event = kwargs.get("traceback_exception", None)
-
-    # Calculate cost using  litellm.completion_cost()
-    cost = litellm.completion_cost(completion_response=response_obj)
-    response = response_obj
-    # tokens used in response 
-    usage = response_obj.get("usage", {})
-
-    print(
-        f"""
-            Model: {model},
-            Messages: {messages},
-            User: {user},
-            Usage: {usage},
-            Cost: {cost},
-            Response: {response}
-            Proxy Metadata: {metadata}
-            Exception: {exception_event}
-            Traceback: {traceback_event}
-        """
-    )
+        litellm_params = kwargs.get("litellm_params", None)
+        proxy_server_request = litellm_params.get("proxy_server_request")
+        print(proxy_server_request)
 ```
 
-### Step 2 - Pass your custom callback functions in `config.yaml`
-We pass the custom callback functions defined in **Step1** to the config.yaml. 
-Set `success_callback` and `failure_callback`  to `python_filename.function_name`
-
-In the config below, we pass
-- python_filename: `custom_callbacks.py`
-- function_name: `async_on_succes_logger` and `async_on_fail_logger` This is defined in Step 1
-
-`success_callback: [custom_callbacks.async_on_succes_logger]`
-
-`failure_callback: [custom_callbacks.async_on_fail_logger]`
-
-```yaml
-model_list:
-  - model_name: gpt-3.5-turbo
-    litellm_params:
-      model: gpt-3.5-turbo
-
-litellm_settings:
-    # setting a callback function for success and failure
-    success_callback: [custom_callbacks.async_on_succes_logger]
-    failure_callback: [custom_callbacks.async_on_fail_logger]
-
-```
-
-### Step 3 - Start proxy + test request
-```shell
-litellm --config proxy_config.yaml
-```
+**Expected Output**
 
 ```shell
-curl --location 'http://0.0.0.0:8000/chat/completions' \
-    --header 'Authorization: Bearer sk-1234' \
-    --data ' {
-    "model": "gpt-3.5-turbo",
+{
+  "url": "http://testserver/chat/completions",
+  "method": "POST",
+  "headers": {
+    "host": "testserver",
+    "accept": "*/*",
+    "accept-encoding": "gzip, deflate",
+    "connection": "keep-alive",
+    "user-agent": "testclient",
+    "authorization": "Bearer None",
+    "content-length": "105",
+    "content-type": "application/json"
+  },
+  "body": {
+    "model": "Azure OpenAI GPT-4 Canada",
     "messages": [
-        {
+      {
         "role": "user",
-        "content": "good morning good sir"
-        }
+        "content": "hi"
+      }
     ],
-    "user": "ishaan-app",
-    "temperature": 0.2
-    }'
-```
-
-#### Resulting Log on Proxy
-```shell
+    "max_tokens": 10
+  }
+}
 
 ```
- -->
 
+### Logging `model_info` set in config.yaml 
+
+Here is how to log the `model_info` set in your proxy `config.yaml`. Information on setting `model_info` on [config.yaml](https://docs.litellm.ai/docs/proxy/configs)
+
+```python
+class MyCustomHandler(CustomLogger):
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        print(f"On Async Success!")
+
+        litellm_params = kwargs.get("litellm_params", None)
+        model_info = litellm_params.get("model_info")
+        print(model_info)
+```
+
+**Expected Output**
+```json
+{'mode': 'embedding', 'input_cost_per_token': 0.002}
+```
+
+### Logging LLM Responses 
 
 ## OpenTelemetry, ElasticSearch
 
