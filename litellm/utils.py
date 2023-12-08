@@ -1435,7 +1435,7 @@ def client(original_function):
                 litellm.cache.add_cache(result, *args, **kwargs)
 
             # LOG SUCCESS - handle streaming success logging in the _next_ object, remove `handle_success` once it's deprecated
-            print_verbose(f"Wrapper: Completed Call, calling async_success_handler")
+            print_verbose(f"Wrapper: Completed Call, calling success_handler")
             threading.Thread(target=logging_obj.success_handler, args=(result, start_time, end_time)).start()
             # threading.Thread(target=logging_obj.success_handler, args=(result, start_time, end_time)).start()
             my_thread = threading.Thread(
@@ -1974,7 +1974,9 @@ def get_litellm_params(
     litellm_call_id=None,
     model_alias_map=None,
     completion_call_id=None,
-    metadata=None
+    metadata=None,
+    model_info=None,
+    proxy_server_request=None,
 ):
     litellm_params = {
         "return_async": return_async,
@@ -1988,6 +1990,8 @@ def get_litellm_params(
         "model_alias_map": model_alias_map,
         "completion_call_id": completion_call_id,
         "metadata": metadata,
+        "model_info": model_info,
+        "proxy_server_request": proxy_server_request,
         "stream_response": {} # litellm_call_id: ModelResponse Dict
     }
 
