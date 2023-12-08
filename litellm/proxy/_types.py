@@ -111,6 +111,9 @@ class ConfigGeneralSettings(BaseModel):
     custom_auth: Optional[str] = Field(None, description="override user_api_key_auth with your own auth script - https://docs.litellm.ai/docs/proxy/virtual_keys#custom-auth")
     max_parallel_requests: Optional[int] = Field(None, description="maximum parallel requests for each api key")
     infer_model_from_keys: Optional[bool] = Field(None, description="for `/models` endpoint, infers available model based on environment keys (e.g. OPENAI_API_KEY)")
+    background_health_checks: Optional[bool] = Field(None, description="run health checks in background")
+    health_check_interval: int = Field(300, description="background health check interval in seconds")
+    
 
 class ConfigYAML(BaseModel):
     """
