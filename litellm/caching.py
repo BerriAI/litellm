@@ -262,9 +262,6 @@ class Cache:
                 cache_key = self.get_cache_key(*args, **kwargs)
             if cache_key is not None:
                 cached_result = self.cache.get_cache(cache_key)
-                if cached_result != None and 'stream' in kwargs and kwargs['stream'] == True:
-                    # if streaming is true and we got a cache hit, return a generator
-                    return self.generate_streaming_content(cached_result["choices"][0]['message']['content'])
                 return cached_result
         except Exception as e:
             logging.debug(f"An exception occurred: {traceback.format_exc()}")
