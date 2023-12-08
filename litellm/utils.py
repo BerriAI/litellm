@@ -1425,6 +1425,10 @@ def client(original_function):
                     return litellm.stream_chunk_builder(chunks, messages=kwargs.get("messages", None))
                 else: 
                     return result
+            elif "acompletion" in kwargs and kwargs["acompletion"] == True: 
+                return result
+            elif "aembedding" in kwargs and kwargs["aembedding"] == True: 
+                return result
             
             ### POST-CALL RULES ### 
             post_call_processing(original_response=result, model=model)
@@ -1435,7 +1439,6 @@ def client(original_function):
 
             # LOG SUCCESS - handle streaming success logging in the _next_ object, remove `handle_success` once it's deprecated
             print_verbose(f"Wrapper: Completed Call, calling async_success_handler")
-            asyncio.run(logging_obj.async_success_handler(result, start_time, end_time))
             threading.Thread(target=logging_obj.success_handler, args=(result, start_time, end_time)).start()
             # threading.Thread(target=logging_obj.success_handler, args=(result, start_time, end_time)).start()
             my_thread = threading.Thread(
@@ -1443,10 +1446,6 @@ def client(original_function):
             )  # don't interrupt execution of main thread
             my_thread.start()
             # RETURN RESULT
-            if "acompletion" in kwargs and kwargs["acompletion"] == True: 
-                return result
-            elif "aembedding" in kwargs and kwargs["aembedding"] == True: 
-                return result
             result._response_ms = (end_time - start_time).total_seconds() * 1000 # return response latency in ms like openai
             return result
         except Exception as e:
