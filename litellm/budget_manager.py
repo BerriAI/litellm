@@ -13,9 +13,12 @@ class BudgetManager:
         self.load_data() 
     
     def print_verbose(self, print_statement):
-        if litellm.set_verbose:
-            import logging
-            logging.info(print_statement)
+        try:
+            if litellm.set_verbose:
+                import logging
+                logging.info(print_statement)
+        except:
+            pass
     
     def load_data(self):
         if self.client_type == "local":
