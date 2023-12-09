@@ -25,7 +25,7 @@ from fastapi.testclient import TestClient
 from fastapi import FastAPI
 from litellm.proxy.proxy_server import router, save_worker_config, startup_event  # Replace with the actual module where your FastAPI router is defined
 filepath = os.path.dirname(os.path.abspath(__file__))
-config_fp = f"{filepath}/test_configs/test_config.yaml"
+config_fp = f"{filepath}/test_configs/test_config_custom_auth.yaml"
 save_worker_config(config=config_fp, model=None, alias=None, api_base=None, api_version=None, debug=False, temperature=None, max_tokens=None, request_timeout=600, max_budget=None, telemetry=False, drop_params=True, add_function_to_prompt=False, headers=None, save=False, use_queue=False)
 app = FastAPI()
 app.include_router(router)  # Include your router in the test app
