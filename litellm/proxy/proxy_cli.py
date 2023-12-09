@@ -26,7 +26,7 @@ def run_ollama_serve():
     except Exception as e:
         print(f"""
             LiteLLM Warning: proxy started with `ollama` model\n`ollama serve` failed with Exception{e}. \nEnsure you run `ollama serve`
-        """)
+        """) # noqa
 
 def clone_subfolder(repo_url, subfolder, destination):
   # Clone the full repo
@@ -109,9 +109,9 @@ def run_server(host, port, api_base, api_version, model, alias, add_key, headers
             # get n recent logs
             recent_logs = {k.strftime("%Y%m%d%H%M%S%f"): v for k, v in sorted_times[:logs]}
 
-            print(json.dumps(recent_logs, indent=4))
+            print(json.dumps(recent_logs, indent=4)) # noqa
         except:
-            print("LiteLLM: No logs saved!")
+            raise Exception("LiteLLM: No logs saved!")
         return
     if model and "ollama" in model: 
         run_ollama_serve()
@@ -140,7 +140,7 @@ def run_server(host, port, api_base, api_version, model, alias, add_key, headers
                     if status == "finished":
                         llm_response = polling_response["result"]
                         break
-                    print(f"POLLING JOB{polling_url}\nSTATUS: {status}, \n Response {polling_response}")
+                    print(f"POLLING JOB{polling_url}\nSTATUS: {status}, \n Response {polling_response}") # noqa
                     time.sleep(0.5)
                 except Exception as e:
                     print("got exception in polling", e)

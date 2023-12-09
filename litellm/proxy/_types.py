@@ -84,8 +84,12 @@ class GenerateKeyRequest(BaseModel):
     user_id: Optional[str] = None
     max_parallel_requests: Optional[int] = None
 
-    def json(self, **kwargs) -> str:
-        return json.dumps(self.dict(), **kwargs)
+    def json(self, **kwargs):
+        try:
+            return self.model_dump() # noqa
+        except:
+            # if using pydantic v1
+            return json.dumps(self.dict(), **kwargs)
 
 class GenerateKeyResponse(BaseModel):
     key: str
