@@ -229,8 +229,10 @@ class Cache:
             # ignore litellm params here
             if param in kwargs:
                 # check if param == model and model_group is passed in, then override model with model_group
-                if param == "model" and kwargs.get("metadata", None) is not None and kwargs["metadata"].get("model_group", None) is not None:
-                    param_value = kwargs["metadata"].get("model_group", None) # for litellm.Router use model_group for caching over `model`
+                if param == "model":
+                    # for litellm.Router use model_group for caching over `model`
+                    model_group = kwargs.get("metadata", {}).get("model_group", None) or kwargs.get("litellm_params", {}).get("metadata", {}).get("model_group", None)
+                    param_value = model_group or kwargs[param] # use model_group if it exists, else use kwargs["model"]
                 else:
                     if kwargs[param] is None:
                         continue # ignore None params
