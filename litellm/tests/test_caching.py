@@ -266,7 +266,7 @@ test_redis_cache_completion_stream()
 
 # redis cache with custom keys
 def custom_get_cache_key(*args, **kwargs):
-    # return key to use for your cache:
+    # return key to use for your cache: 
     key = kwargs.get("model", "") + str(kwargs.get("messages", "")) + str(kwargs.get("temperature", "")) + str(kwargs.get("logit_bias", ""))
     return key
 
