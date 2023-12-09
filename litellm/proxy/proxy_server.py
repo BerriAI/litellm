@@ -1128,9 +1128,7 @@ async def generate_key_fn(request: Request, data: GenerateKeyRequest, Authorizat
     - user_id: (str) Unique user id - used for tracking spend across multiple keys for same user id.
     """
     # data = await request.json()
-    print(f"type of object: {type(data)}")
-    data_json = json.loads(data.model_dump_json())   # type: ignore
-    print(f"data_json: {data_json}")
+    data_json = json.loads(data.json())   # type: ignore
     response = await generate_key_helper_fn(**data_json)
     return GenerateKeyResponse(key=response["token"], expires=response["expires"], user_id=response["user_id"])
 
