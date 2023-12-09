@@ -141,6 +141,8 @@ def test_chat_completion_stream(client):
         print("\n\nHERE is the complete streaming response string", complete_response)
         print("\n\nHERE IS the streaming Response from callback\n\n")
         print(my_custom_logger.streaming_response_obj)
+        import time
+        time.sleep(0.5)
 
         streamed_response = my_custom_logger.streaming_response_obj
         assert complete_response == streamed_response["choices"][0]["message"]["content"]
