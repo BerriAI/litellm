@@ -131,7 +131,9 @@ class Router:
             cache_config.update(cache_kwargs)
             redis_cache = RedisCache(**cache_config)
         if cache_responses:
-            litellm.cache = litellm.Cache(type=cache_type, **cache_config)
+            if litellm.cache is None:
+                # the cache can be initialized on the proxy server. We should not overwrite it
+                litellm.cache = litellm.Cache(type=cache_type, **cache_config)
             self.cache_responses = cache_responses
         self.cache = DualCache(redis_cache=redis_cache, in_memory_cache=InMemoryCache()) # use a dual cache (Redis+In-Memory) for tracking cooldowns, usage, etc.
         ### ROUTING SETUP ### 
