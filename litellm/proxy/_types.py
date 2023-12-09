@@ -76,12 +76,13 @@ class ModelParams(BaseModel):
         protected_namespaces = ()
 
 class GenerateKeyRequest(BaseModel):
-    duration: str = "1h"
-    models: list = []
-    aliases: dict = {}
-    config: dict = {}
-    spend: int = 0
+    duration: Optional[str] = "1h"
+    models: Optional[list] = []
+    aliases: Optional[dict] = {}
+    config: Optional[dict] = {}
+    spend: Optional[float] = 0
     user_id: Optional[str] = None
+    max_parallel_requests: Optional[int] = None
 
 class GenerateKeyResponse(BaseModel):
     key: str
@@ -96,8 +97,17 @@ class DeleteKeyRequest(BaseModel):
 
 
 class UserAPIKeyAuth(BaseModel): # the expected response object for user api key auth
+    """
+    Return the row in the db
+    """
     api_key: Optional[str] = None
+    models: list = []
+    aliases: dict = {}
+    config: dict = {}
+    spend: Optional[float] = 0
     user_id: Optional[str] = None
+    max_parallel_requests: Optional[int] = None
+    duration: str = "1h"
 
 class ConfigGeneralSettings(BaseModel):
     """

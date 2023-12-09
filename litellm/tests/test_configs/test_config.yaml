@@ -3,7 +3,6 @@ general_settings:
   master_key: os.environ/PROXY_MASTER_KEY
 litellm_settings:
   drop_params: true
-  set_verbose: true
   success_callback: ["langfuse"]
   
 model_list:
