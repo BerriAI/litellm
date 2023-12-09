@@ -39,7 +39,6 @@ jobs:
             pip install openai
             pip install prisma
             pip install langfuse
-            pip install "pydantic>=2.5"
       - save_cache:
           paths:
             - ./venv
@@ -62,6 +61,7 @@ jobs:
           command: |
             pwd
             ls
+            pip show pydantic
             python -m pytest -vv litellm/tests/ -x --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 120m
 
