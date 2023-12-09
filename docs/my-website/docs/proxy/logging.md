@@ -284,9 +284,47 @@ ModelResponse(
 ```
 
 
-## OpenTelemetry, ElasticSearch
+## OpenTelemetry - Traceloop
 
-### Step 1 Start OpenTelemetry Collecter Docker Container
+Traceloop allows you to log LLM Input/Output in the OpenTelemetry format
+
+We will use the `--config` to set `litellm.success_callback = ["traceloop"]` this will log all successfull LLM calls to traceloop
+
+**Step 1** Install traceloop-sdk and set Traceloop API key
+
+```shell
+pip install traceloop-sdk -U
+```
+
+```shell
+TRACELOOP_API_KEY=51e7164..
+```
+
+**Step 2**: Create a `config.yaml` file and set `litellm_settings`: `success_callback`
+```yaml
+model_list:
+ - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+litellm_settings:
+  success_callback: ["traceloop"]
+```
+
+**Step 3**: Start the proxy, make a test request
+
+Start proxy
+```shell
+litellm --config config.yaml --debug
+```
+
+Test Request
+```
+litellm --test
+```
+
+
+
+<!-- ### Step 1 Start OpenTelemetry Collecter Docker Container
 This container sends logs to your selected destination 
 
 #### Install OpenTelemetry Collecter Docker Image
@@ -397,48 +435,13 @@ curl --location 'http://0.0.0.0:8000/chat/completions' \
 On successfull logging you should be able to see this log on your `OpenTelemetry Collecter` Docker Container
 ```shell
 Events:
-SpanEvent #0
-     -> Name: LiteLLM: Request Input
-     -> Timestamp: 2023-12-02 05:05:53.71063 +0000 UTC
-     -> DroppedAttributesCount: 0
-     -> Attributes::
-          -> type: Str(http)
-          -> asgi: Str({'version': '3.0', 'spec_version': '2.3'})
-          -> http_version: Str(1.1)
-          -> server: Str(('127.0.0.1', 8000))
-          -> client: Str(('127.0.0.1', 62796))
-          -> scheme: Str(http)
-          -> method: Str(POST)
-          -> root_path: Str()
-          -> path: Str(/chat/completions)
-          -> raw_path: Str(b'/chat/completions')
-          -> query_string: Str(b'')
-          -> headers: Str([(b'host', b'0.0.0.0:8000'), (b'user-agent', b'curl/7.88.1'), (b'accept', b'*/*'), (b'authorization', b'Bearer sk-1244'), (b'content-length', b'147'), (b'content-type', b'application/x-www-form-urlencoded')])
-          -> state: Str({})
-          -> app: Str(<fastapi.applications.FastAPI object at 0x1253dd960>)
-          -> fastapi_astack: Str(<contextlib.AsyncExitStack object at 0x127c8b7c0>)
-          -> router: Str(<fastapi.routing.APIRouter object at 0x1253dda50>)
-          -> endpoint: Str(<function chat_completion at 0x1254383a0>)
-          -> path_params: Str({})
-          -> route: Str(APIRoute(path='/chat/completions', name='chat_completion', methods=['POST']))
-SpanEvent #1
-     -> Name: LiteLLM: Request Headers
-     -> Timestamp: 2023-12-02 05:05:53.710652 +0000 UTC
-     -> DroppedAttributesCount: 0
-     -> Attributes::
-          -> host: Str(0.0.0.0:8000)
-          -> user-agent: Str(curl/7.88.1)
-          -> accept: Str(*/*)
-          -> authorization: Str(Bearer sk-1244)
-          -> content-length: Str(147)
-          -> content-type: Str(application/x-www-form-urlencoded)
-SpanEvent #2
+
 ```
 
 ### View Log on Elastic Search
 Here's the log view on Elastic Search. You can see the request `input`, `output` and `headers`
 
-<Image img={require('../../img/elastic_otel.png')} />
+<Image img={require('../../img/elastic_otel.png')} /> -->
 
 ## Logging Proxy Input/Output - Langfuse
 We will use the `--config` to set `litellm.success_callback = ["langfuse"]` this will log all successfull LLM calls to langfuse
