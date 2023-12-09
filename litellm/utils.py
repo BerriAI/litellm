@@ -132,6 +132,9 @@ def map_finish_reason(finish_reason: str): # openai supports 5 stop sequences - 
         return "content_filter"
     elif finish_reason == "ERROR": # openai currently doesn't support an 'error' finish reason
         return "stop"
+    # huggingface mapping https://huggingface.github.io/text-generation-inference/#/Text%20Generation%20Inference/generate_stream
+    elif finish_reason == "eos_token" or finish_reason == "stop_sequence":
+        return "stop"
     return finish_reason
 
 class FunctionCall(OpenAIObject):
