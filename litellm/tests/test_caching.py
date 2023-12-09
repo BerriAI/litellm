@@ -19,6 +19,13 @@ import random
 messages = [{"role": "user", "content": "who is ishaan Github?  "}]
 # comment
 
+import random
+import string
+
+def generate_random_word(length=4):
+    letters = string.ascii_lowercase
+    return ''.join(random.choice(letters) for _ in range(length))
+
 messages = [{"role": "user", "content": "who is ishaan 5222"}]
 def test_caching_v2(): # test in memory cache
     try:
@@ -227,46 +234,46 @@ def test_redis_cache_completion_stream():
 
     1 & 2 should be exactly the same 
     """
-test_redis_cache_completion_stream()
+# test_redis_cache_completion_stream()
 
 
-# def test_redis_cache_acompletion_stream():
-#     import asyncio
-#     try:
-#         litellm.set_verbose = False
-#         random_number = random.randint(1, 100000) # add a random number to ensure it's always adding / reading from cache
-#         messages = [{"role": "user", "content": f"write a one sentence poem about: {random_number}"}]
-#         litellm.cache = Cache(type="redis", host=os.environ['REDIS_HOST'], port=os.environ['REDIS_PORT'], password=os.environ['REDIS_PASSWORD'])
-#         print("test for caching, streaming + completion")
-#         response_1_content = ""
-#         response_2_content = ""
+def test_redis_cache_acompletion_stream():
+    import asyncio
+    try:
+        litellm.set_verbose = True
+        random_word = generate_random_word()
+        messages = [{"role": "user", "content": f"write a one sentence poem about: {random_word}"}]
+        litellm.cache = Cache(type="redis", host=os.environ['REDIS_HOST'], port=os.environ['REDIS_PORT'], password=os.environ['REDIS_PASSWORD'])
+        print("test for caching, streaming + completion")
+        response_1_content = ""
+        response_2_content = ""
 
-#         async def call1():
-#             nonlocal response_1_content 
-#             response1 = await litellm.acompletion(model="gpt-3.5-turbo", messages=messages, max_tokens=40, temperature=0.2, stream=True)
-#             async for chunk in response1:
-#                 print(chunk)
-#                 response_1_content += chunk.choices[0].delta.content or ""
-#             print(response_1_content)
-#         asyncio.run(call1())
-#         time.sleep(0.5)
-#         print("\n\n Response 1 content: ", response_1_content, "\n\n")
+        async def call1():
+            nonlocal response_1_content 
+            response1 = await litellm.acompletion(model="gpt-3.5-turbo", messages=messages, max_tokens=40, temperature=1, stream=True)
+            async for chunk in response1:
+                print(chunk)
+                response_1_content += chunk.choices[0].delta.content or ""
+            print(response_1_content)
+        asyncio.run(call1())
+        time.sleep(0.5)
+        print("\n\n Response 1 content: ", response_1_content, "\n\n")
 
-#         async def call2():
-#             nonlocal response_2_content
-#             response2 = await litellm.acompletion(model="gpt-3.5-turbo", messages=messages, max_tokens=40, temperature=0.2, stream=True)
-#             async for chunk in response2:
-#                 print(chunk)
-#                 response_2_content += chunk.choices[0].delta.content or ""
-#             print(response_2_content)
-#         asyncio.run(call2())
-#         print("\nresponse 1", response_1_content)
-#         print("\nresponse 2", response_2_content)
-#         assert response_1_content == response_2_content, f"Response 1 != Response 2. Same params, Response 1{response_1_content} != Response 2{response_2_content}"
-#         litellm.cache = None
-#     except Exception as e:
-#         print(e)
-#         raise e
+        async def call2():
+            nonlocal response_2_content
+            response2 = await litellm.acompletion(model="gpt-3.5-turbo", messages=messages, max_tokens=40, temperature=1, stream=True)
+            async for chunk in response2:
+                print(chunk)
+                response_2_content += chunk.choices[0].delta.content or ""
+            print(response_2_content)
+        asyncio.run(call2())
+        print("\nresponse 1", response_1_content)
+        print("\nresponse 2", response_2_content)
+        assert response_1_content == response_2_content, f"Response 1 != Response 2. Same params, Response 1{response_1_content} != Response 2{response_2_content}"
+        litellm.cache = None
+    except Exception as e:
+        print(e)
+        raise e
 # test_redis_cache_acompletion_stream()
 
 # redis cache with custom keys
