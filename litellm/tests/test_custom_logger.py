@@ -25,6 +25,8 @@ class MyCustomHandler(CustomLogger):
         self.async_completion_kwargs_fail = None    # type: ignore
         self.async_embedding_kwargs_fail = None     # type: ignore
 
+        self.stream_collected_response = None       # type: ignore
+
     def log_pre_api_call(self, model, messages, kwargs): 
         print(f"Pre-API Call")
     
@@ -51,6 +53,8 @@ class MyCustomHandler(CustomLogger):
             self.async_success_embedding = True
             self.async_embedding_kwargs = kwargs
             self.async_embedding_response = response_obj
+        if kwargs.get("stream") == True:
+            self.stream_collected_response = response_obj
         self.async_completion_kwargs = kwargs
     
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time): 
@@ -122,6 +126,41 @@ def test_completion_azure_stream_moderation_failure():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+
+def test_async_custom_handler_stream():
+    try:
+        # [PROD Test] - Do not DELETE 
+        # checks if the model response available in the async + stream callbacks is equal to the received response
+        customHandler2 = MyCustomHandler()
+        litellm.callbacks = [customHandler2]
+        litellm.set_verbose = False
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {
+                "role": "user",
+                "content": "write 1 sentence about litellm being amazing",
+            },
+        ]
+        complete_streaming_response = ""
+        async def test_1():
+            nonlocal complete_streaming_response
+            response = await litellm.acompletion(
+                model="azure/chatgpt-v-2", 
+                messages=messages,
+                stream=True
+            )
+            async for chunk in response: 
+                complete_streaming_response += chunk["choices"][0]["delta"]["content"] or ""
+                print(complete_streaming_response)
+        
+        asyncio.run(test_1())
+
+        response_in_success_handler = customHandler2.stream_collected_response
+        response_in_success_handler = response_in_success_handler["choices"][0]["message"]["content"]
+        assert response_in_success_handler == complete_streaming_response
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+# test_async_custom_handler_stream()
 
 def test_async_custom_handler():
     try:
