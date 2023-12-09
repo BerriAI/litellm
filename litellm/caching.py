@@ -61,8 +61,6 @@ class InMemoryCache(BaseCache):
                 cached_response = json.loads(original_cached_response)
             except: 
                 cached_response = original_cached_response
-            if isinstance(cached_response, dict): 
-                    cached_response['cache'] = True  # set cache-hit flag to True
             return cached_response
         return None
     
@@ -110,8 +108,6 @@ class RedisCache(BaseCache):
                     cached_response = json.loads(cached_response)  # Convert string to dictionary
                 except: 
                     cached_response = ast.literal_eval(cached_response)
-                if isinstance(cached_response, dict): 
-                    cached_response['cache'] = True  # set cache-hit flag to True
                 return cached_response
         except Exception as e:
             # NON blocking - notify users Redis is throwing an exception
