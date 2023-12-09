@@ -319,7 +319,17 @@ litellm --config config.yaml --debug
 
 Test Request
 ```
-litellm --test
+curl --location 'http://0.0.0.0:8000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data ' {
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ]
+    }'
 ```
 
 
