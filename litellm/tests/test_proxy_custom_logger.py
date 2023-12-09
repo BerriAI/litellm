@@ -87,6 +87,68 @@ def test_chat_completion(client):
         pytest.fail("LiteLLM Proxy test failed. Exception", e)
 
 
+def test_chat_completion_stream(client):
+    try:
+        # Your test data
+        import json
+        print("initialized proxy")
+        # import the initialized custom logger
+        print(litellm.callbacks)
+
+        assert len(litellm.callbacks) == 1 # assert litellm is initialized with 1 callback
+        my_custom_logger = litellm.callbacks[0]
+
+        assert my_custom_logger.streaming_response_obj == None  # no streaming response obj is set pre call
+
+        test_data = {
+            "model": "Azure OpenAI GPT-4 Canada",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "write 1 line poem about LiteLLM"
+                },
+            ],
+            "max_tokens": 40,
+            "stream": True          # streaming  call
+        }
+
+
+        response = client.post("/chat/completions", json=test_data, headers=headers)
+        print("made request", response.status_code, response.text)
+        complete_response = ""
+        for line in response.iter_lines():
+            if line:
+                # Process the streaming data line here
+                print("\n\n Line", line)
+                print(line)
+                line = str(line)
+
+                json_data = line.replace('data: ', '')
+
+                # Parse the JSON string
+                data = json.loads(json_data)
+
+                print("\n\n decode_data", data)
+
+                # Access the content of choices[0]['message']['content']
+                content = data['choices'][0]['delta']['content'] or ""
+
+                # Process the content as needed
+                print("Content:", content)
+
+                complete_response+= content
+
+        print("\n\nHERE is the complete streaming response string", complete_response)
+        print("\n\nHERE IS the streaming Response from callback\n\n")
+        print(my_custom_logger.streaming_response_obj)
+
+        streamed_response = my_custom_logger.streaming_response_obj
+        assert complete_response == streamed_response["choices"][0]["message"]["content"]
+
+    except Exception as e:
+        pytest.fail("LiteLLM Proxy test failed. Exception", e)
+
+
 
 def test_embedding(client):
     try:
