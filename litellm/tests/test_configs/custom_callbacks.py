@@ -17,6 +17,8 @@ class MyCustomHandler(CustomLogger):
 
         self.async_completion_kwargs_fail = None    # type: ignore
         self.async_embedding_kwargs_fail = None     # type: ignore
+
+        self.streaming_response_obj = None          # type: ignore
         blue_color_code = "\033[94m"
         reset_color_code = "\033[0m"
         print(f"{blue_color_code}Initialized LiteLLM custom logger")
@@ -57,6 +59,10 @@ class MyCustomHandler(CustomLogger):
             self.async_success_embedding = True
             self.async_embedding_kwargs = kwargs
             self.async_embedding_response = response_obj
+        if kwargs.get("stream") == True:
+            self.streaming_response_obj = response_obj
+
+
         self.async_completion_kwargs = kwargs
 
         model = kwargs.get("model", None)
