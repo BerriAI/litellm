@@ -14,7 +14,7 @@ from litellm import embedding, completion, completion_cost, Timeout
 from litellm import RateLimitError
 litellm.num_retries = 3
 litellm.cache = None
-litellm.success_callback = []
+litellm.success_callback = [] 
 user_message = "Write a short poem about the sky"
 messages = [{"content": user_message, "role": "user"}]
 
