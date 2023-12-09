@@ -105,9 +105,10 @@ class Completions:
     def __init__(self, params):
         self.params = params
 
-    def create(self, model, messages, **kwargs):
+    def create(self, messages, model=None, **kwargs):
         for k, v in kwargs.items():
             self.params[k] = v
+        model = model or self.params.get('model')
         response = completion(model=model, messages=messages, **self.params)
         return response
 
