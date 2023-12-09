@@ -11,8 +11,7 @@ model_list:
 
 litellm_settings:
   set_verbose: True
-  cache:          # init cache
-    type: redis   # tell litellm to use redis caching (Also: `pip install redis`)
+  cache: True          # set cache responses to True, litellm defaults to using a redis cache
 ```
 
 #### Step 2: Add Redis Credentials to .env
