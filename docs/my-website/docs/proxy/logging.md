@@ -224,7 +224,6 @@ class MyCustomHandler(CustomLogger):
 {'mode': 'embedding', 'input_cost_per_token': 0.002}
 ```
 
-### Logging LLM Responses 
 
 ## OpenTelemetry, ElasticSearch
 
