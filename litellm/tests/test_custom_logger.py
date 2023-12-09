@@ -205,7 +205,7 @@ def test_azure_completion_stream():
         assert response_in_success_handler == complete_streaming_response
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_azure_completion_stream()
+test_azure_completion_stream()
 
 def test_async_custom_handler():
     try:
@@ -287,3 +287,42 @@ def test_async_custom_handler():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 # test_async_custom_handler()
+
+from litellm import Cache
+def test_redis_cache_completion_stream():
+    # Important Test - This tests if we can add to streaming cache, when custom callbacks are set 
+    import random
+    try:
+        print("\nrunning test_redis_cache_completion_stream")
+        litellm.set_verbose = True
+        random_number = random.randint(1, 100000) # add a random number to ensure it's always adding / reading from cache
+        messages = [{"role": "user", "content": f"write a one sentence poem about: {random_number}"}]
+        litellm.cache = Cache(type="redis", host=os.environ['REDIS_HOST'], port=os.environ['REDIS_PORT'], password=os.environ['REDIS_PASSWORD'])
+        print("test for caching, streaming + completion")
+        response1 = completion(model="gpt-3.5-turbo", messages=messages, max_tokens=40, temperature=0.2, stream=True)
+        response_1_content = ""
+        for chunk in response1:
+            print(chunk)
+            response_1_content += chunk.choices[0].delta.content or ""
+        print(response_1_content)
+
+        time.sleep(0.1) # sleep for 0.1 seconds allow set cache to occur
+        response2 = completion(model="gpt-3.5-turbo", messages=messages, max_tokens=40, temperature=0.2, stream=True)
+        response_2_content = ""
+        for chunk in response2:
+            print(chunk)
+            response_2_content += chunk.choices[0].delta.content or ""
+        print("\nresponse 1", response_1_content)
+        print("\nresponse 2", response_2_content)
+        assert response_1_content == response_2_content, f"Response 1 != Response 2. Same params, Response 1{response_1_content} != Response 2{response_2_content}"
+        litellm.success_callback = []
+        litellm.cache = None
+    except Exception as e:
+        print(e)
+        litellm.success_callback = []
+        raise e
+    """
+
+    1 & 2 should be exactly the same 
+    """
+test_redis_cache_completion_stream()
