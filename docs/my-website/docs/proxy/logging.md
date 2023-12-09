@@ -224,6 +224,65 @@ class MyCustomHandler(CustomLogger):
 {'mode': 'embedding', 'input_cost_per_token': 0.002}
 ```
 
+### Logging responses from proxy
+Both `/chat/completions` and `/embeddings` responses are available as `response_obj`
+
+**Note: for `/chat/completions`, both `stream=True` and `non stream` responses are available as `response_obj`**
+
+```python
+class MyCustomHandler(CustomLogger):
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        print(f"On Async Success!")
+        print(response_obj)
+
+```
+
+**Expected Output /chat/completion [for both `stream` and `non-stream` responses]**
+```json
+ModelResponse(
+    id='chatcmpl-8Tfu8GoMElwOZuj2JlHBhNHG01PPo',
+    choices=[
+        Choices(
+            finish_reason='stop',
+            index=0,
+            message=Message(
+                content='As an AI language model, I do not have a physical body and therefore do not possess any degree or educational qualifications. My knowledge and abilities come from the programming and algorithms that have been developed by my creators.',
+                role='assistant'
+            )
+        )
+    ],
+    created=1702083284,
+    model='chatgpt-v-2',
+    object='chat.completion',
+    system_fingerprint=None,
+    usage=Usage(
+        completion_tokens=42,
+        prompt_tokens=5,
+        total_tokens=47
+    )
+)
+```
+
+**Expected Output /embeddings**
+```json
+{
+    'model': 'ada',
+    'data': [
+        {
+            'embedding': [
+                -0.035126980394124985, -0.020624293014407158, -0.015343423001468182,
+                -0.03980357199907303, -0.02750781551003456, 0.02111034281551838,
+                -0.022069307044148445, -0.019442008808255196, -0.00955679826438427,
+                -0.013143060728907585, 0.029583381488919258, -0.004725852981209755,
+                -0.015198921784758568, -0.014069183729588985, 0.00897879246622324,
+                0.01521205808967352,
+                # ... (truncated for brevity)
+            ]
+        }
+    ]
+}
+```
+
 
 ## OpenTelemetry, ElasticSearch
 
