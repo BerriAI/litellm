@@ -157,10 +157,13 @@ def test_async_custom_handler_stream():
 
         response_in_success_handler = customHandler2.stream_collected_response
         response_in_success_handler = response_in_success_handler["choices"][0]["message"]["content"]
+        print("\n\n")
+        print("response_in_success_handler: ", response_in_success_handler)
+        print("complete_streaming_response: ", complete_streaming_response)
         assert response_in_success_handler == complete_streaming_response
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_async_custom_handler_stream()
+test_async_custom_handler_stream()
 
 def test_async_custom_handler():
     try:
