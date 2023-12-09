@@ -516,6 +516,7 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
                     port=cache_port,
                     password=cache_password
                 )
+                print(f"{blue_color_code}Set Cache on LiteLLM Proxy: {litellm.cache.cache}{reset_color_code} {cache_password}")
             elif key == "callbacks":
                 litellm.callbacks = [get_instance_fn(value=value, config_file_path=config_file_path)]
                 print_verbose(f"{blue_color_code} Initialized Callbacks - {litellm.callbacks} {reset_color_code}")
