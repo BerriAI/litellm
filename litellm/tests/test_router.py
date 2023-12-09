@@ -226,12 +226,9 @@ def test_call_one_endpoint():
 			)
 
 			print("\n response", response)
-		tasks = []
-		tasks.append(call_azure_completion())
-		tasks.append(call_bedrock_claude())
-		tasks.append(call_azure_embedding())
-
-		asyncio.gather(**tasks)
+		asyncio.run(call_azure_completion())
+		asyncio.run(call_bedrock_claude())
+		asyncio.run(call_azure_embedding()
 		
 		os.environ["AZURE_API_BASE"] = old_api_base
 		os.environ["AZURE_API_KEY"] = old_api_key
