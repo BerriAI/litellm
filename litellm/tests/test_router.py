@@ -372,6 +372,7 @@ def test_function_calling():
 	print(response)
 
 def test_acompletion_on_router(): 
+	# tests acompletion + caching on router 
 	try:
 		litellm.set_verbose = False
 		model_list = [
@@ -409,9 +410,10 @@ def test_acompletion_on_router():
 				timeout=30,
 				routing_strategy="simple-shuffle")
 		async def get_response(): 
-			response1 = await router.acompletion(model="gpt-3.5-turbo", messages=messages)
+			print("Testing acompletion + caching on router")
+			response1 = await router.acompletion(model="gpt-3.5-turbo", messages=messages, temperature=1)
 			print(f"response1: {response1}")
-			response2 = await router.acompletion(model="gpt-3.5-turbo", messages=messages)
+			response2 = await router.acompletion(model="gpt-3.5-turbo", messages=messages, temperature=1)
 			print(f"response2: {response2}")
 			assert response1.id == response2.id
 			assert len(response1.choices[0].message.content) > 0
@@ -675,7 +677,7 @@ def test_openai_completion_on_router():
 	except Exception as e:
 		traceback.print_exc()
 		pytest.fail(f"Error occurred: {e}")
-test_openai_completion_on_router()
+# test_openai_completion_on_router()
 
 
 def test_reading_keys_os_environ():
