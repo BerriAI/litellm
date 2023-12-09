@@ -523,6 +523,10 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
                     # these are litellm callbacks - "langfuse", "sentry", "wandb"
                     else:
                         litellm.success_callback.append(callback)
+                        if callback == "traceloop":
+                            from traceloop.sdk import Traceloop
+                            print_verbose(f"{blue_color_code} Initializing Traceloop SDK - \nRunning:`Traceloop.init(app_name='Litellm-Server', disable_batch=True)`")
+                            Traceloop.init(app_name="Litellm-Server", disable_batch=True)
                 print_verbose(f"{blue_color_code} Initialized Success Callbacks - {litellm.success_callback} {reset_color_code}")
             elif key == "failure_callback":
                 litellm.failure_callback = []
