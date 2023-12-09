@@ -229,7 +229,7 @@ def _get_bearer_token(api_key: str):
 
 def _get_pydantic_json_dict(pydantic_obj: BaseModel) -> dict: 
     try:
-        return pydantic_obj.model_dump() # noqa
+        return pydantic_obj.model_dump() # type: ignore
     except:
         # if using pydantic v1
         return pydantic_obj.dict()
