@@ -446,6 +446,7 @@ def completion(
 
         # For logging - save the values of the litellm-specific params passed in
         litellm_params = get_litellm_params(
+            acompletion=acompletion,
             return_async=return_async,
             api_key=api_key,
             force_timeout=force_timeout,
