@@ -227,6 +227,13 @@ def _get_bearer_token(api_key: str):
     api_key = api_key.replace("Bearer ", "") # extract the token
     return api_key
 
+def _get_pydantic_json_dict(pydantic_obj: BaseModel) -> dict: 
+    try:
+        return pydantic_obj.model_dump() # noqa
+    except:
+        # if using pydantic v1
+        return pydantic_obj.dict()
+
 async def user_api_key_auth(request: Request, api_key: str = fastapi.Security(api_key_header)) -> UserAPIKeyAuth:
     global master_key, prisma_client, llm_model_list, user_custom_auth
     try: 
@@ -275,7 +282,7 @@ async def user_api_key_auth(request: Request, api_key: str = fastapi.Security(ap
                     print("\n new llm router model list", llm_model_list)
                 if len(valid_token.models) == 0: # assume an empty model list means all models are allowed to be called
                     api_key = valid_token.token
-                    valid_token_dict = valid_token.model_dump() 
+                    valid_token_dict = _get_pydantic_json_dict(valid_token)
                     valid_token_dict.pop("token", None)
                     return UserAPIKeyAuth(api_key=api_key, **valid_token_dict)
                 else: 
@@ -286,7 +293,7 @@ async def user_api_key_auth(request: Request, api_key: str = fastapi.Security(ap
                     if model and model not in valid_token.models:
                         raise Exception(f"Token not allowed to access model")
                 api_key = valid_token.token
-                valid_token_dict = valid_token.model_dump() 
+                valid_token_dict = _get_pydantic_json_dict(valid_token)
                 valid_token.pop("token", None)
                 return UserAPIKeyAuth(api_key=api_key, **valid_token)
             else: 
