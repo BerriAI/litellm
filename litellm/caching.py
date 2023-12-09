@@ -208,6 +208,8 @@ class Cache:
             litellm.input_callback.append("cache")
         if "cache" not in litellm.success_callback:
             litellm.success_callback.append("cache")
+        if "cache" not in litellm._async_success_callback:
+            litellm._async_success_callback.append("cache")
 
     def get_cache_key(self, *args, **kwargs):
         """
