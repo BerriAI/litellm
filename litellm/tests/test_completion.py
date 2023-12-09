@@ -26,7 +26,7 @@ def test_completion_custom_provider_model_name():
     try:
         litellm.cache = None
         response = completion(
-            model="together_ai/togethercomputer/llama-2-70b-chat",
+            model="together_ai/mistralai/Mistral-7B-Instruct-v0.1",
             messages=messages,
             logger_fn=logger_fn,
         )
@@ -287,7 +287,7 @@ def hf_test_completion_tgi():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# hf_test_completion_tgi()
+hf_test_completion_tgi()
 
 # ################### Hugging Face Conversational models ########################
 # def hf_test_completion_conv():
@@ -1023,7 +1023,7 @@ def test_customprompt_together_ai():
         litellm.set_verbose = False
         litellm.num_retries = 0
         response = completion(
-            model="together_ai/togethercomputer/llama-2-70b-chat",
+            model="together_ai/mistralai/Mistral-7B-Instruct-v0.1",
             messages=messages, 
             roles={"system":{"pre_message":"<|im_start|>system\n", "post_message":"<|im_end|>"}, "assistant":{"pre_message":"<|im_start|>assistant\n","post_message":"<|im_end|>"}, "user":{"pre_message":"<|im_start|>user\n","post_message":"<|im_end|>"}}
         )
@@ -1599,7 +1599,7 @@ def test_completion_together_ai_stream():
     messages = [{ "content": user_message,"role": "user"}]
     try:
         response = completion(
-            model="together_ai/togethercomputer/llama-2-70b-chat", 
+            model="together_ai/mistralai/Mistral-7B-Instruct-v0.1", 
             messages=messages, stream=True, 
             max_tokens=5
         )
