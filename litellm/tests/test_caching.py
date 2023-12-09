@@ -195,6 +195,8 @@ def test_redis_cache_completion():
 def test_redis_cache_completion_stream():
     try:
         litellm.success_callback = []
+        litellm._async_success_callback = []
+        litellm.callbacks = []
         litellm.set_verbose = True
         random_number = random.randint(1, 100000) # add a random number to ensure it's always adding / reading from cache
         messages = [{"role": "user", "content": f"write a one sentence poem about: {random_number}"}]
