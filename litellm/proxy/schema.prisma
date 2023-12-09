@@ -16,4 +16,5 @@ model LiteLLM_VerificationToken {
     aliases    Json  @default("{}")
     config     Json  @default("{}")
     user_id    String?
+    max_parallel_requests Int?
 }
