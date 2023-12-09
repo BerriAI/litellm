@@ -177,7 +177,7 @@ def test_azure_completion_stream():
         # checks if the model response available in the async + stream callbacks is equal to the received response
         customHandler2 = MyCustomHandler()
         litellm.callbacks = [customHandler2]
-        litellm.set_verbose = False
+        litellm.set_verbose = True
         messages = [
             {"role": "system", "content": "You are a helpful assistant."},
             {
@@ -196,6 +196,7 @@ def test_azure_completion_stream():
             complete_streaming_response += chunk["choices"][0]["delta"]["content"] or ""
             print(complete_streaming_response)
         
+        time.sleep(0.5) # wait 1/2 second before checking callbacks
         response_in_success_handler = customHandler2.sync_stream_collected_response
         response_in_success_handler = response_in_success_handler["choices"][0]["message"]["content"]
         print("\n\n")
