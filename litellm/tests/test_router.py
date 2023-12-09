@@ -374,7 +374,7 @@ def test_function_calling():
 def test_acompletion_on_router(): 
 	# tests acompletion + caching on router 
 	try:
-		litellm.set_verbose = False
+		litellm.set_verbose = True
 		model_list = [
 			{
 				"model_name": "gpt-3.5-turbo",
@@ -428,7 +428,7 @@ def test_acompletion_on_router():
 		traceback.print_exc()
 		pytest.fail(f"Error occurred: {e}")
 
-# test_acompletion_on_router() 
+test_acompletion_on_router() 
 
 def test_function_calling_on_router(): 
 	try: 
