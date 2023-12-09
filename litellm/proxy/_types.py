@@ -1,7 +1,7 @@
 from pydantic import BaseModel, Extra, Field
 from typing import Optional, List, Union, Dict, Literal
 from datetime import datetime
-import uuid
+import uuid, json
 ######### Request Class Definition ######
 class ProxyChatCompletionRequest(BaseModel):
     model: str
@@ -83,6 +83,9 @@ class GenerateKeyRequest(BaseModel):
     spend: Optional[float] = 0
     user_id: Optional[str] = None
     max_parallel_requests: Optional[int] = None
+
+    def json(self, **kwargs) -> str:
+        return json.dumps(self.dict(), **kwargs)
 
 class GenerateKeyResponse(BaseModel):
     key: str
