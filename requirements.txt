@@ -3,6 +3,7 @@ litellm
 openai
 fastapi
 tomli
+pydantic>=2.5
 appdirs
 tomli_w
 backoff
