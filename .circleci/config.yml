@@ -39,6 +39,7 @@ jobs:
             pip install openai
             pip install prisma
             pip install langfuse
+            pip install "pydantic>=2.5"
       - save_cache:
           paths:
             - ./venv
