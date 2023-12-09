@@ -1,4 +1,4 @@
-import sys, os
+import sys, os, time
 import traceback
 from dotenv import load_dotenv
 
@@ -19,7 +19,7 @@ logging.basicConfig(
     level=logging.DEBUG,  # Set the desired logging level
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
-
+from concurrent.futures import ThreadPoolExecutor
 # test /chat/completion request to the proxy
 from fastapi.testclient import TestClient
 from fastapi import FastAPI
@@ -62,6 +62,41 @@ def test_add_new_key(client):
         assert result["key"].startswith("sk-")
         print(f"Received response: {result}")
     except Exception as e:
-        pytest.fail("LiteLLM Proxy test failed. Exception", e)
+        pytest.fail(f"LiteLLM Proxy test failed. Exception: {str(e)}")
 
 # # Run the test - only runs via pytest
+
+
+def test_add_new_key_max_parallel_limit(client):
+    try:
+        # Your test data
+        test_data = {"duration": "20m", "max_parallel_requests": 1}
+        # Your bearer token
+        token = os.getenv("PROXY_MASTER_KEY")
+
+        headers = {
+            "Authorization": f"Bearer {token}"
+        }
+        response = client.post("/key/generate", json=test_data, headers=headers)
+        print(f"response: {response.text}")
+        assert response.status_code == 200
+        result = response.json()
+        def _post_data():
+            json_data = {'model': 'azure-model', "messages": [{"role": "user", "content": f"this is a test request, write a short poem {time.time()}"}]}
+            response = client.post("/chat/completions", json=json_data, headers={"Authorization": f"Bearer {result['key']}"})
+            return response
+        def _run_in_parallel():
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                future1 = executor.submit(_post_data)
+                future2 = executor.submit(_post_data)
+
+                # Obtain the results from the futures
+                response1 = future1.result()
+                response2 = future2.result()
+                if response1.status_code == 429 or response2.status_code == 429:
+                    pass
+                else: 
+                    raise Exception()
+        _run_in_parallel()
+    except Exception as e:
+        pytest.fail(f"LiteLLM Proxy test failed. Exception: {str(e)}")
