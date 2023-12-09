@@ -194,6 +194,7 @@ def test_redis_cache_completion():
 
 def test_redis_cache_completion_stream():
     try:
+        litellm.success_callback = []
         litellm.set_verbose = True
         random_number = random.randint(1, 100000) # add a random number to ensure it's always adding / reading from cache
         messages = [{"role": "user", "content": f"write a one sentence poem about: {random_number}"}]
@@ -214,9 +215,11 @@ def test_redis_cache_completion_stream():
         print("\nresponse 1", response_1_content)
         print("\nresponse 2", response_2_content)
         assert response_1_content == response_2_content, f"Response 1 != Response 2. Same params, Response 1{response_1_content} != Response 2{response_2_content}"
+        litellm.success_callback = []
         litellm.cache = None
     except Exception as e:
         print(e)
+        litellm.success_callback = []
         raise e
     """
 
