@@ -996,6 +996,7 @@ class Logging:
                         else:
                             if self.stream and complete_streaming_response:
                                 self.model_call_details["complete_response"] = self.model_call_details.pop("complete_streaming_response", complete_streaming_response)
+                                result = self.model_call_details["complete_response"]
                             callback.log_success_event(
                                 kwargs=self.model_call_details,
                                 response_obj=result,
