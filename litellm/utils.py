@@ -805,8 +805,6 @@ class Logging:
             if isinstance(result, OpenAIObject):
                 result = result.model_dump()
 
-            print_verbose(f"success callbacks: {litellm.success_callback}")
-
             if litellm.max_budget and self.stream:
                 time_diff = (end_time - start_time).total_seconds()
                 float_diff = float(time_diff)
@@ -831,9 +829,12 @@ class Logging:
             else:
                 # this is a completion() call
                 if self.stream: 
+                    print_verbose("success callback - assembling complete streaming response")
                     if result.choices[0].finish_reason is not None: # if it's the last chunk
+                        print_verbose(f"success callback - Got the very Last chunk. Assembling {self.streaming_chunks}")
                         self.streaming_chunks.append(result)
                         complete_streaming_response = litellm.stream_chunk_builder(self.streaming_chunks, messages=self.model_call_details.get("messages", None))
+                        print_verbose(f"success callback - complete streamign response{complete_streaming_response}")
                     else:
                         self.streaming_chunks.append(result)
             if complete_streaming_response: 
@@ -968,11 +969,14 @@ class Logging:
                         )
                     if callback == "cache":
                         # this only logs streaming once, complete_streaming_response exists i.e when stream ends
+                        print_verbose("success_callback: reaches cache for logging!")
                         kwargs = self.model_call_details
                         if self.stream:
                             if "complete_streaming_response" not in kwargs:
+                                print_verbose(f"success_callback: reaches cache for logging, there is no complete_streaming_response. Kwargs={kwargs}\n\n")
                                 return
                             else:
+                                print_verbose("success_callback: reaches cache for logging, there is a complete_streaming_response. Adding to cache")
                                 result = kwargs["complete_streaming_response"]
                                 # only add to cache once we have a complete streaming response
                                 litellm.cache.add_cache(result, **kwargs)
@@ -989,6 +993,7 @@ class Logging:
                             print_verbose=print_verbose,
                         )
                     if isinstance(callback, CustomLogger): # custom logger class 
+                        print_verbose(f"success callbacks: Running Custom Logger Class")      
                         if self.stream and complete_streaming_response is None:
                             callback.log_stream_event(
                                 kwargs=self.model_call_details,
@@ -998,7 +1003,7 @@ class Logging:
                                 )
                         else:
                             if self.stream and complete_streaming_response:
-                                self.model_call_details["complete_response"] = self.model_call_details.pop("complete_streaming_response", complete_streaming_response)
+                                self.model_call_details["complete_response"] = self.model_call_details.get("complete_streaming_response", {})
                                 result = self.model_call_details["complete_response"]
                             callback.log_success_event(
                                 kwargs=self.model_call_details,
@@ -1007,6 +1012,7 @@ class Logging:
                                 end_time=end_time,
                             )
                     if callable(callback): # custom logger functions
+                        print_verbose(f"success callbacks: Running Custom Callback Function")
                         customLogger.log_event(
                             kwargs=self.model_call_details,
                             response_obj=result,
@@ -1459,7 +1465,6 @@ def client(original_function):
 
             # [OPTIONAL] CHECK CACHE
             # remove this after deprecating litellm.caching
-            print_verbose(f"litellm.caching: {litellm.caching}; litellm.caching_with_models: {litellm.caching_with_models}; litellm.cache: {litellm.cache}")
             if (litellm.caching or litellm.caching_with_models) and litellm.cache is None:
                 litellm.cache = Cache() 
 
