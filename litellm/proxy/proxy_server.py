@@ -496,7 +496,10 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
             if key == "cache":
                 print(f"{blue_color_code}\nSetting Cache on Proxy")
                 from litellm.caching import Cache
-                cache_type = value["type"]
+                if isinstance(value, dict):
+                    cache_type = value.get("type", "redis")
+                else:
+                    cache_type = "redis" # default to using redis on cache
                 cache_responses = True
                 cache_host = litellm.get_secret("REDIS_HOST", None)
                 cache_port = litellm.get_secret("REDIS_PORT", None)
