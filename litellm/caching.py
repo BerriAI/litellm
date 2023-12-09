@@ -91,6 +91,7 @@ class RedisCache(BaseCache):
 
     def set_cache(self, key, value, **kwargs):
         ttl = kwargs.get("ttl", None)
+        print_verbose(f"Set Redis Cache: key: {key}\nValue {value}")
         try:
             self.redis_client.set(name=key, value=str(value), ex=ttl)
         except Exception as e:
@@ -99,8 +100,9 @@ class RedisCache(BaseCache):
 
     def get_cache(self, key, **kwargs):
         try:
-            # TODO convert this to a ModelResponse object
+            print_verbose(f"Get Redis Cache: key: {key}")
             cached_response = self.redis_client.get(key)
+            print_verbose(f"Got Redis Cache: key: {key}, cached_response {cached_response}")
             if cached_response != None:
                 # cached_response is in `b{} convert it to ModelResponse
                 cached_response = cached_response.decode("utf-8")  # Convert bytes to string
