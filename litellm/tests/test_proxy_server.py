@@ -122,7 +122,7 @@ def test_embedding(client):
 # Run the test
 # test_embedding()
 
-@pytest.mark.skip(reason="hitting yaml load issues on circle-ci")
+# @pytest.mark.skip(reason="hitting yaml load issues on circle-ci")
 def test_add_new_model(client): 
     global headers
     try: 
@@ -142,8 +142,8 @@ def test_add_new_model(client):
         print(f"response: {result}")
         model_info = None
         for m in result["data"]:
-            if m["id"]["model_name"] == "test_openai_models":
-                model_info = m["id"]["model_info"]
+            if m["model_name"] == "test_openai_models":
+                model_info = m["model_info"]
         assert model_info["description"] == "this is a test openai model"
     except Exception as e: 
         pytest.fail(f"LiteLLM Proxy test failed. Exception {str(e)}")
