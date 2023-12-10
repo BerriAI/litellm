@@ -6,7 +6,7 @@ sys.path.insert(0, os.path.abspath('../..'))
 from litellm import completion, embedding
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
-
+ 
 async_success = False
 complete_streaming_response_in_callback = ""
 class MyCustomHandler(CustomLogger):
