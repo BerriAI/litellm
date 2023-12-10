@@ -9,33 +9,105 @@ from litellm import completion
 import litellm
 litellm.num_retries = 3
 litellm.success_callback = ["langfuse"]
-# litellm.set_verbose = True
+os.environ["LANGFUSE_DEBUG"] = "True"
 import time
 import pytest
 
+def search_logs(log_file_path):
+    """
+    Searches the given log file for logs containing the "/api/public" string. 
+
+    Parameters:
+    - log_file_path (str): The path to the log file to be searched.
+
+    Returns:
+    - None
+
+    Raises:
+    - Exception: If there are any bad logs found in the log file.
+    """
+    import re
+    print("\n searching logs")
+    bad_logs = []
+    good_logs = []
+    all_logs = []
+    try:
+        with open(log_file_path, 'r') as log_file:
+            lines = log_file.readlines()
+            for line in lines:
+                all_logs.append(line.strip())
+                if "/api/public" in line:
+                    print("Found log with /api/public:")
+                    print(line.strip())
+                    print("\n\n")
+                    match = re.search(r'receive_response_headers.complete return_value=\(b\'HTTP/1.1\', (\d+),', line)
+                    if match:
+                        status_code = int(match.group(1))
+                        if status_code != 200 and status_code != 201:
+                            print("got a BAD log")
+                            bad_logs.append(line.strip())
+                        else:
+
+                            good_logs.append(line.strip())
+        print("\nBad Logs")
+        print(bad_logs)
+        if len(bad_logs)>0:
+            raise Exception(f"bad logs, Bad logs = {bad_logs}")
+        
+        print("\nGood Logs")
+        print(good_logs)
+        if len(good_logs) <= 0:
+            raise Exception(f"There were no Good Logs from Langfuse. No logs with /api/public status 200. \nAll logs:{all_logs}")
+
+    except Exception as e:
+        raise e
+
+def pre_langfuse_setup():
+    """
+    Set up the logging for the 'pre_langfuse_setup' function.
+    """
+    # sends logs to langfuse.log
+    import logging
+    # Configure the logging to write to a file
+    logging.basicConfig(filename="langfuse.log", level=logging.DEBUG)
+    logger = logging.getLogger()
+    
+    # Add a FileHandler to the logger
+    file_handler = logging.FileHandler("langfuse.log", mode='w')
+    file_handler.setLevel(logging.DEBUG)
+    logger.addHandler(file_handler)
+    return
+
+
 def test_langfuse_logging_async(): 
     try: 
+        pre_langfuse_setup()
         litellm.set_verbose = True
         async def _test_langfuse():
             return await litellm.acompletion(
                 model="gpt-3.5-turbo",
                 messages=[{"role": "user", "content":"This is a test"}],
-                max_tokens=1000,
+                max_tokens=100,
                 temperature=0.7,
                 timeout=5,
             )
         response = asyncio.run(_test_langfuse())
         print(f"response: {response}")
+
+        time.sleep(2)
+        # check langfuse.log to see if there was a failed response
+        search_logs("langfuse.log")
     except litellm.Timeout as e: 
         pass
     except Exception as e: 
         pytest.fail(f"An exception occurred - {e}")
 
-# test_langfuse_logging_async()
+test_langfuse_logging_async()
 
 def test_langfuse_logging():
     try:
-        # litellm.set_verbose = True
+        pre_langfuse_setup()
+        litellm.set_verbose = True
         response = completion(model="claude-instant-1.2",
                               messages=[{
                                   "role": "user",
@@ -43,19 +115,23 @@ def test_langfuse_logging():
                               }],
                               max_tokens=10,
                               temperature=0.2,
-                              metadata={"langfuse/key": "foo"}
                               )
         print(response)
+        time.sleep(2)
+        # check langfuse.log to see if there was a failed response
+        search_logs("langfuse.log")
+
     except litellm.Timeout as e: 
         pass
     except Exception as e:
-        print(e)
+        pytest.fail(f"An exception occurred - {e}")
 
 test_langfuse_logging()
 
 
 def test_langfuse_logging_stream():
     try:
+        pre_langfuse_setup()
         litellm.set_verbose=True
         response = completion(model="anyscale/meta-llama/Llama-2-7b-chat-hf",
                               messages=[{
@@ -99,7 +175,7 @@ def test_langfuse_logging_custom_generation_name():
         pytest.fail(f"An exception occurred - {e}")
         print(e)
 
-test_langfuse_logging_custom_generation_name()
+# test_langfuse_logging_custom_generation_name()
 
 def test_langfuse_logging_function_calling():
     function1 = [
