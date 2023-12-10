@@ -113,7 +113,7 @@ def run_server(host, port, api_base, api_version, model, alias, add_key, headers
         except:
             raise Exception("LiteLLM: No logs saved!")
         return
-    if model and "ollama" in model: 
+    if model and "ollama" in model and api_base is None: 
         run_ollama_serve()
     if test_async is True: 
         import requests, concurrent, time
