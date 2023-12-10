@@ -1,4 +1,5 @@
-# Logging - Custom Callbacks, OpenTelemetry, Langfuse
+# Logging - Custom Callbacks, OpenTelemetry, Langfuse, Sentry
+
 Log Proxy Input, Output, Exceptions using Custom Callbacks, Langfuse, OpenTelemetry
 
 ## Custom Callback Class [Async]
@@ -486,3 +487,41 @@ litellm --test
 Expected output on Langfuse
 
 <Image img={require('../../img/langfuse_small.png')} />
+
+## Logging Proxy Input/Output - Sentry
+
+If api calls fail (llm/database) you can log those to Sentry: 
+
+**Step 1** Install Sentry
+```shell
+pip install --upgrade sentry-sdk
+```
+
+**Step 2**: Save your Sentry_DSN and add `litellm_settings`: `failure_callback`
+```shell
+export SENTRY_DSN="your-sentry-dsn"
+```
+
+```yaml 
+model_list:
+ - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+litellm_settings:
+  # other settings
+  failure_callback: ["sentry"]
+general_settings: 
+  database_url: "my-bad-url" # set a fake url to trigger a sentry exception
+```
+
+**Step 3**: Start the proxy, make a test request
+
+Start proxy
+```shell
+litellm --config config.yaml --debug
+```
+
+Test Request
+```
+litellm --test
+```
