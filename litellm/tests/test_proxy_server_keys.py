@@ -25,7 +25,7 @@ from fastapi.testclient import TestClient
 from fastapi import FastAPI
 from litellm.proxy.proxy_server import router, save_worker_config, startup_event  # Replace with the actual module where your FastAPI router is defined
 filepath = os.path.dirname(os.path.abspath(__file__))
-config_fp = f"{filepath}/test_configs/test_config_custom_auth.yaml"
+config_fp = f"{filepath}/test_configs/test_config.yaml"
 save_worker_config(config=config_fp, model=None, alias=None, api_base=None, api_version=None, debug=False, temperature=None, max_tokens=None, request_timeout=600, max_budget=None, telemetry=False, drop_params=True, add_function_to_prompt=False, headers=None, save=False, use_queue=False)
 app = FastAPI()
 app.include_router(router)  # Include your router in the test app
@@ -83,6 +83,40 @@ def test_add_new_key_max_parallel_limit(client):
         result = response.json()
         def _post_data():
             json_data = {'model': 'azure-model', "messages": [{"role": "user", "content": f"this is a test request, write a short poem {time.time()}"}]}
+            response = client.post("/chat/completions", json=json_data, headers={"Authorization": f"Bearer {result['key']}"})
+            return response
+        def _run_in_parallel():
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                future1 = executor.submit(_post_data)
+                future2 = executor.submit(_post_data)
+
+                # Obtain the results from the futures
+                response1 = future1.result()
+                response2 = future2.result()
+                if response1.status_code == 429 or response2.status_code == 429:
+                    pass
+                else: 
+                    raise Exception()
+        _run_in_parallel()
+    except Exception as e:
+        pytest.fail(f"LiteLLM Proxy test failed. Exception: {str(e)}")
+
+def test_add_new_key_max_parallel_limit_streaming(client):
+    try:
+        # Your test data
+        test_data = {"duration": "20m", "max_parallel_requests": 1}
+        # Your bearer token
+        token = os.getenv('PROXY_MASTER_KEY')
+
+        headers = {
+            "Authorization": f"Bearer {token}"
+        }
+        response = client.post("/key/generate", json=test_data, headers=headers)
+        print(f"response: {response.text}")
+        assert response.status_code == 200
+        result = response.json()
+        def _post_data():
+            json_data = {'model': 'azure-model', "messages": [{"role": "user", "content": f"this is a test request, write a short poem {time.time()}"}], "stream": True}
             response = client.post("/chat/completions", json=json_data, headers={"Authorization": f"Bearer {result['key']}"})
             return response
         def _run_in_parallel():
