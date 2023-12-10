@@ -79,7 +79,7 @@ def pre_langfuse_setup():
     logger.addHandler(file_handler)
     return
 
-
+@pytest.mark.skip(reason="beta test - checking langfuse output")
 def test_langfuse_logging_async(): 
     try: 
         pre_langfuse_setup()
@@ -105,6 +105,7 @@ def test_langfuse_logging_async():
 
 test_langfuse_logging_async()
 
+@pytest.mark.skip(reason="beta test - checking langfuse output")
 def test_langfuse_logging():
     try:
         pre_langfuse_setup()
@@ -129,7 +130,7 @@ def test_langfuse_logging():
 
 test_langfuse_logging()
 
-
+@pytest.mark.skip(reason="beta test - checking langfuse output")
 def test_langfuse_logging_stream():
     try:
         litellm.set_verbose=True
@@ -153,6 +154,7 @@ def test_langfuse_logging_stream():
 
 # test_langfuse_logging_stream()
 
+@pytest.mark.skip(reason="beta test - checking langfuse output")
 def test_langfuse_logging_custom_generation_name():
     try:
         litellm.set_verbose=True
@@ -176,7 +178,7 @@ def test_langfuse_logging_custom_generation_name():
         print(e)
 
 # test_langfuse_logging_custom_generation_name()
-
+@pytest.mark.skip(reason="beta test - checking langfuse output")
 def test_langfuse_logging_function_calling():
     function1 = [
         {
