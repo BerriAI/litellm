@@ -131,7 +131,6 @@ test_langfuse_logging()
 
 def test_langfuse_logging_stream():
     try:
-        pre_langfuse_setup()
         litellm.set_verbose=True
         response = completion(model="anyscale/meta-llama/Llama-2-7b-chat-hf",
                               messages=[{
