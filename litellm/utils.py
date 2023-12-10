@@ -947,6 +947,7 @@ class Logging:
                             print_verbose=print_verbose,
                         )
                     if callback == "langfuse":
+                        global langFuseLogger
                         print_verbose("reaches langfuse for logging!")
                         kwargs = {}
                         for k, v in self.model_call_details.items(): 
