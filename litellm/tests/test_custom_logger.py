@@ -103,7 +103,7 @@ def test_async_chat_openai_stream():
     except Exception as e:
         print(e)
         pytest.fail(f"An error occurred - {str(e)}")
-# test_async_chat_openai_stream()
+test_async_chat_openai_stream()
 
 def test_completion_azure_stream_moderation_failure():
     try:
@@ -325,4 +325,4 @@ def test_redis_cache_completion_stream():
 
     1 & 2 should be exactly the same 
     """
-test_redis_cache_completion_stream()
+# test_redis_cache_completion_stream()

@@ -348,7 +348,7 @@ def test_get_cache_key():
         traceback.print_exc()
         pytest.fail(f"Error occurred:", e)
 
-test_get_cache_key()
+# test_get_cache_key()
 
 # test_custom_redis_cache_params()
 
