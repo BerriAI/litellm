@@ -1207,10 +1207,12 @@ async def add_new_model(model_params: ModelParams):
         
         print_verbose(f"Loaded config: {config}")
         # Add the new model to the config
+        model_info = model_params.model_info.json()
+        model_info = {k: v for k, v in model_info.items() if v is not None}
         config['model_list'].append({
             'model_name': model_params.model_name,
             'litellm_params': model_params.litellm_params,
-            'model_info': model_params.model_info
+            'model_info': model_info
         })
 
         # Save the updated config
@@ -1227,7 +1229,7 @@ async def add_new_model(model_params: ModelParams):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
 
-#### [BETA] - This is a beta endpoint, format might change based on user feedback https://github.com/BerriAI/litellm/issues/933. If you need a stable endpoint use v1/model/info
+#### [BETA] - This is a beta endpoint, format might change based on user feedback https://github.com/BerriAI/litellm/issues/933. If you need a stable endpoint use /model/info
 @router.get("/model/info", description="Provides more info about each model in /models, including config.yaml descriptions (except api key and api base)", tags=["model management"], dependencies=[Depends(user_api_key_auth)])
 async def model_info_v1(request: Request):
     global llm_model_list, general_settings, user_config_file_path
@@ -1256,7 +1258,7 @@ async def model_info_v1(request: Request):
 
 
 #### [BETA] - This is a beta endpoint, format might change based on user feedback. - https://github.com/BerriAI/litellm/issues/933
-@router.get("v1/model/info", description="Provides more info about each model in /models, including config.yaml descriptions (except api key and api base)", tags=["model management"], dependencies=[Depends(user_api_key_auth)])
+@router.get("/v1/model/info", description="Provides more info about each model in /models, including config.yaml descriptions (except api key and api base)", tags=["model management"], dependencies=[Depends(user_api_key_auth)])
 async def model_info(request: Request):
     global llm_model_list, general_settings, user_config_file_path
     # Load existing config
