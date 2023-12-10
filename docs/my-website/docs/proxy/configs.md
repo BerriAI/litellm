@@ -8,7 +8,8 @@ Set model list, `api_base`, `api_key`, `temperature` & proxy server settings (`m
 | Param Name           | Description                                                   |
 |----------------------|---------------------------------------------------------------|
 | `model_list`         | List of supported models on the server, with model-specific configs |
-| `litellm_settings`   | litellm Module settings, example `litellm.drop_params=True`, `litellm.set_verbose=True`, `litellm.api_base`, `litellm.cache` |
+| `router_settings`   | litellm Router settings, example `routing_strategy="least-busy"` [**see all**](https://github.com/BerriAI/litellm/blob/6ef0e8485e0e720c0efa6f3075ce8119f2f62eea/litellm/router.py#L64)|
+| `litellm_settings`   | litellm Module settings, example `litellm.drop_params=True`, `litellm.set_verbose=True`, `litellm.api_base`, `litellm.cache` [**see all**](https://github.com/BerriAI/litellm/blob/main/litellm/__init__.py)|
 | `general_settings`   | Server settings, example setting `master_key: sk-my_special_key` |
 | `environment_variables`   | Environment Variables example, `REDIS_HOST`, `REDIS_PORT` |
 
@@ -304,6 +305,29 @@ model_list:
 
 ```shell
 $ litellm --config /path/to/config.yaml
+```
+
+## Router Settings 
+
+Use this to configure things like routing strategy. 
+
+```yaml
+router_settings:
+  routing_strategy: "least-busy"
+
+model_list: # will route requests to the least busy ollama model
+  - model_name: ollama-models
+    litellm_params: 
+      model: "ollama/mistral"
+      api_base: "http://127.0.0.1:8001"
+  - model_name: ollama-models
+    litellm_params: 
+      model: "ollama/codellama"
+      api_base: "http://127.0.0.1:8002"
+  - model_name: ollama-models
+    litellm_params: 
+      model: "ollama/llama2"
+      api_base: "http://127.0.0.1:8003"
 ```
 
 ## Max Parallel Requests
