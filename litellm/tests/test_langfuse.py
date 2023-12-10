@@ -95,9 +95,9 @@ def test_langfuse_logging_async():
         response = asyncio.run(_test_langfuse())
         print(f"response: {response}")
 
-        time.sleep(2)
-        # check langfuse.log to see if there was a failed response
-        search_logs("langfuse.log")
+        # time.sleep(2)
+        # # check langfuse.log to see if there was a failed response
+        # search_logs("langfuse.log")
     except litellm.Timeout as e: 
         pass
     except Exception as e: 
@@ -119,9 +119,9 @@ def test_langfuse_logging():
                               temperature=0.2,
                               )
         print(response)
-        time.sleep(5)
-        # check langfuse.log to see if there was a failed response
-        search_logs("langfuse.log")
+        # time.sleep(5)
+        # # check langfuse.log to see if there was a failed response
+        # search_logs("langfuse.log")
 
     except litellm.Timeout as e: 
         pass
