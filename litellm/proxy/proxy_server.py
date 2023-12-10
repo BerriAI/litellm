@@ -293,7 +293,7 @@ async def user_api_key_auth(request: Request, api_key: str = fastapi.Security(ap
                         raise Exception(f"Token not allowed to access model")
                 api_key = valid_token.token
                 valid_token_dict = _get_pydantic_json_dict(valid_token)
-                valid_token.pop("token", None)
+                valid_token_dict.pop("token", None)
                 return UserAPIKeyAuth(api_key=api_key, **valid_token)
             else: 
                 raise Exception(f"Invalid token")
