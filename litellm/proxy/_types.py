@@ -89,7 +89,7 @@ class GenerateKeyRequest(BaseModel):
             return self.model_dump() # noqa
         except:
             # if using pydantic v1
-            return json.dumps(self.dict(), **kwargs)
+            return self.dict()
 
 class GenerateKeyResponse(BaseModel):
     key: str
