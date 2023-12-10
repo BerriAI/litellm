@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Extra, Field
+from pydantic import BaseModel, Extra, Field, root_validator
 from typing import Optional, List, Union, Dict, Literal
 from datetime import datetime
 import uuid, json
@@ -65,15 +65,36 @@ class ModelInfo(BaseModel):
     class Config:
         extra = Extra.allow  # Allow extra fields
         protected_namespaces = ()
+    
+    # @root_validator(pre=True)
+    # def set_model_info(cls, values):
+    #     if values.get("id") is None:
+    #         values.update({"id": str(uuid.uuid4())})
+    #     if values.get("mode") is None: 
+    #         values.update({"mode": str(uuid.uuid4())})
+    #     return values
+
 
 
 class ModelParams(BaseModel):
     model_name: str
     litellm_params: dict
     model_info: Optional[ModelInfo]=None
- 
+    
+    # def __init__(self, model_name: str, litellm_params: dict, model_info: Optional[ModelInfo] = None):
+    #     self.model_name = model_name
+    #     self.litellm_params = litellm_params
+    #     self.model_info = model_info if model_info else ModelInfo()
+    #     super.__init__(model_name=self.model_name, litellm_params=self.litellm_params, model_info=self.model_info)
+
     class Config:
         protected_namespaces = ()
+    
+    # @root_validator(pre=True)
+    # def set_model_info(cls, values):
+    #     if values.get("model_info") is None:
+    #         values.update({"model_info": ModelInfo()})
+    #     return values
 
 class GenerateKeyRequest(BaseModel):
     duration: Optional[str] = "1h"

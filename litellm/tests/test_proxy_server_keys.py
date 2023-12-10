@@ -44,7 +44,7 @@ def test_add_new_key(client):
     try:
         # Your test data
         test_data = {
-            "models": ["gpt-3.5-turbo", "gpt-4", "claude-2"], 
+            "models": ["gpt-3.5-turbo", "gpt-4", "claude-2", "azure-model"], 
             "aliases": {"mistral-7b": "gpt-3.5-turbo"}, 
             "duration": "20m"
         }
@@ -60,6 +60,11 @@ def test_add_new_key(client):
         assert response.status_code == 200
         result = response.json()
         assert result["key"].startswith("sk-")
+        def _post_data():
+            json_data = {'model': 'azure-model', "messages": [{"role": "user", "content": f"this is a test request, write a short poem {time.time()}"}]}
+            response = client.post("/chat/completions", json=json_data, headers={"Authorization": f"Bearer {result['key']}"})
+            return response
+        _post_data()
         print(f"Received response: {result}")
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception: {str(e)}")
