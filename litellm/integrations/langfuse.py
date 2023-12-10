@@ -70,6 +70,6 @@ class LangFuseLogger:
                 f"Langfuse Layer Logging - final response object: {response_obj}"
             )
         except:
-            # traceback.print_exc()
+            traceback.print_exc()
             print_verbose(f"Langfuse Layer Error - {traceback.format_exc()}")
             pass
