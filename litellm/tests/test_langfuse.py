@@ -34,6 +34,7 @@ def search_logs(log_file_path):
     try:
         with open(log_file_path, 'r') as log_file:
             lines = log_file.readlines()
+            print(f"searching logslines: {lines}")
             for line in lines:
                 all_logs.append(line.strip())
                 if "/api/public" in line:
@@ -94,7 +95,7 @@ def test_langfuse_logging_async():
         response = asyncio.run(_test_langfuse())
         print(f"response: {response}")
 
-        time.sleep(5)
+        time.sleep(2)
         # check langfuse.log to see if there was a failed response
         search_logs("langfuse.log")
     except litellm.Timeout as e: 
