@@ -294,7 +294,7 @@ async def user_api_key_auth(request: Request, api_key: str = fastapi.Security(ap
                 api_key = valid_token.token
                 valid_token_dict = _get_pydantic_json_dict(valid_token)
                 valid_token_dict.pop("token", None)
-                return UserAPIKeyAuth(api_key=api_key, **valid_token)
+                return UserAPIKeyAuth(api_key=api_key, **valid_token_dict)
             else: 
                 raise Exception(f"Invalid token")
     except Exception as e: 
@@ -1224,6 +1224,7 @@ async def add_new_model(model_params: ModelParams):
         return {"message": "Model added successfully"}
 
     except Exception as e:
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
 
 #### [BETA] - This is a beta endpoint, format might change based on user feedback https://github.com/BerriAI/litellm/issues/933. If you need a stable endpoint use /model/info
