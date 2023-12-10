@@ -336,6 +336,20 @@ def test_custom_redis_cache_params():
     except Exception as e:
         pytest.fail(f"Error occurred:", e)
 
+
+def test_get_cache_key():
+    from litellm.caching import Cache
+    try:
+        cache_instance = Cache()
+        cache_key = cache_instance.get_cache_key(**{'model': 'gpt-3.5-turbo', 'messages': [{'role': 'user', 'content': 'write a one sentence poem about: 7510'}], 'max_tokens': 40, 'temperature': 0.2, 'stream': True, 'litellm_call_id': 'ffe75e7e-8a07-431f-9a74-71a5b9f35f0b', 'litellm_logging_obj': {}}
+        )
+        assert cache_key == "model: gpt-3.5-turbomessages: [{'role': 'user', 'content': 'write a one sentence poem about: 7510'}]temperature: 0.2max_tokens: 40"    
+    except Exception as e:
+        traceback.print_exc()
+        pytest.fail(f"Error occurred:", e)
+
+test_get_cache_key()
+
 # test_custom_redis_cache_params()
 
 # def test_redis_cache_with_ttl():
