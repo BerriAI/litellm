@@ -959,7 +959,8 @@ class Logging:
                             else:
                                 print_verbose("reaches langfuse for streaming logging!")
                                 result = kwargs["complete_streaming_response"]
-
+                        if langFuseLogger is None:
+                            langFuseLogger = LangFuseLogger()
                         langFuseLogger.log_event(
                             kwargs=kwargs,
                             response_obj=result,
