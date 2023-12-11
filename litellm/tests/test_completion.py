@@ -696,11 +696,12 @@ def test_completion_azure():
         print(response)
 
         cost = completion_cost(completion_response=response)
+        assert cost > 0.0   
         print("Cost for azure completion request", cost)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-# test_completion_azure()
+test_completion_azure()
 
 def test_azure_openai_ad_token():
     # this tests if the azure ad token is set in the request header
@@ -1013,6 +1014,7 @@ def test_completion_together_ai():
         # Add any assertions here to check the response
         print(response)
         cost = completion_cost(completion_response=response)
+        assert cost > 0.0   
         print("Cost for completion call together-computer/llama-2-70b: ", f"${float(cost):.10f}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
