@@ -73,8 +73,10 @@ def test_chat_completion(client):
         assert my_custom_logger.async_success == True                             # checks if the status of async_success is True, only the async_log_success_event can set this to true
         assert my_custom_logger.async_completion_kwargs["model"] == "chatgpt-v-2" # checks if kwargs passed to async_log_success_event are correct
         print("\n\n Custom Logger Async Completion args", my_custom_logger.async_completion_kwargs)           
-        
         litellm_params = my_custom_logger.async_completion_kwargs.get("litellm_params")
+        metadata = litellm_params.get("metadata", None)
+        print("\n\n Metadata in custom logger kwargs", litellm_params.get("metadata"))
+        assert metadata is not None
         config_model_info = litellm_params.get("model_info")
         proxy_server_request_object = litellm_params.get("proxy_server_request")
 
@@ -174,6 +176,9 @@ def test_embedding(client):
         
         kwargs = my_custom_logger.async_embedding_kwargs
         litellm_params = kwargs.get("litellm_params")
+        metadata = litellm_params.get("metadata", None)
+        print("\n\n Metadata in custom logger kwargs", litellm_params.get("metadata"))
+        assert metadata is not None
         proxy_server_request = litellm_params.get("proxy_server_request")
         model_info = litellm_params.get("model_info")
         assert proxy_server_request == {'url': 'http://testserver/embeddings', 'method': 'POST', 'headers': {'host': 'testserver', 'accept': '*/*', 'accept-encoding': 'gzip, deflate', 'connection': 'keep-alive', 'user-agent': 'testclient', 'authorization': 'Bearer sk-1234', 'content-length': '54', 'content-type': 'application/json'}, 'body': {'model': 'azure-embedding-model', 'input': ['hello']}}
