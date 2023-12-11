@@ -33,7 +33,7 @@ async def wrapper_startup_event():
     initialize(config=config_fp)
 
 # Use the app fixture in your client fixture
-@pytest.fixture()
+@pytest.fixture(scope="function")
 def client():
     with TestClient(app) as client:
         yield client
@@ -50,6 +50,8 @@ litellm.success_callback = []
 litellm.callbacks = []
 litellm.failure_callback = []
 litellm._async_success_callback = []
+
+print("Testing proxy custom logger")
 
 def test_embedding(client):
     try:
@@ -93,6 +95,7 @@ def test_embedding(client):
         assert model_info == {'input_cost_per_token': 0.002, 'mode': 'embedding', 'id': 'hello'}
         result = response.json()
         print(f"Received response: {result}")
+        print("Passed Embedding custom logger on proxy!")
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception {str(e)}")
 
@@ -129,7 +132,8 @@ def test_chat_completion(client):
         response = client.post("/chat/completions", json=test_data, headers=headers)
         print("made request", response.status_code, response.text)
         print("LiteLLM Callbacks", litellm.callbacks)
-        print("my_custom_logger", my_custom_logger)
+        print("my_custom_logger in /chat/completions", my_custom_logger)
+        print("vars my custom logger, ", vars(my_custom_logger))
         assert my_custom_logger.async_success == True                             # checks if the status of async_success is True, only the async_log_success_event can set this to true
         assert my_custom_logger.async_completion_kwargs["model"] == "chatgpt-v-2" # checks if kwargs passed to async_log_success_event are correct
         print("\n\n Custom Logger Async Completion args", my_custom_logger.async_completion_kwargs)           
@@ -221,3 +225,4 @@ def test_chat_completion_stream(client):
 
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception {str(e)}")
+
