@@ -62,8 +62,12 @@ def test_embedding(client):
         print(litellm.callbacks)
 
         # assert len(litellm.callbacks) == 1 # assert litellm is initialized with 1 callback
-
+        
         my_custom_logger = litellm.callbacks[0]
+        for callback in litellm.callbacks:
+            if "MyCustomHandler" in str(callback):
+                my_custom_logger = callback
+                break
         assert my_custom_logger.async_success_embedding == False
 
         test_data = {
@@ -101,6 +105,10 @@ def test_chat_completion(client):
 
         # assert len(litellm.callbacks) == 1 # assert litellm is initialized with 1 callback
         my_custom_logger = litellm.callbacks[0]
+        for callback in litellm.callbacks:
+            if "MyCustomHandler" in str(callback):
+                my_custom_logger = callback
+                break
         assert my_custom_logger.async_success == False
 
         test_data = {
@@ -148,6 +156,10 @@ def test_chat_completion_stream(client):
 
         # assert len(litellm.callbacks) == 1 # assert litellm is initialized with 1 callback
         my_custom_logger = litellm.callbacks[0]
+        for callback in litellm.callbacks:
+            if "MyCustomHandler" in str(callback):
+                my_custom_logger = callback
+                break
 
         assert my_custom_logger.streaming_response_obj == None  # no streaming response obj is set pre call
 
