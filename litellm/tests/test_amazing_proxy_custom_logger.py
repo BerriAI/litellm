@@ -20,6 +20,7 @@ import importlib, inspect
 litellm.success_callback = []
 litellm.callbacks = []
 litellm.failure_callback = []
+litellm._async_success_callback = []
 
 # test /chat/completion request to the proxy
 from fastapi.testclient import TestClient
