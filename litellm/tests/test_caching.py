@@ -274,7 +274,7 @@ def test_redis_cache_acompletion_stream():
     except Exception as e:
         print(e)
         raise e
-# test_redis_cache_acompletion_stream()
+test_redis_cache_acompletion_stream()
 
 def test_redis_cache_acompletion_stream_bedrock():
     import asyncio
