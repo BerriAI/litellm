@@ -142,7 +142,7 @@ def test_completion_hf_prompt_array():
             prompt=token_prompt, # token prompt is a 2d list,
             max_tokens=0,
             temperature=0.0,
-            echo=True,
+            # echo=True, # hugging face inference api is currently raising errors for this, looks like they have a regression on their side 
         )
         print("\n\n response")
 
