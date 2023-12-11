@@ -20,6 +20,8 @@ import importlib, inspect
 from fastapi.testclient import TestClient
 from fastapi import FastAPI
 from litellm.proxy.proxy_server import router, save_worker_config, initialize  # Replace with the actual module where your FastAPI router is defined
+
+
 filepath = os.path.dirname(os.path.abspath(__file__))
 config_fp = f"{filepath}/test_configs/test_custom_logger.yaml"
 python_file_path = f"{filepath}/test_configs/custom_callbacks.py"
@@ -31,7 +33,7 @@ async def wrapper_startup_event():
     initialize(config=config_fp)
 
 # Use the app fixture in your client fixture
-@pytest.fixture(autouse=True)
+@pytest.fixture()
 def client():
     with TestClient(app) as client:
         yield client
