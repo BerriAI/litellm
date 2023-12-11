@@ -78,6 +78,11 @@ jobs:
 
     steps:
       - checkout
+
+      - run:
+          name: Copy model_prices_and_context_window File to model_prices_and_context_window_backup
+          command: |
+            cp model_prices_and_context_window.json litellm/model_prices_and_context_window_backup.json
       
       - run:
           name: Check if litellm dir was updated or if pyproject.toml was modified
