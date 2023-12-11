@@ -815,6 +815,7 @@ class Logging:
         print_verbose(
                 f"Logging Details LiteLLM-Success Call"
             )
+        # print(f"original response in success handler: {self.model_call_details['original_response']}")
         try:
             print_verbose(f"success callbacks: {litellm.success_callback}")        
             ## BUILD COMPLETE STREAMED RESPONSE
@@ -1191,7 +1192,7 @@ class Logging:
                             print_verbose=print_verbose,
                             callback_func=callback
                         )
-                    elif isinstance(callback, CustomLogger): # custom logger class 
+                    elif isinstance(callback, CustomLogger) and self.model_call_details.get("litellm_params", {}).get("acompletion", False) == False: # custom logger class 
                         callback.log_failure_event(
                             start_time=start_time,
                             end_time=end_time,
@@ -5712,6 +5713,10 @@ class CustomStreamWrapper:
                 processed_chunk = next(self)
                 asyncio.create_task(self.logging_obj.async_success_handler(processed_chunk,))
                 return processed_chunk
+        except StopAsyncIteration:
+            raise
+        except StopIteration:
+            raise StopAsyncIteration  # Re-raise StopIteration
         except Exception as e:
             traceback_exception = traceback.format_exc()
             # Handle any exceptions that might occur during streaming
