@@ -30,16 +30,20 @@ filepath = os.path.dirname(os.path.abspath(__file__))
 config_fp = f"{filepath}/test_configs/test_custom_logger.yaml"
 python_file_path = f"{filepath}/test_configs/custom_callbacks.py"
 save_worker_config(config=config_fp, model=None, alias=None, api_base=None, api_version=None, debug=False, temperature=None, max_tokens=None, request_timeout=600, max_budget=None, telemetry=False, drop_params=True, add_function_to_prompt=False, headers=None, save=False, use_queue=False)
-app = FastAPI()
-app.include_router(router)  # Include your router in the test app
-@app.on_event("startup")
-async def wrapper_startup_event():
+
+@pytest.fixture(scope="session")
+def app():
+    app = FastAPI()
+    app.include_router(router)
+
+    # Perform the startup initialization only once
     initialize(config=config_fp, model=None, alias=None, api_base=None, api_version=None, debug=True, temperature=None, max_tokens=None, request_timeout=600, max_budget=None, telemetry=False, drop_params=True, add_function_to_prompt=False, headers=None, save=False, use_queue=False)
 
-# Here you create a fixture that will be used by your tests
-# Make sure the fixture returns TestClient(app)
-@pytest.fixture(autouse=True)
-def client():
+    return app
+
+# Use the app fixture in your client fixture
+@pytest.fixture
+def client(app):
     with TestClient(app) as client:
         yield client
 
