@@ -104,7 +104,7 @@ class ProxyLogging:
         2. /embeddings 
         """
         # check if max parallel requests set
-        if user_api_key_dict.max_parallel_requests is not None:
+        if user_api_key_dict is not None and user_api_key_dict.max_parallel_requests is not None:
             ## decrement call count if call failed
             if (hasattr(original_exception, "status_code") 
                 and original_exception.status_code == 429 
