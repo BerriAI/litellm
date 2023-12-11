@@ -1098,8 +1098,10 @@ async def embeddings(request: Request, user_api_key_dict: UserAPIKeyAuth = Depen
             data["model"] = user_model
         if "metadata" in data:
             data["metadata"]["user_api_key"] = user_api_key_dict.api_key
+            data["metadata"]["headers"] = dict(request.headers)
         else:
             data["metadata"] = {"user_api_key": user_api_key_dict.api_key}
+            data["metadata"]["headers"] = dict(request.headers)
         router_model_names = [m["model_name"] for m in llm_model_list] if llm_model_list is not None else []
         print(f"received data: {data['input']}")
         if "input" in data and isinstance(data['input'], list) and isinstance(data['input'][0], list) and isinstance(data['input'][0][0], int): # check if array of tokens passed in

@@ -77,6 +77,8 @@ def test_chat_completion(client):
         metadata = litellm_params.get("metadata", None)
         print("\n\n Metadata in custom logger kwargs", litellm_params.get("metadata"))
         assert metadata is not None
+        assert "user_api_key" in metadata
+        assert "headers" in  metadata
         config_model_info = litellm_params.get("model_info")
         proxy_server_request_object = litellm_params.get("proxy_server_request")
 
@@ -179,6 +181,8 @@ def test_embedding(client):
         metadata = litellm_params.get("metadata", None)
         print("\n\n Metadata in custom logger kwargs", litellm_params.get("metadata"))
         assert metadata is not None
+        assert "user_api_key" in metadata
+        assert "headers" in  metadata
         proxy_server_request = litellm_params.get("proxy_server_request")
         model_info = litellm_params.get("model_info")
         assert proxy_server_request == {'url': 'http://testserver/embeddings', 'method': 'POST', 'headers': {'host': 'testserver', 'accept': '*/*', 'accept-encoding': 'gzip, deflate', 'connection': 'keep-alive', 'user-agent': 'testclient', 'authorization': 'Bearer sk-1234', 'content-length': '54', 'content-type': 'application/json'}, 'body': {'model': 'azure-embedding-model', 'input': ['hello']}}
