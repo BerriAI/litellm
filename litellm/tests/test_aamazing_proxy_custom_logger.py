@@ -88,7 +88,7 @@ def test_embedding(client):
         result = response.json()
         print(f"Received response: {result}")
     except Exception as e:
-        pytest.fail("LiteLLM Proxy test failed. Exception", e)
+        pytest.fail(f"LiteLLM Proxy test failed. Exception {str(e)}")
 
 
 def test_chat_completion(client):
@@ -138,7 +138,7 @@ def test_chat_completion(client):
         print(f"Received response: {result}")
         print("\nPassed /chat/completions with Custom Logger!")
     except Exception as e:
-        pytest.fail("LiteLLM Proxy test failed. Exception", e)
+        pytest.fail(f"LiteLLM Proxy test failed. Exception {str(e)}")
 
 
 def test_chat_completion_stream(client):
@@ -206,4 +206,4 @@ def test_chat_completion_stream(client):
         assert complete_response == streamed_response["choices"][0]["message"]["content"]
 
     except Exception as e:
-        pytest.fail("LiteLLM Proxy test failed. Exception", e)
+        pytest.fail(f"LiteLLM Proxy test failed. Exception {str(e)}")
