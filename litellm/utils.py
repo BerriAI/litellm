@@ -1489,6 +1489,8 @@ def client(original_function):
                 # checking cache
                 if (litellm.cache != None or litellm.caching or litellm.caching_with_models):
                     print_verbose(f"Checking Cache")
+                    preset_cache_key = litellm.cache.get_cache_key(*args, **kwargs)
+                    kwargs["preset_cache_key"] = preset_cache_key # for streaming calls, we need to pass the preset_cache_key
                     cached_result = litellm.cache.get_cache(*args, **kwargs)
                     if cached_result != None:
                         if "detail" in cached_result: 
@@ -2076,6 +2078,7 @@ def get_litellm_params(
     model_info=None,
     proxy_server_request=None,
     acompletion=None,
+    preset_cache_key = None
 ):
     litellm_params = {
         "acompletion": acompletion,
@@ -2092,6 +2095,7 @@ def get_litellm_params(
         "metadata": metadata,
         "model_info": model_info,
         "proxy_server_request": proxy_server_request,
+        "preset_cache_key": preset_cache_key,
         "stream_response": {} # litellm_call_id: ModelResponse Dict
     }
 
@@ -5719,7 +5723,10 @@ class CustomStreamWrapper:
                     return processed_chunk
                 raise StopAsyncIteration
             else: # temporary patch for non-aiohttp async calls
-                return next(self)
+                # example - boto3 bedrock llms
+                processed_chunk = next(self)
+                asyncio.create_task(self.logging_obj.async_success_handler(processed_chunk,))
+                return processed_chunk
         except Exception as e:
             # Handle any exceptions that might occur during streaming
             raise StopAsyncIteration
