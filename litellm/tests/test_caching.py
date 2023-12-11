@@ -276,6 +276,44 @@ def test_redis_cache_acompletion_stream():
         raise e
 # test_redis_cache_acompletion_stream()
 
+def test_redis_cache_acompletion_stream_bedrock():
+    import asyncio
+    try:
+        litellm.set_verbose = True
+        random_word = generate_random_word()
+        messages = [{"role": "user", "content": f"write a one sentence poem about: {random_word}"}]
+        litellm.cache = Cache(type="redis", host=os.environ['REDIS_HOST'], port=os.environ['REDIS_PORT'], password=os.environ['REDIS_PASSWORD'])
+        print("test for caching, streaming + completion")
+        response_1_content = ""
+        response_2_content = ""
+
+        async def call1():
+            nonlocal response_1_content 
+            response1 = await litellm.acompletion(model="bedrock/anthropic.claude-v1", messages=messages, max_tokens=40, temperature=1, stream=True)
+            async for chunk in response1:
+                print(chunk)
+                response_1_content += chunk.choices[0].delta.content or ""
+            print(response_1_content)
+        asyncio.run(call1())
+        time.sleep(0.5)
+        print("\n\n Response 1 content: ", response_1_content, "\n\n")
+
+        async def call2():
+            nonlocal response_2_content
+            response2 = await litellm.acompletion(model="bedrock/anthropic.claude-v1", messages=messages, max_tokens=40, temperature=1, stream=True)
+            async for chunk in response2:
+                print(chunk)
+                response_2_content += chunk.choices[0].delta.content or ""
+            print(response_2_content)
+        asyncio.run(call2())
+        print("\nresponse 1", response_1_content)
+        print("\nresponse 2", response_2_content)
+        assert response_1_content == response_2_content, f"Response 1 != Response 2. Same params, Response 1{response_1_content} != Response 2{response_2_content}"
+        litellm.cache = None
+    except Exception as e:
+        print(e)
+        raise e
+# test_redis_cache_acompletion_stream_bedrock()
 # redis cache with custom keys
 def custom_get_cache_key(*args, **kwargs):
     # return key to use for your cache: 
