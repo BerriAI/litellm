@@ -50,7 +50,7 @@ headers = {
     "Authorization": f"Bearer {token}"
 }
 
-
+@pytest.mark.no_parallel
 def test_chat_completion(client):
     try:
          # Your test data
@@ -96,7 +96,7 @@ def test_chat_completion(client):
     except Exception as e:
         pytest.fail("LiteLLM Proxy test failed. Exception", e)
 
-
+@pytest.mark.no_parallel
 def test_chat_completion_stream(client):
     try:
         # Your test data
@@ -161,7 +161,7 @@ def test_chat_completion_stream(client):
         pytest.fail("LiteLLM Proxy test failed. Exception", e)
 
 
-
+@pytest.mark.no_parallel
 def test_embedding(client):
     try:
         # Your test data
