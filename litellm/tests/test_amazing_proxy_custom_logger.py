@@ -31,7 +31,7 @@ config_fp = f"{filepath}/test_configs/test_custom_logger.yaml"
 python_file_path = f"{filepath}/test_configs/custom_callbacks.py"
 save_worker_config(config=config_fp, model=None, alias=None, api_base=None, api_version=None, debug=False, temperature=None, max_tokens=None, request_timeout=600, max_budget=None, telemetry=False, drop_params=True, add_function_to_prompt=False, headers=None, save=False, use_queue=False)
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="session", autouse=True)
 def app():
     app = FastAPI()
     app.include_router(router)
@@ -54,8 +54,6 @@ headers = {
     "Authorization": f"Bearer {token}"
 }
 
-
-@pytest.mark.no_parallel
 def test_embedding(client):
     try:
         # Your test data
@@ -92,7 +90,7 @@ def test_embedding(client):
     except Exception as e:
         pytest.fail("LiteLLM Proxy test failed. Exception", e)
 
-@pytest.mark.no_parallel
+
 def test_chat_completion(client):
     try:
          # Your test data
@@ -138,7 +136,7 @@ def test_chat_completion(client):
     except Exception as e:
         pytest.fail("LiteLLM Proxy test failed. Exception", e)
 
-@pytest.mark.no_parallel
+
 def test_chat_completion_stream(client):
     try:
         # Your test data
