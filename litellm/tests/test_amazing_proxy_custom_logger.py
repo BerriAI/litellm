@@ -50,6 +50,44 @@ headers = {
     "Authorization": f"Bearer {token}"
 }
 
+
+@pytest.mark.no_parallel
+def test_embedding(client):
+    try:
+        # Your test data
+        print("initialized proxy")
+        # import the initialized custom logger
+        print(litellm.callbacks)
+
+        assert len(litellm.callbacks) == 1 # assert litellm is initialized with 1 callback
+        my_custom_logger = litellm.callbacks[0]
+        assert my_custom_logger.async_success_embedding == False
+
+        test_data = {
+            "model": "azure-embedding-model",
+            "input": ["hello"]
+        }
+        response = client.post("/embeddings", json=test_data, headers=headers)
+        print("made request", response.status_code, response.text)
+        assert my_custom_logger.async_success_embedding == True                             # checks if the status of async_success is True, only the async_log_success_event can set this to true
+        assert my_custom_logger.async_embedding_kwargs["model"] == "azure-embedding-model"  # checks if kwargs passed to async_log_success_event are correct
+        
+        kwargs = my_custom_logger.async_embedding_kwargs
+        litellm_params = kwargs.get("litellm_params")
+        metadata = litellm_params.get("metadata", None)
+        print("\n\n Metadata in custom logger kwargs", litellm_params.get("metadata"))
+        assert metadata is not None
+        assert "user_api_key" in metadata
+        assert "headers" in  metadata
+        proxy_server_request = litellm_params.get("proxy_server_request")
+        model_info = litellm_params.get("model_info")
+        assert proxy_server_request == {'url': 'http://testserver/embeddings', 'method': 'POST', 'headers': {'host': 'testserver', 'accept': '*/*', 'accept-encoding': 'gzip, deflate', 'connection': 'keep-alive', 'user-agent': 'testclient', 'authorization': 'Bearer sk-1234', 'content-length': '54', 'content-type': 'application/json'}, 'body': {'model': 'azure-embedding-model', 'input': ['hello']}}
+        assert model_info == {'input_cost_per_token': 0.002, 'mode': 'embedding', 'id': 'hello'}
+        result = response.json()
+        print(f"Received response: {result}")
+    except Exception as e:
+        pytest.fail("LiteLLM Proxy test failed. Exception", e)
+
 @pytest.mark.no_parallel
 def test_chat_completion(client):
     try:
@@ -157,43 +195,5 @@ def test_chat_completion_stream(client):
         streamed_response = my_custom_logger.streaming_response_obj
         assert complete_response == streamed_response["choices"][0]["message"]["content"]
 
-    except Exception as e:
-        pytest.fail("LiteLLM Proxy test failed. Exception", e)
-
-
-@pytest.mark.no_parallel
-def test_embedding(client):
-    try:
-        # Your test data
-        print("initialized proxy")
-        # import the initialized custom logger
-        print(litellm.callbacks)
-
-        assert len(litellm.callbacks) == 1 # assert litellm is initialized with 1 callback
-        my_custom_logger = litellm.callbacks[0]
-        assert my_custom_logger.async_success_embedding == False
-
-        test_data = {
-            "model": "azure-embedding-model",
-            "input": ["hello"]
-        }
-        response = client.post("/embeddings", json=test_data, headers=headers)
-        print("made request", response.status_code, response.text)
-        assert my_custom_logger.async_success_embedding == True                             # checks if the status of async_success is True, only the async_log_success_event can set this to true
-        assert my_custom_logger.async_embedding_kwargs["model"] == "azure-embedding-model"  # checks if kwargs passed to async_log_success_event are correct
-        
-        kwargs = my_custom_logger.async_embedding_kwargs
-        litellm_params = kwargs.get("litellm_params")
-        metadata = litellm_params.get("metadata", None)
-        print("\n\n Metadata in custom logger kwargs", litellm_params.get("metadata"))
-        assert metadata is not None
-        assert "user_api_key" in metadata
-        assert "headers" in  metadata
-        proxy_server_request = litellm_params.get("proxy_server_request")
-        model_info = litellm_params.get("model_info")
-        assert proxy_server_request == {'url': 'http://testserver/embeddings', 'method': 'POST', 'headers': {'host': 'testserver', 'accept': '*/*', 'accept-encoding': 'gzip, deflate', 'connection': 'keep-alive', 'user-agent': 'testclient', 'authorization': 'Bearer sk-1234', 'content-length': '54', 'content-type': 'application/json'}, 'body': {'model': 'azure-embedding-model', 'input': ['hello']}}
-        assert model_info == {'input_cost_per_token': 0.002, 'mode': 'embedding', 'id': 'hello'}
-        result = response.json()
-        print(f"Received response: {result}")
     except Exception as e:
         pytest.fail("LiteLLM Proxy test failed. Exception", e)
