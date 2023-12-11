@@ -222,7 +222,14 @@ class Cache:
         Returns:
             str: The cache key generated from the arguments, or None if no cache key could be generated.
         """
-        cache_key =""
+        cache_key = ""
+        print_verbose(f"\nGetting Cache key. Kwargs: {kwargs}")
+        
+        # for streaming, we use preset_cache_key. It's created in wrapper(), we do this because optional params like max_tokens, get transformed for bedrock -> max_new_tokens
+        if kwargs.get("litellm_params", {}).get("preset_cache_key", None) is not None:
+            print_verbose(f"\nReturning preset cache key: {cache_key}")
+            return kwargs.get("litellm_params", {}).get("preset_cache_key", None)
+
         # sort kwargs by keys, since model: [gpt-4, temperature: 0.2, max_tokens: 200] == [temperature: 0.2, max_tokens: 200, model: gpt-4]
         completion_kwargs = ["model", "messages", "temperature", "top_p", "n", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "response_format", "seed", "tools", "tool_choice"]
         for param in completion_kwargs:
@@ -245,6 +252,7 @@ class Cache:
                         continue # ignore None params
                     param_value = kwargs[param]
                 cache_key+= f"{str(param)}: {str(param_value)}"
+        print_verbose(f"\nCreated cache key: {cache_key}")
         return cache_key
 
     def generate_streaming_content(self, content):
