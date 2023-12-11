@@ -3,7 +3,7 @@ import traceback
 from dotenv import load_dotenv
 
 load_dotenv()
-import os, io
+import os, io, asyncio
 
 # this file is to test litellm/proxy
 
@@ -122,7 +122,7 @@ def test_chat_completion(client):
             "messages": [
                 {
                     "role": "user",
-                    "content": "hi"
+                    "content": "write a litellm poem"
                 },
             ],
             "max_tokens": 10,
@@ -132,6 +132,8 @@ def test_chat_completion(client):
         response = client.post("/chat/completions", json=test_data, headers=headers)
         print("made request", response.status_code, response.text)
         print("LiteLLM Callbacks", litellm.callbacks)
+        asyncio.sleep(1) # sleep while waiting for callback to run
+
         print("my_custom_logger in /chat/completions", my_custom_logger)
         print("vars my custom logger, ", vars(my_custom_logger))
         assert my_custom_logger.async_success == True                             # checks if the status of async_success is True, only the async_log_success_event can set this to true
