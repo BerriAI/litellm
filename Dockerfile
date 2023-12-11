@@ -18,14 +18,9 @@ RUN apt-get update && \
 # Copy the current directory contents into the container at /app
 COPY requirements.txt .
 
-# Make a virtualenv that we can copy across multistage builds
-ENV VIRTUAL_ENV=/venv
-RUN python -m venv $VIRTUAL_ENV
-# "Activate" the virtualenv
-ENV PATH="$VIRTUAL_ENV/bin:$PATH"
-
 # Install any needed packages specified in requirements.txt
-RUN pip install --no-cache-dir -r /app/requirements.txt
+RUN pip install wheel && \
+    pip wheel --no-cache-dir --wheel-dir=/app/wheels -r requirements.txt
 
 ###############################################################################
 FROM $LITELLM_RUNTIME_IMAGE as runtime
@@ -35,11 +30,9 @@ WORKDIR /app
 # Copy the current directory contents into the container at /app
 COPY . .
 
-# "Activate" the virtualenv
-ENV VIRTUAL_ENV=/venv
-ENV PATH="$VIRTUAL_ENV/bin:$PATH"
+COPY --from=builder /app/wheels /app/wheels
 
-COPY --from=builder /venv /venv
+RUN pip install --no-index --find-links=/app/wheels -r requirements.txt
 
 EXPOSE 4000/tcp
 
