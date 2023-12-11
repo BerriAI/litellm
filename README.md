@@ -62,6 +62,22 @@ response = completion(model="command-nightly", messages=messages)
 print(response)
 ```
 
+## Async ([Docs](https://docs.litellm.ai/docs/completion/stream#async-completion))
+
+```python
+from litellm import acompletion
+import asyncio
+
+async def test_get_response():
+    user_message = "Hello, how are you?"
+    messages = [{"content": user_message, "role": "user"}]
+    response = await acompletion(model="gpt-3.5-turbo", messages=messages)
+    return response
+
+response = asyncio.run(test_get_response())
+print(response)
+```
+
 ## Streaming ([Docs](https://docs.litellm.ai/docs/completion/stream))
 liteLLM supports streaming the model response back, pass `stream=True` to get a streaming iterator in response.  
 Streaming is supported for all models (Bedrock, Huggingface, TogetherAI, Azure, OpenAI, etc.)
