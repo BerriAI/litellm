@@ -326,7 +326,7 @@ def test_model_group_aliases():
 			selected_model = router.get_available_deployment("gpt-4")
 			print("\n selected model", selected_model)
 			selected_model_name = selected_model.get("model_name")
-			if selected_model_name is not "gpt-3.5-turbo":
+			if selected_model_name != "gpt-3.5-turbo":
 				pytest.fail(f"Selected model {selected_model_name} is not gpt-3.5-turbo")
 				
 		router.reset()

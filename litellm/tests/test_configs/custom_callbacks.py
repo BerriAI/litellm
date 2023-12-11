@@ -2,7 +2,7 @@ from litellm.integrations.custom_logger import CustomLogger
 import inspect
 import litellm
 
-class MyCustomHandler(CustomLogger):
+class testCustomCallbackProxy(CustomLogger):
     def __init__(self):
         self.success: bool = False                  # type: ignore
         self.failure: bool = False                  # type: ignore
@@ -107,4 +107,4 @@ class MyCustomHandler(CustomLogger):
         
         self.async_completion_kwargs_fail = kwargs
 
-my_custom_logger = MyCustomHandler()
+my_custom_logger = testCustomCallbackProxy()

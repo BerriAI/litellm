@@ -62,9 +62,11 @@ def test_embedding(client):
         
         my_custom_logger = litellm.callbacks[0]
         for callback in litellm.callbacks:
-            if "MyCustomHandler" in str(callback):
+            if "testCustomCallbackProxy" in str(callback):
                 my_custom_logger = callback
                 break
+        print("LiteLLM Callbacks", litellm.callbacks)
+        print("my_custom_logger", my_custom_logger)
         assert my_custom_logger.async_success_embedding == False
 
         test_data = {
@@ -73,6 +75,8 @@ def test_embedding(client):
         }
         response = client.post("/embeddings", json=test_data, headers=headers)
         print("made request", response.status_code, response.text)
+        print("LiteLLM Callbacks", litellm.callbacks)
+        print("my_custom_logger", my_custom_logger)
         assert my_custom_logger.async_success_embedding == True                             # checks if the status of async_success is True, only the async_log_success_event can set this to true
         assert my_custom_logger.async_embedding_kwargs["model"] == "azure-embedding-model"  # checks if kwargs passed to async_log_success_event are correct
         
@@ -103,9 +107,11 @@ def test_chat_completion(client):
         # assert len(litellm.callbacks) == 1 # assert litellm is initialized with 1 callback
         my_custom_logger = litellm.callbacks[0]
         for callback in litellm.callbacks:
-            if "MyCustomHandler" in str(callback):
+            if "testCustomCallbackProxy" in str(callback):
                 my_custom_logger = callback
                 break
+        print("LiteLLM Callbacks", litellm.callbacks)
+        print("my_custom_logger", my_custom_logger)
         assert my_custom_logger.async_success == False
 
         test_data = {
@@ -122,6 +128,8 @@ def test_chat_completion(client):
 
         response = client.post("/chat/completions", json=test_data, headers=headers)
         print("made request", response.status_code, response.text)
+        print("LiteLLM Callbacks", litellm.callbacks)
+        print("my_custom_logger", my_custom_logger)
         assert my_custom_logger.async_success == True                             # checks if the status of async_success is True, only the async_log_success_event can set this to true
         assert my_custom_logger.async_completion_kwargs["model"] == "chatgpt-v-2" # checks if kwargs passed to async_log_success_event are correct
         print("\n\n Custom Logger Async Completion args", my_custom_logger.async_completion_kwargs)           
@@ -153,10 +161,14 @@ def test_chat_completion_stream(client):
 
         # assert len(litellm.callbacks) == 1 # assert litellm is initialized with 1 callback
         my_custom_logger = litellm.callbacks[0]
+
         for callback in litellm.callbacks:
-            if "MyCustomHandler" in str(callback):
+            if "testCustomCallbackProxy" in str(callback):
                 my_custom_logger = callback
                 break
+
+        print("LiteLLM Callbacks", litellm.callbacks)
+        print("my_custom_logger", my_custom_logger)
 
         assert my_custom_logger.streaming_response_obj == None  # no streaming response obj is set pre call
 
