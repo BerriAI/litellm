@@ -482,7 +482,7 @@ def completion(
         logging_obj.post_call(
             input=prompt,
             api_key="",
-            original_response=response_body,
+            original_response=json.dumps(response_body),
             additional_args={"complete_input_dict": data},
         )
         print_verbose(f"raw model_response: {response}")

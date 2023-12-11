@@ -53,6 +53,9 @@ class CompletionCustomHandler(CustomLogger): # https://docs.litellm.ai/docs/obse
 
     def log_post_api_call(self, kwargs, response_obj, start_time, end_time): 
         try:
+            print("IN POST CALL API")
+            print(f"kwargs input: {kwargs['input']}")
+            print(f"kwargs original response: {kwargs['original_response']}")
             ## START TIME 
             assert isinstance(start_time, datetime)
             ## END TIME 
@@ -67,8 +70,8 @@ class CompletionCustomHandler(CustomLogger): # https://docs.litellm.ai/docs/obse
             assert isinstance(kwargs['start_time'], Optional[datetime])
             assert isinstance(kwargs['stream'], bool)
             assert isinstance(kwargs['user'], Optional[str])
-            assert isinstance(kwargs['input'], list) and isinstance(kwargs['input'][0], dict)
-            assert isinstance(kwargs['api_key'], str)
+            assert (isinstance(kwargs['input'], list) and isinstance(kwargs['input'][0], dict)) or isinstance(kwargs['input'], (dict, str))
+            assert isinstance(kwargs['api_key'], Optional[str])
             assert isinstance(kwargs['original_response'], (str, litellm.CustomStreamWrapper)) or inspect.iscoroutine(kwargs['original_response']) or inspect.isasyncgen(kwargs['original_response'])
             assert isinstance(kwargs['additional_args'], Optional[dict])
             assert isinstance(kwargs['log_event_type'], str) 
@@ -92,9 +95,9 @@ class CompletionCustomHandler(CustomLogger): # https://docs.litellm.ai/docs/obse
             assert isinstance(kwargs['start_time'], Optional[datetime])
             assert isinstance(kwargs['stream'], bool)
             assert isinstance(kwargs['user'], Optional[str])
-            assert isinstance(kwargs['input'], list) and isinstance(kwargs['input'][0], dict)
-            assert isinstance(kwargs['api_key'], str)
-            assert inspect.isasyncgen(kwargs['original_response']) or inspect.iscoroutine(kwargs['original_response'])
+            assert (isinstance(kwargs['input'], list) and isinstance(kwargs['input'][0], dict)) or isinstance(kwargs['input'], (dict, str))
+            assert isinstance(kwargs['api_key'], Optional[str])
+            assert isinstance(kwargs['original_response'], (str, litellm.CustomStreamWrapper)) or inspect.isasyncgen(kwargs['original_response']) or inspect.iscoroutine(kwargs['original_response'])
             assert isinstance(kwargs['additional_args'], Optional[dict])
             assert isinstance(kwargs['log_event_type'], str) 
         except: 
@@ -117,8 +120,8 @@ class CompletionCustomHandler(CustomLogger): # https://docs.litellm.ai/docs/obse
             assert isinstance(kwargs['start_time'], Optional[datetime])
             assert isinstance(kwargs['stream'], bool)
             assert isinstance(kwargs['user'], Optional[str])
-            assert isinstance(kwargs['input'], list) and isinstance(kwargs['input'][0], dict)
-            assert isinstance(kwargs['api_key'], str)
+            assert (isinstance(kwargs['input'], list) and isinstance(kwargs['input'][0], dict)) or isinstance(kwargs['input'], (dict, str))
+            assert isinstance(kwargs['api_key'], Optional[str])
             assert isinstance(kwargs['original_response'], (str, litellm.CustomStreamWrapper))
             assert isinstance(kwargs['additional_args'], Optional[dict])
             assert isinstance(kwargs['log_event_type'], str) 
@@ -142,8 +145,8 @@ class CompletionCustomHandler(CustomLogger): # https://docs.litellm.ai/docs/obse
             assert isinstance(kwargs['start_time'], Optional[datetime])
             assert isinstance(kwargs['stream'], bool)
             assert isinstance(kwargs['user'], Optional[str])
-            assert isinstance(kwargs['input'], list) and isinstance(kwargs['input'][0], dict)
-            assert isinstance(kwargs['api_key'], str)
+            assert (isinstance(kwargs['input'], list) and isinstance(kwargs['input'][0], dict)) or isinstance(kwargs['input'], (dict, str))
+            assert isinstance(kwargs['api_key'], Optional[str])
             assert isinstance(kwargs['original_response'], (str, litellm.CustomStreamWrapper)) or kwargs["original_response"] == None
             assert isinstance(kwargs['additional_args'], Optional[dict])
             assert isinstance(kwargs['log_event_type'], str) 
@@ -185,9 +188,9 @@ class CompletionCustomHandler(CustomLogger): # https://docs.litellm.ai/docs/obse
             assert isinstance(kwargs['start_time'], Optional[datetime])
             assert isinstance(kwargs['stream'], bool)
             assert isinstance(kwargs['user'], Optional[str])
-            assert isinstance(kwargs['input'], list) and isinstance(kwargs['input'][0], dict)
-            assert isinstance(kwargs['api_key'], str)
-            assert isinstance(kwargs['original_response'], str) or inspect.isasyncgen(kwargs['original_response']) or inspect.iscoroutine(kwargs['original_response'])
+            assert (isinstance(kwargs['input'], list) and isinstance(kwargs['input'][0], dict)) or isinstance(kwargs['input'], (dict, str))
+            assert isinstance(kwargs['api_key'], Optional[str])
+            assert isinstance(kwargs['original_response'], (str, litellm.CustomStreamWrapper)) or inspect.isasyncgen(kwargs['original_response']) or inspect.iscoroutine(kwargs['original_response'])
             assert isinstance(kwargs['additional_args'], Optional[dict])
             assert isinstance(kwargs['log_event_type'], str) 
         except: 
@@ -210,8 +213,8 @@ class CompletionCustomHandler(CustomLogger): # https://docs.litellm.ai/docs/obse
             assert isinstance(kwargs['start_time'], Optional[datetime])
             assert isinstance(kwargs['stream'], bool)
             assert isinstance(kwargs['user'], Optional[str])
-            assert isinstance(kwargs['input'], list) and isinstance(kwargs['input'][0], dict)
-            assert isinstance(kwargs['api_key'], str)
+            assert (isinstance(kwargs['input'], list) and isinstance(kwargs['input'][0], dict)) or isinstance(kwargs['input'], (dict, str))
+            assert isinstance(kwargs['api_key'], Optional[str])
             assert isinstance(kwargs['original_response'], (str, litellm.CustomStreamWrapper)) or inspect.isasyncgen(kwargs['original_response'])
             assert isinstance(kwargs['additional_args'], Optional[dict])
             assert isinstance(kwargs['log_event_type'], str) 
@@ -343,7 +346,7 @@ def test_chat_azure_stream():
 
 # test_chat_azure_stream()
 
-## Test OpenAI + Async
+## Test Azure + Async
 @pytest.mark.asyncio
 async def test_async_chat_azure_stream():
     try: 
@@ -384,3 +387,88 @@ async def test_async_chat_azure_stream():
         pytest.fail(f"An exception occurred: {str(e)}")
 
 # asyncio.run(test_async_chat_azure_stream())
+
+## Test Bedrock + sync
+def test_chat_bedrock_stream():
+    try: 
+        customHandler = CompletionCustomHandler()
+        litellm.callbacks = [customHandler]
+        response = litellm.completion(model="bedrock/anthropic.claude-v1",
+                                messages=[{
+                                    "role": "user",
+                                    "content": "Hi 👋 - i'm sync bedrock"
+                                }])
+        # test streaming
+        response = litellm.completion(model="bedrock/anthropic.claude-v1",
+                                messages=[{
+                                    "role": "user",
+                                    "content": "Hi 👋 - i'm sync bedrock"
+                                }],
+                                stream=True)
+        for chunk in response: 
+            continue
+        # test failure callback
+        try: 
+            response = litellm.completion(model="bedrock/anthropic.claude-v1",
+                                    messages=[{
+                                        "role": "user",
+                                        "content": "Hi 👋 - i'm sync bedrock"
+                                    }],
+                                    aws_region_name="my-bad-region",
+                                    stream=True)
+            for chunk in response: 
+                continue
+        except:
+            pass
+        time.sleep(1)
+        print(f"customHandler.errors: {customHandler.errors}")
+        assert len(customHandler.errors) == 0
+        litellm.callbacks = []
+    except Exception as e: 
+        pytest.fail(f"An exception occurred: {str(e)}")
+
+# test_chat_bedrock_stream()
+
+## Test Bedrock + Async
+@pytest.mark.asyncio
+async def test_async_chat_bedrock_stream():
+    try: 
+        customHandler = CompletionCustomHandler()
+        litellm.callbacks = [customHandler]
+        response = await litellm.acompletion(model="bedrock/anthropic.claude-v1",
+                                messages=[{
+                                    "role": "user",
+                                    "content": "Hi 👋 - i'm async bedrock"
+                                }])
+        # test streaming
+        response = await litellm.acompletion(model="bedrock/anthropic.claude-v1",
+                                messages=[{
+                                    "role": "user",
+                                    "content": "Hi 👋 - i'm async bedrock"
+                                }],
+                                stream=True)
+        print(f"response: {response}")
+        async for chunk in response: 
+            print(f"chunk: {chunk}")
+            continue
+        ## test failure callback
+        try: 
+            response = await litellm.acompletion(model="bedrock/anthropic.claude-v1",
+                                    messages=[{
+                                        "role": "user",
+                                        "content": "Hi 👋 - i'm async bedrock"
+                                    }],
+                                    aws_region_name="my-bad-key",
+                                    stream=True)
+            async for chunk in response: 
+                continue
+        except:
+            pass
+        time.sleep(1)
+        print(f"customHandler.errors: {customHandler.errors}")
+        assert len(customHandler.errors) == 0
+        litellm.callbacks = []
+    except Exception as e: 
+        pytest.fail(f"An exception occurred: {str(e)}")
+
+# asyncio.run(test_async_chat_bedrock_stream())
