@@ -196,8 +196,19 @@ class AzureChatCompletion(BaseLLM):
                 else:
                     azure_client = client
                 response = azure_client.chat.completions.create(**data) # type: ignore
-                response.model = "azure/" + str(response.model)
-                return convert_to_model_response_object(response_object=json.loads(response.model_dump_json()), model_response_object=model_response)
+                stringified_response = response.model_dump_json()
+                ## LOGGING
+                logging_obj.post_call(
+                    input=messages,
+                    api_key=api_key,
+                    original_response=stringified_response,
+                    additional_args={
+                        "headers": headers,
+                        "api_version": api_version,
+                        "api_base": api_base,
+                    },
+                )
+                return convert_to_model_response_object(response_object=json.loads(stringified_response), model_response_object=model_response)
         except AzureOpenAIError as e: 
             exception_mapping_worked = True
             raise e
