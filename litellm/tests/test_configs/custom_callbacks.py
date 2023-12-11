@@ -56,7 +56,10 @@ class MyCustomHandler(CustomLogger):
         print("Value of async success: ", self.async_success)
         print("\n kwargs: ", kwargs)
         if kwargs.get("model") == "azure-embedding-model" or kwargs.get("model") == "ada":
+            print("Got an embedding model", kwargs.get("model"))
+            print("Setting embedding success to True")
             self.async_success_embedding = True
+            print("Value of async success embedding: ", self.async_success_embedding)
             self.async_embedding_kwargs = kwargs
             self.async_embedding_response = response_obj
         if kwargs.get("stream") == True:
