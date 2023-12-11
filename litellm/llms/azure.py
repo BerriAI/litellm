@@ -329,7 +329,10 @@ class AzureChatCompletion(BaseLLM):
         data: dict, 
         model_response: ModelResponse, 
         azure_client_params: dict,
+        api_key: str, 
+        input: list, 
         client=None,
+        logging_obj=None
     ): 
         response = None
         try: 
@@ -338,8 +341,23 @@ class AzureChatCompletion(BaseLLM):
             else:
                 openai_aclient = client
             response = await openai_aclient.embeddings.create(**data)
-            return convert_to_model_response_object(response_object=json.loads(response.model_dump_json()), model_response_object=model_response, response_type="embedding")
+            stringified_response = response.model_dump_json()
+            ## LOGGING
+            logging_obj.post_call(
+                    input=input,
+                    api_key=api_key,
+                    additional_args={"complete_input_dict": data},
+                    original_response=stringified_response,
+                )
+            return convert_to_model_response_object(response_object=json.loads(stringified_response), model_response_object=model_response, response_type="embedding")
         except Exception as e:
+            ## LOGGING
+            logging_obj.post_call(
+                    input=input,
+                    api_key=api_key,
+                    additional_args={"complete_input_dict": data},
+                    original_response=str(e),
+                )
             raise e
 
     def embedding(self,
@@ -383,13 +401,7 @@ class AzureChatCompletion(BaseLLM):
                 azure_client_params["api_key"] = api_key
             elif azure_ad_token is not None:
                 azure_client_params["azure_ad_token"] = azure_ad_token
-            if aembedding == True:
-                response =  self.aembedding(data=data, model_response=model_response, azure_client_params=azure_client_params)
-                return response
-            if client is None:
-                azure_client = AzureOpenAI(**azure_client_params) # type: ignore
-            else:
-                azure_client = client
+
             ## LOGGING
             logging_obj.pre_call(
                     input=input,
@@ -402,6 +414,14 @@ class AzureChatCompletion(BaseLLM):
                         }
                     },
                 )
+            
+            if aembedding == True:
+                response =  self.aembedding(data=data, input=input, logging_obj=logging_obj, api_key=api_key, model_response=model_response, azure_client_params=azure_client_params)
+                return response
+            if client is None:
+                azure_client = AzureOpenAI(**azure_client_params) # type: ignore
+            else:
+                azure_client = client
             ## COMPLETION CALL            
             response = azure_client.embeddings.create(**data) # type: ignore
             ## LOGGING
