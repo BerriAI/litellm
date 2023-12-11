@@ -82,6 +82,9 @@ class testCustomCallbackProxy(CustomLogger):
         # tokens used in response 
         usage = response_obj["usage"]
 
+        print("\n\n in custom callback vars my custom logger, ", vars(my_custom_logger))
+
+
         print(
             f"""
                 Model: {model},
