@@ -587,7 +587,7 @@ def _embedding_func_single(
                 input=input,
                 api_key="",
                 additional_args={"complete_input_dict": data},
-                original_response=response_body,
+                original_response=json.dumps(response_body),
             )
         if provider == "cohere":
             response = response_body.get("embeddings")
@@ -650,14 +650,5 @@ def embedding(
             total_tokens=input_tokens + 0
     )
     model_response.usage = usage
-
-    ## LOGGING
-    logging_obj.post_call(
-        input=input,
-        api_key=api_key,
-        additional_args={"complete_input_dict": {"model": model,
-                                                 "texts": input}},
-        original_response=embeddings,
-    )
     
     return model_response

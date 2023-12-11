@@ -4,7 +4,7 @@ import sys, os, time, inspect, asyncio, traceback
 from datetime import datetime
 import pytest
 sys.path.insert(0, os.path.abspath('../..'))
-from typing import Optional
+from typing import Optional, Literal, List
 from litellm import completion, embedding
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
@@ -32,16 +32,18 @@ class CompletionCustomHandler(CustomLogger): # https://docs.litellm.ai/docs/obse
     # Class variables or attributes
     def __init__(self):
         self.errors = []
+        self.states: Optional[List[Literal["sync_pre_api_call", "async_pre_api_call", "post_api_call", "sync_stream", "async_stream", "sync_success", "async_success", "sync_failure", "async_failure"]]] = []
 
     def log_pre_api_call(self, model, messages, kwargs): 
         try: 
+            self.states.append("sync_pre_api_call")
             ## MODEL
             assert isinstance(model, str)
             ## MESSAGES
-            assert isinstance(messages, list) and isinstance(messages[0], dict)
+            assert isinstance(messages, list)
             ## KWARGS
             assert isinstance(kwargs['model'], str)
-            assert isinstance(kwargs['messages'], list) and isinstance(kwargs['messages'][0], dict)
+            assert isinstance(kwargs['messages'], list) 
             assert isinstance(kwargs['optional_params'], dict)
             assert isinstance(kwargs['litellm_params'], dict) 
             assert isinstance(kwargs['start_time'], Optional[datetime])
@@ -53,9 +55,7 @@ class CompletionCustomHandler(CustomLogger): # https://docs.litellm.ai/docs/obse
 
     def log_post_api_call(self, kwargs, response_obj, start_time, end_time): 
         try:
-            print("IN POST CALL API")
-            print(f"kwargs input: {kwargs['input']}")
-            print(f"kwargs original response: {kwargs['original_response']}")
+            self.states.append("post_api_call")
             ## START TIME 
             assert isinstance(start_time, datetime)
             ## END TIME 
@@ -64,13 +64,13 @@ class CompletionCustomHandler(CustomLogger): # https://docs.litellm.ai/docs/obse
             assert response_obj == None
             ## KWARGS 
             assert isinstance(kwargs['model'], str)
-            assert isinstance(kwargs['messages'], list) and isinstance(kwargs['messages'][0], dict)
+            assert isinstance(kwargs['messages'], list)
             assert isinstance(kwargs['optional_params'], dict)
             assert isinstance(kwargs['litellm_params'], dict) 
             assert isinstance(kwargs['start_time'], Optional[datetime])
             assert isinstance(kwargs['stream'], bool)
             assert isinstance(kwargs['user'], Optional[str])
-            assert (isinstance(kwargs['input'], list) and isinstance(kwargs['input'][0], dict)) or isinstance(kwargs['input'], (dict, str))
+            assert isinstance(kwargs['input'], (list, dict, str))
             assert isinstance(kwargs['api_key'], Optional[str])
             assert isinstance(kwargs['original_response'], (str, litellm.CustomStreamWrapper)) or inspect.iscoroutine(kwargs['original_response']) or inspect.isasyncgen(kwargs['original_response'])
             assert isinstance(kwargs['additional_args'], Optional[dict])
@@ -81,6 +81,7 @@ class CompletionCustomHandler(CustomLogger): # https://docs.litellm.ai/docs/obse
     
     async def async_log_stream_event(self, kwargs, response_obj, start_time, end_time):
         try:
+            self.states.append("async_stream")
             ## START TIME 
             assert isinstance(start_time, datetime)
             ## END TIME 
@@ -106,6 +107,7 @@ class CompletionCustomHandler(CustomLogger): # https://docs.litellm.ai/docs/obse
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time): 
         try:
+            self.states.append("sync_success")
             ## START TIME 
             assert isinstance(start_time, datetime)
             ## END TIME 
@@ -131,6 +133,7 @@ class CompletionCustomHandler(CustomLogger): # https://docs.litellm.ai/docs/obse
 
     def log_failure_event(self, kwargs, response_obj, start_time, end_time): 
         try:
+            self.states.append("sync_failure")
             ## START TIME 
             assert isinstance(start_time, datetime)
             ## END TIME 
@@ -156,6 +159,7 @@ class CompletionCustomHandler(CustomLogger): # https://docs.litellm.ai/docs/obse
     
     async def async_log_pre_api_call(self, model, messages, kwargs):
         try: 
+            self.states.append("async_pre_api_call")
             ## MODEL
             assert isinstance(model, str)
             ## MESSAGES
@@ -174,21 +178,22 @@ class CompletionCustomHandler(CustomLogger): # https://docs.litellm.ai/docs/obse
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         try: 
+            self.states.append("async_success")
             ## START TIME 
             assert isinstance(start_time, datetime)
             ## END TIME 
             assert isinstance(end_time, datetime)
             ## RESPONSE OBJECT 
-            assert isinstance(response_obj, litellm.ModelResponse)
+            assert isinstance(response_obj, (litellm.ModelResponse, litellm.EmbeddingResponse))
             ## KWARGS
             assert isinstance(kwargs['model'], str)
-            assert isinstance(kwargs['messages'], list) and isinstance(kwargs['messages'][0], dict)
+            assert isinstance(kwargs['messages'], list)
             assert isinstance(kwargs['optional_params'], dict)
             assert isinstance(kwargs['litellm_params'], dict) 
             assert isinstance(kwargs['start_time'], Optional[datetime])
             assert isinstance(kwargs['stream'], bool)
             assert isinstance(kwargs['user'], Optional[str])
-            assert (isinstance(kwargs['input'], list) and isinstance(kwargs['input'][0], dict)) or isinstance(kwargs['input'], (dict, str))
+            assert isinstance(kwargs['input'], (list, dict, str))
             assert isinstance(kwargs['api_key'], Optional[str])
             assert isinstance(kwargs['original_response'], (str, litellm.CustomStreamWrapper)) or inspect.isasyncgen(kwargs['original_response']) or inspect.iscoroutine(kwargs['original_response'])
             assert isinstance(kwargs['additional_args'], Optional[dict])
@@ -199,6 +204,7 @@ class CompletionCustomHandler(CustomLogger): # https://docs.litellm.ai/docs/obse
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         try:
+            self.states.append("async_failure")
             ## START TIME 
             assert isinstance(start_time, datetime)
             ## END TIME 
@@ -207,21 +213,23 @@ class CompletionCustomHandler(CustomLogger): # https://docs.litellm.ai/docs/obse
             assert response_obj == None
             ## KWARGS
             assert isinstance(kwargs['model'], str)
-            assert isinstance(kwargs['messages'], list) and isinstance(kwargs['messages'][0], dict)
+            assert isinstance(kwargs['messages'], list)
             assert isinstance(kwargs['optional_params'], dict)
             assert isinstance(kwargs['litellm_params'], dict) 
             assert isinstance(kwargs['start_time'], Optional[datetime])
             assert isinstance(kwargs['stream'], bool)
             assert isinstance(kwargs['user'], Optional[str])
-            assert (isinstance(kwargs['input'], list) and isinstance(kwargs['input'][0], dict)) or isinstance(kwargs['input'], (dict, str))
+            assert isinstance(kwargs['input'], (list, str, dict))
             assert isinstance(kwargs['api_key'], Optional[str])
-            assert isinstance(kwargs['original_response'], (str, litellm.CustomStreamWrapper)) or inspect.isasyncgen(kwargs['original_response'])
+            assert isinstance(kwargs['original_response'], (str, litellm.CustomStreamWrapper)) or inspect.isasyncgen(kwargs['original_response']) or kwargs['original_response'] == None
             assert isinstance(kwargs['additional_args'], Optional[dict])
             assert isinstance(kwargs['log_event_type'], str) 
         except: 
             print(f"Assertion Error: {traceback.format_exc()}")
             self.errors.append(traceback.format_exc())
 
+
+# COMPLETION
 ## Test OpenAI + sync
 def test_chat_openai_stream():
     try: 
@@ -379,7 +387,7 @@ async def test_async_chat_azure_stream():
                 continue
         except:
             pass
-        time.sleep(1)
+        await asyncio.sleep(1)
         print(f"customHandler.errors: {customHandler.errors}")
         assert len(customHandler.errors) == 0
         litellm.callbacks = []
@@ -472,3 +480,101 @@ async def test_async_chat_bedrock_stream():
         pytest.fail(f"An exception occurred: {str(e)}")
 
 # asyncio.run(test_async_chat_bedrock_stream())
+
+# EMBEDDING
+## Test OpenAI + Async
+@pytest.mark.asyncio
+async def test_async_embedding_openai():
+    try: 
+        customHandler_success = CompletionCustomHandler()
+        customHandler_failure = CompletionCustomHandler()
+        litellm.callbacks = [customHandler_success]
+        response = await litellm.aembedding(model="azure/azure-embedding-model",
+                                input=["good morning from litellm"])
+        await asyncio.sleep(1)
+        print(f"customHandler_success.errors: {customHandler_success.errors}")
+        print(f"customHandler_success.states: {customHandler_success.states}")
+        assert len(customHandler_success.errors) == 0
+        assert len(customHandler_success.states) == 3 # pre, post, success
+        # test failure callback
+        litellm.callbacks = [customHandler_failure]
+        try: 
+            response = await litellm.aembedding(model="text-embedding-ada-002",
+                                    input=["good morning from litellm"],
+                                    api_key="my-bad-key")
+        except:
+            pass
+        await asyncio.sleep(1)
+        print(f"customHandler_failure.errors: {customHandler_failure.errors}")
+        print(f"customHandler_failure.states: {customHandler_failure.states}")
+        assert len(customHandler_failure.errors) == 0
+        assert len(customHandler_failure.states) == 3 # pre, post, success
+    except Exception as e: 
+        pytest.fail(f"An exception occurred: {str(e)}")
+
+# asyncio.run(test_async_embedding_openai())
+
+## Test Azure + Async
+@pytest.mark.asyncio
+async def test_async_embedding_azure():
+    try: 
+        customHandler_success = CompletionCustomHandler()
+        customHandler_failure = CompletionCustomHandler()
+        litellm.callbacks = [customHandler_success]
+        response = await litellm.aembedding(model="azure/azure-embedding-model",
+                                input=["good morning from litellm"])
+        await asyncio.sleep(1)
+        print(f"customHandler_success.errors: {customHandler_success.errors}")
+        print(f"customHandler_success.states: {customHandler_success.states}")
+        assert len(customHandler_success.errors) == 0
+        assert len(customHandler_success.states) == 3 # pre, post, success
+        # test failure callback
+        litellm.callbacks = [customHandler_failure]
+        try: 
+            response = await litellm.aembedding(model="azure/azure-embedding-model",
+                                    input=["good morning from litellm"],
+                                    api_key="my-bad-key")
+        except:
+            pass
+        await asyncio.sleep(1)
+        print(f"customHandler_failure.errors: {customHandler_failure.errors}")
+        print(f"customHandler_failure.states: {customHandler_failure.states}")
+        assert len(customHandler_failure.errors) == 0
+        assert len(customHandler_failure.states) == 3 # pre, post, success
+    except Exception as e: 
+        pytest.fail(f"An exception occurred: {str(e)}")
+
+# asyncio.run(test_async_embedding_azure())
+
+## Test Bedrock + Async
+@pytest.mark.asyncio
+async def test_async_embedding_bedrock():
+    try: 
+        customHandler_success = CompletionCustomHandler()
+        customHandler_failure = CompletionCustomHandler()
+        litellm.callbacks = [customHandler_success]
+        litellm.set_verbose = True
+        response = await litellm.aembedding(model="bedrock/cohere.embed-multilingual-v3",
+                                input=["good morning from litellm"], aws_region_name="os.environ/AWS_REGION_NAME_2")
+        await asyncio.sleep(1)
+        print(f"customHandler_success.errors: {customHandler_success.errors}")
+        print(f"customHandler_success.states: {customHandler_success.states}")
+        assert len(customHandler_success.errors) == 0
+        assert len(customHandler_success.states) == 3 # pre, post, success
+        # test failure callback
+        litellm.callbacks = [customHandler_failure]
+        try: 
+            response = await litellm.aembedding(model="bedrock/cohere.embed-multilingual-v3",
+                                    input=["good morning from litellm"],
+                                    aws_region_name="my-bad-region")
+        except:
+            pass
+        await asyncio.sleep(1)
+        print(f"customHandler_failure.errors: {customHandler_failure.errors}")
+        print(f"customHandler_failure.states: {customHandler_failure.states}")
+        assert len(customHandler_failure.errors) == 0
+        assert len(customHandler_failure.states) == 3 # pre, post, success
+    except Exception as e: 
+        pytest.fail(f"An exception occurred: {str(e)}")
+
+asyncio.run(test_async_embedding_bedrock())
