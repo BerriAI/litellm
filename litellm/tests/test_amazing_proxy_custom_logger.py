@@ -16,6 +16,11 @@ from litellm import embedding, completion, completion_cost, Timeout
 from litellm import RateLimitError
 import importlib, inspect
 
+# init callbacks to be empty
+litellm.success_callback = []
+litellm.callbacks = []
+litellm.failure_callback = []
+
 # test /chat/completion request to the proxy
 from fastapi.testclient import TestClient
 from fastapi import FastAPI
