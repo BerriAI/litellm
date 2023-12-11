@@ -1001,7 +1001,8 @@ def completion(
 
             data = {
                 "model": model, 
-                "messages": messages,  
+                "messages": messages,
+                "transforms": [],
                 **optional_params
             }
             ## LOGGING
