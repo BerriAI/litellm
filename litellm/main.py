@@ -190,6 +190,7 @@ async def acompletion(*args, **kwargs):
             # Call the synchronous function using run_in_executor
             response =  await loop.run_in_executor(None, func_with_context)
         if kwargs.get("stream", False): # return an async generator
+            print_verbose(f"ENTERS STREAMING FOR ACOMPLETION")
             return _async_streaming(response=response, model=model, custom_llm_provider=custom_llm_provider, args=args)
         else: 
             return response
@@ -202,6 +203,7 @@ async def acompletion(*args, **kwargs):
 async def _async_streaming(response, model, custom_llm_provider, args): 
     try: 
         async for line in response: 
+            print_verbose(f"line in async streaming: {line}")
             yield line
     except Exception as e: 
         raise exception_type(
@@ -1217,6 +1219,7 @@ def completion(
                 # "SageMaker is currently not supporting streaming responses."
                 
                 # fake streaming for sagemaker
+                print_verbose(f"ENTERS SAGEMAKER CUSTOMSTREAMWRAPPER")
                 resp_string = model_response["choices"][0]["message"]["content"]
                 response = CustomStreamWrapper(
                     resp_string, model, custom_llm_provider="sagemaker", logging_obj=logging

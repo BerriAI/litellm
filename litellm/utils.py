@@ -5685,6 +5685,7 @@ class CustomStreamWrapper:
                 else:
                     chunk = next(self.completion_stream)
                 if chunk is not None and chunk != b'':
+                    print_verbose(f"PROCESSED CHUNK PRE CHUNK CREATOR: {chunk}")
                     response = self.chunk_creator(chunk=chunk)
                     if response is None: 
                         continue
