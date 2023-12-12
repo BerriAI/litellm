@@ -1,5 +1,5 @@
 Task exception was never retrieved
-future: <Task finished name='Task-334' coro=<QueryEngine.aclose() done, defined at /opt/homebrew/lib/python3.11/site-packages/prisma/engine/query.py:110> exception=RuntimeError('Event loop is closed')>
+future: <Task finished name='Task-336' coro=<QueryEngine.aclose() done, defined at /opt/homebrew/lib/python3.11/site-packages/prisma/engine/query.py:110> exception=RuntimeError('Event loop is closed')>
 Traceback (most recent call last):
   File "/opt/homebrew/lib/python3.11/site-packages/prisma/engine/query.py", line 112, in aclose
     await self._close_session()

@@ -61,3 +61,9 @@ model_list:
     description: this is a test openai model
     id: 34339b1e-e030-4bcc-a531-c48559f10ce4
   model_name: test_openai_models
+- litellm_params:
+    model: gpt-3.5-turbo
+  model_info:
+    description: this is a test openai model
+    id: f6f74e14-ac64-4403-9365-319e584dcdc5
+  model_name: test_openai_models
