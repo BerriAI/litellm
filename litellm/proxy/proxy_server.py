@@ -874,16 +874,6 @@ async def startup_event():
         # add master key to db
         await generate_key_helper_fn(duration=None, models=[], aliases={}, config={}, spend=0, token=master_key)
 
-@router.on_event("shutdown")
-async def shutdown_event():
-    global prisma_client, master_key, user_custom_auth
-    if prisma_client:
-        print("Disconnecting from Prisma")
-        await prisma_client.disconnect()
-    
-    ## RESET CUSTOM VARIABLES ## 
-    master_key = None
-    user_custom_auth = None
 
 #### API ENDPOINTS ####
 @router.get("/v1/models", dependencies=[Depends(user_api_key_auth)])
@@ -1465,6 +1455,29 @@ async def get_routes():
         routes.append(route_info)
 
     return {"routes": routes}
+
+
+@router.on_event("shutdown")
+async def shutdown_event():
+    global prisma_client, master_key, user_custom_auth
+    if prisma_client:
+        print("Disconnecting from Prisma")
+        await prisma_client.disconnect()
+    
+    ## RESET CUSTOM VARIABLES ## 
+    cleanup_router_config_variables()
+
+def cleanup_router_config_variables():
+    global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, use_background_health_checks, health_check_interval
+    
+    # Set all variables to None
+    master_key = None
+    user_config_file_path = None
+    otel_logging = None
+    user_custom_auth = None
+    user_custom_auth_path = None
+    use_background_health_checks = None
+    health_check_interval = None
 
 
 app.include_router(router)
