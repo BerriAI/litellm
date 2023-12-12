@@ -20,23 +20,24 @@ import importlib, inspect
 from fastapi.testclient import TestClient
 from fastapi import FastAPI
 from litellm.proxy.proxy_server import router, save_worker_config, initialize  # Replace with the actual module where your FastAPI router is defined
-
-
 filepath = os.path.dirname(os.path.abspath(__file__))
-config_fp = f"{filepath}/test_configs/test_custom_logger.yaml"
 python_file_path = f"{filepath}/test_configs/custom_callbacks.py"
-save_worker_config(config=config_fp, model=None, alias=None, api_base=None, api_version=None, debug=False, temperature=None, max_tokens=None, request_timeout=600, max_budget=None, telemetry=False, drop_params=True, add_function_to_prompt=False, headers=None, save=False, use_queue=False)
-app = FastAPI()
-app.include_router(router)  # Include your router in the test app
-@app.on_event("startup")
-async def wrapper_startup_event():
-    initialize(config=config_fp)
+
+# @app.on_event("startup")
+# async def wrapper_startup_event():
+    # initialize(config=config_fp)
 
 # Use the app fixture in your client fixture
-@pytest.fixture()
-def client():
-    with TestClient(app) as client:
-        yield client
+
+def get_client(config_fp):
+    filepath = os.path.dirname(os.path.abspath(__file__))
+    config_fp = f"{filepath}/test_configs/{config_fp}"
+    initialize(config=config_fp)
+    app = FastAPI()
+    app.include_router(router)  # Include your router in the test app
+    return TestClient(app)
+
+    
 
 # Your bearer token
 token = os.getenv("PROXY_MASTER_KEY")
@@ -48,8 +49,9 @@ headers = {
 
 print("Testing proxy custom logger")
 
-def test_embedding(client):
+def test_embedding():
     try:
+        client = get_client(config_fp="test_custom_logger.yaml")
         litellm.set_verbose=False
         from litellm.proxy.utils import get_instance_fn
         my_custom_logger = get_instance_fn(
@@ -94,9 +96,10 @@ def test_embedding(client):
         pytest.fail(f"LiteLLM Proxy test failed. Exception {str(e)}")
 
 
-def test_chat_completion(client):
+def test_chat_completion():
     try:
          # Your test data
+        client = get_client(config_fp="test_custom_logger.yaml")
         print("initialized proxy")
         litellm.set_verbose=False
         from litellm.proxy.utils import get_instance_fn
@@ -157,9 +160,10 @@ def test_chat_completion(client):
         pytest.fail(f"LiteLLM Proxy test failed. Exception {str(e)}")
 
 
-def test_chat_completion_stream(client):
+def test_chat_completion_stream():
     try:
         # Your test data
+        client = get_client(config_fp="test_custom_logger.yaml")
         litellm.set_verbose=False
         from litellm.proxy.utils import get_instance_fn
         my_custom_logger = get_instance_fn(
