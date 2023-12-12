@@ -507,7 +507,6 @@ def test_aembedding_on_router():
 			model="text-embedding-ada-002",
 			input=["good morning from litellm 2"],
 		)
-		print("sync embedding response: ", response)
 		router.reset()
 	except Exception as e:
 		traceback.print_exc()

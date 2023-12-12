@@ -19,3 +19,27 @@ model_list:
   model_info:
     description: this is a test openai model
   model_name: test_openai_models
+- litellm_params:
+    model: gpt-3.5-turbo
+  model_info:
+    description: this is a test openai model
+    id: 56f1bd94-3b54-4b67-9ea2-7c70e9a3a709
+  model_name: test_openai_models
+- litellm_params:
+    model: gpt-3.5-turbo
+  model_info:
+    description: this is a test openai model
+    id: 4d1ee26c-abca-450c-8744-8e87fd6755e9
+  model_name: test_openai_models
+- litellm_params:
+    model: gpt-3.5-turbo
+  model_info:
+    description: this is a test openai model
+    id: 00e19c0f-b63d-42bb-88e9-016fb0c60764
+  model_name: test_openai_models
+- litellm_params:
+    model: gpt-3.5-turbo
+  model_info:
+    description: this is a test openai model
+    id: 79fc75bf-8e1b-47d5-8d24-9365a854af03
+  model_name: test_openai_models

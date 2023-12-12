@@ -1,13 +1,12 @@
 ### What this tests ####
-import sys, os, time, inspect, asyncio
+import sys, os, time, inspect, asyncio, traceback
 import pytest
 sys.path.insert(0, os.path.abspath('../..'))
 
 from litellm import completion, embedding
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
- 
-async_success = False
+
 class MyCustomHandler(CustomLogger):
     complete_streaming_response_in_callback = ""
     def __init__(self):
@@ -51,8 +50,6 @@ class MyCustomHandler(CustomLogger):
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time): 
         print(f"On Async success")
         self.async_success = True
-        print("Value of async success: ", self.async_success)
-        print("\n kwargs: ", kwargs)
         if kwargs.get("model") == "text-embedding-ada-002":
             self.async_success_embedding = True
             self.async_embedding_kwargs = kwargs
@@ -64,8 +61,6 @@ class MyCustomHandler(CustomLogger):
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time): 
         print(f"On Async Failure")
         self.async_failure = True
-        print("Value of async failure: ", self.async_failure)
-        print("\n kwargs: ", kwargs)
         if kwargs.get("model") == "text-embedding-ada-002":
             self.async_failure_embedding = True
             self.async_embedding_kwargs_fail = kwargs
@@ -218,11 +213,26 @@ def test_azure_completion_stream():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-def test_async_custom_handler():
-    try:
-        customHandler2 = MyCustomHandler()
-        litellm.callbacks = [customHandler2]
-        litellm.set_verbose = True
+@pytest.mark.asyncio
+async def test_async_custom_handler_completion(): 
+    try: 
+        customHandler_success = MyCustomHandler()
+        customHandler_failure = MyCustomHandler()
+        # success
+        assert customHandler_success.async_success == False
+        litellm.callbacks = [customHandler_success]
+        response = await litellm.acompletion(
+                model="gpt-3.5-turbo", 
+                messages=[{
+                    "role": "user",
+                    "content": "hello from litellm test",
+                }]
+            )
+        await asyncio.sleep(1)
+        assert customHandler_success.async_success == True, "async success is not set to True even after success"
+        assert customHandler_success.async_completion_kwargs.get("model") == "gpt-3.5-turbo"
+        # failure
+        litellm.callbacks = [customHandler_failure]
         messages = [
             {"role": "system", "content": "You are a helpful assistant."},
             {
@@ -230,75 +240,57 @@ def test_async_custom_handler():
                 "content": "how do i kill someone",
             },
         ]
-        async def test_1():
-            try:
-                response = await litellm.acompletion(
-                    model="gpt-3.5-turbo", 
-                    messages=messages,
-                    api_key="test",
-                )
-            except:
-                pass
 
-        assert customHandler2.async_failure == False 
-        asyncio.run(test_1())
-        assert customHandler2.async_failure == True, "async failure is not set to True even after failure"        
-        assert customHandler2.async_completion_kwargs_fail.get("model") == "gpt-3.5-turbo"
-        assert len(str(customHandler2.async_completion_kwargs_fail.get("exception"))) > 10 # exppect APIError("OpenAIException - Error code: 401 - {'error': {'message': 'Incorrect API key provided: test. You can find your API key at https://platform.openai.com/account/api-keys.', 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_api_key'}}"), 'traceback_exception': 'Traceback (most recent call last):\n  File "/Users/ishaanjaffer/Github/litellm/litellm/llms/openai.py", line 269, in acompletion\n    response = await openai_aclient.chat.completions.create(**data)\n  File "/Library/Frameworks/Python.framework/Versions/3.10/lib/python3.10/site-packages/openai/resources/chat/completions.py", line 119
-        print("Passed setting async failure")
-
-        async def test_2():
+        assert customHandler_failure.async_failure == False 
+        try: 
             response = await litellm.acompletion(
-                model="gpt-3.5-turbo", 
-                messages=[{
-                    "role": "user",
-                    "content": "hello from litellm test",
-                }]
-            )
-            print("\n response", response)
-        assert customHandler2.async_success == False
-        asyncio.run(test_2())
-        assert customHandler2.async_success == True, "async success is not set to True even after success"
-        assert customHandler2.async_completion_kwargs.get("model") == "gpt-3.5-turbo"
+                        model="gpt-3.5-turbo", 
+                        messages=messages,
+                        api_key="my-bad-key",
+                    )
+        except:
+            pass
+        assert customHandler_failure.async_failure == True, "async failure is not set to True even after failure"        
+        assert customHandler_failure.async_completion_kwargs_fail.get("model") == "gpt-3.5-turbo"
+        assert len(str(customHandler_failure.async_completion_kwargs_fail.get("exception"))) > 10 # expect APIError("OpenAIException - Error code: 401 - {'error': {'message': 'Incorrect API key provided: test. You can find your API key at https://platform.openai.com/account/api-keys.', 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_api_key'}}"), 'traceback_exception': 'Traceback (most recent call last):\n  File "/Users/ishaanjaffer/Github/litellm/litellm/llms/openai.py", line 269, in acompletion\n    response = await openai_aclient.chat.completions.create(**data)\n  File "/Library/Frameworks/Python.framework/Versions/3.10/lib/python3.10/site-packages/openai/resources/chat/completions.py", line 119
+        litellm.callbacks = []
+        print("Passed setting async failure")
+    except Exception as e:
+        pytest.fail(f"An exception occurred - {str(e)}")
+# asyncio.run(test_async_custom_handler_completion())
 
-
-        async def test_3():
-            response = await litellm.aembedding(
+@pytest.mark.asyncio
+async def test_async_custom_handler_embedding(): 
+    try: 
+        customHandler_embedding = MyCustomHandler()
+        litellm.callbacks = [customHandler_embedding]
+        # success
+        assert customHandler_embedding.async_success_embedding == False
+        response = await litellm.aembedding(
                 model="text-embedding-ada-002", 
                 input = ["hello world"],
             )
-            print("\n response", response)
-        assert customHandler2.async_success_embedding == False
-        asyncio.run(test_3())
-        assert customHandler2.async_success_embedding == True, "async_success_embedding is not set to True even after success"
-        assert customHandler2.async_embedding_kwargs.get("model") == "text-embedding-ada-002"
-        assert customHandler2.async_embedding_response["usage"]["prompt_tokens"] ==2
+        await asyncio.sleep(1)
+        assert customHandler_embedding.async_success_embedding == True, "async_success_embedding is not set to True even after success"
+        assert customHandler_embedding.async_embedding_kwargs.get("model") == "text-embedding-ada-002"
+        assert customHandler_embedding.async_embedding_response["usage"]["prompt_tokens"] ==2
         print("Passed setting async success: Embedding")
-
-
-        print("Testing custom failure callback for embedding")
-
-        async def test_4():
-            try:
-                response = await litellm.aembedding(
-                    model="text-embedding-ada-002", 
-                    input = ["hello world"],
-                    api_key="test",
-                )
-            except:
-                pass
-
-        assert customHandler2.async_failure_embedding == False 
-        asyncio.run(test_4())
-        assert customHandler2.async_failure_embedding == True, "async failure embedding is not set to True even after failure"        
-        assert customHandler2.async_embedding_kwargs_fail.get("model") == "text-embedding-ada-002"
-        assert len(str(customHandler2.async_embedding_kwargs_fail.get("exception"))) > 10 # exppect APIError("OpenAIException - Error code: 401 - {'error': {'message': 'Incorrect API key provided: test. You can find your API key at https://platform.openai.com/account/api-keys.', 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_api_key'}}"), 'traceback_exception': 'Traceback (most recent call last):\n  File "/Users/ishaanjaffer/Github/litellm/litellm/llms/openai.py", line 269, in acompletion\n    response = await openai_aclient.chat.completions.create(**data)\n  File "/Library/Frameworks/Python.framework/Versions/3.10/lib/python3.10/site-packages/openai/resources/chat/completions.py", line 119
-        print("Passed setting async failure")
-
+        # failure 
+        assert customHandler_embedding.async_failure_embedding == False
+        try: 
+            response = await litellm.aembedding(
+                        model="text-embedding-ada-002", 
+                        input = ["hello world"],
+                        api_key="my-bad-key",
+                    )
+        except: 
+            pass
+        assert customHandler_embedding.async_failure_embedding == True, "async failure embedding is not set to True even after failure"        
+        assert customHandler_embedding.async_embedding_kwargs_fail.get("model") == "text-embedding-ada-002"
+        assert len(str(customHandler_embedding.async_embedding_kwargs_fail.get("exception"))) > 10 # exppect APIError("OpenAIException - Error code: 401 - {'error': {'message': 'Incorrect API key provided: test. You can find your API key at https://platform.openai.com/account/api-keys.', 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_api_key'}}"), 'traceback_exception': 'Traceback (most recent call last):\n  File "/Users/ishaanjaffer/Github/litellm/litellm/llms/openai.py", line 269, in acompletion\n    response = await openai_aclient.chat.completions.create(**data)\n  File "/Library/Frameworks/Python.framework/Versions/3.10/lib/python3.10/site-packages/openai/resources/chat/completions.py", line 119
     except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-# test_async_custom_handler()
-
+        pytest.fail(f"An exception occurred - {str(e)}")
+asyncio.run(test_async_custom_handler_embedding())
 from litellm import Cache
 def test_redis_cache_completion_stream():
     # Important Test - This tests if we can add to streaming cache, when custom callbacks are set 
