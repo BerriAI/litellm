@@ -32,7 +32,7 @@ def get_client(config_fp):
     return TestClient(app)
 
 
-def test_custom_auth(client):
+def test_custom_auth():
     try:
         client = get_client(config_fp="test_config_custom_auth.yaml")
          # Your test data
