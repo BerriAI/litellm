@@ -8,6 +8,7 @@
 #  Thank you ! We ❤️ you! - Krrish & Ishaan 
 
 import os, openai, sys, json, inspect, uuid, datetime, threading
+from re import T
 from typing import Any
 from functools import partial
 import dotenv, traceback, random, asyncio, time, contextvars
@@ -175,7 +176,8 @@ async def acompletion(*args, **kwargs):
             or custom_llm_provider == "deepinfra"
             or custom_llm_provider == "perplexity"
             or custom_llm_provider == "text-completion-openai"
-            or custom_llm_provider == "huggingface"): # currently implemented aiohttp calls for just azure and openai, soon all. 
+            or custom_llm_provider == "huggingface"
+            or custom_llm_provider == "ollama"): # currently implemented aiohttp calls for just azure and openai, soon all. 
             if kwargs.get("stream", False): 
                 response = completion(*args, **kwargs)
             else:
@@ -1318,7 +1320,9 @@ def completion(
                     async_generator = ollama.async_get_ollama_response_stream(api_base, model, prompt, optional_params, logging_obj=logging)
                     return async_generator
 
-            generator = ollama.get_ollama_response_stream(api_base, model, prompt, optional_params, logging_obj=logging)
+            generator = ollama.get_ollama_response_stream(api_base, model, prompt, optional_params, logging_obj=logging, acompletion=acompletion, model_response=model_response, encoding=encoding)
+            if acompletion is True:
+                return generator
             if optional_params.get("stream", False) == True:
                 # assume all ollama responses are streamed
                 response = CustomStreamWrapper(
