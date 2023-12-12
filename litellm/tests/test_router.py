@@ -366,7 +366,7 @@ def test_function_calling():
 		}
 	]
 
-	router = Router(model_list=model_list, routing_strategy="latency-based-routing")
+	router = Router(model_list=model_list)
 	response = router.completion(model="gpt-3.5-turbo-0613", messages=messages, functions=functions)
 	router.reset()
 	print(response)
