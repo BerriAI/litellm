@@ -31,6 +31,12 @@ class MyCustomHandler(CustomLogger):
         self.previous_models += len(kwargs["litellm_params"]["metadata"]["previous_models"]) # {"previous_models": [{"model": litellm_model_name, "exception_type": AuthenticationError, "exception_string": <complete_traceback>}]}
         print(f"self.previous_models: {self.previous_models}")
         print(f"On Success")
+    
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time): 
+        print(f"previous_models: {kwargs['litellm_params']['metadata']['previous_models']}")
+        self.previous_models += len(kwargs["litellm_params"]["metadata"]["previous_models"]) # {"previous_models": [{"model": litellm_model_name, "exception_type": AuthenticationError, "exception_string": <complete_traceback>}]}
+        print(f"self.previous_models: {self.previous_models}")
+        print(f"On Success")
 
     def log_failure_event(self, kwargs, response_obj, start_time, end_time): 
         print(f"On Failure")
@@ -111,30 +117,29 @@ def test_sync_fallbacks():
         print(e)
 # test_sync_fallbacks() 
 
-def test_async_fallbacks(): 
+@pytest.mark.asyncio
+async def test_async_fallbacks(): 
     litellm.set_verbose = False
     router = Router(model_list=model_list, 
                 fallbacks=[{"azure/gpt-3.5-turbo": ["gpt-3.5-turbo"]}], 
                 context_window_fallbacks=[{"azure/gpt-3.5-turbo-context-fallback": ["gpt-3.5-turbo-16k"]}, {"gpt-3.5-turbo": ["gpt-3.5-turbo-16k"]}],
                 set_verbose=False)
-    async def test_get_response():
-        customHandler = MyCustomHandler()
-        litellm.callbacks = [customHandler]
-        user_message = "Hello, how are you?"
-        messages = [{"content": user_message, "role": "user"}]
-        try:
-            response = await router.acompletion(**kwargs)
-            print(f"customHandler.previous_models: {customHandler.previous_models}")
-            time.sleep(0.05) # allow a delay as success_callbacks are on a separate thread
-            assert customHandler.previous_models == 1 # 0 retries, 1 fallback
-            router.reset()
-        except litellm.Timeout as e: 
-            pass
-        except Exception as e:
-            pytest.fail(f"An exception occurred: {e}")
-        finally:
-            router.reset()
-    asyncio.run(test_get_response())
+    customHandler = MyCustomHandler()
+    litellm.callbacks = [customHandler]
+    user_message = "Hello, how are you?"
+    messages = [{"content": user_message, "role": "user"}]
+    try:
+        response = await router.acompletion(**kwargs)
+        print(f"customHandler.previous_models: {customHandler.previous_models}")
+        await asyncio.sleep(0.05) # allow a delay as success_callbacks are on a separate thread
+        assert customHandler.previous_models == 1 # 0 retries, 1 fallback
+        router.reset()
+    except litellm.Timeout as e: 
+        pass
+    except Exception as e:
+        pytest.fail(f"An exception occurred: {e}")
+    finally:
+        router.reset()
 
 # test_async_fallbacks()
 
@@ -184,26 +189,24 @@ def test_dynamic_fallbacks_sync():
 
 # test_dynamic_fallbacks_sync()
 
-def test_dynamic_fallbacks_async(): 
+@pytest.mark.asyncio
+async def test_dynamic_fallbacks_async(): 
     """
     Allow setting the fallback in the router.completion() call. 
     """
-    async def test_get_response():
-         try: 
-            customHandler = MyCustomHandler()
-            litellm.callbacks = [customHandler]
-            router = Router(model_list=model_list, set_verbose=True)
-            kwargs = {}
-            kwargs["model"] = "azure/gpt-3.5-turbo"
-            kwargs["messages"] = [{"role": "user", "content": "Hey, how's it going?"}]
-            kwargs["fallbacks"] = [{"azure/gpt-3.5-turbo": ["gpt-3.5-turbo"]}]
-            response = await router.acompletion(**kwargs)
-            print(f"response: {response}")
-            time.sleep(0.05) # allow a delay as success_callbacks are on a separate thread
-            assert customHandler.previous_models == 1 # 0 retries, 1 fallback
-            router.reset()
-         except Exception as e:
-              pytest.fail(f"An exception occurred - {e}")
-    asyncio.run(test_get_response())
-
+    try: 
+        customHandler = MyCustomHandler()
+        litellm.callbacks = [customHandler]
+        router = Router(model_list=model_list, set_verbose=True)
+        kwargs = {}
+        kwargs["model"] = "azure/gpt-3.5-turbo"
+        kwargs["messages"] = [{"role": "user", "content": "Hey, how's it going?"}]
+        kwargs["fallbacks"] = [{"azure/gpt-3.5-turbo": ["gpt-3.5-turbo"]}]
+        response = await router.acompletion(**kwargs)
+        print(f"response: {response}")
+        await asyncio.sleep(0.05) # allow a delay as success_callbacks are on a separate thread
+        assert customHandler.previous_models == 1 # 0 retries, 1 fallback
+        router.reset()
+    except Exception as e:
+        pytest.fail(f"An exception occurred - {e}")
 # test_dynamic_fallbacks_async()
