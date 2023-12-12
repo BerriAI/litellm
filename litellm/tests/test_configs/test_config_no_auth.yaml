@@ -44,14 +44,8 @@ model_list:
     id: 79fc75bf-8e1b-47d5-8d24-9365a854af03
   model_name: test_openai_models
 - litellm_params:
-    model: gpt-3.5-turbo
-  model_info:
-    description: this is a test openai model
-    id: 78ec9388-427e-49c7-bdf2-355f00a6b246
-  model_name: test_openai_models
-- litellm_params:
-    model: gpt-3.5-turbo
-  model_info:
-    description: this is a test openai model
-    id: cb373690-360e-4aba-8fae-71de12f5278e
-  model_name: test_openai_models
+    api_base: os.environ/AZURE_API_BASE
+    api_key: os.environ/AZURE_API_KEY
+    api_version: 2023-07-01-preview
+    model: azure/azure-embedding-model
+  model_name: azure-embedding-model
