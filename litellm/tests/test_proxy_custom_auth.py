@@ -23,18 +23,19 @@ from litellm.proxy.proxy_server import router, save_worker_config, initialize  #
 
 # Here you create a fixture that will be used by your tests
 # Make sure the fixture returns TestClient(app)
-def get_client(config_fp):
+@pytest.fixture(scope="function")
+def client():
     filepath = os.path.dirname(os.path.abspath(__file__))
-    config_fp = f"{filepath}/test_configs/{config_fp}"
+    config_fp = f"{filepath}/test_configs/test_config_custom_auth.yaml"
+    # initialize can get run in parallel, it sets specific variables for the fast api app, sinc eit gets run in parallel different tests use the wrong variables
     initialize(config=config_fp)
     app = FastAPI()
     app.include_router(router)  # Include your router in the test app
     return TestClient(app)
 
 
-def test_custom_auth():
+def test_custom_auth(client):
     try:
-        client = get_client(config_fp="test_config_custom_auth.yaml")
          # Your test data
         test_data = {
             "model": "openai-model",
