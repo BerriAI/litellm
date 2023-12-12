@@ -7,6 +7,7 @@
 #
 #  Thank you ! We ❤️ you! - Krrish & Ishaan 
 
+import copy
 from datetime import datetime
 from typing import Dict, List, Optional, Union, Literal, Any
 import random, threading, time, traceback, uuid
@@ -879,7 +880,7 @@ class Router:
         return chosen_item
 
     def set_model_list(self, model_list: list):
-        self.model_list = model_list
+        self.model_list = copy.deepcopy(model_list)
         # we add api_base/api_key each model so load balancing between azure/gpt on api_base1 and api_base2 works 
         import os
         for model in self.model_list:

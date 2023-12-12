@@ -607,7 +607,7 @@ def completion(
                 )
                 raise e
 
-            if optional_params.get("stream", False) or acompletion == True:
+            if optional_params.get("stream", False):
                 ## LOGGING
                 logging.post_call(
                     input=messages,
