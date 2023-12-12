@@ -19,3 +19,4 @@ litellm/proxy/_secret_config.yaml
 litellm/tests/aiologs.log
 litellm/tests/exception_data.txt
 litellm/tests/config_*.yaml
+litellm/tests/langfuse.log
