@@ -390,15 +390,13 @@ async def test_async_embedding_azure():
         print(f"Assertion Error: {traceback.format_exc()}")
         pytest.fail(f"An exception occurred - {str(e)}")
 # asyncio.run(test_async_embedding_azure())
-# Azure OpenAI call w/ Retries + Fallbacks
+# Azure OpenAI call w/ Fallbacks
 ## COMPLETION
 @pytest.mark.asyncio
-async def test_async_chat_azure_with_retries_and_fallbacks(): 
+async def test_async_chat_azure_with_fallbacks(): 
     try: 
         customHandler_fallbacks = CompletionCustomHandler()
-        customHandler_streaming = CompletionCustomHandler()
-        customHandler_failure = CompletionCustomHandler()
-        litellm.callbacks = [customHandler_fallbacks]
+        # with fallbacks 
         model_list = [
                     { 
                         "model_name": "gpt-3.5-turbo", # openai model name 
@@ -430,53 +428,7 @@ async def test_async_chat_azure_with_retries_and_fallbacks():
         print(f"customHandler_fallbacks.states: {customHandler_fallbacks.states}")
         assert len(customHandler_fallbacks.errors) == 0
         assert len(customHandler_fallbacks.states) == 6 # pre, post, failure, pre, post, success
-        
-        # # streaming 
-        # litellm.callbacks = [customHandler_streaming]
-        # router2 = Router(model_list=model_list) # type: ignore
-        # response = await router2.acompletion(model="gpt-3.5-turbo",
-        #                         messages=[{
-        #                             "role": "user",
-        #                             "content": "Hi 👋 - i'm openai"
-        #                         }],
-        #                         stream=True)
-        # async for chunk in response: 
-        #     continue
-        # await asyncio.sleep(1)
-        # print(f"customHandler.states: {customHandler_streaming.states}")
-        # assert len(customHandler_streaming.errors) == 0
-        # assert len(customHandler_streaming.states) >= 4 # pre, post, stream (multiple times), success
-        # # failure 
-        # model_list = [
-        #             { 
-        #                 "model_name": "gpt-3.5-turbo", # openai model name 
-        #                 "litellm_params": { # params for litellm completion/embedding call 
-        #                     "model": "azure/chatgpt-v-2", 
-        #                     "api_key": "my-bad-key",
-        #                     "api_version": os.getenv("AZURE_API_VERSION"),
-        #                     "api_base": os.getenv("AZURE_API_BASE")
-        #                 },
-        #                 "tpm": 240000,
-        #                 "rpm": 1800
-        #             },
-        #         ]
-        # litellm.callbacks = [customHandler_failure]
-        # router3 = Router(model_list=model_list) # type: ignore
-        # try: 
-        #     response = await router3.acompletion(model="gpt-3.5-turbo",
-        #                             messages=[{
-        #                                 "role": "user",
-        #                                 "content": "Hi 👋 - i'm openai"
-        #                             }])
-        #     print(f"response in router3 acompletion: {response}")
-        # except:
-        #     pass
-        # await asyncio.sleep(1)
-        # print(f"customHandler.states: {customHandler_failure.states}")
-        # assert len(customHandler_failure.errors) == 0
-        # assert len(customHandler_failure.states) == 3 # pre, post, failure
-        # assert "async_failure" in customHandler_failure.states
     except Exception as e: 
         print(f"Assertion Error: {traceback.format_exc()}")
         pytest.fail(f"An exception occurred - {str(e)}")
-asyncio.run(test_async_chat_azure_with_retries_and_fallbacks())
+# asyncio.run(test_async_chat_azure_with_fallbacks())
