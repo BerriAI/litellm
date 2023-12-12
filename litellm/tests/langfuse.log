@@ -1,5 +1,5 @@
 Task exception was never retrieved
-future: <Task finished name='Task-295' coro=<QueryEngine.aclose() done, defined at /opt/homebrew/lib/python3.11/site-packages/prisma/engine/query.py:110> exception=RuntimeError('Event loop is closed')>
+future: <Task finished name='Task-299' coro=<QueryEngine.aclose() done, defined at /opt/homebrew/lib/python3.11/site-packages/prisma/engine/query.py:110> exception=RuntimeError('Event loop is closed')>
 Traceback (most recent call last):
   File "/opt/homebrew/lib/python3.11/site-packages/prisma/engine/query.py", line 112, in aclose
     await self._close_session()
@@ -28,4 +28,6 @@ Traceback (most recent call last):
   File "/opt/homebrew/Cellar/python@3.11/3.11.6_1/Frameworks/Python.framework/Versions/3.11/lib/python3.11/asyncio/base_events.py", line 519, in _check_closed
     raise RuntimeError('Event loop is closed')
 RuntimeError: Event loop is closed
+Giving up get_data(...) after 3 tries (prisma.errors.ClientNotConnectedError: Client is not connected to the query engine, you must call `connect()` before attempting to query data.)
+Giving up get_data(...) after 3 tries (prisma.errors.ClientNotConnectedError: Client is not connected to the query engine, you must call `connect()` before attempting to query data.)
 Giving up get_data(...) after 3 tries (prisma.errors.ClientNotConnectedError: Client is not connected to the query engine, you must call `connect()` before attempting to query data.)
