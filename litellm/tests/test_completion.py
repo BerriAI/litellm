@@ -1084,7 +1084,52 @@ def test_completion_chat_sagemaker():
         assert len(complete_response) > 0
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_chat_sagemaker()
+# test_completion_chat_sagemaker()
+
+
+def test_completion_chat_sagemaker():
+    try:
+        messages = [{"role": "user", "content": "Hey, how's it going?"}]
+        litellm.set_verbose=True
+        response = completion(
+            model="sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4", 
+            messages=messages,
+            max_tokens=100,
+            temperature=0.7,
+            stream=True,
+        )
+        # Add any assertions here to check the response 
+        complete_response = "" 
+        for chunk in response:
+            complete_response += chunk.choices[0].delta.content or "" 
+        print(f"complete_response: {complete_response}")
+        assert len(complete_response) > 0
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+import asyncio
+@pytest.mark.asyncio
+async def test_completion_chat_sagemaker(): 
+    try: 
+        messages = [{"role": "user", "content": "Hey, how's it going?"}]
+        litellm.set_verbose=True
+        response = await litellm.acompletion(
+            model="sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4", 
+            messages=messages,
+            max_tokens=100,
+            temperature=0.7,
+            stream=True,
+        )
+        # Add any assertions here to check the response 
+        complete_response = "" 
+        async for chunk in response:
+            complete_response += chunk.choices[0].delta.content or "" 
+        print(f"complete_response: {complete_response}")
+        assert len(complete_response) > 0
+    except: 
+        pass
+
+asyncio.run(test_completion_chat_sagemaker())
 
 def test_completion_chat_sagemaker_mistral(): 
     try: 
