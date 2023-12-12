@@ -1098,7 +1098,6 @@ async def embeddings(request: Request, user_api_key_dict: UserAPIKeyAuth = Depen
         
         ### CALL HOOKS ### - modify incoming data / reject request before calling the model
         data = await proxy_logging_obj.pre_call_hook(user_api_key_dict=user_api_key_dict, data=data, call_type="embeddings")
-        print(f'final data: {data}')
         ## ROUTE TO CORRECT ENDPOINT ##
         if llm_router is not None and data["model"] in router_model_names: # model in router model list 
             response = await llm_router.aembedding(**data)
