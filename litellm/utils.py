@@ -2112,6 +2112,39 @@ def get_litellm_params(
     return litellm_params
 
 
+def get_optional_params_embeddings(
+    # 2 optional params
+    user=None, 
+    encoding_format=None,
+    custom_llm_provider="",
+    **kwargs
+):
+    # retrieve all parameters passed to the function
+    passed_params = locals()
+    custom_llm_provider = passed_params.pop("custom_llm_provider", None)
+    special_params = passed_params.pop("kwargs")
+    for k, v in special_params.items():
+        passed_params[k] = v
+    
+    default_params = {
+        "user": None,
+        "encoding_format": None
+    }
+
+    non_default_params = {k: v for k, v in passed_params.items() if (k in default_params and v != default_params[k])}
+
+    ## raise exception if non-default value passed for non-openai/azure embedding calls
+    if custom_llm_provider != "openai" and custom_llm_provider != "azure":
+        if len(non_default_params.keys()) > 0: 
+            if litellm.drop_params is True: 
+                for k in non_default_params.keys(): 
+                    passed_params.pop(k, None)
+                return passed_params
+            raise UnsupportedParamsError(status_code=500, message=f"Setting user/encoding format is not supported by {custom_llm_provider}. To drop it from the call, set `litellm.drop_params = True`.")
+    
+    final_params = {**non_default_params, **kwargs}
+    return final_params
+
 def get_optional_params(  # use the openai defaults
     # 12 optional params
     functions=[],

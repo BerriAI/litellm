@@ -916,7 +916,7 @@ async def completion(request: Request, model: Optional[str] = None, user_api_key
         except: 
             data = json.loads(body_str)
         
-        data["user"] = user_api_key_dict.user_id
+        data["user"] = data.get("user", user_api_key_dict.user_id)
         data["model"] = (
             general_settings.get("completion_model", None) # server default
             or user_model # model name passed via cli args
@@ -1066,7 +1066,7 @@ async def embeddings(request: Request, user_api_key_dict: UserAPIKeyAuth = Depen
             "body": copy.copy(data)  # use copy instead of deepcopy
         }
 
-        data["user"] = user_api_key_dict.user_id
+        data["user"] = data.get("user", user_api_key_dict.user_id)
         data["model"] = (
             general_settings.get("embedding_model", None) # server default
             or user_model # model name passed via cli args
@@ -1081,7 +1081,6 @@ async def embeddings(request: Request, user_api_key_dict: UserAPIKeyAuth = Depen
             data["metadata"] = {"user_api_key": user_api_key_dict.api_key}
             data["metadata"]["headers"] = dict(request.headers)
         router_model_names = [m["model_name"] for m in llm_model_list] if llm_model_list is not None else []
-        print(f"received data: {data['input']}")
         if "input" in data and isinstance(data['input'], list) and isinstance(data['input'][0], list) and isinstance(data['input'][0][0], int): # check if array of tokens passed in
             # check if non-openai/azure model called - e.g. for langchain integration
             if llm_model_list is not None and data["model"] in router_model_names: 
@@ -1099,7 +1098,7 @@ async def embeddings(request: Request, user_api_key_dict: UserAPIKeyAuth = Depen
         
         ### CALL HOOKS ### - modify incoming data / reject request before calling the model
         data = await proxy_logging_obj.pre_call_hook(user_api_key_dict=user_api_key_dict, data=data, call_type="embeddings")
-
+        print(f'final data: {data}')
         ## ROUTE TO CORRECT ENDPOINT ##
         if llm_router is not None and data["model"] in router_model_names: # model in router model list 
             response = await llm_router.aembedding(**data)
