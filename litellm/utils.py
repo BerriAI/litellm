@@ -5554,6 +5554,7 @@ class CustomStreamWrapper:
                     model_response.choices[0].finish_reason = response_obj["finish_reason"]
                     self.sent_last_chunk = True
             elif self.custom_llm_provider == "sagemaker":
+                print_verbose(f"ENTERS SAGEMAKER STREAMING")
                 if len(self.completion_stream)==0:
                     if self.sent_last_chunk: 
                         raise StopIteration
@@ -5561,6 +5562,7 @@ class CustomStreamWrapper:
                         model_response.choices[0].finish_reason = "stop"
                         self.sent_last_chunk = True
                 new_chunk = self.completion_stream
+                print_verbose(f"sagemaker chunk: {new_chunk}")
                 completion_obj["content"] = new_chunk
                 self.completion_stream = self.completion_stream[len(self.completion_stream):]
             elif self.custom_llm_provider == "petals":
@@ -5723,6 +5725,7 @@ class CustomStreamWrapper:
                 # example - boto3 bedrock llms
                 processed_chunk = next(self)
                 asyncio.create_task(self.logging_obj.async_success_handler(processed_chunk,))
+                print_verbose(f"PROCESSED CHUNK IN __ANEXT__: {processed_chunk}")
                 return processed_chunk
         except StopAsyncIteration:
             raise
