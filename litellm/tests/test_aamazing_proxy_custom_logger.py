@@ -33,7 +33,7 @@ async def wrapper_startup_event():
     initialize(config=config_fp)
 
 # Use the app fixture in your client fixture
-@pytest.fixture(scope="function")
+@pytest.fixture()
 def client():
     with TestClient(app) as client:
         yield client
@@ -45,29 +45,25 @@ headers = {
     "Authorization": f"Bearer {token}"
 }
 
-# init callbacks to be empty
-litellm.success_callback = []
-litellm.callbacks = []
-litellm.failure_callback = []
-litellm._async_success_callback = []
 
 print("Testing proxy custom logger")
 
 def test_embedding(client):
     try:
+        litellm.set_verbose=False
+        from litellm.proxy.utils import get_instance_fn
+        my_custom_logger = get_instance_fn(
+            value = "custom_callbacks.my_custom_logger",
+            config_file_path=python_file_path
+        )
+        print("id of initialized custom logger", id(my_custom_logger))
+        litellm.callbacks = [my_custom_logger]
         # Your test data
         print("initialized proxy")
         # import the initialized custom logger
         print(litellm.callbacks)
 
         # assert len(litellm.callbacks) == 1 # assert litellm is initialized with 1 callback
-        
-        my_custom_logger = litellm.callbacks[0]
-        for callback in litellm.callbacks:
-            if "testCustomCallbackProxy" in str(callback):
-                my_custom_logger = callback
-                break
-        print("LiteLLM Callbacks", litellm.callbacks)
         print("my_custom_logger", my_custom_logger)
         assert my_custom_logger.async_success_embedding == False
 
@@ -77,11 +73,9 @@ def test_embedding(client):
         }
         response = client.post("/embeddings", json=test_data, headers=headers)
         print("made request", response.status_code, response.text)
-        print("LiteLLM Callbacks", litellm.callbacks)
-        print("my_custom_logger", my_custom_logger)
+        print("vars my custom logger /embeddings", vars(my_custom_logger), "id", id(my_custom_logger))
         assert my_custom_logger.async_success_embedding == True                             # checks if the status of async_success is True, only the async_log_success_event can set this to true
         assert my_custom_logger.async_embedding_kwargs["model"] == "azure-embedding-model"  # checks if kwargs passed to async_log_success_event are correct
-        
         kwargs = my_custom_logger.async_embedding_kwargs
         litellm_params = kwargs.get("litellm_params")
         metadata = litellm_params.get("metadata", None)
@@ -103,16 +97,23 @@ def test_embedding(client):
 def test_chat_completion(client):
     try:
          # Your test data
+        global my_custom_logger
         print("initialized proxy")
+        litellm.set_verbose=False
+        from litellm.proxy.utils import get_instance_fn
+        my_custom_logger = get_instance_fn(
+            value = "custom_callbacks.my_custom_logger",
+            config_file_path=python_file_path
+        )
+
+        print("id of initialized custom logger", id(my_custom_logger))
+
+        litellm.callbacks = [my_custom_logger]
         # import the initialized custom logger
         print(litellm.callbacks)
 
         # assert len(litellm.callbacks) == 1 # assert litellm is initialized with 1 callback
-        my_custom_logger = litellm.callbacks[0]
-        for callback in litellm.callbacks:
-            if "testCustomCallbackProxy" in str(callback):
-                my_custom_logger = callback
-                break
+
         print("LiteLLM Callbacks", litellm.callbacks)
         print("my_custom_logger", my_custom_logger)
         assert my_custom_logger.async_success == False
@@ -160,18 +161,21 @@ def test_chat_completion(client):
 def test_chat_completion_stream(client):
     try:
         # Your test data
+        litellm.set_verbose=False
+        from litellm.proxy.utils import get_instance_fn
+        my_custom_logger = get_instance_fn(
+            value = "custom_callbacks.my_custom_logger",
+            config_file_path=python_file_path
+        )
+
+        print("id of initialized custom logger", id(my_custom_logger))
+
+        litellm.callbacks = [my_custom_logger]
         import json
         print("initialized proxy")
         # import the initialized custom logger
         print(litellm.callbacks)
-
-        # assert len(litellm.callbacks) == 1 # assert litellm is initialized with 1 callback
-        my_custom_logger = litellm.callbacks[0]
-
-        for callback in litellm.callbacks:
-            if "testCustomCallbackProxy" in str(callback):
-                my_custom_logger = callback
-                break
+        
 
         print("LiteLLM Callbacks", litellm.callbacks)
         print("my_custom_logger", my_custom_logger)
