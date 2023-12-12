@@ -5,7 +5,7 @@
         <p align="center">Call all LLM APIs using the OpenAI format [Bedrock, Huggingface, Cohere, TogetherAI, Azure, OpenAI, etc.]
         <br>
     </p>
-<h4 align="center"><a href="https://github.com/BerriAI/litellm/tree/main/litellm/proxy" target="_blank">OpenAI-Compatible Server</a></h4>
+<h4 align="center"><a href="https://docs.litellm.ai/docs/simple_proxy" target="_blank">OpenAI Proxy Server</a></h4>
 <h4 align="center">
     <a href="https://pypi.org/project/litellm/" target="_blank">
         <img src="https://img.shields.io/pypi/v/litellm.svg" alt="PyPI Version">
@@ -59,6 +59,22 @@ response = completion(model="gpt-3.5-turbo", messages=messages)
 
 # cohere call
 response = completion(model="command-nightly", messages=messages)
+print(response)
+```
+
+## Async ([Docs](https://docs.litellm.ai/docs/completion/stream#async-completion))
+
+```python
+from litellm import acompletion
+import asyncio
+
+async def test_get_response():
+    user_message = "Hello, how are you?"
+    messages = [{"content": user_message, "role": "user"}]
+    response = await acompletion(model="gpt-3.5-turbo", messages=messages)
+    return response
+
+response = asyncio.run(test_get_response())
 print(response)
 ```
 

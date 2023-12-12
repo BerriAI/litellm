@@ -11,3 +11,4 @@ boto3
 appdirs
 orjson
 pydantic
+google-cloud-aiplatform

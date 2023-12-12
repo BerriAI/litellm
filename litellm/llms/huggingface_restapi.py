@@ -170,6 +170,11 @@ class Huggingface(BaseLLM):
                     "content"
                 ] = completion_response["generated_text"] # type: ignore
         elif task == "text-generation-inference": 
+            if (not isinstance(completion_response, list) 
+                or not isinstance(completion_response[0], dict)
+                or "generated_text" not in completion_response[0]): 
+                raise HuggingfaceError(status_code=422, message=f"response is not in expected format - {completion_response}")
+
             if len(completion_response[0]["generated_text"]) > 0: 
                 model_response["choices"][0]["message"][
                     "content"

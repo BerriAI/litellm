@@ -395,7 +395,7 @@ def sagemaker_test_completion():
     try:
         # OVERRIDE WITH DYNAMIC MAX TOKENS
         response_1 = litellm.completion(
-            model="sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b",
+            model="sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4",
             messages=[{ "content": "Hello, how are you? Be as verbose as possible","role": "user"}],
             max_tokens=100
         )
@@ -404,7 +404,7 @@ def sagemaker_test_completion():
 
         # USE CONFIG TOKENS
         response_2 = litellm.completion(
-            model="sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b",
+            model="sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4",
             messages=[{ "content": "Hello, how are you? Be as verbose as possible","role": "user"}],
         )
         response_2_text = response_2.choices[0].message.content

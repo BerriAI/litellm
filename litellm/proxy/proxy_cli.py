@@ -26,7 +26,7 @@ def run_ollama_serve():
     except Exception as e:
         print(f"""
             LiteLLM Warning: proxy started with `ollama` model\n`ollama serve` failed with Exception{e}. \nEnsure you run `ollama serve`
-        """)
+        """) # noqa
 
 def clone_subfolder(repo_url, subfolder, destination):
   # Clone the full repo
@@ -73,8 +73,7 @@ def is_port_in_use(port):
 @click.option('--request_timeout', default=600, type=int, help='Set timeout in seconds for completion calls') 
 @click.option('--drop_params', is_flag=True, help='Drop any unmapped params') 
 @click.option('--add_function_to_prompt', is_flag=True, help='If function passed but unsupported, pass it as prompt') 
-@click.option('--config', '-c', default=None, help='Configure Litellm')  
-@click.option('--file', '-f', help='Path to config file')
+@click.option('--config', '-c', default=None, help='Path to the proxy configuration file (e.g. config.yaml). Usage `litellm --config config.yaml`')  
 @click.option('--max_budget', default=None, type=float, help='Set max budget for API calls - works for hosted models like OpenAI, TogetherAI, Anthropic, etc.`') 
 @click.option('--telemetry', default=True, type=bool, help='Helps us know if people are using this feature. Turn this off by doing `--telemetry False`') 
 @click.option('--logs', flag_value=False, type=int, help='Gets the "n" most recent logs. By default gets most recent log.') 
@@ -83,7 +82,7 @@ def is_port_in_use(port):
 @click.option('--test_async', default=False, is_flag=True, help='Calls async endpoints /queue/requests and /queue/response')
 @click.option('--num_requests', default=10, type=int, help='Number of requests to hit async endpoint with')
 @click.option('--local', is_flag=True, default=False, help='for local debugging')
-def run_server(host, port, api_base, api_version, model, alias, add_key, headers, save, debug, temperature, max_tokens, request_timeout, drop_params, add_function_to_prompt, config, file, max_budget, telemetry, logs, test, local, num_workers, test_async, num_requests, use_queue, health):
+def run_server(host, port, api_base, api_version, model, alias, add_key, headers, save, debug, temperature, max_tokens, request_timeout, drop_params, add_function_to_prompt, config, max_budget, telemetry, logs, test, local, num_workers, test_async, num_requests, use_queue, health):
     global feature_telemetry
     args = locals()
     if local:
@@ -110,11 +109,11 @@ def run_server(host, port, api_base, api_version, model, alias, add_key, headers
             # get n recent logs
             recent_logs = {k.strftime("%Y%m%d%H%M%S%f"): v for k, v in sorted_times[:logs]}
 
-            print(json.dumps(recent_logs, indent=4))
+            print(json.dumps(recent_logs, indent=4)) # noqa
         except:
-            print("LiteLLM: No logs saved!")
+            raise Exception("LiteLLM: No logs saved!")
         return
-    if model and "ollama" in model: 
+    if model and "ollama" in model and api_base is None: 
         run_ollama_serve()
     if test_async is True: 
         import requests, concurrent, time
@@ -141,7 +140,7 @@ def run_server(host, port, api_base, api_version, model, alias, add_key, headers
                     if status == "finished":
                         llm_response = polling_response["result"]
                         break
-                    print(f"POLLING JOB{polling_url}\nSTATUS: {status}, \n Response {polling_response}")
+                    print(f"POLLING JOB{polling_url}\nSTATUS: {status}, \n Response {polling_response}") # noqa
                     time.sleep(0.5)
                 except Exception as e:
                     print("got exception in polling", e)

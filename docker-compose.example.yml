@@ -1,0 +1,12 @@
+version: "3.9"
+services:
+  litellm:
+    image: ghcr.io/berriai/litellm:main
+    ports:
+      - "8000:8000" # Map the container port to the host, change the host port if necessary
+    volumes:
+      - ./litellm-config.yaml:/app/config.yaml # Mount the local configuration file
+    # You can change the port or number of workers as per your requirements or pass any new supported CLI augument. Make sure the port passed here matches with the container port defined above in `ports` value
+    command: [ "--config", "/app/config.yaml", "--port", "8000", "--num_workers", "8" ]
+
+# ...rest of your docker-compose config if any

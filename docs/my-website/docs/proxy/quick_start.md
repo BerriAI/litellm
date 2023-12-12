@@ -43,7 +43,7 @@ litellm --test
 
 This will now automatically route any requests for gpt-3.5-turbo to bigcode starcoder, hosted on huggingface inference endpoints. 
 
-### Using LiteLLM Proxy - Curl Request, OpenAI Package
+### Using LiteLLM Proxy - Curl Request, OpenAI Package, Langchain, Langchain JS
 
 <Tabs>
 <TabItem value="Curl" label="Curl Request">
@@ -84,72 +84,75 @@ print(response)
 
 ```
 </TabItem>
+<TabItem value="langchain" label="Langchain">
 
+```python
+from langchain.chat_models import ChatOpenAI
+from langchain.prompts.chat import (
+    ChatPromptTemplate,
+    HumanMessagePromptTemplate,
+    SystemMessagePromptTemplate,
+)
+from langchain.schema import HumanMessage, SystemMessage
+
+chat = ChatOpenAI(
+    openai_api_base="http://0.0.0.0:8000", # set openai_api_base to the LiteLLM Proxy
+    model = "gpt-3.5-turbo",
+    temperature=0.1
+)
+
+messages = [
+    SystemMessage(
+        content="You are a helpful assistant that im using to make a test request to."
+    ),
+    HumanMessage(
+        content="test from litellm. tell me why it's amazing in 1 sentence"
+    ),
+]
+response = chat(messages)
+
+print(response)
+```
+
+</TabItem>
+<TabItem value="langchain-embedding" label="Langchain Embeddings">
+
+```python
+from langchain.embeddings import OpenAIEmbeddings
+
+embeddings = OpenAIEmbeddings(model="sagemaker-embeddings", openai_api_base="http://0.0.0.0:8000", openai_api_key="temp-key")
+
+
+text = "This is a test document."
+
+query_result = embeddings.embed_query(text)
+
+print(f"SAGEMAKER EMBEDDINGS")
+print(query_result[:5])
+
+embeddings = OpenAIEmbeddings(model="bedrock-embeddings", openai_api_base="http://0.0.0.0:8000", openai_api_key="temp-key")
+
+text = "This is a test document."
+
+query_result = embeddings.embed_query(text)
+
+print(f"BEDROCK EMBEDDINGS")
+print(query_result[:5])
+
+embeddings = OpenAIEmbeddings(model="bedrock-titan-embeddings", openai_api_base="http://0.0.0.0:8000", openai_api_key="temp-key")
+
+text = "This is a test document."
+
+query_result = embeddings.embed_query(text)
+
+print(f"TITAN EMBEDDINGS")
+print(query_result[:5])
+```
+</TabItem>
 </Tabs>
 
-## Quick Start - LiteLLM Proxy + Config.yaml
-The config allows you to create a model list and set `api_base`, `max_tokens` (all litellm params). See more details about the config [here](https://docs.litellm.ai/docs/proxy/configs)
 
-### Create a Config for LiteLLM Proxy
-Example config
-
-```yaml
-model_list:
-  - model_name: gpt-3.5-turbo
-    litellm_params:
-      model: azure/<your-deployment-name>
-      api_base: <your-azure-api-endpoint>
-      api_key: <your-azure-api-key>
-  - model_name: gpt-3.5-turbo
-    litellm_params:
-      model: azure/gpt-turbo-small-ca
-      api_base: https://my-endpoint-canada-berri992.openai.azure.com/
-      api_key: <your-azure-api-key>
-```
-
-### Run proxy with config
-
-```shell
-litellm --config your_config.yaml
-```
-
-## Quick Start Docker Image: Github Container Registry
-
-### Pull the litellm ghcr docker image
-See the latest available ghcr docker image here:
-https://github.com/berriai/litellm/pkgs/container/litellm
-
-```shell
-docker pull ghcr.io/berriai/litellm:main-v1.10.1
-```
-
-### Run the Docker Image
-```shell
-docker run ghcr.io/berriai/litellm:main-v1.10.0
-```
-
-#### Run the Docker Image with LiteLLM CLI args
-
-See all supported CLI args [here](https://docs.litellm.ai/docs/proxy/cli): 
-
-Here's how you can run the docker image and pass your config to `litellm`
-```shell
-docker run ghcr.io/berriai/litellm:main-v1.10.0 --config your_config.yaml
-```
-
-Here's how you can run the docker image and start litellm on port 8002 with `num_workers=8`
-```shell
-docker run ghcr.io/berriai/litellm:main-v1.10.0 --port 8002 --num_workers 8
-```
-
-## Server Endpoints
-- POST `/chat/completions` - chat completions endpoint to call 100+ LLMs
-- POST `/completions` - completions endpoint
-- POST `/embeddings` - embedding endpoint for Azure, OpenAI, Huggingface endpoints
-- GET `/models` - available models on server
-- POST `/key/generate` - generate a key to access the proxy
-
-## Supported LLMs
+### Supported LLMs
 All LiteLLM supported LLMs are supported on the Proxy. Seel all [supported llms](https://docs.litellm.ai/docs/providers)
 <Tabs>
 <TabItem value="bedrock" label="AWS Bedrock">
@@ -175,7 +178,7 @@ $ litellm --model azure/my-deployment-name
 ```
 
 </TabItem>
-<TabItem value="openai-proxy" label="OpenAI">
+<TabItem value="openai" label="OpenAI">
 
 ```shell
 $ export OPENAI_API_KEY=my-api-key
@@ -185,13 +188,23 @@ $ export OPENAI_API_KEY=my-api-key
 $ litellm --model gpt-3.5-turbo
 ```
 </TabItem>
+<TabItem value="openai-proxy" label="OpenAI Compatible Endpoint">
+
+```shell
+$ export OPENAI_API_KEY=my-api-key
+```
+
+```shell
+$ litellm --model openai/<your model name> --api_base <your-api-base> # e.g. http://0.0.0.0:3000
+```
+</TabItem>
 <TabItem value="huggingface" label="Huggingface (TGI) Deployed">
 
 ```shell
 $ export HUGGINGFACE_API_KEY=my-api-key #[OPTIONAL]
 ```
 ```shell
-$ litellm --model huggingface/<your model name> --api_base https://k58ory32yinf1ly0.us-east-1.aws.endpoints.huggingface.cloud
+$ litellm --model huggingface/<your model name> --api_base <your-api-base> # e.g. http://0.0.0.0:3000
 ```
 
 </TabItem>
@@ -299,6 +312,124 @@ $ litellm --model command-nightly
 </TabItem>
 
 </Tabs>
+
+
+
+
+## Quick Start - LiteLLM Proxy + Config.yaml
+The config allows you to create a model list and set `api_base`, `max_tokens` (all litellm params). See more details about the config [here](https://docs.litellm.ai/docs/proxy/configs)
+
+### Create a Config for LiteLLM Proxy
+Example config
+
+```yaml
+model_list: 
+  - model_name: gpt-3.5-turbo # user-facing model alias
+    litellm_params: # all params accepted by litellm.completion() - https://docs.litellm.ai/docs/completion/input
+      model: azure/<your-deployment-name>
+      api_base: <your-azure-api-endpoint>
+      api_key: <your-azure-api-key>
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: azure/gpt-turbo-small-ca
+      api_base: https://my-endpoint-canada-berri992.openai.azure.com/
+      api_key: <your-azure-api-key>
+  - model_name: vllm-model
+    litellm_params:
+      model: openai/<your-model-name>
+      api_base: <your-api-base> # e.g. http://0.0.0.0:3000
+```
+
+### Run proxy with config
+
+```shell
+litellm --config your_config.yaml
+```
+
+[**More Info**](./configs.md)
+
+## Server Endpoints
+- POST `/chat/completions` - chat completions endpoint to call 100+ LLMs
+- POST `/completions` - completions endpoint
+- POST `/embeddings` - embedding endpoint for Azure, OpenAI, Huggingface endpoints
+- GET `/models` - available models on server
+- POST `/key/generate` - generate a key to access the proxy
+
+## Gunicorn + Proxy 
+
+Command: 
+```python
+cmd = f"gunicorn litellm.proxy.proxy_server:app --workers {num_workers} --worker-class uvicorn.workers.UvicornWorker --bind {host}:{port}"
+```
+
+[**Code**](https://github.com/BerriAI/litellm/blob/077f6b1298101079b72396bdf04f8ca0cf737720/litellm/tests/test_proxy_gunicorn.py#L4)
+## Quick Start Docker Image: Github Container Registry
+
+### Pull the litellm ghcr docker image
+See the latest available ghcr docker image here:
+https://github.com/berriai/litellm/pkgs/container/litellm
+
+```shell
+docker pull ghcr.io/berriai/litellm:main-v1.10.1
+```
+
+### Run the Docker Image
+```shell
+docker run ghcr.io/berriai/litellm:main-v1.10.0
+```
+
+#### Run the Docker Image with LiteLLM CLI args
+
+See all supported CLI args [here](https://docs.litellm.ai/docs/proxy/cli): 
+
+Here's how you can run the docker image and pass your config to `litellm`
+```shell
+docker run ghcr.io/berriai/litellm:main-v1.10.0 --config your_config.yaml
+```
+
+Here's how you can run the docker image and start litellm on port 8002 with `num_workers=8`
+```shell
+docker run ghcr.io/berriai/litellm:main-v1.10.0 --port 8002 --num_workers 8
+```
+  
+#### Run the Docker Image using docker compose
+
+**Step 1**
+
+- (Recommended) Use the example file `docker-compose.example.yml` given in the project root. e.g. https://github.com/BerriAI/litellm/blob/main/docker-compose.example.yml
+
+- Rename the file `docker-compose.example.yml` to `docker-compose.yml`.
+
+Here's an example `docker-compose.yml` file
+```yaml
+version: "3.9"
+services:
+  litellm:
+    image: ghcr.io/berriai/litellm:main
+    ports:
+      - "8000:8000" # Map the container port to the host, change the host port if necessary
+    volumes:
+      - ./litellm-config.yaml:/app/config.yaml # Mount the local configuration file
+    # You can change the port or number of workers as per your requirements or pass any new supported CLI augument. Make sure the port passed here matches with the container port defined above in `ports` value
+    command: [ "--config", "/app/config.yaml", "--port", "8000", "--num_workers", "8" ]
+
+# ...rest of your docker-compose config if any
+```
+
+**Step 2**
+
+Create a `litellm-config.yaml` file with your LiteLLM config relative to your `docker-compose.yml` file.
+
+Check the config doc [here](https://docs.litellm.ai/docs/proxy/configs)
+
+**Step 3**
+
+Run the command `docker-compose up` or `docker compose up` as per your docker installation.
+
+> Use `-d` flag to run the container in detached mode (background) e.g. `docker compose up -d`
+
+
+Your LiteLLM container should be running now on the defined port e.g. `8000`.
 
 
 ## Using with OpenAI compatible projects
@@ -473,37 +604,4 @@ curl -X POST \
 https://api.openai.com/v1/chat/completions \
 -H 'content-type: application/json' -H 'Authorization: Bearer sk-qnWGUIW9****************************************' \
 -d '{"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "this is a test request, write a short poem"}]}'
-```
-
-## Health Check LLMs on Proxy
-Use this to health check all LLMs defined in your config.yaml
-#### Request
-```shell
-curl --location 'http://0.0.0.0:8000/health'
-```
-
-You can also run `litellm -health` it makes a `get` request to `http://0.0.0.0:8000/health` for you
-```
-litellm --health
-```
-#### Response
-```shell
-{
-    "healthy_endpoints": [
-        {
-            "model": "azure/gpt-35-turbo",
-            "api_base": "https://my-endpoint-canada-berri992.openai.azure.com/"
-        },
-        {
-            "model": "azure/gpt-35-turbo",
-            "api_base": "https://my-endpoint-europe-berri-992.openai.azure.com/"
-        }
-    ],
-    "unhealthy_endpoints": [
-        {
-            "model": "azure/gpt-35-turbo",
-            "api_base": "https://openai-france-1234.openai.azure.com/"
-        }
-    ]
-}
 ```

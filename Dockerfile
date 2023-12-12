@@ -34,6 +34,9 @@ COPY --from=builder /app/wheels /app/wheels
 
 RUN pip install --no-index --find-links=/app/wheels -r requirements.txt
 
+# Trigger the Prisma CLI to be installed
+RUN prisma -v
+
 EXPOSE 4000/tcp
 
 # Start the litellm proxy, using the `litellm` cli command https://docs.litellm.ai/docs/simple_proxy
