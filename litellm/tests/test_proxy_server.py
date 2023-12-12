@@ -26,23 +26,23 @@ from fastapi import FastAPI
 from litellm.proxy.proxy_server import router, save_worker_config, initialize  # Replace with the actual module where your FastAPI router is defined
 
 # Your bearer token
-token = os.getenv("PROXY_MASTER_KEY")
+token = ""
 
 headers = {
     "Authorization": f"Bearer {token}"
 }
     
-@pytest.fixture
-def client(config_fp):
+@pytest.fixture(scope="function")
+def client_no_auth():
     filepath = os.path.dirname(os.path.abspath(__file__))
-    config_fp = f"{filepath}/test_configs/test_config_no_auth"
+    config_fp = f"{filepath}/test_configs/test_config_no_auth.yaml"
     # initialize can get run in parallel, it sets specific variables for the fast api app, sinc eit gets run in parallel different tests use the wrong variables
     initialize(config=config_fp)
     app = FastAPI()
     app.include_router(router)  # Include your router in the test app
     return TestClient(app)
 
-def test_chat_completion(client):
+def test_chat_completion(client_no_auth):
     global headers
     try:
         # Your test data
@@ -58,7 +58,7 @@ def test_chat_completion(client):
         }
         
         print("testing proxy server")
-        response = client.post("/v1/chat/completions", json=test_data, headers=headers)
+        response = client_no_auth.post("/v1/chat/completions", json=test_data)
         print(f"response - {response.text}")
         assert response.status_code == 200
         result = response.json()
@@ -68,7 +68,7 @@ def test_chat_completion(client):
 
 # Run the test
 
-def test_chat_completion_azure(client):
+def test_chat_completion_azure(client_no_auth):
 
     global headers
     try:
@@ -85,7 +85,7 @@ def test_chat_completion_azure(client):
         }
         
         print("testing proxy server with Azure Request")
-        response = client.post("/v1/chat/completions", json=test_data, headers=headers)
+        response = client_no_auth.post("/v1/chat/completions", json=test_data)
 
         assert response.status_code == 200
         result = response.json()
@@ -98,15 +98,15 @@ def test_chat_completion_azure(client):
 # test_chat_completion_azure()
 
 
-def test_embedding(client):
+def test_embedding(client_no_auth):
     global headers
     try:
         test_data = {
             "model": "azure/azure-embedding-model",
             "input": ["good morning from litellm"],
         }
-        print("testing proxy server with OpenAI embedding")
-        response = client.post("/v1/embeddings", json=test_data, headers=headers)
+        print("testing proxy server with Azure embedding")
+        response = client_no_auth.post("/v1/embeddings", json=test_data)
 
         assert response.status_code == 200
         result = response.json()
@@ -119,7 +119,7 @@ def test_embedding(client):
 # test_embedding()
 
 # @pytest.mark.skip(reason="hitting yaml load issues on circle-ci")
-def test_add_new_model(client):
+def test_add_new_model(client_no_auth):
     global headers
     try: 
         test_data = {
@@ -131,8 +131,8 @@ def test_add_new_model(client):
                 "description": "this is a test openai model"
             }
         }
-        client.post("/model/new", json=test_data, headers=headers)
-        response = client.get("/model/info", headers=headers)
+        client_no_auth.post("/model/new", json=test_data, headers=headers)
+        response = client_no_auth.get("/model/info", headers=headers)
         assert response.status_code == 200
         result = response.json() 
         print(f"response: {result}")
@@ -160,7 +160,7 @@ class MyCustomHandler(CustomLogger):
 customHandler = MyCustomHandler()
 
 
-def test_chat_completion_optional_params(client):
+def test_chat_completion_optional_params(client_no_auth):
     # [PROXY: PROD TEST] - DO NOT DELETE
     # This tests if all the /chat/completion params are passed to litellm
     try:
@@ -180,7 +180,7 @@ def test_chat_completion_optional_params(client):
         
         litellm.callbacks = [customHandler]
         print("testing proxy server: optional params")
-        response = client.post("/v1/chat/completions", json=test_data, headers=headers)
+        response = client_no_auth.post("/v1/chat/completions", json=test_data)
         assert response.status_code == 200
         result = response.json()
         print(f"Received response: {result}")
