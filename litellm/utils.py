@@ -964,7 +964,7 @@ class Logging:
                             end_time=end_time,
                             print_verbose=print_verbose,
                         )
-                    if callback == "cache":
+                    if callback == "cache" and litellm.cache is not None:
                         # this only logs streaming once, complete_streaming_response exists i.e when stream ends
                         print_verbose("success_callback: reaches cache for logging!")
                         kwargs = self.model_call_details
@@ -1052,7 +1052,7 @@ class Logging:
         start_time, end_time, result = self._success_handler_helper_fn(start_time=start_time, end_time=end_time, result=result)
         for callback in litellm._async_success_callback:
             try: 
-                if callback == "cache":
+                if callback == "cache" and litellm.cache is not None:
                     # set_cache once complete streaming response is built
                     print_verbose("async success_callback: reaches cache for logging!")
                     kwargs = self.model_call_details
@@ -1238,7 +1238,7 @@ class Logging:
                         print_verbose=print_verbose,
                         callback_func=callback
                     )              
-            except: 
+            except Exception as e: 
                 print_verbose(
                     f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while success logging {traceback.format_exc()}"
                 )
@@ -1649,6 +1649,19 @@ def client(original_function):
                 result._response_ms = (end_time - start_time).total_seconds() * 1000 # return response latency in ms like openai
             return result
         except Exception as e: 
+            traceback_exception = traceback.format_exc()
+            crash_reporting(*args, **kwargs, exception=traceback_exception)
+            end_time = datetime.datetime.now()
+            if logging_obj:
+                try:
+                    logging_obj.failure_handler(e, traceback_exception, start_time, end_time) # DO NOT MAKE THREADED - router retry fallback relies on this!
+                except Exception as e: 
+                    raise e
+                try:
+                    await logging_obj.async_failure_handler(e, traceback_exception, start_time, end_time)
+                except Exception as e:
+                    raise e
+            
             call_type = original_function.__name__
             if call_type == CallTypes.acompletion.value:
                 num_retries = (
@@ -1658,27 +1671,24 @@ def client(original_function):
                 )
                 litellm.num_retries = None # set retries to None to prevent infinite loops 
                 context_window_fallback_dict = kwargs.get("context_window_fallback_dict", {})
-
+                
                 if num_retries: 
-                    kwargs["num_retries"] = num_retries
-                    kwargs["original_function"] = original_function
-                    if (isinstance(e, openai.RateLimitError)): # rate limiting specific error 
-                        kwargs["retry_strategy"] = "exponential_backoff_retry"
-                    elif (isinstance(e, openai.APIError)): # generic api error
-                        kwargs["retry_strategy"] = "constant_retry"
-                    return await litellm.acompletion_with_retries(*args, **kwargs)
+                    try: 
+                        kwargs["num_retries"] = num_retries
+                        kwargs["original_function"] = original_function
+                        if (isinstance(e, openai.RateLimitError)): # rate limiting specific error 
+                            kwargs["retry_strategy"] = "exponential_backoff_retry"
+                        elif (isinstance(e, openai.APIError)): # generic api error
+                            kwargs["retry_strategy"] = "constant_retry"
+                        return await litellm.acompletion_with_retries(*args, **kwargs)
+                    except:
+                        pass
                 elif isinstance(e, litellm.exceptions.ContextWindowExceededError) and context_window_fallback_dict and model in context_window_fallback_dict:
                     if len(args) > 0:
                         args[0]  = context_window_fallback_dict[model]
                     else:
                         kwargs["model"] = context_window_fallback_dict[model]
                     return await original_function(*args, **kwargs)
-            traceback_exception = traceback.format_exc()
-            crash_reporting(*args, **kwargs, exception=traceback_exception)
-            end_time = datetime.datetime.now()
-            if logging_obj:
-                logging_obj.failure_handler(e, traceback_exception, start_time, end_time) # DO NOT MAKE THREADED - router retry fallback relies on this!
-                await logging_obj.async_failure_handler(e, traceback_exception, start_time, end_time)
             raise e
 
     is_coroutine = inspect.iscoroutinefunction(original_function)

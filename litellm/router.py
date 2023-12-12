@@ -1222,11 +1222,14 @@ class Router:
         raise ValueError("No models available.")
 
     def flush_cache(self):
+        litellm.cache = None
         self.cache.flush_cache()
     
     def reset(self): 
         ## clean up on close
         litellm.success_callback = [] 
+        litellm.__async_success_callback = [] 
         litellm.failure_callback = [] 
+        litellm._async_failure_callback = [] 
         self.flush_cache() 
         
