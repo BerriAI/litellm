@@ -611,7 +611,7 @@ def test_completion_azure_key_completion_arg():
     os.environ.pop("AZURE_API_KEY", None)
     try:
         print("azure gpt-3.5 test\n\n")
-        litellm.set_verbose=False
+        litellm.set_verbose=True
         ## Test azure call
         response = completion(
             model="azure/chatgpt-v-2",
