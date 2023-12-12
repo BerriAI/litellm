@@ -202,10 +202,12 @@ async def acompletion(*args, **kwargs):
 
 async def _async_streaming(response, model, custom_llm_provider, args): 
     try: 
+        print_verbose(f"received response in _async_streaming: {response}")
         async for line in response: 
             print_verbose(f"line in async streaming: {line}")
             yield line
     except Exception as e: 
+        print_verbose(f"error raised _async_streaming: {str(e)}")
         raise exception_type(
                 model=model, custom_llm_provider=custom_llm_provider, original_exception=e, completion_kwargs=args,
             )
