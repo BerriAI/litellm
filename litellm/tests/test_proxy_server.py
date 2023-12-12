@@ -34,12 +34,16 @@ headers = {
     
 @pytest.fixture(scope="function")
 def client_no_auth():
+    # Assuming litellm.proxy.proxy_server is an object
+    from litellm.proxy.proxy_server import cleanup_router_config_variables
+    cleanup_router_config_variables()
     filepath = os.path.dirname(os.path.abspath(__file__))
     config_fp = f"{filepath}/test_configs/test_config_no_auth.yaml"
     # initialize can get run in parallel, it sets specific variables for the fast api app, sinc eit gets run in parallel different tests use the wrong variables
     initialize(config=config_fp)
     app = FastAPI()
     app.include_router(router)  # Include your router in the test app
+
     return TestClient(app)
 
 def test_chat_completion(client_no_auth):
@@ -57,7 +61,7 @@ def test_chat_completion(client_no_auth):
             "max_tokens": 10,
         }
         
-        print("testing proxy server")
+        print("testing proxy server with chat completions")
         response = client_no_auth.post("/v1/chat/completions", json=test_data)
         print(f"response - {response.text}")
         assert response.status_code == 200
@@ -84,7 +88,7 @@ def test_chat_completion_azure(client_no_auth):
             "max_tokens": 10,
         }
         
-        print("testing proxy server with Azure Request")
+        print("testing proxy server with Azure Request /chat/completions")
         response = client_no_auth.post("/v1/chat/completions", json=test_data)
 
         assert response.status_code == 200
@@ -100,12 +104,19 @@ def test_chat_completion_azure(client_no_auth):
 
 def test_embedding(client_no_auth):
     global headers
+    from litellm.proxy.proxy_server import user_custom_auth 
+
     try:
         test_data = {
             "model": "azure/azure-embedding-model",
             "input": ["good morning from litellm"],
         }
-        print("testing proxy server with Azure embedding")
+        # print("testing proxy server with Azure embedding")
+        # print(user_custom_auth)
+        # print(id(user_custom_auth))
+        # user_custom_auth = None
+        # print("valu of user_custom_auth", user_custom_auth)
+        # litellm.proxy.proxy_server.user_custom_auth = None
         response = client_no_auth.post("/v1/embeddings", json=test_data)
 
         assert response.status_code == 200
