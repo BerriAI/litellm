@@ -17,6 +17,7 @@ import inspect, concurrent
 from openai import AsyncOpenAI
 from collections import defaultdict
 from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
+import copy
 class Router:
     """
     Example usage:
@@ -81,6 +82,7 @@ class Router:
         self.set_verbose = set_verbose 
         self.deployment_names: List = [] # names of models under litellm_params. ex. azure/chatgpt-v-2
         if model_list:
+            model_list = copy.deepcopy(model_list)
             self.set_model_list(model_list)
             self.healthy_deployments: List = self.model_list
             self.deployment_latency_map = {}
