@@ -1,6 +1,3 @@
-from email import header
-from re import T
-from tkinter import N
 import requests, types, time
 import json
 import traceback
