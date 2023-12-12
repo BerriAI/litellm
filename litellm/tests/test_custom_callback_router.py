@@ -258,10 +258,10 @@ class CompletionCustomHandler(CustomLogger): # https://docs.litellm.ai/docs/obse
 @pytest.mark.asyncio
 async def test_async_chat_azure():
     try: 
-        customHandler = CompletionCustomHandler()
-        customHandler_streaming = CompletionCustomHandler()
+        customHandler_completion_azure_router = CompletionCustomHandler()
+        customHandler_streaming_azure_router = CompletionCustomHandler()
         customHandler_failure = CompletionCustomHandler()
-        litellm.callbacks = [customHandler]
+        litellm.callbacks = [customHandler_completion_azure_router]
         model_list = [
                     { 
                         "model_name": "gpt-3.5-turbo", # openai model name 
@@ -282,10 +282,10 @@ async def test_async_chat_azure():
                                     "content": "Hi 👋 - i'm openai"
                                 }])
         await asyncio.sleep(2)
-        assert len(customHandler.errors) == 0
-        assert len(customHandler.states) == 3 # pre, post, success
+        assert len(customHandler_completion_azure_router.errors) == 0
+        assert len(customHandler_completion_azure_router.states) == 3 # pre, post, success
         # streaming 
-        litellm.callbacks = [customHandler_streaming]
+        litellm.callbacks = [customHandler_streaming_azure_router]
         router2 = Router(model_list=model_list) # type: ignore
         response = await router2.acompletion(model="gpt-3.5-turbo",
                                 messages=[{
@@ -294,11 +294,12 @@ async def test_async_chat_azure():
                                 }],
                                 stream=True)
         async for chunk in response: 
+            print(f"async azure router chunk: {chunk}")
             continue
         await asyncio.sleep(1)
-        print(f"customHandler.states: {customHandler_streaming.states}")
-        assert len(customHandler_streaming.errors) == 0
-        assert len(customHandler_streaming.states) >= 4 # pre, post, stream (multiple times), success
+        print(f"customHandler.states: {customHandler_streaming_azure_router.states}")
+        assert len(customHandler_streaming_azure_router.errors) == 0
+        assert len(customHandler_streaming_azure_router.states) >= 4 # pre, post, stream (multiple times), success
         # failure 
         model_list = [
                     { 
@@ -396,6 +397,7 @@ async def test_async_embedding_azure():
 async def test_async_chat_azure_with_fallbacks(): 
     try: 
         customHandler_fallbacks = CompletionCustomHandler()
+        litellm.callbacks = [customHandler_fallbacks]
         # with fallbacks 
         model_list = [
                     { 
@@ -428,6 +430,7 @@ async def test_async_chat_azure_with_fallbacks():
         print(f"customHandler_fallbacks.states: {customHandler_fallbacks.states}")
         assert len(customHandler_fallbacks.errors) == 0
         assert len(customHandler_fallbacks.states) == 6 # pre, post, failure, pre, post, success
+        litellm.callbacks = []
     except Exception as e: 
         print(f"Assertion Error: {traceback.format_exc()}")
         pytest.fail(f"An exception occurred - {str(e)}")

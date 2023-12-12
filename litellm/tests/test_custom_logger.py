@@ -205,7 +205,6 @@ def test_azure_completion_stream():
         assert response_in_success_handler == complete_streaming_response
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_azure_completion_stream()
 
 def test_async_custom_handler():
     try:
@@ -316,13 +315,10 @@ def test_redis_cache_completion_stream():
         print("\nresponse 2", response_2_content)
         assert response_1_content == response_2_content, f"Response 1 != Response 2. Same params, Response 1{response_1_content} != Response 2{response_2_content}"
         litellm.success_callback = []
+        litellm._async_success_callback = []
         litellm.cache = None
     except Exception as e:
         print(e)
         litellm.success_callback = []
         raise e
-    """
-
-    1 & 2 should be exactly the same 
-    """
-# test_redis_cache_completion_stream()
+        pytest.fail(f"Error occurred: {e}")
