@@ -5692,7 +5692,7 @@ class CustomStreamWrapper:
                 if chunk is not None and chunk != b'':
                     print_verbose(f"PROCESSED CHUNK PRE CHUNK CREATOR: {chunk}")
                     response = self.chunk_creator(chunk=chunk)
-                    print_verbose(f"PROCESSED CHUNK POST CHUNK CREATOR: {chunk}")
+                    print_verbose(f"PROCESSED CHUNK POST CHUNK CREATOR: {response}")
                     if response is None: 
                         continue
                     ## LOGGING
