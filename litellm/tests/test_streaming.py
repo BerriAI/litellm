@@ -230,7 +230,7 @@ def test_completion_cohere_stream_bad_key():
 
 def test_completion_azure_stream():
     try:
-        litellm.set_verbose = True
+        litellm.set_verbose = False
         messages = [
             {"role": "system", "content": "You are a helpful assistant."},
             {
@@ -243,17 +243,18 @@ def test_completion_azure_stream():
         )
         complete_response = ""
         # Add any assertions here to check the response
-        for idx, chunk in enumerate(response):
-            chunk, finished = streaming_format_tests(idx, chunk)
-            if finished:
-                break
+        for idx, init_chunk in enumerate(response):
+            print(f"azure chunk: {init_chunk}")
+            chunk, finished = streaming_format_tests(idx, init_chunk)
             complete_response += chunk
+            if finished:
+                assert isinstance(init_chunk.choices[0], litellm.utils.StreamingChoices)
+                break
         if complete_response.strip() == "": 
             raise Exception("Empty response received")
-        print(f"completion_response: {complete_response}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_completion_azure_stream() 
+test_completion_azure_stream() 
 
 def test_completion_azure_function_calling_stream():
     try:
