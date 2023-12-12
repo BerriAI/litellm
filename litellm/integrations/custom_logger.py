@@ -28,6 +28,9 @@ class CustomLogger: # https://docs.litellm.ai/docs/observability/custom_callback
     def log_failure_event(self, kwargs, response_obj, start_time, end_time): 
         pass
     
+    async def async_log_stream_event(self, kwargs, response_obj, start_time, end_time):
+        pass
+
     async def async_log_pre_api_call(self, model, messages, kwargs):
         pass
 
