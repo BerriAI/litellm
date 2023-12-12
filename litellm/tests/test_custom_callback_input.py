@@ -197,6 +197,7 @@ class CompletionCustomHandler(CustomLogger): # https://docs.litellm.ai/docs/obse
             assert isinstance(kwargs['original_response'], (str, litellm.CustomStreamWrapper)) or inspect.isasyncgen(kwargs['original_response']) or inspect.iscoroutine(kwargs['original_response'])
             assert isinstance(kwargs['additional_args'], (dict, type(None)))
             assert isinstance(kwargs['log_event_type'], str) 
+
         except: 
             print(f"Assertion Error: {traceback.format_exc()}")
             self.errors.append(traceback.format_exc())
@@ -507,7 +508,7 @@ async def test_async_embedding_openai():
         print(f"customHandler_failure.errors: {customHandler_failure.errors}")
         print(f"customHandler_failure.states: {customHandler_failure.states}")
         assert len(customHandler_failure.errors) == 0
-        assert len(customHandler_failure.states) == 3 # pre, post, success
+        assert len(customHandler_failure.states) == 3 # pre, post, failure
     except Exception as e: 
         pytest.fail(f"An exception occurred: {str(e)}")
 
