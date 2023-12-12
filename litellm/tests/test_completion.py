@@ -21,6 +21,13 @@ messages = [{"content": user_message, "role": "user"}]
 def logger_fn(user_model_dict):
     print(f"user_model_dict: {user_model_dict}")
 
+@pytest.fixture(autouse=True)
+def reset_callbacks():
+    print("\npytest fixture - resetting callbacks")
+    litellm.success_callback = []
+    litellm._async_success_callback = []
+    litellm.failure_callback = []
+    litellm.callbacks = []
 
 def test_completion_custom_provider_model_name():
     try:
