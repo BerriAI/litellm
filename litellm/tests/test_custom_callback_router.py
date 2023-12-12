@@ -81,13 +81,13 @@ class CompletionCustomHandler(CustomLogger): # https://docs.litellm.ai/docs/obse
             assert isinstance(kwargs['messages'], list)
             assert isinstance(kwargs['optional_params'], dict)
             assert isinstance(kwargs['litellm_params'], dict) 
-            assert isinstance(kwargs['start_time'], Optional[datetime])
+            assert isinstance(kwargs['start_time'], (datetime, type(None)))
             assert isinstance(kwargs['stream'], bool)
-            assert isinstance(kwargs['user'], Optional[str])
+            assert isinstance(kwargs['user'], (str, type(None)))
             assert isinstance(kwargs['input'], (list, dict, str))
-            assert isinstance(kwargs['api_key'], Optional[str])
+            assert isinstance(kwargs['api_key'], (str, type(None)))
             assert isinstance(kwargs['original_response'], (str, litellm.CustomStreamWrapper)) or inspect.iscoroutine(kwargs['original_response']) or inspect.isasyncgen(kwargs['original_response'])
-            assert isinstance(kwargs['additional_args'], Optional[dict])
+            assert isinstance(kwargs['additional_args'], (dict, type(None)))
             assert isinstance(kwargs['log_event_type'], str) 
             ### ROUTER-SPECIFIC KWARGS
             assert isinstance(kwargs["litellm_params"]["metadata"], dict)
@@ -95,8 +95,8 @@ class CompletionCustomHandler(CustomLogger): # https://docs.litellm.ai/docs/obse
             assert isinstance(kwargs["litellm_params"]["metadata"]["deployment"], str)
             assert isinstance(kwargs["litellm_params"]["model_info"], dict)
             assert isinstance(kwargs["litellm_params"]["model_info"]["id"], str)
-            assert isinstance(kwargs["litellm_params"]["proxy_server_request"], Optional[str])
-            assert isinstance(kwargs["litellm_params"]["preset_cache_key"], Optional[str])
+            assert isinstance(kwargs["litellm_params"]["proxy_server_request"], (str, type(None)))
+            assert isinstance(kwargs["litellm_params"]["preset_cache_key"], (str, type(None)))
             assert isinstance(kwargs["litellm_params"]["stream_response"], dict)
         except: 
             print(f"Assertion Error: {traceback.format_exc()}")
@@ -116,13 +116,13 @@ class CompletionCustomHandler(CustomLogger): # https://docs.litellm.ai/docs/obse
             assert isinstance(kwargs['messages'], list) and isinstance(kwargs['messages'][0], dict)
             assert isinstance(kwargs['optional_params'], dict)
             assert isinstance(kwargs['litellm_params'], dict) 
-            assert isinstance(kwargs['start_time'], Optional[datetime])
+            assert isinstance(kwargs['start_time'], (datetime, type(None)))
             assert isinstance(kwargs['stream'], bool)
-            assert isinstance(kwargs['user'], Optional[str])
+            assert isinstance(kwargs['user'], (str, type(None)))
             assert (isinstance(kwargs['input'], list) and isinstance(kwargs['input'][0], dict)) or isinstance(kwargs['input'], (dict, str))
-            assert isinstance(kwargs['api_key'], Optional[str])
+            assert isinstance(kwargs['api_key'], (str, type(None)))
             assert isinstance(kwargs['original_response'], (str, litellm.CustomStreamWrapper)) or inspect.isasyncgen(kwargs['original_response']) or inspect.iscoroutine(kwargs['original_response'])
-            assert isinstance(kwargs['additional_args'], Optional[dict])
+            assert isinstance(kwargs['additional_args'], (dict, type(None)))
             assert isinstance(kwargs['log_event_type'], str) 
         except: 
             print(f"Assertion Error: {traceback.format_exc()}")
@@ -142,13 +142,13 @@ class CompletionCustomHandler(CustomLogger): # https://docs.litellm.ai/docs/obse
             assert isinstance(kwargs['messages'], list) and isinstance(kwargs['messages'][0], dict)
             assert isinstance(kwargs['optional_params'], dict)
             assert isinstance(kwargs['litellm_params'], dict) 
-            assert isinstance(kwargs['start_time'], Optional[datetime])
+            assert isinstance(kwargs['start_time'], (datetime, type(None)))
             assert isinstance(kwargs['stream'], bool)
-            assert isinstance(kwargs['user'], Optional[str])
+            assert isinstance(kwargs['user'], (str, type(None)))
             assert (isinstance(kwargs['input'], list) and isinstance(kwargs['input'][0], dict)) or isinstance(kwargs['input'], (dict, str))
-            assert isinstance(kwargs['api_key'], Optional[str])
+            assert isinstance(kwargs['api_key'], (str, type(None)))
             assert isinstance(kwargs['original_response'], (str, litellm.CustomStreamWrapper))
-            assert isinstance(kwargs['additional_args'], Optional[dict])
+            assert isinstance(kwargs['additional_args'], (dict, type(None)))
             assert isinstance(kwargs['log_event_type'], str) 
         except:
             print(f"Assertion Error: {traceback.format_exc()}")
@@ -168,13 +168,13 @@ class CompletionCustomHandler(CustomLogger): # https://docs.litellm.ai/docs/obse
             assert isinstance(kwargs['messages'], list) and isinstance(kwargs['messages'][0], dict)
             assert isinstance(kwargs['optional_params'], dict)
             assert isinstance(kwargs['litellm_params'], dict) 
-            assert isinstance(kwargs['start_time'], Optional[datetime])
+            assert isinstance(kwargs['start_time'], (datetime, type(None)))
             assert isinstance(kwargs['stream'], bool)
-            assert isinstance(kwargs['user'], Optional[str])
+            assert isinstance(kwargs['user'], (str, type(None)))
             assert (isinstance(kwargs['input'], list) and isinstance(kwargs['input'][0], dict)) or isinstance(kwargs['input'], (dict, str))
-            assert isinstance(kwargs['api_key'], Optional[str])
+            assert isinstance(kwargs['api_key'], (str, type(None)))
             assert isinstance(kwargs['original_response'], (str, litellm.CustomStreamWrapper)) or kwargs["original_response"] == None
-            assert isinstance(kwargs['additional_args'], Optional[dict])
+            assert isinstance(kwargs['additional_args'], (dict, type(None)))
             assert isinstance(kwargs['log_event_type'], str) 
         except: 
             print(f"Assertion Error: {traceback.format_exc()}")
@@ -205,13 +205,13 @@ class CompletionCustomHandler(CustomLogger): # https://docs.litellm.ai/docs/obse
             assert isinstance(kwargs['messages'], list)
             assert isinstance(kwargs['optional_params'], dict)
             assert isinstance(kwargs['litellm_params'], dict) 
-            assert isinstance(kwargs['start_time'], Optional[datetime])
+            assert isinstance(kwargs['start_time'], (datetime, type(None)))
             assert isinstance(kwargs['stream'], bool)
-            assert isinstance(kwargs['user'], Optional[str])
+            assert isinstance(kwargs['user'], (str, type(None)))
             assert isinstance(kwargs['input'], (list, dict, str))
-            assert isinstance(kwargs['api_key'], Optional[str])
+            assert isinstance(kwargs['api_key'], (str, type(None)))
             assert isinstance(kwargs['original_response'], (str, litellm.CustomStreamWrapper)) or inspect.isasyncgen(kwargs['original_response']) or inspect.iscoroutine(kwargs['original_response'])
-            assert isinstance(kwargs['additional_args'], Optional[dict])
+            assert isinstance(kwargs['additional_args'], (dict, type(None)))
             assert isinstance(kwargs['log_event_type'], str) 
             ### ROUTER-SPECIFIC KWARGS
             assert isinstance(kwargs["litellm_params"]["metadata"], dict)
@@ -219,8 +219,8 @@ class CompletionCustomHandler(CustomLogger): # https://docs.litellm.ai/docs/obse
             assert isinstance(kwargs["litellm_params"]["metadata"]["deployment"], str)
             assert isinstance(kwargs["litellm_params"]["model_info"], dict)
             assert isinstance(kwargs["litellm_params"]["model_info"]["id"], str)
-            assert isinstance(kwargs["litellm_params"]["proxy_server_request"], Optional[str])
-            assert isinstance(kwargs["litellm_params"]["preset_cache_key"], Optional[str])
+            assert isinstance(kwargs["litellm_params"]["proxy_server_request"], (str, type(None)))
+            assert isinstance(kwargs["litellm_params"]["preset_cache_key"], (str, type(None)))
             assert isinstance(kwargs["litellm_params"]["stream_response"], dict)
         except: 
             print(f"Assertion Error: {traceback.format_exc()}")
@@ -241,13 +241,13 @@ class CompletionCustomHandler(CustomLogger): # https://docs.litellm.ai/docs/obse
             assert isinstance(kwargs['messages'], list)
             assert isinstance(kwargs['optional_params'], dict)
             assert isinstance(kwargs['litellm_params'], dict) 
-            assert isinstance(kwargs['start_time'], Optional[datetime])
+            assert isinstance(kwargs['start_time'], (datetime, type(None)))
             assert isinstance(kwargs['stream'], bool)
-            assert isinstance(kwargs['user'], Optional[str])
+            assert isinstance(kwargs['user'], (str, type(None)))
             assert isinstance(kwargs['input'], (list, str, dict))
-            assert isinstance(kwargs['api_key'], Optional[str])
+            assert isinstance(kwargs['api_key'], (str, type(None)))
             assert isinstance(kwargs['original_response'], (str, litellm.CustomStreamWrapper)) or inspect.isasyncgen(kwargs['original_response']) or inspect.iscoroutine(kwargs['original_response']) or kwargs['original_response'] == None
-            assert isinstance(kwargs['additional_args'], Optional[dict])
+            assert isinstance(kwargs['additional_args'], (dict, type(None)))
             assert isinstance(kwargs['log_event_type'], str) 
         except: 
             print(f"Assertion Error: {traceback.format_exc()}")
@@ -334,6 +334,7 @@ async def test_async_chat_azure():
         pytest.fail(f"An exception occurred - {str(e)}")
 # asyncio.run(test_async_chat_azure())
 ## EMBEDDING
+@pytest.mark.asyncio
 async def test_async_embedding_azure():
     try: 
         customHandler = CompletionCustomHandler()
@@ -388,11 +389,94 @@ async def test_async_embedding_azure():
     except Exception as e: 
         print(f"Assertion Error: {traceback.format_exc()}")
         pytest.fail(f"An exception occurred - {str(e)}")
-asyncio.run(test_async_embedding_azure())
-# Azure OpenAI call w/ Retries
+# asyncio.run(test_async_embedding_azure())
+# Azure OpenAI call w/ Retries + Fallbacks
 ## COMPLETION
-## EMBEDDING
-
-# Azure OpenAI call w/ fallbacks
-## COMPLETION
-## EMBEDDING
+@pytest.mark.asyncio
+async def test_async_chat_azure_with_retries_and_fallbacks(): 
+    try: 
+        customHandler_fallbacks = CompletionCustomHandler()
+        customHandler_streaming = CompletionCustomHandler()
+        customHandler_failure = CompletionCustomHandler()
+        litellm.callbacks = [customHandler_fallbacks]
+        model_list = [
+                    { 
+                        "model_name": "gpt-3.5-turbo", # openai model name 
+                        "litellm_params": { # params for litellm completion/embedding call 
+                            "model": "azure/chatgpt-v-2", 
+                            "api_key": "my-bad-key",
+                            "api_version": os.getenv("AZURE_API_VERSION"),
+                            "api_base": os.getenv("AZURE_API_BASE")
+                        },
+                        "tpm": 240000,
+                        "rpm": 1800
+                    },
+                    {
+                        "model_name": "gpt-3.5-turbo-16k",
+                        "litellm_params": {
+                            "model": "gpt-3.5-turbo-16k", 
+                        }, 
+                        "tpm": 240000,
+                        "rpm": 1800
+                    }
+                ]
+        router = Router(model_list=model_list, fallbacks=[{"gpt-3.5-turbo": ["gpt-3.5-turbo-16k"]}]) # type: ignore
+        response = await router.acompletion(model="gpt-3.5-turbo",
+                                messages=[{
+                                    "role": "user",
+                                    "content": "Hi 👋 - i'm openai"
+                                }])
+        await asyncio.sleep(2)
+        print(f"customHandler_fallbacks.states: {customHandler_fallbacks.states}")
+        assert len(customHandler_fallbacks.errors) == 0
+        assert len(customHandler_fallbacks.states) == 6 # pre, post, failure, pre, post, success
+        
+        # # streaming 
+        # litellm.callbacks = [customHandler_streaming]
+        # router2 = Router(model_list=model_list) # type: ignore
+        # response = await router2.acompletion(model="gpt-3.5-turbo",
+        #                         messages=[{
+        #                             "role": "user",
+        #                             "content": "Hi 👋 - i'm openai"
+        #                         }],
+        #                         stream=True)
+        # async for chunk in response: 
+        #     continue
+        # await asyncio.sleep(1)
+        # print(f"customHandler.states: {customHandler_streaming.states}")
+        # assert len(customHandler_streaming.errors) == 0
+        # assert len(customHandler_streaming.states) >= 4 # pre, post, stream (multiple times), success
+        # # failure 
+        # model_list = [
+        #             { 
+        #                 "model_name": "gpt-3.5-turbo", # openai model name 
+        #                 "litellm_params": { # params for litellm completion/embedding call 
+        #                     "model": "azure/chatgpt-v-2", 
+        #                     "api_key": "my-bad-key",
+        #                     "api_version": os.getenv("AZURE_API_VERSION"),
+        #                     "api_base": os.getenv("AZURE_API_BASE")
+        #                 },
+        #                 "tpm": 240000,
+        #                 "rpm": 1800
+        #             },
+        #         ]
+        # litellm.callbacks = [customHandler_failure]
+        # router3 = Router(model_list=model_list) # type: ignore
+        # try: 
+        #     response = await router3.acompletion(model="gpt-3.5-turbo",
+        #                             messages=[{
+        #                                 "role": "user",
+        #                                 "content": "Hi 👋 - i'm openai"
+        #                             }])
+        #     print(f"response in router3 acompletion: {response}")
+        # except:
+        #     pass
+        # await asyncio.sleep(1)
+        # print(f"customHandler.states: {customHandler_failure.states}")
+        # assert len(customHandler_failure.errors) == 0
+        # assert len(customHandler_failure.states) == 3 # pre, post, failure
+        # assert "async_failure" in customHandler_failure.states
+    except Exception as e: 
+        print(f"Assertion Error: {traceback.format_exc()}")
+        pytest.fail(f"An exception occurred - {str(e)}")
+asyncio.run(test_async_chat_azure_with_retries_and_fallbacks())
