@@ -1024,6 +1024,9 @@ def test_customprompt_together_ai():
     try:
         litellm.set_verbose = False
         litellm.num_retries = 0
+        print("in test_customprompt_together_ai")
+        print(litellm.success_callback)
+        print(litellm._async_success_callback)
         response = completion(
             model="together_ai/mistralai/Mistral-7B-Instruct-v0.1",
             messages=messages, 
@@ -1032,7 +1035,6 @@ def test_customprompt_together_ai():
         print(response)
     except litellm.exceptions.Timeout as e:
         print(f"Timeout Error")
-        litellm.num_retries = 3 # reset retries
         pass
     except Exception as e:
         print(f"ERROR TYPE {type(e)}")
