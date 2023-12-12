@@ -22,8 +22,7 @@ from litellm.integrations.custom_logger import CustomLogger
 
 # Test interfaces
 ## 1. litellm.completion() + litellm.embeddings()
-## 2. router.completion() + router.embeddings() 
-## 3. proxy.completions + proxy.embeddings 
+## refer to test_custom_callback_input_router.py for the router +  proxy tests
 
 class CompletionCustomHandler(CustomLogger): # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
     """
@@ -577,4 +576,4 @@ async def test_async_embedding_bedrock():
     except Exception as e: 
         pytest.fail(f"An exception occurred: {str(e)}")
 
-asyncio.run(test_async_embedding_bedrock())
+# asyncio.run(test_async_embedding_bedrock())

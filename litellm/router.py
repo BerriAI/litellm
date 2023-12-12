@@ -313,8 +313,8 @@ class Router:
                   **kwargs) -> Union[List[float], None]:
         # pick the one that is available (lowest TPM/RPM)
         deployment = self.get_available_deployment(model=model, input=input, specific_deployment=kwargs.pop("specific_deployment", None))
-        kwargs.setdefault("metadata", {}).update({"deployment": deployment["litellm_params"]["model"]})
-        kwargs["model_info"] = deployment.get("model_info", {})
+        kwargs.setdefault("model_info", {})
+        kwargs.setdefault("metadata", {}).update({"model_group": model, "deployment": deployment["litellm_params"]["model"]}) # [TODO]: move to using async_function_with_fallbacks
         data = deployment["litellm_params"].copy()
         for k, v in self.default_litellm_params.items(): 
             if k not in data: # prioritize model-specific params > default router params 
@@ -339,7 +339,7 @@ class Router:
                          **kwargs) -> Union[List[float], None]:
         # pick the one that is available (lowest TPM/RPM)
         deployment = self.get_available_deployment(model=model, input=input, specific_deployment=kwargs.pop("specific_deployment", None))
-        kwargs.setdefault("metadata", {}).update({"deployment": deployment["litellm_params"]["model"]})
+        kwargs.setdefault("metadata", {}).update({"model_group": model, "deployment": deployment["litellm_params"]["model"]})
         data = deployment["litellm_params"].copy()
         kwargs["model_info"] = deployment.get("model_info", {})
         for k, v in self.default_litellm_params.items(): 
