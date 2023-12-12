@@ -317,7 +317,7 @@ def test_redis_cache_completion_stream():
             response_2_content += chunk.choices[0].delta.content or ""
         print("\nresponse 1", response_1_content)
         print("\nresponse 2", response_2_content)
-        assert response_1_content == response_2_content, f"Response 1 != Response 2. Same params, Response 1{response_1_content} != Response 2{response_2_content}"
+        assert response1.id == response2.id, f"Response 1 != Response 2. Same params, Response 1{response1.id} != Response 2{response2.id}"
         litellm.success_callback = []
         litellm._async_success_callback = []
         litellm.cache = None
@@ -325,4 +325,3 @@ def test_redis_cache_completion_stream():
         print(e)
         litellm.success_callback = []
         raise e
-        pytest.fail(f"Error occurred: {e}")
