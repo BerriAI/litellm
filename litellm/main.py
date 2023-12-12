@@ -31,7 +31,8 @@ from litellm.utils import (
     mock_completion_streaming_obj, 
     convert_to_model_response_object, 
     token_counter, 
-    Usage
+    Usage, 
+    get_optional_params_embeddings
 )
 from .llms import (
     anthropic,
@@ -1828,18 +1829,16 @@ def embedding(
     tpm = kwargs.pop("tpm", None)
     model_info = kwargs.get("model_info", None)
     metadata = kwargs.get("metadata", None)
+    encoding_format = kwargs.get("encoding_format", None)
     proxy_server_request = kwargs.get("proxy_server_request", None)
     aembedding = kwargs.pop("aembedding", None)
-    openai_params = ["functions", "function_call", "temperature", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "request_timeout", "api_base", "api_version", "api_key", "deployment_id", "organization", "base_url", "default_headers", "timeout", "response_format", "seed", "tools", "tool_choice", "max_retries", "encoding_format"]
+    openai_params = ["user", "request_timeout", "api_base", "api_version", "api_key", "deployment_id", "organization", "base_url", "default_headers", "timeout", "max_retries", "encoding_format"]
     litellm_params = ["metadata", "aembedding", "caching", "mock_response", "api_key", "api_version", "api_base", "force_timeout", "logger_fn", "verbose", "custom_llm_provider", "litellm_logging_obj", "litellm_call_id", "use_client", "id", "fallbacks", "azure", "headers", "model_list", "num_retries", "context_window_fallback_dict", "roles", "final_prompt_value", "bos_token", "eos_token", "request_timeout", "complete_response", "self", "client", "rpm", "tpm", "input_cost_per_token", "output_cost_per_token", "hf_model_name", "proxy_server_request", "model_info", "preset_cache_key"]
     default_params = openai_params + litellm_params
     non_default_params = {k: v for k,v in kwargs.items() if k not in default_params} # model-specific params - pass them straight to the model/provider
-    optional_params = {}
-    for param in non_default_params:
-        optional_params[param] = kwargs[param]
-    model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, api_key=api_key)
     
-
+    model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, api_key=api_key)
+    optional_params = get_optional_params_embeddings(user=user, encoding_format=encoding_format, custom_llm_provider=custom_llm_provider, **non_default_params)
     try:
         response = None
         logging = litellm_logging_obj

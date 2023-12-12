@@ -415,7 +415,6 @@ class OpenAIChatCompletion(BaseLLM):
             max_retries = data.pop("max_retries", 2)
             if not isinstance(max_retries, int): 
                 raise OpenAIError(status_code=422, message="max retries must be an int")
-            
             ## LOGGING
             logging_obj.pre_call(
                     input=input,
