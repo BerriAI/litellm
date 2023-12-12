@@ -791,11 +791,6 @@ def data_generator(response):
 async def async_data_generator(response, user_api_key_dict):
     print_verbose("inside generator")
     async for chunk in response:
-        # try:
-        #     await proxy_logging_obj.pre_call_hook(user_api_key_dict=user_api_key_dict, data=None, call_type="completion")   
-        # except Exception as e:
-        #     print(f"An exception occurred - {str(e)}")
-
         print_verbose(f"returned chunk: {chunk}")
         try:
             yield f"data: {json.dumps(chunk.dict())}\n\n"

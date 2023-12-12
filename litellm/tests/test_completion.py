@@ -1084,7 +1084,7 @@ def test_completion_chat_sagemaker():
         assert len(complete_response) > 0
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_completion_chat_sagemaker()
+test_completion_chat_sagemaker()
 
 def test_completion_chat_sagemaker_mistral(): 
     try: 
