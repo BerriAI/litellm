@@ -1067,7 +1067,7 @@ def test_completion_chat_sagemaker():
             temperature=0.7,
             stream=True,
         )
-        # Add any assertions here to check the response
+        # Add any assertions here to check the response 
         complete_response = "" 
         for chunk in response:
             complete_response += chunk.choices[0].delta.content or "" 
