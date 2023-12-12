@@ -1044,7 +1044,11 @@ class Logging:
         if self.stream: 
             if result.choices[0].finish_reason is not None: # if it's the last chunk
                 self.streaming_chunks.append(result)
-                complete_streaming_response = litellm.stream_chunk_builder(self.streaming_chunks, messages=self.model_call_details.get("messages", None))
+                print_verbose(f"final set of received chunks: {self.streaming_chunks}")
+                try: 
+                    complete_streaming_response = litellm.stream_chunk_builder(self.streaming_chunks, messages=self.model_call_details.get("messages", None))
+                except: 
+                    complete_streaming_response = None
             else:
                 self.streaming_chunks.append(result)
         if complete_streaming_response: 
