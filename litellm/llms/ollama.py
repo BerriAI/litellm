@@ -1,10 +1,9 @@
-import requests, types
+import requests, types, time
 import json
 import traceback
 from typing import Optional
 import litellm 
-import httpx
-
+import httpx, aiohttp, asyncio
 try:
     from async_generator import async_generator, yield_  # optional dependency
     async_generator_imported = True
@@ -115,6 +114,9 @@ def get_ollama_response_stream(
         prompt="Why is the sky blue?", 
         optional_params=None,
         logging_obj=None,
+        acompletion: bool = False,
+        model_response=None,
+        encoding=None
     ):
     if api_base.endswith("/api/generate"):
         url = api_base
@@ -136,8 +138,15 @@ def get_ollama_response_stream(
     logging_obj.pre_call(
         input=None,
         api_key=None,
-        additional_args={"api_base": url, "complete_input_dict": data},
+        additional_args={"api_base": url, "complete_input_dict": data, "headers": {},  "acompletion": acompletion,},
     )
+    if acompletion is True: 
+        response = ollama_acompletion(url=url, data=data, model_response=model_response, encoding=encoding, logging_obj=logging_obj)
+        return response
+    else:
+        return ollama_completion_stream(url=url, data=data)
+
+def ollama_completion_stream(url, data):
     session = requests.Session()
 
     with session.post(url, json=data, stream=True) as resp:
@@ -168,6 +177,52 @@ def get_ollama_response_stream(
                 except Exception as e:
                     traceback.print_exc()
     session.close()
+
+async def ollama_acompletion(url, data, model_response, encoding, logging_obj):
+
+    try:
+        timeout = aiohttp.ClientTimeout(total=600)  # 10 minutes
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            resp = await session.post(url, json=data)
+
+            if resp.status != 200:
+                text = await resp.text()
+                raise OllamaError(status_code=resp.status, message=text)
+            
+            async for line in resp.content.iter_any():
+                if line:
+                    try:
+                        json_chunk = line.decode("utf-8")
+                        chunks = json_chunk.split("\n")
+                        completion_string = ""
+                        for chunk in chunks:
+                            if chunk.strip() != "":
+                                j = json.loads(chunk)
+                                if "error" in j:
+                                    completion_obj = {
+                                        "role": "assistant",
+                                        "content": "",
+                                        "error": j
+                                    }
+                                if "response" in j:
+                                    completion_obj = {
+                                        "role": "assistant",
+                                        "content": j["response"],
+                                    }
+                                    completion_string += completion_obj["content"]
+                    except Exception as e:
+                        traceback.print_exc()
+            ## RESPONSE OBJECT
+            model_response["choices"][0]["finish_reason"] = "stop"
+            model_response["choices"][0]["message"]["content"] = completion_string
+            model_response["created"] = int(time.time())
+            model_response["model"] = "ollama/" + data['model']
+            prompt_tokens = len(encoding.encode(data['prompt'])) # type: ignore
+            completion_tokens = len(encoding.encode(completion_string))
+            model_response["usage"] = litellm.Usage(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens, total_tokens=prompt_tokens + completion_tokens)
+            return model_response
+    except Exception as e:
+        traceback.print_exc()
 
 if async_generator_imported:
     # ollama implementation

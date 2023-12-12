@@ -1,0 +1,75 @@
+model_list:
+- litellm_params:
+    api_base: https://my-endpoint-europe-berri-992.openai.azure.com/
+    api_key: os.environ/AZURE_EUROPE_API_KEY
+    model: azure/gpt-35-turbo
+  model_name: azure-model
+- litellm_params:
+    api_base: https://my-endpoint-canada-berri992.openai.azure.com
+    api_key: os.environ/AZURE_CANADA_API_KEY
+    model: azure/gpt-35-turbo
+  model_name: azure-model
+- litellm_params:
+    api_base: https://openai-france-1234.openai.azure.com
+    api_key: os.environ/AZURE_FRANCE_API_KEY
+    model: azure/gpt-turbo
+  model_name: azure-model
+- litellm_params:
+    model: gpt-3.5-turbo
+  model_info:
+    description: this is a test openai model
+  model_name: test_openai_models
+- litellm_params:
+    model: gpt-3.5-turbo
+  model_info:
+    description: this is a test openai model
+    id: 56f1bd94-3b54-4b67-9ea2-7c70e9a3a709
+  model_name: test_openai_models
+- litellm_params:
+    model: gpt-3.5-turbo
+  model_info:
+    description: this is a test openai model
+    id: 4d1ee26c-abca-450c-8744-8e87fd6755e9
+  model_name: test_openai_models
+- litellm_params:
+    model: gpt-3.5-turbo
+  model_info:
+    description: this is a test openai model
+    id: 00e19c0f-b63d-42bb-88e9-016fb0c60764
+  model_name: test_openai_models
+- litellm_params:
+    model: gpt-3.5-turbo
+  model_info:
+    description: this is a test openai model
+    id: 79fc75bf-8e1b-47d5-8d24-9365a854af03
+  model_name: test_openai_models
+- litellm_params:
+    api_base: os.environ/AZURE_API_BASE
+    api_key: os.environ/AZURE_API_KEY
+    api_version: 2023-07-01-preview
+    model: azure/azure-embedding-model
+  model_name: azure-embedding-model
+- litellm_params:
+    model: gpt-3.5-turbo
+  model_info:
+    description: this is a test openai model
+    id: 55848c55-4162-40f9-a6e2-9a722b9ef404
+  model_name: test_openai_models
+- litellm_params:
+    model: gpt-3.5-turbo
+  model_info:
+    description: this is a test openai model
+    id: 34339b1e-e030-4bcc-a531-c48559f10ce4
+  model_name: test_openai_models
+- litellm_params:
+    model: gpt-3.5-turbo
+  model_info:
+    description: this is a test openai model
+    id: f6f74e14-ac64-4403-9365-319e584dcdc5
+  model_name: test_openai_models
+- litellm_params:
+    model: gpt-3.5-turbo
+  model_info:
+    description: this is a test openai model
+    id: 9b1ef341-322c-410a-8992-903987fef439
+  model_name: test_openai_models

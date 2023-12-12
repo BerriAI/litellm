@@ -142,6 +142,8 @@ print(response)
 | Model Name           | Function Call                               |
 |----------------------|---------------------------------------------|
 | Titan Embeddings - G1 | `embedding(model="amazon.titan-embed-text-v1", input=input)` |
+| Cohere Embeddings - English | `embedding(model="cohere.embed-english-v3", input=input)` |
+| Cohere Embeddings - Multilingual | `embedding(model="cohere.embed-multilingual-v3", input=input)` |
 
 
 ## Cohere Embedding Models
@@ -180,6 +182,17 @@ os.environ['HUGGINGFACE_API_KEY'] = ""
 response = embedding(
     model='huggingface/microsoft/codebert-base', 
     input=["good morning from litellm"]
+)
+```
+### Usage - Custom API Base
+```python
+from litellm import embedding
+import os
+os.environ['HUGGINGFACE_API_KEY'] = ""
+response = embedding(
+    model='huggingface/microsoft/codebert-base', 
+    input=["good morning from litellm"],
+    api_base = "https://p69xlsj6rpno5drq.us-east-1.aws.endpoints.huggingface.cloud"
 )
 ```
 

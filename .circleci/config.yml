@@ -29,12 +29,16 @@ jobs:
             pip install pytest-asyncio
             pip install mypy
             pip install -q google-generativeai
+            pip install google-cloud-aiplatform
             pip install "boto3>=1.28.57"
             pip install appdirs
             pip install langchain
+            pip install langfuse
             pip install numpydoc
             pip install traceloop-sdk==0.0.69
             pip install openai
+            pip install prisma
+            pip install langfuse
       - save_cache:
           paths:
             - ./venv
@@ -44,7 +48,7 @@ jobs:
           command: |
             cd litellm
             python -m pip install types-requests types-setuptools types-redis
-            if ! python -m mypy . --ignore-missing-imports --explicit-package-bases; then
+            if ! python -m mypy . --ignore-missing-imports; then
               echo "mypy detected errors"
               exit 1
             fi
@@ -57,7 +61,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv litellm/tests/ -x --junitxml=test-results/junit.xml --durations=5
+            python -m pytest -vv litellm/tests/ -x --junitxml=test-results/junit.xml --durations=5 
           no_output_timeout: 120m
 
       # Store test results
@@ -74,6 +78,11 @@ jobs:
 
     steps:
       - checkout
+
+      - run:
+          name: Copy model_prices_and_context_window File to model_prices_and_context_window_backup
+          command: |
+            cp model_prices_and_context_window.json litellm/model_prices_and_context_window_backup.json
       
       - run:
           name: Check if litellm dir was updated or if pyproject.toml was modified

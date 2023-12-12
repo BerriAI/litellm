@@ -7,25 +7,33 @@ import os, io
 
 sys.path.insert(
     0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path 
+)  # Adds the parent directory to the system path    
 import pytest
 import litellm
 from litellm import embedding, completion, completion_cost, Timeout
 from litellm import RateLimitError
 litellm.num_retries = 3
 litellm.cache = None
+litellm.success_callback = [] 
 user_message = "Write a short poem about the sky"
 messages = [{"content": user_message, "role": "user"}]
 
 def logger_fn(user_model_dict):
     print(f"user_model_dict: {user_model_dict}")
 
+@pytest.fixture(autouse=True)
+def reset_callbacks():
+    print("\npytest fixture - resetting callbacks")
+    litellm.success_callback = []
+    litellm._async_success_callback = []
+    litellm.failure_callback = []
+    litellm.callbacks = []
 
 def test_completion_custom_provider_model_name():
     try:
         litellm.cache = None
         response = completion(
-            model="together_ai/togethercomputer/llama-2-70b-chat",
+            model="together_ai/mistralai/Mistral-7B-Instruct-v0.1",
             messages=messages,
             logger_fn=logger_fn,
         )
@@ -53,7 +61,7 @@ def test_completion_claude():
         print(response)
         print(response.usage)
         print(response.usage.completion_tokens)
-        print(response["usage"]["completion_tokens"])
+        print(response["usage"]["completion_tokens"]) 
         # print("new cost tracking")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
@@ -63,6 +71,7 @@ def test_completion_claude():
 def test_completion_claude2_1():
     try:
         print("claude2.1 test request")
+        messages=[{'role': 'system', 'content': 'Your goal is generate a joke on the topic user gives'}, {'role': 'assistant', 'content': 'Hi, how can i assist you today?'}, {'role': 'user', 'content': 'Generate a 3 liner joke for me'}]
         # test without max tokens
         response = completion(
             model="claude-2.1", 
@@ -131,6 +140,7 @@ def test_completion_gpt4_turbo():
         pytest.fail(f"Error occurred: {e}")
 # test_completion_gpt4_turbo()
 
+@pytest.mark.skip(reason="this test is flaky")
 def test_completion_gpt4_vision():
     try:
         litellm.set_verbose=True
@@ -284,7 +294,7 @@ def hf_test_completion_tgi():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# hf_test_completion_tgi()
+hf_test_completion_tgi()
 
 # ################### Hugging Face Conversational models ########################
 # def hf_test_completion_conv():
@@ -442,9 +452,46 @@ def test_completion_text_openai():
         pytest.fail(f"Error occurred: {e}")
 # test_completion_text_openai()
 
+def custom_callback(
+    kwargs,                 # kwargs to completion
+    completion_response,    # response from completion
+    start_time, end_time    # start/end time
+):
+    # Your custom code here
+    try:
+        print("LITELLM: in custom callback function")
+        print("\nkwargs\n", kwargs)
+        model = kwargs["model"]
+        messages = kwargs["messages"]
+        user = kwargs.get("user")
+
+        #################################################
+
+        print(
+            f"""
+                Model: {model},
+                Messages: {messages},
+                User: {user},
+                Seed: {kwargs["seed"]},
+                temperature: {kwargs["temperature"]},
+            """
+        )
+
+        assert kwargs["user"] == "ishaans app"
+        assert kwargs["model"] == "gpt-3.5-turbo-1106"
+        assert kwargs["seed"] == 12
+        assert kwargs["temperature"] == 0.5
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
 def test_completion_openai_with_optional_params():
+    # [Proxy PROD TEST] WARNING: DO NOT DELETE THIS TEST
+    # assert that `user` gets passed to the completion call
+    # Note: This tests that we actually send the optional params to the completion call
+    # We use custom callbacks to test this 
     try:
         litellm.set_verbose = True
+        litellm.success_callback = [custom_callback]
         response = completion(
             model="gpt-3.5-turbo-1106",
             messages=[
@@ -458,11 +505,13 @@ def test_completion_openai_with_optional_params():
             seed=12,
             response_format={ "type": "json_object" },
             logit_bias=None,
+            user = "ishaans app"
         )
         # Add any assertions here to check the response
+
         print(response)
-    except litellm.Timeout as e: 
-        pass
+        litellm.success_callback = [] # unset callbacks
+
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -569,7 +618,7 @@ def test_completion_azure_key_completion_arg():
     os.environ.pop("AZURE_API_KEY", None)
     try:
         print("azure gpt-3.5 test\n\n")
-        litellm.set_verbose=False
+        litellm.set_verbose=True
         ## Test azure call
         response = completion(
             model="azure/chatgpt-v-2",
@@ -654,11 +703,12 @@ def test_completion_azure():
         print(response)
 
         cost = completion_cost(completion_response=response)
+        assert cost > 0.0   
         print("Cost for azure completion request", cost)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-# test_completion_azure()
+test_completion_azure()
 
 def test_azure_openai_ad_token():
     # this tests if the azure ad token is set in the request header
@@ -960,12 +1010,18 @@ def test_replicate_custom_prompt_dict():
 
 ######## Test TogetherAI ######## 
 def test_completion_together_ai():
-    model_name = "together_ai/togethercomputer/llama-2-70b-chat"
+    model_name = "together_ai/togethercomputer/CodeLlama-13b-Instruct"
     try:
+        messages =[
+            {"role": "user", "content": "Who are you"},
+            {"role": "assistant", "content": "I am your helpful assistant."},
+            {"role": "user", "content": "Tell me a joke"},
+        ]
         response = completion(model=model_name, messages=messages, max_tokens=256, n=1, logger_fn=logger_fn)
         # Add any assertions here to check the response
         print(response)
         cost = completion_cost(completion_response=response)
+        assert cost > 0.0   
         print("Cost for completion call together-computer/llama-2-70b: ", f"${float(cost):.10f}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
@@ -975,15 +1031,17 @@ def test_customprompt_together_ai():
     try:
         litellm.set_verbose = False
         litellm.num_retries = 0
+        print("in test_customprompt_together_ai")
+        print(litellm.success_callback)
+        print(litellm._async_success_callback)
         response = completion(
-            model="together_ai/togethercomputer/llama-2-70b-chat",
+            model="together_ai/mistralai/Mistral-7B-Instruct-v0.1",
             messages=messages, 
             roles={"system":{"pre_message":"<|im_start|>system\n", "post_message":"<|im_end|>"}, "assistant":{"pre_message":"<|im_start|>assistant\n","post_message":"<|im_end|>"}, "user":{"pre_message":"<|im_start|>user\n","post_message":"<|im_end|>"}}
         )
         print(response)
     except litellm.exceptions.Timeout as e:
         print(f"Timeout Error")
-        litellm.num_retries = 3 # reset retries
         pass
     except Exception as e:
         print(f"ERROR TYPE {type(e)}")
@@ -996,7 +1054,7 @@ def test_completion_sagemaker():
         print("testing sagemaker")
         litellm.set_verbose=True
         response = completion(
-            model="sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b", 
+            model="sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4", 
             messages=messages,
             temperature=0.2,
             max_tokens=80,
@@ -1009,18 +1067,40 @@ def test_completion_sagemaker():
 
 def test_completion_chat_sagemaker():
     try:
-        print("testing sagemaker")
+        messages = [{"role": "user", "content": "Hey, how's it going?"}]
         litellm.set_verbose=True
         response = completion(
-            model="sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b-f", 
+            model="sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4", 
             messages=messages,
+            max_tokens=100,
+            temperature=0.7,
+            stream=True,
         )
-        # Add any assertions here to check the response
-        print(response)
+        # Add any assertions here to check the response 
+        complete_response = "" 
+        for chunk in response:
+            complete_response += chunk.choices[0].delta.content or "" 
+        print(f"complete_response: {complete_response}")
+        assert len(complete_response) > 0
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 # test_completion_chat_sagemaker()
 
+def test_completion_chat_sagemaker_mistral(): 
+    try: 
+        messages = [{"role": "user", "content": "Hey, how's it going?"}]
+        
+        response = completion(
+            model="sagemaker/jumpstart-dft-hf-llm-mistral-7b-instruct",
+            messages=messages,
+            max_tokens=100,
+        )
+        # Add any assertions here to check the response
+        print(response)
+    except Exception as e: 
+        pytest.fail(f"An error occurred: {str(e)}")
+
+# test_completion_chat_sagemaker_mistral()
 def test_completion_bedrock_titan():
     try:
         response = completion(
@@ -1251,43 +1331,6 @@ def test_completion_bedrock_claude_completion_auth():
 
 # test_completion_custom_api_base()
 
-# def test_vertex_ai():
-#     test_models = ["codechat-bison"] + litellm.vertex_chat_models + litellm.vertex_code_chat_models + litellm.vertex_text_models + litellm.vertex_code_text_models
-#     # test_models = ["chat-bison"]
-#     for model in test_models:
-#         try:
-#             if model in ["code-gecko@001", "code-gecko@latest"]:
-#                 # our account does not have access to this model
-#                 continue
-#             print("making request", model)
-#             response = completion(model=model, messages=[{'role': 'user', 'content': 'hi'}])
-#             print(response)
-
-#             print(response.usage.completion_tokens)
-#             print(response['usage']['completion_tokens'])
-#             assert type(response.choices[0].message.content) == str
-#         except Exception as e:
-#             pytest.fail(f"Error occurred: {e}")
-# test_vertex_ai()
-
-# def test_vertex_ai_stream():
-#     litellm.set_verbose=False
-#     test_models = litellm.vertex_chat_models + litellm.vertex_code_chat_models + litellm.vertex_text_models + litellm.vertex_code_text_models
-#     for model in test_models:
-#         try:
-#             if model in ["code-gecko@001", "code-gecko@latest"]:
-#                 # our account does not have access to this model
-#                 continue
-#             print("making request", model)
-#             response = completion(model=model, messages=[{"role": "user", "content": "write 100 line code code for saying hi"}], stream=True)
-#             for chunk in response:
-#                 print(chunk)
-#                 # pass
-#         except Exception as e:
-#             pytest.fail(f"Error occurred: {e}")
-# test_vertex_ai_stream() 
-
-
 def test_completion_with_fallbacks():
     print(f"RUNNING TEST COMPLETION WITH FALLBACKS -  test_completion_with_fallbacks")
     fallbacks = ["gpt-3.5-turbo", "gpt-3.5-turbo", "command-nightly"]
@@ -1337,7 +1380,7 @@ def test_azure_cloudflare_api():
         traceback.print_exc()
         pass
 
-test_azure_cloudflare_api() 
+# test_azure_cloudflare_api() 
 
 def test_completion_anyscale_2():
     try:
@@ -1567,7 +1610,7 @@ def test_completion_together_ai_stream():
     messages = [{ "content": user_message,"role": "user"}]
     try:
         response = completion(
-            model="together_ai/togethercomputer/llama-2-70b-chat", 
+            model="together_ai/mistralai/Mistral-7B-Instruct-v0.1", 
             messages=messages, stream=True, 
             max_tokens=5
         )

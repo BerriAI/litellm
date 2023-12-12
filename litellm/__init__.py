@@ -2,15 +2,18 @@
 import threading, requests
 from typing import Callable, List, Optional, Dict, Union, Any
 from litellm.caching import Cache
+from litellm._logging import set_verbose
 import httpx
 
 input_callback: List[Union[str, Callable]] = []
 success_callback: List[Union[str, Callable]] = []
 failure_callback: List[Union[str, Callable]] = []
 callbacks: List[Callable] = []
+_async_input_callback: List[Callable] = [] # internal variable - async custom callbacks are routed here. 
+_async_success_callback: List[Callable] = [] # internal variable - async custom callbacks are routed here. 
+_async_failure_callback: List[Callable] = [] # internal variable - async custom callbacks are routed here. 
 pre_call_rules: List[Callable] = []
 post_call_rules: List[Callable] = []
-set_verbose = False
 email: Optional[
     str
 ] = None  # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
@@ -43,6 +46,7 @@ caching: bool = False # Not used anymore, will be removed in next MAJOR release 
 caching_with_models: bool = False  # # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
 cache: Optional[Cache] = None # cache object <- use this - https://docs.litellm.ai/docs/caching
 model_alias_map: Dict[str, str] = {}
+model_group_alias_map: Dict[str, str] = {}
 max_budget: float = 0.0 # set the max budget across all providers
 _current_cost = 0 # private variable, used if max budget is set 
 error_logs: Dict = {}
@@ -338,7 +342,7 @@ cohere_embedding_models: List = [
     "embed-english-light-v2.0", 
     "embed-multilingual-v2.0", 
 ]
-bedrock_embedding_models: List = ["amazon.titan-embed-text-v1"]
+bedrock_embedding_models: List = ["amazon.titan-embed-text-v1", "cohere.embed-english-v3", "cohere.embed-multilingual-v3"]
 
 all_embedding_models = open_ai_embedding_models + cohere_embedding_models + bedrock_embedding_models
 

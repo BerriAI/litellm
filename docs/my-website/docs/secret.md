@@ -68,7 +68,7 @@ You can now test this by starting your proxy:
 litellm --config /path/to/config.yaml
 ```
 
-[Quick Test Proxy](./simple_proxy.md#using-litellm-proxy---curl-request-openai-package)
+[Quick Test Proxy](./proxy/quick_start#using-litellm-proxy---curl-request-openai-package-langchain-langchain-js)
 
 ## Infisical Secret Manager
 Integrates with [Infisical's Secret Manager](https://infisical.com/) for secure storage and retrieval of API keys and sensitive data.
