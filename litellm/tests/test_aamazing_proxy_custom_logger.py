@@ -97,7 +97,6 @@ def test_embedding(client):
 def test_chat_completion(client):
     try:
          # Your test data
-        global my_custom_logger
         print("initialized proxy")
         litellm.set_verbose=False
         from litellm.proxy.utils import get_instance_fn
@@ -135,7 +134,7 @@ def test_chat_completion(client):
         print("LiteLLM Callbacks", litellm.callbacks)
         asyncio.sleep(1) # sleep while waiting for callback to run
 
-        print("my_custom_logger in /chat/completions", my_custom_logger)
+        print("my_custom_logger in /chat/completions", my_custom_logger, "id", id(my_custom_logger))
         print("vars my custom logger, ", vars(my_custom_logger))
         assert my_custom_logger.async_success == True                             # checks if the status of async_success is True, only the async_log_success_event can set this to true
         assert my_custom_logger.async_completion_kwargs["model"] == "chatgpt-v-2" # checks if kwargs passed to async_log_success_event are correct
