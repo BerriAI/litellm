@@ -270,7 +270,9 @@ async def user_api_key_auth(request: Request, api_key: str = fastapi.Security(ap
         print(f"valid_token from cache: {valid_token}")
         if valid_token is None: 
             ## check db 
+            print(f"api key: {api_key}")
             valid_token = await prisma_client.get_data(token=api_key, expires=datetime.utcnow())
+            print(f"valid token from prisma: {valid_token}")
             user_api_key_cache.set_cache(key=api_key, value=valid_token, ttl=60)
         elif valid_token is not None: 
             print(f"API Key Cache Hit!")

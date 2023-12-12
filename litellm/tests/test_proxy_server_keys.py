@@ -1,4 +1,4 @@
-import sys, os, time
+import sys, os, time, asyncio
 import traceback
 from dotenv import load_dotenv
 
@@ -71,8 +71,8 @@ def test_add_new_key(client):
 
 # # Run the test - only runs via pytest
 
-
-def test_add_new_key_max_parallel_limit(client):
+@pytest.mark.asyncio
+async def test_add_new_key_max_parallel_limit(client):
     try:
         # Your test data
         test_data = {"duration": "20m", "max_parallel_requests": 1}
@@ -88,6 +88,7 @@ def test_add_new_key_max_parallel_limit(client):
         result = response.json()
         def _post_data():
             json_data = {'model': 'azure-model', "messages": [{"role": "user", "content": f"this is a test request, write a short poem {time.time()}"}]}
+            print(f"bearer token key: {result['key']}")
             response = client.post("/chat/completions", json=json_data, headers={"Authorization": f"Bearer {result['key']}"})
             return response
         def _run_in_parallel():
