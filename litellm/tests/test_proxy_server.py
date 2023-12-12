@@ -24,14 +24,6 @@ logging.basicConfig(
 from fastapi.testclient import TestClient
 from fastapi import FastAPI
 from litellm.proxy.proxy_server import router, save_worker_config, initialize  # Replace with the actual module where your FastAPI router is defined
-filepath = os.path.dirname(os.path.abspath(__file__))
-config_fp = f"{filepath}/test_configs/test_config_no_auth.yaml"
-save_worker_config(config=config_fp, model=None, alias=None, api_base=None, api_version=None, debug=False, temperature=None, max_tokens=None, request_timeout=600, max_budget=None, telemetry=False, drop_params=True, add_function_to_prompt=False, headers=None, save=False, use_queue=False)
-app = FastAPI()
-app.include_router(router)  # Include your router in the test app
-@app.on_event("startup")
-async def wrapper_startup_event():
-    initialize(config=config_fp)
 
 # Your bearer token
 token = os.getenv("PROXY_MASTER_KEY")
@@ -40,14 +32,16 @@ headers = {
     "Authorization": f"Bearer {token}"
 }
     
-# Here you create a fixture that will be used by your tests
-# Make sure the fixture returns TestClient(app)
-@pytest.fixture(autouse=True)
-def client():
-    with TestClient(app) as client:
-        yield client
+def get_client(config_fp):
+    filepath = os.path.dirname(os.path.abspath(__file__))
+    config_fp = f"{filepath}/test_configs/{config_fp}"
+    initialize(config=config_fp)
+    app = FastAPI()
+    app.include_router(router)  # Include your router in the test app
+    return TestClient(app)
 
-def test_chat_completion(client):
+def test_chat_completion():
+    client = get_client(config_fp="test_config_no_auth.yaml")
     global headers
     try:
         # Your test data
@@ -73,7 +67,8 @@ def test_chat_completion(client):
 
 # Run the test
 
-def test_chat_completion_azure(client):
+def test_chat_completion_azure():
+    client = get_client(config_fp="test_config_no_auth.yaml")
     global headers
     try:
         # Your test data
@@ -102,7 +97,8 @@ def test_chat_completion_azure(client):
 # test_chat_completion_azure()
 
 
-def test_embedding(client):
+def test_embedding():
+    client = get_client(config_fp="test_config_no_auth.yaml")
     global headers
     try:
         test_data = {
@@ -123,7 +119,8 @@ def test_embedding(client):
 # test_embedding()
 
 # @pytest.mark.skip(reason="hitting yaml load issues on circle-ci")
-def test_add_new_model(client): 
+def test_add_new_model():
+    client = get_client(config_fp="test_config_no_auth.yaml") 
     global headers
     try: 
         test_data = {
@@ -164,10 +161,10 @@ class MyCustomHandler(CustomLogger):
 customHandler = MyCustomHandler()
 
 
-def test_chat_completion_optional_params(client):
+def test_chat_completion_optional_params():
     # [PROXY: PROD TEST] - DO NOT DELETE
     # This tests if all the /chat/completion params are passed to litellm
-
+    client = get_client(config_fp="test_config_no_auth.yaml")
     try:
         # Your test data
         litellm.set_verbose=True
