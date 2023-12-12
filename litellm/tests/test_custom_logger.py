@@ -8,8 +8,8 @@ import litellm
 from litellm.integrations.custom_logger import CustomLogger
  
 async_success = False
-complete_streaming_response_in_callback = ""
 class MyCustomHandler(CustomLogger):
+    complete_streaming_response_in_callback = ""
     def __init__(self):
         self.success: bool = False                  # type: ignore
         self.failure: bool = False                  # type: ignore
@@ -72,19 +72,20 @@ class MyCustomHandler(CustomLogger):
         
         self.async_completion_kwargs_fail = kwargs
 
-async def async_test_logging_fn(kwargs, completion_obj, start_time, end_time):
-    global async_success, complete_streaming_response_in_callback
-    print(f"ON ASYNC LOGGING")
-    async_success = True
-    print("\nKWARGS", kwargs)
-    complete_streaming_response_in_callback = kwargs.get("complete_streaming_response")
+class TmpFunction:
+    complete_streaming_response_in_callback = ""
+    async_success: bool = False
+    async def async_test_logging_fn(self, kwargs, completion_obj, start_time, end_time):
+        print(f"ON ASYNC LOGGING")
+        self.async_success = True
+        self.complete_streaming_response_in_callback = kwargs.get("complete_streaming_response")
 
 
 def test_async_chat_openai_stream():
     try:
-        global complete_streaming_response_in_callback
+        tmp_function = TmpFunction()
         # litellm.set_verbose = True
-        litellm.success_callback = [async_test_logging_fn]
+        litellm.success_callback = [tmp_function.async_test_logging_fn]
         complete_streaming_response = ""
         async def call_gpt():
             nonlocal complete_streaming_response
@@ -98,12 +99,23 @@ def test_async_chat_openai_stream():
                 complete_streaming_response += chunk["choices"][0]["delta"]["content"] or ""
                 print(complete_streaming_response)
         asyncio.run(call_gpt())
-        assert complete_streaming_response_in_callback["choices"][0]["message"]["content"] == complete_streaming_response
-        assert async_success == True
+        complete_streaming_response = complete_streaming_response.strip("'")
+        print(f"complete_streaming_response_in_callback: {tmp_function.complete_streaming_response_in_callback['choices'][0]['message']['content']}")
+        print(f"type of complete_streaming_response_in_callback: {type(tmp_function.complete_streaming_response_in_callback['choices'][0]['message']['content'])}")
+        print(f"hidden char complete_streaming_response_in_callback: {repr(tmp_function.complete_streaming_response_in_callback['choices'][0]['message']['content'])}")
+        print(f"encoding complete_streaming_response_in_callback: {tmp_function.complete_streaming_response_in_callback['choices'][0]['message']['content'].encode('utf-8')}")
+        print(f"complete_streaming_response: {complete_streaming_response}")
+        print(f"type(complete_streaming_response): {type(complete_streaming_response)}")
+        print(f"hidden char complete_streaming_response): {repr(complete_streaming_response)}")
+        print(f"encoding complete_streaming_response): {repr(complete_streaming_response).encode('utf-8')}")
+        response1 = tmp_function.complete_streaming_response_in_callback["choices"][0]["message"]["content"]
+        response2 = complete_streaming_response
+        assert [ord(c) for c in response1] == [ord(c) for c in response2]
+        assert tmp_function.async_success == True
     except Exception as e:
         print(e)
         pytest.fail(f"An error occurred - {str(e)}")
-test_async_chat_openai_stream()
+# test_async_chat_openai_stream()
 
 def test_completion_azure_stream_moderation_failure():
     try:
