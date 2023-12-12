@@ -189,6 +189,7 @@ def test_completion_azure_exception():
                 }
             ],
         )
+        os.environ["AZURE_API_KEY"] = old_azure_key
         print(f"response: {response}")
         print(response)
     except openai.AuthenticationError as e:
