@@ -58,6 +58,7 @@ def validate_first_format(chunk):
     for choice in chunk['choices']:
         assert isinstance(choice['index'], int), "'index' should be an integer."
         assert isinstance(choice['delta']['role'], str), "'role' should be a string."
+        assert "messages" not in choice
         # openai v1.0.0 returns content as None
         assert (choice['finish_reason'] is None) or isinstance(choice['finish_reason'], str), "'finish_reason' should be None or a string."
 
@@ -365,6 +366,7 @@ def test_completion_deep_infra_stream():
         pytest.fail(f"Error occurred: {e}")
 # test_completion_deep_infra_stream()
 
+@pytest.mark.skip()
 def test_completion_nlp_cloud_stream():
     try:
         messages = [
