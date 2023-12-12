@@ -5688,6 +5688,7 @@ class CustomStreamWrapper:
                     chunk = self.completion_stream
                 else:
                     chunk = next(self.completion_stream)
+                print_verbose(f"value of chunk: {chunk} ")
                 if chunk is not None and chunk != b'':
                     print_verbose(f"PROCESSED CHUNK PRE CHUNK CREATOR: {chunk}")
                     response = self.chunk_creator(chunk=chunk)
@@ -5728,6 +5729,7 @@ class CustomStreamWrapper:
                 raise StopAsyncIteration
             else: # temporary patch for non-aiohttp async calls
                 # example - boto3 bedrock llms
+                print_verbose(f"ENTERS __NEXT__ LOOP")
                 processed_chunk = next(self)
                 asyncio.create_task(self.logging_obj.async_success_handler(processed_chunk,))
                 print_verbose(f"PROCESSED CHUNK IN __ANEXT__: {processed_chunk}")
