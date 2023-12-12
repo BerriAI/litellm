@@ -32,16 +32,17 @@ headers = {
     "Authorization": f"Bearer {token}"
 }
     
-def get_client(config_fp):
+@pytest.fixture
+def client(config_fp):
     filepath = os.path.dirname(os.path.abspath(__file__))
-    config_fp = f"{filepath}/test_configs/{config_fp}"
+    config_fp = f"{filepath}/test_configs/test_config_no_auth"
+    # initialize can get run in parallel, it sets specific variables for the fast api app, sinc eit gets run in parallel different tests use the wrong variables
     initialize(config=config_fp)
     app = FastAPI()
     app.include_router(router)  # Include your router in the test app
     return TestClient(app)
 
-def test_chat_completion():
-    client = get_client(config_fp="test_config_no_auth.yaml")
+def test_chat_completion(client):
     global headers
     try:
         # Your test data
@@ -67,8 +68,8 @@ def test_chat_completion():
 
 # Run the test
 
-def test_chat_completion_azure():
-    client = get_client(config_fp="test_config_no_auth.yaml")
+def test_chat_completion_azure(client):
+
     global headers
     try:
         # Your test data
@@ -97,8 +98,7 @@ def test_chat_completion_azure():
 # test_chat_completion_azure()
 
 
-def test_embedding():
-    client = get_client(config_fp="test_config_no_auth.yaml")
+def test_embedding(client):
     global headers
     try:
         test_data = {
@@ -119,8 +119,7 @@ def test_embedding():
 # test_embedding()
 
 # @pytest.mark.skip(reason="hitting yaml load issues on circle-ci")
-def test_add_new_model():
-    client = get_client(config_fp="test_config_no_auth.yaml") 
+def test_add_new_model(client):
     global headers
     try: 
         test_data = {
@@ -161,10 +160,9 @@ class MyCustomHandler(CustomLogger):
 customHandler = MyCustomHandler()
 
 
-def test_chat_completion_optional_params():
+def test_chat_completion_optional_params(client):
     # [PROXY: PROD TEST] - DO NOT DELETE
     # This tests if all the /chat/completion params are passed to litellm
-    client = get_client(config_fp="test_config_no_auth.yaml")
     try:
         # Your test data
         litellm.set_verbose=True
