@@ -5692,6 +5692,7 @@ class CustomStreamWrapper:
                 if chunk is not None and chunk != b'':
                     print_verbose(f"PROCESSED CHUNK PRE CHUNK CREATOR: {chunk}")
                     response = self.chunk_creator(chunk=chunk)
+                    print_verbose(f"PROCESSED CHUNK POST CHUNK CREATOR: {chunk}")
                     if response is None: 
                         continue
                     ## LOGGING
@@ -5700,6 +5701,7 @@ class CustomStreamWrapper:
         except StopIteration:
             raise  # Re-raise StopIteration
         except Exception as e:
+            print_verbose(f"HITS AN ERROR: {str(e)}")
             traceback_exception = traceback.format_exc()
             # LOG FAILURE - handle streaming failure logging in the _next_ object, remove `handle_failure` once it's deprecated
             threading.Thread(target=self.logging_obj.failure_handler, args=(e, traceback_exception)).start()
@@ -5731,8 +5733,8 @@ class CustomStreamWrapper:
                 # example - boto3 bedrock llms
                 print_verbose(f"ENTERS __NEXT__ LOOP")
                 processed_chunk = next(self)
-                asyncio.create_task(self.logging_obj.async_success_handler(processed_chunk,))
                 print_verbose(f"PROCESSED CHUNK IN __ANEXT__: {processed_chunk}")
+                asyncio.create_task(self.logging_obj.async_success_handler(processed_chunk,))
                 return processed_chunk
         except StopAsyncIteration:
             raise
