@@ -1,8 +1,54 @@
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: Azure OpenAI GPT-4 Canada-East (External)
+    litellm_params:
+      model: azure/chatgpt-v-2
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
+      api_version: "2023-07-01-preview"
+    model_info:
+      mode: chat
+      input_cost_per_token: 0.0.00006
+      output_cost_per_token: 0.00003
+      max_tokens: 4096
+      base_model: gpt-3.5-turbo
+  - model_name: BEDROCK_GROUP
+    litellm_params:
+      model: bedrock/cohere.command-text-v14
+  - model_name: Azure OpenAI GPT-4 Canada-East (External)
     litellm_params:
       model: gpt-3.5-turbo
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      mode: chat
+  - model_name: azure-embedding-model
+    litellm_params:
+      model: azure/azure-embedding-model
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
+      api_version: "2023-07-01-preview"
+    model_info:
+      mode: embedding
+      base_model: text-embedding-ada-002
+  - model_name: text-embedding-ada-002
+    litellm_params:
+      model: text-embedding-ada-002
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      mode: embedding
+  - model_name: text-davinci-003
+    litellm_params:
+      model: text-davinci-003
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      mode: completion
+
+litellm_settings:
+  # cache: True     
+  # setting callback class
+  # callbacks: custom_callbacks.proxy_handler_instance # sets litellm.callbacks = [proxy_handler_instance]
 
 general_settings: 
+
+environment_variables: 
   # otel: True          # OpenTelemetry Logger
   # master_key: sk-1234 # [OPTIONAL] Only use this if you to require all calls to contain this key (Authorization: Bearer sk-1234)

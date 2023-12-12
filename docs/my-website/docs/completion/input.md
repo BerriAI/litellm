@@ -6,7 +6,7 @@ import TabItem from '@theme/TabItem';
 ## Common Params 
 LiteLLM accepts and translates the [OpenAI Chat Completion params](https://platform.openai.com/docs/api-reference/chat/create) across all providers. 
 
-### usage
+### Usage
 ```python
 import litellm
 
@@ -23,7 +23,7 @@ response = litellm.completion(
 print(response)
 ```
 
-### translated OpenAI params
+### Translated OpenAI params
 This is a list of openai params we translate across providers.
 
 This list is constantly being updated.
@@ -40,7 +40,7 @@ This list is constantly being updated.
 |AI21| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |   |
 |VertexAI| ✅ | ✅ |  | ✅ |  |  |  |  |  |   |
 |Bedrock| ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |  |   |
-|Sagemaker| ✅ | ✅ |  | ✅ |  |  |  |  |  |   |
+|Sagemaker| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |  |   |
 |TogetherAI| ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |  |   |
 |AlephAlpha| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |   |  |   |
 |Palm| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |  |   |
@@ -184,6 +184,25 @@ def completion(
 - `fallbacks`: *list (optional)* - A list of model names + params to be used, in case the initial call fails
 
 - `metadata`: *dict (optional)* - Any additional data you want to be logged when the call is made (sent to logging integrations, eg. promptlayer and accessible via custom callback function)
+
+**CUSTOM MODEL COST** 
+- `input_cost_per_token`: *float (optional)* - The cost per input token for the completion call 
+
+- `output_cost_per_token`: *float (optional)* - The cost per output token for the completion call 
+
+**CUSTOM PROMPT TEMPLATE** (See [prompt formatting for more info](./prompt_formatting.md#format-prompt-yourself))
+- `initial_prompt_value`: *string (optional)* - Initial string applied at the start of the input messages
+
+- `roles`: *dict (optional)* - Dictionary specifying how to format the prompt based on the role + message passed in via `messages`. 
+
+- `final_prompt_value`: *string (optional)* - Final string applied at the end of the input messages
+
+- `bos_token`: *string (optional)* - Initial string applied at the start of a sequence
+
+- `eos_token`: *string (optional)* - Initial string applied at the end of a sequence
+
+- `hf_model_name`: *string (optional)* - [Sagemaker Only] The corresponding huggingface name of the model, used to pull the right chat template for the model. 
+
 
 ## Provider-specific Params
 Providers might offer params not supported by OpenAI (e.g. top_k). You can pass those in 2 ways: 

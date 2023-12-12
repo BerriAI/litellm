@@ -115,7 +115,7 @@ def completion(
                 messages=messages,
             )
     else:
-        prompt = prompt_factory(model=model, messages=messages)
+        prompt = prompt_factory(model=model, messages=messages, api_key=api_key, custom_llm_provider="together_ai") # api key required to query together ai model list
 
     data = {
         "model": model,

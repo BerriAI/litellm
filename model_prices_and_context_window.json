@@ -104,6 +104,13 @@
         "litellm_provider": "openai",
         "mode": "chat"
     },
+    "text-embedding-ada-002": {
+        "max_tokens": 8191,
+        "input_cost_per_token": 0.0000001,
+        "output_cost_per_token": 0.000000,
+        "litellm_provider": "openai",
+        "mode": "embedding"
+    },
     "azure/gpt-4-1106-preview": {
         "max_tokens": 128000,
         "input_cost_per_token": 0.00001,
@@ -138,6 +145,13 @@
         "output_cost_per_token": 0.000002,
         "litellm_provider": "azure",
         "mode": "chat"
+    },
+    "azure/text-embedding-ada-002": {
+        "max_tokens": 8191,
+        "input_cost_per_token": 0.0000001,
+        "output_cost_per_token": 0.000000,
+        "litellm_provider": "azure",
+        "mode": "embedding"
     },
     "text-davinci-003": {
         "max_tokens": 4097,
@@ -617,16 +631,24 @@
     "anthropic.claude-v1": {
         "max_tokens": 100000, 
         "max_output_tokens": 8191,
-        "input_cost_per_token": 0.00001102,
-        "output_cost_per_token": 0.00003268,
+        "input_cost_per_token": 0.000008,
+        "output_cost_per_token": 0.000024,
         "litellm_provider": "bedrock",
         "mode": "chat"
     },
     "anthropic.claude-v2": {
         "max_tokens": 100000, 
         "max_output_tokens": 8191,
-        "input_cost_per_token": 0.00001102,
-        "output_cost_per_token": 0.00003268,
+        "input_cost_per_token": 0.000008,
+        "output_cost_per_token": 0.000024,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "anthropic.claude-v2:1": {
+        "max_tokens": 200000, 
+        "max_output_tokens": 8191,
+        "input_cost_per_token": 0.000008,
+        "output_cost_per_token": 0.000024,
         "litellm_provider": "bedrock",
         "mode": "chat"
     },

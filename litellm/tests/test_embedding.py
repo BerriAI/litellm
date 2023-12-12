@@ -151,16 +151,36 @@ def test_cohere_embedding3():
 
 # test_cohere_embedding3()
 
-def test_bedrock_embedding():
+def test_bedrock_embedding_titan():
     try:
+        litellm.set_verbose=True
         response = embedding(
             model="amazon.titan-embed-text-v1", input=["good morning from litellm, attempting to embed data",
                                                        "lets test a second string for good measure"]
         )
         print(f"response:", response)
+        assert isinstance(response['data'][0]['embedding'], list), "Expected response to be a list"
+        print(f"type of first embedding:", type(response['data'][0]['embedding'][0]))
+        assert all(isinstance(x, float) for x in response['data'][0]['embedding']), "Expected response to be a list of floats"
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-# test_bedrock_embedding()
+# test_bedrock_embedding_titan()
+
+def test_bedrock_embedding_cohere():
+    try:
+        litellm.set_verbose=False
+        response = embedding(
+            model="cohere.embed-multilingual-v3", input=["good morning from litellm, attempting to embed data", "lets test a second string for good measure"],
+            aws_region_name="os.environ/AWS_REGION_NAME_2"
+        )
+        assert isinstance(response['data'][0]['embedding'], list), "Expected response to be a list"
+        print(f"type of first embedding:", type(response['data'][0]['embedding'][0]))
+        assert all(isinstance(x, float) for x in response['data'][0]['embedding']), "Expected response to be a list of floats"
+        # print(f"response:", response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+# test_bedrock_embedding_cohere()
 
 # comment out hf tests - since hf endpoints are unstable
 def test_hf_embedding():
@@ -214,7 +234,14 @@ def test_aembedding_azure():
 
 # test_aembedding_azure()
 
-# def test_custom_openai_embedding():
+def test_sagemaker_embeddings(): 
+    try: 
+        response = litellm.embedding(model="sagemaker/berri-benchmarking-gpt-j-6b-fp16", input=["good morning from litellm", "this is another item"])
+        print(f"response: {response}")
+    except Exception as e: 
+        pytest.fail(f"Error occurred: {e}")
+# test_sagemaker_embeddings()
+# def local_proxy_embeddings():
 #     litellm.set_verbose=True
 #     response = embedding(
 #             model="openai/custom_embedding", 
@@ -222,4 +249,5 @@ def test_aembedding_azure():
 #             api_base="http://0.0.0.0:8000/"
 #         )
 #     print(response)
-# test_custom_openai_embedding()
+
+# local_proxy_embeddings()

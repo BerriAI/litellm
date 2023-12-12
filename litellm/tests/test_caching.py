@@ -19,6 +19,13 @@ import random
 messages = [{"role": "user", "content": "who is ishaan Github?  "}]
 # comment
 
+import random
+import string
+
+def generate_random_word(length=4):
+    letters = string.ascii_lowercase
+    return ''.join(random.choice(letters) for _ in range(length))
+
 messages = [{"role": "user", "content": "who is ishaan 5222"}]
 def test_caching_v2(): # test in memory cache
     try:
@@ -28,6 +35,8 @@ def test_caching_v2(): # test in memory cache
         print(f"response1: {response1}")
         print(f"response2: {response2}")
         litellm.cache = None # disable cache
+        litellm.success_callback = []
+        litellm._async_success_callback = []
         if response2['choices'][0]['message']['content'] != response1['choices'][0]['message']['content']:
             print(f"response1: {response1}")
             print(f"response2: {response2}")
@@ -51,6 +60,8 @@ def test_caching_with_models_v2():
     print(f"response2: {response2}")
     print(f"response3: {response3}")
     litellm.cache = None
+    litellm.success_callback = []
+    litellm._async_success_callback = []
     if response3['choices'][0]['message']['content'] == response2['choices'][0]['message']['content']:
         # if models are different, it should not return cached response
         print(f"response2: {response2}")
@@ -84,13 +95,15 @@ def test_embedding_caching():
     print(f"Embedding 2 response time: {end_time - start_time} seconds")
 
     litellm.cache = None
+    litellm.success_callback = []
+    litellm._async_success_callback = []
     assert end_time - start_time <= 0.1 # ensure 2nd response comes in in under 0.1 s
     if embedding2['data'][0]['embedding'] != embedding1['data'][0]['embedding']:
         print(f"embedding1: {embedding1}")
         print(f"embedding2: {embedding2}")
         pytest.fail("Error occurred: Embedding caching failed")
 
-test_embedding_caching()
+# test_embedding_caching()
 
 
 def test_embedding_caching_azure():
@@ -138,6 +151,8 @@ def test_embedding_caching_azure():
     print(f"Embedding 2 response time: {end_time - start_time} seconds")
 
     litellm.cache = None
+    litellm.success_callback = []
+    litellm._async_success_callback = []
     assert end_time - start_time <= 0.1 # ensure 2nd response comes in in under 0.1 s
     if embedding2['data'][0]['embedding'] != embedding1['data'][0]['embedding']:
         print(f"embedding1: {embedding1}")
@@ -158,9 +173,9 @@ def test_redis_cache_completion():
     messages = [{"role": "user", "content": f"write a one sentence poem about: {random_number}"}]
     litellm.cache = Cache(type="redis", host=os.environ['REDIS_HOST'], port=os.environ['REDIS_PORT'], password=os.environ['REDIS_PASSWORD'])
     print("test2 for caching")
-    response1 = completion(model="gpt-3.5-turbo", messages=messages, caching=True, max_tokens=10, seed=1222)
-    response2 = completion(model="gpt-3.5-turbo", messages=messages, caching=True, max_tokens=10, seed=1222)
-    response3 = completion(model="gpt-3.5-turbo", messages=messages, caching=True, temperature=1)
+    response1 = completion(model="gpt-3.5-turbo", messages=messages, caching=True, max_tokens=20)
+    response2 = completion(model="gpt-3.5-turbo", messages=messages, caching=True, max_tokens=20)
+    response3 = completion(model="gpt-3.5-turbo", messages=messages, caching=True, temperature=0.5)
     response4 = completion(model="command-nightly", messages=messages, caching=True)
 
     print("\nresponse 1", response1)
@@ -168,6 +183,8 @@ def test_redis_cache_completion():
     print("\nresponse 3", response3)
     print("\nresponse 4", response4)
     litellm.cache = None
+    litellm.success_callback = []
+    litellm._async_success_callback = []
 
     """
     1 & 2 should be exactly the same 
@@ -190,11 +207,132 @@ def test_redis_cache_completion():
         print(f"response4: {response4}")
         pytest.fail(f"Error occurred:")
 
-test_redis_cache_completion()
+# test_redis_cache_completion()
 
+def test_redis_cache_completion_stream():
+    try:
+        litellm.success_callback = []
+        litellm._async_success_callback = []
+        litellm.callbacks = []
+        litellm.set_verbose = True
+        random_number = random.randint(1, 100000) # add a random number to ensure it's always adding / reading from cache
+        messages = [{"role": "user", "content": f"write a one sentence poem about: {random_number}"}]
+        litellm.cache = Cache(type="redis", host=os.environ['REDIS_HOST'], port=os.environ['REDIS_PORT'], password=os.environ['REDIS_PASSWORD'])
+        print("test for caching, streaming + completion")
+        response1 = completion(model="gpt-3.5-turbo", messages=messages, max_tokens=40, temperature=0.2, stream=True)
+        response_1_content = ""
+        for chunk in response1:
+            print(chunk)
+            response_1_content += chunk.choices[0].delta.content or ""
+        print(response_1_content)
+        time.sleep(0.5)
+        response2 = completion(model="gpt-3.5-turbo", messages=messages, max_tokens=40, temperature=0.2, stream=True)
+        response_2_content = ""
+        for chunk in response2:
+            print(chunk)
+            response_2_content += chunk.choices[0].delta.content or ""
+        print("\nresponse 1", response_1_content)
+        print("\nresponse 2", response_2_content)
+        assert response_1_content == response_2_content, f"Response 1 != Response 2. Same params, Response 1{response_1_content} != Response 2{response_2_content}"
+        litellm.success_callback = []
+        litellm.cache = None
+        litellm.success_callback = []
+        litellm._async_success_callback = []
+    except Exception as e:
+        print(e)
+        litellm.success_callback = []
+        raise e
+    """
+
+    1 & 2 should be exactly the same 
+    """
+# test_redis_cache_completion_stream()
+
+
+def test_redis_cache_acompletion_stream():
+    import asyncio
+    try:
+        litellm.set_verbose = True
+        random_word = generate_random_word()
+        messages = [{"role": "user", "content": f"write a one sentence poem about: {random_word}"}]
+        litellm.cache = Cache(type="redis", host=os.environ['REDIS_HOST'], port=os.environ['REDIS_PORT'], password=os.environ['REDIS_PASSWORD'])
+        print("test for caching, streaming + completion")
+        response_1_content = ""
+        response_2_content = ""
+
+        async def call1():
+            nonlocal response_1_content 
+            response1 = await litellm.acompletion(model="gpt-3.5-turbo", messages=messages, max_tokens=40, temperature=1, stream=True)
+            async for chunk in response1:
+                print(chunk)
+                response_1_content += chunk.choices[0].delta.content or ""
+            print(response_1_content)
+        asyncio.run(call1())
+        time.sleep(0.5)
+        print("\n\n Response 1 content: ", response_1_content, "\n\n")
+
+        async def call2():
+            nonlocal response_2_content
+            response2 = await litellm.acompletion(model="gpt-3.5-turbo", messages=messages, max_tokens=40, temperature=1, stream=True)
+            async for chunk in response2:
+                print(chunk)
+                response_2_content += chunk.choices[0].delta.content or ""
+            print(response_2_content)
+        asyncio.run(call2())
+        print("\nresponse 1", response_1_content)
+        print("\nresponse 2", response_2_content)
+        assert response_1_content == response_2_content, f"Response 1 != Response 2. Same params, Response 1{response_1_content} != Response 2{response_2_content}"
+        litellm.cache = None
+        litellm.success_callback = []
+        litellm._async_success_callback = []
+    except Exception as e:
+        print(e)
+        raise e
+# test_redis_cache_acompletion_stream()
+
+def test_redis_cache_acompletion_stream_bedrock():
+    import asyncio
+    try:
+        litellm.set_verbose = True
+        random_word = generate_random_word()
+        messages = [{"role": "user", "content": f"write a one sentence poem about: {random_word}"}]
+        litellm.cache = Cache(type="redis", host=os.environ['REDIS_HOST'], port=os.environ['REDIS_PORT'], password=os.environ['REDIS_PASSWORD'])
+        print("test for caching, streaming + completion")
+        response_1_content = ""
+        response_2_content = ""
+
+        async def call1():
+            nonlocal response_1_content 
+            response1 = await litellm.acompletion(model="bedrock/anthropic.claude-v1", messages=messages, max_tokens=40, temperature=1, stream=True)
+            async for chunk in response1:
+                print(chunk)
+                response_1_content += chunk.choices[0].delta.content or ""
+            print(response_1_content)
+        asyncio.run(call1())
+        time.sleep(0.5)
+        print("\n\n Response 1 content: ", response_1_content, "\n\n")
+
+        async def call2():
+            nonlocal response_2_content
+            response2 = await litellm.acompletion(model="bedrock/anthropic.claude-v1", messages=messages, max_tokens=40, temperature=1, stream=True)
+            async for chunk in response2:
+                print(chunk)
+                response_2_content += chunk.choices[0].delta.content or ""
+            print(response_2_content)
+        asyncio.run(call2())
+        print("\nresponse 1", response_1_content)
+        print("\nresponse 2", response_2_content)
+        assert response_1_content == response_2_content, f"Response 1 != Response 2. Same params, Response 1{response_1_content} != Response 2{response_2_content}"
+        litellm.cache = None
+        litellm.success_callback = []
+        litellm._async_success_callback = []
+    except Exception as e:
+        print(e)
+        raise e
+# test_redis_cache_acompletion_stream_bedrock()
 # redis cache with custom keys
 def custom_get_cache_key(*args, **kwargs):
-    # return key to use for your cache:
+    # return key to use for your cache: 
     key = kwargs.get("model", "") + str(kwargs.get("messages", "")) + str(kwargs.get("temperature", "")) + str(kwargs.get("logit_bias", ""))
     return key
 
@@ -228,8 +366,49 @@ def test_custom_redis_cache_with_key():
     if response3['choices'][0]['message']['content'] == response2['choices'][0]['message']['content']:
         pytest.fail(f"Error occurred:")
     litellm.cache = None
+    litellm.success_callback = []
+    litellm._async_success_callback = []
 
 # test_custom_redis_cache_with_key()
+
+
+def test_custom_redis_cache_params():
+    # test if we can init redis with **kwargs
+    try:
+        litellm.cache = Cache(
+            type="redis",
+            host=os.environ['REDIS_HOST'],
+            port=os.environ['REDIS_PORT'],
+            password=os.environ['REDIS_PASSWORD'],
+            db = 0,
+            ssl=True,
+            ssl_certfile="./redis_user.crt",
+            ssl_keyfile="./redis_user_private.key",
+            ssl_ca_certs="./redis_ca.pem",
+        )
+
+        print(litellm.cache.cache.redis_client) 
+        litellm.cache = None
+        litellm.success_callback = []
+        litellm._async_success_callback = []
+    except Exception as e:
+        pytest.fail(f"Error occurred:", e)
+
+
+def test_get_cache_key():
+    from litellm.caching import Cache
+    try:
+        cache_instance = Cache()
+        cache_key = cache_instance.get_cache_key(**{'model': 'gpt-3.5-turbo', 'messages': [{'role': 'user', 'content': 'write a one sentence poem about: 7510'}], 'max_tokens': 40, 'temperature': 0.2, 'stream': True, 'litellm_call_id': 'ffe75e7e-8a07-431f-9a74-71a5b9f35f0b', 'litellm_logging_obj': {}}
+        )
+        assert cache_key == "model: gpt-3.5-turbomessages: [{'role': 'user', 'content': 'write a one sentence poem about: 7510'}]temperature: 0.2max_tokens: 40"    
+    except Exception as e:
+        traceback.print_exc()
+        pytest.fail(f"Error occurred:", e)
+
+# test_get_cache_key()
+
+# test_custom_redis_cache_params()
 
 # def test_redis_cache_with_ttl():
 #     cache = Cache(type="redis", host=os.environ['REDIS_HOST'], port=os.environ['REDIS_PORT'], password=os.environ['REDIS_PASSWORD'])

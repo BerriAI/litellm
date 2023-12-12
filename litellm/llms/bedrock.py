@@ -2,7 +2,7 @@ import json, copy, types
 import os
 from enum import Enum
 import time
-from typing import Callable, Optional
+from typing import Callable, Optional, Any
 import litellm
 from litellm.utils import ModelResponse, get_secret, Usage
 from .prompt_templates.factory import prompt_factory, custom_prompt
@@ -205,15 +205,25 @@ class AmazonLlamaConfig():
 
 def init_bedrock_client(
         region_name = None,
-        aws_access_key_id = None,
-        aws_secret_access_key = None,
-        aws_region_name=None,
-        aws_bedrock_runtime_endpoint=None,
+        aws_access_key_id: Optional[str] = None,
+        aws_secret_access_key: Optional[str] = None,
+        aws_region_name: Optional[str] =None,
+        aws_bedrock_runtime_endpoint: Optional[str]=None,
     ):
-
     # check for custom AWS_REGION_NAME and use it if not passed to init_bedrock_client
-    litellm_aws_region_name = get_secret("AWS_REGION_NAME")
-    standard_aws_region_name = get_secret("AWS_REGION")
+    litellm_aws_region_name = get_secret("AWS_REGION_NAME", None)
+    standard_aws_region_name = get_secret("AWS_REGION", None)
+    
+    ## CHECK IS  'os.environ/' passed in 
+     # Define the list of parameters to check
+    params_to_check = [aws_access_key_id, aws_secret_access_key, aws_region_name, aws_bedrock_runtime_endpoint]
+
+    # Iterate over parameters and update if needed
+    for i, param in enumerate(params_to_check):
+        if param and param.startswith('os.environ/'):
+            params_to_check[i] = get_secret(param)
+    # Assign updated values back to parameters
+    aws_access_key_id, aws_secret_access_key, aws_region_name, aws_bedrock_runtime_endpoint = params_to_check
     if region_name:
         pass
     elif aws_region_name:
@@ -472,7 +482,7 @@ def completion(
         logging_obj.post_call(
             input=prompt,
             api_key="",
-            original_response=response_body,
+            original_response=json.dumps(response_body),
             additional_args={"complete_input_dict": data},
         )
         print_verbose(f"raw model_response: {response}")
@@ -533,37 +543,59 @@ def completion(
 def _embedding_func_single(
         model: str,
         input: str,
+        client: Any,
         optional_params=None,
         encoding=None,
+        logging_obj=None,
 ):
     # logic for parsing in - calling - parsing out model embedding calls
-    # pop aws_secret_access_key, aws_access_key_id, aws_region_name from kwargs, since completion calls fail with them
-    aws_secret_access_key = optional_params.pop("aws_secret_access_key", None)
-    aws_access_key_id = optional_params.pop("aws_access_key_id", None)
-    aws_region_name = optional_params.pop("aws_region_name", None)
-
-    # use passed in BedrockRuntime.Client if provided, otherwise create a new one
-    client = optional_params.pop(
-        "aws_bedrock_client",
-        # only pass variables that are not None
-        init_bedrock_client(
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            aws_region_name=aws_region_name,
-        ),
+    ## FORMAT EMBEDDING INPUT ## 
+    provider = model.split(".")[0]
+    inference_params = copy.deepcopy(optional_params)
+    if provider == "amazon":
+        input = input.replace(os.linesep, " ")
+        data = {"inputText": input, **inference_params}
+        # data = json.dumps(data)
+    elif provider == "cohere":
+        inference_params["input_type"] = inference_params.get("input_type", "search_document") # aws bedrock example default - https://us-east-1.console.aws.amazon.com/bedrock/home?region=us-east-1#/providers?model=cohere.embed-english-v3
+        data = {"texts": [input], **inference_params} # type: ignore
+    body = json.dumps(data).encode("utf-8") 
+    ## LOGGING
+    request_str = f"""
+    response = client.invoke_model(
+        body={body},
+        modelId={model},
+        accept="*/*",
+        contentType="application/json",
+    )""" # type: ignore
+    logging_obj.pre_call(
+        input=input,
+        api_key="", # boto3 is used for init.
+        additional_args={"complete_input_dict": {"model": model,
+                                                 "texts": input}, "request_str": request_str},
     )
-
-    input = input.replace(os.linesep, " ")
-    body = json.dumps({"inputText": input})
     try:
         response = client.invoke_model(
             body=body,
             modelId=model,
-            accept="application/json",
+            accept="*/*",
             contentType="application/json",
         )
         response_body = json.loads(response.get("body").read())
-        return response_body.get("embedding")
+        ## LOGGING
+        logging_obj.post_call(
+                input=input,
+                api_key="",
+                additional_args={"complete_input_dict": data},
+                original_response=json.dumps(response_body),
+            )
+        if provider == "cohere":
+            response = response_body.get("embeddings")
+            # flatten list
+            response = [item for sublist in response for item in sublist]
+            return response
+        elif provider == "amazon":
+            return response_body.get("embedding")
     except Exception as e:
         raise BedrockError(message=f"Embedding Error with model {model}: {e}", status_code=500)
 
@@ -576,17 +608,21 @@ def embedding(
     optional_params=None,
     encoding=None,
 ):
+    ### BOTO3 INIT ###
+    # pop aws_secret_access_key, aws_access_key_id, aws_region_name from kwargs, since completion calls fail with them
+    aws_secret_access_key = optional_params.pop("aws_secret_access_key", None)
+    aws_access_key_id = optional_params.pop("aws_access_key_id", None)
+    aws_region_name = optional_params.pop("aws_region_name", None)
 
-    ## LOGGING
-    logging_obj.pre_call(
-        input=input,
-        api_key=api_key,
-        additional_args={"complete_input_dict": {"model": model,
-                                                 "texts": input}},
-    )
+    # use passed in BedrockRuntime.Client if provided, otherwise create a new one
+    client = init_bedrock_client(
+        aws_access_key_id=aws_access_key_id,
+        aws_secret_access_key=aws_secret_access_key,
+        aws_region_name=aws_region_name,
+    )   
 
     ## Embedding Call
-    embeddings = [_embedding_func_single(model, i, optional_params) for i in input]
+    embeddings = [_embedding_func_single(model, i, optional_params=optional_params, client=client, logging_obj=logging_obj) for i in input] # [TODO]: make these parallel calls
 
 
     ## Populate OpenAI compliant dictionary
@@ -614,14 +650,5 @@ def embedding(
             total_tokens=input_tokens + 0
     )
     model_response.usage = usage
-
-    ## LOGGING
-    logging_obj.post_call(
-        input=input,
-        api_key=api_key,
-        additional_args={"complete_input_dict": {"model": model,
-                                                 "texts": input}},
-        original_response=embeddings,
-    )
     
     return model_response
