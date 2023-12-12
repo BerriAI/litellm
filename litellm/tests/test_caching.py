@@ -35,6 +35,8 @@ def test_caching_v2(): # test in memory cache
         print(f"response1: {response1}")
         print(f"response2: {response2}")
         litellm.cache = None # disable cache
+        litellm.success_callback = []
+        litellm._async_success_callback = []
         if response2['choices'][0]['message']['content'] != response1['choices'][0]['message']['content']:
             print(f"response1: {response1}")
             print(f"response2: {response2}")
@@ -58,6 +60,8 @@ def test_caching_with_models_v2():
     print(f"response2: {response2}")
     print(f"response3: {response3}")
     litellm.cache = None
+    litellm.success_callback = []
+    litellm._async_success_callback = []
     if response3['choices'][0]['message']['content'] == response2['choices'][0]['message']['content']:
         # if models are different, it should not return cached response
         print(f"response2: {response2}")
@@ -91,6 +95,8 @@ def test_embedding_caching():
     print(f"Embedding 2 response time: {end_time - start_time} seconds")
 
     litellm.cache = None
+    litellm.success_callback = []
+    litellm._async_success_callback = []
     assert end_time - start_time <= 0.1 # ensure 2nd response comes in in under 0.1 s
     if embedding2['data'][0]['embedding'] != embedding1['data'][0]['embedding']:
         print(f"embedding1: {embedding1}")
@@ -145,6 +151,8 @@ def test_embedding_caching_azure():
     print(f"Embedding 2 response time: {end_time - start_time} seconds")
 
     litellm.cache = None
+    litellm.success_callback = []
+    litellm._async_success_callback = []
     assert end_time - start_time <= 0.1 # ensure 2nd response comes in in under 0.1 s
     if embedding2['data'][0]['embedding'] != embedding1['data'][0]['embedding']:
         print(f"embedding1: {embedding1}")
@@ -175,6 +183,8 @@ def test_redis_cache_completion():
     print("\nresponse 3", response3)
     print("\nresponse 4", response4)
     litellm.cache = None
+    litellm.success_callback = []
+    litellm._async_success_callback = []
 
     """
     1 & 2 should be exactly the same 
@@ -226,6 +236,8 @@ def test_redis_cache_completion_stream():
         assert response_1_content == response_2_content, f"Response 1 != Response 2. Same params, Response 1{response_1_content} != Response 2{response_2_content}"
         litellm.success_callback = []
         litellm.cache = None
+        litellm.success_callback = []
+        litellm._async_success_callback = []
     except Exception as e:
         print(e)
         litellm.success_callback = []
@@ -271,10 +283,12 @@ def test_redis_cache_acompletion_stream():
         print("\nresponse 2", response_2_content)
         assert response_1_content == response_2_content, f"Response 1 != Response 2. Same params, Response 1{response_1_content} != Response 2{response_2_content}"
         litellm.cache = None
+        litellm.success_callback = []
+        litellm._async_success_callback = []
     except Exception as e:
         print(e)
         raise e
-test_redis_cache_acompletion_stream()
+# test_redis_cache_acompletion_stream()
 
 def test_redis_cache_acompletion_stream_bedrock():
     import asyncio
@@ -310,6 +324,8 @@ def test_redis_cache_acompletion_stream_bedrock():
         print("\nresponse 2", response_2_content)
         assert response_1_content == response_2_content, f"Response 1 != Response 2. Same params, Response 1{response_1_content} != Response 2{response_2_content}"
         litellm.cache = None
+        litellm.success_callback = []
+        litellm._async_success_callback = []
     except Exception as e:
         print(e)
         raise e
@@ -350,6 +366,8 @@ def test_custom_redis_cache_with_key():
     if response3['choices'][0]['message']['content'] == response2['choices'][0]['message']['content']:
         pytest.fail(f"Error occurred:")
     litellm.cache = None
+    litellm.success_callback = []
+    litellm._async_success_callback = []
 
 # test_custom_redis_cache_with_key()
 
@@ -371,6 +389,8 @@ def test_custom_redis_cache_params():
 
         print(litellm.cache.cache.redis_client) 
         litellm.cache = None
+        litellm.success_callback = []
+        litellm._async_success_callback = []
     except Exception as e:
         pytest.fail(f"Error occurred:", e)
 
