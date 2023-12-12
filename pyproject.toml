@@ -7,7 +7,7 @@ license = "MIT License"
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = "^3.8.1"
+python = "^3.8.0"
 openai = ">=1.0.0"
 python-dotenv = ">=0.2.0"
 tiktoken = ">=0.4.0"
@@ -23,7 +23,6 @@ uvicorn = {version = "^0.24.0.post1", optional = true}
 fastapi = {version = "^0.104.1", optional = true}
 backoff = {version = "*", optional = true}
 rq = {version = "*", optional = true}
-langfuse = "1.13.2"
 
 [tool.poetry.extras]
 proxy = [
