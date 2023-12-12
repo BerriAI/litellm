@@ -1,3 +1,4 @@
+from tkinter import N
 from typing import Optional, Union, Any
 import types, time, json
 import httpx
@@ -195,23 +196,23 @@ class OpenAIChatCompletion(BaseLLM):
                     **optional_params
                 }
                 
-                ## LOGGING
-                logging_obj.pre_call(
-                    input=messages,
-                    api_key=api_key,
-                    additional_args={"headers": headers, "api_base": api_base, "acompletion": acompletion, "complete_input_dict": data},
-                )
-
                 try: 
                     max_retries = data.pop("max_retries", 2)
                     if acompletion is True: 
                         if optional_params.get("stream", False):
-                            return self.async_streaming(logging_obj=logging_obj, data=data, model=model, api_base=api_base, api_key=api_key, timeout=timeout, client=client, max_retries=max_retries)
+                            return self.async_streaming(logging_obj=logging_obj, headers=headers, data=data, model=model, api_base=api_base, api_key=api_key, timeout=timeout, client=client, max_retries=max_retries)
                         else:
-                            return self.acompletion(data=data, model_response=model_response, api_base=api_base, api_key=api_key, timeout=timeout, client=client, max_retries=max_retries)
+                            return self.acompletion(data=data, headers=headers, logging_obj=logging_obj, model_response=model_response, api_base=api_base, api_key=api_key, timeout=timeout, client=client, max_retries=max_retries)
                     elif optional_params.get("stream", False):
-                        return self.streaming(logging_obj=logging_obj, data=data, model=model, api_base=api_base, api_key=api_key, timeout=timeout, client=client, max_retries=max_retries)
+                        return self.streaming(logging_obj=logging_obj, headers=headers, data=data, model=model, api_base=api_base, api_key=api_key, timeout=timeout, client=client, max_retries=max_retries)
                     else:
+                        ## LOGGING
+                        logging_obj.pre_call(
+                            input=messages,
+                            api_key=api_key,
+                            additional_args={"headers": headers, "api_base": api_base, "acompletion": acompletion, "complete_input_dict": data},
+                        )
+
                         if not isinstance(max_retries, int): 
                             raise OpenAIError(status_code=422, message="max retries must be an int")
                         if client is None:
@@ -260,6 +261,8 @@ class OpenAIChatCompletion(BaseLLM):
                           api_base: Optional[str]=None,
                           client=None,
                           max_retries=None,
+                          logging_obj=None,
+                          headers=None
                         ): 
         response = None
         try: 
@@ -267,8 +270,21 @@ class OpenAIChatCompletion(BaseLLM):
                 openai_aclient = AsyncOpenAI(api_key=api_key, base_url=api_base, http_client=litellm.aclient_session, timeout=timeout, max_retries=max_retries)
             else:
                 openai_aclient = client
+            ## LOGGING
+            logging_obj.pre_call(
+                input=data['messages'],
+                api_key=api_key,
+                additional_args={"headers": headers, "api_base": api_base, "acompletion": True, "complete_input_dict": data},
+            )
             response = await openai_aclient.chat.completions.create(**data)
-            return convert_to_model_response_object(response_object=json.loads(response.model_dump_json()), model_response_object=model_response)
+            stringified_response = response.model_dump_json()
+            logging_obj.post_call(
+                                input=data['messages'],
+                                api_key=api_key,
+                                original_response=stringified_response,
+                                additional_args={"complete_input_dict": data},
+                            )
+            return convert_to_model_response_object(response_object=json.loads(stringified_response), model_response_object=model_response)
         except Exception as e: 
             if response and hasattr(response, "text"):
                 raise OpenAIError(status_code=500, message=f"{str(e)}\n\nOriginal Response: {response.text}")
@@ -286,12 +302,19 @@ class OpenAIChatCompletion(BaseLLM):
                   api_key: Optional[str]=None,
                   api_base: Optional[str]=None,
                   client = None,
-                  max_retries=None
+                  max_retries=None,
+                  headers=None
     ):
         if client is None:
             openai_client = OpenAI(api_key=api_key, base_url=api_base, http_client=litellm.client_session, timeout=timeout, max_retries=max_retries)
         else:
             openai_client = client
+        ## LOGGING
+        logging_obj.pre_call(
+            input=data['messages'],
+            api_key=api_key,
+            additional_args={"headers": headers, "api_base": api_base, "acompletion": False, "complete_input_dict": data},
+        )
         response = openai_client.chat.completions.create(**data)
         streamwrapper = CustomStreamWrapper(completion_stream=response, model=model, custom_llm_provider="openai",logging_obj=logging_obj)
         return streamwrapper
@@ -305,6 +328,7 @@ class OpenAIChatCompletion(BaseLLM):
                           api_base: Optional[str]=None,
                           client=None,
                           max_retries=None,
+                          headers=None
                           ):
         response = None
         try: 
@@ -312,6 +336,13 @@ class OpenAIChatCompletion(BaseLLM):
                 openai_aclient = AsyncOpenAI(api_key=api_key, base_url=api_base, http_client=litellm.aclient_session, timeout=timeout, max_retries=max_retries)
             else:
                 openai_aclient = client
+            ## LOGGING
+            logging_obj.pre_call(
+                input=data['messages'],
+                api_key=api_key,
+                additional_args={"headers": headers, "api_base": api_base, "acompletion": True, "complete_input_dict": data},
+            )
+
             response = await openai_aclient.chat.completions.create(**data)
             streamwrapper = CustomStreamWrapper(completion_stream=response, model=model, custom_llm_provider="openai",logging_obj=logging_obj)
             async for transformed_chunk in streamwrapper:
