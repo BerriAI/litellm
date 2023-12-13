@@ -624,7 +624,6 @@ def completion(
             or "ft:babbage-002" in model
             or "ft:davinci-002" in model  # support for finetuned completion models
         ):
-            # print("calling custom openai provider")
             openai.api_type = "openai"
 
             api_base = (
@@ -1319,13 +1318,8 @@ def completion(
                 )
             else:
                 prompt = prompt_factory(model=model, messages=messages, custom_llm_provider=custom_llm_provider)
+            
             ## LOGGING
-            if kwargs.get('acompletion', False) == True:    
-                if optional_params.get("stream", False) == True:
-                # assume all ollama responses are streamed
-                    async_generator = ollama.async_get_ollama_response_stream(api_base, model, prompt, optional_params, logging_obj=logging)
-                    return async_generator
-
             generator = ollama.get_ollama_response_stream(api_base, model, prompt, optional_params, logging_obj=logging, acompletion=acompletion, model_response=model_response, encoding=encoding)
             if acompletion is True:
                 return generator
@@ -2126,7 +2120,7 @@ def text_completion(
                         *args,
                         **all_params,
                     )
-                    #print(response)
+
                     text_completion_response["id"] = response.get("id", None)
                     text_completion_response["object"] = "text_completion"
                     text_completion_response["created"] = response.get("created", None)

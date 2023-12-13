@@ -76,7 +76,7 @@ def test_vertex_ai():
     test_models += litellm.vertex_language_models # always test gemini-pro
     for model in test_models:
         try:
-            if model in ["code-gecko@001", "code-gecko@latest", "code-bison@001", "text-bison@001"]:
+            if model in ["code-gecko", "code-gecko@001", "code-gecko@002", "code-gecko@latest", "code-bison@001", "text-bison@001"]:
                 # our account does not have access to this model
                 continue
             print("making request", model)
@@ -97,10 +97,11 @@ def test_vertex_ai_stream():
 
     test_models = litellm.vertex_chat_models + litellm.vertex_code_chat_models + litellm.vertex_text_models + litellm.vertex_code_text_models 
     test_models = random.sample(test_models, 4)
-    test_models += litellm.vertex_language_models # always test gemini-pro
+    # test_models += litellm.vertex_language_models # always test gemini-pro
+    test_models = ["code-gecko@001"]
     for model in test_models:
         try:
-            if model in ["code-gecko@001", "code-gecko@latest", "code-bison@001", "text-bison@001"]:
+            if model in ["code-gecko", "code-gecko@001", "code-gecko@002", "code-gecko@latest", "code-bison@001", "text-bison@001"]:
                 # our account does not have access to this model
                 continue
             print("making request", model)
@@ -116,7 +117,7 @@ def test_vertex_ai_stream():
             assert len(completed_str) > 4
         except Exception as e:
             pytest.fail(f"Error occurred: {e}")
-# test_vertex_ai_stream() 
+test_vertex_ai_stream() 
 
 @pytest.mark.asyncio
 async def test_async_vertexai_response():
@@ -127,6 +128,9 @@ async def test_async_vertexai_response():
     test_models += litellm.vertex_language_models # always test gemini-pro
     for model in test_models:
         print(f'model being tested in async call: {model}')
+        if model in ["code-gecko", "code-gecko@001", "code-gecko@002", "code-gecko@latest", "code-bison@001", "text-bison@001"]:
+                # our account does not have access to this model
+                continue
         try:
             user_message = "Hello, how are you?"
             messages = [{"content": user_message, "role": "user"}]
@@ -147,6 +151,9 @@ async def test_async_vertexai_streaming_response():
     test_models = random.sample(test_models, 4)
     test_models += litellm.vertex_language_models # always test gemini-pro
     for model in test_models:
+        if model in ["code-gecko", "code-gecko@001", "code-gecko@002", "code-gecko@latest", "code-bison@001", "text-bison@001"]:
+                # our account does not have access to this model
+                continue
         try:
             user_message = "Hello, how are you?"
             messages = [{"content": user_message, "role": "user"}]

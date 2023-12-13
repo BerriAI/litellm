@@ -1004,6 +1004,7 @@ async def chat_completion(request: Request, model: Optional[str] = None, user_ap
         ### ROUTE THE REQUEST ###
         router_model_names = [m["model_name"] for m in llm_model_list] if llm_model_list is not None else []
         if llm_router is not None and data["model"] in router_model_names: # model in router model list 
+                print(f"ENTERS LLM ROUTER ACOMPLETION")
                 response = await llm_router.acompletion(**data)
         elif llm_router is not None and data["model"] in llm_router.deployment_names: # model in router deployments, calling a specific deployment on the router
             response = await llm_router.acompletion(**data, specific_deployment = True)
