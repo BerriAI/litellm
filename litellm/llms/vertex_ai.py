@@ -4,7 +4,7 @@ from enum import Enum
 import requests
 import time
 from typing import Callable, Optional
-from litellm.utils import ModelResponse, Usage
+from litellm.utils import ModelResponse, Usage, CustomStreamWrapper
 import litellm
 import httpx
 
@@ -108,37 +108,38 @@ def completion(
             mode = "chat"
             request_str += f"llm_model = ChatModel.from_pretrained({model})\n"
         elif model in litellm.vertex_text_models:
-            text_model = TextGenerationModel.from_pretrained(model)
+            llm_model = TextGenerationModel.from_pretrained(model)
             mode = "text"
-            request_str += f"text_model = TextGenerationModel.from_pretrained({model})\n"
+            request_str += f"llm_model = TextGenerationModel.from_pretrained({model})\n"
         elif model in litellm.vertex_code_text_models:
-            text_model = CodeGenerationModel.from_pretrained(model)
+            llm_model = CodeGenerationModel.from_pretrained(model)
             mode = "text"
-            request_str += f"text_model = CodeGenerationModel.from_pretrained({model})\n"
+            request_str += f"llm_model = CodeGenerationModel.from_pretrained({model})\n"
         else: # vertex_code_llm_models
             llm_model = CodeChatModel.from_pretrained(model)
             mode = "chat"
             request_str += f"llm_model = CodeChatModel.from_pretrained({model})\n"
         
-        if acompletion == True and model in litellm.vertex_language_models: # [TODO] expand support to vertex ai chat + text models 
+        if acompletion == True: # [TODO] expand support to vertex ai chat + text models 
             if optional_params.get("stream", False) is True: 
                 # async streaming
-                pass
-            return async_completion(llm_model=llm_model, mode=mode, prompt=prompt, logging_obj=logging_obj, request_str=request_str, model=model, model_response=model_response, **optional_params)
+                return async_streaming(llm_model=llm_model, mode=mode, prompt=prompt, logging_obj=logging_obj, request_str=request_str, model=model, model_response=model_response, **optional_params)
+            return async_completion(llm_model=llm_model, mode=mode, prompt=prompt, logging_obj=logging_obj, request_str=request_str, model=model, model_response=model_response, encoding=encoding, **optional_params)
 
         if mode == "":
             chat = llm_model.start_chat() 
             request_str+= f"chat = llm_model.start_chat()\n"
 
             if "stream" in optional_params and optional_params["stream"] == True:
-                request_str += f"chat.send_message_streaming({prompt}, **{optional_params})\n"
+                stream = optional_params.pop("stream")
+                request_str += f"chat.send_message({prompt}, generation_config=GenerationConfig(**{optional_params}), stream={stream})\n"
                 ## LOGGING
                 logging_obj.pre_call(input=prompt, api_key=None, additional_args={"complete_input_dict": optional_params, "request_str": request_str})
-                model_response = chat.send_message(prompt, generation_config=GenerationConfig(**optional_params))
+                model_response = chat.send_message(prompt, generation_config=GenerationConfig(**optional_params), stream=stream)
                 optional_params["stream"] = True
                 return model_response
             
-            request_str += f"chat.send_message({prompt}, **{optional_params}).text\n"
+            request_str += f"chat.send_message({prompt}, generation_config=GenerationConfig(**{optional_params})).text\n"
             ## LOGGING
             logging_obj.pre_call(input=prompt, api_key=None, additional_args={"complete_input_dict": optional_params, "request_str": request_str})
             response_obj = chat.send_message(prompt, generation_config=GenerationConfig(**optional_params))
@@ -165,20 +166,19 @@ def completion(
             logging_obj.pre_call(input=prompt, api_key=None, additional_args={"complete_input_dict": optional_params, "request_str": request_str})
             completion_response = chat.send_message(prompt, **optional_params).text
         elif mode == "text":
-
             if "stream" in optional_params and optional_params["stream"] == True:
                 optional_params.pop("stream", None) # See note above on handling streaming for vertex ai 
-                request_str += f"text_model.predict_streaming({prompt}, **{optional_params})\n"
+                request_str += f"llm_model.predict_streaming({prompt}, **{optional_params})\n"
                 ## LOGGING
                 logging_obj.pre_call(input=prompt, api_key=None, additional_args={"complete_input_dict": optional_params, "request_str": request_str})
-                model_response = text_model.predict_streaming(prompt, **optional_params)
+                model_response = llm_model.predict_streaming(prompt, **optional_params)
                 optional_params["stream"] = True
                 return model_response
 
-            request_str += f"text_model.predict({prompt}, **{optional_params}).text\n"
+            request_str += f"llm_model.predict({prompt}, **{optional_params}).text\n"
             ## LOGGING
             logging_obj.pre_call(input=prompt, api_key=None, additional_args={"complete_input_dict": optional_params, "request_str": request_str})
-            completion_response = text_model.predict(prompt, **optional_params).text
+            completion_response = llm_model.predict(prompt, **optional_params).text
             
         ## LOGGING
         logging_obj.post_call(
@@ -216,7 +216,7 @@ def completion(
     except Exception as e: 
         raise VertexAIError(status_code=500, message=str(e))
 
-async def async_completion(llm_model, mode: str, prompt: str, model: str, model_response: ModelResponse, logging_obj=None, request_str=None, **optional_params):
+async def async_completion(llm_model, mode: str, prompt: str, model: str, model_response: ModelResponse, logging_obj=None, request_str=None, encoding=None, **optional_params):
     """
     Add support for acompletion calls for gemini-pro
     """
@@ -224,19 +224,31 @@ async def async_completion(llm_model, mode: str, prompt: str, model: str, model_
 
     if mode == "":
         # gemini-pro
-        llm_model = llm_model.start_chat()
+        chat = llm_model.start_chat()
         ## LOGGING
         logging_obj.pre_call(input=prompt, api_key=None, additional_args={"complete_input_dict": optional_params, "request_str": request_str})
-        response_obj = await llm_model.send_message_async(prompt, generation_config=GenerationConfig(**optional_params))
+        response_obj = await chat.send_message_async(prompt, generation_config=GenerationConfig(**optional_params))
         completion_response = response_obj.text
         response_obj = response_obj._raw_response
     elif mode == "chat":
         # chat-bison etc.
-        pass
+        chat = llm_model.start_chat()
+        ## LOGGING
+        logging_obj.pre_call(input=prompt, api_key=None, additional_args={"complete_input_dict": optional_params, "request_str": request_str})
+        response_obj = await chat.send_message_async(prompt, **optional_params)
+        completion_response = response_obj.text
     elif mode == "text":
         # gecko etc.
-        pass
-    
+        request_str += f"llm_model.predict({prompt}, **{optional_params}).text\n"
+        ## LOGGING
+        logging_obj.pre_call(input=prompt, api_key=None, additional_args={"complete_input_dict": optional_params, "request_str": request_str})
+        response_obj = await llm_model.predict_async(prompt, **optional_params)
+        completion_response = response_obj.text
+
+    ## LOGGING
+    logging_obj.post_call(
+        input=prompt, api_key=None, original_response=completion_response
+    )
 
     ## RESPONSE OBJECT
     if len(str(completion_response)) > 0: 
@@ -252,13 +264,53 @@ async def async_completion(llm_model, mode: str, prompt: str, model: str, model_
         usage = Usage(prompt_tokens=response_obj.usage_metadata.prompt_token_count, 
                         completion_tokens=response_obj.usage_metadata.candidates_token_count,
                         total_tokens=response_obj.usage_metadata.total_token_count)
+    else:
+        prompt_tokens = len(
+            encoding.encode(prompt)
+        ) 
+        completion_tokens = len(
+            encoding.encode(model_response["choices"][0]["message"].get("content", ""))
+        )
+        usage = Usage(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=prompt_tokens + completion_tokens
+            )
     model_response.usage = usage
     return model_response
 
-def async_streaming():
+async def async_streaming(llm_model, mode: str, prompt: str, model: str, model_response: ModelResponse, logging_obj=None, request_str=None, **optional_params):
     """
     Add support for async streaming calls for gemini-pro
     """
+    from vertexai.preview.generative_models import GenerationConfig
+    if mode == "": 
+        # gemini-pro
+        chat = llm_model.start_chat()
+        stream = optional_params.pop("stream")
+        request_str += f"chat.send_message_async({prompt},generation_config=GenerationConfig(**{optional_params}), stream={stream})\n"
+        ## LOGGING
+        logging_obj.pre_call(input=prompt, api_key=None, additional_args={"complete_input_dict": optional_params, "request_str": request_str})
+        response = await chat.send_message_async(prompt, generation_config=GenerationConfig(**optional_params), stream=stream)
+        optional_params["stream"] = True
+    elif mode == "chat":
+        chat = llm_model.start_chat()
+        optional_params.pop("stream", None) # vertex ai raises an error when passing stream in optional params
+        request_str += f"chat.send_message_streaming_async({prompt}, **{optional_params})\n"
+        ## LOGGING
+        logging_obj.pre_call(input=prompt, api_key=None, additional_args={"complete_input_dict": optional_params, "request_str": request_str})
+        response = chat.send_message_streaming_async(prompt, **optional_params)
+        optional_params["stream"] = True
+    elif mode == "text":
+        optional_params.pop("stream", None) # See note above on handling streaming for vertex ai 
+        request_str += f"llm_model.predict_streaming_async({prompt}, **{optional_params})\n"
+        ## LOGGING
+        logging_obj.pre_call(input=prompt, api_key=None, additional_args={"complete_input_dict": optional_params, "request_str": request_str})
+        response = llm_model.predict_streaming_async(prompt, **optional_params)
+
+    streamwrapper = CustomStreamWrapper(completion_stream=response, model=model, custom_llm_provider="vertex_ai",logging_obj=logging_obj)
+    async for transformed_chunk in streamwrapper:
+        yield transformed_chunk
 
 def embedding():
     # logic for parsing in - calling - parsing out model embedding calls
