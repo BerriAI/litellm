@@ -63,6 +63,21 @@ def load_vertex_ai_credentials():
     # Export the temporary file as GOOGLE_APPLICATION_CREDENTIALS
     os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = os.path.abspath(temp_file.name)
 
+def test_vertex_ai_sdk(): 
+    load_vertex_ai_credentials()
+    from vertexai.preview.generative_models import GenerativeModel, Part, GenerationConfig
+    llm_model = GenerativeModel("gemini-pro")
+    chat = llm_model.start_chat()
+    print(chat.send_message("write code for saying hi from LiteLLM", generation_config=GenerationConfig(**{})).text)
+test_vertex_ai_sdk()
+
+def simple_test_vertex_ai(): 
+    try:
+        load_vertex_ai_credentials()
+        response = completion(model="gemini-pro", messages=[{"role": "user", "content": "write code for saying hi from LiteLLM"}])
+        print(f'response: {response}')
+    except Exception as e: 
+        pytest.fail(f"An exception occurred - {str(e)}")
 
 def test_vertex_ai():
     import random
@@ -97,8 +112,7 @@ def test_vertex_ai_stream():
 
     test_models = litellm.vertex_chat_models + litellm.vertex_code_chat_models + litellm.vertex_text_models + litellm.vertex_code_text_models 
     test_models = random.sample(test_models, 4)
-    # test_models += litellm.vertex_language_models # always test gemini-pro
-    test_models = ["code-gecko@001"]
+    test_models += litellm.vertex_language_models # always test gemini-pro
     for model in test_models:
         try:
             if model in ["code-gecko", "code-gecko@001", "code-gecko@002", "code-gecko@latest", "code-bison@001", "text-bison@001"]:
@@ -117,7 +131,7 @@ def test_vertex_ai_stream():
             assert len(completed_str) > 4
         except Exception as e:
             pytest.fail(f"Error occurred: {e}")
-test_vertex_ai_stream() 
+# test_vertex_ai_stream() 
 
 @pytest.mark.asyncio
 async def test_async_vertexai_response():
