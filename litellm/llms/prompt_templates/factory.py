@@ -161,6 +161,8 @@ def phind_codellama_pt(messages):
 
 def hf_chat_template(model: str, messages: list, chat_template: Optional[Any]=None):
     ## get the tokenizer config from huggingface
+    bos_token = ""
+    eos_token = ""
     if chat_template is None: 
         def _get_tokenizer_config(hf_model_name):
             url = f"https://huggingface.co/{hf_model_name}/raw/main/tokenizer_config.json"
@@ -187,7 +189,10 @@ def hf_chat_template(model: str, messages: list, chat_template: Optional[Any]=No
     # Create a template object from the template text
     env = Environment()
     env.globals['raise_exception'] = raise_exception
-    template = env.from_string(chat_template)
+    try:
+        template = env.from_string(chat_template)
+    except Exception as e:
+        raise e
 
     def _is_system_in_template():
         try:
@@ -227,8 +232,8 @@ def hf_chat_template(model: str, messages: list, chat_template: Optional[Any]=No
                     new_messages.append(reformatted_messages[-1])
                     rendered_text = template.render(bos_token=bos_token, eos_token=eos_token, messages=new_messages)
         return rendered_text
-    except: 
-        raise Exception("Error rendering template")
+    except Exception as e: 
+        raise Exception(f"Error rendering template - {str(e)}")
 
 # Anthropic template 
 def claude_2_1_pt(messages: list): # format - https://docs.anthropic.com/claude/docs/how-to-use-system-prompts
@@ -283,6 +288,9 @@ def get_model_info(token, model):
         return None, None
 
 def format_prompt_togetherai(messages, prompt_format, chat_template):
+    if prompt_format is None:
+        return default_pt(messages)
+    
     human_prompt, assistant_prompt = prompt_format.split('{prompt}')
 
     if chat_template is not None:
