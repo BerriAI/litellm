@@ -830,9 +830,9 @@ class Logging:
             complete_streaming_response = None
             if self.stream == True and self.model_call_details.get("litellm_params", {}).get("acompletion", False) == True:
                 # if it's acompletion == True, chunks are built/appended in async_success_handler
-                self.streaming_chunks.append(result)
                 if result.choices[0].finish_reason is not None: # if it's the last chunk
-                    complete_streaming_response = litellm.stream_chunk_builder(self.streaming_chunks, messages=self.model_call_details.get("messages", None))
+                    streaming_chunks = self.streaming_chunks + [result]
+                    complete_streaming_response = litellm.stream_chunk_builder(streaming_chunks, messages=self.model_call_details.get("messages", None))
             else:
                 # this is a completion() call
                 if self.stream == True: 
@@ -1053,7 +1053,7 @@ class Logging:
         if self.stream: 
             if result.choices[0].finish_reason is not None: # if it's the last chunk
                 self.streaming_chunks.append(result)
-                print_verbose(f"final set of received chunks: {self.streaming_chunks}")
+                # print_verbose(f"final set of received chunks: {self.streaming_chunks}")
                 try: 
                     complete_streaming_response = litellm.stream_chunk_builder(self.streaming_chunks, messages=self.model_call_details.get("messages", None))
                 except: 
