@@ -77,6 +77,8 @@ def completion(
     try: 
         from vertexai.preview.language_models import ChatModel, CodeChatModel, InputOutputTextPair
         from vertexai.language_models import TextGenerationModel, CodeGenerationModel
+        from vertexai.preview.generative_models import GenerativeModel, Part
+
 
         vertexai.init(
             project=vertex_project, location=vertex_location
@@ -95,7 +97,12 @@ def completion(
         mode = "" 
 
         request_str = ""
-        if model in litellm.vertex_chat_models or ("chat" in model): # to catch chat-bison@003 or chat-bison@004 when google will release it
+        response_obj = None
+        if model in litellm.vertex_language_models: 
+            chat_model = GenerativeModel(model)
+            mode = ""
+            request_str += f"chat_model = GenerativeModel({model})\n"
+        elif model in litellm.vertex_chat_models:
             chat_model = ChatModel.from_pretrained(model)
             mode = "chat"
             request_str += f"chat_model = ChatModel.from_pretrained({model})\n"
@@ -112,7 +119,24 @@ def completion(
             mode = "chat"
             request_str += f"chat_model = CodeChatModel.from_pretrained({model})\n"
         
-        if mode == "chat":
+        if mode == "":
+            chat = chat_model.start_chat() 
+            request_str+= f"chat = chat_model.start_chat()\n"
+
+            if "stream" in optional_params and optional_params["stream"] == True:
+                request_str += f"chat.send_message_streaming({prompt}, **{optional_params})\n"
+                ## LOGGING
+                logging_obj.pre_call(input=prompt, api_key=None, additional_args={"complete_input_dict": optional_params, "request_str": request_str})
+                model_response = chat.send_message(prompt, **optional_params)
+                optional_params["stream"] = True
+                return model_response
+            
+            request_str += f"chat.send_message({prompt}, **{optional_params}).text\n"
+            logging_obj.pre_call(input=prompt, api_key=None, additional_args={"complete_input_dict": optional_params, "request_str": request_str})
+            response_obj = chat.send_message(prompt, **optional_params)
+            completion_response = response_obj.text
+            response_obj = response_obj._raw_response
+        elif mode == "chat":
             chat = chat_model.start_chat()
             request_str+= f"chat = chat_model.start_chat()\n"
 
@@ -161,17 +185,23 @@ def completion(
         model_response["created"] = int(time.time())
         model_response["model"] = model
         ## CALCULATING USAGE
-        prompt_tokens = len(
-            encoding.encode(prompt)
-        ) 
-        completion_tokens = len(
-            encoding.encode(model_response["choices"][0]["message"].get("content", ""))
-        )
-        usage = Usage(
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-                total_tokens=prompt_tokens + completion_tokens
+        if model in litellm.vertex_language_models and response_obj is not None:
+            model_response["choices"][0].finish_reason = response_obj.candidates[0].finish_reason.name
+            usage = Usage(prompt_tokens=response_obj.usage_metadata.prompt_token_count, 
+                          completion_tokens=response_obj.usage_metadata.candidates_token_count,
+                          total_tokens=response_obj.usage_metadata.total_token_count)
+        else: 
+            prompt_tokens = len(
+                encoding.encode(prompt)
+            ) 
+            completion_tokens = len(
+                encoding.encode(model_response["choices"][0]["message"].get("content", ""))
             )
+            usage = Usage(
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=prompt_tokens + completion_tokens
+                )
         model_response.usage = usage
         return model_response
     except Exception as e: 

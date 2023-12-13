@@ -126,7 +126,7 @@ def map_finish_reason(finish_reason: str): # openai supports 5 stop sequences - 
     # cohere mapping - https://docs.cohere.com/reference/generate
     elif finish_reason == "COMPLETE": 
         return "stop"
-    elif finish_reason == "MAX_TOKENS":
+    elif finish_reason == "MAX_TOKENS": # cohere + vertex ai
         return "length"
     elif finish_reason == "ERROR_TOXIC": 
         return "content_filter"
@@ -135,6 +135,10 @@ def map_finish_reason(finish_reason: str): # openai supports 5 stop sequences - 
     # huggingface mapping https://huggingface.github.io/text-generation-inference/#/Text%20Generation%20Inference/generate_stream
     elif finish_reason == "eos_token" or finish_reason == "stop_sequence":
         return "stop"
+    elif finish_reason == "FINISH_REASON_UNSPECIFIED" or finish_reason == "STOP": # vertex ai - got from running `print(dir(response_obj.candidates[0].finish_reason))`: ['FINISH_REASON_UNSPECIFIED', 'MAX_TOKENS', 'OTHER', 'RECITATION', 'SAFETY', 'STOP',] 
+        return "stop"
+    elif finish_reason == "SAFETY": # vertex ai
+        return "content_filter"
     return finish_reason
 
 class FunctionCall(OpenAIObject):
@@ -2761,12 +2765,13 @@ def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None, api_
         ## openrouter
         elif model in litellm.maritalk_models:
             custom_llm_provider = "maritalk"
-        ## vertex - text + chat models
+        ## vertex - text + chat + language (gemini) models 
         elif(
             model in litellm.vertex_chat_models or 
             model in litellm.vertex_code_chat_models or
             model in litellm.vertex_text_models or
-            model in litellm.vertex_code_text_models
+            model in litellm.vertex_code_text_models or 
+            model in litellm.vertex_language_models
         ):
             custom_llm_provider = "vertex_ai"
         ## ai21 
