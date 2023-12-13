@@ -64,7 +64,7 @@ class ProxyLogging:
         1. /chat/completions
         2. /embeddings 
         """
-        try: 
+        try:
             self.call_details["data"] = data
             self.call_details["call_type"] = call_type
             ## check if max parallel requests set   
@@ -75,6 +75,7 @@ class ProxyLogging:
                     api_key=user_api_key_dict.api_key,
                     user_api_key_cache=self.call_details["user_api_key_cache"])
                 
+            print_verbose(f'final data being sent to {call_type} call: {data}') 
             return data
         except Exception as e:
             raise e
