@@ -332,6 +332,14 @@
         "litellm_provider": "palm",
         "mode": "chat"
     },
+    "gemini-pro": {
+        "max_tokens": 30720,
+        "max_output_tokens": 2048,
+        "input_cost_per_token": 0.0000000625, 
+        "output_cost_per_token": 0.000000125,
+        "litellm_provider": "vertex_ai-language-models",
+        "mode": "chat"
+    },
     "palm/chat-bison-001": {
         "max_tokens": 4096,
         "input_cost_per_token": 0.000000125,
