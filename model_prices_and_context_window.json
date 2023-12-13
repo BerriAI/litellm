@@ -262,6 +262,13 @@
         "litellm_provider": "vertex_ai-chat-models",
         "mode": "chat"
     },
+    "chat-bison@002": {
+        "max_tokens": 4096,
+        "input_cost_per_token": 0.000000125,
+        "output_cost_per_token": 0.000000125,
+        "litellm_provider": "vertex_ai-chat-models",
+        "mode": "chat"
+    },
     "chat-bison-32k": {
         "max_tokens": 32000,
         "input_cost_per_token": 0.000000125,
