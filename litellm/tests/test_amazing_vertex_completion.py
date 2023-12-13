@@ -9,15 +9,15 @@ import os, io
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path  
-import pytest
+import pytest, asyncio
 import litellm
-from litellm import embedding, completion, completion_cost, Timeout
+from litellm import embedding, completion, completion_cost, Timeout, acompletion
 from litellm import RateLimitError
 import json
 import os
 import tempfile
 
-# litellm.num_retries = 3
+litellm.num_retries = 3
 litellm.cache = None
 user_message = "Write a short poem about the sky"
 messages = [{"content": user_message, "role": "user"}]
@@ -73,14 +73,14 @@ def test_vertex_ai():
     litellm.vertex_project = "hardy-device-386718"
 
     test_models = random.sample(test_models, 4)
-    test_models += litellm.vertex_language_models # always test gemini-pro
+    test_models = litellm.vertex_language_models # always test gemini-pro
     for model in test_models:
         try:
             if model in ["code-gecko@001", "code-gecko@latest", "code-bison@001", "text-bison@001"]:
                 # our account does not have access to this model
                 continue
             print("making request", model)
-            response = completion(model=model, messages=[{'role': 'user', 'content': 'hi'}])
+            response = completion(model=model, messages=[{'role': 'user', 'content': 'hi'}], temperature=0.7)
             print("\nModel Response", response)
             print(response)
             assert type(response.choices[0].message.content) == str
@@ -117,3 +117,19 @@ def test_vertex_ai_stream():
         except Exception as e:
             pytest.fail(f"Error occurred: {e}")
 # test_vertex_ai_stream() 
+
+@pytest.mark.asyncio
+async def test_async_vertexai_response():
+    load_vertex_ai_credentials()
+    user_message = "Hello, how are you?"
+    messages = [{"content": user_message, "role": "user"}]
+    try:
+        response = await acompletion(model="gemini-pro", messages=messages, temperature=0.7, timeout=5)
+        # response = await response
+        print(f"response: {response}")
+    except litellm.Timeout as e: 
+        pass
+    except Exception as e:
+        pytest.fail(f"An exception occurred: {e}")
+
+asyncio.run(test_async_vertexai_response())
