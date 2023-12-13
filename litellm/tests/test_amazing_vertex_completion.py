@@ -17,7 +17,7 @@ import json
 import os
 import tempfile
 
-litellm.num_retries = 3
+# litellm.num_retries = 3
 litellm.cache = None
 user_message = "Write a short poem about the sky"
 messages = [{"content": user_message, "role": "user"}]
@@ -73,6 +73,7 @@ def test_vertex_ai():
     litellm.vertex_project = "hardy-device-386718"
 
     test_models = random.sample(test_models, 4)
+    test_models += litellm.vertex_language_models # always test gemini-pro
     for model in test_models:
         try:
             if model in ["code-gecko@001", "code-gecko@latest", "code-bison@001", "text-bison@001"]:
@@ -86,7 +87,7 @@ def test_vertex_ai():
             assert len(response.choices[0].message.content) > 1
         except Exception as e:
             pytest.fail(f"Error occurred: {e}")
-# test_vertex_ai()
+test_vertex_ai()
 
 def test_vertex_ai_stream():
     load_vertex_ai_credentials()
@@ -94,8 +95,9 @@ def test_vertex_ai_stream():
     litellm.vertex_project = "hardy-device-386718"
     import random
 
-    test_models = litellm.vertex_chat_models + litellm.vertex_code_chat_models + litellm.vertex_text_models + litellm.vertex_code_text_models
+    test_models = litellm.vertex_chat_models + litellm.vertex_code_chat_models + litellm.vertex_text_models + litellm.vertex_code_text_models 
     test_models = random.sample(test_models, 4)
+    test_models += litellm.vertex_language_models # always test gemini-pro
     for model in test_models:
         try:
             if model in ["code-gecko@001", "code-gecko@latest", "code-bison@001", "text-bison@001"]:
