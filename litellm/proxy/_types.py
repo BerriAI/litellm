@@ -121,10 +121,23 @@ class GenerateKeyRequest(LiteLLMBase):
     user_id: Optional[str] = None
     max_parallel_requests: Optional[int] = None
 
+class UpdateKeyRequest(LiteLLMBase):
+    key: str
+    duration: Optional[str] = None
+    models: Optional[list] = None
+    aliases: Optional[dict] = None
+    config: Optional[dict] = None
+    spend: Optional[float] = None
+    user_id: Optional[str] = None
+    max_parallel_requests: Optional[int] = None
+
 class GenerateKeyResponse(LiteLLMBase):
     key: str
     expires: datetime
     user_id: str
+
+
+
 
 class _DeleteKeyObject(LiteLLMBase):
     key: str
