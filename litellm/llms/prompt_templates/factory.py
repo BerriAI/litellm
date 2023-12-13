@@ -266,17 +266,20 @@ def claude_2_1_pt(messages: list): # format - https://docs.anthropic.com/claude/
 ### TOGETHER AI 
 
 def get_model_info(token, model):
-    headers = {
-        'Authorization': f'Bearer {token}'
-    }
-    response = requests.get('https://api.together.xyz/models/info', headers=headers)
-    if response.status_code == 200:
-        model_info = response.json()
-        for m in model_info: 
-            if m["name"].lower().strip() == model.strip(): 
-                return m['config'].get('prompt_format', None), m['config'].get('chat_template', None)
-        return None, None
-    else:
+    try: 
+        headers = {
+            'Authorization': f'Bearer {token}'
+        }
+        response = requests.get('https://api.together.xyz/models/info', headers=headers)
+        if response.status_code == 200:
+            model_info = response.json()
+            for m in model_info: 
+                if m["name"].lower().strip() == model.strip(): 
+                    return m['config'].get('prompt_format', None), m['config'].get('chat_template', None)
+            return None, None
+        else:
+            return None, None
+    except Exception as e: # safely fail a prompt template request
         return None, None
 
 def format_prompt_togetherai(messages, prompt_format, chat_template):
