@@ -72,7 +72,7 @@ curl --location 'http://0.0.0.0:8000/chat/completions' \
 '
 ```
 
-## Router settings on config.yaml - routing_strategy, model_group_alias
+## Router settings on config - routing_strategy, model_group_alias
 
 litellm.Router() settings can be set under `router_settings`. You can set `model_group_alias`, `routing_strategy`, `num_retries`,`timeout` . See all Router supported params [here](https://github.com/BerriAI/litellm/blob/1b942568897a48f014fa44618ec3ce54d7570a46/litellm/router.py#L64)
 
