@@ -95,7 +95,7 @@ def completion(
         mode = "" 
 
         request_str = ""
-        if model in litellm.vertex_chat_models:
+        if model in litellm.vertex_chat_models or ("chat" in model): # to catch chat-bison@003 or chat-bison@004 when google will release it
             chat_model = ChatModel.from_pretrained(model)
             mode = "chat"
             request_str += f"chat_model = ChatModel.from_pretrained({model})\n"

@@ -1136,7 +1136,7 @@ def completion(
                 )
                 return response
             response = model_response
-        elif model in litellm.vertex_chat_models or model in litellm.vertex_code_chat_models or model in litellm.vertex_text_models or model in litellm.vertex_code_text_models:
+        elif model in litellm.vertex_chat_models or model in litellm.vertex_code_chat_models or model in litellm.vertex_text_models or model in litellm.vertex_code_text_models or custom_llm_provider == "vertex_ai":
             vertex_ai_project = (litellm.vertex_project 
                                  or get_secret("VERTEXAI_PROJECT"))
             vertex_ai_location = (litellm.vertex_location 
