@@ -78,6 +78,7 @@ class TmpFunction:
     async def async_test_logging_fn(self, kwargs, completion_obj, start_time, end_time):
         print(f"ON ASYNC LOGGING")
         self.async_success = True
+        print(f'kwargs.get("complete_streaming_response"): {kwargs.get("complete_streaming_response")}')
         self.complete_streaming_response_in_callback = kwargs.get("complete_streaming_response")
 
 
@@ -102,7 +103,8 @@ def test_async_chat_openai_stream():
         complete_streaming_response = complete_streaming_response.strip("'")
         response1 = tmp_function.complete_streaming_response_in_callback["choices"][0]["message"]["content"]
         response2 = complete_streaming_response
-        assert [ord(c) for c in response1] == [ord(c) for c in response2]
+        # assert [ord(c) for c in response1] == [ord(c) for c in response2]
+        assert response1 == response2
         assert tmp_function.async_success == True
     except Exception as e:
         print(e)
