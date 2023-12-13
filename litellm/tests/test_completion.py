@@ -1026,6 +1026,22 @@ def test_completion_together_ai():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+def test_completion_together_ai_yi_chat():
+    model_name = "together_ai/zero-one-ai/Yi-34B-Chat"
+    try:
+        messages =[
+            {"role": "user", "content": "What llm are you?"},
+        ]
+        response = completion(model=model_name, messages=messages)
+        # Add any assertions here to check the response
+        print(response)
+        cost = completion_cost(completion_response=response)
+        assert cost > 0.0   
+        print("Cost for completion call together-computer/llama-2-70b: ", f"${float(cost):.10f}")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+# test_completion_together_ai_yi_chat()
+
 # test_completion_together_ai()
 def test_customprompt_together_ai():
     try:
