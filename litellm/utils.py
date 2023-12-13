@@ -5682,6 +5682,13 @@ class CustomStreamWrapper:
                 else: 
                     return 
             elif model_response.choices[0].finish_reason:
+                # flush any remaining holding chunk 
+                if len(self.holding_chunk) > 0:
+                    if model_response.choices[0].delta.content is None:
+                        model_response.choices[0].delta.content = self.holding_chunk
+                    else:
+                        model_response.choices[0].delta.content = self.holding_chunk + model_response.choices[0].delta.content
+                    self.holding_chunk = "" 
                 model_response.choices[0].finish_reason = map_finish_reason(model_response.choices[0].finish_reason) # ensure consistent output to openai
                 return model_response
             elif response_obj is not None and response_obj.get("original_chunk", None) is not None: # function / tool calling branch - only set for openai/azure compatible endpoints
