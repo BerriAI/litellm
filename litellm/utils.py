@@ -178,6 +178,14 @@ class Message(OpenAIObject):
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
+    def json(self, **kwargs):
+        try:
+            return self.model_dump() # noqa
+        except:
+            # if using pydantic v1
+            return self.dict()
+
+
 class Delta(OpenAIObject):
     def __init__(self, content=None, role=None, **params):
         super(Delta, self).__init__(**params)
@@ -817,16 +825,17 @@ class Logging:
             )
         # print(f"original response in success handler: {self.model_call_details['original_response']}")
         try:
-            print_verbose(f"success callbacks: {litellm.success_callback}")        
+            print_verbose(f"success callbacks: {litellm.success_callback}")          
             ## BUILD COMPLETE STREAMED RESPONSE
             complete_streaming_response = None
             if self.stream == True and self.model_call_details.get("litellm_params", {}).get("acompletion", False) == True:
                 # if it's acompletion == True, chunks are built/appended in async_success_handler
+                self.streaming_chunks.append(result)
                 if result.choices[0].finish_reason is not None: # if it's the last chunk
                     complete_streaming_response = litellm.stream_chunk_builder(self.streaming_chunks, messages=self.model_call_details.get("messages", None))
             else:
                 # this is a completion() call
-                if self.stream: 
+                if self.stream == True: 
                     print_verbose("success callback - assembling complete streaming response")
                     if result.choices[0].finish_reason is not None: # if it's the last chunk
                         print_verbose(f"success callback - Got the very Last chunk. Assembling {self.streaming_chunks}")
@@ -5766,14 +5775,13 @@ class CustomStreamWrapper:
                     if processed_chunk is None: 
                         continue
                     ## LOGGING
+                    threading.Thread(target=self.logging_obj.success_handler, args=(processed_chunk,)).start() # log response
                     asyncio.create_task(self.logging_obj.async_success_handler(processed_chunk,))
                     return processed_chunk
                 raise StopAsyncIteration
             else: # temporary patch for non-aiohttp async calls
                 # example - boto3 bedrock llms
-                print_verbose(f"ENTERS __NEXT__ LOOP")
                 processed_chunk = next(self)
-                print_verbose(f"PROCESSED CHUNK IN __ANEXT__: {processed_chunk}")
                 asyncio.create_task(self.logging_obj.async_success_handler(processed_chunk,))
                 return processed_chunk
         except StopAsyncIteration:
