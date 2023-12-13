@@ -219,7 +219,6 @@ async def ollama_async_streaming(url, data, model_response, encoding, logging_ob
     except Exception as e:
         traceback.print_exc()
 
-
 async def ollama_acompletion(url, data, model_response, encoding, logging_obj):
     try:
         timeout = aiohttp.ClientTimeout(total=600)  # 10 minutes
@@ -230,12 +229,12 @@ async def ollama_acompletion(url, data, model_response, encoding, logging_obj):
                 text = await resp.text()
                 raise OllamaError(status_code=resp.status, message=text)
             
+            completion_string = ""
             async for line in resp.content.iter_any():
                 if line:
                     try:
                         json_chunk = line.decode("utf-8")
                         chunks = json_chunk.split("\n")
-                        completion_string = ""
                         for chunk in chunks:
                             if chunk.strip() != "":
                                 j = json.loads(chunk)
@@ -245,14 +244,16 @@ async def ollama_acompletion(url, data, model_response, encoding, logging_obj):
                                         "content": "",
                                         "error": j
                                     }
+                                    raise Exception(f"OllamError - {chunk}")
                                 if "response" in j:
                                     completion_obj = {
                                         "role": "assistant",
                                         "content": j["response"],
                                     }
-                                    completion_string += completion_obj["content"]
+                                    completion_string = completion_string + completion_obj["content"]
                     except Exception as e:
                         traceback.print_exc()
+            
             ## RESPONSE OBJECT
             model_response["choices"][0]["finish_reason"] = "stop"
             model_response["choices"][0]["message"]["content"] = completion_string

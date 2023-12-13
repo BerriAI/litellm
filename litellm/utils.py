@@ -365,6 +365,13 @@ class ModelResponse(OpenAIObject):
     def __setitem__(self, key, value):
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
+    
+    def json(self, **kwargs):
+        try:
+            return self.model_dump() # noqa
+        except:
+            # if using pydantic v1
+            return self.dict()
 
 class Embedding(OpenAIObject):
     embedding: list = []
@@ -430,6 +437,13 @@ class EmbeddingResponse(OpenAIObject):
     def __setitem__(self, key, value):
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
+    
+    def json(self, **kwargs):
+        try:
+            return self.model_dump() # noqa
+        except:
+            # if using pydantic v1
+            return self.dict()
 
 class TextChoices(OpenAIObject):
     def __init__(self, finish_reason=None, index=0, text=None, logprobs=None, **params):
