@@ -252,15 +252,15 @@ async def user_api_key_auth(request: Request, api_key: str = fastapi.Security(ap
         if api_key is None: # only require api key if master key is set
             raise Exception(f"No api key passed in.")
 
-        route = request.url.path
+        route: str = request.url.path
 
         # note: never string compare api keys, this is vulenerable to a time attack. Use secrets.compare_digest instead
         is_master_key_valid = secrets.compare_digest(api_key, master_key)
         if is_master_key_valid:
             return UserAPIKeyAuth(api_key=master_key)
         
-        if (route == "/key/generate" or route == "/key/delete" or route == "/key/info") and not is_master_key_valid:
-            raise Exception(f"If master key is set, only master key can be used to generate, delete or get info for new keys")
+        if route.startswith("/key/") and not is_master_key_valid:
+            raise Exception(f"If master key is set, only master key can be used to generate, delete, update or get info for new keys")
 
         if prisma_client is None: # if both master key + user key submitted, and user key != master key, and no db connected, raise an error
             raise Exception("No connected db.")
@@ -675,6 +675,8 @@ async def generate_key_helper_fn(duration: Optional[str], models: list, aliases:
         traceback.print_exc()
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
     return {"token": token, "expires": new_verification_token.expires, "user_id": user_id}
+
+
 
 async def delete_verification_token(tokens: List):
     global prisma_client
@@ -1139,6 +1141,30 @@ async def generate_key_fn(request: Request, data: GenerateKeyRequest, Authorizat
     data_json = data.json()   # type: ignore
     response = await generate_key_helper_fn(**data_json)
     return GenerateKeyResponse(key=response["token"], expires=response["expires"], user_id=response["user_id"])
+
+@router.post("/key/update", tags=["key management"], dependencies=[Depends(user_api_key_auth)])
+async def update_key_fn(request: Request, data: UpdateKeyRequest):
+    """
+    Update an existing key
+    """
+    global prisma_client
+    try: 
+        data_json: dict = data.json()
+        key = data_json.pop("key")
+        # get the row from db 
+        if prisma_client is None: 
+            raise Exception("Not connected to DB!")
+        
+        non_default_values = {k: v for k, v in data_json.items() if v is not None}
+        print(f"non_default_values: {non_default_values}")
+        response = await prisma_client.update_data(token=key, data={**non_default_values, "token": key})
+        return {"key": key, **non_default_values}
+        # update based on remaining passed in values 
+    except Exception as e: 
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": str(e)},
+        )
 
 @router.post("/key/delete", tags=["key management"], dependencies=[Depends(user_api_key_auth)])
 async def delete_key_fn(request: Request, data: DeleteKeyRequest): 

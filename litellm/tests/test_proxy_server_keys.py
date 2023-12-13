@@ -71,6 +71,38 @@ def test_add_new_key(client):
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception: {str(e)}")
 
+
+def test_update_new_key(client):
+    try:
+        # Your test data
+        test_data = {
+            "models": ["gpt-3.5-turbo", "gpt-4", "claude-2", "azure-model"], 
+            "aliases": {"mistral-7b": "gpt-3.5-turbo"}, 
+            "duration": "20m"
+        }
+        print("testing proxy server")
+        # Your bearer token
+        token = os.getenv("PROXY_MASTER_KEY")
+
+        headers = {
+            "Authorization": f"Bearer {token}"
+        }
+        response = client.post("/key/generate", json=test_data, headers=headers)
+        print(f"response: {response.text}")
+        assert response.status_code == 200
+        result = response.json()
+        assert result["key"].startswith("sk-")
+        def _post_data():
+            json_data = {'models': ['bedrock-models'], "key": result["key"]}
+            response = client.post("/key/update", json=json_data, headers=headers)
+            print(f"response text: {response.text}")
+            assert response.status_code == 200
+            return response
+        _post_data()
+        print(f"Received response: {result}")
+    except Exception as e:
+        pytest.fail(f"LiteLLM Proxy test failed. Exception: {str(e)}")
+
 # # Run the test - only runs via pytest
 
 
