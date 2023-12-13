@@ -19,6 +19,7 @@ import uuid
 import aiohttp
 import logging
 import asyncio, httpx, inspect
+from inspect import iscoroutine
 import copy
 from tokenizers import Tokenizer
 from dataclasses import (
@@ -5769,7 +5770,8 @@ class CustomStreamWrapper:
                 or self.custom_llm_provider == "azure"
                 or self.custom_llm_provider == "custom_openai"
                 or self.custom_llm_provider == "text-completion-openai"
-                or self.custom_llm_provider == "huggingface"):
+                or self.custom_llm_provider == "huggingface"
+                or self.custom_llm_provider == "vertex_ai"):
                 async for chunk in self.completion_stream:
                     if chunk == "None" or chunk is None:
                         raise Exception

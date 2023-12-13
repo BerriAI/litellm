@@ -73,7 +73,7 @@ def test_vertex_ai():
     litellm.vertex_project = "hardy-device-386718"
 
     test_models = random.sample(test_models, 4)
-    test_models = litellm.vertex_language_models # always test gemini-pro
+    test_models += litellm.vertex_language_models # always test gemini-pro
     for model in test_models:
         try:
             if model in ["code-gecko@001", "code-gecko@latest", "code-bison@001", "text-bison@001"]:
@@ -87,7 +87,7 @@ def test_vertex_ai():
             assert len(response.choices[0].message.content) > 1
         except Exception as e:
             pytest.fail(f"Error occurred: {e}")
-test_vertex_ai()
+# test_vertex_ai()
 
 def test_vertex_ai_stream():
     load_vertex_ai_credentials()
@@ -120,16 +120,48 @@ def test_vertex_ai_stream():
 
 @pytest.mark.asyncio
 async def test_async_vertexai_response():
+    import random
     load_vertex_ai_credentials()
-    user_message = "Hello, how are you?"
-    messages = [{"content": user_message, "role": "user"}]
-    try:
-        response = await acompletion(model="gemini-pro", messages=messages, temperature=0.7, timeout=5)
-        # response = await response
-        print(f"response: {response}")
-    except litellm.Timeout as e: 
-        pass
-    except Exception as e:
-        pytest.fail(f"An exception occurred: {e}")
+    test_models = litellm.vertex_chat_models + litellm.vertex_code_chat_models + litellm.vertex_text_models + litellm.vertex_code_text_models 
+    test_models = random.sample(test_models, 4)
+    test_models += litellm.vertex_language_models # always test gemini-pro
+    for model in test_models:
+        print(f'model being tested in async call: {model}')
+        try:
+            user_message = "Hello, how are you?"
+            messages = [{"content": user_message, "role": "user"}]
+            response = await acompletion(model=model, messages=messages, temperature=0.7, timeout=5)
+            print(f"response: {response}")
+        except litellm.Timeout as e: 
+            pass
+        except Exception as e:
+            pytest.fail(f"An exception occurred: {e}")
 
-asyncio.run(test_async_vertexai_response())
+# asyncio.run(test_async_vertexai_response())
+
+@pytest.mark.asyncio
+async def test_async_vertexai_streaming_response():
+    import random
+    load_vertex_ai_credentials()
+    test_models = litellm.vertex_chat_models + litellm.vertex_code_chat_models + litellm.vertex_text_models + litellm.vertex_code_text_models 
+    test_models = random.sample(test_models, 4)
+    test_models += litellm.vertex_language_models # always test gemini-pro
+    for model in test_models:
+        try:
+            user_message = "Hello, how are you?"
+            messages = [{"content": user_message, "role": "user"}]
+            response = await acompletion(model="gemini-pro", messages=messages, temperature=0.7, timeout=5, stream=True)
+            print(f"response: {response}")
+            complete_response = ""
+            async for chunk in response:
+                print(f"chunk: {chunk}")
+                complete_response += chunk.choices[0].delta.content
+            print(f"complete_response: {complete_response}")
+            assert len(complete_response) > 0
+        except litellm.Timeout as e: 
+            pass
+        except Exception as e:
+            print(e)
+            pytest.fail(f"An exception occurred: {e}")
+
+# asyncio.run(test_async_vertexai_streaming_response())
