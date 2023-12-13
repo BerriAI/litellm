@@ -390,7 +390,6 @@ def completion(
                 model=deployment_id
                 custom_llm_provider="azure"
         model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, api_key=api_key)
-        
         ### REGISTER CUSTOM MODEL PRICING -- IF GIVEN ###
         if input_cost_per_token is not None and output_cost_per_token is not None: 
             litellm.register_model({
@@ -1136,7 +1135,7 @@ def completion(
                 )
                 return response
             response = model_response
-        elif model in litellm.vertex_chat_models or model in litellm.vertex_code_chat_models or model in litellm.vertex_text_models or model in litellm.vertex_code_text_models or custom_llm_provider == "vertex_ai":
+        elif custom_llm_provider == "vertex_ai":
             vertex_ai_project = (litellm.vertex_project 
                                  or get_secret("VERTEXAI_PROJECT"))
             vertex_ai_location = (litellm.vertex_location 
