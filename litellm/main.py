@@ -177,7 +177,8 @@ async def acompletion(*args, **kwargs):
             or custom_llm_provider == "perplexity"
             or custom_llm_provider == "text-completion-openai"
             or custom_llm_provider == "huggingface"
-            or custom_llm_provider == "ollama"): # currently implemented aiohttp calls for just azure and openai, soon all. 
+            or custom_llm_provider == "ollama"
+            or custom_llm_provider == "vertex_ai"): # currently implemented aiohttp calls for just azure and openai, soon all. 
             if kwargs.get("stream", False): 
                 response = completion(*args, **kwargs)
             else:
@@ -1152,7 +1153,8 @@ def completion(
                 encoding=encoding,
                 vertex_location=vertex_ai_location,
                 vertex_project=vertex_ai_project,
-                logging_obj=logging
+                logging_obj=logging, 
+                acompletion=acompletion
             )
             
             if "stream" in optional_params and optional_params["stream"] == True:
