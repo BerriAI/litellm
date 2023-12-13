@@ -1,4 +1,8 @@
-# Deploying LiteLLM Proxy
+# 🐳 Docker, Deploying LiteLLM Proxy
+
+## Dockerfile
+
+You can find the Dockerfile to build litellm proxy [here](https://github.com/BerriAI/litellm/blob/main/Dockerfile)
 
 ## Quick Start Docker Image: Github Container Registry
 
