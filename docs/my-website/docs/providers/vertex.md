@@ -10,6 +10,16 @@
     * run `gcloud auth application-default login` See [Google Cloud Docs](https://cloud.google.com/docs/authentication/external/set-up-adc)
     * Alternatively you can set `application_default_credentials.json`
 
+
+## Sample Usage
+```python
+import litellm
+litellm.vertex_project = "hardy-device-38811" # Your Project ID
+litellm.vertex_location = "us-central1"  # proj location
+
+response = completion(model="gemini-pro", messages=[{"role": "user", "content": "write code for saying hi from LiteLLM"}])
+```
+
 ## Set Vertex Project & Vertex Location
 All calls using Vertex AI require the following parameters:
 * Your Project ID
@@ -37,14 +47,10 @@ os.environ["VERTEXAI_LOCATION"] = "us-central1 # Your Location
 litellm.vertex_location = "us-central1 # Your Location
 ```
 
-## Sample Usage
-```python
-import litellm
-litellm.vertex_project = "hardy-device-38811" # Your Project ID
-litellm.vertex_location = "us-central1"  # proj location
-
-response = completion(model="chat-bison", messages=[{"role": "user", "content": "write code for saying hi from LiteLLM"}])
-```
+## Gemini
+| Model Name       | Function Call                        |
+|------------------|--------------------------------------|
+| gemini-pro   | `completion('gemini-pro', messages)` |
 
 ## Chat Models
 | Model Name       | Function Call                        |
