@@ -172,6 +172,7 @@ async def acompletion(*args, **kwargs):
             or custom_llm_provider == "azure" 
             or custom_llm_provider == "custom_openai"
             or custom_llm_provider == "anyscale"
+            or custom_llm_provider == "mistral"
             or custom_llm_provider == "openrouter"
             or custom_llm_provider == "deepinfra"
             or custom_llm_provider == "perplexity"
@@ -548,6 +549,7 @@ def completion(
             or custom_llm_provider == "deepinfra"
             or custom_llm_provider == "perplexity"
             or custom_llm_provider == "anyscale"
+            or custom_llm_provider == "mistral"
             or custom_llm_provider == "openai"
             or "ft:gpt-3.5-turbo" in model  # finetune gpt-3.5-turbo
         ):  # allow user to make an openai call with a custom base

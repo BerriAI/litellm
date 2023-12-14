@@ -2681,6 +2681,20 @@ def get_optional_params(  # use the openai defaults
             optional_params["stream"] = stream
         if max_tokens: 
             optional_params["max_tokens"] = max_tokens
+    elif custom_llm_provider == "mistral":
+        supported_params = ["temperature", "top_p", "stream", "max_tokens", "safe_mode", "random_seed"]
+        _check_valid_arg(supported_params=supported_params)
+        optional_params = non_default_params
+        if temperature is not None:
+            if temperature == 0 and model == "mistralai/Mistral-7B-Instruct-v0.1": # this model does no support temperature == 0
+                temperature = 0.0001 # close to 0
+            optional_params["temperature"] = temperature
+        if top_p is not None: 
+            optional_params["top_p"] = top_p
+        if stream is not None: 
+            optional_params["stream"] = stream
+        if max_tokens is not None: 
+            optional_params["max_tokens"] = max_tokens
     else:  # assume passing in params for openai/azure openai
         supported_params = ["functions", "function_call", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "response_format", "seed", "tools", "tool_choice", "max_retries"]
         _check_valid_arg(supported_params=supported_params)
@@ -2751,6 +2765,10 @@ def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None, api_
                 # deepinfra is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
                 api_base = "https://api.deepinfra.com/v1/openai"
                 dynamic_api_key = get_secret("DEEPINFRA_API_KEY")
+            elif custom_llm_provider == "mistral":
+                # mistral is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.mistral.ai
+                api_base = "https://api.mistral.ai/v1"
+                dynamic_api_key = get_secret("MISTRAL_API_KEY")
             return model, custom_llm_provider, dynamic_api_key, api_base
 
         # check if api base is a known openai compatible endpoint
@@ -2766,6 +2784,9 @@ def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None, api_
                     elif endpoint == "api.deepinfra.com/v1/openai":
                         custom_llm_provider = "deepinfra"
                         dynamic_api_key = get_secret("DEEPINFRA_API_KEY")
+                    elif endpoint == "api.mistral.ai/v1":
+                        custom_llm_provider = "mistral"
+                        dynamic_api_key = get_secret("MISTRAL_API_KEY")
                     return model, custom_llm_provider, dynamic_api_key, api_base
 
         # check if model in known model provider list  -> for huggingface models, raise exception as they don't have a fixed provider (can be togetherai, anyscale, baseten, runpod, et.)
