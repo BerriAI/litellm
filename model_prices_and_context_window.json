@@ -210,6 +210,27 @@
         "litellm_provider": "anthropic",
         "mode": "chat"
     },
+    "mistral/mistral-tiny": {
+        "max_tokens": 8192,
+        "input_cost_per_token": 0.00000015,
+        "output_cost_per_token": 0.00000046,
+        "litellm_provider": "mistral",
+        "mode": "chat"
+    },
+    "mistral/mistral-small": {
+        "max_tokens": 8192,
+        "input_cost_per_token": 0.00000066,
+        "output_cost_per_token": 0.00000197,
+        "litellm_provider": "mistral",
+        "mode": "chat"
+    },
+    "mistral/mistral-medium": {
+        "max_tokens": 8192,
+        "input_cost_per_token": 0.00000273,
+        "output_cost_per_token": 0.00000820,
+        "litellm_provider": "mistral",
+        "mode": "chat"
+    },
     "claude-instant-1.2": {
         "max_tokens": 100000,
         "max_output_tokens": 8191,
