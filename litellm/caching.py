@@ -10,7 +10,7 @@
 import litellm
 import time, logging
 import json, traceback, ast
-from typing import Optional, Literal
+from typing import Optional, Literal, List
 
 def print_verbose(print_statement):
     try:
@@ -170,7 +170,7 @@ class Cache:
             host: Optional[str] = None,
             port: Optional[str] = None,
             password: Optional[str] = None,
-            supported_call_types: Optional[list[Literal["completion", "acompletion", "embedding", "aembedding"]]] = ["completion", "acompletion", "embedding", "aembedding"],
+            supported_call_types: Optional[List[Literal["completion", "acompletion", "embedding", "aembedding"]]] = ["completion", "acompletion", "embedding", "aembedding"],
             **kwargs
     ):
         """
