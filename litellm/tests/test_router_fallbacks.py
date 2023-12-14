@@ -21,9 +21,13 @@ class MyCustomHandler(CustomLogger):
         print(f"Pre-API Call")
     
     def log_post_api_call(self, kwargs, response_obj, start_time, end_time): 
-        print(f"Post-API Call")
+        print(f"Post-API Call - response object: {response_obj}; model: {kwargs['model']}")
+
     
     def log_stream_event(self, kwargs, response_obj, start_time, end_time):
+        print(f"On Stream")
+    
+    def async_log_stream_event(self, kwargs, response_obj, start_time, end_time):
         print(f"On Stream")
         
     def log_success_event(self, kwargs, response_obj, start_time, end_time): 
@@ -41,66 +45,65 @@ class MyCustomHandler(CustomLogger):
     def log_failure_event(self, kwargs, response_obj, start_time, end_time): 
         print(f"On Failure")
 
-model_list = [
-    { # list of model deployments 
-		"model_name": "azure/gpt-3.5-turbo", # openai model name 
-		"litellm_params": { # params for litellm completion/embedding call 
-			"model": "azure/chatgpt-v-2", 
-			"api_key": "bad-key",
-			"api_version": os.getenv("AZURE_API_VERSION"),
-			"api_base": os.getenv("AZURE_API_BASE")
-		},
-		"tpm": 240000,
-		"rpm": 1800
-	}, 
-    { # list of model deployments 
-		"model_name": "azure/gpt-3.5-turbo-context-fallback", # openai model name 
-		"litellm_params": { # params for litellm completion/embedding call 
-			"model": "azure/chatgpt-v-2", 
-			"api_key": os.getenv("AZURE_API_KEY"),
-			"api_version": os.getenv("AZURE_API_VERSION"),
-			"api_base": os.getenv("AZURE_API_BASE")
-		},
-		"tpm": 240000,
-		"rpm": 1800
-	}, 
-	{
-		"model_name": "azure/gpt-3.5-turbo", # openai model name 
-		"litellm_params": { # params for litellm completion/embedding call 
-			"model": "azure/chatgpt-functioncalling", 
-			"api_key": "bad-key",
-			"api_version": os.getenv("AZURE_API_VERSION"),
-			"api_base": os.getenv("AZURE_API_BASE")
-		},
-		"tpm": 240000,
-		"rpm": 1800
-	}, 
-	{
-		"model_name": "gpt-3.5-turbo", # openai model name 
-		"litellm_params": { # params for litellm completion/embedding call 
-			"model": "gpt-3.5-turbo", 
-			"api_key": os.getenv("OPENAI_API_KEY"),
-		},
-		"tpm": 1000000,
-		"rpm": 9000
-	},
-    {
-		"model_name": "gpt-3.5-turbo-16k", # openai model name 
-		"litellm_params": { # params for litellm completion/embedding call 
-			"model": "gpt-3.5-turbo-16k", 
-			"api_key": os.getenv("OPENAI_API_KEY"),
-		},
-		"tpm": 1000000,
-		"rpm": 9000
-	}
-]
-
-
 
 kwargs = {"model": "azure/gpt-3.5-turbo", "messages": [{"role": "user", "content":"Hey, how's it going?"}]}
 
 def test_sync_fallbacks():        
     try:
+        model_list = [
+            { # list of model deployments 
+                "model_name": "azure/gpt-3.5-turbo", # openai model name 
+                "litellm_params": { # params for litellm completion/embedding call 
+                    "model": "azure/chatgpt-v-2", 
+                    "api_key": "bad-key",
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE")
+                },
+                "tpm": 240000,
+                "rpm": 1800
+            }, 
+            { # list of model deployments 
+                "model_name": "azure/gpt-3.5-turbo-context-fallback", # openai model name 
+                "litellm_params": { # params for litellm completion/embedding call 
+                    "model": "azure/chatgpt-v-2", 
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE")
+                },
+                "tpm": 240000,
+                "rpm": 1800
+            }, 
+            {
+                "model_name": "azure/gpt-3.5-turbo", # openai model name 
+                "litellm_params": { # params for litellm completion/embedding call 
+                    "model": "azure/chatgpt-functioncalling", 
+                    "api_key": "bad-key",
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE")
+                },
+                "tpm": 240000,
+                "rpm": 1800
+            }, 
+            {
+                "model_name": "gpt-3.5-turbo", # openai model name 
+                "litellm_params": { # params for litellm completion/embedding call 
+                    "model": "gpt-3.5-turbo", 
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+                "tpm": 1000000,
+                "rpm": 9000
+            },
+            {
+                "model_name": "gpt-3.5-turbo-16k", # openai model name 
+                "litellm_params": { # params for litellm completion/embedding call 
+                    "model": "gpt-3.5-turbo-16k", 
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+                "tpm": 1000000,
+                "rpm": 9000
+            }
+        ]
+
         litellm.set_verbose = True
         customHandler = MyCustomHandler()
         litellm.callbacks = [customHandler]
@@ -112,6 +115,8 @@ def test_sync_fallbacks():
         print(f"response: {response}")
         time.sleep(0.05) # allow a delay as success_callbacks are on a separate thread
         assert customHandler.previous_models == 1 # 0 retries, 1 fallback
+
+        print("Passed ! Test router_fallbacks: test_sync_fallbacks()")
         router.reset()
     except Exception as e:
         print(e)
@@ -120,6 +125,60 @@ def test_sync_fallbacks():
 @pytest.mark.asyncio
 async def test_async_fallbacks(): 
     litellm.set_verbose = False
+    model_list = [
+        { # list of model deployments 
+            "model_name": "azure/gpt-3.5-turbo", # openai model name 
+            "litellm_params": { # params for litellm completion/embedding call 
+                "model": "azure/chatgpt-v-2", 
+                "api_key": "bad-key",
+                "api_version": os.getenv("AZURE_API_VERSION"),
+                "api_base": os.getenv("AZURE_API_BASE")
+            },
+            "tpm": 240000,
+            "rpm": 1800
+        }, 
+        { # list of model deployments 
+            "model_name": "azure/gpt-3.5-turbo-context-fallback", # openai model name 
+            "litellm_params": { # params for litellm completion/embedding call 
+                "model": "azure/chatgpt-v-2", 
+                "api_key": os.getenv("AZURE_API_KEY"),
+                "api_version": os.getenv("AZURE_API_VERSION"),
+                "api_base": os.getenv("AZURE_API_BASE")
+            },
+            "tpm": 240000,
+            "rpm": 1800
+        }, 
+        {
+            "model_name": "azure/gpt-3.5-turbo", # openai model name 
+            "litellm_params": { # params for litellm completion/embedding call 
+                "model": "azure/chatgpt-functioncalling", 
+                "api_key": "bad-key",
+                "api_version": os.getenv("AZURE_API_VERSION"),
+                "api_base": os.getenv("AZURE_API_BASE")
+            },
+            "tpm": 240000,
+            "rpm": 1800
+        }, 
+        {
+            "model_name": "gpt-3.5-turbo", # openai model name 
+            "litellm_params": { # params for litellm completion/embedding call 
+                "model": "gpt-3.5-turbo", 
+                "api_key": os.getenv("OPENAI_API_KEY"),
+            },
+            "tpm": 1000000,
+            "rpm": 9000
+        },
+        {
+            "model_name": "gpt-3.5-turbo-16k", # openai model name 
+            "litellm_params": { # params for litellm completion/embedding call 
+                "model": "gpt-3.5-turbo-16k", 
+                "api_key": os.getenv("OPENAI_API_KEY"),
+            },
+            "tpm": 1000000,
+            "rpm": 9000
+        }
+    ]
+
     router = Router(model_list=model_list, 
                 fallbacks=[{"azure/gpt-3.5-turbo": ["gpt-3.5-turbo"]}], 
                 context_window_fallbacks=[{"azure/gpt-3.5-turbo-context-fallback": ["gpt-3.5-turbo-16k"]}, {"gpt-3.5-turbo": ["gpt-3.5-turbo-16k"]}],
@@ -143,30 +202,6 @@ async def test_async_fallbacks():
 
 # test_async_fallbacks()
 
-## COMMENTING OUT as the context size exceeds both gpt-3.5-turbo and gpt-3.5-turbo-16k, need a better message here
-# def test_sync_context_window_fallbacks(): 
-#     try:
-#         customHandler = MyCustomHandler()
-#         litellm.callbacks = [customHandler]
-#         sample_text = "Say error 50 times" * 10000
-#         kwargs["model"] = "azure/gpt-3.5-turbo-context-fallback"
-#         kwargs["messages"] = [{"role": "user", "content": sample_text}]
-#         router = Router(model_list=model_list, 
-#                 fallbacks=[{"azure/gpt-3.5-turbo": ["gpt-3.5-turbo"]}], 
-#                 context_window_fallbacks=[{"azure/gpt-3.5-turbo-context-fallback": ["gpt-3.5-turbo-16k"]}, {"gpt-3.5-turbo": ["gpt-3.5-turbo-16k"]}],
-#                 set_verbose=False)
-#         response = router.completion(**kwargs)
-#         print(f"response: {response}")
-#         time.sleep(0.05) # allow a delay as success_callbacks are on a separate thread
-#         assert customHandler.previous_models == 1 # 0 retries, 1 fallback
-#         router.reset()
-#     except Exception as e:
-#         print(f"An exception occurred - {e}")
-#     finally: 
-#         router.reset()
-
-# test_sync_context_window_fallbacks()
-
 def test_dynamic_fallbacks_sync(): 
     """
     Allow setting the fallback in the router.completion() call. 
@@ -174,6 +209,60 @@ def test_dynamic_fallbacks_sync():
     try:
           customHandler = MyCustomHandler()
           litellm.callbacks = [customHandler]
+          model_list = [
+            { # list of model deployments 
+                "model_name": "azure/gpt-3.5-turbo", # openai model name 
+                "litellm_params": { # params for litellm completion/embedding call 
+                    "model": "azure/chatgpt-v-2", 
+                    "api_key": "bad-key",
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE")
+                },
+                "tpm": 240000,
+                "rpm": 1800
+            }, 
+            { # list of model deployments 
+                "model_name": "azure/gpt-3.5-turbo-context-fallback", # openai model name 
+                "litellm_params": { # params for litellm completion/embedding call 
+                    "model": "azure/chatgpt-v-2", 
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE")
+                },
+                "tpm": 240000,
+                "rpm": 1800
+            }, 
+            {
+                "model_name": "azure/gpt-3.5-turbo", # openai model name 
+                "litellm_params": { # params for litellm completion/embedding call 
+                    "model": "azure/chatgpt-functioncalling", 
+                    "api_key": "bad-key",
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE")
+                },
+                "tpm": 240000,
+                "rpm": 1800
+            }, 
+            {
+                "model_name": "gpt-3.5-turbo", # openai model name 
+                "litellm_params": { # params for litellm completion/embedding call 
+                    "model": "gpt-3.5-turbo", 
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+                "tpm": 1000000,
+                "rpm": 9000
+            },
+            {
+                "model_name": "gpt-3.5-turbo-16k", # openai model name 
+                "litellm_params": { # params for litellm completion/embedding call 
+                    "model": "gpt-3.5-turbo-16k", 
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+                "tpm": 1000000,
+                "rpm": 9000
+            }
+        ]
+
           router = Router(model_list=model_list, set_verbose=True)
           kwargs = {}
           kwargs["model"] = "azure/gpt-3.5-turbo"
@@ -195,6 +284,65 @@ async def test_dynamic_fallbacks_async():
     Allow setting the fallback in the router.completion() call. 
     """
     try: 
+        model_list = [
+            { # list of model deployments 
+                "model_name": "azure/gpt-3.5-turbo", # openai model name 
+                "litellm_params": { # params for litellm completion/embedding call 
+                    "model": "azure/chatgpt-v-2", 
+                    "api_key": "bad-key",
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE")
+                },
+                "tpm": 240000,
+                "rpm": 1800
+            }, 
+            { # list of model deployments 
+                "model_name": "azure/gpt-3.5-turbo-context-fallback", # openai model name 
+                "litellm_params": { # params for litellm completion/embedding call 
+                    "model": "azure/chatgpt-v-2", 
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE")
+                },
+                "tpm": 240000,
+                "rpm": 1800
+            }, 
+            {
+                "model_name": "azure/gpt-3.5-turbo", # openai model name 
+                "litellm_params": { # params for litellm completion/embedding call 
+                    "model": "azure/chatgpt-functioncalling", 
+                    "api_key": "bad-key",
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE")
+                },
+                "tpm": 240000,
+                "rpm": 1800
+            }, 
+            {
+                "model_name": "gpt-3.5-turbo", # openai model name 
+                "litellm_params": { # params for litellm completion/embedding call 
+                    "model": "gpt-3.5-turbo", 
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+                "tpm": 1000000,
+                "rpm": 9000
+            },
+            {
+                "model_name": "gpt-3.5-turbo-16k", # openai model name 
+                "litellm_params": { # params for litellm completion/embedding call 
+                    "model": "gpt-3.5-turbo-16k", 
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+                "tpm": 1000000,
+                "rpm": 9000
+            }
+        ]
+
+        print()
+        print()
+        print()
+        print()
+        print(f"STARTING DYNAMIC ASYNC")
         customHandler = MyCustomHandler()
         litellm.callbacks = [customHandler]
         router = Router(model_list=model_list, set_verbose=True)
@@ -203,10 +351,10 @@ async def test_dynamic_fallbacks_async():
         kwargs["messages"] = [{"role": "user", "content": "Hey, how's it going?"}]
         kwargs["fallbacks"] = [{"azure/gpt-3.5-turbo": ["gpt-3.5-turbo"]}]
         response = await router.acompletion(**kwargs)
-        print(f"response: {response}")
+        print(f"RESPONSE: {response}")
         await asyncio.sleep(0.05) # allow a delay as success_callbacks are on a separate thread
         assert customHandler.previous_models == 1 # 0 retries, 1 fallback
         router.reset()
     except Exception as e:
         pytest.fail(f"An exception occurred - {e}")
-# test_dynamic_fallbacks_async()
+# asyncio.run(test_dynamic_fallbacks_async())

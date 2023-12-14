@@ -1,6 +1,6 @@
 # LITELLM PROXY DEPENDENCIES #
 litellm
-openai
+openai>=1.0.0
 fastapi
 tomli
 pydantic>=2.5

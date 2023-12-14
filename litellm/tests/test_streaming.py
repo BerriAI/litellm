@@ -245,7 +245,6 @@ def test_completion_azure_stream():
         complete_response = ""
         # Add any assertions here to check the response
         for idx, init_chunk in enumerate(response):
-            print(f"azure chunk: {init_chunk}")
             chunk, finished = streaming_format_tests(idx, init_chunk)
             complete_response += chunk
             if finished:
@@ -255,7 +254,7 @@ def test_completion_azure_stream():
             raise Exception("Empty response received")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_azure_stream() 
+# test_completion_azure_stream() 
 
 def test_completion_azure_function_calling_stream():
     try:
@@ -635,6 +634,47 @@ def test_completion_bedrock_ai21_stream():
         pytest.fail(f"Error occurred: {e}")
 
 # test_completion_bedrock_ai21_stream()
+
+def test_sagemaker_weird_response(): 
+    """
+    When the stream ends, flush any remaining holding chunks.
+    """
+    try: 
+        chunk = """<s>[INST] Hey, how's it going? [/INST]
+
+    I'm doing well, thanks for asking! How about you? Is there anything you'd like to chat about or ask? I'm here to help with any questions you might have."""
+
+        logging_obj = litellm.Logging(model="berri-benchmarking-Llama-2-70b-chat-hf-4", messages=messages, stream=True, litellm_call_id="1234", function_id="function_id", call_type="acompletion", start_time=time.time())
+        response = litellm.CustomStreamWrapper(completion_stream=chunk, model="berri-benchmarking-Llama-2-70b-chat-hf-4", custom_llm_provider="sagemaker", logging_obj=logging_obj)
+        complete_response = ""
+        for chunk in response:
+            complete_response += chunk["choices"][0]["delta"]["content"]
+        assert len(complete_response) > 0
+    except Exception as e: 
+        pytest.fail(f"An exception occurred - {str(e)}")
+# test_sagemaker_weird_response()
+
+@pytest.mark.asyncio
+async def test_sagemaker_streaming_async():
+    try: 
+        messages = [{"role": "user", "content": "Hey, how's it going?"}]
+        litellm.set_verbose=True
+        response = await litellm.acompletion(
+            model="sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4", 
+            messages=messages,
+            max_tokens=100,
+            temperature=0.7,
+            stream=True,
+        )
+
+        # Add any assertions here to check the response 
+        complete_response = "" 
+        async for chunk in response:
+            complete_response += chunk.choices[0].delta.content or "" 
+        print(f"complete_response: {complete_response}")
+        assert len(complete_response) > 0
+    except Exception as e: 
+        pytest.fail(f"An exception occurred - {str(e)}")
 
 # def test_completion_sagemaker_stream():
 #     try:
