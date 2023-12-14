@@ -323,7 +323,7 @@ async def test_async_custom_handler_embedding_optional_param_bedrock():
     customHandler_optional_params = MyCustomHandler()
     litellm.callbacks = [customHandler_optional_params]
     response = await litellm.aembedding(
-                model="bedrock/cohere.embed-multilingual-v3", 
+                model="bedrock/amazon.titan-embed-text-v1", 
                 input = ["hello world"],
                 user = "John"
             )
