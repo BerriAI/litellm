@@ -1682,9 +1682,9 @@ def client(original_function):
             # [OPTIONAL] ADD TO CACHE
             if litellm.caching or litellm.caching_with_models or litellm.cache != None: # user init a cache object
                 if isinstance(result, litellm.ModelResponse) or isinstance(result, litellm.EmbeddingResponse):
-                    litellm.cache.add_cache(result.json(), *args, **kwargs)
+                    asyncio.create_task(litellm.cache._async_add_cache(result.json(), *args, **kwargs))
                 else:
-                    litellm.cache.add_cache(result, *args, **kwargs)
+                    asyncio.create_task(litellm.cache._async_add_cache(result, *args, **kwargs))
             # LOG SUCCESS - handle streaming success logging in the _next_ object
             print_verbose(f"Async Wrapper: Completed Call, calling async_success_handler: {logging_obj.async_success_handler}")
             asyncio.create_task(logging_obj.async_success_handler(result, start_time, end_time))

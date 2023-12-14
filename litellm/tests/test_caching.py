@@ -29,6 +29,7 @@ def generate_random_word(length=4):
 messages = [{"role": "user", "content": "who is ishaan 5222"}]
 def test_caching_v2(): # test in memory cache
     try:
+        litellm.set_verbose=True
         litellm.cache = Cache()
         response1 = completion(model="gpt-3.5-turbo", messages=messages, caching=True)
         response2 = completion(model="gpt-3.5-turbo", messages=messages, caching=True)
@@ -40,7 +41,7 @@ def test_caching_v2(): # test in memory cache
         if response2['choices'][0]['message']['content'] != response1['choices'][0]['message']['content']:
             print(f"response1: {response1}")
             print(f"response2: {response2}")
-            pytest.fail(f"Error occurred: {e}")
+            pytest.fail(f"Error occurred:")
     except Exception as e:
         print(f"error occurred: {traceback.format_exc()}")
         pytest.fail(f"Error occurred: {e}")
