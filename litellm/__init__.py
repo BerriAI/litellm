@@ -280,6 +280,7 @@ model_list = (
 provider_list: List = [
     "openai",
     "custom_openai",
+    "text-completion-openai",
     "cohere",
     "anthropic",
     "replicate",
