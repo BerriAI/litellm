@@ -1414,8 +1414,18 @@ async def config_yaml_endpoint(config_info: ConfigYAML):
     return {"hello": "world"}
 
 
-@router.get("/test")
+@router.get("/test", tags=["health"])
 async def test_endpoint(request: Request): 
+    """
+    A test endpoint that pings the proxy server to check if it's healthy.
+
+    Parameters:
+        request (Request): The incoming request.
+
+    Returns:
+        dict: A dictionary containing the route of the request URL.
+    """
+    # ping the proxy server to check if its healthy
     return {"route": request.url.path}
 
 @router.get("/health", tags=["health"], dependencies=[Depends(user_api_key_auth)])
