@@ -70,6 +70,7 @@ def test_completion_claude():
 
 def test_completion_mistral_api():
     try:
+        litellm.set_verbose=True
         response = completion(
             model="mistral/mistral-tiny", 
             messages=[
@@ -77,7 +78,9 @@ def test_completion_mistral_api():
                     "role": "user",
                     "content": "Hey, how's it going?",
                 }
-            ]
+            ],
+            random_seed=42,
+            safe_mode = True
         )
         # Add any assertions here to check the response
         print(response)
