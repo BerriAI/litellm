@@ -159,7 +159,8 @@ for key, value in model_cost.items():
 openai_compatible_endpoints: List = [
     "api.perplexity.ai", 
     "api.endpoints.anyscale.com/v1",
-    "api.deepinfra.com/v1/openai"
+    "api.deepinfra.com/v1/openai",
+    "api.mistral.ai/v1"
 ]
 
 
@@ -292,6 +293,7 @@ provider_list: List = [
     "deepinfra",
     "perplexity",
     "anyscale",
+    "mistral",
     "maritalk",
     "custom", # custom apis
 ]
