@@ -902,6 +902,7 @@ class Router:
                 or custom_llm_provider == "deepinfra"
                 or custom_llm_provider == "perplexity"
                 or custom_llm_provider == "anyscale"
+                or custom_llm_provider == "mistral"
                 or custom_llm_provider == "openai"
                 or custom_llm_provider == "azure"
                 or "ft:gpt-3.5-turbo" in model_name
