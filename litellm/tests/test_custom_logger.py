@@ -310,6 +310,26 @@ async def test_async_custom_handler_embedding_optional_param():
 
 # asyncio.run(test_async_custom_handler_embedding_optional_param())
 
+@pytest.mark.asyncio
+async def test_async_custom_handler_embedding_optional_param_bedrock(): 
+    """
+    Tests if the openai optional params for embedding - user + encoding_format, 
+    are logged
+
+    but makes sure these are not sent to the non-openai/azure endpoint (raises errors).
+    """
+    customHandler_optional_params = MyCustomHandler()
+    litellm.callbacks = [customHandler_optional_params]
+    response = await litellm.aembedding(
+                model="azure/azure-embedding-model", 
+                input = ["hello world"],
+                user = "John"
+            )
+    await asyncio.sleep(1) # success callback is async 
+    assert customHandler_optional_params.user == "John"
+    assert customHandler_optional_params.user == customHandler_optional_params.data_sent_to_api["user"]
+
+
 def test_redis_cache_completion_stream():
     from litellm import Cache
     # Important Test - This tests if we can add to streaming cache, when custom callbacks are set 
