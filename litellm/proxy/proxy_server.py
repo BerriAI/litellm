@@ -1002,7 +1002,7 @@ async def chat_completion(request: Request, model: Optional[str] = None, user_ap
                 response = await llm_router.acompletion(**data)
         elif llm_router is not None and data["model"] in llm_router.deployment_names: # model in router deployments, calling a specific deployment on the router
             response = await llm_router.acompletion(**data, specific_deployment = True)
-        elif llm_router is not None and litellm.model_group_alias_map is not None and data["model"] in litellm.model_group_alias_map: # model set in model_group_alias_map
+        elif llm_router is not None and llm_router.model_group_alias is not None and data["model"] in llm_router.model_group_alias: # model set in model_group_alias
             response = await llm_router.acompletion(**data)
         else: # router is not set
             response = await litellm.acompletion(**data)
@@ -1100,6 +1100,8 @@ async def embeddings(request: Request, user_api_key_dict: UserAPIKeyAuth = Depen
             response = await llm_router.aembedding(**data)
         elif llm_router is not None and data["model"] in llm_router.deployment_names: # model in router deployments, calling a specific deployment on the router
             response = await llm_router.aembedding(**data, specific_deployment = True)
+        elif llm_router is not None and llm_router.model_group_alias is not None and data["model"] in llm_router.model_group_alias: # model set in model_group_alias
+            response = await llm_router.aembedding(**data) # ensure this goes the llm_router, router will do the correct alias mapping
         else:
             response = await litellm.aembedding(**data)
         background_tasks.add_task(log_input_output, request, response) # background task for logging to OTEL 
