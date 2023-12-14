@@ -12,18 +12,6 @@ import time, logging
 import json, traceback, ast
 from typing import Optional
 
-def get_prompt(*args, **kwargs):
-    # make this safe checks, it should not throw any exceptions
-    if len(args) > 1:
-        messages = args[1]
-        prompt = " ".join(message["content"] for message in messages)
-        return prompt
-    if "messages" in kwargs:
-        messages = kwargs["messages"]
-        prompt = " ".join(message["content"] for message in messages)
-        return prompt
-    return None
-
 def print_verbose(print_statement):
     try:
         if litellm.set_verbose:
@@ -232,7 +220,11 @@ class Cache:
 
         # sort kwargs by keys, since model: [gpt-4, temperature: 0.2, max_tokens: 200] == [temperature: 0.2, max_tokens: 200, model: gpt-4]
         completion_kwargs = ["model", "messages", "temperature", "top_p", "n", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "response_format", "seed", "tools", "tool_choice"]
-        for param in completion_kwargs:
+        embedding_only_kwargs = ["input", "encoding_format"] # embedding kwargs = model, input, user, encoding_format. Model, user are checked in completion_kwargs
+        
+        # combined_kwargs - NEEDS to be ordered across get_cache_key(). Do not use a set()
+        combined_kwargs = completion_kwargs + embedding_only_kwargs 
+        for param in combined_kwargs:
             # ignore litellm params here
             if param in kwargs:
                 # check if param == model and model_group is passed in, then override model with model_group
@@ -305,4 +297,9 @@ class Cache:
                     result = result.model_dump_json()
                 self.cache.set_cache(cache_key, result, **kwargs)
         except Exception as e:
+            print_verbose(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
+            traceback.print_exc()
             pass
+
+    async def _async_add_cache(self, result, *args, **kwargs):
+        self.add_cache(result, *args, **kwargs)

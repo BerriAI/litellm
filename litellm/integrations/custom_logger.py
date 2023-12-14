@@ -2,8 +2,9 @@
 #    On success, logs events to Promptlayer
 import dotenv, os
 import requests
-import requests
-
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.caching import DualCache
+from typing import Literal
 dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
 
@@ -38,6 +39,16 @@ class CustomLogger: # https://docs.litellm.ai/docs/observability/custom_callback
         pass
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        pass
+
+    #### CALL HOOKS #### 
+    """
+    Control the modify incoming / outgoung data before calling the model
+    """
+    async def async_pre_call_hook(self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict, call_type: Literal["completion", "embeddings"]):
+        pass
+    
+    async def async_post_call_failure_hook(self, original_exception: Exception, user_api_key_dict: UserAPIKeyAuth):
         pass
 
     #### SINGLE-USE #### - https://docs.litellm.ai/docs/observability/custom_callback#using-your-custom-callback-function

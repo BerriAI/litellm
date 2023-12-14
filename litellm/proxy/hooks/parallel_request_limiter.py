@@ -1,6 +1,7 @@
 from typing import Optional
 import litellm
 from litellm.caching import DualCache
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.integrations.custom_logger import CustomLogger
 from fastapi import HTTPException
 
@@ -14,24 +15,27 @@ class MaxParallelRequestsHandler(CustomLogger):
             print(print_statement) # noqa
 
     
-    async def max_parallel_request_allow_request(self, max_parallel_requests: Optional[int], api_key: Optional[str], user_api_key_cache: DualCache): 
+    async def async_pre_call_hook(self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict, call_type: str): 
+        api_key = user_api_key_dict.api_key
+        max_parallel_requests = user_api_key_dict.max_parallel_requests
+
         if api_key is None:
             return
 
         if max_parallel_requests is None:
             return
         
-        self.user_api_key_cache = user_api_key_cache # save the api key cache for updating the value
+        self.user_api_key_cache = cache # save the api key cache for updating the value
 
         # CHECK IF REQUEST ALLOWED
         request_count_api_key = f"{api_key}_request_count"
-        current = user_api_key_cache.get_cache(key=request_count_api_key)
+        current = cache.get_cache(key=request_count_api_key)
         self.print_verbose(f"current: {current}")
         if current is None:
-            user_api_key_cache.set_cache(request_count_api_key, 1)
+            cache.set_cache(request_count_api_key, 1)
         elif int(current) <  max_parallel_requests:
             # Increase count for this token
-            user_api_key_cache.set_cache(request_count_api_key, int(current) + 1)
+            cache.set_cache(request_count_api_key, int(current) + 1)
         else: 
             raise HTTPException(status_code=429, detail="Max parallel request limit reached.")
 
@@ -55,16 +59,23 @@ class MaxParallelRequestsHandler(CustomLogger):
         except Exception as e: 
             self.print_verbose(e) # noqa
 
-    async def async_log_failure_call(self, api_key, user_api_key_cache):
+    async def async_log_failure_call(self, user_api_key_dict: UserAPIKeyAuth, original_exception: Exception):
         try:
+            api_key = user_api_key_dict.api_key
             if api_key is None:
                 return
             
-            request_count_api_key = f"{api_key}_request_count"
-            # Decrease count for this token
-            current = self.user_api_key_cache.get_cache(key=request_count_api_key) or 1
-            new_val = current - 1
-            self.print_verbose(f"updated_value in failure call: {new_val}")
-            self.user_api_key_cache.set_cache(request_count_api_key, new_val)
+            ## decrement call count if call failed
+            if (hasattr(original_exception, "status_code") 
+                and original_exception.status_code == 429 
+                and "Max parallel request limit reached" in str(original_exception)):
+                pass # ignore failed calls due to max limit being reached
+            else:  
+                request_count_api_key = f"{api_key}_request_count"
+                # Decrease count for this token
+                current = self.user_api_key_cache.get_cache(key=request_count_api_key) or 1
+                new_val = current - 1
+                self.print_verbose(f"updated_value in failure call: {new_val}")
+                self.user_api_key_cache.set_cache(request_count_api_key, new_val)
         except Exception as e:
             self.print_verbose(f"An exception occurred - {str(e)}") # noqa

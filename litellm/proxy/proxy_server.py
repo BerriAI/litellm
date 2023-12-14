@@ -252,19 +252,19 @@ async def user_api_key_auth(request: Request, api_key: str = fastapi.Security(ap
         if api_key is None: # only require api key if master key is set
             raise Exception(f"No api key passed in.")
 
-        route = request.url.path
+        route: str = request.url.path
 
         # note: never string compare api keys, this is vulenerable to a time attack. Use secrets.compare_digest instead
         is_master_key_valid = secrets.compare_digest(api_key, master_key)
         if is_master_key_valid:
             return UserAPIKeyAuth(api_key=master_key)
         
-        if (route == "/key/generate" or route == "/key/delete" or route == "/key/info") and not is_master_key_valid:
-            raise Exception(f"If master key is set, only master key can be used to generate, delete or get info for new keys")
+        if route.startswith("/key/") and not is_master_key_valid:
+            raise Exception(f"If master key is set, only master key can be used to generate, delete, update or get info for new keys")
 
         if prisma_client is None: # if both master key + user key submitted, and user key != master key, and no db connected, raise an error
             raise Exception("No connected db.")
-
+        
         ## check for cache hit (In-Memory Cache)
         valid_token = user_api_key_cache.get_cache(key=api_key)
         print(f"valid_token from cache: {valid_token}")
@@ -387,16 +387,11 @@ async def track_cost_callback(
             response_cost = litellm.completion_cost(completion_response=completion_response)
             print("streaming response_cost", response_cost)
             user_api_key = kwargs["litellm_params"]["metadata"].get("user_api_key", None)
-            print(f"user_api_key - {user_api_key}; prisma_client - {prisma_client}")
             if user_api_key and prisma_client: 
                 await update_prisma_database(token=user_api_key, response_cost=response_cost)
         elif kwargs["stream"] == False: # for non streaming responses
             response_cost = litellm.completion_cost(completion_response=completion_response)
-            print(f"received completion response: {completion_response}")
-            
-            print(f"regular response_cost: {response_cost}")
             user_api_key = kwargs["litellm_params"]["metadata"].get("user_api_key", None)
-            print(f"user_api_key - {user_api_key}; prisma_client - {prisma_client}")
             if user_api_key and prisma_client: 
                 await update_prisma_database(token=user_api_key, response_cost=response_cost)
     except Exception as e:
@@ -676,6 +671,8 @@ async def generate_key_helper_fn(duration: Optional[str], models: list, aliases:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
     return {"token": token, "expires": new_verification_token.expires, "user_id": user_id}
 
+
+
 async def delete_verification_token(tokens: List):
     global prisma_client
     try: 
@@ -791,11 +788,6 @@ def data_generator(response):
 async def async_data_generator(response, user_api_key_dict):
     print_verbose("inside generator")
     async for chunk in response:
-        # try:
-        #     await proxy_logging_obj.pre_call_hook(user_api_key_dict=user_api_key_dict, data=None, call_type="completion")   
-        # except Exception as e:
-        #     print(f"An exception occurred - {str(e)}")
-
         print_verbose(f"returned chunk: {chunk}")
         try:
             yield f"data: {json.dumps(chunk.dict())}\n\n"
@@ -921,7 +913,7 @@ async def completion(request: Request, model: Optional[str] = None, user_api_key
         except: 
             data = json.loads(body_str)
         
-        data["user"] = user_api_key_dict.user_id
+        data["user"] = data.get("user", user_api_key_dict.user_id)
         data["model"] = (
             general_settings.get("completion_model", None) # server default
             or user_model # model name passed via cli args
@@ -1010,7 +1002,7 @@ async def chat_completion(request: Request, model: Optional[str] = None, user_ap
                 response = await llm_router.acompletion(**data)
         elif llm_router is not None and data["model"] in llm_router.deployment_names: # model in router deployments, calling a specific deployment on the router
             response = await llm_router.acompletion(**data, specific_deployment = True)
-        elif llm_router is not None and litellm.model_group_alias_map is not None and data["model"] in litellm.model_group_alias_map: # model set in model_group_alias_map
+        elif llm_router is not None and llm_router.model_group_alias is not None and data["model"] in llm_router.model_group_alias: # model set in model_group_alias
             response = await llm_router.acompletion(**data)
         else: # router is not set
             response = await litellm.acompletion(**data)
@@ -1071,7 +1063,7 @@ async def embeddings(request: Request, user_api_key_dict: UserAPIKeyAuth = Depen
             "body": copy.copy(data)  # use copy instead of deepcopy
         }
 
-        data["user"] = user_api_key_dict.user_id
+        data["user"] = data.get("user", user_api_key_dict.user_id)
         data["model"] = (
             general_settings.get("embedding_model", None) # server default
             or user_model # model name passed via cli args
@@ -1086,7 +1078,6 @@ async def embeddings(request: Request, user_api_key_dict: UserAPIKeyAuth = Depen
             data["metadata"] = {"user_api_key": user_api_key_dict.api_key}
             data["metadata"]["headers"] = dict(request.headers)
         router_model_names = [m["model_name"] for m in llm_model_list] if llm_model_list is not None else []
-        print(f"received data: {data['input']}")
         if "input" in data and isinstance(data['input'], list) and isinstance(data['input'][0], list) and isinstance(data['input'][0][0], int): # check if array of tokens passed in
             # check if non-openai/azure model called - e.g. for langchain integration
             if llm_model_list is not None and data["model"] in router_model_names: 
@@ -1104,12 +1095,13 @@ async def embeddings(request: Request, user_api_key_dict: UserAPIKeyAuth = Depen
         
         ### CALL HOOKS ### - modify incoming data / reject request before calling the model
         data = await proxy_logging_obj.pre_call_hook(user_api_key_dict=user_api_key_dict, data=data, call_type="embeddings")
-
         ## ROUTE TO CORRECT ENDPOINT ##
         if llm_router is not None and data["model"] in router_model_names: # model in router model list 
             response = await llm_router.aembedding(**data)
         elif llm_router is not None and data["model"] in llm_router.deployment_names: # model in router deployments, calling a specific deployment on the router
             response = await llm_router.aembedding(**data, specific_deployment = True)
+        elif llm_router is not None and llm_router.model_group_alias is not None and data["model"] in llm_router.model_group_alias: # model set in model_group_alias
+            response = await llm_router.aembedding(**data) # ensure this goes the llm_router, router will do the correct alias mapping
         else:
             response = await litellm.aembedding(**data)
         background_tasks.add_task(log_input_output, request, response) # background task for logging to OTEL 
@@ -1146,6 +1138,30 @@ async def generate_key_fn(request: Request, data: GenerateKeyRequest, Authorizat
     data_json = data.json()   # type: ignore
     response = await generate_key_helper_fn(**data_json)
     return GenerateKeyResponse(key=response["token"], expires=response["expires"], user_id=response["user_id"])
+
+@router.post("/key/update", tags=["key management"], dependencies=[Depends(user_api_key_auth)])
+async def update_key_fn(request: Request, data: UpdateKeyRequest):
+    """
+    Update an existing key
+    """
+    global prisma_client
+    try: 
+        data_json: dict = data.json()
+        key = data_json.pop("key")
+        # get the row from db 
+        if prisma_client is None: 
+            raise Exception("Not connected to DB!")
+        
+        non_default_values = {k: v for k, v in data_json.items() if v is not None}
+        print(f"non_default_values: {non_default_values}")
+        response = await prisma_client.update_data(token=key, data={**non_default_values, "token": key})
+        return {"key": key, **non_default_values}
+        # update based on remaining passed in values 
+    except Exception as e: 
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": str(e)},
+        )
 
 @router.post("/key/delete", tags=["key management"], dependencies=[Depends(user_api_key_auth)])
 async def delete_key_fn(request: Request, data: DeleteKeyRequest): 
@@ -1398,8 +1414,18 @@ async def config_yaml_endpoint(config_info: ConfigYAML):
     return {"hello": "world"}
 
 
-@router.get("/test")
+@router.get("/test", tags=["health"])
 async def test_endpoint(request: Request): 
+    """
+    A test endpoint that pings the proxy server to check if it's healthy.
+
+    Parameters:
+        request (Request): The incoming request.
+
+    Returns:
+        dict: A dictionary containing the route of the request URL.
+    """
+    # ping the proxy server to check if its healthy
     return {"route": request.url.path}
 
 @router.get("/health", tags=["health"], dependencies=[Depends(user_api_key_auth)])

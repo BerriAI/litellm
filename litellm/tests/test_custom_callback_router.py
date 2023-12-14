@@ -5,7 +5,7 @@ from datetime import datetime
 import pytest
 sys.path.insert(0, os.path.abspath('../..'))
 from typing import Optional, Literal, List
-from litellm import Router
+from litellm import Router, Cache
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 
@@ -150,6 +150,7 @@ class CompletionCustomHandler(CustomLogger): # https://docs.litellm.ai/docs/obse
             assert isinstance(kwargs['original_response'], (str, litellm.CustomStreamWrapper))
             assert isinstance(kwargs['additional_args'], (dict, type(None)))
             assert isinstance(kwargs['log_event_type'], str) 
+            assert isinstance(kwargs["cache_hit"], Optional[bool])
         except:
             print(f"Assertion Error: {traceback.format_exc()}")
             self.errors.append(traceback.format_exc())
@@ -213,6 +214,7 @@ class CompletionCustomHandler(CustomLogger): # https://docs.litellm.ai/docs/obse
             assert isinstance(kwargs['original_response'], (str, litellm.CustomStreamWrapper)) or inspect.isasyncgen(kwargs['original_response']) or inspect.iscoroutine(kwargs['original_response'])
             assert isinstance(kwargs['additional_args'], (dict, type(None)))
             assert isinstance(kwargs['log_event_type'], str) 
+            assert kwargs["cache_hit"] is None or isinstance(kwargs["cache_hit"], bool)
             ### ROUTER-SPECIFIC KWARGS
             assert isinstance(kwargs["litellm_params"]["metadata"], dict)
             assert isinstance(kwargs["litellm_params"]["metadata"]["model_group"], str)
@@ -435,3 +437,52 @@ async def test_async_chat_azure_with_fallbacks():
         print(f"Assertion Error: {traceback.format_exc()}")
         pytest.fail(f"An exception occurred - {str(e)}")
 # asyncio.run(test_async_chat_azure_with_fallbacks())
+
+# CACHING 
+## Test Azure - completion, embedding
+@pytest.mark.asyncio
+async def test_async_completion_azure_caching():
+    customHandler_caching = CompletionCustomHandler()
+    litellm.cache = Cache(type="redis", host=os.environ['REDIS_HOST'], port=os.environ['REDIS_PORT'], password=os.environ['REDIS_PASSWORD'])
+    litellm.callbacks = [customHandler_caching]
+    unique_time = time.time()
+    model_list = [
+                    { 
+                        "model_name": "gpt-3.5-turbo", # openai model name 
+                        "litellm_params": { # params for litellm completion/embedding call 
+                            "model": "azure/chatgpt-v-2", 
+                            "api_key": os.getenv("AZURE_API_KEY"),
+                            "api_version": os.getenv("AZURE_API_VERSION"),
+                            "api_base": os.getenv("AZURE_API_BASE")
+                        },
+                        "tpm": 240000,
+                        "rpm": 1800
+                    },
+                    {
+                        "model_name": "gpt-3.5-turbo-16k",
+                        "litellm_params": {
+                            "model": "gpt-3.5-turbo-16k", 
+                        }, 
+                        "tpm": 240000,
+                        "rpm": 1800
+                    }
+                ]
+    router = Router(model_list=model_list) # type: ignore
+    response1 = await router.acompletion(model="gpt-3.5-turbo",
+                            messages=[{
+                                "role": "user",
+                                "content": f"Hi 👋 - i'm async azure {unique_time}"
+                            }],
+                            caching=True)
+    await asyncio.sleep(1)
+    print(f"customHandler_caching.states pre-cache hit: {customHandler_caching.states}")
+    response2 = await router.acompletion(model="gpt-3.5-turbo",
+                            messages=[{
+                                "role": "user",
+                                "content": f"Hi 👋 - i'm async azure {unique_time}"
+                            }],
+                            caching=True)
+    await asyncio.sleep(1) # success callbacks are done in parallel
+    print(f"customHandler_caching.states post-cache hit: {customHandler_caching.states}")
+    assert len(customHandler_caching.errors) == 0
+    assert len(customHandler_caching.states) == 4 # pre, post, success, success

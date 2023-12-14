@@ -1,6 +1,3 @@
-from email import header
-from re import T
-from tkinter import N
 import requests, types, time
 import json
 import traceback
@@ -144,8 +141,12 @@ def get_ollama_response_stream(
         additional_args={"api_base": url, "complete_input_dict": data, "headers": {},  "acompletion": acompletion,},
     )
     if acompletion is True: 
-        response = ollama_acompletion(url=url, data=data, model_response=model_response, encoding=encoding, logging_obj=logging_obj)
+        if optional_params.get("stream", False):
+            response = ollama_async_streaming(url=url, data=data, model_response=model_response, encoding=encoding, logging_obj=logging_obj)
+        else:
+            response = ollama_acompletion(url=url, data=data, model_response=model_response, encoding=encoding, logging_obj=logging_obj)
         return response
+    
     else:
         return ollama_completion_stream(url=url, data=data)
 
@@ -181,8 +182,7 @@ def ollama_completion_stream(url, data):
                     traceback.print_exc()
     session.close()
 
-async def ollama_acompletion(url, data, model_response, encoding, logging_obj):
-
+async def ollama_async_streaming(url, data, model_response, encoding, logging_obj):
     try:
         timeout = aiohttp.ClientTimeout(total=600)  # 10 minutes
         async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -207,14 +207,53 @@ async def ollama_acompletion(url, data, model_response, encoding, logging_obj):
                                         "content": "",
                                         "error": j
                                     }
+                                    yield completion_obj
                                 if "response" in j:
                                     completion_obj = {
                                         "role": "assistant",
                                         "content": j["response"],
                                     }
-                                    completion_string += completion_obj["content"]
+                                    yield completion_obj
                     except Exception as e:
                         traceback.print_exc()
+    except Exception as e:
+        traceback.print_exc()
+
+async def ollama_acompletion(url, data, model_response, encoding, logging_obj):
+    try:
+        timeout = aiohttp.ClientTimeout(total=600)  # 10 minutes
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            resp = await session.post(url, json=data)
+
+            if resp.status != 200:
+                text = await resp.text()
+                raise OllamaError(status_code=resp.status, message=text)
+            
+            completion_string = ""
+            async for line in resp.content.iter_any():
+                if line:
+                    try:
+                        json_chunk = line.decode("utf-8")
+                        chunks = json_chunk.split("\n")
+                        for chunk in chunks:
+                            if chunk.strip() != "":
+                                j = json.loads(chunk)
+                                if "error" in j:
+                                    completion_obj = {
+                                        "role": "assistant",
+                                        "content": "",
+                                        "error": j
+                                    }
+                                    raise Exception(f"OllamError - {chunk}")
+                                if "response" in j:
+                                    completion_obj = {
+                                        "role": "assistant",
+                                        "content": j["response"],
+                                    }
+                                    completion_string = completion_string + completion_obj["content"]
+                    except Exception as e:
+                        traceback.print_exc()
+            
             ## RESPONSE OBJECT
             model_response["choices"][0]["finish_reason"] = "stop"
             model_response["choices"][0]["message"]["content"] = completion_string
