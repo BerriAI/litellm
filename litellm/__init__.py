@@ -407,7 +407,8 @@ from .exceptions import (
     APIError,
     Timeout,
     APIConnectionError,
-    APIResponseValidationError
+    APIResponseValidationError, 
+    UnprocessableEntityError
 )
 from .budget_manager import BudgetManager
 from .proxy.proxy_cli import run_server
