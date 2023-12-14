@@ -3,6 +3,7 @@ import subprocess, traceback, json
 import os, sys
 import random, appdirs
 from datetime import datetime
+import importlib
 from dotenv import load_dotenv
 import operator
 sys.path.append(os.getcwd())
@@ -76,13 +77,14 @@ def is_port_in_use(port):
 @click.option('--config', '-c', default=None, help='Path to the proxy configuration file (e.g. config.yaml). Usage `litellm --config config.yaml`')  
 @click.option('--max_budget', default=None, type=float, help='Set max budget for API calls - works for hosted models like OpenAI, TogetherAI, Anthropic, etc.`') 
 @click.option('--telemetry', default=True, type=bool, help='Helps us know if people are using this feature. Turn this off by doing `--telemetry False`') 
+@click.option('--version', '-v', default=False, is_flag=True, type=bool, help='Print LiteLLM version') 
 @click.option('--logs', flag_value=False, type=int, help='Gets the "n" most recent logs. By default gets most recent log.') 
 @click.option('--health', flag_value=True, help='Make a chat/completions request to all llms in config.yaml')
 @click.option('--test', flag_value=True, help='proxy chat completions url to make a test request to')
 @click.option('--test_async', default=False, is_flag=True, help='Calls async endpoints /queue/requests and /queue/response')
 @click.option('--num_requests', default=10, type=int, help='Number of requests to hit async endpoint with')
 @click.option('--local', is_flag=True, default=False, help='for local debugging')
-def run_server(host, port, api_base, api_version, model, alias, add_key, headers, save, debug, temperature, max_tokens, request_timeout, drop_params, add_function_to_prompt, config, max_budget, telemetry, logs, test, local, num_workers, test_async, num_requests, use_queue, health):
+def run_server(host, port, api_base, api_version, model, alias, add_key, headers, save, debug, temperature, max_tokens, request_timeout, drop_params, add_function_to_prompt, config, max_budget, telemetry, logs, test, local, num_workers, test_async, num_requests, use_queue, health, version):
     global feature_telemetry
     args = locals()
     if local:
@@ -112,6 +114,10 @@ def run_server(host, port, api_base, api_version, model, alias, add_key, headers
             print(json.dumps(recent_logs, indent=4)) # noqa
         except:
             raise Exception("LiteLLM: No logs saved!")
+        return
+    if version is not None:
+        pkg_version = importlib.metadata.version("litellm")
+        click.echo(f'\nLiteLLM: Current Version = {pkg_version}\n')
         return
     if model and "ollama" in model and api_base is None: 
         run_ollama_serve()
