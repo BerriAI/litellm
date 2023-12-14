@@ -4858,29 +4858,30 @@ def exception_type(
                         llm_provider="together_ai",
                         response=original_exception.response
                     )
-                elif original_exception.status_code == 408:
+                if hasattr(original_exception, "status_code"):
+                    if original_exception.status_code == 408:
+                            exception_mapping_worked = True
+                            raise Timeout(
+                                message=f"TogetherAIException - {original_exception.message}",
+                                model=model,
+                                llm_provider="together_ai",
+                                request=original_exception.request
+                            )
+                    elif original_exception.status_code == 429:
+                            exception_mapping_worked = True
+                            raise RateLimitError(
+                                message=f"TogetherAIException - {original_exception.message}",
+                                llm_provider="together_ai",
+                                model=model,
+                                response=original_exception.response
+                            )
+                    elif original_exception.status_code == 524:
                         exception_mapping_worked = True
                         raise Timeout(
                             message=f"TogetherAIException - {original_exception.message}",
-                            model=model,
-                            llm_provider="together_ai",
-                            request=original_exception.request
-                        )
-                elif original_exception.status_code == 429:
-                        exception_mapping_worked = True
-                        raise RateLimitError(
-                            message=f"TogetherAIException - {original_exception.message}",
                             llm_provider="together_ai",
                             model=model,
-                            response=original_exception.response
                         )
-                elif original_exception.status_code == 524:
-                    exception_mapping_worked = True
-                    raise Timeout(
-                        message=f"TogetherAIException - {original_exception.message}",
-                        llm_provider="together_ai",
-                        model=model,
-                    )
                 else: 
                     exception_mapping_worked = True
                     raise APIError(
