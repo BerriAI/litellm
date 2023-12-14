@@ -2682,12 +2682,10 @@ def get_optional_params(  # use the openai defaults
         if max_tokens: 
             optional_params["max_tokens"] = max_tokens
     elif custom_llm_provider == "mistral":
-        supported_params = ["temperature", "top_p", "stream", "max_tokens", "safe_mode", "random_seed"]
+        supported_params = ["temperature", "top_p", "stream", "max_tokens"]
         _check_valid_arg(supported_params=supported_params)
         optional_params = non_default_params
         if temperature is not None:
-            if temperature == 0 and model == "mistralai/Mistral-7B-Instruct-v0.1": # this model does no support temperature == 0
-                temperature = 0.0001 # close to 0
             optional_params["temperature"] = temperature
         if top_p is not None: 
             optional_params["top_p"] = top_p
@@ -2695,6 +2693,16 @@ def get_optional_params(  # use the openai defaults
             optional_params["stream"] = stream
         if max_tokens is not None: 
             optional_params["max_tokens"] = max_tokens
+        
+        # check safe_mode, random_seed: https://docs.mistral.ai/api/#operation/createChatCompletion
+        safe_mode = passed_params.pop("safe_mode", None)
+        random_seed = passed_params.pop("random_seed", None)
+        extra_body = {}
+        if safe_mode is not None:
+            extra_body["safe_mode"] = safe_mode
+        if random_seed is not None:
+            extra_body["random_seed"] = random_seed
+        optional_params["extra_body"] = extra_body # openai client supports `extra_body` param
     else:  # assume passing in params for openai/azure openai
         supported_params = ["functions", "function_call", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "response_format", "seed", "tools", "tool_choice", "max_retries"]
         _check_valid_arg(supported_params=supported_params)
