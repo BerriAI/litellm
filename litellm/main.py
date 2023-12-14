@@ -285,7 +285,7 @@ def completion(
 
     # Optional liteLLM function params
     **kwargs,
-) -> ModelResponse:
+) -> Union[ModelResponse, CustomStreamWrapper]:
     """
     Perform a completion() using any of litellm supported llms (example gpt-4, gpt-3.5-turbo, claude-2, command-nightly)
     Parameters:
