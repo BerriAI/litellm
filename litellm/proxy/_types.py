@@ -121,10 +121,23 @@ class GenerateKeyRequest(LiteLLMBase):
     user_id: Optional[str] = None
     max_parallel_requests: Optional[int] = None
 
+class UpdateKeyRequest(LiteLLMBase):
+    key: str
+    duration: Optional[str] = None
+    models: Optional[list] = None
+    aliases: Optional[dict] = None
+    config: Optional[dict] = None
+    spend: Optional[float] = None
+    user_id: Optional[str] = None
+    max_parallel_requests: Optional[int] = None
+
 class GenerateKeyResponse(LiteLLMBase):
     key: str
     expires: datetime
     user_id: str
+
+
+
 
 class _DeleteKeyObject(LiteLLMBase):
     key: str
@@ -169,3 +182,5 @@ class ConfigYAML(LiteLLMBase):
     model_list: Optional[List[ModelParams]] = Field(None, description="List of supported models on the server, with model-specific configs")
     litellm_settings: Optional[dict] = Field(None, description="litellm Module settings. See __init__.py for all, example litellm.drop_params=True, litellm.set_verbose=True, litellm.api_base, litellm.cache")
     general_settings: Optional[ConfigGeneralSettings] = None
+    class Config:
+        protected_namespaces = ()

@@ -18,9 +18,11 @@ from openai import (
     APIError, 
     APITimeoutError, 
     APIConnectionError, 
-    APIResponseValidationError
+    APIResponseValidationError,
+    UnprocessableEntityError
 )
 import httpx
+
 
 class AuthenticationError(AuthenticationError):  # type: ignore
     def __init__(self, message, llm_provider, model, response: httpx.Response):
@@ -37,6 +39,18 @@ class AuthenticationError(AuthenticationError):  # type: ignore
 class BadRequestError(BadRequestError):  # type: ignore
     def __init__(self, message, model, llm_provider, response: httpx.Response):
         self.status_code = 400
+        self.message = message
+        self.model = model
+        self.llm_provider = llm_provider
+        super().__init__(
+            self.message,
+            response=response,
+            body=None
+        )  # Call the base class constructor with the parameters it needs
+
+class UnprocessableEntityError(UnprocessableEntityError): # type: ignore
+    def __init__(self, message, model, llm_provider, response: httpx.Response):
+        self.status_code = 422
         self.message = message
         self.model = model
         self.llm_provider = llm_provider

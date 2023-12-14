@@ -61,7 +61,7 @@ def test_completion_claude():
         print(response)
         print(response.usage)
         print(response.usage.completion_tokens)
-        print(response["usage"]["completion_tokens"])
+        print(response["usage"]["completion_tokens"]) 
         # print("new cost tracking")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
@@ -294,7 +294,7 @@ def hf_test_completion_tgi():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-hf_test_completion_tgi()
+# hf_test_completion_tgi()
 
 # ################### Hugging Face Conversational models ########################
 # def hf_test_completion_conv():
@@ -708,7 +708,7 @@ def test_completion_azure():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_completion_azure()
+# test_completion_azure()
 
 def test_azure_openai_ad_token():
     # this tests if the azure ad token is set in the request header
@@ -1025,6 +1025,43 @@ def test_completion_together_ai():
         print("Cost for completion call together-computer/llama-2-70b: ", f"${float(cost):.10f}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+def test_completion_together_ai_mixtral():
+    model_name = "together_ai/DiscoResearch/DiscoLM-mixtral-8x7b-v2"
+    try:
+        messages =[
+            {"role": "user", "content": "Who are you"},
+            {"role": "assistant", "content": "I am your helpful assistant."},
+            {"role": "user", "content": "Tell me a joke"},
+        ]
+        response = completion(model=model_name, messages=messages, max_tokens=256, n=1, logger_fn=logger_fn)
+        # Add any assertions here to check the response
+        print(response)
+        cost = completion_cost(completion_response=response)
+        assert cost > 0.0   
+        print("Cost for completion call together-computer/llama-2-70b: ", f"${float(cost):.10f}")
+    except litellm.Timeout as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+test_completion_together_ai_mixtral()
+
+def test_completion_together_ai_yi_chat():
+    model_name = "together_ai/zero-one-ai/Yi-34B-Chat"
+    try:
+        messages =[
+            {"role": "user", "content": "What llm are you?"},
+        ]
+        response = completion(model=model_name, messages=messages)
+        # Add any assertions here to check the response
+        print(response)
+        cost = completion_cost(completion_response=response)
+        assert cost > 0.0   
+        print("Cost for completion call together-computer/llama-2-70b: ", f"${float(cost):.10f}")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+# test_completion_together_ai_yi_chat()
 
 # test_completion_together_ai()
 def test_customprompt_together_ai():

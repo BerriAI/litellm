@@ -8,7 +8,6 @@
 #  Thank you ! We ❤️ you! - Krrish & Ishaan 
 
 import os, openai, sys, json, inspect, uuid, datetime, threading
-from re import T
 from typing import Any
 from functools import partial
 import dotenv, traceback, random, asyncio, time, contextvars
@@ -32,7 +31,8 @@ from litellm.utils import (
     mock_completion_streaming_obj, 
     convert_to_model_response_object, 
     token_counter, 
-    Usage
+    Usage, 
+    get_optional_params_embeddings
 )
 from .llms import (
     anthropic,
@@ -177,7 +177,8 @@ async def acompletion(*args, **kwargs):
             or custom_llm_provider == "perplexity"
             or custom_llm_provider == "text-completion-openai"
             or custom_llm_provider == "huggingface"
-            or custom_llm_provider == "ollama"): # currently implemented aiohttp calls for just azure and openai, soon all. 
+            or custom_llm_provider == "ollama"
+            or custom_llm_provider == "vertex_ai"): # currently implemented aiohttp calls for just azure and openai, soon all. 
             if kwargs.get("stream", False): 
                 response = completion(*args, **kwargs)
             else:
@@ -191,6 +192,7 @@ async def acompletion(*args, **kwargs):
             # Call the synchronous function using run_in_executor
             response =  await loop.run_in_executor(None, func_with_context)
         if kwargs.get("stream", False): # return an async generator
+            print_verbose(f"ENTERS STREAMING FOR ACOMPLETION")
             return _async_streaming(response=response, model=model, custom_llm_provider=custom_llm_provider, args=args)
         else: 
             return response
@@ -202,9 +204,12 @@ async def acompletion(*args, **kwargs):
 
 async def _async_streaming(response, model, custom_llm_provider, args): 
     try: 
+        print_verbose(f"received response in _async_streaming: {response}")
         async for line in response: 
+            print_verbose(f"line in async streaming: {line}")
             yield line
     except Exception as e: 
+        print_verbose(f"error raised _async_streaming: {str(e)}")
         raise exception_type(
                 model=model, custom_llm_provider=custom_llm_provider, original_exception=e, completion_kwargs=args,
             )
@@ -280,7 +285,7 @@ def completion(
 
     # Optional liteLLM function params
     **kwargs,
-) -> ModelResponse:
+) -> Union[ModelResponse, CustomStreamWrapper]:
     """
     Perform a completion() using any of litellm supported llms (example gpt-4, gpt-3.5-turbo, claude-2, command-nightly)
     Parameters:
@@ -386,7 +391,6 @@ def completion(
                 model=deployment_id
                 custom_llm_provider="azure"
         model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, api_key=api_key)
-        
         ### REGISTER CUSTOM MODEL PRICING -- IF GIVEN ###
         if input_cost_per_token is not None and output_cost_per_token is not None: 
             litellm.register_model({
@@ -607,7 +611,7 @@ def completion(
                 )
                 raise e
 
-            if optional_params.get("stream", False) or acompletion == True:
+            if optional_params.get("stream", False):
                 ## LOGGING
                 logging.post_call(
                     input=messages,
@@ -620,7 +624,6 @@ def completion(
             or "ft:babbage-002" in model
             or "ft:davinci-002" in model  # support for finetuned completion models
         ):
-            # print("calling custom openai provider")
             openai.api_type = "openai"
 
             api_base = (
@@ -1132,7 +1135,7 @@ def completion(
                 )
                 return response
             response = model_response
-        elif model in litellm.vertex_chat_models or model in litellm.vertex_code_chat_models or model in litellm.vertex_text_models or model in litellm.vertex_code_text_models:
+        elif custom_llm_provider == "vertex_ai":
             vertex_ai_project = (litellm.vertex_project 
                                  or get_secret("VERTEXAI_PROJECT"))
             vertex_ai_location = (litellm.vertex_location 
@@ -1149,10 +1152,11 @@ def completion(
                 encoding=encoding,
                 vertex_location=vertex_ai_location,
                 vertex_project=vertex_ai_project,
-                logging_obj=logging
+                logging_obj=logging, 
+                acompletion=acompletion
             )
             
-            if "stream" in optional_params and optional_params["stream"] == True:
+            if "stream" in optional_params and optional_params["stream"] == True and acompletion == False:
                 response = CustomStreamWrapper(
                     model_response, model, custom_llm_provider="vertex_ai", logging_obj=logging
                     )
@@ -1218,6 +1222,7 @@ def completion(
                 # "SageMaker is currently not supporting streaming responses."
                 
                 # fake streaming for sagemaker
+                print_verbose(f"ENTERS SAGEMAKER CUSTOMSTREAMWRAPPER")
                 resp_string = model_response["choices"][0]["message"]["content"]
                 response = CustomStreamWrapper(
                     resp_string, model, custom_llm_provider="sagemaker", logging_obj=logging
@@ -1313,13 +1318,8 @@ def completion(
                 )
             else:
                 prompt = prompt_factory(model=model, messages=messages, custom_llm_provider=custom_llm_provider)
+            
             ## LOGGING
-            if kwargs.get('acompletion', False) == True:    
-                if optional_params.get("stream", False) == True:
-                # assume all ollama responses are streamed
-                    async_generator = ollama.async_get_ollama_response_stream(api_base, model, prompt, optional_params, logging_obj=logging)
-                    return async_generator
-
             generator = ollama.get_ollama_response_stream(api_base, model, prompt, optional_params, logging_obj=logging, acompletion=acompletion, model_response=model_response, encoding=encoding)
             if acompletion is True:
                 return generator
@@ -1824,18 +1824,16 @@ def embedding(
     tpm = kwargs.pop("tpm", None)
     model_info = kwargs.get("model_info", None)
     metadata = kwargs.get("metadata", None)
+    encoding_format = kwargs.get("encoding_format", None)
     proxy_server_request = kwargs.get("proxy_server_request", None)
     aembedding = kwargs.pop("aembedding", None)
-    openai_params = ["functions", "function_call", "temperature", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "request_timeout", "api_base", "api_version", "api_key", "deployment_id", "organization", "base_url", "default_headers", "timeout", "response_format", "seed", "tools", "tool_choice", "max_retries", "encoding_format"]
+    openai_params = ["user", "request_timeout", "api_base", "api_version", "api_key", "deployment_id", "organization", "base_url", "default_headers", "timeout", "max_retries", "encoding_format"]
     litellm_params = ["metadata", "aembedding", "caching", "mock_response", "api_key", "api_version", "api_base", "force_timeout", "logger_fn", "verbose", "custom_llm_provider", "litellm_logging_obj", "litellm_call_id", "use_client", "id", "fallbacks", "azure", "headers", "model_list", "num_retries", "context_window_fallback_dict", "roles", "final_prompt_value", "bos_token", "eos_token", "request_timeout", "complete_response", "self", "client", "rpm", "tpm", "input_cost_per_token", "output_cost_per_token", "hf_model_name", "proxy_server_request", "model_info", "preset_cache_key"]
     default_params = openai_params + litellm_params
     non_default_params = {k: v for k,v in kwargs.items() if k not in default_params} # model-specific params - pass them straight to the model/provider
-    optional_params = {}
-    for param in non_default_params:
-        optional_params[param] = kwargs[param]
-    model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, api_key=api_key)
     
-
+    model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, api_key=api_key)
+    optional_params = get_optional_params_embeddings(user=user, encoding_format=encoding_format, custom_llm_provider=custom_llm_provider, **non_default_params)
     try:
         response = None
         logging = litellm_logging_obj
@@ -2122,7 +2120,7 @@ def text_completion(
                         *args,
                         **all_params,
                     )
-                    #print(response)
+
                     text_completion_response["id"] = response.get("id", None)
                     text_completion_response["object"] = "text_completion"
                     text_completion_response["created"] = response.get("created", None)
