@@ -106,6 +106,7 @@ Caching can be switched on/off per `/chat/completions` request
 
 
 ## Override caching per `/embeddings` request
+
 Caching can be switched on/off per `/embeddings` request
 - Caching **on** for embedding - pass `caching=True`:
   ```shell
