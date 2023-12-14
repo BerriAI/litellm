@@ -73,3 +73,6 @@ model_list:
     description: this is a test openai model
     id: 9b1ef341-322c-410a-8992-903987fef439
   model_name: test_openai_models
+- model_name: amazon-embeddings
+  litellm_params:
+    model: "bedrock/amazon.titan-embed-text-v1"

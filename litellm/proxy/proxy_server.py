@@ -970,7 +970,7 @@ async def chat_completion(request: Request, model: Optional[str] = None, user_ap
         )
 
         # users can pass in 'user' param to /chat/completions. Don't override it
-        if data.get("user", None) is None:
+        if data.get("user", None) is None and user_api_key_dict.user_id is not None:
             # if users are using user_api_key_auth, set `user` in `data`
             data["user"] = user_api_key_dict.user_id
 
@@ -1063,7 +1063,9 @@ async def embeddings(request: Request, user_api_key_dict: UserAPIKeyAuth = Depen
             "body": copy.copy(data)  # use copy instead of deepcopy
         }
 
-        data["user"] = data.get("user", user_api_key_dict.user_id)
+        if data.get("user", None) is None and user_api_key_dict.user_id is not None:
+            data["user"] = user_api_key_dict.user_id
+            
         data["model"] = (
             general_settings.get("embedding_model", None) # server default
             or user_model # model name passed via cli args
