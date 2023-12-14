@@ -398,15 +398,58 @@ def test_custom_redis_cache_params():
 def test_get_cache_key():
     from litellm.caching import Cache
     try:
+        print("Testing get_cache_key")
         cache_instance = Cache()
         cache_key = cache_instance.get_cache_key(**{'model': 'gpt-3.5-turbo', 'messages': [{'role': 'user', 'content': 'write a one sentence poem about: 7510'}], 'max_tokens': 40, 'temperature': 0.2, 'stream': True, 'litellm_call_id': 'ffe75e7e-8a07-431f-9a74-71a5b9f35f0b', 'litellm_logging_obj': {}}
         )
+        cache_key_2 = cache_instance.get_cache_key(**{'model': 'gpt-3.5-turbo', 'messages': [{'role': 'user', 'content': 'write a one sentence poem about: 7510'}], 'max_tokens': 40, 'temperature': 0.2, 'stream': True, 'litellm_call_id': 'ffe75e7e-8a07-431f-9a74-71a5b9f35f0b', 'litellm_logging_obj': {}}
+        )
         assert cache_key == "model: gpt-3.5-turbomessages: [{'role': 'user', 'content': 'write a one sentence poem about: 7510'}]temperature: 0.2max_tokens: 40"    
+        assert cache_key == cache_key_2, f"{cache_key} != {cache_key_2}. The same kwargs should have the same cache key across runs"
+
+        embedding_cache_key = cache_instance.get_cache_key(
+            **{'model': 'azure/azure-embedding-model', 'api_base': 'https://openai-gpt-4-test-v-1.openai.azure.com/', 
+               'api_key': '', 'api_version': '2023-07-01-preview', 
+               'timeout': None, 'max_retries': 0, 'input': ['hi who is ishaan'], 
+               'caching': True, 
+               'client': "<openai.lib.azure.AsyncAzureOpenAI object at 0x12b6a1060>"
+            }
+        )
+
+        print(embedding_cache_key)
+
+        assert embedding_cache_key == "model: azure/azure-embedding-modelinput: ['hi who is ishaan']", f"{embedding_cache_key} != 'model: azure/azure-embedding-modelinput: ['hi who is ishaan']'. The same kwargs should have the same cache key across runs"
+
+        # Proxy - embedding cache, test if embedding key, gets model_group and not model
+        embedding_cache_key_2 = cache_instance.get_cache_key(
+            **{'model': 'azure/azure-embedding-model', 'api_base': 'https://openai-gpt-4-test-v-1.openai.azure.com/', 
+               'api_key': '', 'api_version': '2023-07-01-preview', 
+               'timeout': None, 'max_retries': 0, 'input': ['hi who is ishaan'], 
+               'caching': True, 
+               'client': "<openai.lib.azure.AsyncAzureOpenAI object at 0x12b6a1060>", 
+               'proxy_server_request': {'url': 'http://0.0.0.0:8000/embeddings', 
+                                        'method': 'POST', 
+                                        'headers': 
+                                        {'host': '0.0.0.0:8000', 'user-agent': 'curl/7.88.1', 'accept': '*/*', 'content-type': 'application/json', 
+                                                                      'content-length': '80'}, 
+                                                                      'body': {'model': 'azure-embedding-model', 'input': ['hi who is ishaan']}}, 
+                                                                      'user': None, 
+                                                                      'metadata': {'user_api_key': None, 
+                                                                                   'headers': {'host': '0.0.0.0:8000', 'user-agent': 'curl/7.88.1', 'accept': '*/*', 'content-type': 'application/json', 'content-length': '80'}, 
+                                                                                   'model_group': 'EMBEDDING_MODEL_GROUP', 
+                                                                                   'deployment': 'azure/azure-embedding-model-ModelID-azure/azure-embedding-modelhttps://openai-gpt-4-test-v-1.openai.azure.com/2023-07-01-preview'}, 
+                                                                                   'model_info': {'mode': 'embedding', 'base_model': 'text-embedding-ada-002', 'id': '20b2b515-f151-4dd5-a74f-2231e2f54e29'}, 
+                                                                                   'litellm_call_id': '2642e009-b3cd-443d-b5dd-bb7d56123b0e', 'litellm_logging_obj': '<litellm.utils.Logging object at 0x12f1bddb0>'}
+        )
+
+        print(embedding_cache_key_2)
+        assert embedding_cache_key_2 == "model: EMBEDDING_MODEL_GROUPinput: ['hi who is ishaan']"
+        print("passed!")
     except Exception as e:
         traceback.print_exc()
         pytest.fail(f"Error occurred:", e)
 
-# test_get_cache_key()
+test_get_cache_key()
 
 # test_custom_redis_cache_params()
 
