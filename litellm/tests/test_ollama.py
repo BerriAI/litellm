@@ -1,100 +1,30 @@
-##### THESE TESTS CAN ONLY RUN LOCALLY WITH THE OLLAMA SERVER RUNNING ######
-# import aiohttp
-# import json
-# import asyncio
-# import requests
-# 
-# async def get_ollama_response_stream(api_base="http://localhost:11434", model="llama2", prompt="Why is the sky blue?"):
-#     session = aiohttp.ClientSession()
-#     url = f'{api_base}/api/generate'
-#     data = {
-#         "model": model,
-#         "prompt": prompt,
-#     }
+import sys, os
+import traceback
+from dotenv import load_dotenv
 
-#     response = ""
+load_dotenv()
+import os, io
 
-#     try:
-#         async with session.post(url, json=data) as resp:
-#             async for line in resp.content.iter_any():
-#                 if line:
-#                     try:
-#                         json_chunk = line.decode("utf-8")
-#                         chunks = json_chunk.split("\n")
-#                         for chunk in chunks:
-#                             if chunk.strip() != "":
-#                                 j = json.loads(chunk)
-#                                 if "response" in j:
-#                                     print(j["response"])
-#                                     yield {
-#                                         "role": "assistant",
-#                                         "content": j["response"]
-#                                     }
-#                                     # self.responses.append(j["response"])
-#                                     # yield "blank"
-#                     except Exception as e:
-#                         print(f"Error decoding JSON: {e}")
-#     finally:
-#         await session.close()
-
-# async def get_ollama_response_no_stream(api_base="http://localhost:11434", model="llama2", prompt="Why is the sky blue?"):
-#     generator =  get_ollama_response_stream(api_base="http://localhost:11434", model="llama2", prompt="Why is the sky blue?")
-#     response = ""
-#     async for elem in generator:
-#         print(elem)
-#         response += elem["content"]
-#     return response
-
-# #generator = get_ollama_response_stream()
-
-# result = asyncio.run(get_ollama_response_no_stream())
-# print(result)
-
-# # return this generator to the client for streaming requests
+sys.path.insert(
+    0, os.path.abspath("../..")
+)  # Adds the parent directory to the system path    
+import pytest
+import litellm
 
 
-# async def get_response():
-#     global generator
-#     async for elem in generator:
-#         print(elem)
+## for ollama we can't test making the completion call
+from litellm.utils import get_optional_params, get_llm_provider
 
-# asyncio.run(get_response())
+def test_get_ollama_params():
+    converted_params = get_optional_params(custom_llm_provider="ollama", model="llama2", max_tokens=20, temperature=0.5, stream=True)
+    print("Converted params", converted_params)
+    assert converted_params == {'num_predict': 20, 'stream': True, 'temperature': 0.5}, f"{converted_params} != {'num_predict': 20, 'stream': True, 'temperature': 0.5}"
+# test_get_ollama_params()
 
 
-
-##### latest implementation of making raw http post requests to local ollama server
-
-# import requests
-# import json
-# def get_ollama_response_stream(api_base="http://localhost:11434", model="llama2", prompt="Why is the sky blue?"):
-#     url = f"{api_base}/api/generate"
-#     data = {
-#         "model": model,
-#         "prompt": prompt,
-#     }
-#     session = requests.Session()
-
-#     with session.post(url, json=data, stream=True) as resp:
-#         for line in resp.iter_lines():
-#             if line:
-#                 try:
-#                     json_chunk = line.decode("utf-8")
-#                     chunks = json_chunk.split("\n")
-#                     for chunk in chunks:
-#                         if chunk.strip() != "":
-#                             j = json.loads(chunk)
-#                             if "response" in j:
-#                                 completion_obj = {
-#                                     "role": "assistant",
-#                                     "content": "",
-#                                 }
-#                                 completion_obj["content"] = j["response"]
-#                                 yield {"choices": [{"delta": completion_obj}]}
-#                 except Exception as e:
-#                     print(f"Error decoding JSON: {e}")
-#     session.close()
-
-# response = get_ollama_response_stream()
-
-# for chunk in response:
-#     print(chunk['choices'][0]['delta'])
+def test_get_ollama_model():
+    model, custom_llm_provider, _, _ = get_llm_provider("ollama/code-llama-22")
+    print("Model", "custom_llm_provider", model, custom_llm_provider)
+    assert custom_llm_provider == "ollama", f"{custom_llm_provider} != ollama"
+    assert model == "code-llama-22", f"{model} != code-llama-22"
+# test_get_ollama_model()
