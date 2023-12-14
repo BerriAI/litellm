@@ -140,6 +140,25 @@ def test_bedrock_embedding(client_no_auth):
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception - {str(e)}")
 
+def test_sagemaker_embedding(client_no_auth):
+    global headers
+    from litellm.proxy.proxy_server import user_custom_auth 
+
+    try:
+        test_data = {
+            "model": "GPT-J 6B - Sagemaker Text Embedding (Internal)",
+            "input": ["good morning from litellm"],
+        }
+
+        response = client_no_auth.post("/v1/embeddings", json=test_data)
+
+        assert response.status_code == 200
+        result = response.json()
+        print(len(result["data"][0]["embedding"]))
+        assert len(result["data"][0]["embedding"]) > 10 # this usually has len==1536 so
+    except Exception as e:
+        pytest.fail(f"LiteLLM Proxy test failed. Exception - {str(e)}")
+
 # Run the test
 # test_embedding()
 

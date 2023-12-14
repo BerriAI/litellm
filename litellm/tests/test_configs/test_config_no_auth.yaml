@@ -76,3 +76,6 @@ model_list:
 - model_name: amazon-embeddings
   litellm_params:
     model: "bedrock/amazon.titan-embed-text-v1"
+- model_name: "GPT-J 6B - Sagemaker Text Embedding (Internal)"
+  litellm_params: 
+    model: "sagemaker/berri-benchmarking-gpt-j-6b-fp16"
