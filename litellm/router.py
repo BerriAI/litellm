@@ -78,6 +78,7 @@ class Router:
                  fallbacks: List = [],
                  allowed_fails: Optional[int] = None,
                  context_window_fallbacks: List = [], 
+                 model_group_alias: Optional[dict] = {},
                  routing_strategy: Literal["simple-shuffle", "least-busy", "usage-based-routing", "latency-based-routing"] = "simple-shuffle") -> None:
 
         self.set_verbose = set_verbose 
@@ -102,6 +103,7 @@ class Router:
         self.fail_calls: defaultdict = defaultdict(int)             # dict to store fail_calls made to each model
         self.success_calls: defaultdict = defaultdict(int)          # dict to store success_calls  made to each model
         self.previous_models: List = [] # list to store failed calls (passed in as metadata to next call)
+        self.model_group_alias: dict = model_group_alias or {}      # dict to store aliases for router, ex. {"gpt-4": "gpt-3.5-turbo"}, all requests with gpt-4 -> get routed to gpt-3.5-turbo group
         
         # make Router.chat.completions.create compatible for openai.chat.completions.create
         self.chat = litellm.Chat(params=default_litellm_params)
@@ -1126,9 +1128,9 @@ class Router:
             raise ValueError(f"LiteLLM Router: Trying to call specific deployment, but Model:{model} does not exist in Model List: {self.model_list}")
 
         # check if aliases set on litellm model alias map
-        if model in litellm.model_group_alias_map:
-            self.print_verbose(f"Using a model alias. Got Request for {model}, sending requests to {litellm.model_group_alias_map.get(model)}")
-            model = litellm.model_group_alias_map[model]
+        if model in self.model_group_alias:
+            self.print_verbose(f"Using a model alias. Got Request for {model}, sending requests to {self.model_group_alias.get(model)}")
+            model = self.model_group_alias[model]
 
         ## get healthy deployments
         ### get all deployments 
