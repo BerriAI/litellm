@@ -197,7 +197,7 @@ def test_completion_azure_exception():
         print("good job got the correct error for azure when key not set")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_azure_exception()
+# test_completion_azure_exception()
 
 async def asynctest_completion_azure_exception():
     try:
@@ -227,7 +227,6 @@ async def asynctest_completion_azure_exception():
         print("Got wrong exception")
         print("exception", e)
         pytest.fail(f"Error occurred: {e}")
-
 # import asyncio
 # asyncio.run(
 #     asynctest_completion_azure_exception()
@@ -260,6 +259,33 @@ def test_completion_openai_exception():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 # test_completion_openai_exception()
+
+def test_completion_mistral_exception():
+    # test if mistral/mistral-tiny raises openai.AuthenticationError
+    try:
+        import openai
+        print("Testing mistral ai exception mapping")
+        litellm.set_verbose=False
+        ## Test azure call
+        old_azure_key = os.environ["MISTRAL_API_KEY"]
+        os.environ["MISTRAL_API_KEY"] = "good morning"
+        response = completion(
+            model="mistral/mistral-tiny",
+            messages=[
+                {
+                    "role": "user",
+                    "content": "hello"
+                }
+            ],
+        )
+        print(f"response: {response}")
+        print(response)
+    except openai.AuthenticationError as e:
+        os.environ["MISTRAL_API_KEY"] = old_azure_key
+        print("good job got the correct error for openai when key not set")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+# test_completion_mistral_exception()
 
 
 

@@ -163,6 +163,14 @@ openai_compatible_endpoints: List = [
     "api.mistral.ai/v1"
 ]
 
+# this is maintained for Exception Mapping
+openai_compatible_providers: List = [
+    "anyscale",
+    "mistral",
+    "deepinfra",
+    "perplexity"
+]
+
 
 # well supported replicate llms
 replicate_models: List = [

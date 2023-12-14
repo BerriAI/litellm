@@ -4163,7 +4163,7 @@ def exception_type(
                     llm_provider=custom_llm_provider
                 )
 
-            if custom_llm_provider == "openai" or custom_llm_provider == "text-completion-openai" or custom_llm_provider == "custom_openai":
+            if custom_llm_provider == "openai" or custom_llm_provider == "text-completion-openai" or custom_llm_provider == "custom_openai" or custom_llm_provider in litellm.openai_compatible_providers:
                 if "This model's maximum context length is" in error_str or "Request too large" in error_str:
                     exception_mapping_worked = True
                     raise ContextWindowExceededError(
