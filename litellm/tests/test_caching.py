@@ -372,6 +372,39 @@ def test_custom_redis_cache_with_key():
 
 # test_custom_redis_cache_with_key()
 
+def test_cache_override():
+    # test if we can override the cache, when `caching=False` but litellm.cache = Cache() is set
+    # in this case it should not return cached responses 
+    litellm.cache = Cache()
+    print("Testing cache override")
+    litellm.set_verbose=True
+
+    # test embedding
+    response1 = embedding(
+        model = "text-embedding-ada-002",
+        input=[
+            "hello who are you"
+        ],
+        caching = False
+    )
+
+
+    start_time = time.time()
+
+    response2 = embedding(
+        model = "text-embedding-ada-002",
+        input=[
+            "hello who are you"
+        ],
+        caching = False
+    )
+
+    end_time = time.time()
+    print(f"Embedding 2 response time: {end_time - start_time} seconds")
+
+    assert end_time - start_time > 0.1 # ensure 2nd response comes in over 0.1s. This should not be cached. 
+# test_cache_override() 
+
 
 def test_custom_redis_cache_params():
     # test if we can init redis with **kwargs
