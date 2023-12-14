@@ -79,3 +79,35 @@ Example response with cache hit
 }
 
 ```
+
+
+## Cache Initialization Parameters
+
+#### `type` (str, optional)
+
+The type of cache to initialize. It can be either "local" or "redis". Defaults to "local".
+
+#### `host` (str, optional)
+
+The host address for the Redis cache. This parameter is required if the `type` is set to "redis".
+
+#### `port` (int, optional)
+
+The port number for the Redis cache. This parameter is required if the `type` is set to "redis".
+
+#### `password` (str, optional)
+
+The password for the Redis cache. This parameter is required if the `type` is set to "redis".
+
+#### `supported_call_types` (list, optional)
+
+A list of call types to cache for. Defaults to caching for all call types. The available call types are:
+
+- "completion"
+- "acompletion"
+- "embedding"
+- "aembedding"
+
+#### `**kwargs` (additional keyword arguments)
+
+Additional keyword arguments are accepted for the initialization of the Redis cache using the `redis.Redis()` constructor. These arguments allow you to fine-tune the Redis cache configuration based on your specific needs.
