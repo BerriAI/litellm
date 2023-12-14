@@ -8,6 +8,7 @@
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
 import sys, re
+import litellm
 import dotenv, json, traceback, threading
 import subprocess, os
 import litellm, openai
@@ -2197,7 +2198,7 @@ def get_optional_params(  # use the openai defaults
     stop=None,
     max_tokens=None,
     presence_penalty=None,
-    frequency_penalty=0,
+    frequency_penalty=None,
     logit_bias=None,
     user=None,
     model=None,
