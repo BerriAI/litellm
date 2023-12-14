@@ -214,7 +214,7 @@ class CompletionCustomHandler(CustomLogger): # https://docs.litellm.ai/docs/obse
             assert isinstance(kwargs['original_response'], (str, litellm.CustomStreamWrapper)) or inspect.isasyncgen(kwargs['original_response']) or inspect.iscoroutine(kwargs['original_response'])
             assert isinstance(kwargs['additional_args'], (dict, type(None)))
             assert isinstance(kwargs['log_event_type'], str) 
-            assert isinstance(kwargs["cache_hit"], Optional[bool])
+            assert kwargs["cache_hit"] is None or isinstance(kwargs["cache_hit"], bool)
             ### ROUTER-SPECIFIC KWARGS
             assert isinstance(kwargs["litellm_params"]["metadata"], dict)
             assert isinstance(kwargs["litellm_params"]["metadata"]["model_group"], str)
