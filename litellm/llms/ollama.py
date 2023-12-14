@@ -220,6 +220,7 @@ async def ollama_async_streaming(url, data, model_response, encoding, logging_ob
         traceback.print_exc()
 
 async def ollama_acompletion(url, data, model_response, encoding, logging_obj):
+    data["stream"] = False
     try:
         timeout = aiohttp.ClientTimeout(total=600)  # 10 minutes
         async with aiohttp.ClientSession(timeout=timeout) as session:
