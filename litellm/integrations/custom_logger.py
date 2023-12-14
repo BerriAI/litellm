@@ -28,6 +28,8 @@ class CustomLogger: # https://docs.litellm.ai/docs/observability/custom_callback
 
     def log_failure_event(self, kwargs, response_obj, start_time, end_time): 
         pass
+
+    #### ASYNC #### 
     
     async def async_log_stream_event(self, kwargs, response_obj, start_time, end_time):
         pass
@@ -41,7 +43,7 @@ class CustomLogger: # https://docs.litellm.ai/docs/observability/custom_callback
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         pass
 
-    #### CALL HOOKS #### 
+    #### CALL HOOKS - proxy only #### 
     """
     Control the modify incoming / outgoung data before calling the model
     """
