@@ -1,13 +1,13 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# [OLD PROXY 👉 [**NEW** proxy here](./simple_proxy.md)] Local OpenAI Proxy Server
+# [OLD PROXY 👉 [**NEW** proxy here](./simple_proxy)] Local OpenAI Proxy Server
 
 A fast, and lightweight OpenAI-compatible server to call 100+ LLM APIs. 
 
 :::info
 
-Docs outdated. New docs 👉 [here](./simple_proxy.md)
+Docs outdated. New docs 👉 [here](./simple_proxy)
 
 :::
 
