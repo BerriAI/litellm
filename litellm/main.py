@@ -1826,7 +1826,7 @@ def embedding(
     metadata = kwargs.get("metadata", None)
     encoding_format = kwargs.get("encoding_format", None)
     proxy_server_request = kwargs.get("proxy_server_request", None)
-    aembedding = kwargs.pop("aembedding", None)
+    aembedding = kwargs.get("aembedding", None)
     openai_params = ["user", "request_timeout", "api_base", "api_version", "api_key", "deployment_id", "organization", "base_url", "default_headers", "timeout", "max_retries", "encoding_format"]
     litellm_params = ["metadata", "aembedding", "caching", "mock_response", "api_key", "api_version", "api_base", "force_timeout", "logger_fn", "verbose", "custom_llm_provider", "litellm_logging_obj", "litellm_call_id", "use_client", "id", "fallbacks", "azure", "headers", "model_list", "num_retries", "context_window_fallback_dict", "roles", "final_prompt_value", "bos_token", "eos_token", "request_timeout", "complete_response", "self", "client", "rpm", "tpm", "input_cost_per_token", "output_cost_per_token", "hf_model_name", "proxy_server_request", "model_info", "preset_cache_key"]
     default_params = openai_params + litellm_params
