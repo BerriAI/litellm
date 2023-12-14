@@ -413,6 +413,9 @@ def test_acompletion_on_router():
 			print("Testing acompletion + caching on router")
 			response1 = await router.acompletion(model="gpt-3.5-turbo", messages=messages, temperature=1)
 			print(f"response1: {response1}")
+
+			await asyncio.sleep(1) # add cache is async, async sleep for cache to get set
+
 			response2 = await router.acompletion(model="gpt-3.5-turbo", messages=messages, temperature=1)
 			print(f"response2: {response2}")
 			assert response1.id == response2.id
