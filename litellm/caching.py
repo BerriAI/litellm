@@ -232,8 +232,10 @@ class Cache:
 
         # sort kwargs by keys, since model: [gpt-4, temperature: 0.2, max_tokens: 200] == [temperature: 0.2, max_tokens: 200, model: gpt-4]
         completion_kwargs = ["model", "messages", "temperature", "top_p", "n", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "response_format", "seed", "tools", "tool_choice"]
-        embedding_kwargs = ["model", "input", "user", "encoding_format"]
-        combined_kwargs = list(set(completion_kwargs + embedding_kwargs))
+        embedding_only_kwargs = ["input", "encoding_format"] # embedding kwargs = model, input, user, encoding_format. Model, user are checked in completion_kwargs
+        
+        # combined_kwargs - NEEDS to be ordered across get_cache_key(). Do not use a set()
+        combined_kwargs = completion_kwargs + embedding_only_kwargs 
         for param in combined_kwargs:
             # ignore litellm params here
             if param in kwargs:
