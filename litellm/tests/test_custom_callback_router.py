@@ -150,7 +150,7 @@ class CompletionCustomHandler(CustomLogger): # https://docs.litellm.ai/docs/obse
             assert isinstance(kwargs['original_response'], (str, litellm.CustomStreamWrapper))
             assert isinstance(kwargs['additional_args'], (dict, type(None)))
             assert isinstance(kwargs['log_event_type'], str) 
-            assert isinstance(kwargs["cache_hit"], Optional[bool])
+            assert kwargs["cache_hit"] is None or isinstance(kwargs["cache_hit"], bool)
         except:
             print(f"Assertion Error: {traceback.format_exc()}")
             self.errors.append(traceback.format_exc())
