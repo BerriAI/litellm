@@ -66,6 +66,7 @@ const sidebars = {
         "providers/ollama", 
         "providers/vertex", 
         "providers/palm", 
+        "providers/mistral", 
         "providers/anthropic", 
         "providers/aws_sagemaker",
         "providers/bedrock", 
