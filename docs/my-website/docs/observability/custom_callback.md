@@ -228,6 +228,48 @@ Here's exactly what you can expect in the kwargs dictionary:
 "end_time" = end_time # datetime object of when call was completed
 ```
 
+
+### Cache hits
+
+Cache hits are logged in success events as `kwarg["cache_hit"]`. 
+
+Here's an example of accessing it: 
+
+  ```python
+  import litellm
+from litellm.integrations.custom_logger import CustomLogger
+from litellm import completion, acompletion, Cache
+
+class MyCustomHandler(CustomLogger):
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time): 
+        print(f"On Success")
+        print(f"Value of Cache hit: {kwargs['cache_hit']"})
+
+async def test_async_completion_azure_caching():
+    customHandler_caching = MyCustomHandler()
+    litellm.cache = Cache(type="redis", host=os.environ['REDIS_HOST'], port=os.environ['REDIS_PORT'], password=os.environ['REDIS_PASSWORD'])
+    litellm.callbacks = [customHandler_caching]
+    unique_time = time.time()
+    response1 = await litellm.acompletion(model="azure/chatgpt-v-2",
+                            messages=[{
+                                "role": "user",
+                                "content": f"Hi 👋 - i'm async azure {unique_time}"
+                            }],
+                            caching=True)
+    await asyncio.sleep(1)
+    print(f"customHandler_caching.states pre-cache hit: {customHandler_caching.states}")
+    response2 = await litellm.acompletion(model="azure/chatgpt-v-2",
+                            messages=[{
+                                "role": "user",
+                                "content": f"Hi 👋 - i'm async azure {unique_time}"
+                            }],
+                            caching=True)
+    await asyncio.sleep(1) # success callbacks are done in parallel
+    print(f"customHandler_caching.states post-cache hit: {customHandler_caching.states}")
+    assert len(customHandler_caching.errors) == 0
+    assert len(customHandler_caching.states) == 4 # pre, post, success, success
+  ```
+
 ### Get complete streaming response
 
 LiteLLM will pass you the complete streaming response in the final streaming chunk as part of the kwargs for your custom callback function.
