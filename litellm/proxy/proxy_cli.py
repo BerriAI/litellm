@@ -115,7 +115,7 @@ def run_server(host, port, api_base, api_version, model, alias, add_key, headers
         except:
             raise Exception("LiteLLM: No logs saved!")
         return
-    if version is not None:
+    if version == True:
         pkg_version = importlib.metadata.version("litellm")
         click.echo(f'\nLiteLLM: Current Version = {pkg_version}\n')
         return
