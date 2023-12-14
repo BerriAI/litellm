@@ -10,7 +10,7 @@
 import litellm
 import time, logging
 import json, traceback, ast
-from typing import Optional
+from typing import Optional, Literal
 
 def print_verbose(print_statement):
     try:
@@ -162,34 +162,36 @@ class DualCache(BaseCache):
         if self.redis_cache is not None:
             self.redis_cache.flush_cache()
 
-#### LiteLLM.Completion Cache ####
+#### LiteLLM.Completion / Embedding Cache ####
 class Cache:
     def __init__(
             self,
-            type="local",
-            host=None,
-            port=None,
-            password=None,
+            type: Optional[Literal["local", "redis"]] = "local",
+            host: Optional[str] = None,
+            port: Optional[str] = None,
+            password: Optional[str] = None,
+            supported_call_types: Optional[list[Literal["completion", "acompletion", "embedding", "aembedding"]]] = ["completion", "acompletion", "embedding", "aembedding"],
             **kwargs
     ):
         """
         Initializes the cache based on the given type.
 
         Args:
-            type (str, optional): The type of cache to initialize. Defaults to "local".
+            type (str, optional): The type of cache to initialize. Can be "local" or "redis". Defaults to "local".
             host (str, optional): The host address for the Redis cache. Required if type is "redis".
             port (int, optional): The port number for the Redis cache. Required if type is "redis".
             password (str, optional): The password for the Redis cache. Required if type is "redis".
+            supported_call_types (list, optional): List of call types to cache for. Defaults to cache == on for all call types.
             **kwargs: Additional keyword arguments for redis.Redis() cache
 
         Raises:
             ValueError: If an invalid cache type is provided.
 
         Returns:
-            None
+            None. Cache is set as a litellm param
         """
         if type == "redis":
-            self.cache = RedisCache(host, port, password, **kwargs)
+            self.cache: BaseCache = RedisCache(host, port, password, **kwargs)
         if type == "local":
             self.cache = InMemoryCache()
         if "cache" not in litellm.input_callback:
@@ -198,6 +200,7 @@ class Cache:
             litellm.success_callback.append("cache")
         if "cache" not in litellm._async_success_callback:
             litellm._async_success_callback.append("cache")
+        self.supported_call_types = supported_call_types # default to ["completion", "acompletion", "embedding", "aembedding"]
 
     def get_cache_key(self, *args, **kwargs):
         """
