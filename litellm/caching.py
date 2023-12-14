@@ -232,7 +232,9 @@ class Cache:
 
         # sort kwargs by keys, since model: [gpt-4, temperature: 0.2, max_tokens: 200] == [temperature: 0.2, max_tokens: 200, model: gpt-4]
         completion_kwargs = ["model", "messages", "temperature", "top_p", "n", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "response_format", "seed", "tools", "tool_choice"]
-        for param in completion_kwargs:
+        embedding_kwargs = ["model", "input", "user", "encoding_format"]
+        combined_kwargs = list(set(completion_kwargs + embedding_kwargs))
+        for param in combined_kwargs:
             # ignore litellm params here
             if param in kwargs:
                 # check if param == model and model_group is passed in, then override model with model_group
