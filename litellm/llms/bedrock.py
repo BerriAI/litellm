@@ -552,6 +552,7 @@ def _embedding_func_single(
     ## FORMAT EMBEDDING INPUT ## 
     provider = model.split(".")[0]
     inference_params = copy.deepcopy(optional_params)
+    inference_params.pop("user", None) # make sure user is not passed in for bedrock call
     if provider == "amazon":
         input = input.replace(os.linesep, " ")
         data = {"inputText": input, **inference_params}
