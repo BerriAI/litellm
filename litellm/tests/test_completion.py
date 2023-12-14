@@ -79,7 +79,6 @@ def test_completion_mistral_api():
                     "content": "Hey, how's it going?",
                 }
             ],
-            random_seed=42,
             safe_mode = True
         )
         # Add any assertions here to check the response
