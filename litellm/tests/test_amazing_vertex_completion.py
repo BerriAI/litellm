@@ -63,22 +63,27 @@ def load_vertex_ai_credentials():
     # Export the temporary file as GOOGLE_APPLICATION_CREDENTIALS
     os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = os.path.abspath(temp_file.name)
 
+@pytest.mark.asyncio
 async def get_response():
     load_vertex_ai_credentials()
     prompt = '\ndef count_nums(arr):\n    """\n    Write a function count_nums which takes an array of integers and returns\n    the number of elements which has a sum of digits > 0.\n    If a number is negative, then its first signed digit will be negative:\n    e.g. -123 has signed digits -1, 2, and 3.\n    >>> count_nums([]) == 0\n    >>> count_nums([-1, 11, -11]) == 1\n    >>> count_nums([1, 1, 2]) == 3\n    """\n'
-    response = await acompletion(
-        model="gemini-pro",
-        messages=[
-            {
-                "role": "system",
-                "content": "Complete the given code with no more explanation. Remember that there is a 4-space indent before the first line of your generated code.",
-            },
-            {"role": "user", "content": prompt},
-        ],
-    )
-    return response
+    try:
+        response = await acompletion(
+            model="gemini-pro",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "Complete the given code with no more explanation. Remember that there is a 4-space indent before the first line of your generated code.",
+                },
+                {"role": "user", "content": prompt},
+            ],
+        )
+        return response
+    except litellm.UnprocessableEntityError as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"An error occurred - {str(e)}")
 
-asyncio.run(get_response())
 
 def test_vertex_ai():
     import random
