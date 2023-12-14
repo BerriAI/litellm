@@ -335,6 +335,37 @@ def test_completion_palm_stream():
         pytest.fail(f"Error occurred: {e}")
 # test_completion_palm_stream()
 
+
+def test_completion_mistral_api_stream():
+    try:
+        litellm.set_verbose = True
+        print("Testing streaming mistral api response")
+        response = completion(
+            model="mistral/mistral-medium", 
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Hey, how's it going?",
+                }
+            ],
+            max_tokens=10,
+            stream=True
+        )
+        complete_response = ""
+        for idx, chunk in enumerate(response):
+            print(chunk)
+            # print(chunk.choices[0].delta)
+            chunk, finished = streaming_format_tests(idx, chunk)
+            if finished:
+                break
+            complete_response += chunk
+        if complete_response.strip() == "": 
+            raise Exception("Empty response received")
+        print(f"completion_response: {complete_response}")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+# test_completion_mistral_api_stream()
+
 def test_completion_deep_infra_stream():
     # deep infra currently includes role in the 2nd chunk 
     # waiting for them to make a fix on this
