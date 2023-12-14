@@ -193,7 +193,6 @@ async def acompletion(*args, **kwargs):
             # Call the synchronous function using run_in_executor
             response =  await loop.run_in_executor(None, func_with_context)
         if kwargs.get("stream", False): # return an async generator
-            print_verbose(f"ENTERS STREAMING FOR ACOMPLETION")
             return _async_streaming(response=response, model=model, custom_llm_provider=custom_llm_provider, args=args)
         else: 
             return response
@@ -664,17 +663,6 @@ def completion(
                 prompt = messages[0]["content"]
             else:
                 prompt = " ".join([message["content"] for message in messages]) # type: ignore
-            ## LOGGING
-            logging.pre_call(
-                input=prompt,
-                api_key=api_key,
-                additional_args={
-                    "openai_organization": litellm.organization,
-                    "headers": headers,
-                    "api_base": api_base,
-                    "api_type": openai.api_type,
-                },
-            )
             ## COMPLETION CALL
             model_response = openai_text_completions.completion(
                 model=model,
@@ -1991,6 +1979,59 @@ def embedding(
 
 
 ###### Text Completion ################
+async def atext_completion(*args, **kwargs):
+    """
+    Implemented to handle async streaming for the text completion endpoint 
+    """
+    loop = asyncio.get_event_loop()
+    model = args[0] if len(args) > 0 else kwargs["model"]
+    ### PASS ARGS TO COMPLETION ### 
+    kwargs["acompletion"] = True
+    custom_llm_provider = None
+    try: 
+        # Use a partial function to pass your keyword arguments
+        func = partial(text_completion, *args, **kwargs)
+
+        # Add the context to the function
+        ctx = contextvars.copy_context()
+        func_with_context = partial(ctx.run, func)
+
+        _, custom_llm_provider, _, _ = get_llm_provider(model=model, api_base=kwargs.get("api_base", None))
+
+        if (custom_llm_provider == "openai" 
+            or custom_llm_provider == "azure" 
+            or custom_llm_provider == "custom_openai"
+            or custom_llm_provider == "anyscale"
+            or custom_llm_provider == "mistral"
+            or custom_llm_provider == "openrouter"
+            or custom_llm_provider == "deepinfra"
+            or custom_llm_provider == "perplexity"
+            or custom_llm_provider == "text-completion-openai"
+            or custom_llm_provider == "huggingface"
+            or custom_llm_provider == "ollama"
+            or custom_llm_provider == "vertex_ai"): # currently implemented aiohttp calls for just azure and openai, soon all. 
+            if kwargs.get("stream", False): 
+                response = text_completion(*args, **kwargs)
+            else:
+                # Await normally
+                init_response = await loop.run_in_executor(None, func_with_context)
+                if isinstance(init_response, dict) or isinstance(init_response, ModelResponse): ## CACHING SCENARIO 
+                    response = init_response
+                elif asyncio.iscoroutine(init_response):
+                    response = await init_response
+        else: 
+            # Call the synchronous function using run_in_executor
+            response =  await loop.run_in_executor(None, func_with_context)
+        if kwargs.get("stream", False): # return an async generator
+            return _async_streaming(response=response, model=model, custom_llm_provider=custom_llm_provider, args=args)
+        else: 
+            return response
+    except Exception as e: 
+        custom_llm_provider = custom_llm_provider or "openai"
+        raise exception_type(
+                model=model, custom_llm_provider=custom_llm_provider, original_exception=e, completion_kwargs=args,
+            )
+
 def text_completion(
     prompt: Union[str, List[Union[str, List[Union[str, List[int]]]]]], # Required: The prompt(s) to generate completions for.
     model: Optional[str]=None,                 # Optional: either `model` or `engine` can be set
