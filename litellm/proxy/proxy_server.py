@@ -264,7 +264,7 @@ async def user_api_key_auth(request: Request, api_key: str = fastapi.Security(ap
 
         if prisma_client is None: # if both master key + user key submitted, and user key != master key, and no db connected, raise an error
             raise Exception("No connected db.")
-
+        
         ## check for cache hit (In-Memory Cache)
         valid_token = user_api_key_cache.get_cache(key=api_key)
         print(f"valid_token from cache: {valid_token}")
@@ -387,16 +387,11 @@ async def track_cost_callback(
             response_cost = litellm.completion_cost(completion_response=completion_response)
             print("streaming response_cost", response_cost)
             user_api_key = kwargs["litellm_params"]["metadata"].get("user_api_key", None)
-            print(f"user_api_key - {user_api_key}; prisma_client - {prisma_client}")
             if user_api_key and prisma_client: 
                 await update_prisma_database(token=user_api_key, response_cost=response_cost)
         elif kwargs["stream"] == False: # for non streaming responses
             response_cost = litellm.completion_cost(completion_response=completion_response)
-            print(f"received completion response: {completion_response}")
-            
-            print(f"regular response_cost: {response_cost}")
             user_api_key = kwargs["litellm_params"]["metadata"].get("user_api_key", None)
-            print(f"user_api_key - {user_api_key}; prisma_client - {prisma_client}")
             if user_api_key and prisma_client: 
                 await update_prisma_database(token=user_api_key, response_cost=response_cost)
     except Exception as e:
@@ -1004,7 +999,6 @@ async def chat_completion(request: Request, model: Optional[str] = None, user_ap
         ### ROUTE THE REQUEST ###
         router_model_names = [m["model_name"] for m in llm_model_list] if llm_model_list is not None else []
         if llm_router is not None and data["model"] in router_model_names: # model in router model list 
-                print(f"ENTERS LLM ROUTER ACOMPLETION")
                 response = await llm_router.acompletion(**data)
         elif llm_router is not None and data["model"] in llm_router.deployment_names: # model in router deployments, calling a specific deployment on the router
             response = await llm_router.acompletion(**data, specific_deployment = True)
