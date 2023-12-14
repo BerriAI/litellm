@@ -63,21 +63,22 @@ def load_vertex_ai_credentials():
     # Export the temporary file as GOOGLE_APPLICATION_CREDENTIALS
     os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = os.path.abspath(temp_file.name)
 
-def test_vertex_ai_sdk(): 
+async def get_response():
     load_vertex_ai_credentials()
-    from vertexai.preview.generative_models import GenerativeModel, Part, GenerationConfig
-    llm_model = GenerativeModel("gemini-pro")
-    chat = llm_model.start_chat()
-    print(chat.send_message("write code for saying hi from LiteLLM", generation_config=GenerationConfig(**{})).text)
-test_vertex_ai_sdk()
+    prompt = '\ndef count_nums(arr):\n    """\n    Write a function count_nums which takes an array of integers and returns\n    the number of elements which has a sum of digits > 0.\n    If a number is negative, then its first signed digit will be negative:\n    e.g. -123 has signed digits -1, 2, and 3.\n    >>> count_nums([]) == 0\n    >>> count_nums([-1, 11, -11]) == 1\n    >>> count_nums([1, 1, 2]) == 3\n    """\n'
+    response = await acompletion(
+        model="gemini-pro",
+        messages=[
+            {
+                "role": "system",
+                "content": "Complete the given code with no more explanation. Remember that there is a 4-space indent before the first line of your generated code.",
+            },
+            {"role": "user", "content": prompt},
+        ],
+    )
+    return response
 
-def simple_test_vertex_ai(): 
-    try:
-        load_vertex_ai_credentials()
-        response = completion(model="gemini-pro", messages=[{"role": "user", "content": "write code for saying hi from LiteLLM"}])
-        print(f'response: {response}')
-    except Exception as e: 
-        pytest.fail(f"An exception occurred - {str(e)}")
+asyncio.run(get_response())
 
 def test_vertex_ai():
     import random
