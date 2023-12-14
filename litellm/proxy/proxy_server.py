@@ -289,7 +289,10 @@ async def user_api_key_auth(request: Request, api_key: str = fastapi.Security(ap
                 valid_token_dict.pop("token", None)
                 return UserAPIKeyAuth(api_key=api_key, **valid_token_dict)
             else: 
-                data = await request.json()
+                try:
+                    data = await request.json()
+                except json.JSONDecodeError:
+                    data = {}  # Provide a default value, such as an empty dictionary
                 model = data.get("model", None)
                 if model in litellm.model_alias_map:
                     model = litellm.model_alias_map[model]
