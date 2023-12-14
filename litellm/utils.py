@@ -5872,31 +5872,43 @@ class TextCompletionStreamWrapper:
 
     def __aiter__(self):
         return self
+    
+    def convert_to_text_completion_object(self, chunk: ModelResponse):
+        response = TextCompletionResponse()
+        response["id"] = chunk.get("id", None)
+        response["object"] = "text_completion"
+        response["created"] = response.get("created", None)
+        response["model"] = response.get("model", None)
+        text_choices = TextChoices()
+        text_choices["text"] = chunk["choices"][0]["delta"]["content"]
+        text_choices["index"] = response["choices"][0]["index"]
+        text_choices["finish_reason"] = response["choices"][0]["finish_reason"]
+        response["choices"] = [text_choices]
+        return response
 
     def __next__(self):
         # model_response = ModelResponse(stream=True, model=self.model)
         response = TextCompletionResponse()
         try:
-            while True: # loop until a non-empty string is found
-                # return this for all models
-                chunk = next(self.completion_stream)
-                response["id"] = chunk.get("id", None)
-                response["object"] = "text_completion"
-                response["created"] = response.get("created", None)
-                response["model"] = response.get("model", None)
-                text_choices = TextChoices()
-                text_choices["text"] = chunk["choices"][0]["delta"]["content"]
-                text_choices["index"] = response["choices"][0]["index"]
-                text_choices["finish_reason"] = response["choices"][0]["finish_reason"]
-                response["choices"] = [text_choices]
-                return response
+            for chunk in self.completion_stream:
+                if chunk == "None" or chunk is None:
+                        raise Exception
+                processed_chunk = self.convert_to_text_completion_object(chunk=chunk) 
+                return processed_chunk
+            raise StopIteration
         except StopIteration:
             raise StopIteration
         except Exception as e: 
             print(f"got exception {e}") # noqa
+
     async def __anext__(self):
         try:
-            return next(self)
+            async for chunk in self.completion_stream:
+                if chunk == "None" or chunk is None:
+                        raise Exception
+                processed_chunk = self.convert_to_text_completion_object(chunk=chunk) 
+                return processed_chunk
+            raise StopIteration
         except StopIteration:
             raise StopAsyncIteration
 

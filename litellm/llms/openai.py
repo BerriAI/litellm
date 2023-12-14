@@ -521,12 +521,14 @@ class OpenAITextCompletion(BaseLLM):
             else:
                 prompt = " ".join([message["content"] for message in messages]) # type: ignore
 
+            # don't send max retries to the api, if set
+            optional_params.pop("max_retries", None)
+
             data = {
                 "model": model,
                 "prompt": prompt, 
                 **optional_params
             }
-            
             ## LOGGING
             logging_obj.pre_call(
                 input=messages,
