@@ -52,7 +52,8 @@ from .exceptions import (
     Timeout,
     APIConnectionError,
     APIError,
-    BudgetExceededError
+    BudgetExceededError,
+    UnprocessableEntityError
 )
 from typing import cast, List, Dict, Union, Optional, Literal
 from .caching import Cache
@@ -4432,7 +4433,15 @@ def exception_type(
                     )
                 elif "403" in error_str: 
                     exception_mapping_worked = True
-                    raise AuthenticationError(
+                    raise U(
+                        message=f"VertexAIException - {error_str}", 
+                        model=model, 
+                        llm_provider="vertex_ai",
+                        response=original_exception.response
+                    )
+                elif "The response was blocked." in error_str:
+                    exception_mapping_worked = True
+                    raise UnprocessableEntityError(
                         message=f"VertexAIException - {error_str}", 
                         model=model, 
                         llm_provider="vertex_ai",
