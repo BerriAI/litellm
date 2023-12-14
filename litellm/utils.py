@@ -2170,14 +2170,14 @@ def get_optional_params_embeddings(
     }
 
     non_default_params = {k: v for k, v in passed_params.items() if (k in default_params and v != default_params[k])}
-
     ## raise exception if non-default value passed for non-openai/azure embedding calls
     if custom_llm_provider != "openai" and custom_llm_provider != "azure":
         if len(non_default_params.keys()) > 0: 
-            if litellm.drop_params is True: 
-                for k in non_default_params.keys(): 
-                    passed_params.pop(k, None)
-                return passed_params
+            if litellm.drop_params is True: # drop the unsupported non-default values
+                keys = list(non_default_params.keys())
+                for k in keys: 
+                    non_default_params.pop(k, None)
+                return non_default_params
             raise UnsupportedParamsError(status_code=500, message=f"Setting user/encoding format is not supported by {custom_llm_provider}. To drop it from the call, set `litellm.drop_params = True`.")
     
     final_params = {**non_default_params, **kwargs}

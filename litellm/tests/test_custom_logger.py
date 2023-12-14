@@ -318,16 +318,18 @@ async def test_async_custom_handler_embedding_optional_param_bedrock():
 
     but makes sure these are not sent to the non-openai/azure endpoint (raises errors).
     """
+    litellm.drop_params = True
+    litellm.set_verbose = True
     customHandler_optional_params = MyCustomHandler()
     litellm.callbacks = [customHandler_optional_params]
     response = await litellm.aembedding(
-                model="azure/azure-embedding-model", 
+                model="bedrock/cohere.embed-multilingual-v3", 
                 input = ["hello world"],
                 user = "John"
             )
     await asyncio.sleep(1) # success callback is async 
     assert customHandler_optional_params.user == "John"
-    assert customHandler_optional_params.user == customHandler_optional_params.data_sent_to_api["user"]
+    assert "user" not in customHandler_optional_params.data_sent_to_api
 
 
 def test_redis_cache_completion_stream():
