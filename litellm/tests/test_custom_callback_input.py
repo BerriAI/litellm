@@ -609,6 +609,7 @@ async def test_async_completion_azure_caching():
 
 @pytest.mark.asyncio
 async def test_async_embedding_azure_caching():
+    print("Testing custom callback input - Azure Caching")
     customHandler_caching = CompletionCustomHandler()
     litellm.cache = Cache(type="redis", host=os.environ['REDIS_HOST'], port=os.environ['REDIS_PORT'], password=os.environ['REDIS_PASSWORD'])
     litellm.callbacks = [customHandler_caching]
@@ -616,9 +617,15 @@ async def test_async_embedding_azure_caching():
     response1 = await litellm.aembedding(model="azure/azure-embedding-model",
                             input=[f"good morning from litellm1 {unique_time}"],
                             caching=True)
+    await asyncio.sleep(1) # set cache is async for aembedding()
     response2 = await litellm.aembedding(model="azure/azure-embedding-model",
                             input=[f"good morning from litellm1 {unique_time}"],
                             caching=True)
     await asyncio.sleep(1) # success callbacks are done in parallel
+    print(customHandler_caching.states)
     assert len(customHandler_caching.errors) == 0
     assert len(customHandler_caching.states) == 4 # pre, post, success, success
+
+# asyncio.run(
+#     test_async_embedding_azure_caching()
+# )
