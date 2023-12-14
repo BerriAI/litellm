@@ -68,6 +68,23 @@ def test_completion_claude():
 
 # test_completion_claude()
 
+def test_completion_mistral_api():
+    try:
+        response = completion(
+            model="mistral/mistral-tiny", 
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Hey, how's it going?",
+                }
+            ]
+        )
+        # Add any assertions here to check the response
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+# test_completion_mistral_api()
+
 def test_completion_claude2_1():
     try:
         print("claude2.1 test request")
