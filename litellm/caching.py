@@ -12,18 +12,6 @@ import time, logging
 import json, traceback, ast
 from typing import Optional
 
-def get_prompt(*args, **kwargs):
-    # make this safe checks, it should not throw any exceptions
-    if len(args) > 1:
-        messages = args[1]
-        prompt = " ".join(message["content"] for message in messages)
-        return prompt
-    if "messages" in kwargs:
-        messages = kwargs["messages"]
-        prompt = " ".join(message["content"] for message in messages)
-        return prompt
-    return None
-
 def print_verbose(print_statement):
     try:
         if litellm.set_verbose:
@@ -309,4 +297,9 @@ class Cache:
                     result = result.model_dump_json()
                 self.cache.set_cache(cache_key, result, **kwargs)
         except Exception as e:
+            print_verbose(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
+            traceback.print_exc()
             pass
+
+    async def _async_add_cache(self, result, *args, **kwargs):
+        self.add_cache(result, *args, **kwargs)
