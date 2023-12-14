@@ -114,7 +114,7 @@ class Router:
         self.default_litellm_params.setdefault("max_retries", 0)
 
         ### CACHING ###
-        cache_type = "local" # default to an in-memory cache
+        cache_type: Literal["local", "redis"] = "local" # default to an in-memory cache
         redis_cache = None
         cache_config = {} 
         if redis_url is not None or (redis_host is not None and redis_port is not None and redis_password is not None):
@@ -138,7 +138,7 @@ class Router:
         if cache_responses:
             if litellm.cache is None:
                 # the cache can be initialized on the proxy server. We should not overwrite it
-                litellm.cache = litellm.Cache(type=cache_type, **cache_config)
+                litellm.cache = litellm.Cache(type=cache_type, **cache_config) # type: ignore
             self.cache_responses = cache_responses
         self.cache = DualCache(redis_cache=redis_cache, in_memory_cache=InMemoryCache()) # use a dual cache (Redis+In-Memory) for tracking cooldowns, usage, etc.
         ### ROUTING SETUP ### 
