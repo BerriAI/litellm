@@ -492,7 +492,11 @@ Expected output on Langfuse
 
 ## Logging Proxy Input/Output - DynamoDB
 
-We will use the `--config` to set `litellm.success_callback = ["dynamodb"]` this will log all successfull LLM calls to DynamoDB
+We will use the `--config` to set 
+- `litellm.success_callback = ["dynamodb"]` 
+- `litellm.dynamodb_table_name = "your-table-name"`
+
+This will log all successfull LLM calls to DynamoDB
 
 **Step 1** Set AWS Credentials in .env
 
@@ -510,6 +514,7 @@ model_list:
       model: gpt-3.5-turbo
 litellm_settings:
   success_callback: ["dynamodb"]
+  dynamodb_table_name: your-table-name
 ```
 
 **Step 3**: Start the proxy, make a test request
@@ -535,8 +540,6 @@ curl --location 'http://0.0.0.0:8000/chat/completions' \
 ```
 
 Your logs should be available on DynamoDB
-
-**Note: LiteLLM Proxy Auto Creates the table called `litellm-server-logs` when initialized**. It takes 1-2 mins after your first request to provision your table. After this all requests will be logged to DynamoDB
 
 #### Data Logged to DynamoDB /chat/completions
 
