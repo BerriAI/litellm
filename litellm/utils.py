@@ -46,6 +46,7 @@ from openai._models import BaseModel as OpenAIObject
 from .exceptions import (
     AuthenticationError,
     BadRequestError,
+    NotFoundError,
     RateLimitError,
     ServiceUnavailableError,
     OpenAIError,
@@ -4169,6 +4170,14 @@ def exception_type(
                         model=model,
                         response=original_exception.response
                     )
+                elif "invalid_request_error" in error_str and "model_not_found" in error_str:
+                    exception_mapping_worked = True
+                    raise NotFoundError(
+                        message=f"OpenAIException - {original_exception.message}",
+                        llm_provider="openai",
+                        model=model,
+                        response=original_exception.response
+                    )
                 elif "invalid_request_error" in error_str and "Incorrect API key provided" not in error_str:
                     exception_mapping_worked = True
                     raise BadRequestError(
@@ -4994,15 +5003,15 @@ def exception_type(
                         model=model,
                         response=original_exception.response
                     )
-                elif "invalid_request_error" in error_str:
+                elif "DeploymentNotFound" in error_str:
                     exception_mapping_worked = True
-                    raise BadRequestError(
+                    raise NotFoundError(
                         message=f"AzureException - {original_exception.message}",
                         llm_provider="azure",
                         model=model,
                         response=original_exception.response
                     )
-                elif "DeploymentNotFound" in error_str:
+                elif "invalid_request_error" in error_str:
                     exception_mapping_worked = True
                     raise BadRequestError(
                         message=f"AzureException - {original_exception.message}",
