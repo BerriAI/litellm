@@ -70,3 +70,58 @@ def test_chat_completion_exception_azure(client):
 
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception {str(e)}")
+
+
+# raise openai.BadRequestError
+
+def test_exception_openai_bad_model(client):
+    try:
+        # Your test data
+        test_data = {
+            "model": "openai/GPT-12",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "hi"
+                },
+            ],
+            "max_tokens": 10,
+        }
+
+        response = client.post("/chat/completions", json=test_data)
+
+        # make an openai client to call _make_status_error_from_response
+        openai_client = openai.OpenAI(api_key="anything")
+        openai_exception = openai_client._make_status_error_from_response(response=response)
+        print("Type of exception=", type(openai_exception))
+        assert isinstance(openai_exception, openai.NotFoundError)
+
+    except Exception as e:
+        pytest.fail(f"LiteLLM Proxy test failed. Exception {str(e)}")
+
+
+def test_chat_completion_exception_any_model(client):
+    try:
+        # Your test data
+        test_data = {
+            "model": "Lite-GPT-12",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "hi"
+                },
+            ],
+            "max_tokens": 10,
+        }
+
+        response = client.post("/chat/completions", json=test_data)
+
+        # make an openai client to call _make_status_error_from_response
+        openai_client = openai.OpenAI(api_key="anything")
+        openai_exception = openai_client._make_status_error_from_response(response=response)
+        print("Exception raised=", openai_exception)
+        assert isinstance(openai_exception, openai.NotFoundError)
+
+    except Exception as e:
+        pytest.fail(f"LiteLLM Proxy test failed. Exception {str(e)}")
+
