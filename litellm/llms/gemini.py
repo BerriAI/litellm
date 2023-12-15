@@ -163,7 +163,7 @@ def completion(
     )
 
     model_response["created"] = int(time.time())
-    model_response["model"] = "palm/" + model
+    model_response["model"] = "gemini/" + model
     usage = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
