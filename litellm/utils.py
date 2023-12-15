@@ -40,7 +40,7 @@ from .integrations.langsmith import LangsmithLogger
 from .integrations.weights_biases import WeightsBiasesLogger
 from .integrations.custom_logger import CustomLogger
 from .integrations.langfuse import LangFuseLogger
-from .integrations.dyanmodb import DyanmoDBLogger
+from .integrations.dynamodb import DyanmoDBLogger
 from .integrations.litedebugger import LiteDebugger
 from openai import OpenAIError as OriginalError
 from openai._models import BaseModel as OpenAIObject
