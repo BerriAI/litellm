@@ -8,3 +8,9 @@ model_list:
       model: azure/chatgpt-v-2
       api_base: os.environ/AZURE_API_BASE
       api_key: bad-key
+  - model_name: azure-embedding
+    litellm_params:
+      model: azure/azure-embedding-model
+      api_base: os.environ/AZURE_API_BASE
+      api_key: bad-key
+    
