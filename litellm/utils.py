@@ -2862,7 +2862,7 @@ def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None, api_
                 response=httpx.Response(
                     status_code=404,
                     content=error_str,              
-                    request=httpx.request(method="completion", url="https://litellm.ai") # type: ignore
+                    request=httpx.request(method="completion", url="https://github.com/BerriAI/litellm") # type: ignore
                 ),
                 llm_provider=""
             )
@@ -4207,6 +4207,14 @@ def exception_type(
                             model=model,
                             response=original_exception.response
                         )
+                    elif original_exception.status_code == 404:
+                        exception_mapping_worked = True
+                        raise NotFoundError(
+                            message=f"OpenAIException - {original_exception.message}",
+                            model=model,
+                            llm_provider="openai",
+                            response=original_exception.response
+                        )
                     elif original_exception.status_code == 408:
                         exception_mapping_worked = True
                         raise Timeout(
@@ -4214,7 +4222,7 @@ def exception_type(
                             model=model,
                             llm_provider="openai",
                         )
-                    if original_exception.status_code == 422:
+                    elif original_exception.status_code == 422:
                         exception_mapping_worked = True
                         raise BadRequestError(
                             message=f"OpenAIException - {original_exception.message}",
