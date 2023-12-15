@@ -3,3 +3,8 @@ model_list:
     litellm_params:
       api_key: bad-key
       model: gpt-3.5-turbo
+  - model_name: azure-gpt-3.5-turbo
+    litellm_params:
+      model: azure/chatgpt-v-2
+      api_base: os.environ/AZURE_API_BASE
+      api_key: bad-key
