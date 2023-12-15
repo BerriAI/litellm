@@ -65,6 +65,7 @@ def test_dynamo_logging():
         # redirect stdout to log_file
 
         litellm.success_callback = ["dynamodb"]
+        litellm.dynamodb_table_name = "litellm-logs-1"
         litellm.set_verbose = True
         original_stdout, log_file, file_name = pre_request()
 
