@@ -40,6 +40,7 @@ from .integrations.langsmith import LangsmithLogger
 from .integrations.weights_biases import WeightsBiasesLogger
 from .integrations.custom_logger import CustomLogger
 from .integrations.langfuse import LangFuseLogger
+from .integrations.dyanmodb import DyanmoDBLogger
 from .integrations.litedebugger import LiteDebugger
 from openai import OpenAIError as OriginalError
 from openai._models import BaseModel as OpenAIObject
@@ -79,6 +80,7 @@ langsmithLogger = None
 weightsBiasesLogger = None
 customLogger = None
 langFuseLogger = None
+dynamoLogger = None
 llmonitorLogger = None
 aispendLogger = None
 berrispendLogger = None
@@ -998,6 +1000,28 @@ class Logging:
                             end_time=end_time,
                             print_verbose=print_verbose,
                         )
+                    if callback == "dynamodb":
+                        global dynamoLogger
+                        if dynamoLogger is None:
+                            dynamoLogger = DyanmoDBLogger()
+                        if self.stream:
+                            if "complete_streaming_response" in self.model_call_details:
+                                print_verbose("DynamoDB Logger: Got Stream Event - Completed Stream Response")
+                                dynamoLogger.log_event(
+                                    kwargs=self.model_call_details,
+                                    response_obj=self.model_call_details["complete_streaming_response"],
+                                    start_time=start_time,
+                                    end_time=end_time,
+                                )
+                            else: 
+                                print_verbose("DynamoDB Logger: Got Stream Event - No complete stream response as yet")
+                        else:
+                            dynamoLogger.log_event(
+                                kwargs=self.model_call_details,
+                                response_obj=result,
+                                start_time=start_time,
+                                end_time=end_time,
+                            )
                     if callback == "cache" and litellm.cache is not None:
                         # this only logs streaming once, complete_streaming_response exists i.e when stream ends
                         print_verbose("success_callback: reaches cache for logging!")
@@ -1141,6 +1165,7 @@ class Logging:
                 print_verbose(
                     f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while success logging {traceback.format_exc()}"
                 )
+                pass
 
     def _failure_handler_helper_fn(self, exception, traceback_exception, start_time=None, end_time=None):
         if start_time is None:
@@ -3409,7 +3434,7 @@ def validate_environment(model: Optional[str]=None) -> dict:
     return {"keys_in_environment": keys_in_environment, "missing_keys": missing_keys} 
 
 def set_callbacks(callback_list, function_id=None):
-    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, llmonitorLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, langsmithLogger
+    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, llmonitorLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, langsmithLogger, dynamoLogger
     try:
         for callback in callback_list:
             print_verbose(f"callback: {callback}")
@@ -3472,6 +3497,8 @@ def set_callbacks(callback_list, function_id=None):
                 promptLayerLogger = PromptLayerLogger()
             elif callback == "langfuse":
                 langFuseLogger = LangFuseLogger()
+            elif callback == "dynamodb":
+                dynamoLogger = DyanmoDBLogger()
             elif callback == "wandb":
                 weightsBiasesLogger = WeightsBiasesLogger()
             elif callback == "langsmith":
