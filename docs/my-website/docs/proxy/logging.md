@@ -520,9 +520,23 @@ litellm --config config.yaml --debug
 ```
 
 Test Request
+```shell
+curl --location 'http://0.0.0.0:8000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data ' {
+    "model": "Azure OpenAI GPT-4 East",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ]
+    }'
 ```
-litellm --test
-```
+
+Your logs should be available on DynamoDB
+
+**Note: LiteLLM Proxy Auto Creates the table called `litellm-server-logs` when initialized**. It takes 1-2 mins after your first request to provision your table. After this all requests will be logged to DynamoDB
 
 #### Data Logged to DynamoDB /chat/completions
 
