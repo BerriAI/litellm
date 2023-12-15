@@ -73,3 +73,6 @@ class LangFuseLogger:
             traceback.print_exc()
             print_verbose(f"Langfuse Layer Error - {traceback.format_exc()}")
             pass
+
+    async def _async_log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
+        self.log_event(kwargs, response_obj, start_time, end_time, print_verbose)
