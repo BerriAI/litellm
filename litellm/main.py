@@ -51,6 +51,7 @@ from .llms import (
     petals,
     oobabooga,
     palm,
+    gemini,
     vertex_ai,
     maritalk)
 from .llms.openai import OpenAIChatCompletion, OpenAITextCompletion
@@ -1116,6 +1117,28 @@ def completion(
                 api_key=palm_api_key,
                 logging_obj=logging
             )
+            
+        elif custom_llm_provider == "gemini":
+            gemini_api_key = (
+                api_key
+                or get_secret("GEMINI_API_KEY")
+                or litellm.api_key
+            )
+        
+            # gemini does not support streaming as yet :(
+            model_response = gemini.completion(
+                model=model,
+                messages=messages,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                encoding=encoding,
+                api_key=gemini_api_key,
+                logging_obj=logging
+            )
+            
             # fake palm streaming
             if "stream" in optional_params and optional_params["stream"] == True:
                 # fake streaming for palm
