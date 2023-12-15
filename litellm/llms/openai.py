@@ -285,13 +285,7 @@ class OpenAIChatCompletion(BaseLLM):
                             )
             return convert_to_model_response_object(response_object=json.loads(stringified_response), model_response_object=model_response)
         except Exception as e: 
-            if response and hasattr(response, "text"):
-                raise OpenAIError(status_code=500, message=f"{str(e)}\n\nOriginal Response: {response.text}")
-            else: 
-                if type(e).__name__ == "ReadTimeout": 
-                    raise OpenAIError(status_code=408, message=f"{type(e).__name__}")
-                else:
-                    raise OpenAIError(status_code=500, message=f"{str(e)}")
+            raise e
 
     def streaming(self,
                   logging_obj,
