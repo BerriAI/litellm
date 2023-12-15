@@ -177,6 +177,7 @@ def completion(
             model_response["choices"][0]["message"]["content"] = completion_response["output"]["choices"][0]["text"]
 
         ## CALCULATING USAGE
+        print_verbose(f"CALCULATING TOGETHERAI TOKEN USAGE. Model Response: {model_response}; model_response['choices'][0]['message'].get('content', ''): {model_response['choices'][0]['message'].get('content', None)}")
         prompt_tokens = len(encoding.encode(prompt))
         completion_tokens = len(
             encoding.encode(model_response["choices"][0]["message"].get("content", ""))
