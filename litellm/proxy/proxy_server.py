@@ -513,6 +513,9 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
             elif key == "callbacks":
                 litellm.callbacks = [get_instance_fn(value=value, config_file_path=config_file_path)]
                 print_verbose(f"{blue_color_code} Initialized Callbacks - {litellm.callbacks} {reset_color_code}")
+            elif key == "post_call_rules":
+                litellm.post_call_rules = [get_instance_fn(value=value, config_file_path=config_file_path)]
+                print(f"litellm.post_call_rules: {litellm.post_call_rules}")
             elif key == "success_callback":
                 litellm.success_callback = []
                 
@@ -1065,7 +1068,7 @@ async def embeddings(request: Request, user_api_key_dict: UserAPIKeyAuth = Depen
 
         if data.get("user", None) is None and user_api_key_dict.user_id is not None:
             data["user"] = user_api_key_dict.user_id
-            
+
         data["model"] = (
             general_settings.get("embedding_model", None) # server default
             or user_model # model name passed via cli args
