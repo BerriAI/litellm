@@ -1,0 +1,14 @@
+{
+  "version": 1.0,
+  "merge": {
+    "pagination": {
+      "ListRecommendationSummaries": {
+        "non_aggregate_keys": [
+          "groupBy",
+          "currencyCode",
+          "estimatedTotalDedupedSavings"
+        ]
+      }
+    }
+  }
+}

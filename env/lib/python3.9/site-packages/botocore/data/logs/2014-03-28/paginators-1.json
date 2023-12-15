@@ -1,0 +1,91 @@
+{
+  "pagination": {
+    "DescribeDestinations": {
+      "input_token": "nextToken",
+      "output_token": "nextToken",
+      "limit_key": "limit",
+      "result_key": "destinations"
+    },
+    "DescribeLogGroups": {
+      "input_token": "nextToken",
+      "output_token": "nextToken",
+      "limit_key": "limit",
+      "result_key": "logGroups"
+    },
+    "DescribeLogStreams": {
+      "input_token": "nextToken",
+      "output_token": "nextToken",
+      "limit_key": "limit",
+      "result_key": "logStreams"
+    },
+    "DescribeMetricFilters": {
+      "input_token": "nextToken",
+      "output_token": "nextToken",
+      "limit_key": "limit",
+      "result_key": "metricFilters"
+    },
+    "DescribeSubscriptionFilters": {
+      "input_token": "nextToken",
+      "output_token": "nextToken",
+      "limit_key": "limit",
+      "result_key": "subscriptionFilters"
+    },
+    "FilterLogEvents": {
+      "input_token": "nextToken",
+      "output_token": "nextToken",
+      "limit_key": "limit",
+      "result_key": [
+        "events",
+        "searchedLogStreams"
+      ]
+    },
+    "DescribeExportTasks": {
+      "input_token": "nextToken",
+      "limit_key": "limit",
+      "output_token": "nextToken",
+      "result_key": "exportTasks"
+    },
+    "DescribeQueries": {
+      "input_token": "nextToken",
+      "limit_key": "maxResults",
+      "output_token": "nextToken",
+      "result_key": "queries"
+    },
+    "DescribeResourcePolicies": {
+      "input_token": "nextToken",
+      "limit_key": "limit",
+      "output_token": "nextToken",
+      "result_key": "resourcePolicies"
+    },
+    "DescribeDeliveries": {
+      "input_token": "nextToken",
+      "limit_key": "limit",
+      "output_token": "nextToken",
+      "result_key": "deliveries"
+    },
+    "DescribeDeliveryDestinations": {
+      "input_token": "nextToken",
+      "limit_key": "limit",
+      "output_token": "nextToken",
+      "result_key": "deliveryDestinations"
+    },
+    "DescribeDeliverySources": {
+      "input_token": "nextToken",
+      "limit_key": "limit",
+      "output_token": "nextToken",
+      "result_key": "deliverySources"
+    },
+    "ListAnomalies": {
+      "input_token": "nextToken",
+      "limit_key": "limit",
+      "output_token": "nextToken",
+      "result_key": "anomalies"
+    },
+    "ListLogAnomalyDetectors": {
+      "input_token": "nextToken",
+      "limit_key": "limit",
+      "output_token": "nextToken",
+      "result_key": "anomalyDetectors"
+    }
+  }
+}

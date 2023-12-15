@@ -1,0 +1,187 @@
+{% include '_header.py.jinja' %}
+{% from '_utils.py.jinja' import recursive_types with context %}
+# -- template fields.py.jinja --
+from ._compat import PYDANTIC_V2, CoreSchema, core_schema
+
+import base64
+from pydantic import Json as _PydanticJson
+
+
+__all__ = (
+    'Json',
+    'Base64',
+)
+
+
+if TYPE_CHECKING:
+    BaseJson = str
+else:
+    BaseJson = _PydanticJson
+
+_JsonKeys = Union[
+    None,
+    bool,
+    float,
+    int,
+    str,
+]
+
+# Base64 data should only be valid ascii, we limit our encoding to ascii so that
+# any erroneous data is caught as early on as possible.
+BASE64_ENCODING = 'ascii'
+
+
+# inherit from _PydanticJson so that pydantic will automatically
+# transform the json string into python objects.
+class Json(BaseJson):
+    data: 'Serializable'
+
+    def __init__(self, data: 'Serializable') -> None:
+        self.data = data
+        super().__init__()
+
+    @classmethod
+    def keys(cls, **data: 'Serializable') -> 'Json':
+        return cls(data)
+
+    if TYPE_CHECKING:
+        # Fields that are of the `Json` type are automatically
+        # de-serialized from json to the corresponding python type
+        # when the model is created, e.g.
+        #
+        # User(json_obj='{"foo": null}') -> User(json_obj={'foo': None})
+        #
+        # As we don't know what the type will actually be at runtime
+        # we add methods here for convenience so that naive access
+        # to the field is still allowed, e.g.
+        #
+        # user.json_obj['foo']
+        # user.json_obj[1]
+        # user.json_obj[1:5]
+        #
+        # It should be noted that users will still have
+        # to validate / cast fields to the type they are expecting
+        # for any strict type binding or nested index calls to work, e.g.
+        #
+        # isinstance(user.json_obj, dict)
+        # cast(Dict[str, Any], user.json_obj)
+        # prisma.validate(ExpectedType, user.json_obj)  # NOTE: not implemented yet
+        @overload  # type: ignore
+        def __getitem__(self, i: slice) -> List['Serializable']:
+            ...
+
+        @overload
+        def __getitem__(self, i: '_JsonKeys') -> 'Serializable':
+            ...
+
+        def __getitem__(self, i: Union['_JsonKeys', slice]) -> 'Serializable':  # pyright: ignore[reportIncompatibleMethodOverride]
+            ...
+
+
+class Base64:
+    __slots__ = ('_raw',)
+
+    def __init__(self, raw: bytes) -> None:
+        self._raw = raw
+
+    @classmethod
+    def encode(cls, value: bytes) -> 'Base64':
+        """Encode bytes into valid Base64"""
+        return cls(base64.b64encode(value))
+
+    @classmethod
+    def fromb64(cls, value: Union[str, bytes]) -> 'Base64':
+        """
+        Create an instance of the `Base64` class from data that has already
+        been encoded into a valid base 64 structure.
+        """
+        if isinstance(value, bytes):
+            return cls(value)
+
+        return cls(value.encode(BASE64_ENCODING))
+
+    def decode(self) -> bytes:
+        """Decode from Base64 to the original bytes object"""
+        return base64.b64decode(self._raw)
+
+    # NOTE: we explicitly use a different encoding here as we are decoding
+    # to the original data provided by the user, this data does not have
+    # the limitation of being ascii only that the raw Base64 data does
+    def decode_str(self, encoding: str = 'utf-8') -> str:
+        """Decode from Base64 to the original string
+
+        This decodes using the `utf-8` encoding by default,
+        you can customise the encoding like so:
+
+        ```py
+        value = b64.decode_str('ascii')
+        ```
+        """
+        return self.decode().decode(encoding)
+
+    # Support OpenAPI schema generation
+    if PYDANTIC_V2:
+        @classmethod
+        def __get_pydantic_json_schema__(cls, core_schema: CoreSchema, handler: Any) -> Any:
+            json_schema = handler(core_schema)
+            json_schema = handler.resolve_ref_schema(json_schema)
+            json_schema['type'] = 'string'
+            json_schema['format'] = 'byte'
+            return json_schema
+    else:
+        @classmethod
+        def __modify_schema__(cls, field_schema: Dict[str, object]) -> None:
+            field_schema['type'] = 'string'
+            field_schema['format'] = 'byte'
+
+    # Support converting objects into Base64 at the Pydantic level
+    if PYDANTIC_V2:
+        @classmethod
+        def __get_pydantic_core_schema__(
+            cls,
+            source_type: Any,
+            *args: Any,
+            **kwargs: Any,
+        ) -> CoreSchema:
+            return core_schema.no_info_before_validator_function(
+                cls._validate,
+                schema=core_schema.any_schema(),
+                serialization=core_schema.plain_serializer_function_ser_schema(
+                    lambda instance: str(instance)
+                )
+            )
+    else:
+        @classmethod
+        def __get_validators__(cls) -> Iterator[object]:
+            yield cls._validate
+
+    @classmethod
+    def _validate(cls, value: object) -> 'Base64':
+        if isinstance(value, Base64):
+            return value
+
+        # TODO: validate that the structure of the input is valid too?
+        if isinstance(value, str):
+            return cls(bytes(value, BASE64_ENCODING))
+
+        if isinstance(value, bytes):
+            return cls(value)
+
+        raise ValueError(
+            f'Could not convert type: {type(value)} to a Base64 object; Expected a string or bytes object'
+        )
+
+    def __str__(self) -> str:
+        return self._raw.decode(BASE64_ENCODING)
+
+    def __repr__(self) -> str:
+        return f'{self.__class__.__name__}({self._raw})'  # type: ignore[str-bytes-safe]
+
+    def __eq__(self, other: Any) -> bool:
+        if isinstance(other, Base64):
+            return self._raw == other._raw
+
+        return False
+
+
+from .types import Serializable

@@ -1,0 +1,82 @@
+{
+  "pagination": {
+    "ListSkills": {
+      "result_key": "SkillSummaries",
+      "output_token": "NextToken",
+      "input_token": "NextToken",
+      "limit_key": "MaxResults"
+    },
+    "SearchUsers": {
+      "result_key": "Users",
+      "output_token": "NextToken",
+      "input_token": "NextToken",
+      "limit_key": "MaxResults"
+    },
+    "ListTags": {
+      "result_key": "Tags",
+      "output_token": "NextToken",
+      "input_token": "NextToken",
+      "limit_key": "MaxResults"
+    },
+    "SearchProfiles": {
+      "result_key": "Profiles",
+      "output_token": "NextToken",
+      "input_token": "NextToken",
+      "limit_key": "MaxResults"
+    },
+    "SearchSkillGroups": {
+      "result_key": "SkillGroups",
+      "output_token": "NextToken",
+      "input_token": "NextToken",
+      "limit_key": "MaxResults"
+    },
+    "SearchDevices": {
+      "result_key": "Devices",
+      "output_token": "NextToken",
+      "input_token": "NextToken",
+      "limit_key": "MaxResults"
+    },
+    "SearchRooms": {
+      "result_key": "Rooms",
+      "output_token": "NextToken",
+      "input_token": "NextToken",
+      "limit_key": "MaxResults"
+    },
+    "ListBusinessReportSchedules": {
+      "input_token": "NextToken",
+      "limit_key": "MaxResults",
+      "output_token": "NextToken",
+      "result_key": "BusinessReportSchedules"
+    },
+    "ListConferenceProviders": {
+      "input_token": "NextToken",
+      "limit_key": "MaxResults",
+      "output_token": "NextToken",
+      "result_key": "ConferenceProviders"
+    },
+    "ListDeviceEvents": {
+      "input_token": "NextToken",
+      "limit_key": "MaxResults",
+      "output_token": "NextToken",
+      "result_key": "DeviceEvents"
+    },
+    "ListSkillsStoreCategories": {
+      "input_token": "NextToken",
+      "limit_key": "MaxResults",
+      "output_token": "NextToken",
+      "result_key": "CategoryList"
+    },
+    "ListSkillsStoreSkillsByCategory": {
+      "input_token": "NextToken",
+      "limit_key": "MaxResults",
+      "output_token": "NextToken",
+      "result_key": "SkillsStoreSkills"
+    },
+    "ListSmartHomeAppliances": {
+      "input_token": "NextToken",
+      "limit_key": "MaxResults",
+      "output_token": "NextToken",
+      "result_key": "SmartHomeAppliances"
+    }
+  }
+}

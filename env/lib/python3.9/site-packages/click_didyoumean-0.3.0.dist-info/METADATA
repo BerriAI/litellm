@@ -1,0 +1,14 @@
+Metadata-Version: 2.1
+Name: click-didyoumean
+Version: 0.3.0
+Summary: Enables git-like *did-you-mean* feature in click
+License: MIT
+Author: Timo Furrer
+Author-email: timo.furrer@roche.com
+Requires-Python: >=3.6.2,<4.0.0
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.7
+Classifier: Programming Language :: Python :: 3.8
+Classifier: Programming Language :: Python :: 3.9
+Requires-Dist: click (>=7)

@@ -1,0 +1,41 @@
+Metadata-Version: 2.1
+Name: rq
+Version: 1.15.1
+Summary: RQ is a simple, lightweight, library for creating background jobs, and processing them.
+Home-page: https://github.com/nvie/rq/
+Author: Vincent Driessen
+Author-email: vincent@3rdcloud.com
+License: BSD
+Platform: any
+Classifier: Development Status :: 5 - Production/Stable
+Classifier: Intended Audience :: Developers
+Classifier: Intended Audience :: End Users/Desktop
+Classifier: Intended Audience :: Information Technology
+Classifier: Intended Audience :: Science/Research
+Classifier: Intended Audience :: System Administrators
+Classifier: License :: OSI Approved :: BSD License
+Classifier: Operating System :: POSIX
+Classifier: Operating System :: MacOS
+Classifier: Operating System :: Unix
+Classifier: Programming Language :: Python
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.6
+Classifier: Programming Language :: Python :: 3.7
+Classifier: Programming Language :: Python :: 3.8
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Topic :: Software Development :: Libraries :: Python Modules
+Classifier: Topic :: Internet
+Classifier: Topic :: Scientific/Engineering
+Classifier: Topic :: System :: Distributed Computing
+Classifier: Topic :: System :: Systems Administration
+Classifier: Topic :: System :: Monitoring
+Requires-Python: >=3.6
+License-File: LICENSE
+Requires-Dist: redis (>=4.0.0)
+Requires-Dist: click (>=5.0.0)
+
+
+rq is a simple, lightweight, library for creating background jobs, and
+processing them.

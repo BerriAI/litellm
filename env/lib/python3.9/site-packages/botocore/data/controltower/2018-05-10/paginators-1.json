@@ -1,0 +1,16 @@
+{
+  "pagination": {
+    "ListEnabledControls": {
+      "input_token": "nextToken",
+      "output_token": "nextToken",
+      "limit_key": "maxResults",
+      "result_key": "enabledControls"
+    },
+    "ListLandingZones": {
+      "input_token": "nextToken",
+      "output_token": "nextToken",
+      "limit_key": "maxResults",
+      "result_key": "landingZones"
+    }
+  }
+}

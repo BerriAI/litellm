@@ -1,0 +1,6 @@
+#!/Users/guttisumanth/Desktop/workspace/litellm/env/bin/python
+import sys
+from litellm import run_server
+
+if __name__ == '__main__':
+    sys.exit(run_server())

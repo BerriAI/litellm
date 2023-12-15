@@ -1,0 +1,136 @@
+Metadata-Version: 2.1
+Name: google-ai-generativelanguage
+Version: 0.3.3
+Summary: Google Ai Generativelanguage API client library
+Home-page: https://github.com/googleapis/google-cloud-python
+Author: Google LLC
+Author-email: googleapis-packages@google.com
+License: Apache 2.0
+Platform: Posix; MacOS X; Windows
+Classifier: Development Status :: 4 - Beta
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: Apache Software License
+Classifier: Programming Language :: Python
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.7
+Classifier: Programming Language :: Python :: 3.8
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Operating System :: OS Independent
+Classifier: Topic :: Internet
+Requires-Python: >=3.7
+License-File: LICENSE
+Requires-Dist: google-api-core[grpc] (!=2.0.*,!=2.1.*,!=2.10.*,!=2.2.*,!=2.3.*,!=2.4.*,!=2.5.*,!=2.6.*,!=2.7.*,!=2.8.*,!=2.9.*,<3.0.0dev,>=1.34.0)
+Requires-Dist: proto-plus (<2.0.0dev,>=1.22.0)
+Requires-Dist: protobuf (!=3.20.0,!=3.20.1,!=4.21.0,!=4.21.1,!=4.21.2,!=4.21.3,!=4.21.4,!=4.21.5,<5.0.0dev,>=3.19.5)
+Requires-Dist: proto-plus (<2.0.0dev,>=1.22.2) ; python_version >= "3.11"
+
+Python Client for Generative Language API
+=========================================
+
+|preview| |pypi| |versions|
+
+`Generative Language API`_: Generative Language API
+
+- `Client Library Documentation`_
+- `Product Documentation`_
+
+.. |preview| image:: https://img.shields.io/badge/support-preview-orange.svg
+   :target: https://github.com/googleapis/google-cloud-python/blob/main/README.rst#stability-levels
+.. |pypi| image:: https://img.shields.io/pypi/v/google-ai-generativelanguage.svg
+   :target: https://pypi.org/project/google-ai-generativelanguage/
+.. |versions| image:: https://img.shields.io/pypi/pyversions/google-ai-generativelanguage.svg
+   :target: https://pypi.org/project/google-ai-generativelanguage/
+.. _Generative Language API: https://developers.generativeai.google/
+.. _Client Library Documentation: https://googleapis.dev/python/generativelanguage/latest
+.. _Product Documentation:  https://developers.generativeai.google/
+
+Quick Start
+-----------
+
+In order to use this library, you first need to go through the following steps:
+
+1. `Select or create a Cloud Platform project.`_
+2. `Enable billing for your project.`_
+3. `Enable the Generative Language API.`_
+4. `Setup Authentication.`_
+
+.. _Select or create a Cloud Platform project.: https://console.cloud.google.com/project
+.. _Enable billing for your project.: https://cloud.google.com/billing/docs/how-to/modify-project#enable_billing_for_a_project
+.. _Enable the Generative Language API.:  https://developers.generativeai.google/
+.. _Setup Authentication.: https://googleapis.dev/python/google-api-core/latest/auth.html
+
+Installation
+~~~~~~~~~~~~
+
+Install this library in a virtual environment using `venv`_. `venv`_ is a tool that
+creates isolated Python environments. These isolated environments can have separate
+versions of Python packages, which allows you to isolate one project's dependencies
+from the dependencies of other projects.
+
+With `venv`_, it's possible to install this library without needing system
+install permissions, and without clashing with the installed system
+dependencies.
+
+.. _`venv`: https://docs.python.org/3/library/venv.html
+
+
+Code samples and snippets
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Code samples and snippets live in the `samples/`_ folder.
+
+.. _samples/: https://github.com/googleapis/google-cloud-python/tree/main/packages/google-ai-generativelanguage/samples
+
+
+Supported Python Versions
+^^^^^^^^^^^^^^^^^^^^^^^^^
+Our client libraries are compatible with all current `active`_ and `maintenance`_ versions of
+Python.
+
+Python >= 3.7
+
+.. _active: https://devguide.python.org/devcycle/#in-development-main-branch
+.. _maintenance: https://devguide.python.org/devcycle/#maintenance-branches
+
+Unsupported Python Versions
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Python <= 3.6
+
+If you are using an `end-of-life`_
+version of Python, we recommend that you update as soon as possible to an actively supported version.
+
+.. _end-of-life: https://devguide.python.org/devcycle/#end-of-life-branches
+
+Mac/Linux
+^^^^^^^^^
+
+.. code-block:: console
+
+    python3 -m venv <your-env>
+    source <your-env>/bin/activate
+    pip install google-ai-generativelanguage
+
+
+Windows
+^^^^^^^
+
+.. code-block:: console
+
+    py -m venv <your-env>
+    .\<your-env>\Scripts\activate
+    pip install google-ai-generativelanguage
+
+Next Steps
+~~~~~~~~~~
+
+-  Read the `Client Library Documentation`_ for Generative Language API
+   to see other available methods on the client.
+-  Read the `Generative Language API Product documentation`_ to learn
+   more about the product and see How-to Guides.
+-  View this `README`_ to see the full list of Cloud
+   APIs that we cover.
+
+.. _Generative Language API Product documentation:  https://developers.generativeai.google/
+.. _README: https://github.com/googleapis/google-cloud-python/blob/main/README.rst

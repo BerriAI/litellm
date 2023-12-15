@@ -1,0 +1,16 @@
+{
+  "pagination": {
+    "ListApplicationSnapshots": {
+      "input_token": "NextToken",
+      "limit_key": "Limit",
+      "output_token": "NextToken",
+      "result_key": "SnapshotSummaries"
+    },
+    "ListApplications": {
+      "input_token": "NextToken",
+      "limit_key": "Limit",
+      "output_token": "NextToken",
+      "result_key": "ApplicationSummaries"
+    }
+  }
+}

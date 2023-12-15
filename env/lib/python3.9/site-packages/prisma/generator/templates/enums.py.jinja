@@ -1,0 +1,12 @@
+{% include '_header.py.jinja' %}
+# -- template enums.py.jinja --
+from enum import Enum
+
+
+{% for enum in dmmf.datamodel.enums %}
+class {{ enum.name }}(str, Enum):
+    {% for value in enum.values %}
+    {{ value.name }} = '{{ value.name }}'
+    {% endfor %}
+
+{% endfor %}

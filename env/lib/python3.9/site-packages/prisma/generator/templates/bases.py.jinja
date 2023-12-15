@@ -1,0 +1,51 @@
+{% include '_header.py.jinja' %}
+{% from '_utils.py.jinja' import recursive_types with context %}
+# -- template models.py.jinja --
+from pydantic import BaseModel
+
+from . import fields, actions
+from ._types import FuncType
+from .builder import serialize_base64
+from ._compat import PYDANTIC_V2, ConfigDict
+
+if TYPE_CHECKING:
+    from .client import Prisma
+
+
+_PrismaModelT = TypeVar('_PrismaModelT', bound='_PrismaModel')
+
+
+class _PrismaModel(BaseModel):
+    if PYDANTIC_V2:
+        model_config: ClassVar[ConfigDict] = ConfigDict(
+            use_enum_values=True,
+            arbitrary_types_allowed=True,
+            populate_by_name=True,
+        )
+    elif not TYPE_CHECKING:
+        from ._compat import BaseConfig
+
+        class Config(BaseConfig):
+            use_enum_values: bool = True
+            arbitrary_types_allowed: bool = True
+            allow_population_by_field_name: bool = True
+            json_encoders: Dict[Any, FuncType] = {
+                fields.Base64: serialize_base64,
+            }
+
+    # TODO: ensure this is required by subclasses
+    __prisma_model__: ClassVar[str]
+
+
+{% for model in dmmf.datamodel.models %}
+class Base{{ model.name }}(_PrismaModel):
+    __prisma_model__: ClassVar[Literal['{{ model.name }}']] = '{{ model.name }}'
+
+    @classmethod
+    def prisma(cls: Type[_PrismaModelT], client: Optional['Prisma'] = None) -> 'actions.{{ model.name }}Actions[_PrismaModelT]':
+        from .client import get_client
+
+        return actions.{{ model.name }}Actions[_PrismaModelT](client or get_client(), cls)
+
+
+{% endfor %}

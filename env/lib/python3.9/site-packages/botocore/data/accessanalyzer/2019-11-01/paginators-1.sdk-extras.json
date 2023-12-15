@@ -1,0 +1,21 @@
+{
+  "version": 1.0,
+  "merge": {
+    "pagination": {
+      "GetFindingV2": {
+        "non_aggregate_keys": [
+          "resource",
+          "status",
+          "error",
+          "createdAt",
+          "resourceType",
+          "findingType",
+          "resourceOwnerAccount",
+          "analyzedAt",
+          "id",
+          "updatedAt"
+        ]
+      }
+    }
+  }
+}

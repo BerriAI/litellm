@@ -1,0 +1,27 @@
+{
+  "pagination": {
+    "ListTableColumns": {
+      "input_token": "nextToken",
+      "output_token": "nextToken",
+      "result_key": "tableColumns"
+    },
+    "ListTableRows": {
+      "input_token": "nextToken",
+      "output_token": "nextToken",
+      "limit_key": "maxResults",
+      "result_key": "rows"
+    },
+    "ListTables": {
+      "input_token": "nextToken",
+      "output_token": "nextToken",
+      "limit_key": "maxResults",
+      "result_key": "tables"
+    },
+    "QueryTableRows": {
+      "input_token": "nextToken",
+      "output_token": "nextToken",
+      "limit_key": "maxResults",
+      "result_key": "rows"
+    }
+  }
+}

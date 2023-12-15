@@ -1,0 +1,35 @@
+{
+  "version": 1.0,
+  "merge": {
+    "pagination": {
+      "ListMultipartUploads": {
+        "non_aggregate_keys": [
+          "RequestCharged"
+        ]
+      },
+      "ListObjectVersions": {
+        "non_aggregate_keys": [
+          "RequestCharged"
+        ]
+      },
+      "ListObjects": {
+          "non_aggregate_keys": [
+            "RequestCharged"
+          ]
+      },
+      "ListObjectsV2": {
+        "non_aggregate_keys": [
+          "RequestCharged"
+        ]
+      },
+      "ListParts": {
+        "non_aggregate_keys": [
+          "ChecksumAlgorithm",
+          "Initiator",
+          "Owner",
+          "StorageClass"
+        ]
+      }
+    }
+  }
+}
