@@ -173,7 +173,7 @@ def completion(
                 message=json.dumps(completion_response["output"]), status_code=response.status_code
             )
     
-        if len(completion_response["output"]["choices"][0]["text"]) > 0:
+        if len(completion_response["output"]["choices"][0]["text"]) >= 0:
             model_response["choices"][0]["message"]["content"] = completion_response["output"]["choices"][0]["text"]
 
         ## CALCULATING USAGE
