@@ -281,6 +281,7 @@ provider_list: List = [
     "openai",
     "custom_openai",
     "text-completion-openai",
+    "aphrodite",
     "cohere",
     "anthropic",
     "replicate",

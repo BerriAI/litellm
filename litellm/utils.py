@@ -5043,6 +5043,16 @@ def exception_type(
                             model=model,
                             request=original_exception.request
                         )
+            elif custom_llm_provider == "aphrodite":
+                if hasattr(original_exception, "status_code"):
+                    if original_exception.status_code == 0:
+                        exception_mapping_worked = True
+                        raise APIConnectionError(
+                            message=f"AphroditeException - {original_exception.message}",
+                            llm_provider="aphrodite",
+                            model=model,
+                            request=original_exception.request
+                        )
             elif custom_llm_provider == "azure": 
                 if "This model's maximum context length is" in error_str:
                     exception_mapping_worked = True

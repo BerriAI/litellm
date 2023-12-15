@@ -36,6 +36,7 @@ from litellm.utils import (
 )
 from .llms import (
     anthropic,
+    aphrodite,
     together_ai,
     ai21,
     sagemaker,
@@ -1285,6 +1286,29 @@ def completion(
 
             ## RESPONSE OBJECT
             response = model_response
+        elif custom_llm_provider == "aphrodite":
+            model_response = aphrodite.completion(
+                model=model,
+                messages=messages,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                encoding=encoding,
+                logging_obj=logging
+            )
+
+            if "stream" in optional_params and optional_params["stream"] == True: ## [BETA]
+                # don't try to access stream object,
+                response = CustomStreamWrapper(
+                    model_response, model, custom_llm_provider="aphrodite",
+                    logging_obj=logging
+                )
+                return response
+
+            ## RESPONSE OBJECT
+            response = model_response
         elif custom_llm_provider == "ollama":
             api_base = (
                 litellm.api_base or
@@ -1517,6 +1541,23 @@ def batch_completion(
     max_tokens: Optional[float] = None,
     presence_penalty: Optional[float] = None,
     frequency_penalty: Optional[float]=None,
+    repetition_penalty: Optional[float]=None,
+    top_k: Optional[int]=None,
+    top_a: Optional[float]=None,
+    min_p: Optional[float]=None,
+    tfs: Optional[float] = None,
+    eta_cutoff: Optional[float] = None,
+    epsilon_cutoff: Optional[float] = None,
+    typical_p: Optional[float] = None,
+    mirostat_mode: Optional[int] = None,
+    mirostat_tau: Optional[float] = None,
+    mirostat_eta: Optional[float] = None,
+    use_beam_search: Optional[bool] = None,
+    early_stopping: Optional[bool] = None,
+    ignore_eos: Optional[bool] = None,
+    custom_token_bans: Optional[List[int]] = None,
+    skip_special_tokens: Optional[bool] = None,
+    spaces_between_special_tokens: Optional[bool] = None,
     logit_bias: Optional[dict] = None,
     user: Optional[str] = None,
     deployment_id = None,
@@ -1574,8 +1615,48 @@ def batch_completion(
             custom_llm_provider=custom_llm_provider
         )
         results = vllm.batch_completions(model=model, messages=batch_messages, custom_prompt_dict=litellm.custom_prompt_dict, optional_params=optional_params)
-    # all non VLLM models for batch completion models 
+    elif custom_llm_provider == "aphrodite":
+        optional_params = get_optional_params(
+            functions=functions,
+            function_call=function_call,
+            n=n,
+            presence_penalty=presence_penalty,
+            frequency_penalty=frequency_penalty,
+            repetition_penalty=repetition_penalty,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+            top_a=top_a,
+            min_p=min_p,
+            tfs=tfs,
+            eta_cutoff=eta_cutoff,
+            epsilon_cutoff=epsilon_cutoff,
+            typical_p=typical_p,
+            mirostat_mode=mirostat_mode,
+            mirostat_tau=mirostat_tau,
+            mirostat_eta=mirostat_eta,
+            use_beam_search=use_beam_search,
+            early_stopping=early_stopping,
+            ignore_eos=ignore_eos,
+            custom_token_bans=custom_token_bans,
+            skip_special_tokens=skip_special_tokens,
+            spaces_between_special_tokens=spaces_between_special_tokens,
+            logit_bias=logit_bias,
+            max_tokens=max_tokens,
+            stream=stream,
+            stop=stop,
+            user=user,
+            # params to identify the model
+            model=model,
+            custom_llm_provider=custom_llm_provider 
+        )
+        results = aphrodite.batch_completions(model=model,
+                                              messages=batch_messages,
+                                              custom_prompt_dict=(
+                                                  litellm.custom_prompt_dict),
+                                              optional_params=optional_params)
     else:
+        # all non vLLM/aphrodite models for batch completion models 
         def chunks(lst, n):
             """Yield successive n-sized chunks from lst."""
             for i in range(0, len(lst), n):

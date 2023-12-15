@@ -62,6 +62,7 @@ const sidebars = {
       items: [
         "providers/openai", 
         "providers/openai_compatible",
+        "providers/aphrodite",
         "providers/azure", 
         "providers/huggingface", 
         "providers/ollama", 

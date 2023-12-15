@@ -133,7 +133,13 @@ $ litellm --model command-nightly
 ```
 
 </TabItem>
+<TabItem value="aphrodite-local" lable="Aphrodite">
+Assuming you're running aphrodite locally:
 
+```shell
+$ litellm --model aphrodite/EleutherAI/pythia-70m
+```
+</TabItem>
 </Tabs>
 
 ### Tutorial: Use with Multiple LLMs + LibreChat/Chatbot-UI/Auto-Gen/ChatDev/Langroid,etc. 
