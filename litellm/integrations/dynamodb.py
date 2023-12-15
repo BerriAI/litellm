@@ -13,43 +13,14 @@ from litellm._logging import print_verbose
 class DyanmoDBLogger:
     # Class variables or attributes
 
-    def __init__(self, table_name="litellm-server-logs"):
+    def __init__(self):
         # Instance variables
         import boto3
         self.dynamodb = boto3.resource('dynamodb', region_name=os.environ["AWS_REGION_NAME"])
-        self.table_name = table_name
+        if litellm.dynamodb_table_name is None:
+            raise ValueError("LiteLLM Error, trying to use DynamoDB but not table name passed. Create a table and set `litellm.dynamodb_table_name=<your-table>`")
+        self.table_name = litellm.dynamodb_table_name
 
-        # on init check if there is a table with name == self.table_name
-        # if not call self.create_dynamodb_table()
-        if not self.check_table_exists():
-            print_verbose(f"DynamoDB: Table {self.table_name} does not exist. Creating table")
-            self.create_dynamodb_table()
-
-    def check_table_exists(self):
-        existing_tables = self.dynamodb.meta.client.list_tables()['TableNames']
-        print_verbose(f"Dynamo DB: Existing Tables= {existing_tables}")
-        return self.table_name in existing_tables
-
-
-    def create_dynamodb_table(self):
-        # for dynamo we can create a table with id attribute, there's no need to define other cols
-        table_params = {
-            'TableName': self.table_name,
-            'KeySchema': [
-                {'AttributeName': 'id', 'KeyType': 'HASH'}  # 'id' is the primary key
-            ],
-            'AttributeDefinitions': [
-                {'AttributeName': 'id', 'AttributeType': 'S'}  # 'S' denotes string type
-            ],
-            'ProvisionedThroughput': {
-                'ReadCapacityUnits': 5,   # Adjust based on your read/write capacity needs
-                'WriteCapacityUnits': 5
-            }
-        }
-
-        self.dynamodb.create_table(**table_params)
-        print_verbose(f'Table {self.table_name} created successfully')
-    
     async def _async_log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
         self.log_event(kwargs, response_obj, start_time, end_time, print_verbose)
     def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
