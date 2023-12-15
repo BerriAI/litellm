@@ -233,6 +233,63 @@ async def asynctest_completion_azure_exception():
 # )
 
 
+def asynctest_completion_openai_exception_bad_model():
+    try:
+        import openai
+        import litellm, asyncio
+        print("azure exception bad model\n\n")
+        litellm.set_verbose=True
+        ## Test azure call
+        async def test():
+            response = await litellm.acompletion(
+                model="openai/gpt-6",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": "hello"
+                    }
+                ],
+            )
+        asyncio.run(test())
+    except openai.BadRequestError:
+        print("Good job this is a bad request error for a model that does not exist!")
+        print("Passed")
+    except Exception as e:
+        print("Raised wrong type of exception", type(e))
+        assert isinstance(e, openai.BadRequestError)
+        pytest.fail(f"Error occurred: {e}")
+
+# asynctest_completion_openai_exception_bad_model()
+
+
+
+def asynctest_completion_azure_exception_bad_model():
+    try:
+        import openai
+        import litellm, asyncio
+        print("azure exception bad model\n\n")
+        litellm.set_verbose=True
+        ## Test azure call
+        async def test():
+            response = await litellm.acompletion(
+                model="azure/gpt-12",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": "hello"
+                    }
+                ],
+            )
+        asyncio.run(test())
+    except openai.BadRequestError:
+        print("Good job this is a bad request error for a model that does not exist!")
+        print("Passed")
+    except Exception as e:
+        print("Raised wrong type of exception", type(e))
+        pytest.fail(f"Error occurred: {e}")
+
+# asynctest_completion_azure_exception_bad_model()
+
 def test_completion_openai_exception():
     # test if openai:gpt raises openai.AuthenticationError
     try:
