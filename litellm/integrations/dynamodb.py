@@ -62,14 +62,14 @@ class DyanmoDBLogger:
             metadata = litellm_params.get("metadata", {}) or {}  # if litellm_params['metadata'] == None
             messages = kwargs.get("messages")
             optional_params = kwargs.get("optional_params", {})
-            function_name = kwargs.get("function_name", "litellm.completion")
+            call_type = kwargs.get("call_type", "litellm.completion")
             usage = response_obj["usage"]
             id = response_obj.get("id", str(uuid.uuid4()))
 
             # Build the initial payload
             payload = {
                 "id": id,
-                "function_name": function_name,
+                "call_type": call_type,
                 "startTime": start_time,
                 "endTime": end_time,
                 "model": kwargs.get("model", ""),
