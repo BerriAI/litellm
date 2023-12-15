@@ -23,23 +23,50 @@ def client():
     app.include_router(router)  # Include your router in the test app
     return TestClient(app)
 
+# raise openai.AuthenticationError
 def test_chat_completion_exception(client):
     try:
-        base_url = client.base_url
-        print("Base url of client= ", base_url)
+        # Your test data
+        test_data = {
+            "model": "gpt-3.5-turbo",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "hi"
+                },
+            ],
+            "max_tokens": 10,
+        }
 
-        openai_client = openai.OpenAI(
-            api_key="anything",
-            base_url="http://0.0.0.0:8000",
-        )
+        response = client.post("/chat/completions", json=test_data)
 
-        response = openai_client.chat.completions.create(model="gpt-3.5-turbo", messages = [
-            {
-                "role": "user",
-                "content": "this is a test request, write a short poem"
-            },
-        ])
-    except openai.AuthenticationError:
-        print("Got openai Auth Exception. Good job. The proxy mapped to OpenAI exceptions")
+        # make an openai client to call _make_status_error_from_response
+        openai_client = openai.OpenAI(api_key="anything")
+        openai_exception = openai_client._make_status_error_from_response(response=response)
+        assert isinstance(openai_exception, openai.AuthenticationError)
+
+    except Exception as e:
+        pytest.fail(f"LiteLLM Proxy test failed. Exception {str(e)}")
+def test_chat_completion_exception_azure(client):
+    try:
+        # Your test data
+        test_data = {
+            "model": "azure-gpt-3.5-turbo",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "hi"
+                },
+            ],
+            "max_tokens": 10,
+        }
+
+        response = client.post("/chat/completions", json=test_data)
+
+        # make an openai client to call _make_status_error_from_response
+        openai_client = openai.OpenAI(api_key="anything")
+        openai_exception = openai_client._make_status_error_from_response(response=response)
+        assert isinstance(openai_exception, openai.AuthenticationError)
+
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception {str(e)}")
