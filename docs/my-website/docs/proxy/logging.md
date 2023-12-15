@@ -1,6 +1,8 @@
+import Image from '@theme/IdealImage';
+
 # Logging - Custom Callbacks, OpenTelemetry, Langfuse, Sentry
 
-Log Proxy Input, Output, Exceptions using Custom Callbacks, Langfuse, OpenTelemetry
+Log Proxy Input, Output, Exceptions using Custom Callbacks, Langfuse, OpenTelemetry, LangFuse, DynamoDB
 
 ## Custom Callback Class [Async]
 Use this when you want to run custom callbacks in `python`
@@ -487,6 +489,43 @@ litellm --test
 Expected output on Langfuse
 
 <Image img={require('../../img/langfuse_small.png')} />
+
+## Logging Proxy Input/Output - DynamoDB
+
+We will use the `--config` to set `litellm.success_callback = ["dynamodb"]` this will log all successfull LLM calls to DynamoDB
+
+**Step 1** Set AWS Credentials in .env
+
+```shell
+AWS_ACCESS_KEY_ID = ""
+AWS_SECRET_ACCESS_KEY = ""
+AWS_REGION_NAME = ""
+```
+
+**Step 2**: Create a `config.yaml` file and set `litellm_settings`: `success_callback`
+```yaml
+model_list:
+ - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+litellm_settings:
+  success_callback: ["dynamodb"]
+```
+
+**Step 3**: Start the proxy, make a test request
+
+Start proxy
+```shell
+litellm --config config.yaml --debug
+```
+
+Test Request
+```
+litellm --test
+```
+
+
+
 
 ## Logging Proxy Input/Output - Sentry
 
