@@ -1160,6 +1160,29 @@ class Logging:
                             end_time=end_time,
                             print_verbose=print_verbose,
                         )
+                if callback == "langfuse":
+                    global langFuseLogger
+                    print_verbose("reaches langfuse for logging!")
+                    kwargs = {}
+                    for k, v in self.model_call_details.items(): 
+                        if k != "original_response": # copy.deepcopy raises errors as this could be a coroutine
+                            kwargs[k] = v
+                    # this only logs streaming once, complete_streaming_response exists i.e when stream ends
+                    if self.stream:
+                        if "complete_streaming_response" not in kwargs:
+                            return
+                        else:
+                            print_verbose("reaches langfuse for streaming logging!")
+                            result = kwargs["complete_streaming_response"]
+                    if langFuseLogger is None:
+                        langFuseLogger = LangFuseLogger()
+                    await langFuseLogger._async_log_event(
+                        kwargs=kwargs,
+                        response_obj=result,
+                        start_time=start_time,
+                        end_time=end_time,
+                        print_verbose=print_verbose,
+                    )
             except: 
                 print_verbose(
                     f"LiteLLM.LoggingError: [Non-Blocking] Exception occurred while success logging {traceback.format_exc()}"
@@ -1442,6 +1465,11 @@ def client(original_function):
                         removed_async_items.append(index)
                     elif callback == "dynamodb":
                         # dynamo is an async callback, it's used for the proxy and needs to be async
+                        # we only support async dynamo db logging for acompletion/aembedding since that's used on proxy
+                        litellm._async_success_callback.append(callback)
+                        removed_async_items.append(index)
+                    elif callback == "langfuse" and inspect.iscoroutinefunction(original_function):
+                        # use async success callback for langfuse if this is litellm.acompletion(). Streaming logging does not work otherwise
                         litellm._async_success_callback.append(callback)
                         removed_async_items.append(index)
 
