@@ -1,3 +1,6 @@
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # 🐳 Docker, Deploying LiteLLM Proxy
 
 ## Dockerfile
@@ -81,6 +84,26 @@ Your LiteLLM container should be running now on the defined port e.g. `8000`.
 
 <iframe width="840" height="500" src="https://www.loom.com/embed/805964b3c8384b41be180a61442389a3" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
 
+
+## Deploy on Google Cloud Run
+**Click the button** to deploy to Google Cloud Run
+
+[![Deploy](https://deploy.cloud.run/button.svg)](https://l.linklyhq.com/l/1uHtX)
+
+#### Testing your deployed proxy
+**Assuming the required keys are set as Environment Variables**
+
+https://litellm-7yjrj3ha2q-uc.a.run.app is our example proxy, substitute it with your deployed cloud run app
+
+```shell
+curl https://litellm-7yjrj3ha2q-uc.a.run.app/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+     "model": "gpt-3.5-turbo",
+     "messages": [{"role": "user", "content": "Say this is a test!"}],
+     "temperature": 0.7
+   }'
+```
 
 ## LiteLLM Proxy Performance
 
