@@ -12,6 +12,7 @@
 from openai import (
     AuthenticationError,
     BadRequestError,
+    NotFoundError,
     RateLimitError,
     APIStatusError,
     OpenAIError,
@@ -35,6 +36,20 @@ class AuthenticationError(AuthenticationError):  # type: ignore
             response=response,
             body=None
         )  # Call the base class constructor with the parameters it needs
+
+# raise when invalid models passed, example gpt-8
+class NotFoundError(NotFoundError):  # type: ignore
+    def __init__(self, message, model, llm_provider, response: httpx.Response):
+        self.status_code = 404
+        self.message = message
+        self.model = model
+        self.llm_provider = llm_provider
+        super().__init__(
+            self.message,
+            response=response,
+            body=None
+        )  # Call the base class constructor with the parameters it needs
+
 
 class BadRequestError(BadRequestError):  # type: ignore
     def __init__(self, message, model, llm_provider, response: httpx.Response):

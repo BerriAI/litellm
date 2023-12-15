@@ -412,6 +412,7 @@ from .exceptions import (
     AuthenticationError,
     InvalidRequestError,
     BadRequestError,
+    NotFoundError,
     RateLimitError,
     ServiceUnavailableError,
     OpenAIError,
