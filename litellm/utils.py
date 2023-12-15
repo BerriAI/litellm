@@ -2854,7 +2854,18 @@ def get_llm_provider(model: str, custom_llm_provider: Optional[str] = None, api_
             print() # noqa
             print("\033[1;31mProvider List: https://docs.litellm.ai/docs/providers\033[0m") # noqa
             print() # noqa
-            raise ValueError(f"LLM Provider NOT provided. Pass in the LLM provider you are trying to call. E.g. For 'Huggingface' inference endpoints pass in `completion(model='huggingface/{model}',..)` Learn more: https://docs.litellm.ai/docs/providers")
+            error_str = f"LLM Provider NOT provided. Pass in the LLM provider you are trying to call. You passed model={model}\n Pass model as E.g. For 'Huggingface' inference endpoints pass in `completion(model='huggingface/starcoder',..)` Learn more: https://docs.litellm.ai/docs/providers"
+            # maps to openai.NotFoundError, this is raised when openai does not recognize the llm
+            raise litellm.exceptions.NotFoundError( # type: ignore
+                message=error_str,
+                model=model,
+                response=httpx.Response(
+                    status_code=404,
+                    content=error_str,              
+                    request=httpx.request(method="completion", url="https://litellm.ai") # type: ignore
+                ),
+                llm_provider=""
+            )
         return model, custom_llm_provider, dynamic_api_key, api_base
     except Exception as e: 
         raise e
