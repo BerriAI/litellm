@@ -900,6 +900,7 @@ class Router:
                 or custom_llm_provider == "mistral"
                 or custom_llm_provider == "openai"
                 or custom_llm_provider == "azure"
+                or custom_llm_provider == "mistral"
                 or "ft:gpt-3.5-turbo" in model_name
                 or model_name in litellm.open_ai_embedding_models
             ):
