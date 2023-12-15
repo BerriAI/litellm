@@ -5002,6 +5002,14 @@ def exception_type(
                         model=model,
                         response=original_exception.response
                     )
+                elif "DeploymentNotFound" in error_str:
+                    exception_mapping_worked = True
+                    raise BadRequestError(
+                        message=f"AzureException - {original_exception.message}",
+                        llm_provider="azure",
+                        model=model,
+                        response=original_exception.response
+                    )
                 elif hasattr(original_exception, "status_code"):
                     exception_mapping_worked = True
                     if original_exception.status_code == 401:
