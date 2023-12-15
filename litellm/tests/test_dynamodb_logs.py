@@ -54,7 +54,7 @@ def verify_log_file(log_file_path):
 
         # Print the count of successful responses
         print(f"Count of successful responses from DynamoDB: {success_count}")
-    assert success_count == 3
+    assert success_count == 3 # Expect 3 success logs from dynamoDB
 
 
 def test_dynamo_logging(): 
