@@ -1,4 +1,6 @@
-A private and secure ChatGPT alternative that knows your business. 
+**A private and secure ChatGPT alternative that knows your business.**
+
+Upload docs, ask questions --> get answers.
 
 Leverage GenAI with your confidential documents to increase efficiency and collaboration.
 
