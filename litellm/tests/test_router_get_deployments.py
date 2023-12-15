@@ -49,7 +49,7 @@ def test_weighted_selection_router():
 		for _ in range(1000):
 			selected_model = router.get_available_deployment("gpt-3.5-turbo")
 			selected_model_id = selected_model["litellm_params"]["model"]
-			selected_model_name = litellm.utils.remove_model_id(selected_model_id)
+			selected_model_name = selected_model_id
 			selection_counts[selected_model_name] +=1
 		print(selection_counts)
 
@@ -101,7 +101,7 @@ def test_weighted_selection_router_tpm():
 		for _ in range(1000):
 			selected_model = router.get_available_deployment("gpt-3.5-turbo")
 			selected_model_id = selected_model["litellm_params"]["model"]
-			selected_model_name = litellm.utils.remove_model_id(selected_model_id)
+			selected_model_name = selected_model_id
 			selection_counts[selected_model_name] +=1
 		print(selection_counts)
 
@@ -154,7 +154,7 @@ def test_weighted_selection_router_tpm_as_router_param():
 		for _ in range(1000):
 			selected_model = router.get_available_deployment("gpt-3.5-turbo")
 			selected_model_id = selected_model["litellm_params"]["model"]
-			selected_model_name = litellm.utils.remove_model_id(selected_model_id)
+			selected_model_name = selected_model_id
 			selection_counts[selected_model_name] +=1
 		print(selection_counts)
 
@@ -210,7 +210,7 @@ def test_weighted_selection_router_rpm_as_router_param():
 		for _ in range(1000):
 			selected_model = router.get_available_deployment("gpt-3.5-turbo")
 			selected_model_id = selected_model["litellm_params"]["model"]
-			selected_model_name = litellm.utils.remove_model_id(selected_model_id)
+			selected_model_name = selected_model_id
 			selection_counts[selected_model_name] +=1
 		print(selection_counts)
 
@@ -270,7 +270,7 @@ def test_weighted_selection_router_no_rpm_set():
 		for _ in range(1000):
 			selected_model = router.get_available_deployment("claude-1")
 			selected_model_id = selected_model["litellm_params"]["model"]
-			selected_model_name = litellm.utils.remove_model_id(selected_model_id)
+			selected_model_name = selected_model_id
 			selection_counts[selected_model_name] +=1
 		print(selection_counts)
 
@@ -337,7 +337,7 @@ def test_model_group_aliases():
 		for _ in range(1000):
 			selected_model = router.get_available_deployment("gpt-3.5-turbo")
 			selected_model_id = selected_model["litellm_params"]["model"]
-			selected_model_name = litellm.utils.remove_model_id(selected_model_id)
+			selected_model_name = selected_model_id
 			selection_counts[selected_model_name] +=1
 		print(selection_counts)
 
