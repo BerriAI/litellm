@@ -856,22 +856,17 @@ class Logging:
             print_verbose(f"success callbacks: {litellm.success_callback}")     
             ## BUILD COMPLETE STREAMED RESPONSE
             complete_streaming_response = None
-            if self.stream == True and self.model_call_details.get("litellm_params", {}).get("acompletion", False) == False: # only call stream chunk builder if it's not acompletion()
-                # if it's acompletion == True, chunks are built/appended in async_success_handler
+            if self.stream and self.model_call_details.get("litellm_params", {}).get("acompletion", False) == False: # only call stream chunk builder if it's not acompletion()
                 if result.choices[0].finish_reason is not None: # if it's the last chunk
-                    streaming_chunks = self.streaming_chunks + [result]
-                    complete_streaming_response = litellm.stream_chunk_builder(streaming_chunks, messages=self.model_call_details.get("messages", None))
-            else:
-                # this is a completion() call
-                if self.stream == True: 
-                    print_verbose("success callback - assembling complete streaming response")
-                    if result.choices[0].finish_reason is not None: # if it's the last chunk
-                        print_verbose(f"success callback - Got the very Last chunk. Assembling {self.streaming_chunks}")
-                        self.streaming_chunks.append(result)
+                    self.streaming_chunks.append(result)
+                    # print_verbose(f"final set of received chunks: {self.streaming_chunks}")
+                    try: 
                         complete_streaming_response = litellm.stream_chunk_builder(self.streaming_chunks, messages=self.model_call_details.get("messages", None))
-                        print_verbose(f"success callback - complete streamign response{complete_streaming_response}")
-                    else:
-                        self.streaming_chunks.append(result)
+                    except: 
+                        complete_streaming_response = None
+                else:
+                    self.streaming_chunks.append(result)
+
             if complete_streaming_response: 
                 self.model_call_details["complete_streaming_response"] = complete_streaming_response
 
