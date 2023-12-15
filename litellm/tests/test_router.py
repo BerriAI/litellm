@@ -431,7 +431,7 @@ def test_acompletion_on_router():
 		traceback.print_exc()
 		pytest.fail(f"Error occurred: {e}")
 
-test_acompletion_on_router() 
+# test_acompletion_on_router() 
 
 def test_function_calling_on_router(): 
 	try: 
@@ -593,6 +593,30 @@ def test_bedrock_on_router():
 		pytest.fail(f"Error occurred: {e}")
 # test_bedrock_on_router()
 
+# test openai-compatible endpoint
+@pytest.mark.asyncio
+async def test_mistral_on_router():
+	litellm.set_verbose = True
+	model_list = [
+			{
+				"model_name": "gpt-3.5-turbo",
+				"litellm_params": {
+					"model": "mistral/mistral-medium",
+				},
+			},
+		]
+	router = Router(model_list=model_list)
+	response = await router.acompletion(
+				model="gpt-3.5-turbo",
+				messages=[
+					{
+						"role": "user",
+						"content": "hello from litellm test",
+					}
+				]
+			)
+	print(response)
+asyncio.run(test_mistral_on_router())
 
 def test_openai_completion_on_router():
 	# [PROD Use Case] - Makes an acompletion call + async acompletion call, and sync acompletion call, sync completion + stream
