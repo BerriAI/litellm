@@ -58,6 +58,7 @@ aclient_session: Optional[httpx.AsyncClient] = None
 model_fallbacks: Optional[List] = None # Deprecated for 'litellm.fallbacks'
 model_cost_map_url: str = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
 suppress_debug_info = False
+dynamodb_table_name: Optional[str] = None
 #### RELIABILITY ####
 request_timeout: Optional[float] = 6000
 num_retries: Optional[int] = None
