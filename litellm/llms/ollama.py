@@ -182,40 +182,28 @@ def ollama_completion_stream(url, data):
                     traceback.print_exc()
     session.close()
 
+async def iter_lines(reader):
+    buffer = b""
+    async for chunk in reader.iter_any():
+        buffer += chunk
+        while b'\n' in buffer:
+            line, buffer = buffer.split(b'\n', 1)
+            yield line
+
 async def ollama_async_streaming(url, data, model_response, encoding, logging_obj):
     try:
-        timeout = aiohttp.ClientTimeout(total=600)  # 10 minutes
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            resp = await session.post(url, json=data)
-
-            if resp.status != 200:
-                text = await resp.text()
-                raise OllamaError(status_code=resp.status, message=text)
-            
-            async for line in resp.content.iter_any():
-                if line:
-                    try:
-                        json_chunk = line.decode("utf-8")
-                        chunks = json_chunk.split("\n")
-                        completion_string = ""
-                        for chunk in chunks:
-                            if chunk.strip() != "":
-                                j = json.loads(chunk)
-                                if "error" in j:
-                                    completion_obj = {
-                                        "role": "assistant",
-                                        "content": "",
-                                        "error": j
-                                    }
-                                    yield completion_obj
-                                if "response" in j:
-                                    completion_obj = {
-                                        "role": "assistant",
-                                        "content": j["response"],
-                                    }
-                                    yield completion_obj
-                    except Exception as e:
-                        traceback.print_exc()
+        with httpx.stream(
+                    url=f"{url}",
+                    json=data,
+                    method="POST",
+                    timeout=litellm.request_timeout
+                ) as response: 
+                    if response.status_code != 200:
+                        raise OllamaError(status_code=response.status_code, message=response.text) 
+                    
+                    streamwrapper = litellm.CustomStreamWrapper(completion_stream=response.iter_lines(), model=data['model'], custom_llm_provider="ollama",logging_obj=logging_obj)
+                    for transformed_chunk in streamwrapper:
+                        yield transformed_chunk
     except Exception as e:
         traceback.print_exc()
 
@@ -267,7 +255,6 @@ async def ollama_acompletion(url, data, model_response, encoding, logging_obj):
     except Exception as e:
         traceback.print_exc()
 
-if async_generator_imported:
     # ollama implementation
     @async_generator
     async def async_get_ollama_response_stream(

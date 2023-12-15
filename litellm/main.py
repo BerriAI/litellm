@@ -209,7 +209,7 @@ async def _async_streaming(response, model, custom_llm_provider, args):
             print_verbose(f"line in async streaming: {line}")
             yield line
     except Exception as e: 
-        print_verbose(f"error raised _async_streaming: {str(e)}")
+        print_verbose(f"error raised _async_streaming: {traceback.format_exc()}")
         raise exception_type(
                 model=model, custom_llm_provider=custom_llm_provider, original_exception=e, completion_kwargs=args,
             )
@@ -2378,6 +2378,8 @@ def stream_chunk_builder(chunks: list, messages: Optional[list]=None):
         completion_output = combined_content
     elif len(combined_arguments) > 0: 
         completion_output = combined_arguments
+    else: 
+        completion_output = ""
     # # Update usage information if needed
     try:
         response["usage"]["prompt_tokens"] = token_counter(model=model, messages=messages)
