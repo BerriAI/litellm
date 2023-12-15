@@ -22,5 +22,5 @@ litellm/tests/config_*.yaml
 litellm/tests/langfuse.log
 litellm/tests/test_custom_logger.py
 litellm/tests/langfuse.log
-litellm/tests/dynamo.log
+litellm/tests/dynamo*.log
 .vscode/settings.json
