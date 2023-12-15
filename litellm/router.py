@@ -796,7 +796,6 @@ class Router:
         current_minute = datetime.now().strftime("%H-%M")
         tpm_key = f'{deployment_name}:tpm:{current_minute}'
         rpm_key = f'{deployment_name}:rpm:{current_minute}'
-        print("get: ", tpm_key)
 
         # ------------
         # Return usage
@@ -828,7 +827,6 @@ class Router:
         current_minute = datetime.now().strftime("%H-%M")
         tpm_key = f'{model_name}:tpm:{current_minute}'
         rpm_key = f'{model_name}:rpm:{current_minute}'
-        print("set: ", tpm_key)
 
         # ------------
         # Update usage
