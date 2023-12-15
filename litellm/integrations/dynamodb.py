@@ -56,39 +56,40 @@ class DyanmoDBLogger:
                 f"DynamoDB Logging - Enters logging function for model {kwargs}"
             )
 
-            # construct payload to send to dyanmo DB
+            # construct payload to send to DynamoDB
             # follows the same params as langfuse.py
             litellm_params = kwargs.get("litellm_params", {})
-            metadata = litellm_params.get("metadata", {}) or {} # if litellm_params['metadata'] == None 
+            metadata = litellm_params.get("metadata", {}) or {}  # if litellm_params['metadata'] == None
             messages = kwargs.get("messages")
             optional_params = kwargs.get("optional_params", {})
             function_name = kwargs.get("function_name", "litellm.completion")
-            usage = str(response_obj["usage"])
+            usage = response_obj["usage"]
             id = response_obj.get("id", str(uuid.uuid4()))
 
- 
-            # convert all optional params to str
-            for param, value in optional_params.items():
-                try:
-                    optional_params[param] = str(value)
-                except:
-                    # if casting value to str fails don't block logging
-                    pass
-            response_obj = str(response_obj)
- 
+            # Build the initial payload
             payload = {
                 "id": id,
-                "function_name": function_name,                  # str
-                "startTime": str(start_time),                # str
-                "endTime": str(end_time),                    # str
-                "model": kwargs.get("model", ""),              # str
-                "user": kwargs.get("user", ""),                 # str
-                "modelParameters": optional_params,     # dict[str]
-                "messages": [{"role": "user", "content": "hit"}],                   # List[dict[str, str]]
-                "response": response_obj,               # litellm.ModelResponse
-                "usage" : usage,        # dict[str, int]
-                "metadata": metadata                    # dict[Any, Any]
+                "function_name": function_name,
+                "startTime": start_time,
+                "endTime": end_time,
+                "model": kwargs.get("model", ""),
+                "user": kwargs.get("user", ""),
+                "modelParameters": optional_params,
+                "messages": messages,
+                "response": response_obj,
+                "usage": usage,
+                "metadata": metadata
             }
+
+            # Ensure everything in the payload is converted to str
+            for key, value in payload.items():
+                try:
+                    payload[key] = str(value)
+                except:
+                    # non blocking if it can't cast to a str
+                    pass
+
+
             print_verbose(f"\nDynamoDB Logger - Logging payload = {payload}")
             
             # put data in dyanmo DB
