@@ -595,6 +595,7 @@ class Logging:
             "start_time": self.start_time,
             "stream": self.stream,
             "user": user,
+            "call_type": str(self.call_type),
             **self.optional_params,
             **additional_params
         }
