@@ -21,6 +21,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 litellm.vertex_project = "pathrise-convert-1606954137718"
 litellm.vertex_location = "us-central1"
+litellm.num_retries=0
 
 # litellm.failure_callback = ["sentry"]
 #### What this tests ####
@@ -38,10 +39,11 @@ models = ["command-nightly"]
 # Test 1: Context Window Errors 
 @pytest.mark.parametrize("model", models)
 def test_context_window(model):
+    print("Testing context window error")
     sample_text = "Say error 50 times" * 1000000
     messages = [{"content": sample_text, "role": "user"}]
     try:
-        litellm.set_verbose = False
+        litellm.set_verbose = True
         response = completion(model=model, messages=messages)
         print(f"response: {response}")
         print("FAILED!")
@@ -176,7 +178,7 @@ def test_completion_azure_exception():
     try:
         import openai
         print("azure gpt-3.5 test\n\n")
-        litellm.set_verbose=False
+        litellm.set_verbose=True
         ## Test azure call
         old_azure_key = os.environ["AZURE_API_KEY"]
         os.environ["AZURE_API_KEY"] = "good morning"
@@ -204,7 +206,7 @@ async def asynctest_completion_azure_exception():
         import openai
         import litellm
         print("azure gpt-3.5 test\n\n")
-        litellm.set_verbose=False
+        litellm.set_verbose=True
         ## Test azure call
         old_azure_key = os.environ["AZURE_API_KEY"]
         os.environ["AZURE_API_KEY"] = "good morning"
@@ -251,8 +253,8 @@ def asynctest_completion_openai_exception_bad_model():
                 ],
             )
         asyncio.run(test())
-    except openai.BadRequestError:
-        print("Good job this is a bad request error for a model that does not exist!")
+    except openai.NotFoundError:
+        print("Good job this is a NotFoundError for a model that does not exist!")
         print("Passed")
     except Exception as e:
         print("Raised wrong type of exception", type(e))
@@ -281,8 +283,8 @@ def asynctest_completion_azure_exception_bad_model():
                 ],
             )
         asyncio.run(test())
-    except openai.BadRequestError:
-        print("Good job this is a bad request error for a model that does not exist!")
+    except openai.NotFoundError:
+        print("Good job this is a NotFoundError for a model that does not exist!")
         print("Passed")
     except Exception as e:
         print("Raised wrong type of exception", type(e))
@@ -295,7 +297,7 @@ def test_completion_openai_exception():
     try:
         import openai
         print("openai gpt-3.5 test\n\n")
-        litellm.set_verbose=False
+        litellm.set_verbose=True
         ## Test azure call
         old_azure_key = os.environ["OPENAI_API_KEY"]
         os.environ["OPENAI_API_KEY"] = "good morning"
@@ -312,7 +314,7 @@ def test_completion_openai_exception():
         print(response)
     except openai.AuthenticationError as e:
         os.environ["OPENAI_API_KEY"] = old_azure_key
-        print("good job got the correct error for openai when key not set")
+        print("OpenAI: good job got the correct error for openai when key not set")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 # test_completion_openai_exception()
@@ -322,7 +324,7 @@ def test_completion_mistral_exception():
     try:
         import openai
         print("Testing mistral ai exception mapping")
-        litellm.set_verbose=False
+        litellm.set_verbose=True
         ## Test azure call
         old_azure_key = os.environ["MISTRAL_API_KEY"]
         os.environ["MISTRAL_API_KEY"] = "good morning"
