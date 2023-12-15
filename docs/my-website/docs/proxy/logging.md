@@ -524,6 +524,77 @@ Test Request
 litellm --test
 ```
 
+#### Data Logged to DynamoDB /chat/completions
+
+```json
+{
+  "id": {
+    "S": "chatcmpl-8W15J4480a3fAQ1yQaMgtsKJAicen"
+  },
+  "call_type": {
+    "S": "acompletion"
+  },
+  "endTime": {
+    "S": "2023-12-15 17:25:58.424118"
+  },
+  "messages": {
+    "S": "[{'role': 'user', 'content': 'This is a test'}]"
+  },
+  "metadata": {
+    "S": "{}"
+  },
+  "model": {
+    "S": "gpt-3.5-turbo"
+  },
+  "modelParameters": {
+    "S": "{'temperature': 0.7, 'max_tokens': 100, 'user': 'ishaan-2'}"
+  },
+  "response": {
+    "S": "ModelResponse(id='chatcmpl-8W15J4480a3fAQ1yQaMgtsKJAicen', choices=[Choices(finish_reason='stop', index=0, message=Message(content='Great! What can I assist you with?', role='assistant'))], created=1702641357, model='gpt-3.5-turbo-0613', object='chat.completion', system_fingerprint=None, usage=Usage(completion_tokens=9, prompt_tokens=11, total_tokens=20))"
+  },
+  "startTime": {
+    "S": "2023-12-15 17:25:56.047035"
+  },
+  "usage": {
+    "S": "Usage(completion_tokens=9, prompt_tokens=11, total_tokens=20)"
+  },
+  "user": {
+    "S": "ishaan-2"
+  }
+}
+```
+
+#### Data logged to DynamoDB /embeddings
+
+```json
+{
+  "id": {
+    "S": "4dec8d4d-4817-472d-9fc6-c7a6153eb2ca"
+  },
+  "call_type": {
+    "S": "aembedding"
+  },
+  "endTime": {
+    "S": "2023-12-15 17:25:59.890261"
+  },
+  "messages": {
+    "S": "['hi']"
+  },
+  "metadata": {
+    "S": "{}"
+  },
+  "model": {
+    "S": "text-embedding-ada-002"
+  },
+  "modelParameters": {
+    "S": "{'user': 'ishaan-2'}"
+  },
+  "response": {
+    "S": "EmbeddingResponse(model='text-embedding-ada-002-v2', data=[{'embedding': [-0.03503197431564331, -0.020601635798811913, -0.015375726856291294,
+  }
+}
+```
+
 
 
 
