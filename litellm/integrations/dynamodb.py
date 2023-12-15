@@ -49,8 +49,10 @@ class DyanmoDBLogger:
 
         self.dynamodb.create_table(**table_params)
         print_verbose(f'Table {self.table_name} created successfully')
-
-    def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose=print):
+    
+    async def _async_log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
+        self.log_event(kwargs, response_obj, start_time, end_time, print_verbose)
+    def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
         try:
             print_verbose(
                 f"DynamoDB Logging - Enters logging function for model {kwargs}"
