@@ -193,6 +193,7 @@ const sidebars = {
             slug: '/project',
           },
           items: [
+            "projects/Docq.AI",
             "projects/OpenInterpreter",
             "projects/FastREPL",
             "projects/PROMPTMETHEUS",
