@@ -1115,7 +1115,19 @@ async def embeddings(request: Request, user_api_key_dict: UserAPIKeyAuth = Depen
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(user_api_key_dict=user_api_key_dict, original_exception=e) 
         traceback.print_exc()
-        raise e
+        if isinstance(e, HTTPException):
+            raise e
+        else:
+            error_traceback = traceback.format_exc()
+            error_msg = f"{str(e)}\n\n{error_traceback}"
+            try:
+                status = e.status_code # type: ignore
+            except:
+                status = 500
+            raise HTTPException(
+                status_code=status,
+                detail=error_msg
+            )
 
 #### KEY MANAGEMENT #### 
 
