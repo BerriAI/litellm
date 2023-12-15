@@ -853,10 +853,10 @@ class Logging:
             )
         # print(f"original response in success handler: {self.model_call_details['original_response']}")
         try:
-            print_verbose(f"success callbacks: {litellm.success_callback}")          
+            print_verbose(f"success callbacks: {litellm.success_callback}")     
             ## BUILD COMPLETE STREAMED RESPONSE
             complete_streaming_response = None
-            if self.stream == True and self.model_call_details.get("litellm_params", {}).get("acompletion", False) == True:
+            if self.stream == True and self.model_call_details.get("litellm_params", {}).get("acompletion", False) == False: # only call stream chunk builder if it's not acompletion()
                 # if it's acompletion == True, chunks are built/appended in async_success_handler
                 if result.choices[0].finish_reason is not None: # if it's the last chunk
                     streaming_chunks = self.streaming_chunks + [result]
