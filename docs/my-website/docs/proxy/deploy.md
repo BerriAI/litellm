@@ -88,7 +88,7 @@ Your LiteLLM container should be running now on the defined port e.g. `8000`.
 ## Deploy on Google Cloud Run
 **Click the button** to deploy to Google Cloud Run
 
-[![Deploy](https://deploy.cloud.run/button.svg)](https://l.linklyhq.com/l/1uHtX)
+[![Deploy](https://deploy.cloud.run/button.svg)](https://deploy.cloud.run/?git_repo=https://github.com/BerriAI/litellm)
 
 #### Testing your deployed proxy
 **Assuming the required keys are set as Environment Variables**
