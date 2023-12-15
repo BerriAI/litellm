@@ -8,21 +8,14 @@ sys.path.insert(0, os.path.abspath('../..'))
 from litellm import completion
 import litellm
 litellm.num_retries = 3
-litellm.success_callback = ["dynamodb"]
 
-litellm.set_verbose = True
-
-
-import time
+import time, random
 import pytest
-
-def verify_dynamo_logs():
-    num_requests = 2
-    pass
 
 
 def pre_request():
-    log_file = open("dynamo.log", "a+")
+    file_name = f"dynamo.log"
+    log_file = open(file_name, "a+")
 
     # Clear the contents of the file by truncating it
     log_file.truncate(0)
@@ -32,7 +25,7 @@ def pre_request():
     # Redirect stdout to the file
     sys.stdout = log_file
 
-    return original_stdout, log_file
+    return original_stdout, log_file, file_name
 
 
 import re
@@ -40,6 +33,7 @@ def verify_log_file(log_file_path):
 
     with open(log_file_path, 'r') as log_file:
         log_content = log_file.read()
+        print(f"\nVerifying DynamoDB file = {log_file_path}. File content=", log_content)
 
         # Define the pattern to search for in the log file
         pattern = r"Response from DynamoDB:{.*?}"
@@ -60,16 +54,22 @@ def verify_log_file(log_file_path):
 
         # Print the count of successful responses
         print(f"Count of successful responses from DynamoDB: {success_count}")
-    assert success_count == 5
-
-   
+    assert success_count == 3
 
 
-
-def test_dynamo_logging_async(): 
+def test_dynamo_logging(): 
+    # all dynamodb requests need to be in one test function
+    # since we are modifying stdout, and pytests runs tests in parallel
     try: 
         # pre
-        original_stdout, log_file = pre_request()
+        # redirect stdout to log_file
+
+        litellm.success_callback = ["dynamodb"]
+        litellm.set_verbose = True
+        original_stdout, log_file, file_name = pre_request()
+
+
+        print("Testing async dynamoDB logging")
         async def _test():
             return await litellm.acompletion(
                 model="gpt-3.5-turbo",
@@ -80,9 +80,31 @@ def test_dynamo_logging_async():
             )
         response = asyncio.run(_test())
         print(f"response: {response}")
+
+    
+        # streaming + async 
+        async def _test2():
+            response =  await litellm.acompletion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content":"This is a test"}],
+                max_tokens=10,
+                temperature=0.7,
+                user = "ishaan-2",
+                stream=True
+            )
+            async for chunk in response:
+                pass
+        asyncio.run(_test2())
+
+        # aembedding()
+        async def _test3():
+            return await litellm.aembedding(
+                model="text-embedding-ada-002",
+                input = ["hi"],
+                user = "ishaan-2"
+            )
+        response = asyncio.run(_test3())
         time.sleep(1)
-    except litellm.Timeout as e: 
-        pass
     except Exception as e: 
         pytest.fail(f"An exception occurred - {e}")
     finally:
@@ -91,143 +113,7 @@ def test_dynamo_logging_async():
         sys.stdout = original_stdout
         # Close the file
         log_file.close()
-        verify_log_file("dynamo.log")
+        verify_log_file(file_name)
+        print("Passed! Testing async dynamoDB logging")
 
-
-
-test_dynamo_logging_async()
-
-
-def test_dynamo_logging_async_stream(): 
-    try: 
-        litellm.set_verbose = True
-        async def _test():
-            response =  await litellm.acompletion(
-                model="gpt-3.5-turbo",
-                messages=[{"role": "user", "content":"This is a test"}],
-                max_tokens=100,
-                temperature=0.7,
-                user = "ishaan-2",
-                stream=True
-            )
-            async for chunk in response:
-                pass
-        asyncio.run(_test())
-    except litellm.Timeout as e: 
-        pass
-    except Exception as e: 
-        pytest.fail(f"An exception occurred - {e}")
-
-# test_dynamo_logging_async_stream()
-
-# @pytest.mark.skip(reason="beta test - checking langfuse output")
-# def test_langfuse_logging():
-#     try:
-#         pre_langfuse_setup()
-#         litellm.set_verbose = True
-#         response = completion(model="claude-instant-1.2",
-#                               messages=[{
-#                                   "role": "user",
-#                                   "content": "Hi 👋 - i'm claude"
-#                               }],
-#                               max_tokens=10,
-#                               temperature=0.2,
-#                               )
-#         print(response)
-#         # time.sleep(5)
-#         # # check langfuse.log to see if there was a failed response
-#         # search_logs("langfuse.log")
-
-#     except litellm.Timeout as e: 
-#         pass
-#     except Exception as e:
-#         pytest.fail(f"An exception occurred - {e}")
-
-# test_langfuse_logging()
-
-# @pytest.mark.skip(reason="beta test - checking langfuse output")
-# def test_langfuse_logging_stream():
-#     try:
-#         litellm.set_verbose=True
-#         response = completion(model="anyscale/meta-llama/Llama-2-7b-chat-hf",
-#                               messages=[{
-#                                   "role": "user",
-#                                   "content": "this is a streaming test for llama2 + langfuse"
-#                               }],
-#                               max_tokens=20,
-#                               temperature=0.2,
-#                               stream=True
-#                               )
-#         print(response)
-#         for chunk in response:
-#             pass
-#             # print(chunk)
-#     except litellm.Timeout as e: 
-#         pass
-#     except Exception as e:
-#         print(e)
-
-# # test_langfuse_logging_stream()
-
-# @pytest.mark.skip(reason="beta test - checking langfuse output")
-# def test_langfuse_logging_custom_generation_name():
-#     try:
-#         litellm.set_verbose=True
-#         response = completion(model="gpt-3.5-turbo",
-#                               messages=[{
-#                                   "role": "user",
-#                                   "content": "Hi 👋 - i'm claude"
-#                               }],
-#                               max_tokens=10,
-#                               metadata = {
-#                                     "langfuse/foo": "bar", 
-#                                     "langsmith/fizz": "buzz", 
-#                                     "prompt_hash": "asdf98u0j9131123"
-#                                 }
-#         )
-#         print(response)
-#     except litellm.Timeout as e: 
-#         pass
-#     except Exception as e:
-#         pytest.fail(f"An exception occurred - {e}")
-#         print(e)
-
-# # test_langfuse_logging_custom_generation_name()
-# @pytest.mark.skip(reason="beta test - checking langfuse output")
-# def test_langfuse_logging_function_calling():
-#     function1 = [
-#         {
-#             "name": "get_current_weather",
-#             "description": "Get the current weather in a given location",
-#             "parameters": {
-#                 "type": "object",
-#                 "properties": {
-#                     "location": {
-#                         "type": "string",
-#                         "description": "The city and state, e.g. San Francisco, CA",
-#                     },
-#                     "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
-#                 },
-#                 "required": ["location"],
-#             },
-#         }
-#     ]
-#     try:
-#         response = completion(model="gpt-3.5-turbo",
-#                               messages=[{
-#                                   "role": "user",
-#                                   "content": "what's the weather in boston"
-#                               }],
-#                               temperature=0.1,
-#                               functions=function1,
-#             )
-#         print(response)
-#     except litellm.Timeout as e: 
-#         pass
-#     except Exception as e:
-#         print(e)
-
-# # test_langfuse_logging_function_calling()
-
-
-
+# test_dynamo_logging_async()
