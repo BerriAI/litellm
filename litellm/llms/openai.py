@@ -272,8 +272,8 @@ class OpenAIChatCompletion(BaseLLM):
             ## LOGGING
             logging_obj.pre_call(
                 input=data['messages'],
-                api_key=api_key,
-                additional_args={"headers": headers, "api_base": api_base, "acompletion": True, "complete_input_dict": data},
+                api_key=openai_aclient.api_key,
+                additional_args={"headers": {"Authorization": f"Bearer {openai_aclient.api_key}"}, "api_base": openai_aclient._base_url._uri_reference, "acompletion": True, "complete_input_dict": data},
             )
             response = await openai_aclient.chat.completions.create(**data)
             stringified_response = response.model_dump_json()
