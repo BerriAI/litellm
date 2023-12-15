@@ -27,6 +27,7 @@ class DyanmoDBLogger:
 
     def check_table_exists(self):
         existing_tables = self.dynamodb.meta.client.list_tables()['TableNames']
+        print_verbose(f"Dynamo DB: Existing Tables= {existing_tables}")
         return self.table_name in existing_tables
 
 
@@ -66,7 +67,6 @@ class DyanmoDBLogger:
             id = response_obj.get("id", str(uuid.uuid4()))
 
  
-
             # convert all optional params to str
             for param, value in optional_params.items():
                 try:
@@ -95,7 +95,8 @@ class DyanmoDBLogger:
             table = self.dynamodb.Table(self.table_name)
             # Assuming log_data is a dictionary with log information
             response = table.put_item(Item=payload)
-            print(f'Log data added to {self.table_name} successfully:', response)
+
+            print_verbose(f"Response from DynamoDB:{str(response)}")
 
             print_verbose(
                 f"DynamoDB Layer Logging - final response object: {response_obj}"

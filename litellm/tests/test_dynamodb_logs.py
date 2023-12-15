@@ -10,12 +10,66 @@ import litellm
 litellm.num_retries = 3
 litellm.success_callback = ["dynamodb"]
 
+litellm.set_verbose = True
+
+
 import time
 import pytest
 
+def verify_dynamo_logs():
+    num_requests = 2
+    pass
+
+
+def pre_request():
+    log_file = open("dynamo.log", "a+")
+
+    # Clear the contents of the file by truncating it
+    log_file.truncate(0)
+
+    # Save the original stdout so that we can restore it later
+    original_stdout = sys.stdout
+    # Redirect stdout to the file
+    sys.stdout = log_file
+
+    return original_stdout, log_file
+
+
+import re
+def verify_log_file(log_file_path):
+
+    with open(log_file_path, 'r') as log_file:
+        log_content = log_file.read()
+
+        # Define the pattern to search for in the log file
+        pattern = r"Response from DynamoDB:{.*?}"
+
+        # Find all matches in the log content
+        matches = re.findall(pattern, log_content)
+
+        # Print the DynamoDB success log matches
+        print("DynamoDB Success Log Matches:")
+        for match in matches:
+            print(match)
+
+        # Print the total count of lines containing the specified response
+        print(f"Total occurrences of specified response: {len(matches)}")
+
+        # Count the occurrences of successful responses (status code 200 or 201)
+        success_count = sum(1 for match in matches if "'HTTPStatusCode': 200" in match or "'HTTPStatusCode': 201" in match)
+
+        # Print the count of successful responses
+        print(f"Count of successful responses from DynamoDB: {success_count}")
+    assert success_count == 5
+
+   
+
+
+
 def test_dynamo_logging_async(): 
     try: 
-        litellm.set_verbose = True
+        # pre
+        original_stdout, log_file = pre_request()
         async def _test():
             return await litellm.acompletion(
                 model="gpt-3.5-turbo",
@@ -26,12 +80,22 @@ def test_dynamo_logging_async():
             )
         response = asyncio.run(_test())
         print(f"response: {response}")
+        time.sleep(1)
     except litellm.Timeout as e: 
         pass
     except Exception as e: 
         pytest.fail(f"An exception occurred - {e}")
+    finally:
+        # post, close log file and verify
+        # Reset stdout to the original value
+        sys.stdout = original_stdout
+        # Close the file
+        log_file.close()
+        verify_log_file("dynamo.log")
 
-# test_dynamo_logging_async()
+
+
+test_dynamo_logging_async()
 
 
 def test_dynamo_logging_async_stream(): 
