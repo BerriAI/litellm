@@ -11,7 +11,7 @@ class GeminiError(Exception):
     def __init__(self, status_code, message):
         self.status_code = status_code
         self.message = message
-        self.request = httpx.Request(method="POST", url="https://developers.generativeai.google/api/python/google/generativeai/chat")
+        self.request = httpx.Request(method="POST", url="https://ai.google.dev/api/python/google/generativeai/GenerativeModel")
         self.response = httpx.Response(status_code=status_code, request=self.request)
         super().__init__(
             self.message
@@ -19,9 +19,9 @@ class GeminiError(Exception):
 
 class GeminiConfig(): 
     """
-    Reference: https://developers.generativeai.google/api/python/google/generativeai/chat
+    Reference: https://ai.google.dev/api/python/google/generativeai/GenerativeModel
 
-    The class `GeminiConfig` provides configuration for the Palm's API interface. Here are the parameters:
+    The class `GeminiConfig` provides configuration for the Gemini's API interface. Here are the parameters:
 
     - `context` (string): Text that should be provided to the model first, to ground the response. This could be a prompt to guide the model's responses.
 
@@ -86,14 +86,15 @@ def completion(
         raise Exception("Importing google.generativeai failed, please run 'pip install -q google-generativeai")
     genai.configure(api_key=api_key)
 
+    # Get the model
     model = model
     
     ## Load Config
     inference_params = copy.deepcopy(optional_params)
-    inference_params.pop("stream", None) # palm does not support streaming, so we handle this by fake streaming in main.py
+    inference_params.pop("stream", None) # gemini does not support streaming, so we handle this by fake streaming in main.py
     config = litellm.GeminiConfig.get_config() 
     for k, v in config.items(): 
-        if k not in inference_params: # completion(top_k=3) > palm_config(top_k=3) <- allows for dynamic variables to be passed in
+        if k not in inference_params: # completion(top_k=3) > gemini_config(top_k=3) <- allows for dynamic variables to be passed in
             inference_params[k] = v
 
     prompt = ""
