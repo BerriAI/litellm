@@ -47,6 +47,8 @@ def test_chat_completion_exception(client):
 
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception {str(e)}")
+
+# raise openai.AuthenticationError
 def test_chat_completion_exception_azure(client):
     try:
         # Your test data
@@ -70,6 +72,30 @@ def test_chat_completion_exception_azure(client):
 
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception {str(e)}")
+
+
+# raise openai.AuthenticationError
+def test_embedding_auth_exception_azure(client):
+    try:
+        # Your test data
+        test_data = {
+            "model": "azure-embedding",
+            "input": ["hi"]
+        }
+
+        response = client.post("/embeddings", json=test_data)
+        print("Response from proxy=", response)
+
+        # make an openai client to call _make_status_error_from_response
+        openai_client = openai.OpenAI(api_key="anything")
+        openai_exception = openai_client._make_status_error_from_response(response=response)
+        print("Exception raised=", openai_exception)
+        assert isinstance(openai_exception, openai.AuthenticationError)
+
+    except Exception as e:
+        pytest.fail(f"LiteLLM Proxy test failed. Exception {str(e)}")
+
+
 
 
 # raise openai.BadRequestError
