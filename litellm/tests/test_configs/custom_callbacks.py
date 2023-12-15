@@ -2,7 +2,7 @@ from litellm.integrations.custom_logger import CustomLogger
 import inspect
 import litellm
 
-class MyCustomHandler(CustomLogger):
+class testCustomCallbackProxy(CustomLogger):
     def __init__(self):
         self.success: bool = False                  # type: ignore
         self.failure: bool = False                  # type: ignore
@@ -55,8 +55,11 @@ class MyCustomHandler(CustomLogger):
         self.async_success = True
         print("Value of async success: ", self.async_success)
         print("\n kwargs: ", kwargs)
-        if kwargs.get("model") == "azure-embedding-model":
+        if kwargs.get("model") == "azure-embedding-model" or kwargs.get("model") == "ada":
+            print("Got an embedding model", kwargs.get("model"))
+            print("Setting embedding success to True")
             self.async_success_embedding = True
+            print("Value of async success embedding: ", self.async_success_embedding)
             self.async_embedding_kwargs = kwargs
             self.async_embedding_response = response_obj
         if kwargs.get("stream") == True:
@@ -78,6 +81,9 @@ class MyCustomHandler(CustomLogger):
         response = response_obj
         # tokens used in response 
         usage = response_obj["usage"]
+
+        print("\n\n in custom callback vars my custom logger, ", vars(my_custom_logger))
+
 
         print(
             f"""
@@ -104,4 +110,4 @@ class MyCustomHandler(CustomLogger):
         
         self.async_completion_kwargs_fail = kwargs
 
-my_custom_logger = MyCustomHandler()
+my_custom_logger = testCustomCallbackProxy()

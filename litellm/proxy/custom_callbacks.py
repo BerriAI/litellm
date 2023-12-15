@@ -1,3 +1,11 @@
+import sys, os, traceback
+
+# this file is to test litellm/proxy
+
+sys.path.insert(
+    0, os.path.abspath("../..")
+)  # Adds the parent directory to the system path 
+
 from litellm.integrations.custom_logger import CustomLogger
 import litellm
 import inspect
@@ -36,9 +44,12 @@ class MyCustomHandler(CustomLogger):
         
     def log_success_event(self, kwargs, response_obj, start_time, end_time): 
         print_verbose("On Success!")
+
     
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         print_verbose(f"On Async Success!")
+        response_cost = litellm.completion_cost(completion_response=response_obj)
+        assert response_cost > 0.0
         return
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time): 

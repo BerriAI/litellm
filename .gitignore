@@ -19,3 +19,8 @@ litellm/proxy/_secret_config.yaml
 litellm/tests/aiologs.log
 litellm/tests/exception_data.txt
 litellm/tests/config_*.yaml
+litellm/tests/langfuse.log
+litellm/tests/test_custom_logger.py
+litellm/tests/langfuse.log
+litellm/tests/dynamo*.log
+.vscode/settings.json

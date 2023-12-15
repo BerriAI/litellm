@@ -1,8 +1,11 @@
 # Base image
-ARG LITELLM_BASE_IMAGE=python:3.9-slim
+ARG LITELLM_BUILD_IMAGE=python:3.9
 
-# allow users to specify, else use python 3.9-slim
-FROM $LITELLM_BASE_IMAGE
+# Runtime image
+ARG LITELLM_RUNTIME_IMAGE=python:3.9-slim
+
+# allow users to specify, else use python 3.9
+FROM $LITELLM_BUILD_IMAGE as builder
 
 # Set the working directory to /app
 WORKDIR /app
@@ -13,16 +16,30 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 # Copy the current directory contents into the container at /app
-COPY . /app
+COPY requirements.txt .
 
 # Install any needed packages specified in requirements.txt
-RUN pip wheel --no-cache-dir --wheel-dir=wheels -r requirements.txt
-RUN pip install --no-cache-dir --find-links=wheels -r requirements.txt
+RUN pip install wheel && \
+    pip wheel --no-cache-dir --wheel-dir=/app/wheels -r requirements.txt
+
+###############################################################################
+FROM $LITELLM_RUNTIME_IMAGE as runtime
+
+WORKDIR /app
+
+# Copy the current directory contents into the container at /app
+COPY . .
+
+COPY --from=builder /app/wheels /app/wheels
+
+RUN pip install --no-index --find-links=/app/wheels -r requirements.txt
+
+# Trigger the Prisma CLI to be installed
+RUN prisma -v
 
 EXPOSE 4000/tcp
 
 # Start the litellm proxy, using the `litellm` cli command https://docs.litellm.ai/docs/simple_proxy
-
 # Start the litellm proxy with default options
 CMD ["--port", "4000"]
 

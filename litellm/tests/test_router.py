@@ -366,7 +366,7 @@ def test_function_calling():
 		}
 	]
 
-	router = Router(model_list=model_list, routing_strategy="latency-based-routing")
+	router = Router(model_list=model_list)
 	response = router.completion(model="gpt-3.5-turbo-0613", messages=messages, functions=functions)
 	router.reset()
 	print(response)
@@ -413,6 +413,9 @@ def test_acompletion_on_router():
 			print("Testing acompletion + caching on router")
 			response1 = await router.acompletion(model="gpt-3.5-turbo", messages=messages, temperature=1)
 			print(f"response1: {response1}")
+
+			await asyncio.sleep(1) # add cache is async, async sleep for cache to get set
+
 			response2 = await router.acompletion(model="gpt-3.5-turbo", messages=messages, temperature=1)
 			print(f"response2: {response2}")
 			assert response1.id == response2.id
@@ -507,7 +510,6 @@ def test_aembedding_on_router():
 			model="text-embedding-ada-002",
 			input=["good morning from litellm 2"],
 		)
-		print("sync embedding response: ", response)
 		router.reset()
 	except Exception as e:
 		traceback.print_exc()
