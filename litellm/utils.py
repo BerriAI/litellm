@@ -6381,12 +6381,3 @@ def transform_logprobs(hf_response):
         transformed_logprobs = token_info
 
     return transformed_logprobs
-
-# used in LiteLLM Router
-def remove_model_id(original_model_string):
-    # Find the index of "ModelID" in the string
-    index_of_model_id = original_model_string.find("-ModelID")
-    # Remove everything after "-ModelID" if it exists
-    if index_of_model_id != -1:
-        return original_model_string[:index_of_model_id]
-    return original_model_string
