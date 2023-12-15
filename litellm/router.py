@@ -761,9 +761,13 @@ class Router:
         # return deployment with lowest tpm usage
         for item in potential_deployments:
             deployment_name=item["litellm_params"]["model"]
-            litellm_provider = models_context_map.get(deployment_name, {}).get("litellm_provider", None)
-            if litellm_provider is not None:
-                deployment_name = f"{litellm_provider}/{deployment_name}"
+            custom_llm_provider = item["litellm_params"].get("custom_llm_provider", None)
+            if custom_llm_provider is not None:
+                deployment_name = f"{custom_llm_provider}/{deployment_name}"
+            else:
+                litellm_provider = models_context_map.get(deployment_name, {}).get("litellm_provider", None)
+                if litellm_provider is not None:
+                    deployment_name = f"{litellm_provider}/{deployment_name}"
             item_tpm, item_rpm = self._get_deployment_usage(deployment_name=deployment_name)
 
             if item_tpm == 0:
@@ -792,6 +796,7 @@ class Router:
         current_minute = datetime.now().strftime("%H-%M")
         tpm_key = f'{deployment_name}:tpm:{current_minute}'
         rpm_key = f'{deployment_name}:rpm:{current_minute}'
+        print("get: ", tpm_key)
 
         # ------------
         # Return usage
@@ -823,6 +828,7 @@ class Router:
         current_minute = datetime.now().strftime("%H-%M")
         tpm_key = f'{model_name}:tpm:{current_minute}'
         rpm_key = f'{model_name}:rpm:{current_minute}'
+        print("set: ", tpm_key)
 
         # ------------
         # Update usage
