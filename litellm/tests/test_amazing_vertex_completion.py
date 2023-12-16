@@ -211,7 +211,7 @@ def test_gemini_pro_vision():
                                     {
                                         "type": "image_url",
                                         "image_url": {
-                                        "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
+                                        "url": "gs://cloud-samples-data/generative-ai/image/boats.jpeg"
                                         }
                                     }
                                 ]
