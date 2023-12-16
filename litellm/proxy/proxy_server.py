@@ -486,6 +486,18 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
                 cache_port = litellm.get_secret("REDIS_PORT", None)
                 cache_password = litellm.get_secret("REDIS_PASSWORD", None)
 
+                cache_params = {
+                    "type": cache_type,
+                    "host": cache_host,
+                    "port": cache_port,
+                    "password": cache_password
+                }
+
+                if "cache_params" in litellm_settings:
+                    cache_params_in_config = litellm_settings["cache_params"]
+                    # overwrie cache_params with cache_params_in_config
+                    cache_params.update(cache_params_in_config)
+
                 # Assuming cache_type, cache_host, cache_port, and cache_password are strings
                 print(f"{blue_color_code}Cache Type:{reset_color_code} {cache_type}")
                 print(f"{blue_color_code}Cache Host:{reset_color_code} {cache_host}")
@@ -495,10 +507,7 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
 
                 ## to pass a complete url, or set ssl=True, etc. just set it as `os.environ[REDIS_URL] = <your-redis-url>`, _redis.py checks for REDIS specific environment variables
                 litellm.cache = Cache(
-                    type=cache_type,
-                    host=cache_host,
-                    port=cache_port,
-                    password=cache_password
+                    **cache_params
                 )
                 print(f"{blue_color_code}Set Cache on LiteLLM Proxy: {litellm.cache.cache}{reset_color_code} {cache_password}")
             elif key == "callbacks":
@@ -535,6 +544,10 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
                     else:
                         litellm.failure_callback.append(callback)
                 print_verbose(f"{blue_color_code} Initialized Success Callbacks - {litellm.failure_callback} {reset_color_code}")
+            elif key == "cache_params":
+                # this is set in the cache branch
+                # see usage here: https://docs.litellm.ai/docs/proxy/caching
+                pass
             else:
                 setattr(litellm, key, value)
 
