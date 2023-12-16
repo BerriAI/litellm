@@ -244,6 +244,12 @@ def completion(
                 model_response = chat.send_message(prompt, generation_config=GenerationConfig(**optional_params), stream=stream)
                 optional_params["stream"] = True
                 return model_response
+            request_str += f"chat.send_message({prompt}, generation_config=GenerationConfig(**{optional_params})).text\n"
+            ## LOGGING
+            logging_obj.pre_call(input=prompt, api_key=None, additional_args={"complete_input_dict": optional_params, "request_str": request_str})
+            response_obj = chat.send_message(prompt, generation_config=GenerationConfig(**optional_params))
+            completion_response = response_obj.text
+            response_obj = response_obj._raw_response
         elif mode == "vision":
             print_verbose("\nMaking VertexAI Gemini Pro Vision Call")
             print_verbose(f"\nProcessing input messages = {messages}")
