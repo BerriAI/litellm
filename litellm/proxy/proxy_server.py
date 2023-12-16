@@ -831,7 +831,6 @@ async def startup_event():
         # add master key to db
         await generate_key_helper_fn(duration=None, models=[], aliases={}, config={}, spend=0, token=master_key)
 
-    print("END OF STARTUP")
 
 #### API ENDPOINTS ####
 @router.get("/v1/models", dependencies=[Depends(user_api_key_auth)])
