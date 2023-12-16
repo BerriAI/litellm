@@ -111,6 +111,7 @@ cohere_models: List = []
 anthropic_models: List = []
 openrouter_models: List = []
 vertex_language_models: List = []
+vertex_vision_models: List = []
 vertex_chat_models: List = []
 vertex_code_chat_models: List = []
 vertex_text_models: List = []
@@ -139,6 +140,8 @@ for key, value in model_cost.items():
         vertex_code_text_models.append(key)
     elif value.get('litellm_provider') == 'vertex_ai-language-models':
         vertex_language_models.append(key)
+    elif value.get('litellm_provider') == 'vertex_ai-vision-models':
+        vertex_vision_models.append(key)
     elif value.get('litellm_provider') == 'vertex_ai-chat-models':
         vertex_chat_models.append(key)
     elif value.get('litellm_provider') == 'vertex_ai-code-chat-models':
