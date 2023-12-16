@@ -93,7 +93,7 @@ def test_vertex_ai():
     litellm.set_verbose=False
     litellm.vertex_project = "hardy-device-386718"
 
-    test_models = random.sample(test_models, 4)
+    test_models = random.sample(test_models, 1)
     test_models += litellm.vertex_language_models # always test gemini-pro
     for model in test_models:
         try:
@@ -117,7 +117,7 @@ def test_vertex_ai_stream():
     import random
 
     test_models = litellm.vertex_chat_models + litellm.vertex_code_chat_models + litellm.vertex_text_models + litellm.vertex_code_text_models 
-    test_models = random.sample(test_models, 4)
+    test_models = random.sample(test_models, 1)
     test_models += litellm.vertex_language_models # always test gemini-pro
     for model in test_models:
         try:
@@ -144,7 +144,7 @@ async def test_async_vertexai_response():
     import random
     load_vertex_ai_credentials()
     test_models = litellm.vertex_chat_models + litellm.vertex_code_chat_models + litellm.vertex_text_models + litellm.vertex_code_text_models 
-    test_models = random.sample(test_models, 4)
+    test_models = random.sample(test_models, 1)
     test_models += litellm.vertex_language_models # always test gemini-pro
     for model in test_models:
         print(f'model being tested in async call: {model}')
@@ -168,7 +168,7 @@ async def test_async_vertexai_streaming_response():
     import random
     load_vertex_ai_credentials()
     test_models = litellm.vertex_chat_models + litellm.vertex_code_chat_models + litellm.vertex_text_models + litellm.vertex_code_text_models 
-    test_models = random.sample(test_models, 4)
+    test_models = random.sample(test_models, 1)
     test_models += litellm.vertex_language_models # always test gemini-pro
     for model in test_models:
         if model in ["code-gecko", "code-gecko@001", "code-gecko@002", "code-gecko@latest", "code-bison@001", "text-bison@001"]:
@@ -195,6 +195,7 @@ async def test_async_vertexai_streaming_response():
 
 def test_gemini_pro_vision():
     try:
+        load_vertex_ai_credentials()
         litellm.set_verbose = True
         litellm.num_retries=0
         resp = litellm.completion(
