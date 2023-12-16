@@ -222,4 +222,114 @@ def test_gemini_pro_vision():
         import traceback
         traceback.print_exc()
         raise e
-test_gemini_pro_vision()
+# test_gemini_pro_vision()
+
+
+# Extra gemini Vision tests for completion + stream, async, async + stream
+# if we run into issues with gemini, we will also add these to our ci/cd pipeline
+# def test_gemini_pro_vision_stream():
+#     try:
+#         litellm.set_verbose = False
+#         litellm.num_retries=0
+#         print("streaming response from gemini-pro-vision")
+#         resp = litellm.completion(
+#             model = "vertex_ai/gemini-pro-vision",
+#             messages=[
+#                 {
+#                     "role": "user",
+#                     "content": [
+#                                     {
+#                                         "type": "text",
+#                                         "text": "Whats in this image?"
+#                                     },
+#                                     {
+#                                         "type": "image_url",
+#                                         "image_url": {
+#                                         "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
+#                                         }
+#                                     }
+#                                 ]
+#                 }
+#             ],
+#             stream=True
+#         )
+#         print(resp)
+#         for chunk in resp:
+#             print(chunk)
+#     except Exception as e:
+#         import traceback
+#         traceback.print_exc()
+#         raise e
+# test_gemini_pro_vision_stream()
+
+# def test_gemini_pro_vision_async():
+#     try:
+#         litellm.set_verbose = True
+#         litellm.num_retries=0
+#         async def test():
+#             resp = await litellm.acompletion(
+#                 model = "vertex_ai/gemini-pro-vision",
+#                 messages=[
+#                     {
+#                         "role": "user",
+#                         "content": [
+#                                         {
+#                                             "type": "text",
+#                                             "text": "Whats in this image?"
+#                                         },
+#                                         {
+#                                             "type": "image_url",
+#                                             "image_url": {
+#                                             "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
+#                                             }
+#                                         }
+#                                     ]
+#                     }
+#                 ],
+#             )
+#             print("async response gemini pro vision")
+#             print(resp)
+#         asyncio.run(test())
+#     except Exception as e:
+#         import traceback
+#         traceback.print_exc()
+#         raise e
+# test_gemini_pro_vision_async()
+
+
+# def test_gemini_pro_vision_async_stream():
+#     try:
+#         litellm.set_verbose = True
+#         litellm.num_retries=0
+#         async def test():
+#             resp = await litellm.acompletion(
+#                 model = "vertex_ai/gemini-pro-vision",
+#                 messages=[
+#                     {
+#                         "role": "user",
+#                         "content": [
+#                                         {
+#                                             "type": "text",
+#                                             "text": "Whats in this image?"
+#                                         },
+#                                         {
+#                                             "type": "image_url",
+#                                             "image_url": {
+#                                             "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
+#                                             }
+#                                         }
+#                                     ]
+#                     }
+#                 ],
+#                 stream=True
+#             )
+#             print("async response gemini pro vision")
+#             print(resp)
+#             for chunk in resp:
+#                 print(chunk)
+#         asyncio.run(test())
+#     except Exception as e:
+#         import traceback
+#         traceback.print_exc()
+#         raise e
+# test_gemini_pro_vision_async()
