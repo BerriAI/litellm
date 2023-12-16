@@ -229,8 +229,8 @@ def completion(
         if acompletion == True: # [TODO] expand support to vertex ai chat + text models 
             if optional_params.get("stream", False) is True: 
                 # async streaming
-                return async_streaming(llm_model=llm_model, mode=mode, prompt=prompt, logging_obj=logging_obj, request_str=request_str, model=model, model_response=model_response, **optional_params)
-            return async_completion(llm_model=llm_model, mode=mode, prompt=prompt, logging_obj=logging_obj, request_str=request_str, model=model, model_response=model_response, encoding=encoding, **optional_params)
+                return async_streaming(llm_model=llm_model, mode=mode, prompt=prompt, logging_obj=logging_obj, request_str=request_str, model=model, model_response=model_response, messages=messages, print_verbose=print_verbose, **optional_params)
+            return async_completion(llm_model=llm_model, mode=mode, prompt=prompt, logging_obj=logging_obj, request_str=request_str, model=model, model_response=model_response, encoding=encoding, messages=messages,print_verbose=print_verbose,**optional_params)
 
         if mode == "":
             chat = llm_model.start_chat() 
@@ -345,7 +345,7 @@ def completion(
     except Exception as e: 
         raise VertexAIError(status_code=500, message=str(e))
 
-async def async_completion(llm_model, mode: str, prompt: str, model: str, model_response: ModelResponse, logging_obj=None, request_str=None, encoding=None, **optional_params):
+async def async_completion(llm_model, mode: str, prompt: str, model: str, model_response: ModelResponse, logging_obj=None, request_str=None, encoding=None, messages = None, print_verbose = None, **optional_params):
     """
     Add support for acompletion calls for gemini-pro
     """
@@ -360,6 +360,24 @@ async def async_completion(llm_model, mode: str, prompt: str, model: str, model_
             response_obj = await chat.send_message_async(prompt, generation_config=GenerationConfig(**optional_params))
             completion_response = response_obj.text
             response_obj = response_obj._raw_response
+        elif mode == "vision":
+            print_verbose("\nMaking VertexAI Gemini Pro Vision Call")
+            print_verbose(f"\nProcessing input messages = {messages}")
+
+            prompt, images = _gemini_vision_convert_messages(messages=messages)
+            content = [prompt] + images
+
+            request_str += f"response = llm_model.generate_content({content})\n"
+            ## LOGGING
+            logging_obj.pre_call(input=prompt, api_key=None, additional_args={"complete_input_dict": optional_params, "request_str": request_str})
+            
+            ## LLM Call
+            response = await llm_model._generate_content_async(
+                contents=content,
+                generation_config=GenerationConfig(**optional_params)
+            )
+            completion_response = response.text
+            response_obj = response._raw_response
         elif mode == "chat":
             # chat-bison etc.
             chat = llm_model.start_chat()
@@ -411,7 +429,7 @@ async def async_completion(llm_model, mode: str, prompt: str, model: str, model_
     except Exception as e: 
         raise VertexAIError(status_code=500, message=str(e))
 
-async def async_streaming(llm_model, mode: str, prompt: str, model: str, model_response: ModelResponse, logging_obj=None, request_str=None, **optional_params):
+async def async_streaming(llm_model, mode: str, prompt: str, model: str, model_response: ModelResponse, logging_obj=None, request_str=None, messages = None, print_verbose = None, **optional_params):
     """
     Add support for async streaming calls for gemini-pro
     """
@@ -424,6 +442,24 @@ async def async_streaming(llm_model, mode: str, prompt: str, model: str, model_r
         ## LOGGING
         logging_obj.pre_call(input=prompt, api_key=None, additional_args={"complete_input_dict": optional_params, "request_str": request_str})
         response = await chat.send_message_async(prompt, generation_config=GenerationConfig(**optional_params), stream=stream)
+        optional_params["stream"] = True
+    elif mode == "vision": 
+        stream = optional_params.pop("stream")
+
+        print_verbose("\nMaking VertexAI Gemini Pro Vision Call")
+        print_verbose(f"\nProcessing input messages = {messages}")
+
+        prompt, images = _gemini_vision_convert_messages(messages=messages)
+        content = [prompt] + images
+        stream = optional_params.pop("stream")
+        request_str += f"response = llm_model.generate_content({content}, generation_config=GenerationConfig(**{optional_params}), stream={stream})\n"
+        logging_obj.pre_call(input=prompt, api_key=None, additional_args={"complete_input_dict": optional_params, "request_str": request_str})
+        
+        response = llm_model._generate_content_streaming_async(
+            contents=content,
+            generation_config=GenerationConfig(**optional_params),
+            stream=True
+        )
         optional_params["stream"] = True
     elif mode == "chat":
         chat = llm_model.start_chat()
