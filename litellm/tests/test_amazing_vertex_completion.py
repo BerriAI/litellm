@@ -221,5 +221,5 @@ def test_gemini_pro_vision():
     except Exception as e:
         import traceback
         traceback.print_exc()
-    raise e
+        raise e
 test_gemini_pro_vision()
