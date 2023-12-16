@@ -1,4 +1,4 @@
-# VertexAI - Google
+# VertexAI - Google [Gemini]
 
 <a target="_blank" href="https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/liteLLM_VertextAI_Example.ipynb">
   <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
@@ -47,10 +47,46 @@ os.environ["VERTEXAI_LOCATION"] = "us-central1 # Your Location
 litellm.vertex_location = "us-central1 # Your Location
 ```
 
-## Gemini
+## Gemini Pro
 | Model Name       | Function Call                        |
 |------------------|--------------------------------------|
 | gemini-pro   | `completion('gemini-pro', messages)` |
+
+## Gemini Pro Vision
+| Model Name       | Function Call                        |
+|------------------|--------------------------------------|
+| gemini-pro-vision   | `completion('gemini-pro-vision', messages)` |
+
+#### Using Gemini Pro Vision
+
+LiteLLM supports `litellm.acompletion()`, `litellm.completion()` for `gemini-pro-vision`. You can call `gemini-pro-vision` in the same input/output format as OpenAI [`gpt-4-vision`](https://docs.litellm.ai/docs/providers/openai#openai-vision-models)
+
+**Example Request**
+```python
+import litellm
+
+response = litellm.completion(
+  model = "vertex_ai/gemini-pro-vision",
+  messages=[
+      {
+          "role": "user",
+          "content": [
+                          {
+                              "type": "text",
+                              "text": "Whats in this image?"
+                          },
+                          {
+                              "type": "image_url",
+                              "image_url": {
+                              "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
+                              }
+                          }
+                      ]
+      }
+  ],
+)
+print(response)
+```
 
 ## Chat Models
 | Model Name       | Function Call                        |
