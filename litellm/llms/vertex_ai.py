@@ -205,7 +205,7 @@ def completion(
             llm_model = GenerativeModel(model)
             mode = ""
             request_str += f"llm_model = GenerativeModel({model})\n"
-        elif model in ["gemini-pro-vision"]:
+        elif model in litellm.vertex_vision_models:
             llm_model = GenerativeModel(model)
             request_str += f"llm_model = GenerativeModel({model})\n"
             mode = "vision"
