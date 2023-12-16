@@ -1,5 +1,4 @@
 # LITELLM PROXY DEPENDENCIES #
-litellm
 openai>=1.0.0
 fastapi
 tomli
