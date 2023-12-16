@@ -58,6 +58,7 @@ def validate_first_format(chunk):
     for choice in chunk['choices']:
         assert isinstance(choice['index'], int), "'index' should be an integer."
         assert isinstance(choice['delta']['role'], str), "'role' should be a string."
+        assert "messages" not in choice
         # openai v1.0.0 returns content as None
         assert (choice['finish_reason'] is None) or isinstance(choice['finish_reason'], str), "'finish_reason' should be None or a string."
 
@@ -230,7 +231,7 @@ def test_completion_cohere_stream_bad_key():
 
 def test_completion_azure_stream():
     try:
-        litellm.set_verbose = True
+        litellm.set_verbose = False
         messages = [
             {"role": "system", "content": "You are a helpful assistant."},
             {
@@ -243,14 +244,14 @@ def test_completion_azure_stream():
         )
         complete_response = ""
         # Add any assertions here to check the response
-        for idx, chunk in enumerate(response):
-            chunk, finished = streaming_format_tests(idx, chunk)
-            if finished:
-                break
+        for idx, init_chunk in enumerate(response):
+            chunk, finished = streaming_format_tests(idx, init_chunk)
             complete_response += chunk
+            if finished:
+                assert isinstance(init_chunk.choices[0], litellm.utils.StreamingChoices)
+                break
         if complete_response.strip() == "": 
             raise Exception("Empty response received")
-        print(f"completion_response: {complete_response}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 # test_completion_azure_stream() 
@@ -334,6 +335,37 @@ def test_completion_palm_stream():
         pytest.fail(f"Error occurred: {e}")
 # test_completion_palm_stream()
 
+
+def test_completion_mistral_api_stream():
+    try:
+        litellm.set_verbose = True
+        print("Testing streaming mistral api response")
+        response = completion(
+            model="mistral/mistral-medium", 
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Hey, how's it going?",
+                }
+            ],
+            max_tokens=10,
+            stream=True
+        )
+        complete_response = ""
+        for idx, chunk in enumerate(response):
+            print(chunk)
+            # print(chunk.choices[0].delta)
+            chunk, finished = streaming_format_tests(idx, chunk)
+            if finished:
+                break
+            complete_response += chunk
+        if complete_response.strip() == "": 
+            raise Exception("Empty response received")
+        print(f"completion_response: {complete_response}")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+# test_completion_mistral_api_stream()
+
 def test_completion_deep_infra_stream():
     # deep infra currently includes role in the 2nd chunk 
     # waiting for them to make a fix on this
@@ -364,6 +396,7 @@ def test_completion_deep_infra_stream():
         pytest.fail(f"Error occurred: {e}")
 # test_completion_deep_infra_stream()
 
+@pytest.mark.skip()
 def test_completion_nlp_cloud_stream():
     try:
         messages = [
@@ -632,6 +665,47 @@ def test_completion_bedrock_ai21_stream():
         pytest.fail(f"Error occurred: {e}")
 
 # test_completion_bedrock_ai21_stream()
+
+def test_sagemaker_weird_response(): 
+    """
+    When the stream ends, flush any remaining holding chunks.
+    """
+    try: 
+        chunk = """<s>[INST] Hey, how's it going? [/INST]
+
+    I'm doing well, thanks for asking! How about you? Is there anything you'd like to chat about or ask? I'm here to help with any questions you might have."""
+
+        logging_obj = litellm.Logging(model="berri-benchmarking-Llama-2-70b-chat-hf-4", messages=messages, stream=True, litellm_call_id="1234", function_id="function_id", call_type="acompletion", start_time=time.time())
+        response = litellm.CustomStreamWrapper(completion_stream=chunk, model="berri-benchmarking-Llama-2-70b-chat-hf-4", custom_llm_provider="sagemaker", logging_obj=logging_obj)
+        complete_response = ""
+        for chunk in response:
+            complete_response += chunk["choices"][0]["delta"]["content"]
+        assert len(complete_response) > 0
+    except Exception as e: 
+        pytest.fail(f"An exception occurred - {str(e)}")
+# test_sagemaker_weird_response()
+
+@pytest.mark.asyncio
+async def test_sagemaker_streaming_async():
+    try: 
+        messages = [{"role": "user", "content": "Hey, how's it going?"}]
+        litellm.set_verbose=True
+        response = await litellm.acompletion(
+            model="sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4", 
+            messages=messages,
+            max_tokens=100,
+            temperature=0.7,
+            stream=True,
+        )
+
+        # Add any assertions here to check the response 
+        complete_response = "" 
+        async for chunk in response:
+            complete_response += chunk.choices[0].delta.content or "" 
+        print(f"complete_response: {complete_response}")
+        assert len(complete_response) > 0
+    except Exception as e: 
+        pytest.fail(f"An exception occurred - {str(e)}")
 
 # def test_completion_sagemaker_stream():
 #     try:

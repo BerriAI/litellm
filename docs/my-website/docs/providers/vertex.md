@@ -1,4 +1,4 @@
-# VertexAI - Google
+# VertexAI - Google [Gemini]
 
 <a target="_blank" href="https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/liteLLM_VertextAI_Example.ipynb">
   <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
@@ -9,6 +9,16 @@
 * Authentication: 
     * run `gcloud auth application-default login` See [Google Cloud Docs](https://cloud.google.com/docs/authentication/external/set-up-adc)
     * Alternatively you can set `application_default_credentials.json`
+
+
+## Sample Usage
+```python
+import litellm
+litellm.vertex_project = "hardy-device-38811" # Your Project ID
+litellm.vertex_location = "us-central1"  # proj location
+
+response = completion(model="gemini-pro", messages=[{"role": "user", "content": "write code for saying hi from LiteLLM"}])
+```
 
 ## Set Vertex Project & Vertex Location
 All calls using Vertex AI require the following parameters:
@@ -37,13 +47,50 @@ os.environ["VERTEXAI_LOCATION"] = "us-central1 # Your Location
 litellm.vertex_location = "us-central1 # Your Location
 ```
 
-## Sample Usage
+## Gemini Pro
+| Model Name       | Function Call                        |
+|------------------|--------------------------------------|
+| gemini-pro   | `completion('gemini-pro', messages)` |
+
+## Gemini Pro Vision
+| Model Name       | Function Call                        |
+|------------------|--------------------------------------|
+| gemini-pro-vision   | `completion('gemini-pro-vision', messages)` |
+
+#### Using Gemini Pro Vision
+
+Call `gemini-pro-vision` in the same input/output format as OpenAI [`gpt-4-vision`](https://docs.litellm.ai/docs/providers/openai#openai-vision-models)
+
+LiteLLM Supports the following image types passed in `url`
+- Images with Cloud Storage URIs - gs://cloud-samples-data/generative-ai/image/boats.jpeg
+- Images with direct links - https://storage.googleapis.com/github-repo/img/gemini/intro/landmark3.jpg
+- Videos with Cloud Storage URIs - https://storage.googleapis.com/github-repo/img/gemini/multimodality_usecases_overview/pixel8.mp4
+
+**Example Request**
 ```python
 import litellm
-litellm.vertex_project = "hardy-device-38811" # Your Project ID
-litellm.vertex_location = "us-central1"  # proj location
 
-response = completion(model="chat-bison", messages=[{"role": "user", "content": "write code for saying hi from LiteLLM"}])
+response = litellm.completion(
+  model = "vertex_ai/gemini-pro-vision",
+  messages=[
+      {
+          "role": "user",
+          "content": [
+                          {
+                              "type": "text",
+                              "text": "Whats in this image?"
+                          },
+                          {
+                              "type": "image_url",
+                              "image_url": {
+                              "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
+                              }
+                          }
+                      ]
+      }
+  ],
+)
+print(response)
 ```
 
 ## Chat Models

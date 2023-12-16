@@ -21,6 +21,13 @@ messages = [{"content": user_message, "role": "user"}]
 def logger_fn(user_model_dict):
     print(f"user_model_dict: {user_model_dict}")
 
+@pytest.fixture(autouse=True)
+def reset_callbacks():
+    print("\npytest fixture - resetting callbacks")
+    litellm.success_callback = []
+    litellm._async_success_callback = []
+    litellm.failure_callback = []
+    litellm.callbacks = []
 
 def test_completion_custom_provider_model_name():
     try:
@@ -54,12 +61,31 @@ def test_completion_claude():
         print(response)
         print(response.usage)
         print(response.usage.completion_tokens)
-        print(response["usage"]["completion_tokens"])
+        print(response["usage"]["completion_tokens"]) 
         # print("new cost tracking")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
 # test_completion_claude()
+
+def test_completion_mistral_api():
+    try:
+        litellm.set_verbose=True
+        response = completion(
+            model="mistral/mistral-tiny", 
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Hey, how's it going?",
+                }
+            ],
+            safe_mode = True
+        )
+        # Add any assertions here to check the response
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+# test_completion_mistral_api()
 
 def test_completion_claude2_1():
     try:
@@ -287,7 +313,7 @@ def hf_test_completion_tgi():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-hf_test_completion_tgi()
+# hf_test_completion_tgi()
 
 # ################### Hugging Face Conversational models ########################
 # def hf_test_completion_conv():
@@ -611,7 +637,7 @@ def test_completion_azure_key_completion_arg():
     os.environ.pop("AZURE_API_KEY", None)
     try:
         print("azure gpt-3.5 test\n\n")
-        litellm.set_verbose=False
+        litellm.set_verbose=True
         ## Test azure call
         response = completion(
             model="azure/chatgpt-v-2",
@@ -696,6 +722,7 @@ def test_completion_azure():
         print(response)
 
         cost = completion_cost(completion_response=response)
+        assert cost > 0.0   
         print("Cost for azure completion request", cost)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
@@ -1013,15 +1040,56 @@ def test_completion_together_ai():
         # Add any assertions here to check the response
         print(response)
         cost = completion_cost(completion_response=response)
+        assert cost > 0.0   
         print("Cost for completion call together-computer/llama-2-70b: ", f"${float(cost):.10f}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+def test_completion_together_ai_mixtral():
+    model_name = "together_ai/DiscoResearch/DiscoLM-mixtral-8x7b-v2"
+    try:
+        messages =[
+            {"role": "user", "content": "Who are you"},
+            {"role": "assistant", "content": "I am your helpful assistant."},
+            {"role": "user", "content": "Tell me a joke"},
+        ]
+        response = completion(model=model_name, messages=messages, max_tokens=256, n=1, logger_fn=logger_fn)
+        # Add any assertions here to check the response
+        print(response)
+        cost = completion_cost(completion_response=response)
+        assert cost > 0.0   
+        print("Cost for completion call together-computer/llama-2-70b: ", f"${float(cost):.10f}")
+    except litellm.Timeout as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+test_completion_together_ai_mixtral()
+
+def test_completion_together_ai_yi_chat():
+    model_name = "together_ai/zero-one-ai/Yi-34B-Chat"
+    try:
+        messages =[
+            {"role": "user", "content": "What llm are you?"},
+        ]
+        response = completion(model=model_name, messages=messages)
+        # Add any assertions here to check the response
+        print(response)
+        cost = completion_cost(completion_response=response)
+        assert cost > 0.0   
+        print("Cost for completion call together-computer/llama-2-70b: ", f"${float(cost):.10f}")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+# test_completion_together_ai_yi_chat()
 
 # test_completion_together_ai()
 def test_customprompt_together_ai():
     try:
         litellm.set_verbose = False
         litellm.num_retries = 0
+        print("in test_customprompt_together_ai")
+        print(litellm.success_callback)
+        print(litellm._async_success_callback)
         response = completion(
             model="together_ai/mistralai/Mistral-7B-Instruct-v0.1",
             messages=messages, 
@@ -1030,7 +1098,6 @@ def test_customprompt_together_ai():
         print(response)
     except litellm.exceptions.Timeout as e:
         print(f"Timeout Error")
-        litellm.num_retries = 3 # reset retries
         pass
     except Exception as e:
         print(f"ERROR TYPE {type(e)}")
@@ -1065,7 +1132,7 @@ def test_completion_chat_sagemaker():
             temperature=0.7,
             stream=True,
         )
-        # Add any assertions here to check the response
+        # Add any assertions here to check the response 
         complete_response = "" 
         for chunk in response:
             complete_response += chunk.choices[0].delta.content or "" 

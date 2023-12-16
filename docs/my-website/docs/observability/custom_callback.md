@@ -4,7 +4,9 @@
 You can create a custom callback class to precisely log events as they occur in litellm. 
 
 ```python
+import litellm
 from litellm.integrations.custom_logger import CustomLogger
+from litellm import completion, acompletion
 
 class MyCustomHandler(CustomLogger):
     def log_pre_api_call(self, model, messages, kwargs): 
@@ -21,14 +23,38 @@ class MyCustomHandler(CustomLogger):
 
     def log_failure_event(self, kwargs, response_obj, start_time, end_time): 
         print(f"On Failure")
+    
+    #### ASYNC #### - for acompletion/aembeddings
+    
+    async def async_log_stream_event(self, kwargs, response_obj, start_time, end_time):
+        print(f"On Async Streaming")
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        print(f"On Async Success")
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        print(f"On Async Success")
 
 customHandler = MyCustomHandler()
 
 litellm.callbacks = [customHandler]
+
+## sync 
 response = completion(model="gpt-3.5-turbo", messages=[{ "role": "user", "content": "Hi 👋 - i'm openai"}],
                               stream=True)
 for chunk in response: 
     continue
+
+
+## async
+import asyncio 
+
+def async completion():
+    response = await acompletion(model="gpt-3.5-turbo", messages=[{ "role": "user", "content": "Hi 👋 - i'm openai"}],
+                              stream=True)
+    async for chunk in response: 
+        continue
+asyncio.run(completion())
 ```
 
 ## Callback Functions
@@ -87,6 +113,41 @@ print(response)
 
 ## Async Callback Functions 
 
+We recommend using the Custom Logger class for async.
+
+```python
+from litellm.integrations.custom_logger import CustomLogger
+from litellm import acompletion 
+
+class MyCustomHandler(CustomLogger):
+    #### ASYNC #### 
+    
+    async def async_log_stream_event(self, kwargs, response_obj, start_time, end_time):
+        print(f"On Async Streaming")
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        print(f"On Async Success")
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        print(f"On Async Failure")
+
+import asyncio 
+customHandler = MyCustomHandler()
+
+litellm.callbacks = [customHandler]
+
+def async completion():
+    response = await acompletion(model="gpt-3.5-turbo", messages=[{ "role": "user", "content": "Hi 👋 - i'm openai"}],
+                              stream=True)
+    async for chunk in response: 
+        continue
+asyncio.run(completion())
+```
+
+**Functions**
+
+If you just want to pass in an async function for logging. 
+
 LiteLLM currently supports just async success callback functions for async completion/embedding calls. 
 
 ```python
@@ -117,9 +178,6 @@ asyncio.run(test_chat_openai())
 :::info
 
 We're actively trying to expand this to other event types. [Tell us if you need this!](https://github.com/BerriAI/litellm/issues/1007)
-
-
-
 :::
 
 ## What's in kwargs? 
@@ -169,6 +227,48 @@ Here's exactly what you can expect in the kwargs dictionary:
 "traceback_exception" = traceback_exception # the traceback generated via `traceback.format_exc()`
 "end_time" = end_time # datetime object of when call was completed
 ```
+
+
+### Cache hits
+
+Cache hits are logged in success events as `kwarg["cache_hit"]`. 
+
+Here's an example of accessing it: 
+
+  ```python
+  import litellm
+from litellm.integrations.custom_logger import CustomLogger
+from litellm import completion, acompletion, Cache
+
+class MyCustomHandler(CustomLogger):
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time): 
+        print(f"On Success")
+        print(f"Value of Cache hit: {kwargs['cache_hit']"})
+
+async def test_async_completion_azure_caching():
+    customHandler_caching = MyCustomHandler()
+    litellm.cache = Cache(type="redis", host=os.environ['REDIS_HOST'], port=os.environ['REDIS_PORT'], password=os.environ['REDIS_PASSWORD'])
+    litellm.callbacks = [customHandler_caching]
+    unique_time = time.time()
+    response1 = await litellm.acompletion(model="azure/chatgpt-v-2",
+                            messages=[{
+                                "role": "user",
+                                "content": f"Hi 👋 - i'm async azure {unique_time}"
+                            }],
+                            caching=True)
+    await asyncio.sleep(1)
+    print(f"customHandler_caching.states pre-cache hit: {customHandler_caching.states}")
+    response2 = await litellm.acompletion(model="azure/chatgpt-v-2",
+                            messages=[{
+                                "role": "user",
+                                "content": f"Hi 👋 - i'm async azure {unique_time}"
+                            }],
+                            caching=True)
+    await asyncio.sleep(1) # success callbacks are done in parallel
+    print(f"customHandler_caching.states post-cache hit: {customHandler_caching.states}")
+    assert len(customHandler_caching.errors) == 0
+    assert len(customHandler_caching.states) == 4 # pre, post, success, success
+  ```
 
 ### Get complete streaming response
 

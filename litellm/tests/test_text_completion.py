@@ -1,4 +1,4 @@
-import sys, os
+import sys, os, asyncio
 import traceback
 from dotenv import load_dotenv
 
@@ -10,7 +10,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import pytest
 import litellm
-from litellm import embedding, completion, text_completion, completion_cost
+from litellm import embedding, completion, text_completion, completion_cost, atext_completion
 from litellm import RateLimitError
 
 
@@ -61,7 +61,7 @@ def test_completion_openai_engine():
         #print(response.choices[0].text)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_openai_engine()
+# test_completion_openai_engine()
 
 
 def test_completion_chatgpt_prompt():
@@ -142,7 +142,7 @@ def test_completion_hf_prompt_array():
             prompt=token_prompt, # token prompt is a 2d list,
             max_tokens=0,
             temperature=0.0,
-            echo=True,
+            # echo=True, # hugging face inference api is currently raising errors for this, looks like they have a regression on their side 
         )
         print("\n\n response")
 
@@ -163,8 +163,23 @@ def test_text_completion_stream():
                 max_tokens=10,
             )
         for chunk in response:
-            print(chunk)
+            print(f"chunk: {chunk}")
     except Exception as e:
         pytest.fail(f"GOT exception for HF In streaming{e}")
 
-test_text_completion_stream()
+# test_text_completion_stream()
+
+async def test_text_completion_async_stream():
+    try:
+        response = await atext_completion(
+                model="text-completion-openai/text-davinci-003", 
+                prompt="good morning",
+                stream=True,
+                max_tokens=10,
+            )
+        async for chunk in response:
+            print(f"chunk: {chunk}")
+    except Exception as e:
+        pytest.fail(f"GOT exception for HF In streaming{e}")
+
+asyncio.run(test_text_completion_async_stream())

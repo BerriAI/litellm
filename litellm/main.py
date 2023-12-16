@@ -14,6 +14,7 @@ import dotenv, traceback, random, asyncio, time, contextvars
 from copy import deepcopy
 import httpx
 import litellm
+
 from litellm import (  # type: ignore
     client,
     exception_type,
@@ -31,7 +32,8 @@ from litellm.utils import (
     mock_completion_streaming_obj, 
     convert_to_model_response_object, 
     token_counter, 
-    Usage
+    Usage, 
+    get_optional_params_embeddings
 )
 from .llms import (
     anthropic,
@@ -171,11 +173,14 @@ async def acompletion(*args, **kwargs):
             or custom_llm_provider == "azure" 
             or custom_llm_provider == "custom_openai"
             or custom_llm_provider == "anyscale"
+            or custom_llm_provider == "mistral"
             or custom_llm_provider == "openrouter"
             or custom_llm_provider == "deepinfra"
             or custom_llm_provider == "perplexity"
             or custom_llm_provider == "text-completion-openai"
-            or custom_llm_provider == "huggingface"): # currently implemented aiohttp calls for just azure and openai, soon all. 
+            or custom_llm_provider == "huggingface"
+            or custom_llm_provider == "ollama"
+            or custom_llm_provider == "vertex_ai"): # currently implemented aiohttp calls for just azure and openai, soon all. 
             if kwargs.get("stream", False): 
                 response = completion(*args, **kwargs)
             else:
@@ -200,9 +205,12 @@ async def acompletion(*args, **kwargs):
 
 async def _async_streaming(response, model, custom_llm_provider, args): 
     try: 
+        print_verbose(f"received response in _async_streaming: {response}")
         async for line in response: 
+            print_verbose(f"line in async streaming: {line}")
             yield line
     except Exception as e: 
+        print_verbose(f"error raised _async_streaming: {traceback.format_exc()}")
         raise exception_type(
                 model=model, custom_llm_provider=custom_llm_provider, original_exception=e, completion_kwargs=args,
             )
@@ -278,7 +286,7 @@ def completion(
 
     # Optional liteLLM function params
     **kwargs,
-) -> ModelResponse:
+) -> Union[ModelResponse, CustomStreamWrapper]:
     """
     Perform a completion() using any of litellm supported llms (example gpt-4, gpt-3.5-turbo, claude-2, command-nightly)
     Parameters:
@@ -319,7 +327,6 @@ def completion(
     ######### unpacking kwargs #####################
     args = locals()
     api_base = kwargs.get('api_base', None)
-    return_async = kwargs.get('return_async', False)
     mock_response = kwargs.get('mock_response', None)
     force_timeout= kwargs.get('force_timeout', 600) ## deprecated
     logger_fn = kwargs.get('logger_fn', None)
@@ -344,13 +351,14 @@ def completion(
     final_prompt_value = kwargs.get("final_prompt_value", None)
     bos_token = kwargs.get("bos_token", None)
     eos_token = kwargs.get("eos_token", None)
+    preset_cache_key = kwargs.get("preset_cache_key", None)
     hf_model_name = kwargs.get("hf_model_name", None)
     ### ASYNC CALLS ### 
     acompletion = kwargs.get("acompletion", False)
     client = kwargs.get("client", None)
     ######## end of unpacking kwargs ###########
     openai_params = ["functions", "function_call", "temperature", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "request_timeout", "api_base", "api_version", "api_key", "deployment_id", "organization", "base_url", "default_headers", "timeout", "response_format", "seed", "tools", "tool_choice", "max_retries"]
-    litellm_params = ["metadata", "acompletion", "caching", "return_async", "mock_response", "api_key", "api_version", "api_base", "force_timeout", "logger_fn", "verbose", "custom_llm_provider", "litellm_logging_obj", "litellm_call_id", "use_client", "id", "fallbacks", "azure", "headers", "model_list", "num_retries", "context_window_fallback_dict", "roles", "final_prompt_value", "bos_token", "eos_token", "request_timeout", "complete_response", "self", "client", "rpm", "tpm", "input_cost_per_token", "output_cost_per_token", "hf_model_name", "model_info", "proxy_server_request"]
+    litellm_params = ["metadata", "acompletion", "caching", "mock_response", "api_key", "api_version", "api_base", "force_timeout", "logger_fn", "verbose", "custom_llm_provider", "litellm_logging_obj", "litellm_call_id", "use_client", "id", "fallbacks", "azure", "headers", "model_list", "num_retries", "context_window_fallback_dict", "roles", "final_prompt_value", "bos_token", "eos_token", "request_timeout", "complete_response", "self", "client", "rpm", "tpm", "input_cost_per_token", "output_cost_per_token", "hf_model_name", "model_info", "proxy_server_request", "preset_cache_key", "caching_groups"]
     default_params = openai_params + litellm_params
     non_default_params = {k: v for k,v in kwargs.items() if k not in default_params} # model-specific params - pass them straight to the model/provider
     if mock_response:
@@ -384,7 +392,6 @@ def completion(
                 model=deployment_id
                 custom_llm_provider="azure"
         model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, api_key=api_key)
-        
         ### REGISTER CUSTOM MODEL PRICING -- IF GIVEN ###
         if input_cost_per_token is not None and output_cost_per_token is not None: 
             litellm.register_model({
@@ -448,7 +455,6 @@ def completion(
         # For logging - save the values of the litellm-specific params passed in
         litellm_params = get_litellm_params(
             acompletion=acompletion,
-            return_async=return_async,
             api_key=api_key,
             force_timeout=force_timeout,
             logger_fn=logger_fn,
@@ -460,7 +466,8 @@ def completion(
             completion_call_id=id,
             metadata=metadata,
             model_info=model_info,
-            proxy_server_request=proxy_server_request
+            proxy_server_request=proxy_server_request,
+            preset_cache_key=preset_cache_key
         )
         logging.update_environment_variables(model=model, user=user, optional_params=optional_params, litellm_params=litellm_params)
         if custom_llm_provider == "azure":
@@ -524,23 +531,25 @@ def completion(
                 client=client # pass AsyncAzureOpenAI, AzureOpenAI client
             )
 
-            ## LOGGING
-            logging.post_call(
-                input=messages,
-                api_key=api_key,
-                original_response=response,
-                additional_args={
-                    "headers": headers,
-                    "api_version": api_version,
-                    "api_base": api_base,
-                },
-            )
+            if optional_params.get("stream", False) or acompletion == True:
+                ## LOGGING
+                logging.post_call(
+                    input=messages,
+                    api_key=api_key,
+                    original_response=response,
+                    additional_args={
+                        "headers": headers,
+                        "api_version": api_version,
+                        "api_base": api_base,
+                    },
+                )
         elif (
             model in litellm.open_ai_chat_completion_models
             or custom_llm_provider == "custom_openai"
             or custom_llm_provider == "deepinfra"
             or custom_llm_provider == "perplexity"
             or custom_llm_provider == "anyscale"
+            or custom_llm_provider == "mistral"
             or custom_llm_provider == "openai"
             or "ft:gpt-3.5-turbo" in model  # finetune gpt-3.5-turbo
         ):  # allow user to make an openai call with a custom base
@@ -604,19 +613,19 @@ def completion(
                 )
                 raise e
 
-            ## LOGGING
-            logging.post_call(
-                input=messages,
-                api_key=api_key,
-                original_response=response,
-                additional_args={"headers": headers},
-            )
+            if optional_params.get("stream", False):
+                ## LOGGING
+                logging.post_call(
+                    input=messages,
+                    api_key=api_key,
+                    original_response=response,
+                    additional_args={"headers": headers},
+                )
         elif (
             custom_llm_provider == "text-completion-openai"
             or "ft:babbage-002" in model
             or "ft:davinci-002" in model  # support for finetuned completion models
         ):
-            # print("calling custom openai provider")
             openai.api_type = "openai"
 
             api_base = (
@@ -655,17 +664,6 @@ def completion(
                 prompt = messages[0]["content"]
             else:
                 prompt = " ".join([message["content"] for message in messages]) # type: ignore
-            ## LOGGING
-            logging.pre_call(
-                input=prompt,
-                api_key=api_key,
-                additional_args={
-                    "openai_organization": litellm.organization,
-                    "headers": headers,
-                    "api_base": api_base,
-                    "api_type": openai.api_type,
-                },
-            )
             ## COMPLETION CALL
             model_response = openai_text_completions.completion(
                 model=model,
@@ -681,9 +679,14 @@ def completion(
                 logger_fn=logger_fn
             )
             
-            # if "stream" in optional_params and optional_params["stream"] == True:
-            #     response = CustomStreamWrapper(model_response, model, custom_llm_provider="text-completion-openai", logging_obj=logging)
-            #     return response
+            if optional_params.get("stream", False) or acompletion == True:
+                ## LOGGING
+                logging.post_call(
+                    input=messages,
+                    api_key=api_key,
+                    original_response=model_response,
+                    additional_args={"headers": headers},
+                )
             response = model_response
         elif (
             "replicate" in model or 
@@ -728,8 +731,16 @@ def completion(
             )
             if "stream" in optional_params and optional_params["stream"] == True:
                 # don't try to access stream object,
-                response = CustomStreamWrapper(model_response, model, logging_obj=logging, custom_llm_provider="replicate")
-                return response
+                model_response = CustomStreamWrapper(model_response, model, logging_obj=logging, custom_llm_provider="replicate") # type: ignore
+
+            if optional_params.get("stream", False) or acompletion == True:
+                ## LOGGING
+                logging.post_call(
+                    input=messages,
+                    api_key=replicate_key,
+                    original_response=model_response,
+                )
+
             response = model_response
 
         elif custom_llm_provider=="anthropic":
@@ -749,7 +760,7 @@ def completion(
                 custom_prompt_dict
                 or litellm.custom_prompt_dict
             )
-            model_response = anthropic.completion(
+            response = anthropic.completion(
                 model=model,
                 messages=messages,
                 api_base=api_base,
@@ -765,9 +776,16 @@ def completion(
             )
             if "stream" in optional_params and optional_params["stream"] == True:
                 # don't try to access stream object,
-                response = CustomStreamWrapper(model_response, model, custom_llm_provider="anthropic", logging_obj=logging)
-                return response
-            response = model_response
+                response = CustomStreamWrapper(response, model, custom_llm_provider="anthropic", logging_obj=logging)
+            
+            if optional_params.get("stream", False) or acompletion == True:
+                ## LOGGING
+                logging.post_call(
+                    input=messages,
+                    api_key=api_key,
+                    original_response=response,
+                )
+            response = response
         elif custom_llm_provider == "nlp_cloud":
             nlp_cloud_key = (
                 api_key or litellm.nlp_cloud_key or get_secret("NLP_CLOUD_API_KEY") or litellm.api_key
@@ -780,7 +798,7 @@ def completion(
                 or "https://api.nlpcloud.io/v1/gpu/"
             )
 
-            model_response = nlp_cloud.completion(
+            response = nlp_cloud.completion(
                 model=model,
                 messages=messages,
                 api_base=api_base,
@@ -796,9 +814,17 @@ def completion(
 
             if "stream" in optional_params and optional_params["stream"] == True:
                 # don't try to access stream object,
-                response = CustomStreamWrapper(model_response, model, custom_llm_provider="nlp_cloud", logging_obj=logging)
-                return response
-            response = model_response
+                response = CustomStreamWrapper(response, model, custom_llm_provider="nlp_cloud", logging_obj=logging)
+            
+            if optional_params.get("stream", False) or acompletion == True:
+                ## LOGGING
+                logging.post_call(
+                    input=messages,
+                    api_key=api_key,
+                    original_response=response,
+                )
+
+            response = response
         elif custom_llm_provider == "aleph_alpha":
             aleph_alpha_key = (
                 api_key or litellm.aleph_alpha_key or get_secret("ALEPH_ALPHA_API_KEY") or get_secret("ALEPHALPHA_API_KEY") or litellm.api_key
@@ -1100,7 +1126,7 @@ def completion(
                 )
                 return response
             response = model_response
-        elif model in litellm.vertex_chat_models or model in litellm.vertex_code_chat_models or model in litellm.vertex_text_models or model in litellm.vertex_code_text_models:
+        elif custom_llm_provider == "vertex_ai":
             vertex_ai_project = (litellm.vertex_project 
                                  or get_secret("VERTEXAI_PROJECT"))
             vertex_ai_location = (litellm.vertex_location 
@@ -1117,10 +1143,11 @@ def completion(
                 encoding=encoding,
                 vertex_location=vertex_ai_location,
                 vertex_project=vertex_ai_project,
-                logging_obj=logging
+                logging_obj=logging, 
+                acompletion=acompletion
             )
             
-            if "stream" in optional_params and optional_params["stream"] == True:
+            if "stream" in optional_params and optional_params["stream"] == True and acompletion == False:
                 response = CustomStreamWrapper(
                     model_response, model, custom_llm_provider="vertex_ai", logging_obj=logging
                     )
@@ -1186,6 +1213,7 @@ def completion(
                 # "SageMaker is currently not supporting streaming responses."
                 
                 # fake streaming for sagemaker
+                print_verbose(f"ENTERS SAGEMAKER CUSTOMSTREAMWRAPPER")
                 resp_string = model_response["choices"][0]["message"]["content"]
                 response = CustomStreamWrapper(
                     resp_string, model, custom_llm_provider="sagemaker", logging_obj=logging
@@ -1200,7 +1228,7 @@ def completion(
                 custom_prompt_dict
                 or litellm.custom_prompt_dict
             )
-            model_response = bedrock.completion(
+            response = bedrock.completion(
                 model=model,
                 messages=messages,
                 custom_prompt_dict=litellm.custom_prompt_dict,
@@ -1218,16 +1246,24 @@ def completion(
                 # don't try to access stream object,
                 if "ai21" in model: 
                     response = CustomStreamWrapper(
-                        model_response, model, custom_llm_provider="bedrock", logging_obj=logging
+                        response, model, custom_llm_provider="bedrock", logging_obj=logging
                     )
                 else:
                     response = CustomStreamWrapper(
-                        iter(model_response), model, custom_llm_provider="bedrock", logging_obj=logging
+                        iter(response), model, custom_llm_provider="bedrock", logging_obj=logging
                     )
-                return response
+            
+            if optional_params.get("stream", False):
+                ## LOGGING
+                logging.post_call(
+                    input=messages,
+                    api_key=None,
+                    original_response=response,
+                )
+
 
             ## RESPONSE OBJECT
-            response = model_response
+            response = response
         elif custom_llm_provider == "vllm":
             model_response = vllm.completion(
                 model=model,
@@ -1273,14 +1309,18 @@ def completion(
                 )
             else:
                 prompt = prompt_factory(model=model, messages=messages, custom_llm_provider=custom_llm_provider)
-            ## LOGGING
-            if kwargs.get('acompletion', False) == True:    
-                if optional_params.get("stream", False) == True:
-                # assume all ollama responses are streamed
-                    async_generator = ollama.async_get_ollama_response_stream(api_base, model, prompt, optional_params, logging_obj=logging)
-                    return async_generator
+                if isinstance(prompt, dict):
+                    # for multimode models - ollama/llava prompt_factory returns a dict {
+                    #     "prompt": prompt,
+                    #     "images": images
+                    # }
+                    prompt, images = prompt["prompt"], prompt["images"]
+                    optional_params["images"] = images
 
-            generator = ollama.get_ollama_response_stream(api_base, model, prompt, optional_params, logging_obj=logging)
+            ## LOGGING
+            generator = ollama.get_ollama_response_stream(api_base, model, prompt, optional_params, logging_obj=logging, acompletion=acompletion, model_response=model_response, encoding=encoding)
+            if acompletion is True:
+                return generator
             if optional_params.get("stream", False) == True:
                 # assume all ollama responses are streamed
                 response = CustomStreamWrapper(
@@ -1716,8 +1756,7 @@ async def aembedding(*args, **kwargs):
             or custom_llm_provider == "anyscale"
             or custom_llm_provider == "openrouter"
             or custom_llm_provider == "deepinfra"
-            or custom_llm_provider == "perplexity"
-            or custom_llm_provider == "huggingface"): # currently implemented aiohttp calls for just azure and openai, soon all. 
+            or custom_llm_provider == "perplexity"): # currently implemented aiohttp calls for just azure and openai, soon all. 
             # Await normally
             init_response = await loop.run_in_executor(None, func_with_context)
             if isinstance(init_response, dict) or isinstance(init_response, ModelResponse): ## CACHING SCENARIO 
@@ -1781,22 +1820,21 @@ def embedding(
     rpm = kwargs.pop("rpm", None)
     tpm = kwargs.pop("tpm", None)
     model_info = kwargs.get("model_info", None)
+    metadata = kwargs.get("metadata", None)
+    encoding_format = kwargs.get("encoding_format", None)
     proxy_server_request = kwargs.get("proxy_server_request", None)
-    aembedding = kwargs.pop("aembedding", None)
-    openai_params = ["functions", "function_call", "temperature", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "request_timeout", "api_base", "api_version", "api_key", "deployment_id", "organization", "base_url", "default_headers", "timeout", "response_format", "seed", "tools", "tool_choice", "max_retries", "encoding_format"]
-    litellm_params = ["metadata", "acompletion", "caching", "return_async", "mock_response", "api_key", "api_version", "api_base", "force_timeout", "logger_fn", "verbose", "custom_llm_provider", "litellm_logging_obj", "litellm_call_id", "use_client", "id", "fallbacks", "azure", "headers", "model_list", "num_retries", "context_window_fallback_dict", "roles", "final_prompt_value", "bos_token", "eos_token", "request_timeout", "complete_response", "self", "client", "rpm", "tpm", "input_cost_per_token", "output_cost_per_token", "hf_model_name", "proxy_server_request", "model_info"]
+    aembedding = kwargs.get("aembedding", None)
+    openai_params = ["user", "request_timeout", "api_base", "api_version", "api_key", "deployment_id", "organization", "base_url", "default_headers", "timeout", "max_retries", "encoding_format"]
+    litellm_params = ["metadata", "aembedding", "caching", "mock_response", "api_key", "api_version", "api_base", "force_timeout", "logger_fn", "verbose", "custom_llm_provider", "litellm_logging_obj", "litellm_call_id", "use_client", "id", "fallbacks", "azure", "headers", "model_list", "num_retries", "context_window_fallback_dict", "roles", "final_prompt_value", "bos_token", "eos_token", "request_timeout", "complete_response", "self", "client", "rpm", "tpm", "input_cost_per_token", "output_cost_per_token", "hf_model_name", "proxy_server_request", "model_info", "preset_cache_key", "caching_groups"]
     default_params = openai_params + litellm_params
     non_default_params = {k: v for k,v in kwargs.items() if k not in default_params} # model-specific params - pass them straight to the model/provider
-    optional_params = {}
-    for param in non_default_params:
-        optional_params[param] = kwargs[param]
-    model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, api_key=api_key)
     
-
+    model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, api_key=api_key)
+    optional_params = get_optional_params_embeddings(user=user, encoding_format=encoding_format, custom_llm_provider=custom_llm_provider, **non_default_params)
     try:
         response = None
         logging = litellm_logging_obj
-        logging.update_environment_variables(model=model, user="", optional_params=optional_params, litellm_params={"timeout": timeout, "azure": azure, "litellm_call_id": litellm_call_id, "logger_fn": logger_fn, "proxy_server_request": proxy_server_request, "model_info": model_info})
+        logging.update_environment_variables(model=model, user=user, optional_params=optional_params, litellm_params={"timeout": timeout, "azure": azure, "litellm_call_id": litellm_call_id, "logger_fn": logger_fn, "proxy_server_request": proxy_server_request, "model_info": model_info, "metadata": metadata, "aembedding": aembedding, "preset_cache_key": None, "stream_response": {}})
         if azure == True or custom_llm_provider == "azure":
             # azure configs
             api_type = get_secret("AZURE_API_TYPE") or "azure"
@@ -1936,7 +1974,7 @@ def embedding(
         ## LOGGING
         logging.post_call(
             input=input,
-            api_key=openai.api_key,
+            api_key=api_key,
             original_response=str(e),
         )
         ## Map to OpenAI Exception
@@ -1948,6 +1986,59 @@ def embedding(
 
 
 ###### Text Completion ################
+async def atext_completion(*args, **kwargs):
+    """
+    Implemented to handle async streaming for the text completion endpoint 
+    """
+    loop = asyncio.get_event_loop()
+    model = args[0] if len(args) > 0 else kwargs["model"]
+    ### PASS ARGS TO COMPLETION ### 
+    kwargs["acompletion"] = True
+    custom_llm_provider = None
+    try: 
+        # Use a partial function to pass your keyword arguments
+        func = partial(text_completion, *args, **kwargs)
+
+        # Add the context to the function
+        ctx = contextvars.copy_context()
+        func_with_context = partial(ctx.run, func)
+
+        _, custom_llm_provider, _, _ = get_llm_provider(model=model, api_base=kwargs.get("api_base", None))
+
+        if (custom_llm_provider == "openai" 
+            or custom_llm_provider == "azure" 
+            or custom_llm_provider == "custom_openai"
+            or custom_llm_provider == "anyscale"
+            or custom_llm_provider == "mistral"
+            or custom_llm_provider == "openrouter"
+            or custom_llm_provider == "deepinfra"
+            or custom_llm_provider == "perplexity"
+            or custom_llm_provider == "text-completion-openai"
+            or custom_llm_provider == "huggingface"
+            or custom_llm_provider == "ollama"
+            or custom_llm_provider == "vertex_ai"): # currently implemented aiohttp calls for just azure and openai, soon all. 
+            if kwargs.get("stream", False): 
+                response = text_completion(*args, **kwargs)
+            else:
+                # Await normally
+                init_response = await loop.run_in_executor(None, func_with_context)
+                if isinstance(init_response, dict) or isinstance(init_response, ModelResponse): ## CACHING SCENARIO 
+                    response = init_response
+                elif asyncio.iscoroutine(init_response):
+                    response = await init_response
+        else: 
+            # Call the synchronous function using run_in_executor
+            response =  await loop.run_in_executor(None, func_with_context)
+        if kwargs.get("stream", False): # return an async generator
+            return _async_streaming(response=response, model=model, custom_llm_provider=custom_llm_provider, args=args)
+        else: 
+            return response
+    except Exception as e: 
+        custom_llm_provider = custom_llm_provider or "openai"
+        raise exception_type(
+                model=model, custom_llm_provider=custom_llm_provider, original_exception=e, completion_kwargs=args,
+            )
+
 def text_completion(
     prompt: Union[str, List[Union[str, List[Union[str, List[int]]]]]], # Required: The prompt(s) to generate completions for.
     model: Optional[str]=None,                 # Optional: either `model` or `engine` can be set
@@ -2079,7 +2170,7 @@ def text_completion(
                         *args,
                         **all_params,
                     )
-                    #print(response)
+
                     text_completion_response["id"] = response.get("id", None)
                     text_completion_response["object"] = "text_completion"
                     text_completion_response["created"] = response.get("created", None)
@@ -2294,6 +2385,8 @@ def stream_chunk_builder(chunks: list, messages: Optional[list]=None):
         completion_output = combined_content
     elif len(combined_arguments) > 0: 
         completion_output = combined_arguments
+    else: 
+        completion_output = ""
     # # Update usage information if needed
     try:
         response["usage"]["prompt_tokens"] = token_counter(model=model, messages=messages)

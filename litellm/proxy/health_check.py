@@ -69,7 +69,6 @@ async def _perform_health_check(model_list: list):
     for model in model_list:
         litellm_params = model["litellm_params"]
         model_info = model.get("model_info", {})
-        litellm_params["model"] = litellm.utils.remove_model_id(litellm_params["model"])
         litellm_params["messages"] = _get_random_llm_message()
 
         prepped_params.append(litellm_params)

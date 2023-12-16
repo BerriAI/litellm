@@ -1,4 +1,11 @@
-# Deploying LiteLLM Proxy
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+# 🐳 Docker, Deploying LiteLLM Proxy
+
+## Dockerfile
+
+You can find the Dockerfile to build litellm proxy [here](https://github.com/BerriAI/litellm/blob/main/Dockerfile)
 
 ## Quick Start Docker Image: Github Container Registry
 
@@ -7,12 +14,12 @@ See the latest available ghcr docker image here:
 https://github.com/berriai/litellm/pkgs/container/litellm
 
 ```shell
-docker pull ghcr.io/berriai/litellm:main-v1.10.1
+docker pull ghcr.io/berriai/litellm:main-v1.12.3
 ```
 
 ### Run the Docker Image
 ```shell
-docker run ghcr.io/berriai/litellm:main-v1.10.0
+docker run ghcr.io/berriai/litellm:main-v1.12.3
 ```
 
 #### Run the Docker Image with LiteLLM CLI args
@@ -21,12 +28,12 @@ See all supported CLI args [here](https://docs.litellm.ai/docs/proxy/cli):
 
 Here's how you can run the docker image and pass your config to `litellm`
 ```shell
-docker run ghcr.io/berriai/litellm:main-v1.10.0 --config your_config.yaml
+docker run ghcr.io/berriai/litellm:main-v1.12.3 --config your_config.yaml
 ```
 
 Here's how you can run the docker image and start litellm on port 8002 with `num_workers=8`
 ```shell
-docker run ghcr.io/berriai/litellm:main-v1.10.0 --port 8002 --num_workers 8
+docker run ghcr.io/berriai/litellm:main-v1.12.3 --port 8002 --num_workers 8
 ```
   
 #### Run the Docker Image using docker compose
@@ -42,6 +49,10 @@ Here's an example `docker-compose.yml` file
 version: "3.9"
 services:
   litellm:
+    build:
+      context: .
+        args:
+          target: runtime
     image: ghcr.io/berriai/litellm:main
     ports:
       - "8000:8000" # Map the container port to the host, change the host port if necessary
@@ -73,6 +84,26 @@ Your LiteLLM container should be running now on the defined port e.g. `8000`.
 
 <iframe width="840" height="500" src="https://www.loom.com/embed/805964b3c8384b41be180a61442389a3" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
 
+
+## Deploy on Google Cloud Run
+**Click the button** to deploy to Google Cloud Run
+
+[![Deploy](https://deploy.cloud.run/button.svg)](https://deploy.cloud.run/?git_repo=https://github.com/BerriAI/litellm)
+
+#### Testing your deployed proxy
+**Assuming the required keys are set as Environment Variables**
+
+https://litellm-7yjrj3ha2q-uc.a.run.app is our example proxy, substitute it with your deployed cloud run app
+
+```shell
+curl https://litellm-7yjrj3ha2q-uc.a.run.app/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+     "model": "gpt-3.5-turbo",
+     "messages": [{"role": "user", "content": "Say this is a test!"}],
+     "temperature": 0.7
+   }'
+```
 
 ## LiteLLM Proxy Performance
 
