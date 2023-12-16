@@ -59,9 +59,9 @@ litellm.vertex_location = "us-central1 # Your Location
 
 #### Using Gemini Pro Vision
 
-LiteLLM supports `litellm.acompletion()`, `litellm.completion()` for `gemini-pro-vision`. You can call `gemini-pro-vision` in the same input/output format as OpenAI [`gpt-4-vision`](https://docs.litellm.ai/docs/providers/openai#openai-vision-models)
+Call `gemini-pro-vision` in the same input/output format as OpenAI [`gpt-4-vision`](https://docs.litellm.ai/docs/providers/openai#openai-vision-models)
 
-For Gemini LiteLLM Supports the following types passed in `url`
+LiteLLM Supports the following image types passed in `url`
 - Images with Cloud Storage URIs - gs://cloud-samples-data/generative-ai/image/boats.jpeg
 - Images with direct links - https://storage.googleapis.com/github-repo/img/gemini/intro/landmark3.jpg
 - Videos with Cloud Storage URIs - https://storage.googleapis.com/github-repo/img/gemini/multimodality_usecases_overview/pixel8.mp4
