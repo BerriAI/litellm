@@ -57,6 +57,108 @@ class VertexAIConfig():
                 and not isinstance(v, (types.FunctionType, types.BuiltinFunctionType, classmethod, staticmethod)) 
                 and v is not None}
 
+def _get_image_bytes_from_url(image_url: str) -> bytes:
+    try:
+        response = requests.get(image_url)
+        response.raise_for_status()  # Raise an error for bad responses (4xx and 5xx)
+        image_bytes = response.content
+        return image_bytes
+    except requests.exceptions.RequestException as e:
+        # Handle any request exceptions (e.g., connection error, timeout)
+        return b''  # Return an empty bytes object or handle the error as needed
+
+
+def _load_image_from_url(image_url: str):
+    """
+    Loads an image from a URL.
+
+    Args:
+        image_url (str): The URL of the image.
+
+    Returns:
+        Image: The loaded image.
+    """
+    from vertexai.preview.generative_models import GenerativeModel, Part, GenerationConfig, Image
+    image_bytes = _get_image_bytes_from_url(image_url)
+    return Image.from_bytes(image_bytes)
+
+def _gemini_vision_convert_messages(
+        messages: list
+):
+    """
+    Converts given messages for GPT-4 Vision to Gemini format.
+
+    Args:
+        messages (list): The messages to convert. Each message can be a dictionary with a "content" key. The content can be a string or a list of elements. If it is a string, it will be concatenated to the prompt. If it is a list, each element will be processed based on its type:
+            - If the element is a dictionary with a "type" key equal to "text", its "text" value will be concatenated to the prompt.
+            - If the element is a dictionary with a "type" key equal to "image_url", its "image_url" value will be added to the list of images.
+
+    Returns:
+        tuple: A tuple containing the prompt (a string) and the processed images (a list of objects representing the images).
+        
+    Raises:
+        VertexAIError: If the import of the 'vertexai' module fails, indicating that 'google-cloud-aiplatform' needs to be installed.
+        Exception: If any other exception occurs during the execution of the function.
+
+    Note:
+        This function is based on the code from the 'gemini/getting-started/intro_gemini_python.ipynb' notebook in the 'generative-ai' repository on GitHub.
+        The supported MIME types for images include 'image/png' and 'image/jpeg'.
+
+    Examples:
+        >>> messages = [
+        ...     {"content": "Hello, world!"},
+        ...     {"content": [{"type": "text", "text": "This is a text message."}, {"type": "image_url", "image_url": "example.com/image.png"}]},
+        ... ]
+        >>> _gemini_vision_convert_messages(messages)
+        ('Hello, world!This is a text message.', [<Part object>, <Part object>])
+    """
+    try:
+        import vertexai
+    except:
+        raise VertexAIError(status_code=400,message="vertexai import failed please run `pip install google-cloud-aiplatform`")
+    try: 
+        from vertexai.preview.language_models import ChatModel, CodeChatModel, InputOutputTextPair
+        from vertexai.language_models import TextGenerationModel, CodeGenerationModel
+        from vertexai.preview.generative_models import GenerativeModel, Part, GenerationConfig, Image
+
+        # given messages for gpt-4 vision, convert them for gemini
+        # https://github.com/GoogleCloudPlatform/generative-ai/blob/main/gemini/getting-started/intro_gemini_python.ipynb
+        prompt = ""
+        images = []
+        for message in messages:
+            if isinstance(message["content"], str):
+                prompt += message["content"]
+            elif isinstance(message["content"], list):
+                # see https://docs.litellm.ai/docs/providers/openai#openai-vision-models
+                for element in message["content"]:
+                    if isinstance(element, dict):
+                        if element["type"] == "text":
+                            prompt += element["text"]
+                        elif element["type"] == "image_url":
+                            image_url = element["image_url"]["url"]
+                            images.append(image_url)
+        # processing images passed to gemini
+        processed_images = []
+        for img in images:
+            if "gs://" in img:
+                # Case 1: Images with Cloud Storage URIs
+                # The supported MIME types for images include image/png and image/jpeg.
+                part_mime = "image/png" if "png" in img else "image/jpeg"
+                google_clooud_part = Part.from_uri(img, mime_type=part_mime)
+                processed_images.append(google_clooud_part)
+            elif "https:/" in img:
+                # Case 2: Images with direct links
+                image = _load_image_from_url(img)
+                processed_images.append(image)
+            elif ".mp4" in img and "gs://" in img:
+                # Case 3: Videos with Cloud Storage URIs
+                part_mime = "video/mp4"
+                google_clooud_part = Part.from_uri(img, mime_type=part_mime)
+                processed_images.append(google_clooud_part)
+        return prompt, processed_images
+    except Exception as e:
+        raise e
+
 def completion(
     model: str,
     messages: list,
@@ -93,7 +195,7 @@ def completion(
 
         # vertexai does not use an API key, it looks for credentials.json in the environment
 
-        prompt = " ".join([message["content"] for message in messages])
+        prompt = " ".join([message["content"] for message in messages if isinstance(message["content"], str)])
 
         mode = "" 
 
@@ -103,6 +205,10 @@ def completion(
             llm_model = GenerativeModel(model)
             mode = ""
             request_str += f"llm_model = GenerativeModel({model})\n"
+        elif model in ["gemini-pro-vision"]:
+            llm_model = GenerativeModel(model)
+            request_str += f"llm_model = GenerativeModel({model})\n"
+            mode = "vision"
         elif model in litellm.vertex_chat_models:
             llm_model = ChatModel.from_pretrained(model)
             mode = "chat"
@@ -138,13 +244,36 @@ def completion(
                 model_response = chat.send_message(prompt, generation_config=GenerationConfig(**optional_params), stream=stream)
                 optional_params["stream"] = True
                 return model_response
-            
-            request_str += f"chat.send_message({prompt}, generation_config=GenerationConfig(**{optional_params})).text\n"
+        elif mode == "vision":
+            print_verbose("\nMaking VertexAI Gemini Pro Vision Call")
+            print_verbose(f"\nProcessing input messages = {messages}")
+
+            prompt, images = _gemini_vision_convert_messages(messages=messages)
+            content = [prompt] + images
+            if "stream" in optional_params and optional_params["stream"] == True:
+                stream = optional_params.pop("stream")
+                request_str += f"response = llm_model.generate_content({content}, generation_config=GenerationConfig(**{optional_params}), stream={stream})\n"
+                logging_obj.pre_call(input=prompt, api_key=None, additional_args={"complete_input_dict": optional_params, "request_str": request_str})
+                
+                model_response = llm_model.generate_content(
+                    contents=content,
+                    generation_config=GenerationConfig(**optional_params),
+                    stream=True
+                )
+                optional_params["stream"] = True
+                return model_response
+
+            request_str += f"response = llm_model.generate_content({content})\n"
             ## LOGGING
             logging_obj.pre_call(input=prompt, api_key=None, additional_args={"complete_input_dict": optional_params, "request_str": request_str})
-            response_obj = chat.send_message(prompt, generation_config=GenerationConfig(**optional_params))
-            completion_response = response_obj.text
-            response_obj = response_obj._raw_response
+            
+            ## LLM Call
+            response = llm_model.generate_content(
+                contents=content,
+                generation_config=GenerationConfig(**optional_params)
+            )
+            completion_response = response.text
+            response_obj = response._raw_response
         elif mode == "chat":
             chat = llm_model.start_chat()
             request_str+= f"chat = llm_model.start_chat()\n"
