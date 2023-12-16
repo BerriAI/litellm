@@ -319,7 +319,6 @@ async def user_api_key_auth(request: Request, api_key: str = fastapi.Security(ap
 def prisma_setup(database_url: Optional[str]): 
     global prisma_client, proxy_logging_obj, user_api_key_cache
 
-    proxy_logging_obj._init_litellm_callbacks()
     if database_url is not None:
         try: 
             prisma_client = PrismaClient(database_url=database_url, proxy_logging_obj=proxy_logging_obj)
@@ -527,10 +526,6 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
                     # these are litellm callbacks - "langfuse", "sentry", "wandb"
                     else:
                         litellm.success_callback.append(callback)
-                        if callback == "traceloop":
-                            from traceloop.sdk import Traceloop
-                            print_verbose(f"{blue_color_code} Initializing Traceloop SDK - \nRunning:`Traceloop.init(app_name='Litellm-Server', disable_batch=True)`")
-                            Traceloop.init(app_name="Litellm-Server", disable_batch=True)
                 print_verbose(f"{blue_color_code} Initialized Success Callbacks - {litellm.success_callback} {reset_color_code}")
             elif key == "failure_callback":
                 litellm.failure_callback = []
@@ -816,10 +811,8 @@ def get_litellm_model_info(model: dict = {}):
     
 @router.on_event("startup")
 async def startup_event():
-    global prisma_client, master_key, use_background_health_checks, use_queue
+    global prisma_client, master_key, use_background_health_checks
     import json
-
-    print(f"VALUE OF USE_QUEUE: {use_queue}")
 
     ### LOAD CONFIG ### 
     worker_config = litellm.get_secret("WORKER_CONFIG")
@@ -833,6 +826,8 @@ async def startup_event():
         initialize(**worker_config)
     
     
+    proxy_logging_obj._init_litellm_callbacks() # INITIALIZE LITELLM CALLBACKS ON SERVER STARTUP <- do this to catch any logging errors on startup, not when calls are being made
+
     if use_background_health_checks:
         asyncio.create_task(_run_background_health_check()) # start the background health check coroutine. 
 
