@@ -93,9 +93,7 @@ model_list:
 litellm_settings:
   set_verbose: True
   cache: True          # set cache responses to True, litellm defaults to using a redis cache
-
-  # cache_params are optional
-  cache_params:
+  cache_params:         # cache_params are optional
     type: "redis"  # The type of cache to initialize. Can be "local" or "redis". Defaults to "local".
     host: "localhost"  # The host address for the Redis cache. Required if type is "redis".
     port: 6379  # The port number for the Redis cache. Required if type is "redis".
