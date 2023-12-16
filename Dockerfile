@@ -15,8 +15,17 @@ RUN apt-get update && \
     apt-get install -y gcc python3-dev && \
     rm -rf /var/lib/apt/lists/*
 
+RUN pip install --upgrade pip && \
+    pip install build
+
 # Copy the current directory contents into the container at /app
 COPY requirements.txt .
+
+# Build the package
+RUN rm -rf dist/* && python -m build
+
+# Install the package
+RUN pip install dist/*.whl
 
 # Install any needed packages specified in requirements.txt
 RUN pip install wheel && \
