@@ -16,9 +16,8 @@ os.environ['MISTRAL_API_KEY'] = ""
 response = completion(
     model="mistral/mistral-tiny"", 
     messages=[
-        "role": "user",
-        "content": "hello from litellm"
-    ]
+       {"role": "user", "content": "hello from litellm"}
+   ],
 )
 print(response)
 ```
@@ -32,9 +31,8 @@ os.environ['MISTRAL_API_KEY'] = ""
 response = completion(
     model="mistral/mistral-tiny", 
     messages=[
-        "role": "user",
-        "content": "hello from litellm"
-    ]
+       {"role": "user", "content": "hello from litellm"}
+   ],
     stream=True
 )
 
