@@ -1308,7 +1308,14 @@ def completion(
                 )
             else:
                 prompt = prompt_factory(model=model, messages=messages, custom_llm_provider=custom_llm_provider)
-            
+                if isinstance(prompt, dict):
+                    # for multimode models - ollama/llava prompt_factory returns a dict {
+                    #     "prompt": prompt,
+                    #     "images": images
+                    # }
+                    prompt, images = prompt["prompt"], prompt["images"]
+                    optional_params["images"] = images
+
             ## LOGGING
             generator = ollama.get_ollama_response_stream(api_base, model, prompt, optional_params, logging_obj=logging, acompletion=acompletion, model_response=model_response, encoding=encoding)
             if acompletion is True:
