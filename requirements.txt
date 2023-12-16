@@ -1,5 +1,5 @@
 # LITELLM PROXY DEPENDENCIES #
-openai
+openai>=1.0.0
 fastapi
 tomli
 pydantic>=2.5
@@ -17,4 +17,5 @@ celery
 psutil
 mangum
 google-generativeai 
-async_generator # for ollama 
+traceloop-sdk==0.5.3
+langfuse==1.14.0

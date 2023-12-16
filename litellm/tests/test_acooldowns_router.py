@@ -118,6 +118,7 @@ def test_cooldown_same_model_name():
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": "BAD_API_BASE",
+                    "tpm": 90
                 },
             },
             {
@@ -126,7 +127,8 @@ def test_cooldown_same_model_name():
                     "model": "azure/chatgpt-v-2",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
-                    "api_base": os.getenv("AZURE_API_BASE")
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                    "tpm": 0.000001
                 },
             },
         ]
@@ -151,13 +153,14 @@ def test_cooldown_same_model_name():
             ]
         )
         print(router.model_list)
-        litellm_model_names = []
+        model_ids = []
         for model in router.model_list:
-            litellm_model_names.append(model["litellm_params"]["model"])
-        print("\n litellm model names ", litellm_model_names)
+            model_ids.append(model["model_info"]["id"])
+        print("\n litellm model ids ", model_ids)
 
         # example litellm_model_names ['azure/chatgpt-v-2-ModelID-64321', 'azure/chatgpt-v-2-ModelID-63960']
-        assert litellm_model_names[0] != litellm_model_names[1] # ensure both models have a uuid added, and they have different names
+        assert model_ids[0] != model_ids[1] # ensure both models have a uuid added, and they have different names
+
         print("\ngot response\n", response)
     except Exception as e:
         pytest.fail(f"Got unexpected exception on router! - {e}")

@@ -73,8 +73,27 @@ def ollama_pt(model, messages): # https://github.com/jmorganca/ollama/blob/af4cf
             final_prompt_value="### Response:",
             messages=messages
         )
+    elif "llava" in model:
+        prompt = ""
+        images = []
+        for message in messages:
+            if isinstance(message["content"], str):
+                prompt += message["content"]
+            elif isinstance(message["content"], list):
+                # see https://docs.litellm.ai/docs/providers/openai#openai-vision-models
+                for element in message["content"]:
+                    if isinstance(element, dict):
+                        if element["type"] == "text":
+                            prompt += element["text"]
+                        elif element["type"] == "image_url":
+                            image_url = element["image_url"]["url"]
+                            images.append(image_url)
+        return {
+            "prompt": prompt,
+            "images": images
+        }
     else: 
-        prompt = "".join(m["content"] for m in messages)
+        prompt = "".join(m["content"] if isinstance(m['content'], str) is str else "".join(m['content']) for m in messages)
     return prompt
 
 def mistral_instruct_pt(messages): 
@@ -161,6 +180,8 @@ def phind_codellama_pt(messages):
 
 def hf_chat_template(model: str, messages: list, chat_template: Optional[Any]=None):
     ## get the tokenizer config from huggingface
+    bos_token = ""
+    eos_token = ""
     if chat_template is None: 
         def _get_tokenizer_config(hf_model_name):
             url = f"https://huggingface.co/{hf_model_name}/raw/main/tokenizer_config.json"
@@ -187,7 +208,10 @@ def hf_chat_template(model: str, messages: list, chat_template: Optional[Any]=No
     # Create a template object from the template text
     env = Environment()
     env.globals['raise_exception'] = raise_exception
-    template = env.from_string(chat_template)
+    try:
+        template = env.from_string(chat_template)
+    except Exception as e:
+        raise e
 
     def _is_system_in_template():
         try:
@@ -227,8 +251,8 @@ def hf_chat_template(model: str, messages: list, chat_template: Optional[Any]=No
                     new_messages.append(reformatted_messages[-1])
                     rendered_text = template.render(bos_token=bos_token, eos_token=eos_token, messages=new_messages)
         return rendered_text
-    except: 
-        raise Exception("Error rendering template")
+    except Exception as e: 
+        raise Exception(f"Error rendering template - {str(e)}")
 
 # Anthropic template 
 def claude_2_1_pt(messages: list): # format - https://docs.anthropic.com/claude/docs/how-to-use-system-prompts
@@ -266,20 +290,26 @@ def claude_2_1_pt(messages: list): # format - https://docs.anthropic.com/claude/
 ### TOGETHER AI 
 
 def get_model_info(token, model):
-    headers = {
-        'Authorization': f'Bearer {token}'
-    }
-    response = requests.get('https://api.together.xyz/models/info', headers=headers)
-    if response.status_code == 200:
-        model_info = response.json()
-        for m in model_info: 
-            if m["name"].lower().strip() == model.strip(): 
-                return m['config'].get('prompt_format', None), m['config'].get('chat_template', None)
-        return None, None
-    else:
+    try: 
+        headers = {
+            'Authorization': f'Bearer {token}'
+        }
+        response = requests.get('https://api.together.xyz/models/info', headers=headers)
+        if response.status_code == 200:
+            model_info = response.json()
+            for m in model_info: 
+                if m["name"].lower().strip() == model.strip(): 
+                    return m['config'].get('prompt_format', None), m['config'].get('chat_template', None)
+            return None, None
+        else:
+            return None, None
+    except Exception as e: # safely fail a prompt template request
         return None, None
 
 def format_prompt_togetherai(messages, prompt_format, chat_template):
+    if prompt_format is None:
+        return default_pt(messages)
+    
     human_prompt, assistant_prompt = prompt_format.split('{prompt}')
 
     if chat_template is not None:

@@ -10,19 +10,7 @@
 import litellm
 import time, logging
 import json, traceback, ast
-from typing import Optional
-
-def get_prompt(*args, **kwargs):
-    # make this safe checks, it should not throw any exceptions
-    if len(args) > 1:
-        messages = args[1]
-        prompt = " ".join(message["content"] for message in messages)
-        return prompt
-    if "messages" in kwargs:
-        messages = kwargs["messages"]
-        prompt = " ".join(message["content"] for message in messages)
-        return prompt
-    return None
+from typing import Optional, Literal, List
 
 def print_verbose(print_statement):
     try:
@@ -174,34 +162,36 @@ class DualCache(BaseCache):
         if self.redis_cache is not None:
             self.redis_cache.flush_cache()
 
-#### LiteLLM.Completion Cache ####
+#### LiteLLM.Completion / Embedding Cache ####
 class Cache:
     def __init__(
             self,
-            type="local",
-            host=None,
-            port=None,
-            password=None,
+            type: Optional[Literal["local", "redis"]] = "local",
+            host: Optional[str] = None,
+            port: Optional[str] = None,
+            password: Optional[str] = None,
+            supported_call_types: Optional[List[Literal["completion", "acompletion", "embedding", "aembedding"]]] = ["completion", "acompletion", "embedding", "aembedding"],
             **kwargs
     ):
         """
         Initializes the cache based on the given type.
 
         Args:
-            type (str, optional): The type of cache to initialize. Defaults to "local".
+            type (str, optional): The type of cache to initialize. Can be "local" or "redis". Defaults to "local".
             host (str, optional): The host address for the Redis cache. Required if type is "redis".
             port (int, optional): The port number for the Redis cache. Required if type is "redis".
             password (str, optional): The password for the Redis cache. Required if type is "redis".
+            supported_call_types (list, optional): List of call types to cache for. Defaults to cache == on for all call types.
             **kwargs: Additional keyword arguments for redis.Redis() cache
 
         Raises:
             ValueError: If an invalid cache type is provided.
 
         Returns:
-            None
+            None. Cache is set as a litellm param
         """
         if type == "redis":
-            self.cache = RedisCache(host, port, password, **kwargs)
+            self.cache: BaseCache = RedisCache(host, port, password, **kwargs)
         if type == "local":
             self.cache = InMemoryCache()
         if "cache" not in litellm.input_callback:
@@ -210,6 +200,7 @@ class Cache:
             litellm.success_callback.append("cache")
         if "cache" not in litellm._async_success_callback:
             litellm._async_success_callback.append("cache")
+        self.supported_call_types = supported_call_types # default to ["completion", "acompletion", "embedding", "aembedding"]
 
     def get_cache_key(self, *args, **kwargs):
         """
@@ -222,29 +213,55 @@ class Cache:
         Returns:
             str: The cache key generated from the arguments, or None if no cache key could be generated.
         """
-        cache_key =""
+        cache_key = ""
+        print_verbose(f"\nGetting Cache key. Kwargs: {kwargs}")
+        
+        # for streaming, we use preset_cache_key. It's created in wrapper(), we do this because optional params like max_tokens, get transformed for bedrock -> max_new_tokens
+        if kwargs.get("litellm_params", {}).get("preset_cache_key", None) is not None:
+            print_verbose(f"\nReturning preset cache key: {cache_key}")
+            return kwargs.get("litellm_params", {}).get("preset_cache_key", None)
+
         # sort kwargs by keys, since model: [gpt-4, temperature: 0.2, max_tokens: 200] == [temperature: 0.2, max_tokens: 200, model: gpt-4]
         completion_kwargs = ["model", "messages", "temperature", "top_p", "n", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "response_format", "seed", "tools", "tool_choice"]
-        for param in completion_kwargs:
+        embedding_only_kwargs = ["input", "encoding_format"] # embedding kwargs = model, input, user, encoding_format. Model, user are checked in completion_kwargs
+        
+        # combined_kwargs - NEEDS to be ordered across get_cache_key(). Do not use a set()
+        combined_kwargs = completion_kwargs + embedding_only_kwargs 
+        for param in combined_kwargs:
             # ignore litellm params here
             if param in kwargs:
                 # check if param == model and model_group is passed in, then override model with model_group
                 if param == "model":
                     model_group = None
+                    caching_group = None
                     metadata = kwargs.get("metadata", None)
                     litellm_params = kwargs.get("litellm_params", {})
                     if metadata is not None:
                         model_group = metadata.get("model_group")
+                        model_group = metadata.get("model_group", None)
+                        caching_groups = metadata.get("caching_groups", None)
+                        if caching_groups:
+                            for group in caching_groups: 
+                                if model_group in group: 
+                                    caching_group = group
+                                    break
                     if litellm_params is not None:
                         metadata = litellm_params.get("metadata", None)
                         if metadata is not None:
                             model_group = metadata.get("model_group", None)
-                    param_value = model_group or kwargs[param] # use model_group if it exists, else use kwargs["model"]
+                            caching_groups = metadata.get("caching_groups", None)
+                            if caching_groups:
+                                for group in caching_groups: 
+                                    if model_group in group: 
+                                        caching_group = group
+                                        break
+                    param_value = caching_group or model_group or kwargs[param] # use caching_group, if set then model_group if it exists, else use kwargs["model"]
                 else:
                     if kwargs[param] is None:
                         continue # ignore None params
                     param_value = kwargs[param]
                 cache_key+= f"{str(param)}: {str(param_value)}"
+        print_verbose(f"\nCreated cache key: {cache_key}")
         return cache_key
 
     def generate_streaming_content(self, content):
@@ -297,4 +314,9 @@ class Cache:
                     result = result.model_dump_json()
                 self.cache.set_cache(cache_key, result, **kwargs)
         except Exception as e:
+            print_verbose(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
+            traceback.print_exc()
             pass
+
+    async def _async_add_cache(self, result, *args, **kwargs):
+        self.add_cache(result, *args, **kwargs)
