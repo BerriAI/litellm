@@ -356,9 +356,17 @@
     "gemini-pro": {
         "max_tokens": 30720,
         "max_output_tokens": 2048,
-        "input_cost_per_token": 0.0000000625, 
-        "output_cost_per_token": 0.000000125,
+        "input_cost_per_token": 0.00000025, 
+        "output_cost_per_token": 0.0000005,
         "litellm_provider": "vertex_ai-language-models",
+        "mode": "chat"
+    },
+    "gemini-pro-vision": {
+        "max_tokens": 30720,
+        "max_output_tokens": 2048,
+        "input_cost_per_token": 0.00000025, 
+        "output_cost_per_token": 0.0000005,
+        "litellm_provider": "vertex_ai-vision-models",
         "mode": "chat"
     },
     "palm/chat-bison": {
