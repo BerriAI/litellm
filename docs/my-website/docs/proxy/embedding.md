@@ -145,3 +145,37 @@ print(query_result[:5])
 }
 
 ```
+
+## Supported Models
+
+### Create Config.yaml
+
+<Tabs>
+<TabItem value="Hugging Face emb" label="Hugging Face Embeddings">
+For HF LiteLLM Proxy supports all [Feature-Extraction Embedding models](https://huggingface.co/models?pipeline_tag=feature-extraction)
+
+```yaml
+model_list:
+  - model_name: deployed-codebert-base
+    litellm_params: 
+      # send request to deployed hugging face inference endpoint
+      model: huggingface/microsoft/codebert-base # add huggingface prefix so it routes to hugging face
+      api_key: hf_LdS                            # api key for hugging face inference endpoint
+      api_base: https://uysneno1wv2wd4lw.us-east-1.aws.endpoints.huggingface.cloud # your hf inference endpoint 
+  - model_name: codebert-base
+    litellm_params: 
+      # no api_base set, sends request to hugging face free inference api https://api-inference.huggingface.co/models/
+      model: huggingface/microsoft/codebert-base # add huggingface prefix so it routes to hugging face
+      api_key: hf_LdS                            # api key for hugging face                     
+
+```
+
+</TabItem>
+</Tabs>
+
+### Make Request
+
+
+
+
+
