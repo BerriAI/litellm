@@ -23,6 +23,8 @@ Traceloop.init(app_name=<YOUR APP NAME>, disable_batch=True)
 litellm.success_callback = ["traceloop"]
 ```
 
+Make sure to properly set a destination to your traces. See [OpenLLMetry docs](https://www.traceloop.com/docs/openllmetry/integrations/introduction) for options.
+
 To get better visualizations on how your code behaves, you may want to annotate specific parts of your LLM chain. See [Traceloop docs on decorators](https://traceloop.com/docs/python-sdk/decorators) for more information.
 
 ## Exporting traces to other systems (e.g. Datadog, New Relic, and others)
