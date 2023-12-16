@@ -584,6 +584,14 @@ class Huggingface(BaseLLM):
                             "embedding": embedding # flatten list returned from hf
                         }
                     )
+                elif isinstance(embedding, list) and isinstance(embedding[0], float):
+                    output_data.append(
+                        {
+                            "object": "embedding",
+                            "index": idx,
+                            "embedding": embedding # flatten list returned from hf
+                        }
+                    )
                 else: 
                     output_data.append(
                         {
