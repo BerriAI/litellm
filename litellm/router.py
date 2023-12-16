@@ -386,7 +386,7 @@ class Router:
             self.print_verbose(f'Async Response: {response}')
             return response
         except Exception as e: 
-            self.print_verbose(f"An exception occurs: {e}")
+            self.print_verbose(f"An exception occurs: {e}\n\n Traceback{traceback.format_exc()}")
             original_exception = e
             try: 
                 self.print_verbose(f"Trying to fallback b/w models")
