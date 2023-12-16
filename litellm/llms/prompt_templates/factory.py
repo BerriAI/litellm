@@ -73,6 +73,25 @@ def ollama_pt(model, messages): # https://github.com/jmorganca/ollama/blob/af4cf
             final_prompt_value="### Response:",
             messages=messages
         )
+    elif "llava" in model:
+        prompt = ""
+        images = []
+        for message in messages:
+            if isinstance(message["content"], str):
+                prompt += message["content"]
+            elif isinstance(message["content"], list):
+                # see https://docs.litellm.ai/docs/providers/openai#openai-vision-models
+                for element in message["content"]:
+                    if isinstance(element, dict):
+                        if element["type"] == "text":
+                            prompt += element["text"]
+                        elif element["type"] == "image_url":
+                            image_url = element["image_url"]["url"]
+                            images.append(image_url)
+        return {
+            "prompt": prompt,
+            "images": images
+        }
     else: 
         prompt = "".join(m["content"] if isinstance(m['content'], str) is str else "".join(m['content']) for m in messages)
     return prompt
