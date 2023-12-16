@@ -148,11 +148,13 @@ print(query_result[:5])
 
 ## Supported Models
 
-### Create Config.yaml
+See supported Embedding Providers & Models [here](https://docs.litellm.ai/docs/embedding/supported_embedding)
+
+#### Create Config.yaml
 
 <Tabs>
 <TabItem value="Hugging Face emb" label="Hugging Face Embeddings">
-For HF LiteLLM Proxy supports all [Feature-Extraction Embedding models](https://huggingface.co/models?pipeline_tag=feature-extraction)
+LiteLLM Proxy supports all <a href="https://huggingface.co/models?pipeline_tag=feature-extraction">Feature-Extraction Embedding models</a>.
 
 ```yaml
 model_list:
@@ -171,9 +173,70 @@ model_list:
 ```
 
 </TabItem>
+
+<TabItem value="azure" label="Azure OpenAI Embeddings">
+
+```yaml
+model_list:
+  - model_name: azure-embedding-model # model group
+    litellm_params:
+      model: azure/azure-embedding-model # model name for litellm.embedding(model=azure/azure-embedding-model) call
+      api_base: your-azure-api-base
+      api_key: your-api-key
+      api_version: 2023-07-01-preview
+```
+
+</TabItem>
+
+<TabItem value="openai" label="OpenAI Embeddings">
+
+```yaml
+model_list:
+- model_name: text-embedding-ada-002 # model group
+  litellm_params:
+    model: text-embedding-ada-002 # model name for litellm.embedding(model=text-embedding-ada-002) 
+    api_key: your-api-key-1
+- model_name: text-embedding-ada-002 
+  litellm_params:
+    model: text-embedding-ada-002
+    api_key: your-api-key-2
+```
+
+</TabItem>
+
+<TabItem value="openai emb" label="OpenAI Compatible Embeddings">
+
+<p>Use this for calling <a href="https://github.com/xorbitsai/inference">/embedding endpoints on OpenAI Compatible Servers</a>.</p>
+
+**Note add `openai/` prefix to `litellm_params`: `model` so litellm knows to route to OpenAI**
+
+```yaml
+model_list:
+- model_name: text-embedding-ada-002  # model group
+  litellm_params:
+    model: openai/<your-model-name>   # model name for litellm.embedding(model=text-embedding-ada-002) 
+    api_base: <model-api-base>
+```
+
+</TabItem>
 </Tabs>
 
-### Make Request
+#### Start Proxy
+```shell
+litellm --config config.yaml
+```
+
+#### Make Request
+Sends Request to `deployed-codebert-base`
+
+```shell
+curl --location 'http://0.0.0.0:8000/embeddings' \
+  --header 'Content-Type: application/json' \
+  --data ' {
+  "model": "deployed-codebert-base",
+  "input": ["write a litellm poem"]
+  }'
+```
 
 
 
