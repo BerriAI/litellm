@@ -256,6 +256,29 @@ def test_load_router_config():
         print(result)
         assert len(result[1]) == 2
 
+        # tests for litellm.cache set from config
+        print("testing reading proxy config for cache")
+        litellm.cache = None
+        load_router_config(
+            router=None,
+            config_file_path=f"{filepath}/example_config_yaml/cache_no_params.yaml"
+        )
+        assert litellm.cache is not None
+        assert "redis_client" in vars(litellm.cache.cache) # it should default to redis on proxy
+        assert litellm.cache.supported_call_types == ['completion', 'acompletion', 'embedding', 'aembedding'] # init with all call types
+       
+        print("testing reading proxy config for cache with params")
+        load_router_config(
+            router=None,
+            config_file_path=f"{filepath}/example_config_yaml/cache_with_params.yaml"
+        )
+        assert litellm.cache is not None
+        print(litellm.cache)
+        print(litellm.cache.supported_call_types)
+        print(vars(litellm.cache.cache))
+        assert "redis_client" in vars(litellm.cache.cache) # it should default to redis on proxy
+        assert litellm.cache.supported_call_types == ['embedding', 'aembedding'] # init with all call types
+
     except Exception as e:
         pytest.fail("Proxy: Got exception reading config", e)
 # test_load_router_config()
