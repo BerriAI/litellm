@@ -7,7 +7,7 @@ from litellm.proxy.hooks.parallel_request_limiter import MaxParallelRequestsHand
 from litellm.integrations.custom_logger import CustomLogger
 def print_verbose(print_statement):
     if litellm.set_verbose:
-        print(print_statement) # noqa
+        print(f"LiteLLM Proxy: {print_statement}") # noqa
 ### LOGGING ### 
 class ProxyLogging: 
     """
@@ -26,7 +26,7 @@ class ProxyLogging:
         pass
 
     def _init_litellm_callbacks(self):
-        
+        print_verbose(f"INITIALIZING LITELLM CALLBACKS!")
         litellm.callbacks.append(self.max_parallel_request_limiter)
         for callback in litellm.callbacks: 
             if callback not in litellm.input_callback:
