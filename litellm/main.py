@@ -1748,8 +1748,7 @@ async def aembedding(*args, **kwargs):
             or custom_llm_provider == "anyscale"
             or custom_llm_provider == "openrouter"
             or custom_llm_provider == "deepinfra"
-            or custom_llm_provider == "perplexity"
-            or custom_llm_provider == "huggingface"): # currently implemented aiohttp calls for just azure and openai, soon all. 
+            or custom_llm_provider == "perplexity"): # currently implemented aiohttp calls for just azure and openai, soon all. 
             # Await normally
             init_response = await loop.run_in_executor(None, func_with_context)
             if isinstance(init_response, dict) or isinstance(init_response, ModelResponse): ## CACHING SCENARIO 
