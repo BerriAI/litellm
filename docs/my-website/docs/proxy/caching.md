@@ -79,7 +79,33 @@ curl --location 'http://0.0.0.0:8000/embeddings' \
   }'
 ```
 
-## Override caching per `chat/completions` request
+## Advanced
+### Set Cache Params on config.yaml
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+  - model_name: text-embedding-ada-002
+    litellm_params:
+      model: text-embedding-ada-002
+
+litellm_settings:
+  set_verbose: True
+  cache: True          # set cache responses to True, litellm defaults to using a redis cache
+
+  # cache_params are optional
+  cache_params:
+    type: "redis"  # The type of cache to initialize. Can be "local" or "redis". Defaults to "local".
+    host: "localhost"  # The host address for the Redis cache. Required if type is "redis".
+    port: 6379  # The port number for the Redis cache. Required if type is "redis".
+    password: "your_password"  # The password for the Redis cache. Required if type is "redis".
+    
+    # Optional configurations
+    supported_call_types: ["acompletion", "completion", "embedding", "aembedding"] # defaults to all litellm call types
+```
+
+### Override caching per `chat/completions` request
 Caching can be switched on/off per `/chat/completions` request
 - Caching **on** for individual completion - pass `caching=True`:
   ```shell
@@ -105,7 +131,7 @@ Caching can be switched on/off per `/chat/completions` request
   ```
 
 
-## Override caching per `/embeddings` request
+### Override caching per `/embeddings` request
 
 Caching can be switched on/off per `/embeddings` request
 - Caching **on** for embedding - pass `caching=True`:
