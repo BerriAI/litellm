@@ -17,10 +17,10 @@ model_alias_map = {
     "good-model": "anyscale/meta-llama/Llama-2-7b-chat-hf"
 }
 
-litellm.model_alias_map = model_alias_map
 
 def test_model_alias_map():
     try:
+        litellm.model_alias_map = model_alias_map
         response = completion(
             "good-model",
             messages=[{"role": "user", "content": "Hey, how's it going?"}],

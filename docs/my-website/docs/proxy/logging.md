@@ -1,5 +1,8 @@
-# Logging - Custom Callbacks, OpenTelemetry, Langfuse
-Log Proxy Input, Output, Exceptions using Custom Callbacks, Langfuse, OpenTelemetry
+import Image from '@theme/IdealImage';
+
+# Logging - Custom Callbacks, OpenTelemetry, Langfuse, Sentry
+
+Log Proxy Input, Output, Exceptions using Custom Callbacks, Langfuse, OpenTelemetry, LangFuse, DynamoDB
 
 ## Custom Callback Class [Async]
 Use this when you want to run custom callbacks in `python`
@@ -486,3 +489,166 @@ litellm --test
 Expected output on Langfuse
 
 <Image img={require('../../img/langfuse_small.png')} />
+
+## Logging Proxy Input/Output - DynamoDB
+
+We will use the `--config` to set 
+- `litellm.success_callback = ["dynamodb"]` 
+- `litellm.dynamodb_table_name = "your-table-name"`
+
+This will log all successfull LLM calls to DynamoDB
+
+**Step 1** Set AWS Credentials in .env
+
+```shell
+AWS_ACCESS_KEY_ID = ""
+AWS_SECRET_ACCESS_KEY = ""
+AWS_REGION_NAME = ""
+```
+
+**Step 2**: Create a `config.yaml` file and set `litellm_settings`: `success_callback`
+```yaml
+model_list:
+ - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+litellm_settings:
+  success_callback: ["dynamodb"]
+  dynamodb_table_name: your-table-name
+```
+
+**Step 3**: Start the proxy, make a test request
+
+Start proxy
+```shell
+litellm --config config.yaml --debug
+```
+
+Test Request
+```shell
+curl --location 'http://0.0.0.0:8000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data ' {
+    "model": "Azure OpenAI GPT-4 East",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ]
+    }'
+```
+
+Your logs should be available on DynamoDB
+
+#### Data Logged to DynamoDB /chat/completions
+
+```json
+{
+  "id": {
+    "S": "chatcmpl-8W15J4480a3fAQ1yQaMgtsKJAicen"
+  },
+  "call_type": {
+    "S": "acompletion"
+  },
+  "endTime": {
+    "S": "2023-12-15 17:25:58.424118"
+  },
+  "messages": {
+    "S": "[{'role': 'user', 'content': 'This is a test'}]"
+  },
+  "metadata": {
+    "S": "{}"
+  },
+  "model": {
+    "S": "gpt-3.5-turbo"
+  },
+  "modelParameters": {
+    "S": "{'temperature': 0.7, 'max_tokens': 100, 'user': 'ishaan-2'}"
+  },
+  "response": {
+    "S": "ModelResponse(id='chatcmpl-8W15J4480a3fAQ1yQaMgtsKJAicen', choices=[Choices(finish_reason='stop', index=0, message=Message(content='Great! What can I assist you with?', role='assistant'))], created=1702641357, model='gpt-3.5-turbo-0613', object='chat.completion', system_fingerprint=None, usage=Usage(completion_tokens=9, prompt_tokens=11, total_tokens=20))"
+  },
+  "startTime": {
+    "S": "2023-12-15 17:25:56.047035"
+  },
+  "usage": {
+    "S": "Usage(completion_tokens=9, prompt_tokens=11, total_tokens=20)"
+  },
+  "user": {
+    "S": "ishaan-2"
+  }
+}
+```
+
+#### Data logged to DynamoDB /embeddings
+
+```json
+{
+  "id": {
+    "S": "4dec8d4d-4817-472d-9fc6-c7a6153eb2ca"
+  },
+  "call_type": {
+    "S": "aembedding"
+  },
+  "endTime": {
+    "S": "2023-12-15 17:25:59.890261"
+  },
+  "messages": {
+    "S": "['hi']"
+  },
+  "metadata": {
+    "S": "{}"
+  },
+  "model": {
+    "S": "text-embedding-ada-002"
+  },
+  "modelParameters": {
+    "S": "{'user': 'ishaan-2'}"
+  },
+  "response": {
+    "S": "EmbeddingResponse(model='text-embedding-ada-002-v2', data=[{'embedding': [-0.03503197431564331, -0.020601635798811913, -0.015375726856291294,
+  }
+}
+```
+
+
+
+
+## Logging Proxy Input/Output - Sentry
+
+If api calls fail (llm/database) you can log those to Sentry: 
+
+**Step 1** Install Sentry
+```shell
+pip install --upgrade sentry-sdk
+```
+
+**Step 2**: Save your Sentry_DSN and add `litellm_settings`: `failure_callback`
+```shell
+export SENTRY_DSN="your-sentry-dsn"
+```
+
+```yaml 
+model_list:
+ - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+litellm_settings:
+  # other settings
+  failure_callback: ["sentry"]
+general_settings: 
+  database_url: "my-bad-url" # set a fake url to trigger a sentry exception
+```
+
+**Step 3**: Start the proxy, make a test request
+
+Start proxy
+```shell
+litellm --config config.yaml --debug
+```
+
+Test Request
+```
+litellm --test
+```

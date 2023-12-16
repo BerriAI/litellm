@@ -1,13 +1,13 @@
 from typing import Optional, List, Any, Literal
-import os, subprocess, hashlib, importlib, asyncio
+import os, subprocess, hashlib, importlib, asyncio, copy
 import litellm, backoff
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.caching import DualCache
 from litellm.proxy.hooks.parallel_request_limiter import MaxParallelRequestsHandler
-
+from litellm.integrations.custom_logger import CustomLogger
 def print_verbose(print_statement):
     if litellm.set_verbose:
-        print(print_statement) # noqa
+        print(f"LiteLLM Proxy: {print_statement}") # noqa
 ### LOGGING ### 
 class ProxyLogging: 
     """
@@ -26,7 +26,7 @@ class ProxyLogging:
         pass
 
     def _init_litellm_callbacks(self):
-        
+        print_verbose(f"INITIALIZING LITELLM CALLBACKS!")
         litellm.callbacks.append(self.max_parallel_request_limiter)
         for callback in litellm.callbacks: 
             if callback not in litellm.input_callback:
@@ -64,18 +64,14 @@ class ProxyLogging:
         1. /chat/completions
         2. /embeddings 
         """
-        try: 
-            self.call_details["data"] = data
-            self.call_details["call_type"] = call_type
+        try:
+            for callback in litellm.callbacks: 
+                if isinstance(callback, CustomLogger) and 'async_pre_call_hook' in vars(callback.__class__):
+                    response = await callback.async_pre_call_hook(user_api_key_dict=user_api_key_dict, cache=self.call_details["user_api_key_cache"], data=data, call_type=call_type)
+                    if response is not None: 
+                        data = response
 
-            ## check if max parallel requests set   
-            if user_api_key_dict.max_parallel_requests is not None: 
-                ## if set, check if request allowed
-                await self.max_parallel_request_limiter.max_parallel_request_allow_request(
-                    max_parallel_requests=user_api_key_dict.max_parallel_requests,
-                    api_key=user_api_key_dict.api_key,
-                    user_api_key_cache=self.call_details["user_api_key_cache"])
-                
+            print_verbose(f'final data being sent to {call_type} call: {data}') 
             return data
         except Exception as e:
             raise e
@@ -103,17 +99,13 @@ class ProxyLogging:
         1. /chat/completions
         2. /embeddings 
         """
-        # check if max parallel requests set
-        if user_api_key_dict.max_parallel_requests is not None:
-            ## decrement call count if call failed
-            if (hasattr(original_exception, "status_code") 
-                and original_exception.status_code == 429 
-                and "Max parallel request limit reached" in str(original_exception)):
-                pass # ignore failed calls due to max limit being reached
-            else:  
-                await self.max_parallel_request_limiter.async_log_failure_call(
-                    api_key=user_api_key_dict.api_key,
-                    user_api_key_cache=self.call_details["user_api_key_cache"])
+
+        for callback in litellm.callbacks:
+            try: 
+                if isinstance(callback, CustomLogger):
+                    await callback.async_post_call_failure_hook(user_api_key_dict=user_api_key_dict, original_exception=original_exception)
+            except Exception as e: 
+                raise e
         return
    
 
@@ -165,19 +157,20 @@ class PrismaClient:
     async def get_data(self, token: str, expires: Optional[Any]=None): 
         try: 
             # check if plain text or hash
+            hashed_token = token
             if token.startswith("sk-"): 
-                token = self.hash_token(token=token)
+                hashed_token = self.hash_token(token=token)
             if expires: 
                 response = await self.db.litellm_verificationtoken.find_first(
                         where={
-                            "token": token,
+                            "token": hashed_token,
                             "expires": {"gte": expires}  # Check if the token is not expired
                         }
                     )
             else: 
                 response = await self.db.litellm_verificationtoken.find_unique(
                     where={
-                        "token": token
+                        "token": hashed_token
                     }
                 )
             return response
@@ -200,18 +193,18 @@ class PrismaClient:
         try: 
             token = data["token"]
             hashed_token = self.hash_token(token=token)
-            data["token"] = hashed_token
+            db_data = copy.deepcopy(data)
+            db_data["token"] = hashed_token
 
             new_verification_token = await self.db.litellm_verificationtoken.upsert( # type: ignore
                 where={
                     'token': hashed_token,
                 },
                 data={
-                    "create": {**data}, #type: ignore
+                    "create": {**db_data}, #type: ignore
                     "update": {} # don't do anything if it already exists
                 }
             )
-
             return new_verification_token
         except Exception as e:
             asyncio.create_task(self.proxy_logging_obj.failure_handler(original_exception=e))
@@ -235,15 +228,16 @@ class PrismaClient:
             if token.startswith("sk-"): 
                 token = self.hash_token(token=token)
 
-            data["token"] = token 
+            db_data = copy.deepcopy(data)
+            db_data["token"] = token 
             response = await self.db.litellm_verificationtoken.update(
                 where={
                     "token": token
                 },
-                data={**data} # type: ignore 
+                data={**db_data} # type: ignore 
             )
             print_verbose("\033[91m" + f"DB write succeeded {response}" + "\033[0m")
-            return {"token": token, "data": data}
+            return {"token": token, "data": db_data}
         except Exception as e: 
             asyncio.create_task(self.proxy_logging_obj.failure_handler(original_exception=e))
             print_verbose("\033[91m" + f"DB write failed: {e}" + "\033[0m")

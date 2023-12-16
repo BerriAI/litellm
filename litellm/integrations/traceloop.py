@@ -1,7 +1,8 @@
 class TraceloopLogger:
     def __init__(self):
         from traceloop.sdk.tracing.tracing import TracerWrapper
-
+        from traceloop.sdk import Traceloop
+        Traceloop.init(app_name="Litellm-Server", disable_batch=True)
         self.tracer_wrapper = TracerWrapper()
 
     def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
