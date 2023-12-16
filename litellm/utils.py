@@ -1079,7 +1079,8 @@ class Logging:
                 # print_verbose(f"final set of received chunks: {self.streaming_chunks}")
                 try: 
                     complete_streaming_response = litellm.stream_chunk_builder(self.streaming_chunks, messages=self.model_call_details.get("messages", None))
-                except: 
+                except Exception as e:
+                    print_verbose(f"Error occurred building stream chunk: {traceback.format_exc()}") 
                     complete_streaming_response = None
             else:
                 self.streaming_chunks.append(result)
@@ -5953,14 +5954,20 @@ class CustomStreamWrapper:
                 or self.custom_llm_provider == "custom_openai"
                 or self.custom_llm_provider == "text-completion-openai"
                 or self.custom_llm_provider == "huggingface"
+                or self.custom_llm_provider == "ollama"
                 or self.custom_llm_provider == "vertex_ai"):
+                print_verbose(f"INSIDE ASYNC STREAMING!!!")
+                print_verbose(f"value of async completion stream: {self.completion_stream}")
                 async for chunk in self.completion_stream:
+                    print_verbose(f"value of async chunk: {chunk}")
                     if chunk == "None" or chunk is None:
                         raise Exception
 
                     # chunk_creator() does logging/stream chunk building. We need to let it know its being called in_async_func, so we don't double add chunks. 
                     # __anext__ also calls async_success_handler, which does logging
+                    print_verbose(f"PROCESSED ASYNC CHUNK PRE CHUNK CREATOR: {chunk}")
                     processed_chunk = self.chunk_creator(chunk=chunk) 
+                    print_verbose(f"PROCESSED ASYNC CHUNK POST CHUNK CREATOR: {processed_chunk}")
                     if processed_chunk is None: 
                         continue
                     ## LOGGING

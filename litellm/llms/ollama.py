@@ -182,17 +182,11 @@ def ollama_completion_stream(url, data):
                     traceback.print_exc()
     session.close()
 
-async def iter_lines(reader):
-    buffer = b""
-    async for chunk in reader.iter_any():
-        buffer += chunk
-        while b'\n' in buffer:
-            line, buffer = buffer.split(b'\n', 1)
-            yield line
 
 async def ollama_async_streaming(url, data, model_response, encoding, logging_obj):
     try:
-        with httpx.stream(
+        client = httpx.AsyncClient()
+        async with client.stream(
                     url=f"{url}",
                     json=data,
                     method="POST",
@@ -201,8 +195,8 @@ async def ollama_async_streaming(url, data, model_response, encoding, logging_ob
                     if response.status_code != 200:
                         raise OllamaError(status_code=response.status_code, message=response.text) 
                     
-                    streamwrapper = litellm.CustomStreamWrapper(completion_stream=response.iter_lines(), model=data['model'], custom_llm_provider="ollama",logging_obj=logging_obj)
-                    for transformed_chunk in streamwrapper:
+                    streamwrapper = litellm.CustomStreamWrapper(completion_stream=response.aiter_lines(), model=data['model'], custom_llm_provider="ollama",logging_obj=logging_obj)
+                    async for transformed_chunk in streamwrapper:
                         yield transformed_chunk
     except Exception as e:
         traceback.print_exc()

@@ -24,3 +24,4 @@ litellm/tests/test_custom_logger.py
 litellm/tests/langfuse.log
 litellm/tests/dynamo*.log
 .vscode/settings.json
+litellm/proxy/log.txt

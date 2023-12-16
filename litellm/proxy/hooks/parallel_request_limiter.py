@@ -16,6 +16,7 @@ class MaxParallelRequestsHandler(CustomLogger):
 
     
     async def async_pre_call_hook(self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict, call_type: str): 
+        self.print_verbose(f"Inside Max Parallel Request Pre-Call Hook")
         api_key = user_api_key_dict.api_key
         max_parallel_requests = user_api_key_dict.max_parallel_requests
 
@@ -61,6 +62,7 @@ class MaxParallelRequestsHandler(CustomLogger):
 
     async def async_log_failure_call(self, user_api_key_dict: UserAPIKeyAuth, original_exception: Exception):
         try:
+            self.print_verbose(f"Inside Max Parallel Request Failure Hook")
             api_key = user_api_key_dict.api_key
             if api_key is None:
                 return
