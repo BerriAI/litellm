@@ -192,3 +192,34 @@ async def test_async_vertexai_streaming_response():
             pytest.fail(f"An exception occurred: {e}")
 
 # asyncio.run(test_async_vertexai_streaming_response())
+
+def test_gemini_pro_vision():
+    try:
+        litellm.set_verbose = True
+        litellm.num_retries=0
+        resp = litellm.completion(
+            model = "vertex_ai/gemini-pro-vision",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                                    {
+                                        "type": "text",
+                                        "text": "Whats in this image?"
+                                    },
+                                    {
+                                        "type": "image_url",
+                                        "image_url": {
+                                        "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
+                                        }
+                                    }
+                                ]
+                }
+            ],
+        )
+        print(resp)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+    raise e
+test_gemini_pro_vision()
