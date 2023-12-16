@@ -233,15 +233,29 @@ class Cache:
                 # check if param == model and model_group is passed in, then override model with model_group
                 if param == "model":
                     model_group = None
+                    caching_group = None
                     metadata = kwargs.get("metadata", None)
                     litellm_params = kwargs.get("litellm_params", {})
                     if metadata is not None:
                         model_group = metadata.get("model_group")
+                        model_group = metadata.get("model_group", None)
+                        caching_groups = metadata.get("caching_groups", None)
+                        if caching_groups:
+                            for group in caching_groups: 
+                                if model_group in group: 
+                                    caching_group = group
+                                    break
                     if litellm_params is not None:
                         metadata = litellm_params.get("metadata", None)
                         if metadata is not None:
                             model_group = metadata.get("model_group", None)
-                    param_value = model_group or kwargs[param] # use model_group if it exists, else use kwargs["model"]
+                            caching_groups = metadata.get("caching_groups", None)
+                            if caching_groups:
+                                for group in caching_groups: 
+                                    if model_group in group: 
+                                        caching_group = group
+                                        break
+                    param_value = caching_group or model_group or kwargs[param] # use caching_group, if set then model_group if it exists, else use kwargs["model"]
                 else:
                     if kwargs[param] is None:
                         continue # ignore None params
