@@ -33,16 +33,18 @@
 #     try:
 #         response = completion(
 #             model="ollama/llama2", 
-#             messages=messages, 
+#             messages=[{"role": "user", "content": "Hey, how's it going?"}], 
 #             max_tokens=200,
 #             request_timeout = 10,
-
+#             stream=True
 #         )
+#         for chunk in response: 
+#             print(chunk)
 #         print(response)
 #     except Exception as e:
 #         pytest.fail(f"Error occurred: {e}")
 
-# # test_completion_ollama()
+# test_completion_ollama()
 
 # def test_completion_ollama_with_api_base():
 #     try:

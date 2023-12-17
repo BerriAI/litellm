@@ -148,39 +148,21 @@ def get_ollama_response_stream(
         return response
     
     else:
-        return ollama_completion_stream(url=url, data=data)
+        return ollama_completion_stream(url=url, data=data, logging_obj=logging_obj)
 
-def ollama_completion_stream(url, data):
-    session = requests.Session()
-
-    with session.post(url, json=data, stream=True) as resp:
-        if resp.status_code != 200:
-            raise OllamaError(status_code=resp.status_code, message=resp.text)
-        for line in resp.iter_lines():
-            if line:
-                try:
-                    json_chunk = line.decode("utf-8")
-                    chunks = json_chunk.split("\n")
-                    for chunk in chunks:
-                        if chunk.strip() != "":
-                            j = json.loads(chunk)
-                            if "error" in j:
-                                completion_obj = {
-                                    "role": "assistant",
-                                    "content": "",
-                                    "error": j
-                                }
-                                yield completion_obj
-                            if "response" in j:
-                                completion_obj = {
-                                    "role": "assistant",
-                                    "content": "",
-                                }
-                                completion_obj["content"] = j["response"]
-                                yield completion_obj
-                except Exception as e:
-                    traceback.print_exc()
-    session.close()
+def ollama_completion_stream(url, data, logging_obj):
+    with httpx.stream(
+        url=url,
+        json=data,
+        method="POST",
+        timeout=litellm.request_timeout
+    ) as response: 
+        if response.status_code != 200:
+            raise OllamaError(status_code=response.status_code, message=response.text) 
+        
+        streamwrapper = litellm.CustomStreamWrapper(completion_stream=response.iter_lines(), model=data['model'], custom_llm_provider="ollama",logging_obj=logging_obj)
+        for transformed_chunk in streamwrapper:
+            yield transformed_chunk
 
 
 async def ollama_async_streaming(url, data, model_response, encoding, logging_obj):
