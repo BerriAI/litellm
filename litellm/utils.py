@@ -222,7 +222,7 @@ class Delta(OpenAIObject):
 class Choices(OpenAIObject):
     def __init__(self, finish_reason=None, index=0, message=None, **params):
         super(Choices, self).__init__(**params)
-        self.finish_reason = map_finish_reason(finish_reason) # set finish_reason for all responses
+        self.finish_reason = map_finish_reason(finish_reason) or "stop" # set finish_reason for all responses
         self.index = index
         if message is None:
             self.message = Message(content=None)
