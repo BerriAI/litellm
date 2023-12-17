@@ -195,7 +195,7 @@ async def ollama_acompletion(url, data, model_response, encoding, logging_obj):
                 raise OllamaError(status_code=resp.status, message=text)
             
             completion_string = ""
-            async for line in resp.content.iter_any():
+            async for line in resp.content:
                 if line:
                     try:
                         json_chunk = line.decode("utf-8")
