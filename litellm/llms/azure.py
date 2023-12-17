@@ -153,29 +153,29 @@ class AzureChatCompletion(BaseLLM):
                     "messages": messages, 
                     **optional_params
                 }
+            ## LOGGING
+            logging_obj.pre_call(
+                input=messages,
+                api_key=api_key,
+                additional_args={
+                    "headers": {
+                        "api_key": api_key, 
+                        "azure_ad_token": azure_ad_token
+                    },
+                    "api_version": api_version,
+                    "api_base": api_base,
+                    "complete_input_dict": data,
+                },
+            )
             
             if acompletion is True: 
                 if optional_params.get("stream", False):
                     return self.async_streaming(logging_obj=logging_obj, api_base=api_base, data=data, model=model, api_key=api_key, api_version=api_version, azure_ad_token=azure_ad_token, timeout=timeout, client=client)
                 else:
-                    return self.acompletion(api_base=api_base, data=data, model_response=model_response, api_key=api_key, api_version=api_version, model=model, azure_ad_token=azure_ad_token, timeout=timeout, client=client, logging_obj=logging_obj)
+                    return self.acompletion(api_base=api_base, data=data, model_response=model_response, api_key=api_key, api_version=api_version, model=model, azure_ad_token=azure_ad_token, timeout=timeout, client=client)
             elif "stream" in optional_params and optional_params["stream"] == True:
                 return self.streaming(logging_obj=logging_obj, api_base=api_base, data=data, model=model, api_key=api_key, api_version=api_version, azure_ad_token=azure_ad_token, timeout=timeout, client=client)
             else:
-                ## LOGGING
-                logging_obj.pre_call(
-                    input=messages,
-                    api_key=api_key,
-                    additional_args={
-                        "headers": {
-                            "api_key": api_key, 
-                            "azure_ad_token": azure_ad_token
-                        },
-                        "api_version": api_version,
-                        "api_base": api_base,
-                        "complete_input_dict": data,
-                    },
-                )
                 if not isinstance(max_retries, int): 
                     raise AzureOpenAIError(status_code=422, message="max retries must be an int")
                 # init AzureOpenAI Client
@@ -196,19 +196,8 @@ class AzureChatCompletion(BaseLLM):
                 else:
                     azure_client = client
                 response = azure_client.chat.completions.create(**data) # type: ignore
-                stringified_response = response.model_dump_json()
-                ## LOGGING
-                logging_obj.post_call(
-                    input=messages,
-                    api_key=api_key,
-                    original_response=stringified_response,
-                    additional_args={
-                        "headers": headers,
-                        "api_version": api_version,
-                        "api_base": api_base,
-                    },
-                )
-                return convert_to_model_response_object(response_object=json.loads(stringified_response), model_response_object=model_response)
+                response.model = "azure/" + str(response.model)
+                return convert_to_model_response_object(response_object=json.loads(response.model_dump_json()), model_response_object=model_response)
         except AzureOpenAIError as e: 
             exception_mapping_worked = True
             raise e
@@ -225,7 +214,6 @@ class AzureChatCompletion(BaseLLM):
                           model_response: ModelResponse,
                           azure_ad_token: Optional[str]=None, 
                           client = None, # this is the AsyncAzureOpenAI
-                          logging_obj=None,
                           ): 
        response = None
        try:
@@ -249,19 +237,13 @@ class AzureChatCompletion(BaseLLM):
                 azure_client = AsyncAzureOpenAI(**azure_client_params)
             else:
                 azure_client = client
-            ## LOGGING
-            logging_obj.pre_call(
-                input=data['messages'],
-                api_key=azure_client.api_key,
-                additional_args={"headers": {"Authorization": f"Bearer {azure_client.api_key}"}, "api_base": azure_client._base_url._uri_reference, "acompletion": True, "complete_input_dict": data},
-            )
             response = await azure_client.chat.completions.create(**data) 
             return convert_to_model_response_object(response_object=json.loads(response.model_dump_json()), model_response_object=model_response)
        except AzureOpenAIError as e: 
             exception_mapping_worked = True
             raise e
        except Exception as e: 
-            raise AzureOpenAIError(status_code=500, message=str(e))
+            raise e
 
     def streaming(self,
                   logging_obj,
@@ -294,12 +276,6 @@ class AzureChatCompletion(BaseLLM):
             azure_client = AzureOpenAI(**azure_client_params)
         else:
             azure_client = client
-        ## LOGGING
-        logging_obj.pre_call(
-            input=data['messages'],
-            api_key=azure_client.api_key,
-            additional_args={"headers": {"Authorization": f"Bearer {azure_client.api_key}"}, "api_base": azure_client._base_url._uri_reference, "acompletion": True, "complete_input_dict": data},
-        )
         response = azure_client.chat.completions.create(**data)
         streamwrapper = CustomStreamWrapper(completion_stream=response, model=model, custom_llm_provider="azure",logging_obj=logging_obj)
         return streamwrapper
@@ -332,12 +308,6 @@ class AzureChatCompletion(BaseLLM):
                 azure_client = AsyncAzureOpenAI(**azure_client_params)
         else:
             azure_client = client
-        ## LOGGING
-        logging_obj.pre_call(
-            input=data['messages'],
-            api_key=azure_client.api_key,
-            additional_args={"headers": {"Authorization": f"Bearer {azure_client.api_key}"}, "api_base": azure_client._base_url._uri_reference, "acompletion": True, "complete_input_dict": data},
-        )
         response = await azure_client.chat.completions.create(**data)
         streamwrapper = CustomStreamWrapper(completion_stream=response, model=model, custom_llm_provider="azure",logging_obj=logging_obj)
         async for transformed_chunk in streamwrapper:
@@ -348,10 +318,7 @@ class AzureChatCompletion(BaseLLM):
         data: dict, 
         model_response: ModelResponse, 
         azure_client_params: dict,
-        api_key: str, 
-        input: list, 
         client=None,
-        logging_obj=None
     ): 
         response = None
         try: 
@@ -360,23 +327,8 @@ class AzureChatCompletion(BaseLLM):
             else:
                 openai_aclient = client
             response = await openai_aclient.embeddings.create(**data)
-            stringified_response = response.model_dump_json()
-            ## LOGGING
-            logging_obj.post_call(
-                    input=input,
-                    api_key=api_key,
-                    additional_args={"complete_input_dict": data},
-                    original_response=stringified_response,
-                )
-            return convert_to_model_response_object(response_object=json.loads(stringified_response), model_response_object=model_response, response_type="embedding")
+            return convert_to_model_response_object(response_object=json.loads(response.model_dump_json()), model_response_object=model_response, response_type="embedding")
         except Exception as e:
-            ## LOGGING
-            logging_obj.post_call(
-                    input=input,
-                    api_key=api_key,
-                    additional_args={"complete_input_dict": data},
-                    original_response=str(e),
-                )
             raise e
 
     def embedding(self,
@@ -420,7 +372,13 @@ class AzureChatCompletion(BaseLLM):
                 azure_client_params["api_key"] = api_key
             elif azure_ad_token is not None:
                 azure_client_params["azure_ad_token"] = azure_ad_token
-
+            if aembedding == True:
+                response =  self.aembedding(data=data, model_response=model_response, azure_client_params=azure_client_params)
+                return response
+            if client is None:
+                azure_client = AzureOpenAI(**azure_client_params) # type: ignore
+            else:
+                azure_client = client
             ## LOGGING
             logging_obj.pre_call(
                     input=input,
@@ -433,14 +391,6 @@ class AzureChatCompletion(BaseLLM):
                         }
                     },
                 )
-            
-            if aembedding == True:
-                response =  self.aembedding(data=data, input=input, logging_obj=logging_obj, api_key=api_key, model_response=model_response, azure_client_params=azure_client_params)
-                return response
-            if client is None:
-                azure_client = AzureOpenAI(**azure_client_params) # type: ignore
-            else:
-                azure_client = client
             ## COMPLETION CALL            
             response = azure_client.embeddings.create(**data) # type: ignore
             ## LOGGING
@@ -453,67 +403,6 @@ class AzureChatCompletion(BaseLLM):
 
 
             return convert_to_model_response_object(response_object=json.loads(response.model_dump_json()), model_response_object=model_response, response_type="embedding") # type: ignore
-        except AzureOpenAIError as e: 
-            exception_mapping_worked = True
-            raise e
-        except Exception as e: 
-            if exception_mapping_worked: 
-                raise e
-            else: 
-                import traceback
-                raise AzureOpenAIError(status_code=500, message=traceback.format_exc())
-
-    def image_generation(self,
-                prompt: list,
-                timeout: float, 
-                model: Optional[str]=None,
-                api_key: Optional[str] = None,
-                api_base: Optional[str] = None,
-                model_response: Optional[litellm.utils.ImageResponse] = None,
-                logging_obj=None,
-                optional_params=None,
-                client=None,
-                aimg_generation=None,
-                ):
-        exception_mapping_worked = False
-        try: 
-            model = model
-            data = {
-                # "model": model,
-                "prompt": prompt,
-                **optional_params
-            }
-            max_retries = data.pop("max_retries", 2)
-            if not isinstance(max_retries, int): 
-                raise AzureOpenAIError(status_code=422, message="max retries must be an int")
-            
-            # if aembedding == True:
-            #     response =  self.aembedding(data=data, input=input, logging_obj=logging_obj, model_response=model_response, api_base=api_base, api_key=api_key, timeout=timeout, client=client, max_retries=max_retries) # type: ignore
-            #     return response
-            
-            if client is None:
-                azure_client = AzureOpenAI(api_key=api_key, base_url=api_base, http_client=litellm.client_session, timeout=timeout, max_retries=max_retries)  # type: ignore 
-            else:
-                azure_client = client
-            
-            ## LOGGING
-            logging_obj.pre_call(
-                input=prompt,
-                api_key=azure_client.api_key,
-                additional_args={"headers": {"Authorization": f"Bearer {azure_client.api_key}"}, "api_base": azure_client._base_url._uri_reference, "acompletion": False, "complete_input_dict": data},
-            )
-            
-            ## COMPLETION CALL
-            response = azure_client.images.generate(**data) # type: ignore
-            ## LOGGING
-            logging_obj.post_call(
-                    input=input,
-                    api_key=api_key,
-                    additional_args={"complete_input_dict": data},
-                    original_response=response,
-                )
-            # return response
-            return convert_to_model_response_object(response_object=json.loads(response.model_dump_json()), model_response_object=model_response, response_type="image_generation") # type: ignore
         except AzureOpenAIError as e: 
             exception_mapping_worked = True
             raise e

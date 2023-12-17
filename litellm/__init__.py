@@ -9,8 +9,7 @@ input_callback: List[Union[str, Callable]] = []
 success_callback: List[Union[str, Callable]] = []
 failure_callback: List[Union[str, Callable]] = []
 callbacks: List[Callable] = []
-_async_input_callback: List[Callable] = [] # internal variable - async custom callbacks are routed here. 
-_async_success_callback: List[Union[str, Callable]] = [] # internal variable - async custom callbacks are routed here. 
+_async_success_callback: List[Callable] = [] # internal variable - async custom callbacks are routed here. 
 _async_failure_callback: List[Callable] = [] # internal variable - async custom callbacks are routed here. 
 pre_call_rules: List[Callable] = []
 post_call_rules: List[Callable] = []
@@ -48,8 +47,6 @@ cache: Optional[Cache] = None # cache object <- use this - https://docs.litellm.
 model_alias_map: Dict[str, str] = {}
 model_group_alias_map: Dict[str, str] = {}
 max_budget: float = 0.0 # set the max budget across all providers
-_openai_completion_params = ["functions", "function_call", "temperature", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "request_timeout", "api_base", "api_version", "api_key", "deployment_id", "organization", "base_url", "default_headers", "timeout", "response_format", "seed", "tools", "tool_choice", "max_retries"]
-_litellm_completion_params = ["metadata", "acompletion", "caching", "mock_response", "api_key", "api_version", "api_base", "force_timeout", "logger_fn", "verbose", "custom_llm_provider", "litellm_logging_obj", "litellm_call_id", "use_client", "id", "fallbacks", "azure", "headers", "model_list", "num_retries", "context_window_fallback_dict", "roles", "final_prompt_value", "bos_token", "eos_token", "request_timeout", "complete_response", "self", "client", "rpm", "tpm", "input_cost_per_token", "output_cost_per_token", "hf_model_name", "model_info", "proxy_server_request", "preset_cache_key"]
 _current_cost = 0 # private variable, used if max budget is set 
 error_logs: Dict = {}
 add_function_to_prompt: bool = False # if function calling not supported by api, append function call details to system prompt
@@ -58,7 +55,6 @@ aclient_session: Optional[httpx.AsyncClient] = None
 model_fallbacks: Optional[List] = None # Deprecated for 'litellm.fallbacks'
 model_cost_map_url: str = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
 suppress_debug_info = False
-dynamodb_table_name: Optional[str] = None
 #### RELIABILITY ####
 request_timeout: Optional[float] = 6000
 num_retries: Optional[int] = None
@@ -110,8 +106,6 @@ open_ai_text_completion_models: List = []
 cohere_models: List = []
 anthropic_models: List = []
 openrouter_models: List = []
-vertex_language_models: List = []
-vertex_vision_models: List = []
 vertex_chat_models: List = []
 vertex_code_chat_models: List = []
 vertex_text_models: List = []
@@ -132,15 +126,12 @@ for key, value in model_cost.items():
     elif value.get('litellm_provider') == 'anthropic':
         anthropic_models.append(key)
     elif value.get('litellm_provider') == 'openrouter':
-        openrouter_models.append(key)
+        split_string = key.split('/', 1)
+        openrouter_models.append(split_string[1])
     elif value.get('litellm_provider') == 'vertex_ai-text-models':
         vertex_text_models.append(key)
     elif value.get('litellm_provider') == 'vertex_ai-code-text-models':
         vertex_code_text_models.append(key)
-    elif value.get('litellm_provider') == 'vertex_ai-language-models':
-        vertex_language_models.append(key)
-    elif value.get('litellm_provider') == 'vertex_ai-vision-models':
-        vertex_vision_models.append(key)
     elif value.get('litellm_provider') == 'vertex_ai-chat-models':
         vertex_chat_models.append(key)
     elif value.get('litellm_provider') == 'vertex_ai-code-chat-models':
@@ -162,16 +153,7 @@ for key, value in model_cost.items():
 openai_compatible_endpoints: List = [
     "api.perplexity.ai", 
     "api.endpoints.anyscale.com/v1",
-    "api.deepinfra.com/v1/openai",
-    "api.mistral.ai/v1"
-]
-
-# this is maintained for Exception Mapping
-openai_compatible_providers: List = [
-    "anyscale",
-    "mistral",
-    "deepinfra",
-    "perplexity"
+    "api.deepinfra.com/v1/openai"
 ]
 
 
@@ -283,7 +265,6 @@ model_list = (
 provider_list: List = [
     "openai",
     "custom_openai",
-    "text-completion-openai",
     "cohere",
     "anthropic",
     "replicate",
@@ -305,7 +286,6 @@ provider_list: List = [
     "deepinfra",
     "perplexity",
     "anyscale",
-    "mistral",
     "maritalk",
     "custom", # custom apis
 ]
@@ -365,13 +345,6 @@ bedrock_embedding_models: List = ["amazon.titan-embed-text-v1", "cohere.embed-en
 
 all_embedding_models = open_ai_embedding_models + cohere_embedding_models + bedrock_embedding_models
 
-####### IMAGE GENERATION MODELS ###################
-openai_image_generation_models = [
-    "dall-e-2",
-    "dall-e-3"
-]
-
-
 from .timeout import timeout
 from .utils import (
     client,
@@ -422,7 +395,6 @@ from .exceptions import (
     AuthenticationError,
     InvalidRequestError,
     BadRequestError,
-    NotFoundError,
     RateLimitError,
     ServiceUnavailableError,
     OpenAIError,
@@ -431,8 +403,7 @@ from .exceptions import (
     APIError,
     Timeout,
     APIConnectionError,
-    APIResponseValidationError, 
-    UnprocessableEntityError
+    APIResponseValidationError
 )
 from .budget_manager import BudgetManager
 from .proxy.proxy_cli import run_server

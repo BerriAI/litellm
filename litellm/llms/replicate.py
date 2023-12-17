@@ -232,8 +232,7 @@ def completion(
     if system_prompt is not None:
         input_data = {
             "prompt": prompt,
-            "system_prompt": system_prompt,
-            **optional_params
+            "system_prompt": system_prompt
         }
     # Otherwise, use the prompt as is
     else:

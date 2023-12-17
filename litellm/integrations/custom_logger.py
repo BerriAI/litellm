@@ -2,9 +2,8 @@
 #    On success, logs events to Promptlayer
 import dotenv, os
 import requests
-from litellm.proxy._types import UserAPIKeyAuth
-from litellm.caching import DualCache
-from typing import Literal
+import requests
+
 dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
 
@@ -29,28 +28,10 @@ class CustomLogger: # https://docs.litellm.ai/docs/observability/custom_callback
     def log_failure_event(self, kwargs, response_obj, start_time, end_time): 
         pass
 
-    #### ASYNC #### 
-    
-    async def async_log_stream_event(self, kwargs, response_obj, start_time, end_time):
-        pass
-
-    async def async_log_pre_api_call(self, model, messages, kwargs):
-        pass
-
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         pass
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
-        pass
-
-    #### CALL HOOKS - proxy only #### 
-    """
-    Control the modify incoming / outgoung data before calling the model
-    """
-    async def async_pre_call_hook(self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict, call_type: Literal["completion", "embeddings"]):
-        pass
-    
-    async def async_post_call_failure_hook(self, original_exception: Exception, user_api_key_dict: UserAPIKeyAuth):
         pass
 
     #### SINGLE-USE #### - https://docs.litellm.ai/docs/observability/custom_callback#using-your-custom-callback-function
@@ -69,22 +50,6 @@ class CustomLogger: # https://docs.litellm.ai/docs/observability/custom_callback
         except: 
             traceback.print_exc()
             print_verbose(f"Custom Logger Error - {traceback.format_exc()}")
-
-    async def async_log_input_event(self, model, messages, kwargs, print_verbose, callback_func):
-        try: 
-            kwargs["model"] = model
-            kwargs["messages"] = messages
-            kwargs["log_event_type"] = "pre_api_call"
-            await callback_func(
-                kwargs,
-            )
-            print_verbose(
-                f"Custom Logger - model call details: {kwargs}"
-            )
-        except: 
-            traceback.print_exc()
-            print_verbose(f"Custom Logger Error - {traceback.format_exc()}")
-    
 
     def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose, callback_func):
         # Method definition

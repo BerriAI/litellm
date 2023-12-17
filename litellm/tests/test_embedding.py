@@ -164,7 +164,7 @@ def test_bedrock_embedding_titan():
         assert all(isinstance(x, float) for x in response['data'][0]['embedding']), "Expected response to be a list of floats"
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_bedrock_embedding_titan()
+# test_bedrock_embedding_titan()
 
 def test_bedrock_embedding_cohere():
     try:

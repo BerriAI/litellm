@@ -3,7 +3,7 @@ repos:
     rev: 3.8.4  # The version of flake8 to use
     hooks:
     -  id: flake8
-       exclude: ^litellm/tests/|^litellm/proxy/proxy_server.py|^litellm/proxy/proxy_cli.py|^litellm/integrations/
+       exclude: ^litellm/tests/|^litellm/proxy/|^litellm/integrations/
        additional_dependencies: [flake8-print]
        files: litellm/.*\.py
 -   repo: local

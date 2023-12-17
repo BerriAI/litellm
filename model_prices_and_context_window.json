@@ -210,27 +210,6 @@
         "litellm_provider": "anthropic",
         "mode": "chat"
     },
-    "mistral/mistral-tiny": {
-        "max_tokens": 8192,
-        "input_cost_per_token": 0.00000015,
-        "output_cost_per_token": 0.00000046,
-        "litellm_provider": "mistral",
-        "mode": "chat"
-    },
-    "mistral/mistral-small": {
-        "max_tokens": 8192,
-        "input_cost_per_token": 0.00000066,
-        "output_cost_per_token": 0.00000197,
-        "litellm_provider": "mistral",
-        "mode": "chat"
-    },
-    "mistral/mistral-medium": {
-        "max_tokens": 8192,
-        "input_cost_per_token": 0.00000273,
-        "output_cost_per_token": 0.00000820,
-        "litellm_provider": "mistral",
-        "mode": "chat"
-    },
     "claude-instant-1.2": {
         "max_tokens": 100000,
         "max_output_tokens": 8191,
@@ -283,13 +262,6 @@
         "litellm_provider": "vertex_ai-chat-models",
         "mode": "chat"
     },
-    "chat-bison@002": {
-        "max_tokens": 4096,
-        "input_cost_per_token": 0.000000125,
-        "output_cost_per_token": 0.000000125,
-        "litellm_provider": "vertex_ai-chat-models",
-        "mode": "chat"
-    },
     "chat-bison-32k": {
         "max_tokens": 32000,
         "input_cost_per_token": 0.000000125,
@@ -315,21 +287,14 @@
         "max_tokens": 2048,
         "input_cost_per_token": 0.000000125,
         "output_cost_per_token": 0.000000125,
-        "litellm_provider": "vertex_ai-code-text-models",
+        "litellm_provider": "vertex_ai-chat-models",
         "mode": "completion"
     },
-    "code-gecko@002": {
+    "code-gecko@latest": {
         "max_tokens": 2048,
         "input_cost_per_token": 0.000000125,
         "output_cost_per_token": 0.000000125,
-        "litellm_provider": "vertex_ai-code-text-models",
-        "mode": "completion"
-    },
-    "code-gecko": {
-        "max_tokens": 2048,
-        "input_cost_per_token": 0.000000125,
-        "output_cost_per_token": 0.000000125,
-        "litellm_provider": "vertex_ai-code-text-models",
+        "litellm_provider": "vertex_ai-chat-models",
         "mode": "completion"
     },
     "codechat-bison": {
@@ -351,22 +316,6 @@
         "input_cost_per_token": 0.000000125,
         "output_cost_per_token": 0.000000125,
         "litellm_provider": "vertex_ai-code-chat-models",
-        "mode": "chat"
-    },
-    "gemini-pro": {
-        "max_tokens": 30720,
-        "max_output_tokens": 2048,
-        "input_cost_per_token": 0.00000025, 
-        "output_cost_per_token": 0.0000005,
-        "litellm_provider": "vertex_ai-language-models",
-        "mode": "chat"
-    },
-    "gemini-pro-vision": {
-        "max_tokens": 30720,
-        "max_output_tokens": 2048,
-        "input_cost_per_token": 0.00000025, 
-        "output_cost_per_token": 0.0000005,
-        "litellm_provider": "vertex_ai-vision-models",
         "mode": "chat"
     },
     "palm/chat-bison": {

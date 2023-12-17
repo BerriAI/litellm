@@ -1,0 +1,44 @@
+model_list:
+  - model_name: gpt-4
+    litellm_params:
+        model: gpt-4
+        api_key: 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
+  - model_name: gpt-4-8k-latest
+    litellm_params:
+        model: gpt-4
+        api_key: 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
+  - model_name: gpt-4-1106-preview-128k
+    litellm_params:
+        model: gpt-4-1106-preview
+        api_key: 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
+  - model_name: gpt-4-vision-preview-128k
+    litellm_params:
+        model: gpt-4-vision-preview
+        api_key: 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
+  - model_name: gpt-3.5-turbo-1106-16k-latest
+    litellm_params:
+        model: gpt-3.5-turbo-1106
+        api_key: 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
+  - model_name: gpt-3.5-turbo-16k
+    litellm_params:
+        model: gpt-3.5-turbo-16k
+        api_key: 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
+  
+litellm_settings:
+  drop_params: True
+  set_verbose: True
+  success_callback: ["langfuse"]
+
+# general_settings: 
+  # master_key: sk-1234 # [OPTIONAL] Only use this if you to require all calls to contain this key (Authorization: Bearer sk-1234)
+
+
+# environment_variables:
+LANGFUSE_PUBLIC_KEY: "pk-lf-04e7bde2-55ab-44b9-9895-7b5978cd6636"
+LANGFUSE_SECRET_KEY: "sk-lf-f5211d12-53b6-4778-90f6-719ed0aba332"
+LANGFUSE_HOST: "https://us.cloud.langfuse.com"
+# OPENAI_API_KEY: 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
+#  REPLICATE_API_KEY: sk-cohere-is-okay
+#  REDIS_HOST: redis-16337.c322.us-east-1-2.ec2.cloud.redislabs.com
+#  REDIS_PORT: "16337"
+#  REDIS_PASSWORD: 

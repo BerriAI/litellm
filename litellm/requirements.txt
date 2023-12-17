@@ -1,1 +1,20 @@
-../requirements.txt
+# LITELLM PROXY DEPENDENCIES #
+litellm
+openai
+fastapi
+tomli
+appdirs
+tomli_w
+backoff
+pyyaml
+uvicorn
+boto3
+redis
+pyyaml
+rq
+prisma
+celery
+psutil
+mangum
+google-generativeai
+langfuse

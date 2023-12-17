@@ -58,7 +58,7 @@ class LangsmithLogger:
                     "inputs": {
                         **new_kwargs
                     },
-                    "outputs": response_obj.json(),
+                    "outputs": response_obj,
                     "session_name": project_name,
                     "start_time": start_time,
                     "end_time": end_time,

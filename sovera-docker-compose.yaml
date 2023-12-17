@@ -1,0 +1,30 @@
+version: "3.9"
+services:
+  llama-gateway-litellm:
+    container_name: "llama-gateway"
+    restart: unless-stopped
+    image: "kloudtaxi/sovera-litellm-proxy:1.0"
+    environment:
+      - "LANGFUSE_HOST=https://us.cloud.langfuse.com"
+      - "LANGFUSE_PUBLIC_KEY=pk-lf-04e7bde2-55ab-44b9-9895-7b5978cd6636"
+      - "LANGFUSE_SECRET_KEY=sk-lf-f5211d12-53b6-4778-90f6-719ed0aba332"
+      - "PATH=/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+      - "LANG=C.UTF-8"
+      - "GPG_KEY=E3FF2839C048B25C084DEBE9B26995E310250568"
+      - "PYTHON_VERSION=3.9.18"
+      - "PYTHON_PIP_VERSION=23.0.1"
+      - "PYTHON_SETUPTOOLS_VERSION=58.1.0"
+      - "PYTHON_GET_PIP_URL=https://github.com/pypa/get-pip/raw/4cfa4081d27285bda1220a62a5ebf5b4bd749cdb/public/get-pip.py"
+      - "PYTHON_GET_PIP_SHA256=9cc01665956d22b3bf057ae8287b035827bfd895da235bcea200ab3b811790b6"
+    working_dir: "/app"
+    entrypoint:
+      - "litellm"
+    command:
+      - "--config"
+      - "lite-llm-proxy-config.yaml"
+      - "--debug"
+    ports:
+      - "8000:8000/tcp"
+    # Mount the local configuration file
+    volumes:
+      - ./lite-llm-proxy-config.yaml:/app/config.yaml 

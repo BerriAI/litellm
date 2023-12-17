@@ -542,7 +542,7 @@ class Huggingface(BaseLLM):
         logging_obj.pre_call(
                 input=input,
                 api_key=api_key,
-                additional_args={"complete_input_dict": data, "headers": headers, "api_base": embed_url},
+                additional_args={"complete_input_dict": data},
             )
         ## COMPLETION CALL
         response = requests.post(
@@ -577,14 +577,6 @@ class Huggingface(BaseLLM):
         else: 
             for idx, embedding in enumerate(embeddings):
                 if isinstance(embedding, float): 
-                    output_data.append(
-                        {
-                            "object": "embedding",
-                            "index": idx,
-                            "embedding": embedding # flatten list returned from hf
-                        }
-                    )
-                elif isinstance(embedding, list) and isinstance(embedding[0], float):
                     output_data.append(
                         {
                             "object": "embedding",

@@ -1,26 +1,20 @@
 # LITELLM PROXY DEPENDENCIES #
-anyio==4.2.0 # openai + http req.
-openai>=1.0.0 # openai req. 
-fastapi # server dep
-pydantic>=2.5 # openai req. 
-appdirs # server dep
-backoff # server dep
-pyyaml # server dep
-uvicorn # server dep
-boto3 # aws bedrock/sagemaker calls
-redis # caching
-prisma # for db
-mangum # for aws lambda functions
-google-generativeai # for vertex ai calls
-traceloop-sdk==0.5.3 # for open telemetry logging
-langfuse==1.14.0 # for langfuse self-hosted logging
-### LITELLM PACKAGE DEPENDENCIES
-python-dotenv>=0.2.0 # for env 
-tiktoken>=0.4.0 # for calculating usage
-importlib-metadata>=6.8.0 # for random utils
-tokenizers # for calculating usage
-click # for proxy cli 
-jinja2==3.1.2 # for prompt templates
-certifi>=2023.7.22 # [TODO] clean up 
-aiohttp # for network calls
-####
+litellm
+openai
+fastapi
+tomli
+appdirs
+tomli_w
+backoff
+pyyaml
+uvicorn
+boto3
+redis
+pyyaml
+rq
+prisma
+celery
+psutil
+mangum
+google-generativeai
+langfuse
