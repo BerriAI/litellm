@@ -2016,11 +2016,9 @@ async def atext_completion(*args, **kwargs):
                 response = text_completion(*args, **kwargs)
             else:
                 # Await normally
-                init_response = await loop.run_in_executor(None, func_with_context)
-                if isinstance(init_response, dict) or isinstance(init_response, ModelResponse): ## CACHING SCENARIO 
-                    response = init_response
-                elif asyncio.iscoroutine(init_response):
-                    response = await init_response
+                response = await loop.run_in_executor(None, func_with_context)
+                if asyncio.iscoroutine(response):
+                    response = await response
         else: 
             # Call the synchronous function using run_in_executor
             response =  await loop.run_in_executor(None, func_with_context)
@@ -2195,6 +2193,9 @@ def text_completion(
     if stream == True or kwargs.get("stream", False) == True:
         response = TextCompletionStreamWrapper(completion_stream=response, model=model)
         return response
+
+    if asyncio.iscoroutine(response):
+        response = asyncio.run(response)
 
     transformed_logprobs = None
     # only supported for TGI models
