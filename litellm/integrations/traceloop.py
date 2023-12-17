@@ -11,7 +11,7 @@ class TraceloopLogger:
 
         try:
             tracer = self.tracer_wrapper.get_tracer()
-
+    
             model = kwargs.get("model")
 
             # LiteLLM uses the standard OpenAI library, so it's already handled by Traceloop SDK

@@ -294,6 +294,12 @@ class AzureChatCompletion(BaseLLM):
             azure_client = AzureOpenAI(**azure_client_params)
         else:
             azure_client = client
+        ## LOGGING
+        logging_obj.pre_call(
+            input=data['messages'],
+            api_key=azure_client.api_key,
+            additional_args={"headers": {"Authorization": f"Bearer {azure_client.api_key}"}, "api_base": azure_client._base_url._uri_reference, "acompletion": True, "complete_input_dict": data},
+        )
         response = azure_client.chat.completions.create(**data)
         streamwrapper = CustomStreamWrapper(completion_stream=response, model=model, custom_llm_provider="azure",logging_obj=logging_obj)
         return streamwrapper
