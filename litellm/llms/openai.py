@@ -445,6 +445,66 @@ class OpenAIChatCompletion(BaseLLM):
                 import traceback
                 raise OpenAIError(status_code=500, message=traceback.format_exc())
 
+    def image_generation(self,
+                model: Optional[str],
+                prompt: str,
+                timeout: float, 
+                api_key: Optional[str] = None,
+                api_base: Optional[str] = None,
+                model_response: Optional[litellm.utils.ImageResponse] = None,
+                logging_obj=None,
+                optional_params=None,
+                client=None,
+                aimg_generation=None,
+                ):
+        exception_mapping_worked = False
+        try: 
+            model = model
+            data = {
+                "model": model,
+                "prompt": prompt,
+                **optional_params
+            }
+            max_retries = data.pop("max_retries", 2)
+            if not isinstance(max_retries, int): 
+                raise OpenAIError(status_code=422, message="max retries must be an int")
+            
+            # if aembedding == True:
+            #     response =  self.aembedding(data=data, input=input, logging_obj=logging_obj, model_response=model_response, api_base=api_base, api_key=api_key, timeout=timeout, client=client, max_retries=max_retries) # type: ignore
+            #     return response
+            
+            if client is None:
+                openai_client = OpenAI(api_key=api_key, base_url=api_base, http_client=litellm.client_session, timeout=timeout, max_retries=max_retries)
+            else:
+                openai_client = client
+            
+            ## LOGGING
+            logging_obj.pre_call(
+                input=prompt,
+                api_key=openai_client.api_key,
+                additional_args={"headers": {"Authorization": f"Bearer {openai_client.api_key}"}, "api_base": openai_client._base_url._uri_reference, "acompletion": True, "complete_input_dict": data},
+            )
+            
+            ## COMPLETION CALL
+            response = openai_client.images.generate(**data) # type: ignore
+            ## LOGGING
+            logging_obj.post_call(
+                    input=input,
+                    api_key=api_key,
+                    additional_args={"complete_input_dict": data},
+                    original_response=response,
+                )
+            # return response
+            return convert_to_model_response_object(response_object=json.loads(response.model_dump_json()), model_response_object=model_response, response_type="image_generation") # type: ignore
+        except OpenAIError as e: 
+            exception_mapping_worked = True
+            raise e
+        except Exception as e: 
+            if exception_mapping_worked: 
+                raise e
+            else: 
+                import traceback
+                raise OpenAIError(status_code=500, message=traceback.format_exc())
 
 class OpenAITextCompletion(BaseLLM):
     _client_session: httpx.Client

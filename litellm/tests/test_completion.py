@@ -650,7 +650,7 @@ def test_completion_azure_key_completion_arg():
     except Exception as e:
         os.environ["AZURE_API_KEY"] = old_key
         pytest.fail(f"Error occurred: {e}")
-# test_completion_azure_key_completion_arg()
+test_completion_azure_key_completion_arg()
 
 
 async def test_re_use_azure_async_client():
