@@ -25,3 +25,6 @@ litellm/tests/langfuse.log
 litellm/tests/dynamo*.log
 .vscode/settings.json
 litellm/proxy/log.txt
+proxy_server_config_@.yaml
+.gitignore
+proxy_server_config_2.yaml

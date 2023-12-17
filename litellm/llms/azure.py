@@ -153,29 +153,29 @@ class AzureChatCompletion(BaseLLM):
                     "messages": messages, 
                     **optional_params
                 }
-            ## LOGGING
-            logging_obj.pre_call(
-                input=messages,
-                api_key=api_key,
-                additional_args={
-                    "headers": {
-                        "api_key": api_key, 
-                        "azure_ad_token": azure_ad_token
-                    },
-                    "api_version": api_version,
-                    "api_base": api_base,
-                    "complete_input_dict": data,
-                },
-            )
             
             if acompletion is True: 
                 if optional_params.get("stream", False):
                     return self.async_streaming(logging_obj=logging_obj, api_base=api_base, data=data, model=model, api_key=api_key, api_version=api_version, azure_ad_token=azure_ad_token, timeout=timeout, client=client)
                 else:
-                    return self.acompletion(api_base=api_base, data=data, model_response=model_response, api_key=api_key, api_version=api_version, model=model, azure_ad_token=azure_ad_token, timeout=timeout, client=client)
+                    return self.acompletion(api_base=api_base, data=data, model_response=model_response, api_key=api_key, api_version=api_version, model=model, azure_ad_token=azure_ad_token, timeout=timeout, client=client, logging_obj=logging_obj)
             elif "stream" in optional_params and optional_params["stream"] == True:
                 return self.streaming(logging_obj=logging_obj, api_base=api_base, data=data, model=model, api_key=api_key, api_version=api_version, azure_ad_token=azure_ad_token, timeout=timeout, client=client)
             else:
+                ## LOGGING
+                logging_obj.pre_call(
+                    input=messages,
+                    api_key=api_key,
+                    additional_args={
+                        "headers": {
+                            "api_key": api_key, 
+                            "azure_ad_token": azure_ad_token
+                        },
+                        "api_version": api_version,
+                        "api_base": api_base,
+                        "complete_input_dict": data,
+                    },
+                )
                 if not isinstance(max_retries, int): 
                     raise AzureOpenAIError(status_code=422, message="max retries must be an int")
                 # init AzureOpenAI Client
@@ -225,6 +225,7 @@ class AzureChatCompletion(BaseLLM):
                           model_response: ModelResponse,
                           azure_ad_token: Optional[str]=None, 
                           client = None, # this is the AsyncAzureOpenAI
+                          logging_obj=None,
                           ): 
        response = None
        try:
@@ -248,13 +249,19 @@ class AzureChatCompletion(BaseLLM):
                 azure_client = AsyncAzureOpenAI(**azure_client_params)
             else:
                 azure_client = client
+            ## LOGGING
+            logging_obj.pre_call(
+                input=data['messages'],
+                api_key=azure_client.api_key,
+                additional_args={"headers": {"Authorization": f"Bearer {azure_client.api_key}"}, "api_base": azure_client._base_url._uri_reference, "acompletion": True, "complete_input_dict": data},
+            )
             response = await azure_client.chat.completions.create(**data) 
             return convert_to_model_response_object(response_object=json.loads(response.model_dump_json()), model_response_object=model_response)
        except AzureOpenAIError as e: 
             exception_mapping_worked = True
             raise e
        except Exception as e: 
-            raise e
+            raise AzureOpenAIError(status_code=500, message=str(e))
 
     def streaming(self,
                   logging_obj,
@@ -319,6 +326,12 @@ class AzureChatCompletion(BaseLLM):
                 azure_client = AsyncAzureOpenAI(**azure_client_params)
         else:
             azure_client = client
+        ## LOGGING
+        logging_obj.pre_call(
+            input=data['messages'],
+            api_key=azure_client.api_key,
+            additional_args={"headers": {"Authorization": f"Bearer {azure_client.api_key}"}, "api_base": azure_client._base_url._uri_reference, "acompletion": True, "complete_input_dict": data},
+        )
         response = await azure_client.chat.completions.create(**data)
         streamwrapper = CustomStreamWrapper(completion_stream=response, model=model, custom_llm_provider="azure",logging_obj=logging_obj)
         async for transformed_chunk in streamwrapper:
