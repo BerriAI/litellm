@@ -132,8 +132,7 @@ for key, value in model_cost.items():
     elif value.get('litellm_provider') == 'anthropic':
         anthropic_models.append(key)
     elif value.get('litellm_provider') == 'openrouter':
-        split_string = key.split('/', 1)
-        openrouter_models.append(split_string[1])
+        openrouter_models.append(key)
     elif value.get('litellm_provider') == 'vertex_ai-text-models':
         vertex_text_models.append(key)
     elif value.get('litellm_provider') == 'vertex_ai-code-text-models':
@@ -365,6 +364,13 @@ cohere_embedding_models: List = [
 bedrock_embedding_models: List = ["amazon.titan-embed-text-v1", "cohere.embed-english-v3", "cohere.embed-multilingual-v3"]
 
 all_embedding_models = open_ai_embedding_models + cohere_embedding_models + bedrock_embedding_models
+
+####### IMAGE GENERATION MODELS ###################
+openai_image_generation_models = [
+    "dall-e-2",
+    "dall-e-3"
+]
+
 
 from .timeout import timeout
 from .utils import (
