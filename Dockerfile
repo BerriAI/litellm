@@ -19,35 +19,32 @@ RUN pip install --upgrade pip && \
     pip install build
 
 # Copy the current directory contents into the container at /app
-COPY requirements.txt .
+COPY . .
 
 # Build the package
 RUN rm -rf dist/* && python -m build
 
+# There should be only one wheel file now, assume the build only creates one
+RUN ls -1 dist/*.whl | head -1
+
 # Install the package
 RUN pip install dist/*.whl
 
-# Install any needed packages specified in requirements.txt
-RUN pip install wheel && \
-    pip wheel --no-cache-dir --wheel-dir=/app/wheels -r requirements.txt
-
-# Clear out any existing builds and build the package
-RUN rm -rf dist/* && python -m build
-
-# There should be only one wheel file now, assume the build only creates one
-RUN ls -1 dist/*.whl | head -1
+# install dependencies as wheels
+RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
 
 # Runtime stage
 FROM $LITELLM_RUNTIME_IMAGE as runtime
 
 WORKDIR /app
 
-# Depending on wheel naming patterns, use a wildcard if multiple versions are possible
 # Copy the built wheel from the builder stage to the runtime stage; assumes only one wheel file is present
 COPY --from=builder /app/dist/*.whl .
+COPY --from=builder /wheels/ /wheels/
 
 # Install the built wheel using pip; again using a wildcard if it's the only file
-RUN pip install *.whl && rm -f *.whl
+RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ && rm -f *.whl && rm -rf /wheels
+
 
 EXPOSE 4000/tcp
 

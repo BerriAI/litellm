@@ -18,7 +18,6 @@ try:
     import appdirs
     import backoff
     import yaml
-    import rq
     import orjson
 except ImportError:
     import sys
@@ -34,7 +33,6 @@ except ImportError:
             "appdirs",
             "backoff",
             "pyyaml", 
-            "rq",
             "orjson"
         ]
     )
@@ -111,7 +109,6 @@ from fastapi.security.api_key import APIKeyHeader
 import json
 import logging
 from typing import Union
-# from litellm.proxy.queue import start_rq_worker_in_background
 
 app = FastAPI(docs_url="/", title="LiteLLM API")
 router = APIRouter()
