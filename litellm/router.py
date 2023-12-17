@@ -964,7 +964,7 @@ class Router:
                 
                 if "azure" in model_name:
                     if api_base is None:
-                        raise ValueError("api_base is required for Azure OpenAI. Set it on your config")
+                        raise ValueError(f"api_base is required for Azure OpenAI. Set it on your config. Model - {model}")
                     if api_version is None:
                         api_version = "2023-07-01-preview"
                     if "gateway.ai.cloudflare.com" in api_base: 
