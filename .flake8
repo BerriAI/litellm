@@ -1,2 +1,0 @@
-[flake8]
-ignore = E,F,W,B,B9,C,D,I,N,S,W503,W504,E203, TCE,TCA,EXE999,E999,TD
