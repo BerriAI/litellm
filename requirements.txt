@@ -22,5 +22,5 @@ tokenizers==0.14.0 # for calculating usage
 click==8.1.7 # for proxy cli 
 jinja2==3.1.2 # for prompt templates
 certifi>=2023.7.22 # [TODO] clean up 
-aiohttp==3.8.4 # for network calls
+aiohttp==3.9.0 # for network calls
 ####
