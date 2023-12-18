@@ -3962,7 +3962,7 @@ def convert_to_model_response_object(response_object: Optional[dict]=None, model
                     raise Exception("Error in response object format")
                 
                 if model_response_object is None: 
-                    model_response_object = EmbeddingResponse()
+                    model_response_object = ImageResponse()
                 
                 if "created" in response_object: 
                     model_response_object.created = response_object["created"]
