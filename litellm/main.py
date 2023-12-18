@@ -52,6 +52,7 @@ from .llms import (
     cohere,
     petals,
     oobabooga,
+    openrouter,
     palm,
     vertex_ai,
     maritalk)
@@ -1026,14 +1027,17 @@ def completion(
                 }
             )
 
+            ## Load Config
+            config = openrouter.OpenrouterConfig.get_config() 
+            for k, v in config.items(): 
+                if k not in optional_params: # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
+                    optional_params[k] = v
+
             data = {
                 "model": model, 
                 "messages": messages,  
                 **optional_params
             }
-            ## LOGGING
-            logging.pre_call(input=messages, api_key=openai.api_key, additional_args={"complete_input_dict": data, "headers": headers})
-            ## COMPLETION CALL
 
             ## COMPLETION CALL
             response = openai_chat_completions.completion(
