@@ -1030,7 +1030,13 @@ def completion(
             ## Load Config
             config = openrouter.OpenrouterConfig.get_config() 
             for k, v in config.items(): 
-                if k not in optional_params: 
+                if k == "extra_body":
+                    # we use openai 'extra_body' to pass openrouter specific params - transforms, route, models
+                    if "extra_body" in  optional_params:
+                        optional_params[k].update(v)
+                    else:
+                        optional_params[k] = v
+                elif k not in optional_params: 
                     optional_params[k] = v
 
             data = {
