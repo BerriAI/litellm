@@ -261,8 +261,8 @@ def completion(
     model: str,
     # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
     messages: List = [],
-    functions: List = [],
-    function_call: str = "",  # optional params
+    functions: Optional[List] = None,
+    function_call: Optional[str] = None,
     timeout: Optional[Union[float, int]] = None,
     temperature: Optional[float] = None,
     top_p: Optional[float] = None,
@@ -1030,7 +1030,7 @@ def completion(
             ## Load Config
             config = openrouter.OpenrouterConfig.get_config() 
             for k, v in config.items(): 
-                if k not in optional_params: # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
+                if k not in optional_params: 
                     optional_params[k] = v
 
             data = {
