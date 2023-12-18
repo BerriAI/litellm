@@ -1514,8 +1514,8 @@ def batch_completion(
     model: str,
     # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
     messages: List = [],
-    functions: List = [],
-    function_call: str = "",  # optional params
+    functions: Optional[List] = None,
+    function_call: Optional[str] = None,
     temperature: Optional[float] = None,
     top_p: Optional[float] = None,
     n: Optional[int] = None,
