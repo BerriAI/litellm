@@ -8,38 +8,49 @@ from datetime import datetime
 dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
 
+
 class LangFuseLogger:
     # Class variables or attributes
     def __init__(self):
         try:
             from langfuse import Langfuse
         except Exception as e:
-            raise Exception(f"\033[91mLangfuse not installed, try running 'pip install langfuse' to fix this error: {e}\033[0m")
+            raise Exception(
+                f"\033[91mLangfuse not installed, try running 'pip install langfuse' to fix this error: {e}\033[0m"
+            )
         # Instance variables
         self.secret_key = os.getenv("LANGFUSE_SECRET_KEY")
         self.public_key = os.getenv("LANGFUSE_PUBLIC_KEY")
         self.langfuse_host = os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
         self.langfuse_release = os.getenv("LANGFUSE_RELEASE")
         self.langfuse_debug = os.getenv("LANGFUSE_DEBUG")
-        self.Langfuse =  Langfuse(
+        self.Langfuse = Langfuse(
             public_key=self.public_key,
             secret_key=self.secret_key,
             host=self.langfuse_host,
             release=self.langfuse_release,
-            debug=self.langfuse_debug
+            debug=True,
         )
 
     def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
         # Method definition
-        from langfuse.model import InitialGeneration, Usage
+
         try:
             print_verbose(
                 f"Langfuse Logging - Enters logging function for model {kwargs}"
             )
             litellm_params = kwargs.get("litellm_params", {})
-            metadata = litellm_params.get("metadata", {}) or {} # if litellm_params['metadata'] == None 
-            prompt = [kwargs.get('messages')]
+            metadata = (
+                litellm_params.get("metadata", {}) or {}
+            )  # if litellm_params['metadata'] == None
+            prompt = [kwargs.get("messages")]
             optional_params = kwargs.get("optional_params", {})
+
+            optional_params.pop("functions", None)
+            print_verbose(
+                f"Langfuse Logging - typw: {type(optional_params), optional_params}"
+            )
+            print_verbose(f"Langfuse Logging - optional params: {optional_params}")
 
             # langfuse only accepts str, int, bool, float for logging
             for param, value in optional_params.items():
@@ -49,22 +60,31 @@ class LangFuseLogger:
                     except:
                         # if casting value to str fails don't block logging
                         pass
- 
+
             # end of processing langfuse ########################
-            self.Langfuse.generation(InitialGeneration(
+            input = prompt
+            output = response_obj["choices"][0]["message"].json()
+
+            trace = self.Langfuse.trace(
+                name=metadata.get("generation_name", "litellm-completion"),
+                input=input,
+                output=output,
+            )
+
+            trace.generation(
                 name=metadata.get("generation_name", "litellm-completion"),
                 startTime=start_time,
                 endTime=end_time,
-                model=kwargs['model'],
+                model=kwargs["model"],
                 modelParameters=optional_params,
-                prompt=prompt,
-                completion=response_obj['choices'][0]['message'].json(),
-                usage=Usage(
-                    prompt_tokens=response_obj['usage']['prompt_tokens'],
-                    completion_tokens=response_obj['usage']['completion_tokens']
-                ),
-                metadata=metadata
-            ))
+                input=input,
+                output=output,
+                usage={
+                    "prompt_tokens": response_obj["usage"]["prompt_tokens"],
+                    "completion_tokens": response_obj["usage"]["completion_tokens"],
+                },
+                metadata=metadata,
+            )
             self.Langfuse.flush()
             print_verbose(
                 f"Langfuse Layer Logging - final response object: {response_obj}"
@@ -74,5 +94,7 @@ class LangFuseLogger:
             print_verbose(f"Langfuse Layer Error - {traceback.format_exc()}")
             pass
 
-    async def _async_log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
+    async def _async_log_event(
+        self, kwargs, response_obj, start_time, end_time, print_verbose
+    ):
         self.log_event(kwargs, response_obj, start_time, end_time, print_verbose)
