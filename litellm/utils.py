@@ -2336,8 +2336,8 @@ def get_optional_params_embeddings(
 
 def get_optional_params(  # use the openai defaults
     # 12 optional params
-    functions=[],
-    function_call="",
+    functions=None,
+    function_call=None,
     temperature=None,
     top_p=None,
     n=None,
@@ -2363,8 +2363,8 @@ def get_optional_params(  # use the openai defaults
     for k, v in special_params.items():
         passed_params[k] = v
     default_params = {
-        "functions":[],
-        "function_call":"",
+        "functions": None,
+        "function_call": None,
         "temperature":None,
         "top_p":None,
         "n":None,
@@ -2850,6 +2850,57 @@ def get_optional_params(  # use the openai defaults
             extra_body["safe_mode"] = safe_mode
         if random_seed is not None:
             extra_body["random_seed"] = random_seed
+        optional_params["extra_body"] = extra_body # openai client supports `extra_body` param
+    elif custom_llm_provider == "openrouter":
+        supported_params = ["functions", "function_call", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "response_format", "seed", "tools", "tool_choice", "max_retries"]
+        _check_valid_arg(supported_params=supported_params)
+
+        if functions is not None:
+            optional_params["functions"] = functions
+        if function_call is not None:
+            optional_params["function_call"] = function_call
+        if temperature is not None:
+            optional_params["temperature"] = temperature
+        if top_p is not None:
+            optional_params["top_p"] = top_p
+        if n is not None:
+            optional_params["n"] = n
+        if stream is not None:
+            optional_params["stream"] = stream
+        if stop is not None:
+            optional_params["stop"] = stop
+        if max_tokens is not None:
+            optional_params["max_tokens"] = max_tokens
+        if presence_penalty is not None:
+            optional_params["presence_penalty"] = presence_penalty
+        if frequency_penalty is not None:
+            optional_params["frequency_penalty"] = frequency_penalty
+        if logit_bias is not None:
+            optional_params["logit_bias"] = logit_bias
+        if user is not None:
+            optional_params["user"] = user
+        if response_format is not None:
+            optional_params["response_format"] = response_format
+        if seed is not None:
+            optional_params["seed"] = seed
+        if tools is not None:
+            optional_params["tools"] = tools
+        if tool_choice is not None:
+            optional_params["tool_choice"] = tool_choice
+        if max_retries is not None:
+            optional_params["max_retries"] = max_retries
+        
+        # OpenRouter-only parameters
+        extra_body = {}
+        transforms = passed_params.pop("transforms", None)
+        models = passed_params.pop("models", None)
+        route = passed_params.pop("route", None)
+        if transforms is not None:
+            extra_body["transforms"] = transforms
+        if models is not None:
+            extra_body["models"] = models
+        if route is not None:
+            extra_body["route"] = route
         optional_params["extra_body"] = extra_body # openai client supports `extra_body` param
     else:  # assume passing in params for openai/azure openai
         supported_params = ["functions", "function_call", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "response_format", "seed", "tools", "tool_choice", "max_retries"]
