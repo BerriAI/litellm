@@ -2205,7 +2205,8 @@ def text_completion(
     if stream == True or kwargs.get("stream", False) == True:
         response = TextCompletionStreamWrapper(completion_stream=response, model=model)
         return response
-
+    if kwargs.get("acompletion", False) == True: 
+        return response
     transformed_logprobs = None
     # only supported for TGI models
     try:
