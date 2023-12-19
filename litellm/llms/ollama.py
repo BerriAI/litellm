@@ -230,3 +230,4 @@ async def ollama_acompletion(url, data, model_response, encoding, logging_obj):
             return model_response
     except Exception as e:
         traceback.print_exc()
+        raise e
