@@ -4719,7 +4719,7 @@ def exception_type(
                     )
                 elif "403" in error_str: 
                     exception_mapping_worked = True
-                    raise U(
+                    raise BadRequestError(
                         message=f"VertexAIException - {error_str}", 
                         model=model, 
                         llm_provider="vertex_ai",
