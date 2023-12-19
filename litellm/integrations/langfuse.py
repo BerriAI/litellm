@@ -33,7 +33,9 @@ class LangFuseLogger:
             debug=True,
         )
 
-    def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
+    def log_event(
+        self, kwargs, response_obj, start_time, end_time, user_id, print_verbose
+    ):
         # Method definition
 
         try:
@@ -64,6 +66,7 @@ class LangFuseLogger:
             output = response_obj["choices"][0]["message"].json()
 
             self._log_langfuse_v2(
+                user_id,
                 metadata,
                 output,
                 start_time,
@@ -73,6 +76,7 @@ class LangFuseLogger:
                 input,
                 response_obj,
             ) if self._is_langfuse_v2() else self._log_langfuse_v1(
+                user_id,
                 metadata,
                 output,
                 start_time,
@@ -93,9 +97,11 @@ class LangFuseLogger:
             pass
 
     async def _async_log_event(
-        self, kwargs, response_obj, start_time, end_time, print_verbose
+        self, kwargs, response_obj, start_time, end_time, user_id, print_verbose
     ):
-        self.log_event(kwargs, response_obj, start_time, end_time, print_verbose)
+        self.log_event(
+            kwargs, response_obj, start_time, end_time, user_id, print_verbose
+        )
 
     def _is_langfuse_v2(self):
         import langfuse
@@ -104,6 +110,7 @@ class LangFuseLogger:
 
     def _log_langfuse_v1(
         self,
+        user_id,
         metadata,
         output,
         start_time,
@@ -120,6 +127,7 @@ class LangFuseLogger:
                 name=metadata.get("generation_name", "litellm-completion"),
                 input=input,
                 output=output,
+                userId=user_id,
             )
         )
 
@@ -142,6 +150,7 @@ class LangFuseLogger:
 
     def _log_langfuse_v2(
         self,
+        user_id,
         metadata,
         output,
         start_time,
@@ -155,6 +164,7 @@ class LangFuseLogger:
             name=metadata.get("generation_name", "litellm-completion"),
             input=input,
             output=output,
+            user_id=user_id,
         )
 
         trace.generation(
