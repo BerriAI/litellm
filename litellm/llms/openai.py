@@ -284,7 +284,7 @@ class OpenAIChatCompletion(BaseLLM):
                                 additional_args={"complete_input_dict": data},
                             )
             return convert_to_model_response_object(response_object=json.loads(stringified_response), model_response_object=model_response)
-        except Exception as e: 
+        except Exception as e:
             raise e
 
     def streaming(self,
@@ -631,24 +631,27 @@ class OpenAITextCompletion(BaseLLM):
                         api_key: str, 
                         model: str): 
         async with httpx.AsyncClient() as client:
-            response = await client.post(api_base, json=data, headers=headers, timeout=litellm.request_timeout) 
-            response_json = response.json()
-            if response.status_code != 200:
-                raise OpenAIError(status_code=response.status_code, message=response.text)
-                
-            ## LOGGING
-            logging_obj.post_call(
-                input=prompt,
-                api_key=api_key,
-                original_response=response,
-                additional_args={
-                    "headers": headers,
-                    "api_base": api_base,
-                },
-            )
+            try: 
+                response = await client.post(api_base, json=data, headers=headers, timeout=litellm.request_timeout) 
+                response_json = response.json()
+                if response.status_code != 200:
+                    raise OpenAIError(status_code=response.status_code, message=response.text)
+                    
+                ## LOGGING
+                logging_obj.post_call(
+                    input=prompt,
+                    api_key=api_key,
+                    original_response=response,
+                    additional_args={
+                        "headers": headers,
+                        "api_base": api_base,
+                    },
+                )
 
-            ## RESPONSE OBJECT
-            return self.convert_to_model_response_object(response_object=response_json, model_response_object=model_response)
+                ## RESPONSE OBJECT
+                return self.convert_to_model_response_object(response_object=response_json, model_response_object=model_response)
+            except Exception as e: 
+                raise e
 
     def streaming(self,
                   logging_obj,
@@ -687,9 +690,12 @@ class OpenAITextCompletion(BaseLLM):
                     method="POST",
                     timeout=litellm.request_timeout
                 ) as response: 
-            if response.status_code != 200:
-                raise OpenAIError(status_code=response.status_code, message=response.text)
-            
-            streamwrapper = CustomStreamWrapper(completion_stream=response.aiter_lines(), model=model, custom_llm_provider="text-completion-openai",logging_obj=logging_obj)
-            async for transformed_chunk in streamwrapper:
-                yield transformed_chunk
+            try: 
+                if response.status_code != 200:
+                    raise OpenAIError(status_code=response.status_code, message=response.text)
+                
+                streamwrapper = CustomStreamWrapper(completion_stream=response.aiter_lines(), model=model, custom_llm_provider="text-completion-openai",logging_obj=logging_obj)
+                async for transformed_chunk in streamwrapper:
+                    yield transformed_chunk
+            except Exception as e: 
+                raise e
