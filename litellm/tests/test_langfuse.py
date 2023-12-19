@@ -105,6 +105,7 @@ def test_langfuse_logging_async():
                 max_tokens=100,
                 temperature=0.7,
                 timeout=5,
+                user="test_user",
             )
 
         response = asyncio.run(_test_langfuse())
@@ -198,7 +199,7 @@ def test_langfuse_logging_custom_generation_name():
         print(e)
 
 
-test_langfuse_logging_custom_generation_name()
+# test_langfuse_logging_custom_generation_name()
 
 
 @pytest.mark.skip(reason="beta test - checking langfuse output")
@@ -235,7 +236,7 @@ def test_langfuse_logging_function_calling():
         print(e)
 
 
-test_langfuse_logging_function_calling()
+# test_langfuse_logging_function_calling()
 
 
 def test_langfuse_logging_tool_calling():
@@ -296,4 +297,4 @@ def test_langfuse_logging_tool_calling():
     tool_calls = response.choices[0].message.tool_calls
 
 
-test_langfuse_logging_tool_calling()
+# test_langfuse_logging_tool_calling()
