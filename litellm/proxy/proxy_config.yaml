@@ -47,7 +47,7 @@ litellm_settings:
   # setting callback class
   # callbacks: custom_callbacks.proxy_handler_instance # sets litellm.callbacks = [proxy_handler_instance]
 
-general_settings: 
+# general_settings: 
 
 environment_variables: 
   # otel: True          # OpenTelemetry Logger
