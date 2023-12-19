@@ -1,3 +1,4 @@
+import json
 import sys
 import os
 import io, asyncio
@@ -91,7 +92,7 @@ def pre_langfuse_setup():
     return
 
 
-# @pytest.mark.skip(reason="beta test - checking langfuse output")
+@pytest.mark.skip(reason="beta test - checking langfuse output")
 def test_langfuse_logging_async():
     try:
         pre_langfuse_setup()
@@ -118,9 +119,10 @@ def test_langfuse_logging_async():
         pytest.fail(f"An exception occurred - {e}")
 
 
-# test_langfuse_logging_async()
+test_langfuse_logging_async()
 
 
+@pytest.mark.skip(reason="beta test - checking langfuse output")
 def test_langfuse_logging():
     try:
         pre_langfuse_setup()
@@ -142,9 +144,10 @@ def test_langfuse_logging():
         pytest.fail(f"An exception occurred - {e}")
 
 
-# test_langfuse_logging()
+test_langfuse_logging()
 
 
+@pytest.mark.skip(reason="beta test - checking langfuse output")
 def test_langfuse_logging_stream():
     try:
         litellm.set_verbose = True
@@ -170,7 +173,7 @@ def test_langfuse_logging_stream():
         print(e)
 
 
-# test_langfuse_logging_stream()
+test_langfuse_logging_stream()
 
 
 @pytest.mark.skip(reason="beta test - checking langfuse output")
@@ -195,6 +198,10 @@ def test_langfuse_logging_custom_generation_name():
         print(e)
 
 
+test_langfuse_logging_custom_generation_name()
+
+
+@pytest.mark.skip(reason="beta test - checking langfuse output")
 def test_langfuse_logging_function_calling():
     litellm.set_verbose = True
     function1 = [
@@ -229,3 +236,64 @@ def test_langfuse_logging_function_calling():
 
 
 test_langfuse_logging_function_calling()
+
+
+def test_langfuse_logging_tool_calling():
+    litellm.set_verbose = True
+
+    def get_current_weather(location, unit="fahrenheit"):
+        """Get the current weather in a given location"""
+        if "tokyo" in location.lower():
+            return json.dumps(
+                {"location": "Tokyo", "temperature": "10", "unit": "celsius"}
+            )
+        elif "san francisco" in location.lower():
+            return json.dumps(
+                {"location": "San Francisco", "temperature": "72", "unit": "fahrenheit"}
+            )
+        elif "paris" in location.lower():
+            return json.dumps(
+                {"location": "Paris", "temperature": "22", "unit": "celsius"}
+            )
+        else:
+            return json.dumps({"location": location, "temperature": "unknown"})
+
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the weather like in San Francisco, Tokyo, and Paris?",
+        }
+    ]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+
+    response = litellm.completion(
+        model="gpt-3.5-turbo-1106",
+        messages=messages,
+        tools=tools,
+        tool_choice="auto",  # auto is default, but we'll be explicit
+    )
+    print("\nLLM Response1:\n", response)
+    response_message = response.choices[0].message
+    tool_calls = response.choices[0].message.tool_calls
+
+
+test_langfuse_logging_tool_calling()

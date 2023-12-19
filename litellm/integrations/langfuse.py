@@ -7,6 +7,7 @@ from datetime import datetime
 
 dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
+from packaging.version import Version
 
 
 class LangFuseLogger:
@@ -47,10 +48,7 @@ class LangFuseLogger:
             optional_params = kwargs.get("optional_params", {})
 
             optional_params.pop("functions", None)
-            print_verbose(
-                f"Langfuse Logging - typw: {type(optional_params), optional_params}"
-            )
-            print_verbose(f"Langfuse Logging - optional params: {optional_params}")
+            optional_params.pop("tools", None)
 
             # langfuse only accepts str, int, bool, float for logging
             for param, value in optional_params.items():
@@ -65,26 +63,26 @@ class LangFuseLogger:
             input = prompt
             output = response_obj["choices"][0]["message"].json()
 
-            trace = self.Langfuse.trace(
-                name=metadata.get("generation_name", "litellm-completion"),
-                input=input,
-                output=output,
+            self._log_langfuse_v2(
+                metadata,
+                output,
+                start_time,
+                end_time,
+                kwargs,
+                optional_params,
+                input,
+                response_obj,
+            ) if self._is_langfuse_v2() else self._log_langfuse_v1(
+                metadata,
+                output,
+                start_time,
+                end_time,
+                kwargs,
+                optional_params,
+                input,
+                response_obj,
             )
 
-            trace.generation(
-                name=metadata.get("generation_name", "litellm-completion"),
-                startTime=start_time,
-                endTime=end_time,
-                model=kwargs["model"],
-                modelParameters=optional_params,
-                input=input,
-                output=output,
-                usage={
-                    "prompt_tokens": response_obj["usage"]["prompt_tokens"],
-                    "completion_tokens": response_obj["usage"]["completion_tokens"],
-                },
-                metadata=metadata,
-            )
             self.Langfuse.flush()
             print_verbose(
                 f"Langfuse Layer Logging - final response object: {response_obj}"
@@ -98,3 +96,78 @@ class LangFuseLogger:
         self, kwargs, response_obj, start_time, end_time, print_verbose
     ):
         self.log_event(kwargs, response_obj, start_time, end_time, print_verbose)
+
+    def _is_langfuse_v2(self):
+        import langfuse
+
+        return Version(langfuse.version.__version__) >= Version("2.0.0")
+
+    def _log_langfuse_v1(
+        self,
+        metadata,
+        output,
+        start_time,
+        end_time,
+        kwargs,
+        optional_params,
+        input,
+        response_obj,
+    ):
+        from langfuse.model import CreateTrace, CreateGeneration
+
+        trace = self.Langfuse.trace(
+            CreateTrace(
+                name=metadata.get("generation_name", "litellm-completion"),
+                input=input,
+                output=output,
+            )
+        )
+
+        trace.generation(
+            CreateGeneration(
+                name=metadata.get("generation_name", "litellm-completion"),
+                startTime=start_time,
+                endTime=end_time,
+                model=kwargs["model"],
+                modelParameters=optional_params,
+                input=input,
+                output=output,
+                usage={
+                    "prompt_tokens": response_obj["usage"]["prompt_tokens"],
+                    "completion_tokens": response_obj["usage"]["completion_tokens"],
+                },
+                metadata=metadata,
+            )
+        )
+
+    def _log_langfuse_v2(
+        self,
+        metadata,
+        output,
+        start_time,
+        end_time,
+        kwargs,
+        optional_params,
+        input,
+        response_obj,
+    ):
+        trace = self.Langfuse.trace(
+            name=metadata.get("generation_name", "litellm-completion"),
+            input=input,
+            output=output,
+        )
+
+        trace.generation(
+            name=metadata.get("generation_name", "litellm-completion"),
+            startTime=start_time,
+            endTime=end_time,
+            model=kwargs["model"],
+            modelParameters=optional_params,
+            input=input,
+            output=output,
+            usage={
+                "prompt_tokens": response_obj["usage"]["prompt_tokens"],
+                "completion_tokens": response_obj["usage"]["completion_tokens"],
+            },
+            metadata=metadata,
+        )
