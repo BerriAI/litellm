@@ -1514,9 +1514,18 @@ async def health_endpoint(request: Request, model: Optional[str] = fastapi.Query
     ```
     else, the health checks will be run on models when /health is called.
     """
-    global health_check_results, use_background_health_checks
+    global health_check_results, use_background_health_checks, user_model
 
     if llm_model_list is None: 
+        # if no router set, check if user set a model using litellm --model ollama/llama2
+        if user_model is not None:
+            healthy_endpoints, unhealthy_endpoints = await perform_health_check(model_list=[], cli_model=user_model)
+            return {
+                "healthy_endpoints": healthy_endpoints,
+                "unhealthy_endpoints": unhealthy_endpoints,
+                "healthy_count": len(healthy_endpoints),
+                "unhealthy_count": len(unhealthy_endpoints),
+            }
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"error": "Model list not initialized"},
