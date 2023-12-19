@@ -770,10 +770,22 @@ class Router:
         # ----------------------
         lowest_tpm = float("inf")
         deployment = None
+        
+        # load model context map
+        models_context_map = litellm.model_cost
+        
 
         # return deployment with lowest tpm usage
         for item in potential_deployments:
-            item_tpm, item_rpm = self._get_deployment_usage(deployment_name=item["litellm_params"]["model"])
+            deployment_name=item["litellm_params"]["model"]
+            custom_llm_provider = item["litellm_params"].get("custom_llm_provider", None)
+            if custom_llm_provider is not None:
+                deployment_name = f"{custom_llm_provider}/{deployment_name}"
+            else:
+                litellm_provider = models_context_map.get(deployment_name, {}).get("litellm_provider", None)
+                if litellm_provider is not None:
+                    deployment_name = f"{litellm_provider}/{deployment_name}"
+            item_tpm, item_rpm = self._get_deployment_usage(deployment_name=deployment_name)
 
             if item_tpm == 0:
                 return item
