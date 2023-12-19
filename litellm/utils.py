@@ -1572,11 +1572,14 @@ def client(original_function):
     
     def post_call_processing(original_response, model):
         try: 
-            call_type = original_function.__name__
-            if call_type == CallTypes.completion.value or call_type == CallTypes.acompletion.value:
-                model_response = original_response['choices'][0]['message']['content']
-                ### POST-CALL RULES ### 
-                rules_obj.post_call_rules(input=model_response, model=model)
+            if original_response is None: 
+                pass
+            else: 
+                call_type = original_function.__name__
+                if call_type == CallTypes.completion.value or call_type == CallTypes.acompletion.value:
+                    model_response = original_response['choices'][0]['message']['content']
+                    ### POST-CALL RULES ### 
+                    rules_obj.post_call_rules(input=model_response, model=model)
         except Exception as e: 
             raise e
 
