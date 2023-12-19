@@ -1,6 +1,17 @@
 # Model Management
 Add new models + Get model info without restarting proxy.
 
+## In Config.yaml 
+
+```yaml
+model_list:
+  - model_name: text-davinci-003
+    litellm_params: 
+      model: "text-completion-openai/text-davinci-003"
+    model_info: 
+      metadata: "here's additional metadata on the model" # returned via GET /model/info
+```
+
 ## Get Model Information
 
 Retrieve detailed information about each model listed in the `/models` endpoint, including descriptions from the `config.yaml` file, and additional model info (e.g. max tokens, cost per input token, etc.) pulled the model_info you set and the litellm model cost map. Sensitive details like API keys are excluded for security purposes.
