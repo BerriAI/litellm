@@ -122,6 +122,10 @@ class LangFuseLogger:
     ):
         from langfuse.model import CreateTrace, CreateGeneration
 
+        print(
+            "Please upgrade langfuse to v2.0.0 or higher: https://github.com/langfuse/langfuse-python/releases/tag/v2.0.1"
+        )
+
         trace = self.Langfuse.trace(
             CreateTrace(
                 name=metadata.get("generation_name", "litellm-completion"),
