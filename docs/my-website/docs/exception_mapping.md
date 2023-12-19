@@ -1,13 +1,18 @@
 # Exception Mapping
 
 LiteLLM maps exceptions across all providers to their OpenAI counterparts.
-- Rate Limit Errors
-- Invalid Request Errors
-- Authentication Errors
-- Timeout Errors `openai.APITimeoutError`
-- ServiceUnavailableError 
-- APIError 
-- APIConnectionError
+
+| Status Code | Error Type               |
+|-------------|--------------------------|
+| 400         | BadRequestError          |
+| 401         | AuthenticationError      |
+| 403         | PermissionDeniedError    |
+| 404         | NotFoundError            |
+| 422         | UnprocessableEntityError |
+| 429         | RateLimitError           |
+| >=500       | InternalServerError      |
+| N/A         | APIConnectionError       |
+
 
 Base case we return APIConnectionError
 
