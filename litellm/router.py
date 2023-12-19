@@ -84,11 +84,11 @@ class Router:
 
         self.set_verbose = set_verbose 
         self.deployment_names: List = [] # names of models under litellm_params. ex. azure/chatgpt-v-2
+        self.deployment_latency_map = {}
         if model_list:
             model_list = copy.deepcopy(model_list)
             self.set_model_list(model_list)
             self.healthy_deployments: List = self.model_list
-            self.deployment_latency_map = {}
             for m in model_list: 
                 self.deployment_latency_map[m["litellm_params"]["model"]] = 0
         
