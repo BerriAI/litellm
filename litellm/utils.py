@@ -2398,6 +2398,8 @@ def get_optional_params(  # use the openai defaults
                 optional_params["format"] = "json"
                 litellm.add_function_to_prompt = True # so that main.py adds the function call to the prompt
                 optional_params["functions_unsupported_model"] = non_default_params.pop("tools", non_default_params.pop("functions"))
+            elif custom_llm_provider == "anyscale" and model == "mistralai/Mistral-7B-Instruct-v0.1": # anyscale just supports function calling with mistral
+                pass
             elif litellm.add_function_to_prompt: # if user opts to add it to prompt instead
                 optional_params["functions_unsupported_model"] = non_default_params.pop("tools", non_default_params.pop("functions"))
             else: 
@@ -2825,7 +2827,9 @@ def get_optional_params(  # use the openai defaults
         if frequency_penalty: 
             optional_params["frequency_penalty"] = frequency_penalty
     elif custom_llm_provider == "anyscale":
-        supported_params = ["temperature", "top_p", "stream", "max_tokens"]
+        supported_params = ["temperature", "top_p", "stream", "max_tokens", "stop", "frequency_penalty", "presence_penalty"]
+        if model == "mistralai/Mistral-7B-Instruct-v0.1":
+            supported_params += ["functions", "function_call", "tools", "tool_choice"]
         _check_valid_arg(supported_params=supported_params)
         optional_params = non_default_params
         if temperature is not None:
