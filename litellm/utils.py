@@ -1613,6 +1613,7 @@ def client(original_function):
         try:
             model = args[0] if len(args) > 0 else kwargs["model"]
         except:
+            model = None
             call_type = original_function.__name__ 
             if call_type != CallTypes.image_generation.value:
                 raise ValueError("model param not passed in.")
