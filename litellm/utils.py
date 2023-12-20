@@ -2439,7 +2439,7 @@ def get_optional_params(  # use the openai defaults
         
     elif custom_llm_provider == "gemini": 
         ## check if unsupported param passed in
-        supported_params = ["temperature", "topK", "topP", "maxOutputTokens", "stopSequences"]
+        supported_params = ["temperature", "top_p", "stream", "n", "stop", "max_tokens"]
         _check_valid_arg(supported_params=supported_params)
         
         if temperature is not None:
