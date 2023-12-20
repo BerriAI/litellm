@@ -464,6 +464,42 @@ class AzureChatCompletion(BaseLLM):
                 import traceback
                 raise AzureOpenAIError(status_code=500, message=traceback.format_exc())
 
+    async def aimage_generation(
+        self, 
+        data: dict, 
+        model_response: ModelResponse, 
+        azure_client_params: dict,
+        api_key: str, 
+        input: list, 
+        client=None,
+        logging_obj=None
+    ): 
+        response = None
+        try: 
+            if client is None:
+                openai_aclient = AsyncAzureOpenAI(**azure_client_params)
+            else:
+                openai_aclient = client
+            response = await openai_aclient.images.generate(**data)
+            stringified_response = response.model_dump_json()
+            ## LOGGING
+            logging_obj.post_call(
+                    input=input,
+                    api_key=api_key,
+                    additional_args={"complete_input_dict": data},
+                    original_response=stringified_response,
+                )
+            return convert_to_model_response_object(response_object=json.loads(stringified_response), model_response_object=model_response, response_type="embedding")
+        except Exception as e:
+            ## LOGGING
+            logging_obj.post_call(
+                    input=input,
+                    api_key=api_key,
+                    additional_args={"complete_input_dict": data},
+                    original_response=str(e),
+                )
+            raise e
+        
     def image_generation(self,
                 prompt: str,
                 timeout: float, 
@@ -492,9 +528,9 @@ class AzureChatCompletion(BaseLLM):
             if not isinstance(max_retries, int): 
                 raise AzureOpenAIError(status_code=422, message="max retries must be an int")
             
-            # if aembedding == True:
-            #     response =  self.aembedding(data=data, input=input, logging_obj=logging_obj, model_response=model_response, api_base=api_base, api_key=api_key, timeout=timeout, client=client, max_retries=max_retries) # type: ignore
-            #     return response
+            if aimg_generation == True:
+                response =  self.aimage_generation(data=data, input=input, logging_obj=logging_obj, model_response=model_response, api_base=api_base, api_key=api_key, timeout=timeout, client=client, max_retries=max_retries) # type: ignore
+                return response
             
             if client is None:
                 client_session = litellm.client_session or httpx.Client(transport=CustomHTTPTransport(),)
