@@ -872,9 +872,9 @@ def model_list():
         object="list",
     )
 
-@router.post("/v1/completions", dependencies=[Depends(user_api_key_auth)])
-@router.post("/completions", dependencies=[Depends(user_api_key_auth)])
-@router.post("/engines/{model:path}/completions", dependencies=[Depends(user_api_key_auth)])
+@router.post("/v1/completions", dependencies=[Depends(user_api_key_auth)], tags=["completions"])
+@router.post("/completions", dependencies=[Depends(user_api_key_auth)], tags=["completions"])
+@router.post("/engines/{model:path}/completions", dependencies=[Depends(user_api_key_auth)], tags=["completions"])
 async def completion(request: Request, model: Optional[str] = None, user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth), background_tasks: BackgroundTasks = BackgroundTasks()):
     global user_temperature, user_request_timeout, user_max_tokens, user_api_base
     try: 
