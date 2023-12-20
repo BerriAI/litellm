@@ -110,7 +110,7 @@ import json
 import logging
 from typing import Union
 
-app = FastAPI(docs_url="/", title="LiteLLM API")
+app = FastAPI(docs_url="/", title="LiteLLM API", description="Proxy Server to call 100+ LLMs in the OpenAI format")
 router = APIRouter()
 origins = ["*"]
 
