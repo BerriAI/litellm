@@ -445,6 +445,43 @@ class OpenAIChatCompletion(BaseLLM):
                 import traceback
                 raise OpenAIError(status_code=500, message=traceback.format_exc())
 
+    async def aimage_generation(
+            self, 
+            prompt: str,
+            data: dict, 
+            model_response: ModelResponse, 
+            timeout: float,
+            api_key: Optional[str]=None,
+            api_base: Optional[str]=None,
+            client=None,
+            max_retries=None,
+            logging_obj=None
+        ): 
+        response = None
+        try: 
+            if client is None:
+                openai_aclient = AsyncOpenAI(api_key=api_key, base_url=api_base, http_client=litellm.aclient_session, timeout=timeout, max_retries=max_retries)
+            else:
+                openai_aclient = client
+            response = await openai_aclient.images.generate(**data) # type: ignore
+            stringified_response = response.model_dump_json()
+            ## LOGGING
+            logging_obj.post_call(
+                    input=prompt,
+                    api_key=api_key,
+                    additional_args={"complete_input_dict": data},
+                    original_response=stringified_response,
+                )
+            return convert_to_model_response_object(response_object=json.loads(stringified_response), model_response_object=model_response, response_type="embedding") # type: ignore
+        except Exception as e:
+            ## LOGGING
+            logging_obj.post_call(
+                input=input,
+                api_key=api_key,
+                original_response=str(e),
+            )
+            raise e
+
     def image_generation(self,
                 model: Optional[str],
                 prompt: str,
