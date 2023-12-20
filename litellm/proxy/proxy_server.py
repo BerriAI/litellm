@@ -774,6 +774,7 @@ def initialize(
     print(f"\033[1;34mLiteLLM: Test your local proxy with: \"litellm --test\" This runs an openai.ChatCompletion request to your proxy [In a new terminal tab]\033[0m\n")
     print(f"\033[1;34mLiteLLM: Curl Command Test for your local proxy\n {curl_command} \033[0m\n")
     print("\033[1;34mDocs: https://docs.litellm.ai/docs/simple_proxy\033[0m\n")
+    print(f"\033[1;34mSee all Router/Swagger docs on http://0.0.0.0:8000 \033[0m\n")
 # for streaming
 def data_generator(response):
     print_verbose("inside generator")
