@@ -1,14 +1,10 @@
 import requests, types, time
-import json
+import json, uuid
 import traceback
 from typing import Optional
 import litellm 
 import httpx, aiohttp, asyncio
-try:
-    from async_generator import async_generator, yield_  # optional dependency
-    async_generator_imported = True
-except ImportError:
-    async_generator_imported = False  # this should not throw an error, it will impact the 'import litellm' statement
+from .prompt_templates.factory import prompt_factory, custom_prompt
 
 class OllamaError(Exception):
     def __init__(self, status_code, message):
@@ -106,9 +102,8 @@ class OllamaConfig():
                 and not isinstance(v, (types.FunctionType, types.BuiltinFunctionType, classmethod, staticmethod)) 
                 and v is not None}
 
-
 # ollama implementation
-def get_ollama_response_stream(
+def get_ollama_response(
         api_base="http://localhost:11434",
         model="llama2",
         prompt="Why is the sky blue?", 
@@ -129,6 +124,7 @@ def get_ollama_response_stream(
         if k not in optional_params: # completion(top_k=3) > cohere_config(top_k=3) <- allows for dynamic variables to be passed in
             optional_params[k] = v
 
+    optional_params["stream"] = optional_params.get("stream", False)
     data = {
         "model": model,
         "prompt": prompt,
@@ -146,9 +142,41 @@ def get_ollama_response_stream(
         else:
             response = ollama_acompletion(url=url, data=data, model_response=model_response, encoding=encoding, logging_obj=logging_obj)
         return response
-    
-    else:
+    elif optional_params.get("stream", False):
         return ollama_completion_stream(url=url, data=data, logging_obj=logging_obj)
+    response = requests.post(
+                    url=f"{url}",
+                    json=data,
+                )
+    if response.status_code != 200:
+        raise OllamaError(status_code=response.status_code, message=response.text) 
+    
+    ## LOGGING
+    logging_obj.post_call(
+        input=prompt,
+        api_key="",
+        original_response=response.text,
+        additional_args={
+            "headers": None,
+            "api_base": api_base,
+        },
+    )
+
+    response_json = response.json()
+
+    ## RESPONSE OBJECT
+    model_response["choices"][0]["finish_reason"] = "stop"
+    if optional_params.get("format", "") == "json":
+        message = litellm.Message(content=None, tool_calls=[{"id": f"call_{str(uuid.uuid4())}", "function": {"arguments": response_json["response"], "name": ""}, "type": "function"}])
+        model_response["choices"][0]["message"] = message
+    else:
+        model_response["choices"][0]["message"]["content"] = response_json["response"]
+    model_response["created"] = int(time.time())
+    model_response["model"] = "ollama/" + model
+    prompt_tokens = response_json["prompt_eval_count"] # type: ignore
+    completion_tokens = response_json["eval_count"]
+    model_response["usage"] = litellm.Usage(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens, total_tokens=prompt_tokens + completion_tokens)
+    return model_response
 
 def ollama_completion_stream(url, data, logging_obj):
     with httpx.stream(
@@ -157,13 +185,15 @@ def ollama_completion_stream(url, data, logging_obj):
         method="POST",
         timeout=litellm.request_timeout
     ) as response: 
-        if response.status_code != 200:
-            raise OllamaError(status_code=response.status_code, message=response.text) 
-        
-        streamwrapper = litellm.CustomStreamWrapper(completion_stream=response.iter_lines(), model=data['model'], custom_llm_provider="ollama",logging_obj=logging_obj)
-        for transformed_chunk in streamwrapper:
-            yield transformed_chunk
-
+        try: 
+            if response.status_code != 200:
+                raise OllamaError(status_code=response.status_code, message=response.text) 
+            
+            streamwrapper = litellm.CustomStreamWrapper(completion_stream=response.iter_lines(), model=data['model'], custom_llm_provider="ollama",logging_obj=logging_obj)
+            for transformed_chunk in streamwrapper:
+                yield transformed_chunk
+        except Exception as e: 
+            raise e
 
 async def ollama_async_streaming(url, data, model_response, encoding, logging_obj):
     try:
@@ -194,38 +224,29 @@ async def ollama_acompletion(url, data, model_response, encoding, logging_obj):
                 text = await resp.text()
                 raise OllamaError(status_code=resp.status, message=text)
             
-            completion_string = ""
-            async for line in resp.content:
-                if line:
-                    try:
-                        json_chunk = line.decode("utf-8")
-                        chunks = json_chunk.split("\n")
-                        for chunk in chunks:
-                            if chunk.strip() != "":
-                                j = json.loads(chunk)
-                                if "error" in j:
-                                    completion_obj = {
-                                        "role": "assistant",
-                                        "content": "",
-                                        "error": j
-                                    }
-                                    raise Exception(f"OllamError - {chunk}")
-                                if "response" in j:
-                                    completion_obj = {
-                                        "role": "assistant",
-                                        "content": j["response"],
-                                    }
-                                    completion_string = completion_string + completion_obj["content"]
-                    except Exception as e:
-                        traceback.print_exc()
-            
+            ## LOGGING
+            logging_obj.post_call(
+                input=data['prompt'],
+                api_key="",
+                original_response=resp.text,
+                additional_args={
+                    "headers": None,
+                    "api_base": url,
+                },
+            )
+
+            response_json = await resp.json()
             ## RESPONSE OBJECT
             model_response["choices"][0]["finish_reason"] = "stop"
-            model_response["choices"][0]["message"]["content"] = completion_string
+            if data.get("format", "") == "json":
+                message = litellm.Message(content=None, tool_calls=[{"id": f"call_{str(uuid.uuid4())}", "function": {"arguments": response_json["response"], "name": ""}, "type": "function"}])
+                model_response["choices"][0]["message"] = message
+            else:
+                model_response["choices"][0]["message"]["content"] = response_json["response"]
             model_response["created"] = int(time.time())
             model_response["model"] = "ollama/" + data['model']
-            prompt_tokens = len(encoding.encode(data['prompt'])) # type: ignore
-            completion_tokens = len(encoding.encode(completion_string))
+            prompt_tokens = response_json["prompt_eval_count"] # type: ignore
+            completion_tokens = response_json["eval_count"]
             model_response["usage"] = litellm.Usage(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens, total_tokens=prompt_tokens + completion_tokens)
             return model_response
     except Exception as e:
