@@ -1177,6 +1177,7 @@ class Router:
             min_deployment = None
             for k, v in deployments.items(): 
                 if v < min_traffic:
+                    min_traffic = v
                     min_deployment = k
             ############## No Available Deployments passed, we do a random pick #################
             if min_deployment is None: 
