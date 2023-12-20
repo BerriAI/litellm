@@ -6,6 +6,7 @@ from typing import Callable, Optional
 from litellm import OpenAIConfig
 import litellm, json
 import httpx
+from .custom_httpx.azure_dall_e_2 import CustomHTTPTransport
 from openai import AzureOpenAI, AsyncAzureOpenAI
 
 class AzureOpenAIError(Exception):
@@ -464,11 +465,12 @@ class AzureChatCompletion(BaseLLM):
                 raise AzureOpenAIError(status_code=500, message=traceback.format_exc())
 
     def image_generation(self,
-                prompt: list,
+                prompt: str,
                 timeout: float, 
                 model: Optional[str]=None,
                 api_key: Optional[str] = None,
                 api_base: Optional[str] = None,
+                api_version: Optional[str] = None,
                 model_response: Optional[litellm.utils.ImageResponse] = None,
                 logging_obj=None,
                 optional_params=None,
@@ -477,9 +479,12 @@ class AzureChatCompletion(BaseLLM):
                 ):
         exception_mapping_worked = False
         try: 
-            model = model
+            if model and len(model) > 0:
+                model = model
+            else:
+                model = None
             data = {
-                # "model": model,
+                "model": model,
                 "prompt": prompt,
                 **optional_params
             }
@@ -492,7 +497,8 @@ class AzureChatCompletion(BaseLLM):
             #     return response
             
             if client is None:
-                azure_client = AzureOpenAI(api_key=api_key, base_url=api_base, http_client=litellm.client_session, timeout=timeout, max_retries=max_retries)  # type: ignore 
+                client_session = litellm.client_session or httpx.Client(transport=CustomHTTPTransport(),)
+                azure_client = AzureOpenAI(api_key=api_key, azure_endpoint=api_base, http_client=client_session, timeout=timeout, max_retries=max_retries, api_version=api_version)  # type: ignore 
             else:
                 azure_client = client
             
