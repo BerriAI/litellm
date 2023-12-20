@@ -1329,23 +1329,11 @@ def completion(
                     optional_params["images"] = images
 
             ## LOGGING
-            generator = ollama.get_ollama_response_stream(api_base, model, prompt, optional_params, logging_obj=logging, acompletion=acompletion, model_response=model_response, encoding=encoding)
+            generator = ollama.get_ollama_response(api_base, model, prompt, optional_params, logging_obj=logging, acompletion=acompletion, model_response=model_response, encoding=encoding)
             if acompletion is True or optional_params.get("stream", False) == True:
                 return generator
-            else:
-                response_string = ""
-                for chunk in generator:
-                    response_string+=chunk['content']
-            
-            ## RESPONSE OBJECT
-            model_response["choices"][0]["finish_reason"] = "stop"
-            model_response["choices"][0]["message"]["content"] = response_string
-            model_response["created"] = int(time.time())
-            model_response["model"] = "ollama/" + model
-            prompt_tokens = len(encoding.encode(prompt)) # type: ignore
-            completion_tokens = len(encoding.encode(response_string))
-            model_response["usage"] = Usage(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens, total_tokens=prompt_tokens + completion_tokens)
-            response = model_response
+    
+            response = generator
         elif (
             custom_llm_provider == "baseten"
             or litellm.api_base == "https://app.baseten.co"
