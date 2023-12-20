@@ -195,6 +195,7 @@ def completion(
                 optional_params[k] = v
 
         ## Process safety settings into format expected by vertex AI    
+        safety_settings = None
         if "safety_settings" in optional_params:
             safety_settings = optional_params.pop("safety_settings")
             if not isinstance(safety_settings, list):
