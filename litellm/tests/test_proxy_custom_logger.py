@@ -99,8 +99,6 @@ def test_embedding(client):
 def test_chat_completion(client):
     try:
          # Your test data
-
-        print("initialized proxy")
         litellm.set_verbose=False
         from litellm.proxy.utils import get_instance_fn
         my_custom_logger = get_instance_fn(

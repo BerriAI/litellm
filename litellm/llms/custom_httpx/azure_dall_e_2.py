@@ -1,6 +1,4 @@
-import time
-import json
-import httpx
+import time, json, httpx, asyncio
 
 class CustomHTTPTransport(httpx.HTTPTransport):
     """
