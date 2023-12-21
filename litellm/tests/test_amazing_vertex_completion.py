@@ -20,7 +20,7 @@ import tempfile
 litellm.num_retries = 3
 litellm.cache = None
 user_message = "Write a short poem about the sky"
-messages = [{"content": user_message, "role": "user"}]
+messages = [{"content": user_message, "role": "user"}] 
 
 
 def load_vertex_ai_credentials():
