@@ -1127,6 +1127,72 @@ async def embeddings(request: Request, user_api_key_dict: UserAPIKeyAuth = Depen
                 detail=error_msg
             )
 
+
+@router.post("/v1/images/generations", dependencies=[Depends(user_api_key_auth)], response_class=ORJSONResponse, tags=["image generation"])
+@router.post("/images/generations", dependencies=[Depends(user_api_key_auth)], response_class=ORJSONResponse, tags=["image generation"])
+async def image_generation(request: Request, user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth), background_tasks: BackgroundTasks = BackgroundTasks()): 
+    global proxy_logging_obj
+    try: 
+        # Use orjson to parse JSON data, orjson speeds up requests significantly
+        body = await request.body()
+        data = orjson.loads(body)
+
+         # Include original request and headers in the data
+        data["proxy_server_request"] = {
+            "url": str(request.url),
+            "method": request.method,
+            "headers": dict(request.headers),
+            "body": copy.copy(data)  # use copy instead of deepcopy
+        }
+
+        if data.get("user", None) is None and user_api_key_dict.user_id is not None:
+            data["user"] = user_api_key_dict.user_id
+
+        data["model"] = (
+            general_settings.get("image_generation_model", None) # server default
+            or user_model # model name passed via cli args
+            or data["model"] # default passed in http request
+        )
+        if user_model:
+            data["model"] = user_model
+        if "metadata" in data:
+            data["metadata"]["user_api_key"] = user_api_key_dict.api_key
+            data["metadata"]["headers"] = dict(request.headers)
+        else:
+            data["metadata"] = {"user_api_key": user_api_key_dict.api_key}
+            data["metadata"]["headers"] = dict(request.headers)
+        router_model_names = [m["model_name"] for m in llm_model_list] if llm_model_list is not None else []
+        
+        ### CALL HOOKS ### - modify incoming data / reject request before calling the model
+        data = await proxy_logging_obj.pre_call_hook(user_api_key_dict=user_api_key_dict, data=data, call_type="embeddings")
+        ## ROUTE TO CORRECT ENDPOINT ##
+        if llm_router is not None and data["model"] in router_model_names: # model in router model list 
+            response = await llm_router.aimage_generation(**data)
+        elif llm_router is not None and data["model"] in llm_router.deployment_names: # model in router deployments, calling a specific deployment on the router
+            response = await llm_router.aimage_generation(**data, specific_deployment = True)
+        elif llm_router is not None and llm_router.model_group_alias is not None and data["model"] in llm_router.model_group_alias: # model set in model_group_alias
+            response = await llm_router.aimage_generation(**data) # ensure this goes the llm_router, router will do the correct alias mapping
+        else:
+            response = await litellm.aimage_generation(**data)
+        background_tasks.add_task(log_input_output, request, response) # background task for logging to OTEL 
+
+        return response
+    except Exception as e:
+        await proxy_logging_obj.post_call_failure_hook(user_api_key_dict=user_api_key_dict, original_exception=e) 
+        traceback.print_exc()
+        if isinstance(e, HTTPException):
+            raise e
+        else:
+            error_traceback = traceback.format_exc()
+            error_msg = f"{str(e)}\n\n{error_traceback}"
+            try:
+                status = e.status_code # type: ignore
+            except:
+                status = 500
+            raise HTTPException(
+                status_code=status,
+                detail=error_msg
+            )
 #### KEY MANAGEMENT #### 
 
 @router.post("/key/generate", tags=["key management"], dependencies=[Depends(user_api_key_auth)], response_model=GenerateKeyResponse)
