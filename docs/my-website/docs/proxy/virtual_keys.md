@@ -40,7 +40,8 @@ litellm --config /path/to/config.yaml
 ```shell 
 curl 'http://0.0.0.0:8000/key/generate' \
 --header 'Authorization: Bearer sk-1234' \
---data '{"models": ["gpt-3.5-turbo", "gpt-4", "claude-2"], "duration": "20m"}'
+--header 'Content-Type: application/json' \
+--data-raw '{"models": ["gpt-3.5-turbo", "gpt-4", "claude-2"], "duration": "20m"}'
 ```
 
 - `models`: *list or null (optional)* - Specify the models a token has access too. If null, then token has access to all models on server. 
