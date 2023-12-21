@@ -1,9 +1,10 @@
 from typing import Optional, List, Any, Literal
-import os, subprocess, hashlib, importlib, asyncio, copy
+import os, subprocess, hashlib, importlib, asyncio, copy, json
 import litellm, backoff
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.caching import DualCache
 from litellm.proxy.hooks.parallel_request_limiter import MaxParallelRequestsHandler
+from litellm.proxy.hooks.max_budget_limiter import MaxBudgetLimiter
 from litellm.integrations.custom_logger import CustomLogger
 def print_verbose(print_statement):
     if litellm.set_verbose:
@@ -23,11 +24,13 @@ class ProxyLogging:
         self.call_details: dict = {}
         self.call_details["user_api_key_cache"] = user_api_key_cache
         self.max_parallel_request_limiter = MaxParallelRequestsHandler()  
+        self.max_budget_limiter = MaxBudgetLimiter()  
         pass
 
     def _init_litellm_callbacks(self):
         print_verbose(f"INITIALIZING LITELLM CALLBACKS!")
         litellm.callbacks.append(self.max_parallel_request_limiter)
+        litellm.callbacks.append(self.max_budget_limiter)
         for callback in litellm.callbacks: 
             if callback not in litellm.input_callback:
                 litellm.input_callback.append(callback)
@@ -147,6 +150,14 @@ class PrismaClient:
         
         return hashed_token
 
+    def jsonify_object(self, data: dict) -> dict: 
+        db_data = copy.deepcopy(data)
+
+        for k, v in db_data.items():
+            if isinstance(v, dict):
+                db_data[k] = json.dumps(v)
+        return db_data
+
     @backoff.on_exception(
         backoff.expo,
         Exception,        # base exception to catch for the backoff
@@ -193,9 +204,8 @@ class PrismaClient:
         try: 
             token = data["token"]
             hashed_token = self.hash_token(token=token)
-            db_data = copy.deepcopy(data)
+            db_data = self.jsonify_object(data=data)
             db_data["token"] = hashed_token
-
             new_verification_token = await self.db.litellm_verificationtoken.upsert( # type: ignore
                 where={
                     'token': hashed_token,
@@ -228,7 +238,7 @@ class PrismaClient:
             if token.startswith("sk-"): 
                 token = self.hash_token(token=token)
 
-            db_data = copy.deepcopy(data)
+            db_data = self.jsonify_object(data=data)
             db_data["token"] = token 
             response = await self.db.litellm_verificationtoken.update(
                 where={

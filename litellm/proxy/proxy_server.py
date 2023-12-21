@@ -110,7 +110,7 @@ import json
 import logging
 from typing import Union
 
-app = FastAPI(docs_url="/", title="LiteLLM API")
+app = FastAPI(docs_url="/", title="LiteLLM API", description="Proxy Server to call 100+ LLMs in the OpenAI format")
 router = APIRouter()
 origins = ["*"]
 
@@ -616,7 +616,16 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
     router = litellm.Router(**router_params) # type:ignore
     return router, model_list, general_settings
 
-async def generate_key_helper_fn(duration: Optional[str], models: list, aliases: dict, config: dict, spend: float, token: Optional[str]=None, user_id: Optional[str]=None, max_parallel_requests: Optional[int]=None):
+async def generate_key_helper_fn(duration: Optional[str], 
+                                 models: list, 
+                                 aliases: dict, 
+                                 config: dict, 
+                                 spend: float, 
+                                 max_budget: Optional[float]=None,
+                                 token: Optional[str]=None, 
+                                 user_id: Optional[str]=None, 
+                                 max_parallel_requests: Optional[int]=None, 
+                                 metadata: Optional[dict] = {},):
     global prisma_client
 
     if prisma_client is None: 
@@ -653,6 +662,7 @@ async def generate_key_helper_fn(duration: Optional[str], models: list, aliases:
     
     aliases_json = json.dumps(aliases)
     config_json = json.dumps(config)
+    metadata_json = json.dumps(metadata)
     user_id = user_id or str(uuid.uuid4())
     try:
         # Create a new verification token (you may want to enhance this logic based on your needs)
@@ -664,7 +674,9 @@ async def generate_key_helper_fn(duration: Optional[str], models: list, aliases:
             "config": config_json,
             "spend": spend, 
             "user_id": user_id, 
-            "max_parallel_requests": max_parallel_requests
+            "max_parallel_requests": max_parallel_requests,
+            "metadata": metadata_json,
+            "max_budget": max_budget
         }
         new_verification_token = await prisma_client.insert_data(data=verification_token_data)
     except Exception as e:
@@ -774,6 +786,7 @@ def initialize(
     print(f"\033[1;34mLiteLLM: Test your local proxy with: \"litellm --test\" This runs an openai.ChatCompletion request to your proxy [In a new terminal tab]\033[0m\n")
     print(f"\033[1;34mLiteLLM: Curl Command Test for your local proxy\n {curl_command} \033[0m\n")
     print("\033[1;34mDocs: https://docs.litellm.ai/docs/simple_proxy\033[0m\n")
+    print(f"\033[1;34mSee all Router/Swagger docs on http://0.0.0.0:8000 \033[0m\n")
 # for streaming
 def data_generator(response):
     print_verbose("inside generator")
@@ -871,9 +884,9 @@ def model_list():
         object="list",
     )
 
-@router.post("/v1/completions", dependencies=[Depends(user_api_key_auth)])
-@router.post("/completions", dependencies=[Depends(user_api_key_auth)])
-@router.post("/engines/{model:path}/completions", dependencies=[Depends(user_api_key_auth)])
+@router.post("/v1/completions", dependencies=[Depends(user_api_key_auth)], tags=["completions"])
+@router.post("/completions", dependencies=[Depends(user_api_key_auth)], tags=["completions"])
+@router.post("/engines/{model:path}/completions", dependencies=[Depends(user_api_key_auth)], tags=["completions"])
 async def completion(request: Request, model: Optional[str] = None, user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth), background_tasks: BackgroundTasks = BackgroundTasks()):
     global user_temperature, user_request_timeout, user_max_tokens, user_api_base
     try: 
@@ -1044,8 +1057,8 @@ async def chat_completion(request: Request, model: Optional[str] = None, user_ap
                 detail=error_msg
             )
 
-@router.post("/v1/embeddings", dependencies=[Depends(user_api_key_auth)], response_class=ORJSONResponse)
-@router.post("/embeddings", dependencies=[Depends(user_api_key_auth)], response_class=ORJSONResponse)
+@router.post("/v1/embeddings", dependencies=[Depends(user_api_key_auth)], response_class=ORJSONResponse, tags=["embeddings"])
+@router.post("/embeddings", dependencies=[Depends(user_api_key_auth)], response_class=ORJSONResponse, tags=["embeddings"])
 async def embeddings(request: Request, user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth), background_tasks: BackgroundTasks = BackgroundTasks()): 
     global proxy_logging_obj
     try: 
@@ -1124,6 +1137,72 @@ async def embeddings(request: Request, user_api_key_dict: UserAPIKeyAuth = Depen
                 detail=error_msg
             )
 
+
+@router.post("/v1/images/generations", dependencies=[Depends(user_api_key_auth)], response_class=ORJSONResponse, tags=["image generation"])
+@router.post("/images/generations", dependencies=[Depends(user_api_key_auth)], response_class=ORJSONResponse, tags=["image generation"])
+async def image_generation(request: Request, user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth), background_tasks: BackgroundTasks = BackgroundTasks()): 
+    global proxy_logging_obj
+    try: 
+        # Use orjson to parse JSON data, orjson speeds up requests significantly
+        body = await request.body()
+        data = orjson.loads(body)
+
+         # Include original request and headers in the data
+        data["proxy_server_request"] = {
+            "url": str(request.url),
+            "method": request.method,
+            "headers": dict(request.headers),
+            "body": copy.copy(data)  # use copy instead of deepcopy
+        }
+
+        if data.get("user", None) is None and user_api_key_dict.user_id is not None:
+            data["user"] = user_api_key_dict.user_id
+
+        data["model"] = (
+            general_settings.get("image_generation_model", None) # server default
+            or user_model # model name passed via cli args
+            or data["model"] # default passed in http request
+        )
+        if user_model:
+            data["model"] = user_model
+        if "metadata" in data:
+            data["metadata"]["user_api_key"] = user_api_key_dict.api_key
+            data["metadata"]["headers"] = dict(request.headers)
+        else:
+            data["metadata"] = {"user_api_key": user_api_key_dict.api_key}
+            data["metadata"]["headers"] = dict(request.headers)
+        router_model_names = [m["model_name"] for m in llm_model_list] if llm_model_list is not None else []
+        
+        ### CALL HOOKS ### - modify incoming data / reject request before calling the model
+        data = await proxy_logging_obj.pre_call_hook(user_api_key_dict=user_api_key_dict, data=data, call_type="embeddings")
+        ## ROUTE TO CORRECT ENDPOINT ##
+        if llm_router is not None and data["model"] in router_model_names: # model in router model list 
+            response = await llm_router.aimage_generation(**data)
+        elif llm_router is not None and data["model"] in llm_router.deployment_names: # model in router deployments, calling a specific deployment on the router
+            response = await llm_router.aimage_generation(**data, specific_deployment = True)
+        elif llm_router is not None and llm_router.model_group_alias is not None and data["model"] in llm_router.model_group_alias: # model set in model_group_alias
+            response = await llm_router.aimage_generation(**data) # ensure this goes the llm_router, router will do the correct alias mapping
+        else:
+            response = await litellm.aimage_generation(**data)
+        background_tasks.add_task(log_input_output, request, response) # background task for logging to OTEL 
+
+        return response
+    except Exception as e:
+        await proxy_logging_obj.post_call_failure_hook(user_api_key_dict=user_api_key_dict, original_exception=e) 
+        traceback.print_exc()
+        if isinstance(e, HTTPException):
+            raise e
+        else:
+            error_traceback = traceback.format_exc()
+            error_msg = f"{str(e)}\n\n{error_traceback}"
+            try:
+                status = e.status_code # type: ignore
+            except:
+                status = 500
+            raise HTTPException(
+                status_code=status,
+                detail=error_msg
+            )
 #### KEY MANAGEMENT #### 
 
 @router.post("/key/generate", tags=["key management"], dependencies=[Depends(user_api_key_auth)], response_model=GenerateKeyResponse)
@@ -1140,6 +1219,7 @@ async def generate_key_fn(request: Request, data: GenerateKeyRequest, Authorizat
     - config: Optional[dict] - any key-specific configs, overrides config in config.yaml 
     - spend: Optional[int] - Amount spent by key. Default is 0. Will be updated by proxy whenever key is used. https://docs.litellm.ai/docs/proxy/virtual_keys#managing-auth---tracking-spend
     - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
+    - metadata: Optional[dict] - Metadata for key, store information for key. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" } 
 
     Returns:
     - key: (str) The generated api key 
@@ -1165,7 +1245,6 @@ async def update_key_fn(request: Request, data: UpdateKeyRequest):
             raise Exception("Not connected to DB!")
         
         non_default_values = {k: v for k, v in data_json.items() if v is not None}
-        print(f"non_default_values: {non_default_values}")
         response = await prisma_client.update_data(token=key, data={**non_default_values, "token": key})
         return {"key": key, **non_default_values}
         # update based on remaining passed in values 
@@ -1514,9 +1593,18 @@ async def health_endpoint(request: Request, model: Optional[str] = fastapi.Query
     ```
     else, the health checks will be run on models when /health is called.
     """
-    global health_check_results, use_background_health_checks
+    global health_check_results, use_background_health_checks, user_model
 
     if llm_model_list is None: 
+        # if no router set, check if user set a model using litellm --model ollama/llama2
+        if user_model is not None:
+            healthy_endpoints, unhealthy_endpoints = await perform_health_check(model_list=[], cli_model=user_model)
+            return {
+                "healthy_endpoints": healthy_endpoints,
+                "unhealthy_endpoints": unhealthy_endpoints,
+                "healthy_count": len(healthy_endpoints),
+                "unhealthy_count": len(unhealthy_endpoints),
+            }
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"error": "Model list not initialized"},

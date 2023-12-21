@@ -39,13 +39,16 @@ litellm --config /path/to/config.yaml
 
 ```shell 
 curl 'http://0.0.0.0:8000/key/generate' \
---h 'Authorization: Bearer sk-1234' \
---d '{"models": ["gpt-3.5-turbo", "gpt-4", "claude-2"], "duration": "20m"}'
+--header 'Authorization: Bearer sk-1234' \
+--header 'Content-Type: application/json' \
+--data-raw '{"models": ["gpt-3.5-turbo", "gpt-4", "claude-2"], "duration": "20m","metadata": {"user": "ishaan@berri.ai", "team": "core-infra"}}'
 ```
 
 - `models`: *list or null (optional)* - Specify the models a token has access too. If null, then token has access to all models on server. 
 
 - `duration`: *str or null (optional)* Specify the length of time the token is valid for. If null, default is set to 1 hour. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
+
+- `metadata`: *dict or null (optional)* Pass metadata for the created token. If null defaults to {}
 
 Expected response: 
 

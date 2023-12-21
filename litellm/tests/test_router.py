@@ -423,6 +423,94 @@ def test_function_calling_on_router():
 
 # test_function_calling_on_router()
 
+### IMAGE GENERATION 
+@pytest.mark.asyncio
+async def test_aimg_gen_on_router():
+	litellm.set_verbose = True
+	try:
+		model_list = [
+			{
+				"model_name": "dall-e-3",
+				"litellm_params": {
+					"model": "dall-e-3",
+				},
+			},
+			{
+				"model_name": "dall-e-3",
+				"litellm_params": {
+					"model": "azure/dall-e-3-test",
+					"api_version": "2023-12-01-preview",
+					"api_base": os.getenv("AZURE_SWEDEN_API_BASE"),
+					"api_key": os.getenv("AZURE_SWEDEN_API_KEY")
+				}
+			}, 
+			{
+				"model_name": "dall-e-2",
+				"litellm_params": {
+					"model": "azure/",
+					"api_version": "2023-06-01-preview",
+					"api_base": os.getenv("AZURE_API_BASE"),
+					"api_key": os.getenv("AZURE_API_KEY")
+				}
+			}
+		]
+		router = Router(model_list=model_list)
+		response = await router.aimage_generation(
+			model="dall-e-3",
+			prompt="A cute baby sea otter"
+		)
+		print(response)
+		assert len(response.data) > 0
+
+		response = await router.aimage_generation(
+			model="dall-e-2",
+			prompt="A cute baby sea otter"
+		)
+		print(response)
+		assert len(response.data) > 0
+		
+		router.reset()
+	except Exception as e:
+		traceback.print_exc()
+		pytest.fail(f"Error occurred: {e}")	
+
+# asyncio.run(test_aimg_gen_on_router())
+
+def test_img_gen_on_router():
+	litellm.set_verbose = True
+	try:
+		model_list = [
+			{
+				"model_name": "dall-e-3",
+				"litellm_params": {
+					"model": "dall-e-3",
+				},
+			},
+			{
+				"model_name": "dall-e-3",
+				"litellm_params": {
+					"model": "azure/dall-e-3-test",
+					"api_version": "2023-12-01-preview",
+					"api_base": os.getenv("AZURE_SWEDEN_API_BASE"),
+					"api_key": os.getenv("AZURE_SWEDEN_API_KEY")
+				}
+			}
+		]
+		router = Router(model_list=model_list)
+		response = router.image_generation(
+			model="dall-e-3",
+			prompt="A cute baby sea otter"
+		)
+		print(response)
+		assert len(response.data) > 0
+		router.reset()
+	except Exception as e:
+		traceback.print_exc()
+		pytest.fail(f"Error occurred: {e}")	
+
+# test_img_gen_on_router()
+###
+
 def test_aembedding_on_router():
 	litellm.set_verbose = True
 	try:
@@ -556,7 +644,7 @@ async def test_mistral_on_router():
 				]
 			)
 	print(response)
-asyncio.run(test_mistral_on_router())
+# asyncio.run(test_mistral_on_router())
 
 def test_openai_completion_on_router():
 	# [PROD Use Case] - Makes an acompletion call + async acompletion call, and sync acompletion call, sync completion + stream

@@ -16,23 +16,61 @@
 # user_message = "respond in 20 words. who are you?"
 # messages = [{ "content": user_message,"role": "user"}]
 
+# def test_ollama_streaming():
+#     try: 
+#         litellm.set_verbose = False
+#         messages = [
+#             {"role": "user", "content": "What is the weather like in Boston?"}
+#         ]
+#         functions = [
+#             {
+#             "name": "get_current_weather",
+#             "description": "Get the current weather in a given location",
+#             "parameters": {
+#                 "type": "object",
+#                 "properties": {
+#                 "location": {
+#                     "type": "string",
+#                     "description": "The city and state, e.g. San Francisco, CA"
+#                 },
+#                 "unit": {
+#                     "type": "string",
+#                     "enum": ["celsius", "fahrenheit"]
+#                 }
+#                 },
+#                 "required": ["location"]
+#             }
+#             }
+#         ]
+#         response = litellm.completion(model="ollama/mistral", 
+#                                              messages=messages,
+#                                              functions=functions,
+#                                              stream=True)
+#         for chunk in response: 
+#             print(f"CHUNK: {chunk}")
+#     except Exception as e: 
+#         print(e)
+
+# test_ollama_streaming()
+
 # async def test_async_ollama_streaming():
 #     try: 
-#         litellm.set_verbose = True
+#         litellm.set_verbose = False
 #         response = await litellm.acompletion(model="ollama/mistral-openorca", 
 #                                              messages=[{"role": "user", "content": "Hey, how's it going?"}],
 #                                              stream=True)
 #         async for chunk in response: 
-#             print(chunk)
+#             print(f"CHUNK: {chunk}")
 #     except Exception as e: 
 #         print(e)
 
-# asyncio.run(test_async_ollama_streaming())
+# # asyncio.run(test_async_ollama_streaming())
 
 # def test_completion_ollama():
 #     try:
+#         litellm.set_verbose = True
 #         response = completion(
-#             model="ollama/llama2", 
+#             model="ollama/mistral", 
 #             messages=[{"role": "user", "content": "Hey, how's it going?"}], 
 #             max_tokens=200,
 #             request_timeout = 10,
@@ -44,7 +82,87 @@
 #     except Exception as e:
 #         pytest.fail(f"Error occurred: {e}")
 
-# test_completion_ollama()
+# # test_completion_ollama()
+
+# def test_completion_ollama_function_calling():
+#     try:
+#         litellm.set_verbose = True
+#         messages = [
+#             {"role": "user", "content": "What is the weather like in Boston?"}
+#         ]
+#         functions = [
+#             {
+#             "name": "get_current_weather",
+#             "description": "Get the current weather in a given location",
+#             "parameters": {
+#                 "type": "object",
+#                 "properties": {
+#                 "location": {
+#                     "type": "string",
+#                     "description": "The city and state, e.g. San Francisco, CA"
+#                 },
+#                 "unit": {
+#                     "type": "string",
+#                     "enum": ["celsius", "fahrenheit"]
+#                 }
+#                 },
+#                 "required": ["location"]
+#             }
+#             }
+#         ]
+#         response = completion(
+#             model="ollama/mistral", 
+#             messages=messages,
+#             functions=functions, 
+#             max_tokens=200,
+#             request_timeout = 10,
+#         )
+#         for chunk in response: 
+#             print(chunk)
+#         print(response)
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
+# # test_completion_ollama_function_calling()
+
+# async def async_test_completion_ollama_function_calling():
+#     try:
+#         litellm.set_verbose = True
+#         messages = [
+#             {"role": "user", "content": "What is the weather like in Boston?"}
+#         ]
+#         functions = [
+#             {
+#             "name": "get_current_weather",
+#             "description": "Get the current weather in a given location",
+#             "parameters": {
+#                 "type": "object",
+#                 "properties": {
+#                 "location": {
+#                     "type": "string",
+#                     "description": "The city and state, e.g. San Francisco, CA"
+#                 },
+#                 "unit": {
+#                     "type": "string",
+#                     "enum": ["celsius", "fahrenheit"]
+#                 }
+#                 },
+#                 "required": ["location"]
+#             }
+#             }
+#         ]
+#         response = await litellm.acompletion(
+#             model="ollama/mistral", 
+#             messages=messages,
+#             functions=functions, 
+#             max_tokens=200,
+#             request_timeout = 10,
+#         )
+#         print(response)
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
+
+# # asyncio.run(async_test_completion_ollama_function_calling())
+
 
 # def test_completion_ollama_with_api_base():
 #     try:
@@ -197,7 +315,7 @@
 #     )
 #     print("Response from ollama/llava")
 #     print(response)
-# test_ollama_llava()
+# # test_ollama_llava() 
 
 
 # # PROCESSED CHUNK PRE CHUNK CREATOR

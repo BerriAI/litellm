@@ -348,7 +348,7 @@ def anthropic_pt(messages: list): # format - https://docs.anthropic.com/claude/r
 
 # Function call template 
 def function_call_prompt(messages: list, functions: list):
-    function_prompt = "The following functions are available to you:"
+    function_prompt = "Produce JSON OUTPUT ONLY! The following functions are available to you:"
     for function in functions: 
         function_prompt += f"""\n{function}\n"""
     
@@ -425,6 +425,6 @@ def prompt_factory(model: str, messages: list, custom_llm_provider: Optional[str
             return alpaca_pt(messages=messages) 
         else: 
             return hf_chat_template(original_model_name, messages)
-    except:
+    except Exception as e:
         return default_pt(messages=messages) # default that covers Bloom, T-5, any non-chat tuned model (e.g. base Llama2)
     

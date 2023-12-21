@@ -41,6 +41,18 @@ def send_slack_alert(
     # get it from https://api.slack.com/messaging/webhooks
     slack_webhook_url = os.environ['SLACK_WEBHOOK_URL']   # "https://hooks.slack.com/services/<>/<>/<>"
 
+    # Remove api_key from kwargs under litellm_params
+    if kwargs.get('litellm_params'):
+        kwargs['litellm_params'].pop('api_key', None)
+        if kwargs['litellm_params'].get('metadata'):
+            kwargs['litellm_params']['metadata'].pop('deployment', None)
+    # Remove deployment under metadata
+    if kwargs.get('metadata'):
+        kwargs['metadata'].pop('deployment', None)
+    # Prevent api_key from being logged
+    if kwargs.get('api_key'):
+        kwargs.pop('api_key', None)
+
     # Define the text payload, send data available in litellm custom_callbacks
     text_payload = f"""LiteLLM Logging: kwargs: {str(kwargs)}\n\n, response: {str(completion_response)}\n\n, start time{str(start_time)} end time: {str(end_time)}
     """

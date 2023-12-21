@@ -1329,23 +1329,11 @@ def completion(
                     optional_params["images"] = images
 
             ## LOGGING
-            generator = ollama.get_ollama_response_stream(api_base, model, prompt, optional_params, logging_obj=logging, acompletion=acompletion, model_response=model_response, encoding=encoding)
+            generator = ollama.get_ollama_response(api_base, model, prompt, optional_params, logging_obj=logging, acompletion=acompletion, model_response=model_response, encoding=encoding)
             if acompletion is True or optional_params.get("stream", False) == True:
                 return generator
-            else:
-                response_string = ""
-                for chunk in generator:
-                    response_string+=chunk['content']
-            
-            ## RESPONSE OBJECT
-            model_response["choices"][0]["finish_reason"] = "stop"
-            model_response["choices"][0]["message"]["content"] = response_string
-            model_response["created"] = int(time.time())
-            model_response["model"] = "ollama/" + model
-            prompt_tokens = len(encoding.encode(prompt)) # type: ignore
-            completion_tokens = len(encoding.encode(response_string))
-            model_response["usage"] = Usage(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens, total_tokens=prompt_tokens + completion_tokens)
-            response = model_response
+    
+            response = generator
         elif (
             custom_llm_provider == "baseten"
             or litellm.api_base == "https://app.baseten.co"
@@ -2026,11 +2014,9 @@ async def atext_completion(*args, **kwargs):
                 response = text_completion(*args, **kwargs)
             else:
                 # Await normally
-                init_response = await loop.run_in_executor(None, func_with_context)
-                if isinstance(init_response, dict) or isinstance(init_response, ModelResponse): ## CACHING SCENARIO 
-                    response = init_response
-                elif asyncio.iscoroutine(init_response):
-                    response = await init_response
+                response = await loop.run_in_executor(None, func_with_context)
+                if asyncio.iscoroutine(response):
+                    response = await response
         else: 
             # Call the synchronous function using run_in_executor
             response =  await loop.run_in_executor(None, func_with_context)
@@ -2205,7 +2191,8 @@ def text_completion(
     if stream == True or kwargs.get("stream", False) == True:
         response = TextCompletionStreamWrapper(completion_stream=response, model=model)
         return response
-
+    if kwargs.get("acompletion", False) == True: 
+        return response
     transformed_logprobs = None
     # only supported for TGI models
     try:
@@ -2244,6 +2231,49 @@ def moderation(input: str, api_key: Optional[str]=None):
 
 ##### Image Generation #######################
 @client
+async def aimage_generation(*args, **kwargs):
+    """
+    Asynchronously calls the `image_generation` function with the given arguments and keyword arguments.
+
+    Parameters:
+    - `args` (tuple): Positional arguments to be passed to the `embedding` function.
+    - `kwargs` (dict): Keyword arguments to be passed to the `embedding` function.
+
+    Returns:
+    - `response` (Any): The response returned by the `embedding` function.
+    """
+    loop = asyncio.get_event_loop()
+    model = args[0] if len(args) > 0 else kwargs["model"]
+    ### PASS ARGS TO Image Generation ### 
+    kwargs["aimg_generation"] = True
+    custom_llm_provider = None
+    try: 
+        # Use a partial function to pass your keyword arguments
+        func = partial(image_generation, *args, **kwargs)
+
+        # Add the context to the function
+        ctx = contextvars.copy_context()
+        func_with_context = partial(ctx.run, func)
+
+        _, custom_llm_provider, _, _ = get_llm_provider(model=model, api_base=kwargs.get("api_base", None)) 
+        
+        # Await normally
+        init_response = await loop.run_in_executor(None, func_with_context)
+        if isinstance(init_response, dict) or isinstance(init_response, ModelResponse): ## CACHING SCENARIO 
+            response = init_response
+        elif asyncio.iscoroutine(init_response):
+            response = await init_response
+        else: 
+            # Call the synchronous function using run_in_executor
+            response =  await loop.run_in_executor(None, func_with_context)
+        return response
+    except Exception as e: 
+        custom_llm_provider = custom_llm_provider or "openai"
+        raise exception_type(
+                model=model, custom_llm_provider=custom_llm_provider, original_exception=e, completion_kwargs=args,
+            )
+    
+@client
 def image_generation(prompt: str, 
                  model: Optional[str]=None, 
                  n: Optional[int]=None, 
@@ -2264,6 +2294,7 @@ def image_generation(prompt: str,
 
     Currently supports just Azure + OpenAI. 
     """
+    aimg_generation = kwargs.get("aimg_generation", False)
     litellm_call_id = kwargs.get("litellm_call_id", None)
     logger_fn = kwargs.get("logger_fn", None)
     proxy_server_request = kwargs.get('proxy_server_request', None)
@@ -2277,7 +2308,7 @@ def image_generation(prompt: str,
         model = "dall-e-2"
         custom_llm_provider = "openai" # default to dall-e-2 on openai 
     openai_params = ["user", "request_timeout", "api_base", "api_version", "api_key", "deployment_id", "organization", "base_url", "default_headers", "timeout", "max_retries", "n", "quality", "size", "style"]
-    litellm_params = ["metadata", "aembedding", "caching", "mock_response", "api_key", "api_version", "api_base", "force_timeout", "logger_fn", "verbose", "custom_llm_provider", "litellm_logging_obj", "litellm_call_id", "use_client", "id", "fallbacks", "azure", "headers", "model_list", "num_retries", "context_window_fallback_dict", "roles", "final_prompt_value", "bos_token", "eos_token", "request_timeout", "complete_response", "self", "client", "rpm", "tpm", "input_cost_per_token", "output_cost_per_token", "hf_model_name", "proxy_server_request", "model_info", "preset_cache_key", "caching_groups"]
+    litellm_params = ["metadata", "aimg_generation", "caching", "mock_response", "api_key", "api_version", "api_base", "force_timeout", "logger_fn", "verbose", "custom_llm_provider", "litellm_logging_obj", "litellm_call_id", "use_client", "id", "fallbacks", "azure", "headers", "model_list", "num_retries", "context_window_fallback_dict", "roles", "final_prompt_value", "bos_token", "eos_token", "request_timeout", "complete_response", "self", "client", "rpm", "tpm", "input_cost_per_token", "output_cost_per_token", "hf_model_name", "proxy_server_request", "model_info", "preset_cache_key", "caching_groups"]
     default_params = openai_params + litellm_params
     non_default_params = {k: v for k,v in kwargs.items() if k not in default_params} # model-specific params - pass them straight to the model/provider
     optional_params = get_optional_params_image_gen(n=n, 
@@ -2320,10 +2351,9 @@ def image_generation(prompt: str,
             get_secret("AZURE_AD_TOKEN")
         )
 
-        # model_response = azure_chat_completions.image_generation(model=model, prompt=prompt, timeout=timeout, api_key=api_key, api_base=api_base, logging_obj=litellm_logging_obj, optional_params=optional_params, model_response = model_response)
-        pass
+        model_response = azure_chat_completions.image_generation(model=model, prompt=prompt, timeout=timeout, api_key=api_key, api_base=api_base, logging_obj=litellm_logging_obj, optional_params=optional_params, model_response = model_response, api_version = api_version, aimg_generation=aimg_generation)
     elif custom_llm_provider == "openai":
-        model_response = openai_chat_completions.image_generation(model=model, prompt=prompt, timeout=timeout, api_key=api_key, api_base=api_base, logging_obj=litellm_logging_obj, optional_params=optional_params, model_response = model_response)
+        model_response = openai_chat_completions.image_generation(model=model, prompt=prompt, timeout=timeout, api_key=api_key, api_base=api_base, logging_obj=litellm_logging_obj, optional_params=optional_params, model_response = model_response, aimg_generation=aimg_generation)
 
     return model_response
 
