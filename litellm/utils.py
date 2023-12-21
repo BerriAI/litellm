@@ -2397,7 +2397,11 @@ def get_optional_params(  # use the openai defaults
                 # ollama actually supports json output 
                 optional_params["format"] = "json"
                 litellm.add_function_to_prompt = True # so that main.py adds the function call to the prompt
-                optional_params["functions_unsupported_model"] = non_default_params.pop("tools", non_default_params.pop("functions"))
+                if "tools" in non_default_params:
+                    optional_params["functions_unsupported_model"] = non_default_params.pop("tools")
+                    non_default_params.pop("tool_choice", None) # causes ollama requests to hang
+                elif "functions" in non_default_params:
+                    optional_params["functions_unsupported_model"] = non_default_params.pop("functions")
             elif custom_llm_provider == "anyscale" and model == "mistralai/Mistral-7B-Instruct-v0.1": # anyscale just supports function calling with mistral
                 pass
             elif litellm.add_function_to_prompt: # if user opts to add it to prompt instead
