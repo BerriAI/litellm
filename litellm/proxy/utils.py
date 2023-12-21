@@ -1,5 +1,5 @@
 from typing import Optional, List, Any, Literal
-import os, subprocess, hashlib, importlib, asyncio, copy
+import os, subprocess, hashlib, importlib, asyncio, copy, json
 import litellm, backoff
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.caching import DualCache
@@ -147,6 +147,14 @@ class PrismaClient:
         
         return hashed_token
 
+    def jsonify_object(self, data: dict) -> dict: 
+        db_data = copy.deepcopy(data)
+
+        for k, v in db_data.items():
+            if isinstance(v, dict):
+                db_data[k] = json.dumps(v)
+        return db_data
+
     @backoff.on_exception(
         backoff.expo,
         Exception,        # base exception to catch for the backoff
@@ -193,7 +201,7 @@ class PrismaClient:
         try: 
             token = data["token"]
             hashed_token = self.hash_token(token=token)
-            db_data = copy.deepcopy(data)
+            db_data = self.jsonify_object(data=data)
             db_data["token"] = hashed_token
 
             new_verification_token = await self.db.litellm_verificationtoken.upsert( # type: ignore
@@ -228,7 +236,7 @@ class PrismaClient:
             if token.startswith("sk-"): 
                 token = self.hash_token(token=token)
 
-            db_data = copy.deepcopy(data)
+            db_data = self.jsonify_object(data=data)
             db_data["token"] = token 
             response = await self.db.litellm_verificationtoken.update(
                 where={
