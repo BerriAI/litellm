@@ -1,10 +1,12 @@
 #
-name: Build & Publich to GHCR
+name: Build & Publish to GHCR
 on:
   workflow_dispatch:
     inputs:
       tag:
         description: "The tag version you want to build"
+  release:
+    types: [published]
 
 # Defines two custom environment variables for the workflow. Used for the Container registry domain, and a name for the Docker image that this workflow builds.
 env:
@@ -19,7 +21,7 @@ jobs:
     permissions:
       contents: read
       packages: write
-      # 
+      #
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -44,5 +46,5 @@ jobs:
         with:
           context: .
           push: true
-          tags: ${{ steps.meta.outputs.tags }}-${{ github.event.inputs.tag }}  # Add the input tag to the image tags
+          tags: ${{ steps.meta.outputs.tags }}-${{ github.event.inputs.tag || github.event.release.tag_name }} # if a tag is provided, use that, otherwise use the release tag
           labels: ${{ steps.meta.outputs.labels }}
