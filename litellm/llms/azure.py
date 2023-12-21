@@ -262,7 +262,10 @@ class AzureChatCompletion(BaseLLM):
             exception_mapping_worked = True
             raise e
        except Exception as e: 
-            raise AzureOpenAIError(status_code=500, message=str(e))
+            if hasattr(e, "status_code"):
+                raise e
+            else:
+                raise AzureOpenAIError(status_code=500, message=str(e))
 
     def streaming(self,
                   logging_obj,
