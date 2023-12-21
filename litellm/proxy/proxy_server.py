@@ -616,7 +616,16 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
     router = litellm.Router(**router_params) # type:ignore
     return router, model_list, general_settings
 
-async def generate_key_helper_fn(duration: Optional[str], models: list, aliases: dict, config: dict, spend: float, token: Optional[str]=None, user_id: Optional[str]=None, max_parallel_requests: Optional[int]=None, metadata: Optional[dict] = {}):
+async def generate_key_helper_fn(duration: Optional[str], 
+                                 models: list, 
+                                 aliases: dict, 
+                                 config: dict, 
+                                 spend: float, 
+                                 max_budget: Optional[float]=None,
+                                 token: Optional[str]=None, 
+                                 user_id: Optional[str]=None, 
+                                 max_parallel_requests: Optional[int]=None, 
+                                 metadata: Optional[dict] = {},):
     global prisma_client
 
     if prisma_client is None: 
@@ -666,7 +675,8 @@ async def generate_key_helper_fn(duration: Optional[str], models: list, aliases:
             "spend": spend, 
             "user_id": user_id, 
             "max_parallel_requests": max_parallel_requests,
-            "metadata": metadata_json
+            "metadata": metadata_json,
+            "max_budget": max_budget
         }
         new_verification_token = await prisma_client.insert_data(data=verification_token_data)
     except Exception as e:

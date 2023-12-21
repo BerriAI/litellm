@@ -4,6 +4,7 @@ import litellm, backoff
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.caching import DualCache
 from litellm.proxy.hooks.parallel_request_limiter import MaxParallelRequestsHandler
+from litellm.proxy.hooks.max_budget_limiter import MaxBudgetLimiter
 from litellm.integrations.custom_logger import CustomLogger
 def print_verbose(print_statement):
     if litellm.set_verbose:
@@ -23,11 +24,13 @@ class ProxyLogging:
         self.call_details: dict = {}
         self.call_details["user_api_key_cache"] = user_api_key_cache
         self.max_parallel_request_limiter = MaxParallelRequestsHandler()  
+        self.max_budget_limiter = MaxBudgetLimiter()  
         pass
 
     def _init_litellm_callbacks(self):
         print_verbose(f"INITIALIZING LITELLM CALLBACKS!")
         litellm.callbacks.append(self.max_parallel_request_limiter)
+        litellm.callbacks.append(self.max_budget_limiter)
         for callback in litellm.callbacks: 
             if callback not in litellm.input_callback:
                 litellm.input_callback.append(callback)
@@ -203,7 +206,6 @@ class PrismaClient:
             hashed_token = self.hash_token(token=token)
             db_data = self.jsonify_object(data=data)
             db_data["token"] = hashed_token
-
             new_verification_token = await self.db.litellm_verificationtoken.upsert( # type: ignore
                 where={
                     'token': hashed_token,

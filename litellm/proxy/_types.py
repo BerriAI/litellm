@@ -121,6 +121,7 @@ class GenerateKeyRequest(LiteLLMBase):
     user_id: Optional[str] = None
     max_parallel_requests: Optional[int] = None
     metadata: Optional[dict] = {}
+    max_budget: Optional[float] = None
 
 class UpdateKeyRequest(LiteLLMBase):
     key: str
@@ -132,21 +133,7 @@ class UpdateKeyRequest(LiteLLMBase):
     user_id: Optional[str] = None
     max_parallel_requests: Optional[int] = None
     metadata: Optional[dict] = {}
-
-class GenerateKeyResponse(LiteLLMBase):
-    key: str
-    expires: datetime
-    user_id: str
-
-
-
-
-class _DeleteKeyObject(LiteLLMBase):
-    key: str
-
-class DeleteKeyRequest(LiteLLMBase):
-    keys: List[_DeleteKeyObject]
-
+    max_budget: Optional[float] = None
 
 class UserAPIKeyAuth(LiteLLMBase): # the expected response object for user api key auth
     """
@@ -161,6 +148,19 @@ class UserAPIKeyAuth(LiteLLMBase): # the expected response object for user api k
     max_parallel_requests: Optional[int] = None
     duration: str = "1h"
     metadata: dict = {}
+    max_budget: Optional[float] = None
+
+class GenerateKeyResponse(LiteLLMBase):
+    key: str
+    expires: datetime
+    user_id: str
+
+class _DeleteKeyObject(LiteLLMBase):
+    key: str
+
+class DeleteKeyRequest(LiteLLMBase):
+    keys: List[_DeleteKeyObject]
+
 
 class ConfigGeneralSettings(LiteLLMBase):
     """
