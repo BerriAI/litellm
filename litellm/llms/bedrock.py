@@ -327,6 +327,7 @@ def completion(
         aws_secret_access_key = optional_params.pop("aws_secret_access_key", None)
         aws_access_key_id = optional_params.pop("aws_access_key_id", None)
         aws_region_name = optional_params.pop("aws_region_name", None)
+        aws_bedrock_runtime_endpoint = optional_params.pop("aws_bedrock_runtime_endpoint", None)
 
         # use passed in BedrockRuntime.Client if provided, otherwise create a new one
         client = optional_params.pop(
@@ -336,6 +337,7 @@ def completion(
                 aws_access_key_id=aws_access_key_id,
                 aws_secret_access_key=aws_secret_access_key,
                 aws_region_name=aws_region_name,
+                aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
             ),
         )
 
@@ -614,12 +616,14 @@ def embedding(
     aws_secret_access_key = optional_params.pop("aws_secret_access_key", None)
     aws_access_key_id = optional_params.pop("aws_access_key_id", None)
     aws_region_name = optional_params.pop("aws_region_name", None)
+    aws_bedrock_runtime_endpoint = optional_params.pop("aws_bedrock_runtime_endpoint", None)
 
     # use passed in BedrockRuntime.Client if provided, otherwise create a new one
     client = init_bedrock_client(
         aws_access_key_id=aws_access_key_id,
         aws_secret_access_key=aws_secret_access_key,
         aws_region_name=aws_region_name,
+        aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
     )   
 
     ## Embedding Call
