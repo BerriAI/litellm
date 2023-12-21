@@ -18,7 +18,7 @@ import inspect, concurrent
 from openai import AsyncOpenAI
 from collections import defaultdict
 from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
-from litellm.llms.custom_httpx.azure_dall_e_2 import CustomHTTPTransport
+from litellm.llms.custom_httpx.azure_dall_e_2 import CustomHTTPTransport, AsyncCustomHTTPTransport
 import copy
 class Router:
     """
@@ -525,7 +525,6 @@ class Router:
         
     async def async_function_with_retries(self, *args, **kwargs):
         self.print_verbose(f"Inside async function with retries: args - {args}; kwargs - {kwargs}")
-        backoff_factor = 1
         original_function = kwargs.pop("original_function")
         fallbacks = kwargs.pop("fallbacks", self.fallbacks)
         context_window_fallbacks = kwargs.pop("context_window_fallbacks", self.context_window_fallbacks)
@@ -1099,6 +1098,7 @@ class Router:
                             api_version=api_version,
                             timeout=timeout,
                             max_retries=max_retries,
+                            http_client=httpx.AsyncClient(transport=AsyncCustomHTTPTransport(),) # type: ignore
                         )
                         model["client"] = openai.AzureOpenAI(
                             api_key=api_key,

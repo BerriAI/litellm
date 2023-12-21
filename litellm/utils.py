@@ -551,6 +551,8 @@ class ImageResponse(OpenAIObject):
     
     data: Optional[list] = None
 
+    usage: Optional[dict] = None
+
     def __init__(self, created=None, data=None, response_ms=None):
         if response_ms:
             _response_ms = response_ms
@@ -565,8 +567,10 @@ class ImageResponse(OpenAIObject):
             created = created
         else:
             created = None
-
+        
         super().__init__(data=data, created=created)
+        self.usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -1667,6 +1671,8 @@ def client(original_function):
             elif "acompletion" in kwargs and kwargs["acompletion"] == True: 
                 return result
             elif "aembedding" in kwargs and kwargs["aembedding"] == True: 
+                return result
+            elif "aimg_generation" in kwargs and kwargs["aimg_generation"] == True:
                 return result
             
             ### POST-CALL RULES ### 
