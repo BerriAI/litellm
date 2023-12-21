@@ -455,12 +455,12 @@ async def test_aimg_gen_on_router():
 			}
 		]
 		router = Router(model_list=model_list)
-		# response = await router.aimage_generation(
-		# 	model="dall-e-3",
-		# 	prompt="A cute baby sea otter"
-		# )
-		# print(response)
-		# assert len(response.data) > 0
+		response = await router.aimage_generation(
+			model="dall-e-3",
+			prompt="A cute baby sea otter"
+		)
+		print(response)
+		assert len(response.data) > 0
 
 		response = await router.aimage_generation(
 			model="dall-e-2",

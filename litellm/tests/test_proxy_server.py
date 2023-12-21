@@ -101,7 +101,7 @@ def test_chat_completion_azure(client_no_auth):
 # Run the test
 # test_chat_completion_azure()
 
-
+### EMBEDDING 
 def test_embedding(client_no_auth):
     global headers
     from litellm.proxy.proxy_server import user_custom_auth 
@@ -161,7 +161,30 @@ def test_sagemaker_embedding(client_no_auth):
 
 # Run the test
 # test_embedding()
+#### IMAGE GENERATION
+        
+def test_img_gen(client_no_auth):
+    global headers
+    from litellm.proxy.proxy_server import user_custom_auth 
 
+    try:
+        test_data = {
+            "model": "dall-e-3",
+            "prompt": "A cute baby sea otter",
+            "n": 1,
+            "size": "1024x1024"
+        }
+
+        response = client_no_auth.post("/v1/images/generations", json=test_data)
+
+        assert response.status_code == 200
+        result = response.json()
+        print(len(result["data"][0]["url"]))
+        assert len(result["data"][0]["url"]) > 10 
+    except Exception as e:
+        pytest.fail(f"LiteLLM Proxy test failed. Exception - {str(e)}")
+
+#### ADDITIONAL 
 # @pytest.mark.skip(reason="hitting yaml load issues on circle-ci")
 def test_add_new_model(client_no_auth):
     global headers
