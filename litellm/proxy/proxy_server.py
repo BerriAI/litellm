@@ -1169,7 +1169,6 @@ async def update_key_fn(request: Request, data: UpdateKeyRequest):
             raise Exception("Not connected to DB!")
         
         non_default_values = {k: v for k, v in data_json.items() if v is not None}
-        print(f"non_default_values: {non_default_values}")
         response = await prisma_client.update_data(token=key, data={**non_default_values, "token": key})
         return {"key": key, **non_default_values}
         # update based on remaining passed in values 
