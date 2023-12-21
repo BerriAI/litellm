@@ -15,7 +15,7 @@ join our [discord](https://discord.gg/wuPM9dRgDw)
 ## Pre-Requisites
 Ensure you have run `pip install langfuse` for this integration
 ```shell
-pip install langfuse litellm
+pip install langfuse==1.14.0 litellm
 ```
 
 ## Quick Start

@@ -68,6 +68,7 @@ def test_chat_completion_exception_azure(client):
         # make an openai client to call _make_status_error_from_response
         openai_client = openai.OpenAI(api_key="anything")
         openai_exception = openai_client._make_status_error_from_response(response=response)
+        print(openai_exception)
         assert isinstance(openai_exception, openai.AuthenticationError)
 
     except Exception as e:

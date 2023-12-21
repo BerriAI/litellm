@@ -96,7 +96,7 @@ async def _perform_health_check(model_list: list):
 
 
 
-async def perform_health_check(model_list: list, model: Optional[str] = None):
+async def perform_health_check(model_list: list, model: Optional[str] = None, cli_model: Optional[str] = None):
     """
     Perform a health check on the system.
 
@@ -104,7 +104,10 @@ async def perform_health_check(model_list: list, model: Optional[str] = None):
         (bool): True if the health check passes, False otherwise.
     """
     if not model_list:
-        return [], []
+        if cli_model:
+            model_list = [{"model_name": cli_model, "litellm_params": {"model": cli_model}}]
+        else:
+            return [], []
 
     if model is not None:
         model_list = [x for x in model_list if x["litellm_params"]["model"] == model]
