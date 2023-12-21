@@ -60,3 +60,20 @@ $ litellm /path/to/config.yaml
 ```
 curl --location 'http://0.0.0.0:8000/health'
 ```
+
+## Embedding Models 
+
+We need some way to know if the model is an embedding model when running checks, if you have this in your config, specifying mode it makes an embedding health check
+
+```yaml
+model_list:
+  - model_name: azure-embedding-model
+    litellm_params:
+      model: azure/azure-embedding-model
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
+      api_version: "2023-07-01-preview"
+    model_info:
+      mode: embedding # 👈 ADD THIS
+```
+
