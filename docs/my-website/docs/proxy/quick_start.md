@@ -349,6 +349,12 @@ litellm --config your_config.yaml
 [**More Info**](./configs.md)
 
 ## Server Endpoints
+
+:::note
+
+You can see Swagger Docs for the server on root http://0.0.0.0:8000
+
+::: 
 - POST `/chat/completions` - chat completions endpoint to call 100+ LLMs
 - POST `/completions` - completions endpoint
 - POST `/embeddings` - embedding endpoint for Azure, OpenAI, Huggingface endpoints

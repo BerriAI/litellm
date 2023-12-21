@@ -599,34 +599,34 @@ def test_completion_hf_model_no_provider():
 
 # test_completion_hf_model_no_provider()
 
-# def test_completion_openai_azure_with_functions():
-#     function1 = [
-#         {
-#             "name": "get_current_weather",
-#             "description": "Get the current weather in a given location",
-#             "parameters": {
-#                 "type": "object",
-#                 "properties": {
-#                     "location": {
-#                         "type": "string",
-#                         "description": "The city and state, e.g. San Francisco, CA",
-#                     },
-#                     "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
-#                 },
-#                 "required": ["location"],
-#             },
-#         }
-#     ]
-#     try:
-#         messages = [{"role": "user", "content": "What is the weather like in Boston?"}]
-#         response = completion(
-#             model="azure/chatgpt-functioncalling", messages=messages, functions=function1
-#         )
-#         # Add any assertions here to check the response
-#         print(response)
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
-# test_completion_openai_azure_with_functions()
+def test_completion_anyscale_with_functions():
+    function1 = [
+        {
+            "name": "get_current_weather",
+            "description": "Get the current weather in a given location",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {
+                        "type": "string",
+                        "description": "The city and state, e.g. San Francisco, CA",
+                    },
+                    "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                },
+                "required": ["location"],
+            },
+        }
+    ]
+    try:
+        messages = [{"role": "user", "content": "What is the weather like in Boston?"}]
+        response = completion(
+            model="anyscale/mistralai/Mistral-7B-Instruct-v0.1", messages=messages, functions=function1
+        )
+        # Add any assertions here to check the response
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+test_completion_anyscale_with_functions()
 
 def test_completion_azure_key_completion_arg():
     # this tests if we can pass api_key to completion, when it's not in the env 
@@ -727,7 +727,7 @@ def test_completion_azure():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-# test_completion_azure()
+test_completion_azure() 
 
 def test_azure_openai_ad_token():
     # this tests if the azure ad token is set in the request header

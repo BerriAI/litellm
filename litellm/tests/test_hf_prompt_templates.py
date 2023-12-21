@@ -17,6 +17,14 @@ def test_prompt_formatting():
         assert prompt == "<s>[INST] Be a good bot [/INST]</s> [INST] Hello world [/INST]"
     except Exception as e: 
         pytest.fail(f"An exception occurred: {str(e)}")
+
+def test_prompt_formatting_custom_model(): 
+    try:
+        prompt = prompt_factory(model="ehartford/dolphin-2.5-mixtral-8x7b", messages=[{"role": "system", "content": "Be a good bot"}, {"role": "user", "content": "Hello world"}], custom_llm_provider="huggingface")
+        print(f"prompt: {prompt}")
+    except Exception as e: 
+        pytest.fail(f"An exception occurred: {str(e)}")
+# test_prompt_formatting_custom_model()
 # def logger_fn(user_model_dict):
 #     return
 #     print(f"user_model_dict: {user_model_dict}")

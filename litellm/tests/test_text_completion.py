@@ -169,17 +169,37 @@ def test_text_completion_stream():
 
 # test_text_completion_stream()
 
-async def test_text_completion_async_stream():
-    try:
-        response = await atext_completion(
-                model="text-completion-openai/text-davinci-003", 
-                prompt="good morning",
-                stream=True,
-                max_tokens=10,
-            )
-        async for chunk in response:
-            print(f"chunk: {chunk}")
-    except Exception as e:
-        pytest.fail(f"GOT exception for HF In streaming{e}")
+# async def test_text_completion_async_stream():
+#     try:
+#         response = await atext_completion(
+#                 model="text-completion-openai/text-davinci-003", 
+#                 prompt="good morning",
+#                 stream=True,
+#                 max_tokens=10,
+#             )
+#         async for chunk in response:
+#             print(f"chunk: {chunk}")
+#     except Exception as e:
+#         pytest.fail(f"GOT exception for HF In streaming{e}")
 
-asyncio.run(test_text_completion_async_stream())
+# asyncio.run(test_text_completion_async_stream())
+        
+def test_async_text_completion():
+    litellm.set_verbose = True
+    print('test_async_text_completion')
+    async def test_get_response():
+        try:
+            response = await litellm.atext_completion(
+                model="gpt-3.5-turbo-instruct", 
+                prompt="good morning",
+                stream=False,
+                max_tokens=10
+            )
+            print(f"response: {response}")
+        except litellm.Timeout as e: 
+            print(e)
+        except Exception as e: 
+            print(e)
+
+    asyncio.run(test_get_response())
+test_async_text_completion()
