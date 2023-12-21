@@ -91,7 +91,7 @@ def test_vertex_ai():
     load_vertex_ai_credentials()
     test_models = litellm.vertex_chat_models + litellm.vertex_code_chat_models + litellm.vertex_text_models + litellm.vertex_code_text_models
     litellm.set_verbose=False
-    litellm.vertex_project = "hardy-device-386718"
+    litellm.vertex_project = "reliablekeys"
 
     test_models = random.sample(test_models, 1)
     test_models += litellm.vertex_language_models # always test gemini-pro
@@ -113,7 +113,7 @@ def test_vertex_ai():
 def test_vertex_ai_stream():
     load_vertex_ai_credentials()
     litellm.set_verbose=False
-    litellm.vertex_project = "hardy-device-386718"
+    litellm.vertex_project = "reliablekeys"
     import random
 
     test_models = litellm.vertex_chat_models + litellm.vertex_code_chat_models + litellm.vertex_text_models + litellm.vertex_code_text_models 
