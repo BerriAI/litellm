@@ -7,6 +7,12 @@ generator client {
   provider = "prisma-client-py"
 }
 
+model LiteLLM_UserTable {
+		user_id    String @unique
+		max_budget Float?
+    spend      Float    @default(0.0)
+}
+
 // required for token gen
 model LiteLLM_VerificationToken {
     token      String   @unique
@@ -18,5 +24,4 @@ model LiteLLM_VerificationToken {
     user_id    String?
     max_parallel_requests Int?
     metadata   Json  @default("{}")
-    max_budget Float?
 }
