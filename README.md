@@ -188,7 +188,7 @@ poetry install
 Step 3: Test your change:
 ```
 cd litellm/tests # pwd: Documents/litellm/litellm/tests
-pytest .
+poetry run pytest .
 ```
 
 Step 4: Submit a PR with your changes! 🚀
