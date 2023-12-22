@@ -276,6 +276,33 @@ def test_completion_azure_function_calling_stream():
 
 # test_completion_azure_function_calling_stream()
 
+def test_completion_ollama_hosted_stream(): 
+    try:
+        litellm.set_verbose = True
+        response = completion(
+            model="ollama/phi",
+            messages=messages,
+            max_tokens=10,
+            api_base="https://test-ollama-endpoint.onrender.com",
+            stream=True
+        )
+        # Add any assertions here to check the response
+        complete_response = ""
+        # Add any assertions here to check the response
+        for idx, init_chunk in enumerate(response):
+            chunk, finished = streaming_format_tests(idx, init_chunk)
+            complete_response += chunk
+            if finished:
+                assert isinstance(init_chunk.choices[0], litellm.utils.StreamingChoices)
+                break
+        if complete_response.strip() == "": 
+            raise Exception("Empty response received")
+        print(f"complete_response: {complete_response}")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+# test_completion_ollama_hosted_stream()
+
 def test_completion_claude_stream():
     try:
         messages = [
