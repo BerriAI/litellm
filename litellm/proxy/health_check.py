@@ -44,6 +44,16 @@ async def _perform_health_check(model_list: list):
     """
     Perform a health check for each model in the list.
     """
+    async def _check_img_gen_model(model_params: dict):
+        model_params.pop("messages", None)
+        model_params["prompt"] = "test from litellm"
+        try:
+            await litellm.aimage_generation(**model_params)
+        except Exception as e:
+            print_verbose(f"Health check failed for model {model_params['model']}. Error: {e}")
+            return False
+        return True
+    
     async def _check_embedding_model(model_params: dict):
         model_params.pop("messages", None)
         model_params["input"] = ["test from litellm"]
@@ -64,17 +74,17 @@ async def _perform_health_check(model_list: list):
         
         return True
 
-    prepped_params = []
     tasks = []
     for model in model_list:
         litellm_params = model["litellm_params"]
         model_info = model.get("model_info", {})
         litellm_params["messages"] = _get_random_llm_message()
 
-        prepped_params.append(litellm_params)
         if model_info.get("mode", None) == "embedding":
             # this is an embedding model
             tasks.append(_check_embedding_model(litellm_params))
+        elif model_info.get("mode", None) == "image_generation":
+            tasks.append(_check_img_gen_model(litellm_params))
         else:
             tasks.append(_check_model(litellm_params))
 

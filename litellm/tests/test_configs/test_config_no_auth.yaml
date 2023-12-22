@@ -49,6 +49,8 @@ model_list:
     api_version: 2023-07-01-preview
     model: azure/azure-embedding-model
   model_name: azure-embedding-model
+  model_info:
+    mode: "embedding"
 - litellm_params:
     model: gpt-3.5-turbo
   model_info:
@@ -76,21 +78,40 @@ model_list:
 - model_name: amazon-embeddings
   litellm_params:
     model: "bedrock/amazon.titan-embed-text-v1"
+  model_info:
+    mode: embedding
 - model_name: "GPT-J 6B - Sagemaker Text Embedding (Internal)"
   litellm_params: 
     model: "sagemaker/berri-benchmarking-gpt-j-6b-fp16"
+  model_info:
+    mode: embedding
 - model_name: dall-e-3
   litellm_params: 
-      model: dall-e-3
+    model: dall-e-3
+  model_info:
+    mode: image_generation
 - model_name: dall-e-3
   litellm_params: 
     model: "azure/dall-e-3-test"
     api_version: "2023-12-01-preview"
     api_base: "os.environ/AZURE_SWEDEN_API_BASE"
     api_key: "os.environ/AZURE_SWEDEN_API_KEY"
+  model_info:
+    mode: image_generation
 - model_name: dall-e-2
   litellm_params: 
     model: "azure/"
     api_version: "2023-06-01-preview"
     api_base: "os.environ/AZURE_API_BASE"
     api_key: "os.environ/AZURE_API_KEY"
+  model_info:
+    mode: image_generation
+- model_name: text-embedding-ada-002
+  litellm_params:
+    model: azure/azure-embedding-model
+    api_base: "os.environ/AZURE_API_BASE"
+    api_key: "os.environ/AZURE_API_KEY"
+    api_version: "2023-07-01-preview"
+  model_info:
+    mode: embedding
+    base_model: text-embedding-ada-002

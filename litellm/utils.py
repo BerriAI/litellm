@@ -1627,6 +1627,10 @@ def client(original_function):
                 logging_obj = function_setup(start_time, *args, **kwargs)
             kwargs["litellm_logging_obj"] = logging_obj
 
+            # CHECK FOR 'os.environ/' in kwargs
+            for k,v in kwargs.items(): 
+                if v is not None and isinstance(v, str) and v.startswith("os.environ/"):
+                    kwargs[k] = litellm.get_secret(v)
             # [OPTIONAL] CHECK BUDGET 
             if litellm.max_budget:
                 if litellm._current_cost > litellm.max_budget:
