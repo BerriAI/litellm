@@ -5811,7 +5811,10 @@ class CustomStreamWrapper:
 
     def handle_ollama_stream(self, chunk): 
         try: 
-            json_chunk = json.loads(chunk)
+            if isinstance(chunk, dict):
+                json_chunk = chunk
+            else:
+                json_chunk = json.loads(chunk)
             if "error" in json_chunk: 
                 raise Exception(f"Ollama Error - {json_chunk}")
             
