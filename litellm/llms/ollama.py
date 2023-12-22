@@ -137,13 +137,14 @@ def get_ollama_response(
         additional_args={"api_base": url, "complete_input_dict": data, "headers": {},  "acompletion": acompletion,},
     )
     if acompletion is True: 
-        if optional_params.get("stream", False):
+        if optional_params.get("stream", False) == True:
             response = ollama_async_streaming(url=url, data=data, model_response=model_response, encoding=encoding, logging_obj=logging_obj)
         else:
             response = ollama_acompletion(url=url, data=data, model_response=model_response, encoding=encoding, logging_obj=logging_obj)
         return response
-    elif optional_params.get("stream", False):
+    elif optional_params.get("stream", False) == True:
         return ollama_completion_stream(url=url, data=data, logging_obj=logging_obj)
+    
     response = requests.post(
                     url=f"{url}",
                     json=data,
