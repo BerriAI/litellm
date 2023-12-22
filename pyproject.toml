@@ -52,6 +52,7 @@ litellm = 'litellm:run_server'
 
 [tool.poetry.group.dev.dependencies]
 flake8 = "^6.1.0"
+black = "^23.12.0"
 
 [build-system]
 requires = ["poetry-core", "wheel"]
