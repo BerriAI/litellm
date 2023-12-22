@@ -571,6 +571,22 @@ def test_completion_openai_litellm_key():
 
 # test_completion_openai_litellm_key()
 
+def test_completion_ollama_hosted(): 
+    try:
+        litellm.set_verbose = True
+        response = completion(
+            model="ollama/phi",
+            messages=messages,
+            max_tokens=10,
+            api_base="https://test-ollama-endpoint.onrender.com"
+        )
+        # Add any assertions here to check the response
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+# test_completion_ollama_hosted()
+
 def test_completion_openrouter1():
     try:
         response = completion(
@@ -626,7 +642,7 @@ def test_completion_anyscale_with_functions():
         print(response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_completion_anyscale_with_functions()
+# test_completion_anyscale_with_functions()
 
 def test_completion_azure_key_completion_arg():
     # this tests if we can pass api_key to completion, when it's not in the env 
