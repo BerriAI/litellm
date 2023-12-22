@@ -1,2 +1,41 @@
 [flake8]
-ignore = E,F,W,B,B9,C,D,I,N,S,W503,W504,E203, TCE,TCA,EXE999,E999,TD
+ignore =
+    # line break before binary operator
+    W503,
+    # inline comment should start with '# '
+    E262,
+    # too many leading '#' for block comment
+    E266,
+    # multiple imports on one line
+    E401,
+    # module level import not at top of file
+    E402,
+    # Line too long (82 > 79 characters)
+    E501,
+    # comparison to None should be 'if cond is None:'
+    E711,
+    # comparison to True should be 'if cond is True:' or 'if cond:'
+    E712,
+    # do not compare types, for exact checks use `is` / `is not`, for instance checks use `isinstance()`
+    E721,
+    # do not use bare 'except'
+    E722,
+    # x is imported but unused
+    F401,
+    # 'from . import *' used; unable to detect undefined names
+    F403,
+    # x may be undefined, or defined from star imports:
+    F405,
+    # f-string is missing placeholders
+    F541,
+    # dictionary key '' repeated with different values
+    F601,
+    # redefinition of unused x from line 123
+    F811,
+    # undefined name x
+    F821,
+    # local variable x is assigned to but never used
+    F841,
+
+# https://black.readthedocs.io/en/stable/guides/using_black_with_other_tools.html#flake8
+extend-ignore = E203
