@@ -211,6 +211,18 @@ def test_add_new_model(client_no_auth):
     except Exception as e: 
         pytest.fail(f"LiteLLM Proxy test failed. Exception {str(e)}")
 
+
+def test_health(client_no_auth):
+    global headers
+    import time
+    try:
+        response = client_no_auth.get("/health")
+        assert response.status_code == 200
+        result = response.json()
+        assert result["unhealthy_count"] == 0
+        raise Exception(f"It worked!")
+    except Exception as e:
+        pytest.fail(f"LiteLLM Proxy test failed. Exception - {str(e)}")
 # test_add_new_model()
 
 from litellm.integrations.custom_logger import CustomLogger
