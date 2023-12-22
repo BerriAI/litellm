@@ -962,7 +962,12 @@ async def chat_completion(request: Request, model: Optional[str] = None, user_ap
     global general_settings, user_debug, proxy_logging_obj
     try: 
         data = {}
-        data = await request.json() # type: ignore 
+        body = await request.body()
+        body_str = body.decode()
+        try:
+            data = ast.literal_eval(body_str)
+        except: 
+            data = json.loads(body_str)
 
         # Include original request and headers in the data
         data["proxy_server_request"] = {
