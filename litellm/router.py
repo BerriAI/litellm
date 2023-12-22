@@ -740,7 +740,7 @@ class Router:
             model_name = kwargs.get('model', None)  # i.e. gpt35turbo
             custom_llm_provider = kwargs.get("litellm_params", {}).get('custom_llm_provider', None)  # i.e. azure
             metadata = kwargs.get("litellm_params", {}).get('metadata', None)
-            deployment_id =  kwargs.get("litellm_params", {}).get("model_info").get("id")
+            deployment_id =  kwargs.get("litellm_params", {}).get("model_info", {}).get("id", None)
             self._set_cooldown_deployments(deployment_id)  # setting deployment_id in cooldown deployments
             if metadata: 
                 deployment = metadata.get("deployment", None)
@@ -779,10 +779,12 @@ class Router:
             raise e
 
     def _set_cooldown_deployments(self, 
-                                  deployment: str):
+                                  deployment: Optional[str]=None):
         """
         Add a model to the list of models being cooled down for that minute, if it exceeds the allowed fails / minute
         """
+        if deployment is None:
+            return
         
         current_minute = datetime.now().strftime("%H-%M")
         # get current fails for deployment
