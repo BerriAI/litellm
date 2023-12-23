@@ -1,8 +1,10 @@
 """
 Routes between admin, auth, keys pages
 """
+from dotenv import load_dotenv
+load_dotenv()
 import streamlit as st
-import base64, binascii
+import base64, binascii, os
 from admin import admin_page
 from auth import auth_page
 from urllib.parse import urlparse, parse_qs
@@ -44,7 +46,7 @@ if page_param:
     try:
         # Try to decode the page_param from base64
         if is_base64(page_param):
-            auth_page()
+            auth_page(redirect_url=f"{os.getenv('BASE_URL')}/{page_param}")
         else:
             st.error("Unknown page")
     except Exception as e:
