@@ -984,7 +984,7 @@ class Logging:
                             print_verbose=print_verbose,
                         )
                     if callback == "langsmith":
-                        print_verbose("reaches langsmtih for logging!")
+                        print_verbose("reaches langsmith for logging!")
                         if self.stream:
                             if "complete_streaming_response" not in kwargs:
                                 break
