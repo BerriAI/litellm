@@ -39,7 +39,6 @@ class LangFuseLogger:
         # Method definition
 
         try:
-            print(f"result in langfuse logging: {response_obj}")
             print_verbose(
                 f"Langfuse Logging - Enters logging function for model {kwargs}"
             )
@@ -136,7 +135,6 @@ class LangFuseLogger:
             )
         )
 
-        print(f"LANGFUSE OUTPUT: {output}")
         trace.generation(
             CreateGeneration(
                 name=metadata.get("generation_name", "litellm-completion"),
