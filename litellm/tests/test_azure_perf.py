@@ -9,7 +9,7 @@ from openai import AsyncAzureOpenAI
 
 client = AsyncAzureOpenAI(
     api_key=os.getenv("AZURE_API_KEY"),
-    azure_endpoint=os.getenv("AZURE_API_BASE"),
+    azure_endpoint=os.getenv("AZURE_API_BASE"), # type: ignore
     api_version=os.getenv("AZURE_API_VERSION")
 )
 
