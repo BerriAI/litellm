@@ -1,11 +1,13 @@
 """
 Admin sets proxy url + allowed email subdomain 
 """
+from dotenv import load_dotenv
+load_dotenv()
 import streamlit as st
-import base64
+import base64, os
 
 # Replace your_base_url with the actual URL where the proxy auth app is hosted
-your_base_url = 'http://localhost:8501'  # Example base URL
+your_base_url = os.getenv("BASE_URL")  # Example base URL
 
 # Function to encode the configuration
 def encode_config(proxy_url, allowed_email_subdomain):
