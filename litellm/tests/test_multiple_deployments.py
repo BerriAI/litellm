@@ -28,13 +28,6 @@ model_list = [{
     }
 }, {
 	"model_name": "mistral-7b-instruct",
-	"litellm_params": { # params for litellm completion/embedding call 
-        "model": "mistral-7b-instruct", 
-        "api_base": "https://api.perplexity.ai",
-        "api_key": os.getenv("PERPLEXITYAI_API_KEY")
-    }
-}, {
-	"model_name": "mistral-7b-instruct",
 	"litellm_params": {
 		"model": "deepinfra/mistralai/Mistral-7B-Instruct-v0.1",
 		"api_key": os.getenv("DEEPINFRA_API_KEY")

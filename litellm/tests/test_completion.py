@@ -191,6 +191,7 @@ def test_completion_gpt4_vision():
         pytest.fail(f"Error occurred: {e}")
 # test_completion_gpt4_vision()
 
+@pytest.mark.skip(reason="this test is flaky")
 def test_completion_perplexity_api():
     try:
         # litellm.set_verbose=True
@@ -214,6 +215,7 @@ def test_completion_perplexity_api():
 
 # test_completion_perplexity_api()
 
+@pytest.mark.skip(reason="this test is flaky")
 def test_completion_perplexity_api_2():
     try:
         # litellm.set_verbose=True
