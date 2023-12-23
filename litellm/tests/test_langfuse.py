@@ -120,7 +120,7 @@ def test_langfuse_logging_async():
         pytest.fail(f"An exception occurred - {e}")
 
 
-test_langfuse_logging_async()
+# test_langfuse_logging_async()
 
 
 @pytest.mark.skip(reason="beta test - checking langfuse output")
@@ -145,7 +145,7 @@ def test_langfuse_logging():
         pytest.fail(f"An exception occurred - {e}")
 
 
-test_langfuse_logging()
+# test_langfuse_logging()
 
 
 @pytest.mark.skip(reason="beta test - checking langfuse output")
@@ -174,7 +174,7 @@ def test_langfuse_logging_stream():
         print(e)
 
 
-test_langfuse_logging_stream()
+# test_langfuse_logging_stream()
 
 
 @pytest.mark.skip(reason="beta test - checking langfuse output")
@@ -297,4 +297,4 @@ def test_langfuse_logging_tool_calling():
     tool_calls = response.choices[0].message.tool_calls
 
 
-# test_langfuse_logging_tool_calling()
+test_langfuse_logging_tool_calling()
