@@ -16,6 +16,14 @@
 # user_message = "respond in 20 words. who are you?"
 # messages = [{ "content": user_message,"role": "user"}]
 
+# async def test_ollama_aembeddings():
+#     litellm.set_verbose = True
+#     input = "The food was delicious and the waiter..."
+#     response = await litellm.aembedding(model="ollama/mistral", input=input)
+#     print(response)
+
+# asyncio.run(test_ollama_aembeddings())
+
 # def test_ollama_streaming():
 #     try: 
 #         litellm.set_verbose = False
@@ -51,7 +59,7 @@
 #     except Exception as e: 
 #         print(e)
 
-# test_ollama_streaming()
+# # test_ollama_streaming()
 
 # async def test_async_ollama_streaming():
 #     try: 
