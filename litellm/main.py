@@ -1749,7 +1749,8 @@ async def aembedding(*args, **kwargs):
             or custom_llm_provider == "anyscale"
             or custom_llm_provider == "openrouter"
             or custom_llm_provider == "deepinfra"
-            or custom_llm_provider == "perplexity"): # currently implemented aiohttp calls for just azure and openai, soon all. 
+            or custom_llm_provider == "perplexity"
+            or custom_llm_provider == "ollama"): # currently implemented aiohttp calls for just azure and openai, soon all. 
             # Await normally
             init_response = await loop.run_in_executor(None, func_with_context)
             if isinstance(init_response, dict) or isinstance(init_response, ModelResponse): ## CACHING SCENARIO 
@@ -1949,6 +1950,16 @@ def embedding(
                 optional_params=optional_params,
                 model_response= EmbeddingResponse()
             )
+        elif custom_llm_provider == "ollama": 
+            if aembedding == True:
+                response = ollama.ollama_aembeddings(
+                    model=model,
+                    prompt=input,
+                    encoding=encoding,
+                    logging_obj=logging,
+                    optional_params=optional_params,
+                    model_response=EmbeddingResponse(),
+                )
         elif custom_llm_provider == "sagemaker": 
             response = sagemaker.embedding(
                 model=model,
