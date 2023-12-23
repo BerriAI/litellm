@@ -362,8 +362,6 @@ def cost_tracking():
             print("setting litellm success callback to track cost")
             if (track_cost_callback) not in litellm.success_callback: # type: ignore
                 litellm.success_callback.append(track_cost_callback) # type: ignore
-            else:
-                litellm.success_callback = track_cost_callback # type: ignore
 
 async def track_cost_callback(
     kwargs,                                       # kwargs to completion
