@@ -1052,6 +1052,7 @@ class Logging:
                             response_obj=result,
                             start_time=start_time,
                             end_time=end_time,
+                            user_id=kwargs.get("user", None),
                             print_verbose=print_verbose,
                         )
                     if callback == "cache" and litellm.cache is not None:

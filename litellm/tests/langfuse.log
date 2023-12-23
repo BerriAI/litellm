@@ -1,2 +1,57 @@
-close.started
-close.complete
+Starting new HTTPS connection (1): api.anthropic.com:443
+Starting new HTTPS connection (1): litellm-logging.onrender.com:443
+https://litellm-logging.onrender.com:443 "POST /logging HTTP/1.1" 200 38
+https://api.anthropic.com:443 "POST /v1/complete HTTP/1.1" 200 None
+Starting new HTTPS connection (1): litellm-logging.onrender.com:443
+Request options: {'method': 'post', 'url': '/chat/completions', 'files': None, 'json_data': {'messages': [{'role': 'user', 'content': 'this is a streaming test for llama2 + langfuse'}], 'model': 'gpt-3.5-turbo', 'max_tokens': 20, 'stream': True, 'temperature': 0.2}}
+connect_tcp.started host='api.openai.com' port=443 local_address=None timeout=600.0 socket_options=None
+connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0x1090f92d0>
+start_tls.started ssl_context=<ssl.SSLContext object at 0x108ddf020> server_hostname='api.openai.com' timeout=600.0
+start_tls.complete return_value=<httpcore._backends.sync.SyncStream object at 0x1090f9290>
+send_request_headers.started request=<Request [b'POST']>
+send_request_headers.complete
+send_request_body.started request=<Request [b'POST']>
+send_request_body.complete
+receive_response_headers.started request=<Request [b'POST']>
+https://litellm-logging.onrender.com:443 "POST /logging HTTP/1.1" 200 38
+receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Date', b'Sat, 23 Dec 2023 06:33:00 GMT'), (b'Content-Type', b'text/event-stream'), (b'Transfer-Encoding', b'chunked'), (b'Connection', b'keep-alive'), (b'access-control-allow-origin', b'*'), (b'Cache-Control', b'no-cache, must-revalidate'), (b'openai-model', b'gpt-3.5-turbo-0613'), (b'openai-organization', b'reliablekeystest'), (b'openai-processing-ms', b'62'), (b'openai-version', b'2020-10-01'), (b'strict-transport-security', b'max-age=15724800; includeSubDomains'), (b'x-ratelimit-limit-requests', b'9000'), (b'x-ratelimit-limit-tokens', b'1000000'), (b'x-ratelimit-limit-tokens_usage_based', b'1000000'), (b'x-ratelimit-remaining-requests', b'8998'), (b'x-ratelimit-remaining-tokens', b'999967'), (b'x-ratelimit-remaining-tokens_usage_based', b'999967'), (b'x-ratelimit-reset-requests', b'6ms'), (b'x-ratelimit-reset-tokens', b'1ms'), (b'x-ratelimit-reset-tokens_usage_based', b'1ms'), (b'x-request-id', b'dd1029a85edecb986fb662945c9f7b4f'), (b'CF-Cache-Status', b'DYNAMIC'), (b'Set-Cookie', b'__cf_bm=dnuSnc6BPNJd4lgWKpv3iE2P5zy4r5aCVekXVi7HG7U-1703313180-1-AbeMpAfvmJ6BShULb7tMaErR5ergUrt6ohiXj1e8zoo9AotZ0Jz0alUSUcp8FXyQX2VQ9P6gBUeoSR9aE98OasU=; path=/; expires=Sat, 23-Dec-23 07:03:00 GMT; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), (b'Set-Cookie', b'_cfuvid=dET0GKSNfbtSWNJuXndP8GY8M0ANzDK4Dl7mvIfhmM0-1703313180257-0-604800000; path=/; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), (b'Server', b'cloudflare'), (b'CF-RAY', b'839e920e4f47f4b0-BOM'), (b'alt-svc', b'h3=":443"; ma=86400')])
+HTTP Request: POST https://api.openai.com/v1/chat/completions "200 OK"
+receive_response_body.started request=<Request [b'POST']>
+receive_response_body.complete
+response_closed.started
+response_closed.complete
+Starting new HTTPS connection (1): litellm-logging.onrender.com:443
+Request options: {'method': 'post', 'url': '/chat/completions', 'files': None, 'json_data': {'messages': [{'role': 'user', 'content': "What's the weather like in San Francisco, Tokyo, and Paris?"}], 'model': 'gpt-3.5-turbo-1106', 'tool_choice': 'auto', 'tools': [{'type': 'function', 'function': {'name': 'get_current_weather', 'description': 'Get the current weather in a given location', 'parameters': {'type': 'object', 'properties': {'location': {'type': 'string', 'description': 'The city and state, e.g. San Francisco, CA'}, 'unit': {'type': 'string', 'enum': ['celsius', 'fahrenheit']}}, 'required': ['location']}}}]}}
+connect_tcp.started host='api.openai.com' port=443 local_address=None timeout=600.0 socket_options=None
+connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0x10972d410>
+start_tls.started ssl_context=<ssl.SSLContext object at 0x1090c5be0> server_hostname='api.openai.com' timeout=600.0
+start_tls.complete return_value=<httpcore._backends.sync.SyncStream object at 0x1097547d0>
+send_request_headers.started request=<Request [b'POST']>
+send_request_headers.complete
+send_request_body.started request=<Request [b'POST']>
+send_request_body.complete
+receive_response_headers.started request=<Request [b'POST']>
+https://litellm-logging.onrender.com:443 "POST /logging HTTP/1.1" 200 38
+receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Date', b'Sat, 23 Dec 2023 06:33:03 GMT'), (b'Content-Type', b'application/json'), (b'Transfer-Encoding', b'chunked'), (b'Connection', b'keep-alive'), (b'access-control-allow-origin', b'*'), (b'Cache-Control', b'no-cache, must-revalidate'), (b'openai-model', b'gpt-3.5-turbo-1106'), (b'openai-organization', b'reliablekeystest'), (b'openai-processing-ms', b'2145'), (b'openai-version', b'2020-10-01'), (b'strict-transport-security', b'max-age=15724800; includeSubDomains'), (b'x-ratelimit-limit-requests', b'9000'), (b'x-ratelimit-limit-tokens', b'1000000'), (b'x-ratelimit-limit-tokens_usage_based', b'1000000'), (b'x-ratelimit-remaining-requests', b'8998'), (b'x-ratelimit-remaining-tokens', b'999968'), (b'x-ratelimit-remaining-tokens_usage_based', b'999968'), (b'x-ratelimit-reset-requests', b'6ms'), (b'x-ratelimit-reset-tokens', b'1ms'), (b'x-ratelimit-reset-tokens_usage_based', b'1ms'), (b'x-request-id', b'd0fd54d3a7696ee677f3690e9e0d6d04'), (b'CF-Cache-Status', b'DYNAMIC'), (b'Set-Cookie', b'__cf_bm=P_4fUmw4vvrbGKTlavf9VWuuzzro87gvhLE0DEGKA84-1703313183-1-ARgz+AQXAzH1uTTK8iyPE3QnT8TovAP61UvYsFD+d5DWM0lFi5U2+eSgPH+Pqt+Y1fNH1FWBUn9DmVceJKvyLcU=; path=/; expires=Sat, 23-Dec-23 07:03:03 GMT; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), (b'Set-Cookie', b'_cfuvid=g.nvBthte.6BJ7KHg5tihyGwupeGfMNMGnw72QUUBQc-1703313183034-0-604800000; path=/; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), (b'Server', b'cloudflare'), (b'CF-RAY', b'839e92128b7ff2e2-BOM'), (b'Content-Encoding', b'gzip'), (b'alt-svc', b'h3=":443"; ma=86400')])
+receive_response_body.started request=<Request [b'POST']>
+receive_response_body.complete
+response_closed.started
+response_closed.complete
+HTTP Request: POST https://api.openai.com/v1/chat/completions "200 OK"
+nction': {'name': 'get_current_weather', 'description': 'Get the current weather in a given location', 'parameters': {'type': 'object', 'properties': {'location': {'type': 'string', 'description': 'The city and state, e.g. San Francisco, CA'}, 'unit': {'type': 'string', 'enum': ['celsius', 'fahrenheit']}}, 'required': ['location']}}}]}}
+connect_tcp.started host='api.openai.com' port=443 local_address=None timeout=600.0 socket_options=None
+connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0x10972d410>
+start_tls.started ssl_context=<ssl.SSLContext object at 0x1090c5be0> server_hostname='api.openai.com' timeout=600.0
+start_tls.complete return_value=<httpcore._backends.sync.SyncStream object at 0x1097547d0>
+send_request_headers.started request=<Request [b'POST']>
+send_request_headers.complete
+send_request_body.started request=<Request [b'POST']>
+send_request_body.complete
+receive_response_headers.started request=<Request [b'POST']>
+https://litellm-logging.onrender.com:443 "POST /logging HTTP/1.1" 200 38
+receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Date', b'Sat, 23 Dec 2023 06:33:03 GMT'), (b'Content-Type', b'application/json'), (b'Transfer-Encoding', b'chunked'), (b'Connection', b'keep-alive'), (b'access-control-allow-origin', b'*'), (b'Cache-Control', b'no-cache, must-revalidate'), (b'openai-model', b'gpt-3.5-turbo-1106'), (b'openai-organization', b'reliablekeystest'), (b'openai-processing-ms', b'2145'), (b'openai-version', b'2020-10-01'), (b'strict-transport-security', b'max-age=15724800; includeSubDomains'), (b'x-ratelimit-limit-requests', b'9000'), (b'x-ratelimit-limit-tokens', b'1000000'), (b'x-ratelimit-limit-tokens_usage_based', b'1000000'), (b'x-ratelimit-remaining-requests', b'8998'), (b'x-ratelimit-remaining-tokens', b'999968'), (b'x-ratelimit-remaining-tokens_usage_based', b'999968'), (b'x-ratelimit-reset-requests', b'6ms'), (b'x-ratelimit-reset-tokens', b'1ms'), (b'x-ratelimit-reset-tokens_usage_based', b'1ms'), (b'x-request-id', b'd0fd54d3a7696ee677f3690e9e0d6d04'), (b'CF-Cache-Status', b'DYNAMIC'), (b'Set-Cookie', b'__cf_bm=P_4fUmw4vvrbGKTlavf9VWuuzzro87gvhLE0DEGKA84-1703313183-1-ARgz+AQXAzH1uTTK8iyPE3QnT8TovAP61UvYsFD+d5DWM0lFi5U2+eSgPH+Pqt+Y1fNH1FWBUn9DmVceJKvyLcU=; path=/; expires=Sat, 23-Dec-23 07:03:03 GMT; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), (b'Set-Cookie', b'_cfuvid=g.nvBthte.6BJ7KHg5tihyGwupeGfMNMGnw72QUUBQc-1703313183034-0-604800000; path=/; domain=.api.openai.com; HttpOnly; Secure; SameSite=None'), (b'Server', b'cloudflare'), (b'CF-RAY', b'839e92128b7ff2e2-BOM'), (b'Content-Encoding', b'gzip'), (b'alt-svc', b'h3=":443"; ma=86400')])
+receive_response_body.started request=<Request [b'POST']>
+receive_response_body.complete
+response_closed.started
+response_closed.complete
+HTTP Request: POST https://api.openai.com/v1/chat/completions "200 OK"

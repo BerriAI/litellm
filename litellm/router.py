@@ -710,6 +710,7 @@ class Router:
         Function LiteLLM submits a callback to after a successful
         completion. Purpose of this is to update TPM/RPM usage per model
         """
+        deployment_id =  kwargs.get("litellm_params", {}).get("model_info", {}).get("id", None)
         model_name = kwargs.get('model', None)  # i.e. gpt35turbo
         custom_llm_provider = kwargs.get("litellm_params", {}).get('custom_llm_provider', None)  # i.e. azure
         if custom_llm_provider:
@@ -717,10 +718,10 @@ class Router:
         if kwargs["stream"] is True: 
             if kwargs.get("complete_streaming_response"):
                 total_tokens = kwargs.get("complete_streaming_response")['usage']['total_tokens']
-                self._set_deployment_usage(model_name, total_tokens)
+                self._set_deployment_usage(deployment_id, total_tokens)
         else: 
             total_tokens = completion_response['usage']['total_tokens']
-            self._set_deployment_usage(model_name, total_tokens)
+            self._set_deployment_usage(deployment_id, total_tokens)
         
         self.deployment_latency_map[model_name] = (end_time - start_time).total_seconds()
 
@@ -867,15 +868,8 @@ class Router:
 
         # return deployment with lowest tpm usage
         for item in potential_deployments:
-            deployment_name=item["litellm_params"]["model"]
-            custom_llm_provider = item["litellm_params"].get("custom_llm_provider", None)
-            if custom_llm_provider is not None:
-                deployment_name = f"{custom_llm_provider}/{deployment_name}"
-            else:
-                litellm_provider = models_context_map.get(deployment_name, {}).get("litellm_provider", None)
-                if litellm_provider is not None:
-                    deployment_name = f"{litellm_provider}/{deployment_name}"
-            item_tpm, item_rpm = self._get_deployment_usage(deployment_name=deployment_name)
+            model_id = item["model_info"].get("id")
+            item_tpm, item_rpm = self._get_deployment_usage(deployment_name=model_id)
 
             if item_tpm == 0:
                 return item

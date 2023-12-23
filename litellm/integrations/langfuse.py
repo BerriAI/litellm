@@ -39,6 +39,7 @@ class LangFuseLogger:
         # Method definition
 
         try:
+            print(f"result in langfuse logging: {response_obj}")
             print_verbose(
                 f"Langfuse Logging - Enters logging function for model {kwargs}"
             )
@@ -64,7 +65,7 @@ class LangFuseLogger:
             # end of processing langfuse ########################
             input = prompt
             output = response_obj["choices"][0]["message"].json()
-
+            print(f"OUTPUT IN LANGFUSE: {output}; original: {response_obj['choices'][0]['message']}")
             self._log_langfuse_v2(
                 user_id,
                 metadata,
@@ -135,6 +136,7 @@ class LangFuseLogger:
             )
         )
 
+        print(f"LANGFUSE OUTPUT: {output}")
         trace.generation(
             CreateGeneration(
                 name=metadata.get("generation_name", "litellm-completion"),
@@ -171,6 +173,7 @@ class LangFuseLogger:
             user_id=user_id,
         )
 
+        
         trace.generation(
             name=metadata.get("generation_name", "litellm-completion"),
             startTime=start_time,
