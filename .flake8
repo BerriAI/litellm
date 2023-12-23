@@ -1,5 +1,10 @@
 [flake8]
 ignore =
+    # The following ignores can be removed when formatting using black
+    W191,W291,W292,W293,W391,W504
+    E101,E111,E114,E116,E117,E121,E122,E123,E124,E125,E126,E127,E128,E129,E131,
+    E201,E202,E221,E222,E225,E226,E231,E241,E251,E252,E261,E265,E271,E272,E275,
+    E301,E302,E303,E305,E306,
     # line break before binary operator
     W503,
     # inline comment should start with '# '
