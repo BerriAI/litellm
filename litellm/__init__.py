@@ -292,6 +292,7 @@ provider_list: List = [
     "openrouter",
     "vertex_ai",
     "palm",
+    "gemini",
     "ai21",
     "baseten",
     "azure",

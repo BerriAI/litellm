@@ -2614,8 +2614,14 @@ def get_optional_params(  # use the openai defaults
             optional_params["frequencyPenalty"] = {"scale": frequency_penalty}
         if presence_penalty is not None:
             optional_params["presencePenalty"] = {"scale": presence_penalty}
+    
     elif custom_llm_provider == "palm": # https://developers.generativeai.google/tutorials/curl_quickstart
         ## check if unsupported param passed in 
+        supported_params = ["temperature", "top_p", "stream", "n", "stop", "max_tokens"]
+        _check_valid_arg(supported_params=supported_params)
+        
+    elif custom_llm_provider == "gemini": 
+        ## check if unsupported param passed in
         supported_params = ["temperature", "top_p", "stream", "n", "stop", "max_tokens"]
         _check_valid_arg(supported_params=supported_params)
         
@@ -4810,6 +4816,36 @@ def exception_type(
                             llm_provider="palm",
                             response=original_exception.response
                         )
+                    
+            elif custom_llm_provider == "gemini":
+                if "503 Getting metadata" in error_str:
+                    # auth errors look like this
+                    # 503 Getting metadata from plugin failed with error: Reauthentication is needed. Please run `gcloud auth application-default login` to reauthenticate.
+                    exception_mapping_worked = True
+                    raise BadRequestError(
+                        message=f"GeminiException - Invalid api key", 
+                        model=model, 
+                        llm_provider="gemini",
+                        response=original_exception.response
+                    )
+                if "400 Request payload size exceeds" in error_str:
+                    exception_mapping_worked = True
+                    raise ContextWindowExceededError(
+                        message=f"GeminiException - {error_str}",
+                        model=model,
+                        llm_provider="gemini",
+                        response=original_exception.response
+                    )
+                if hasattr(original_exception, "status_code"):
+                    if original_exception.status_code == 400:
+                        exception_mapping_worked = True
+                        raise BadRequestError(
+                            message=f"GeminiException - {error_str}",
+                            model=model,
+                            llm_provider="gemini",
+                            response=original_exception.response
+                        )
+            
                 # Dailed: Error occurred: 400 Request payload size exceeds the limit: 20000 bytes
             elif custom_llm_provider == "cohere":  # Cohere
                 if (

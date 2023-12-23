@@ -1655,6 +1655,38 @@ def test_completion_palm_stream():
         pytest.fail(f"Error occurred: {e}")
 # test_completion_palm_stream()
 
+#Gemini tests
+def test_completion_gemini():
+    litellm.set_verbose = True
+    model_name = "gemini/gemini-pro"
+    messages = [{"role": "user", "content": "Hey, how's it going?"}]
+    try:
+        response = completion(model=model_name, messages=messages)
+        # Add any assertions here to check the response
+        print(response)
+    except Exception as e:
+       print(f"Error occurred: {e}")
+#test_completion_gemini()
+
+# test palm with streaming
+def test_completion_gemini_stream():
+    # litellm.set_verbose = True
+    model_name = "gemini/gemini-pro"
+    try:
+        response = completion(
+            model=model_name, 
+            messages=messages,
+            stop=["stop"],
+            stream=True,
+            max_tokens=20
+        )
+        # Add any assertions here to check the response
+        for chunk in response:
+            print(chunk)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+# test_completion_gemini_stream()
+
 # test_completion_deep_infra()
 # test_completion_ai21()
 # test config file with completion #
