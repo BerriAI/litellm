@@ -8,6 +8,13 @@ Don't want to get crazy bills because either while you're calling LLM APIs **or*
 LiteLLM exposes: 
 * `litellm.max_budget`: a global variable you can use to set the max budget (in USD) across all your litellm calls. If this budget is exceeded, it will raise a BudgetExceededError 
 * `BudgetManager`: A class to help set budgets per user. BudgetManager creates a dictionary to manage the user budgets, where the key is user and the object is their current cost + model-specific costs. 
+* `OpenAI Proxy Server`: A server to call 100+ LLMs with an openai-compatible endpoint. Manages user budgets, spend tracking, load balancing etc. 
+
+:::info
+
+If you want a server to manage user keys, budgets, etc. use our [OpenAI Proxy Server](./proxy/virtual_keys.md)
+
+:::
 
 ## quick start
 
