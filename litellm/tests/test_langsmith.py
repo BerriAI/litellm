@@ -8,7 +8,7 @@ from litellm import completion
 import litellm
 
 litellm.success_callback = ["langsmith"]
-# litellm.set_verbose = True
+litellm.set_verbose = True
 import time
 
 
@@ -26,7 +26,7 @@ def test_langsmith_logging():
     except Exception as e:
         print(e)
 
-test_langsmith_logging()
+# test_langsmith_logging()
 
 
 def test_langsmith_logging_with_metadata():
@@ -47,4 +47,26 @@ def test_langsmith_logging_with_metadata():
     except Exception as e:
         print(e)
 
-test_langsmith_logging_with_metadata()
+# test_langsmith_logging_with_metadata()
+
+def test_langsmith_logging_with_streaming_and_metadata():
+    try:
+        response = completion(model="gpt-3.5-turbo",
+                              messages=[{
+                                  "role": "user",
+                                  "content": "what llm are u"
+                              }],
+                              max_tokens=10,
+                              temperature=0.2,
+                              metadata={
+                                  "run_name": "litellmRUN",
+                                  "project_name": "litellm-completion",
+                              },
+                              stream=True
+                              )
+        for chunk in response:
+            continue
+    except Exception as e:
+        print(e)
+
+test_langsmith_logging_with_streaming_and_metadata()
