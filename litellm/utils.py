@@ -985,6 +985,12 @@ class Logging:
                         )
                     if callback == "langsmith":
                         print_verbose("reaches langsmtih for logging!")
+                        if self.stream:
+                            if "complete_streaming_response" not in kwargs:
+                                break
+                            else:
+                                print_verbose("reaches langfuse for streaming logging!")
+                                result = kwargs["complete_streaming_response"]
                         langsmithLogger.log_event(
                             kwargs=self.model_call_details,
                             response_obj=result,
@@ -1035,7 +1041,7 @@ class Logging:
                         # this only logs streaming once, complete_streaming_response exists i.e when stream ends
                         if self.stream:
                             if "complete_streaming_response" not in kwargs:
-                                return
+                                break
                             else:
                                 print_verbose("reaches langfuse for streaming logging!")
                                 result = kwargs["complete_streaming_response"]
