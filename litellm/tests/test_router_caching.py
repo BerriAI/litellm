@@ -125,3 +125,42 @@ async def test_acompletion_caching_on_router_caching_groups():
 	except Exception as e:
 		traceback.print_exc()
 		pytest.fail(f"Error occurred: {e}")
+  
+def test_usage_based_routing_completion():
+  model_list = [
+		{
+			"model_name": "gpt-3.5-turbo", 
+			"litellm_params": {
+					"model": "gpt-3.5-turbo-0301", 
+					"api_key": os.getenv("OPENAI_API_KEY"),
+					"custom_llm_provider": "Custom-LLM"
+			},
+			"tpm": 10000,
+			"rpm": 5
+		},
+  	{
+			"model_name": "gpt-3.5-turbo", 
+			"litellm_params": {
+					"model": "gpt-3.5-turbo-0301", 
+					"api_key": os.getenv("OPENAI_API_KEY"),
+			},
+			"tpm": 10000,
+			"rpm": 5
+		}
+	]
+  router = Router(model_list= model_list, 
+                routing_strategy= "usage-based-routing",
+                set_verbose= False)
+  max_requests = 5
+  while max_requests > 0:
+    try:
+      router.completion(
+				model='gpt-3.5-turbo',
+				messages=[{"content": "write a one sentence poem.", "role": "user"}],
+			)
+    except ValueError as e:
+      traceback.print_exc()
+      pytest.fail(f"Error occurred: {e}")
+    finally:
+      max_requests -= 1
+  router.reset()  
