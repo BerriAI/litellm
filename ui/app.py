@@ -1,35 +1,53 @@
+"""
+Routes between admin, auth, keys pages
+"""
 import streamlit as st
-import urllib.parse
+import base64, binascii
+from admin import admin_page
+from auth import auth_page
+from urllib.parse import urlparse, parse_qs
 
-def generate_key(name, description):
-    # Code to generate and return a key goes here
-    return "Generated Key"
+# Parse the query params in the URL
+def get_query_params():
+    # Get the query params from Streamlit's `server.request` function
+    # This functionality is not officially documented and could change in the future versions of Streamlit
+	query_params = st.experimental_get_query_params()
+	return query_params
 
-
-def main(api_base, url_hash):
-    st.title("Key Request")
-
-    # Create input fields for key name and description
-    name = st.text_input("Key Name")
-    description = st.text_area("Key Description")
-
-    # Create a button to request the key
-    if st.button("Request Key"):
-        if name and description:
-            key = generate_key(name, description)
-            st.success(f"Your key: {key}")
+def is_base64(sb):
+    try:
+        if isinstance(sb, str):
+            # Try to encode it to bytes if it's a unicode string
+            sb_bytes = sb.encode('ascii')
+        elif isinstance(sb, bytes):
+            sb_bytes = sb
         else:
-            st.error("Please enter a valid key name and description.")
+            # If it is not a byte or a string, it is not base64
+            return False
 
+        # Check if decoding is successful.
+        # The result of the decode is not required, so it is ignored.
+        _ = base64.urlsafe_b64decode(sb_bytes)
 
-if __name__ == "__main__":
-    # Get the proxy URL and hash from the admin
-    proxy_url = st.text_input("Admin Proxy URL")
-    hash_input = st.text_input("URL Hash")
+        # If the decode was successful, the input is likely base64
+        return True
+    except (binascii.Error, ValueError):
+        # If an error occurs, return False, as the input is not base64
+        return False
+    
+# Check the URL path and route to the correct page based on the path
+query_params = get_query_params()
+page_param = query_params.get('page', [None])[0]
 
-    # Generate the public URL with hash
-    encoded_hash = urllib.parse.quote(hash_input.strip()) if hash_input else ""
-    public_url = f"{proxy_url}/{encoded_hash}"
-
-    # Run the Streamlit app
-    main(proxy_url, hash_input)
+# Route to the appropriate page based on the URL query param
+if page_param:
+    try:
+        # Try to decode the page_param from base64
+        if is_base64(page_param):
+            auth_page()
+        else:
+            st.error("Unknown page")
+    except Exception as e:
+        st.error("Failed to decode the page parameter. Error: " + str(e))
+else:
+    admin_page()
