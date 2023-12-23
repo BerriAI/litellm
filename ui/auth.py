@@ -24,7 +24,7 @@ def sign_in_with_otp(email: str):
     
 
 # Create the Streamlit app
-def main():
+def auth_page():
     st.title("User Authentication")
 
     # User email input
@@ -33,7 +33,3 @@ def main():
     # Sign in button
     if st.button("Sign In"):
         sign_in_with_otp(email)
-
-
-if __name__ == "__main__":
-    main()
