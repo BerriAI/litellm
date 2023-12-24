@@ -188,7 +188,8 @@ poetry install
 Step 3: Test your change:
 ```
 cd litellm/tests # pwd: Documents/litellm/litellm/tests
-pytest .
+poetry run flake8
+poetry run pytest .
 ```
 
 Step 4: Submit a PR with your changes! 🚀
