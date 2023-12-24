@@ -54,6 +54,7 @@ from .llms import (
     oobabooga,
     openrouter,
     palm,
+    gemini,
     vertex_ai,
     maritalk)
 from .llms.openai import OpenAIChatCompletion, OpenAITextCompletion
@@ -1136,6 +1137,30 @@ def completion(
                     resp_string, model, custom_llm_provider="palm", logging_obj=logging
                 )
                 return response
+            response = model_response
+        elif custom_llm_provider == "gemini":
+            gemini_api_key = (
+                api_key
+                or get_secret("GEMINI_API_KEY")
+                or get_secret("PALM_API_KEY") # older palm api key should also work 
+                or litellm.api_key
+            )
+            
+            # palm does not support streaming as yet :(
+            model_response = gemini.completion(
+                model=model,
+                messages=messages,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                encoding=encoding,
+                api_key=gemini_api_key,
+                logging_obj=logging,
+                acompletion=acompletion,
+                custom_prompt_dict=custom_prompt_dict
+            )
             response = model_response
         elif custom_llm_provider == "vertex_ai":
             vertex_ai_project = (litellm.vertex_project 

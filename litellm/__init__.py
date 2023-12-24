@@ -292,6 +292,7 @@ provider_list: List = [
     "openrouter",
     "vertex_ai",
     "palm",
+    "gemini",
     "ai21",
     "baseten",
     "azure",
@@ -406,6 +407,7 @@ from .llms.cohere import CohereConfig
 from .llms.ai21 import AI21Config
 from .llms.together_ai import TogetherAIConfig
 from .llms.palm import PalmConfig
+from .llms.gemini import GeminiConfig
 from .llms.nlp_cloud import NLPCloudConfig
 from .llms.aleph_alpha import AlephAlphaConfig
 from .llms.petals import PetalsConfig

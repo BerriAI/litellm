@@ -12,7 +12,7 @@ import pytest
 import litellm
 from litellm import embedding, completion, completion_cost, Timeout
 from litellm import RateLimitError
-litellm.num_retries = 3
+# litellm.num_retries = 3
 litellm.cache = None
 litellm.success_callback = [] 
 user_message = "Write a short poem about the sky"
@@ -668,7 +668,7 @@ def test_completion_azure_key_completion_arg():
     except Exception as e:
         os.environ["AZURE_API_KEY"] = old_key
         pytest.fail(f"Error occurred: {e}")
-test_completion_azure_key_completion_arg()
+# test_completion_azure_key_completion_arg()
 
 
 async def test_re_use_azure_async_client():
@@ -745,7 +745,7 @@ def test_completion_azure():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_completion_azure() 
+# test_completion_azure() 
 
 def test_azure_openai_ad_token():
     # this tests if the azure ad token is set in the request header
@@ -1082,7 +1082,7 @@ def test_completion_together_ai_mixtral():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-test_completion_together_ai_mixtral()
+# test_completion_together_ai_mixtral()
 
 def test_completion_together_ai_yi_chat():
     model_name = "together_ai/zero-one-ai/Yi-34B-Chat"
@@ -1623,6 +1623,18 @@ def test_completion_deep_infra_mistral():
         pytest.fail(f"Error occurred: {e}")
 # test_completion_deep_infra_mistral()
 
+# Gemini tests
+def test_completion_gemini(): 
+    litellm.set_verbose = True
+    model_name = "gemini/gemini-pro"
+    messages = [{"role": "user", "content": "Hey, how's it going?"}]
+    try:
+        response = completion(model=model_name, messages=messages)
+        # Add any assertions here to check the response
+        print(response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+test_completion_gemini() 
 # Palm tests
 def test_completion_palm():
     litellm.set_verbose = True
