@@ -346,6 +346,47 @@ def anthropic_pt(messages: list): # format - https://docs.anthropic.com/claude/r
     prompt += f"{AnthropicConstants.AI_PROMPT.value}"
     return prompt 
 
+def gemini_text_image_pt(messages: list): 
+    """
+    {
+        "contents":[
+            {
+            "parts":[
+                {"text": "What is this picture?"},
+                {
+                "inline_data": {
+                    "mime_type":"image/jpeg",
+                    "data": "'$(base64 -w0 image.jpg)'"
+                }
+                }
+            ]
+            }
+        ]
+    }
+    """
+    try:
+        import google.generativeai as genai
+    except:
+        raise Exception("Importing google.generativeai failed, please run 'pip install -q google-generativeai")
+    
+    prompt = ""
+    images = [] 
+    for message in messages: 
+        if isinstance(message["content"], str):
+                prompt += message["content"]
+        elif isinstance(message["content"], list):
+            # see https://docs.litellm.ai/docs/providers/openai#openai-vision-models
+            for element in message["content"]:
+                if isinstance(element, dict):
+                    if element["type"] == "text":
+                        prompt += element["text"]
+                    elif element["type"] == "image_url":
+                        image_url = element["image_url"]["url"]
+                        images.append(image_url)
+    
+    content = [prompt] + images
+    return content
+
 # Function call template 
 def function_call_prompt(messages: list, functions: list):
     function_prompt = "Produce JSON OUTPUT ONLY! The following functions are available to you:"
@@ -401,6 +442,8 @@ def prompt_factory(model: str, messages: list, custom_llm_provider: Optional[str
     elif custom_llm_provider == "together_ai": 
         prompt_format, chat_template = get_model_info(token=api_key, model=model)
         return format_prompt_togetherai(messages=messages, prompt_format=prompt_format, chat_template=chat_template)
+    elif custom_llm_provider == "gemini": 
+        return gemini_text_image_pt(messages=messages)
     try:
         if "meta-llama/llama-2" in model and "chat" in model:
             return llama_2_chat_pt(messages=messages)
