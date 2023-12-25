@@ -975,11 +975,12 @@ def test_openai_text_completion_call():
 # test_openai_text_completion_call()
 
 # # test on together ai completion call - starcoder
-def test_together_ai_completion_call_starcoder():
+def test_together_ai_completion_call_mistral():
     try:
+        litellm.set_verbose = False
         start_time = time.time()
         response = completion(
-            model="together_ai/bigcode/starcoder",
+            model="together_ai/mistralai/Mistral-7B-Instruct-v0.2",
             messages=messages,
             logger_fn=logger_fn,
             stream=True,
@@ -1002,7 +1003,7 @@ def test_together_ai_completion_call_starcoder():
         print(f"error occurred: {traceback.format_exc()}")
         pass
 
-# test_together_ai_completion_call_starcoder() 
+test_together_ai_completion_call_starcoder() 
 
 def test_together_ai_completion_call_starcoder_bad_key():
     try:
