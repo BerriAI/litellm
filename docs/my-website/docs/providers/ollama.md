@@ -77,6 +77,19 @@ response = completion(
   format = "json"
 )
 ```
+
+## Using ollama `api/chat` 
+In order to send ollama requests to `POST /api/chat` on your ollama server, set the model prefix to `ollama_chat`
+
+```python
+from litellm import completion
+
+response = completion(
+    model="ollama_chat/llama2", 
+    messages=[{ "content": "respond in 20 words. who are you?","role": "user"}], 
+)
+print(response)
+```
 ## Ollama Models
 Ollama supported models: https://github.com/jmorganca/ollama
 
