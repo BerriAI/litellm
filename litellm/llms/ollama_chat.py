@@ -125,7 +125,7 @@ class OllamaConfig:
 def get_ollama_response(
     api_base="http://localhost:11434",
     model="llama2",
-    prompt="Why is the sky blue?",
+    messages=None,
     optional_params=None,
     logging_obj=None,
     acompletion: bool = False,
@@ -146,7 +146,7 @@ def get_ollama_response(
             optional_params[k] = v
 
     optional_params["stream"] = optional_params.get("stream", False)
-    data = {"model": model, "prompt": prompt, **optional_params}
+    data = {"model": model, "messages": messages, **optional_params}
     ## LOGGING
     logging_obj.pre_call(
         input=None,
@@ -188,7 +188,7 @@ def get_ollama_response(
 
     ## LOGGING
     logging_obj.post_call(
-        input=prompt,
+        input=messages,
         api_key="",
         original_response=response.text,
         additional_args={
