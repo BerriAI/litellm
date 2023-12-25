@@ -377,6 +377,7 @@ provider_list: List = [
     "petals",
     "oobabooga",
     "ollama",
+    "ollama_chat",
     "deepinfra",
     "perplexity",
     "anyscale",
