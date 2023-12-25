@@ -1531,42 +1531,19 @@ def completion(
                 return generator
 
             response = generator
-        elif custom_llm_provider == "ollama-chat":
+        elif custom_llm_provider == "ollama_chat":
             api_base = (
                 litellm.api_base
                 or api_base
                 or get_secret("OLLAMA_API_BASE")
                 or "http://localhost:11434"
             )
-            custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
-            if model in custom_prompt_dict:
-                # check if the model has a registered custom prompt
-                model_prompt_details = custom_prompt_dict[model]
-                prompt = custom_prompt(
-                    role_dict=model_prompt_details["roles"],
-                    initial_prompt_value=model_prompt_details["initial_prompt_value"],
-                    final_prompt_value=model_prompt_details["final_prompt_value"],
-                    messages=messages,
-                )
-            else:
-                prompt = prompt_factory(
-                    model=model,
-                    messages=messages,
-                    custom_llm_provider=custom_llm_provider,
-                )
-                if isinstance(prompt, dict):
-                    # for multimode models - ollama/llava prompt_factory returns a dict {
-                    #     "prompt": prompt,
-                    #     "images": images
-                    # }
-                    prompt, images = prompt["prompt"], prompt["images"]
-                    optional_params["images"] = images
 
             ## LOGGING
             generator = ollama_chat.get_ollama_response(
                 api_base,
                 model,
-                prompt,
+                messages,
                 optional_params,
                 logging_obj=logging,
                 acompletion=acompletion,
