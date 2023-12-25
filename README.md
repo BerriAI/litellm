@@ -27,7 +27,6 @@
 LiteLLM manages
 - Translating inputs to the provider's `completion` and `embedding` endpoints
 - Guarantees [consistent output](https://docs.litellm.ai/docs/completion/output), text responses will always be available at `['choices'][0]['message']['content']`
-- Exception mapping - common exceptions across providers are mapped to the OpenAI exception types.
 - Load-balance across multiple deployments (e.g. Azure/OpenAI) - `Router` **1k+ requests/second**
 
 # OpenAI Proxy - ([Docs](https://docs.litellm.ai/docs/simple_proxy))
