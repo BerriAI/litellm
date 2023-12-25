@@ -263,7 +263,7 @@ async def ollama_async_streaming(url, data, model_response, encoding, logging_ob
             streamwrapper = litellm.CustomStreamWrapper(
                 completion_stream=response.aiter_lines(),
                 model=data["model"],
-                custom_llm_provider="ollama",
+                custom_llm_provider="ollama_chat",
                 logging_obj=logging_obj,
             )
             async for transformed_chunk in streamwrapper:
