@@ -48,6 +48,9 @@ class MaxParallelRequestsHandler(CustomLogger):
             if user_api_key is None:
                 return
             
+            if self.user_api_key_cache is None: 
+                return
+            
             request_count_api_key = f"{user_api_key}_request_count"
             # check if it has collected an entire stream response
             self.print_verbose(f"'complete_streaming_response' is in kwargs: {'complete_streaming_response' in kwargs}")
@@ -65,6 +68,9 @@ class MaxParallelRequestsHandler(CustomLogger):
             self.print_verbose(f"Inside Max Parallel Request Failure Hook")
             api_key = user_api_key_dict.api_key
             if api_key is None:
+                return
+            
+            if self.user_api_key_cache is None: 
                 return
             
             ## decrement call count if call failed

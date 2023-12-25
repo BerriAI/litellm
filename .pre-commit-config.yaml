@@ -14,4 +14,3 @@ repos:
         language: system
         types: [python]
         files: ^litellm/
-        exclude: ^litellm/tests/
