@@ -826,13 +826,15 @@ def data_generator(response):
 
 async def async_data_generator(response, user_api_key_dict):
     print_verbose("inside generator")
-    async for chunk in response:
-        print_verbose(f"returned chunk: {chunk}")
-        try:
-            yield f"data: {json.dumps(chunk.dict())}\n\n"
-        except:
-            yield f"data: {json.dumps(chunk)}\n\n"
-
+    try: 
+        async for chunk in response:
+            print_verbose(f"returned chunk: {chunk}")
+            try:
+                yield f"data: {json.dumps(chunk.dict())}\n\n"
+            except Exception as e:
+                yield f"data: {str(e)}\n\n"
+    except Exception as e: 
+        yield f"data: {str(e)}\n\n"
 def get_litellm_model_info(model: dict = {}):
     model_info = model.get("model_info", {})
     model_to_lookup = model.get("litellm_params", {}).get("model", None)
@@ -971,6 +973,7 @@ async def completion(request: Request, model: Optional[str] = None, user_api_key
         background_tasks.add_task(log_input_output, request, response) # background task for logging to OTEL 
         return response
     except Exception as e: 
+        print(f"EXCEPTION RAISED IN PROXY MAIN.PY")
         print(f"\033[1;31mAn error occurred: {e}\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`")
         traceback.print_exc()
         error_traceback = traceback.format_exc()
