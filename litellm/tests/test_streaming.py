@@ -1003,8 +1003,6 @@ def test_together_ai_completion_call_mistral():
         print(f"error occurred: {traceback.format_exc()}")
         pass
 
-test_together_ai_completion_call_starcoder() 
-
 def test_together_ai_completion_call_starcoder_bad_key():
     try:
         api_key = "bad-key"
