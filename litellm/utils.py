@@ -7198,6 +7198,7 @@ class CustomStreamWrapper:
                 or self.custom_llm_provider == "text-completion-openai"
                 or self.custom_llm_provider == "huggingface"
                 or self.custom_llm_provider == "ollama"
+                or self.custom_llm_provider == "ollama_chat"
                 or self.custom_llm_provider == "vertex_ai"
             ):
                 print_verbose(f"INSIDE ASYNC STREAMING!!!")
