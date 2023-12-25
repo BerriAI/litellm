@@ -6,6 +6,8 @@ from litellm.caching import DualCache
 from litellm.proxy.hooks.parallel_request_limiter import MaxParallelRequestsHandler
 from litellm.proxy.hooks.max_budget_limiter import MaxBudgetLimiter
 from litellm.integrations.custom_logger import CustomLogger
+from fastapi import HTTPException, status
+
 def print_verbose(print_statement):
     if litellm.set_verbose:
         print(f"LiteLLM Proxy: {print_statement}") # noqa
@@ -173,22 +175,25 @@ class PrismaClient:
                 hashed_token = token
                 if token.startswith("sk-"): 
                     hashed_token = self.hash_token(token=token)
-                if expires: 
-                    response = await self.db.litellm_verificationtoken.find_first(
-                            where={
-                                "token": hashed_token,
-                                "expires": {"gte": expires}  # Check if the token is not expired
-                            }
-                        )
-                else: 
-                    response = await self.db.litellm_verificationtoken.find_unique(
+                response = await self.db.litellm_verificationtoken.find_unique(
                         where={
                             "token": hashed_token
                         }
                     )
-                return response
+                if response:
+                    # Token exists, now check expiration.
+                    if response.expires is not None and expires is not None: 
+                        if response.expires >= expires:
+                            # Token exists and is not expired.
+                            return response
+                        else:
+                            # Token exists but is expired.
+                            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="expired user key")
+                else:
+                    # Token does not exist.
+                    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid user key")
             elif user_id is not None: 
-                response = await self.db.litellm_usertable.find_first( # type: ignore
+                response = await self.db.litellm_usertable.find_unique( # type: ignore
                             where={
                                 "user_id": user_id,
                             }

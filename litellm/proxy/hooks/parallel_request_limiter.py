@@ -6,6 +6,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from fastapi import HTTPException
 
 class MaxParallelRequestsHandler(CustomLogger): 
+    user_api_key_cache = None
     # Class variables or attributes
     def __init__(self):
         pass
