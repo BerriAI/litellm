@@ -234,13 +234,13 @@ def ollama_completion_stream(url, data, logging_obj):
         try:
             if response.status_code != 200:
                 raise OllamaError(
-                    status_code=response.status_code, message=response.text
+                    status_code=response.status_code, message=response.iter_lines()
                 )
 
             streamwrapper = litellm.CustomStreamWrapper(
                 completion_stream=response.iter_lines(),
                 model=data["model"],
-                custom_llm_provider="ollama",
+                custom_llm_provider="ollama_chat",
                 logging_obj=logging_obj,
             )
             for transformed_chunk in streamwrapper:
