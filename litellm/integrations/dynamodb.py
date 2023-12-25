@@ -10,19 +10,28 @@ import datetime, subprocess, sys
 import litellm, uuid
 from litellm._logging import print_verbose
 
+
 class DyanmoDBLogger:
     # Class variables or attributes
 
     def __init__(self):
         # Instance variables
         import boto3
-        self.dynamodb = boto3.resource('dynamodb', region_name=os.environ["AWS_REGION_NAME"])
+
+        self.dynamodb = boto3.resource(
+            "dynamodb", region_name=os.environ["AWS_REGION_NAME"]
+        )
         if litellm.dynamodb_table_name is None:
-            raise ValueError("LiteLLM Error, trying to use DynamoDB but not table name passed. Create a table and set `litellm.dynamodb_table_name=<your-table>`")
+            raise ValueError(
+                "LiteLLM Error, trying to use DynamoDB but not table name passed. Create a table and set `litellm.dynamodb_table_name=<your-table>`"
+            )
         self.table_name = litellm.dynamodb_table_name
 
-    async def _async_log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
+    async def _async_log_event(
+        self, kwargs, response_obj, start_time, end_time, print_verbose
+    ):
         self.log_event(kwargs, response_obj, start_time, end_time, print_verbose)
+
     def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
         try:
             print_verbose(
@@ -32,7 +41,9 @@ class DyanmoDBLogger:
             # construct payload to send to DynamoDB
             # follows the same params as langfuse.py
             litellm_params = kwargs.get("litellm_params", {})
-            metadata = litellm_params.get("metadata", {}) or {}  # if litellm_params['metadata'] == None
+            metadata = (
+                litellm_params.get("metadata", {}) or {}
+            )  # if litellm_params['metadata'] == None
             messages = kwargs.get("messages")
             optional_params = kwargs.get("optional_params", {})
             call_type = kwargs.get("call_type", "litellm.completion")
@@ -51,7 +62,7 @@ class DyanmoDBLogger:
                 "messages": messages,
                 "response": response_obj,
                 "usage": usage,
-                "metadata": metadata
+                "metadata": metadata,
             }
 
             # Ensure everything in the payload is converted to str
@@ -62,9 +73,8 @@ class DyanmoDBLogger:
                     # non blocking if it can't cast to a str
                     pass
 
-
             print_verbose(f"\nDynamoDB Logger - Logging payload = {payload}")
-            
+
             # put data in dyanmo DB
             table = self.dynamodb.Table(self.table_name)
             # Assuming log_data is a dictionary with log information

@@ -26,24 +26,24 @@
 # async def main():
 #     # Initialize the Router
 #     model_list= [{
-#             "model_name": "gpt-3.5-turbo", 
+#             "model_name": "gpt-3.5-turbo",
 #             "litellm_params": {
-#                 "model": "gpt-3.5-turbo", 
-#                 "api_key": os.getenv("OPENAI_API_KEY"), 
+#                 "model": "gpt-3.5-turbo",
+#                 "api_key": os.getenv("OPENAI_API_KEY"),
 #             },
 #         }, {
-#             "model_name": "gpt-3.5-turbo", 
+#             "model_name": "gpt-3.5-turbo",
 #             "litellm_params": {
-#                 "model": "azure/chatgpt-v-2", 
-#                 "api_key": os.getenv("AZURE_API_KEY"), 
+#                 "model": "azure/chatgpt-v-2",
+#                 "api_key": os.getenv("AZURE_API_KEY"),
 #                 "api_base": os.getenv("AZURE_API_BASE"),
 #                 "api_version": os.getenv("AZURE_API_VERSION")
 #             },
 #         }, {
-#             "model_name": "gpt-3.5-turbo", 
+#             "model_name": "gpt-3.5-turbo",
 #             "litellm_params": {
-#                 "model": "azure/chatgpt-functioncalling", 
-#                 "api_key": os.getenv("AZURE_API_KEY"), 
+#                 "model": "azure/chatgpt-functioncalling",
+#                 "api_key": os.getenv("AZURE_API_KEY"),
 #                 "api_base": os.getenv("AZURE_API_BASE"),
 #                 "api_version": os.getenv("AZURE_API_VERSION")
 #             },

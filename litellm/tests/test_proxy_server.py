@@ -9,11 +9,12 @@ import os, io
 
 sys.path.insert(
     0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path 
+)  # Adds the parent directory to the system path
 import pytest, logging
 import litellm
 from litellm import embedding, completion, completion_cost, Timeout
 from litellm import RateLimitError
+
 # Configure logging
 logging.basicConfig(
     level=logging.DEBUG,  # Set the desired logging level
@@ -23,19 +24,23 @@ logging.basicConfig(
 # test /chat/completion request to the proxy
 from fastapi.testclient import TestClient
 from fastapi import FastAPI
-from litellm.proxy.proxy_server import router, save_worker_config, initialize  # Replace with the actual module where your FastAPI router is defined
+from litellm.proxy.proxy_server import (
+    router,
+    save_worker_config,
+    initialize,
+)  # Replace with the actual module where your FastAPI router is defined
 
 # Your bearer token
 token = ""
 
-headers = {
-    "Authorization": f"Bearer {token}"
-}
-    
+headers = {"Authorization": f"Bearer {token}"}
+
+
 @pytest.fixture(scope="function")
 def client_no_auth():
     # Assuming litellm.proxy.proxy_server is an object
     from litellm.proxy.proxy_server import cleanup_router_config_variables
+
     cleanup_router_config_variables()
     filepath = os.path.dirname(os.path.abspath(__file__))
     config_fp = f"{filepath}/test_configs/test_config_no_auth.yaml"
@@ -46,6 +51,7 @@ def client_no_auth():
 
     return TestClient(app)
 
+
 def test_chat_completion(client_no_auth):
     global headers
     try:
@@ -53,14 +59,11 @@ def test_chat_completion(client_no_auth):
         test_data = {
             "model": "gpt-3.5-turbo",
             "messages": [
-                {
-                    "role": "user",
-                    "content": "hi"
-                },
+                {"role": "user", "content": "hi"},
             ],
             "max_tokens": 10,
         }
-        
+
         print("testing proxy server with chat completions")
         response = client_no_auth.post("/v1/chat/completions", json=test_data)
         print(f"response - {response.text}")
@@ -70,41 +73,41 @@ def test_chat_completion(client_no_auth):
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception - {str(e)}")
 
+
 # Run the test
 
-def test_chat_completion_azure(client_no_auth):
 
+def test_chat_completion_azure(client_no_auth):
     global headers
     try:
         # Your test data
         test_data = {
             "model": "azure/chatgpt-v-2",
             "messages": [
-                {
-                    "role": "user",
-                    "content": "write 1 sentence poem"
-                },
+                {"role": "user", "content": "write 1 sentence poem"},
             ],
             "max_tokens": 10,
         }
-        
+
         print("testing proxy server with Azure Request /chat/completions")
         response = client_no_auth.post("/v1/chat/completions", json=test_data)
 
         assert response.status_code == 200
         result = response.json()
         print(f"Received response: {result}")
-        assert len(result["choices"][0]["message"]["content"]) > 0 
+        assert len(result["choices"][0]["message"]["content"]) > 0
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception - {str(e)}")
+
 
 # Run the test
 # test_chat_completion_azure()
 
-### EMBEDDING 
+
+### EMBEDDING
 def test_embedding(client_no_auth):
     global headers
-    from litellm.proxy.proxy_server import user_custom_auth 
+    from litellm.proxy.proxy_server import user_custom_auth
 
     try:
         test_data = {
@@ -117,13 +120,14 @@ def test_embedding(client_no_auth):
         assert response.status_code == 200
         result = response.json()
         print(len(result["data"][0]["embedding"]))
-        assert len(result["data"][0]["embedding"]) > 10 # this usually has len==1536 so
+        assert len(result["data"][0]["embedding"]) > 10  # this usually has len==1536 so
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception - {str(e)}")
 
+
 def test_bedrock_embedding(client_no_auth):
     global headers
-    from litellm.proxy.proxy_server import user_custom_auth 
+    from litellm.proxy.proxy_server import user_custom_auth
 
     try:
         test_data = {
@@ -136,13 +140,14 @@ def test_bedrock_embedding(client_no_auth):
         assert response.status_code == 200
         result = response.json()
         print(len(result["data"][0]["embedding"]))
-        assert len(result["data"][0]["embedding"]) > 10 # this usually has len==1536 so
+        assert len(result["data"][0]["embedding"]) > 10  # this usually has len==1536 so
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception - {str(e)}")
 
+
 def test_sagemaker_embedding(client_no_auth):
     global headers
-    from litellm.proxy.proxy_server import user_custom_auth 
+    from litellm.proxy.proxy_server import user_custom_auth
 
     try:
         test_data = {
@@ -155,24 +160,26 @@ def test_sagemaker_embedding(client_no_auth):
         assert response.status_code == 200
         result = response.json()
         print(len(result["data"][0]["embedding"]))
-        assert len(result["data"][0]["embedding"]) > 10 # this usually has len==1536 so
+        assert len(result["data"][0]["embedding"]) > 10  # this usually has len==1536 so
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception - {str(e)}")
+
 
 # Run the test
 # test_embedding()
 #### IMAGE GENERATION
-        
+
+
 def test_img_gen(client_no_auth):
     global headers
-    from litellm.proxy.proxy_server import user_custom_auth 
+    from litellm.proxy.proxy_server import user_custom_auth
 
     try:
         test_data = {
             "model": "dall-e-3",
             "prompt": "A cute baby sea otter",
             "n": 1,
-            "size": "1024x1024"
+            "size": "1024x1024",
         }
 
         response = client_no_auth.post("/v1/images/generations", json=test_data)
@@ -180,41 +187,41 @@ def test_img_gen(client_no_auth):
         assert response.status_code == 200
         result = response.json()
         print(len(result["data"][0]["url"]))
-        assert len(result["data"][0]["url"]) > 10 
+        assert len(result["data"][0]["url"]) > 10
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception - {str(e)}")
 
-#### ADDITIONAL 
+
+#### ADDITIONAL
 # @pytest.mark.skip(reason="hitting yaml load issues on circle-ci")
 def test_add_new_model(client_no_auth):
     global headers
-    try: 
+    try:
         test_data = {
             "model_name": "test_openai_models",
             "litellm_params": {
-                "model": "gpt-3.5-turbo", 
+                "model": "gpt-3.5-turbo",
             },
-            "model_info": {
-                "description": "this is a test openai model"
-            }
+            "model_info": {"description": "this is a test openai model"},
         }
         client_no_auth.post("/model/new", json=test_data, headers=headers)
         response = client_no_auth.get("/model/info", headers=headers)
         assert response.status_code == 200
-        result = response.json() 
+        result = response.json()
         print(f"response: {result}")
         model_info = None
         for m in result["data"]:
             if m["model_name"] == "test_openai_models":
                 model_info = m["model_info"]
         assert model_info["description"] == "this is a test openai model"
-    except Exception as e: 
+    except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception {str(e)}")
 
 
 def test_health(client_no_auth):
     global headers
     import time
+
     try:
         response = client_no_auth.get("/health")
         assert response.status_code == 200
@@ -222,18 +229,23 @@ def test_health(client_no_auth):
         assert result["unhealthy_count"] == 0
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception - {str(e)}")
+
+
 # test_add_new_model()
 
 from litellm.integrations.custom_logger import CustomLogger
+
+
 class MyCustomHandler(CustomLogger):
-    def log_pre_api_call(self, model, messages, kwargs): 
+    def log_pre_api_call(self, model, messages, kwargs):
         print(f"Pre-API Call")
 
-    def log_success_event(self, kwargs, response_obj, start_time, end_time): 
+    def log_success_event(self, kwargs, response_obj, start_time, end_time):
         print(f"On Success")
         assert kwargs["user"] == "proxy-user"
         assert kwargs["model"] == "gpt-3.5-turbo"
         assert kwargs["max_tokens"] == 10
+
 
 customHandler = MyCustomHandler()
 
@@ -243,19 +255,16 @@ def test_chat_completion_optional_params(client_no_auth):
     # This tests if all the /chat/completion params are passed to litellm
     try:
         # Your test data
-        litellm.set_verbose=True
+        litellm.set_verbose = True
         test_data = {
             "model": "gpt-3.5-turbo",
             "messages": [
-                {
-                    "role": "user",
-                    "content": "hi"
-                },
+                {"role": "user", "content": "hi"},
             ],
             "max_tokens": 10,
-            "user": "proxy-user"
+            "user": "proxy-user",
         }
-        
+
         litellm.callbacks = [customHandler]
         print("testing proxy server: optional params")
         response = client_no_auth.post("/v1/chat/completions", json=test_data)
@@ -265,28 +274,39 @@ def test_chat_completion_optional_params(client_no_auth):
     except Exception as e:
         pytest.fail("LiteLLM Proxy test failed. Exception", e)
 
+
 # Run the test
 # test_chat_completion_optional_params()
 
-# Test Reading config.yaml file 
+# Test Reading config.yaml file
 from litellm.proxy.proxy_server import load_router_config
+
 
 def test_load_router_config():
     try:
         print("testing reading config")
         # this is a basic config.yaml with only a model
         filepath = os.path.dirname(os.path.abspath(__file__))
-        result = load_router_config(router=None, config_file_path=f"{filepath}/example_config_yaml/simple_config.yaml")
+        result = load_router_config(
+            router=None,
+            config_file_path=f"{filepath}/example_config_yaml/simple_config.yaml",
+        )
         print(result)
         assert len(result[1]) == 1
 
         # this is a load balancing config yaml
-        result = load_router_config(router=None, config_file_path=f"{filepath}/example_config_yaml/azure_config.yaml")
+        result = load_router_config(
+            router=None,
+            config_file_path=f"{filepath}/example_config_yaml/azure_config.yaml",
+        )
         print(result)
         assert len(result[1]) == 2
 
         # config with general settings - custom callbacks
-        result = load_router_config(router=None, config_file_path=f"{filepath}/example_config_yaml/azure_config.yaml")
+        result = load_router_config(
+            router=None,
+            config_file_path=f"{filepath}/example_config_yaml/azure_config.yaml",
+        )
         print(result)
         assert len(result[1]) == 2
 
@@ -295,24 +315,38 @@ def test_load_router_config():
         litellm.cache = None
         load_router_config(
             router=None,
-            config_file_path=f"{filepath}/example_config_yaml/cache_no_params.yaml"
+            config_file_path=f"{filepath}/example_config_yaml/cache_no_params.yaml",
         )
         assert litellm.cache is not None
-        assert "redis_client" in vars(litellm.cache.cache) # it should default to redis on proxy
-        assert litellm.cache.supported_call_types == ['completion', 'acompletion', 'embedding', 'aembedding'] # init with all call types
-       
+        assert "redis_client" in vars(
+            litellm.cache.cache
+        )  # it should default to redis on proxy
+        assert litellm.cache.supported_call_types == [
+            "completion",
+            "acompletion",
+            "embedding",
+            "aembedding",
+        ]  # init with all call types
+
         print("testing reading proxy config for cache with params")
         load_router_config(
             router=None,
-            config_file_path=f"{filepath}/example_config_yaml/cache_with_params.yaml"
+            config_file_path=f"{filepath}/example_config_yaml/cache_with_params.yaml",
         )
         assert litellm.cache is not None
         print(litellm.cache)
         print(litellm.cache.supported_call_types)
         print(vars(litellm.cache.cache))
-        assert "redis_client" in vars(litellm.cache.cache) # it should default to redis on proxy
-        assert litellm.cache.supported_call_types == ['embedding', 'aembedding'] # init with all call types
+        assert "redis_client" in vars(
+            litellm.cache.cache
+        )  # it should default to redis on proxy
+        assert litellm.cache.supported_call_types == [
+            "embedding",
+            "aembedding",
+        ]  # init with all call types
 
     except Exception as e:
         pytest.fail("Proxy: Got exception reading config", e)
+
+
 # test_load_router_config()

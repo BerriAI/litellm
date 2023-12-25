@@ -9,7 +9,7 @@ import os, io
 
 sys.path.insert(
     0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path 
+)  # Adds the parent directory to the system path
 import pytest
 import litellm
 from litellm import embedding, completion, completion_cost, Timeout
@@ -18,7 +18,11 @@ from litellm import RateLimitError
 # test /chat/completion request to the proxy
 from fastapi.testclient import TestClient
 from fastapi import FastAPI
-from litellm.proxy.proxy_server import router, save_worker_config, initialize  # Replace with the actual module where your FastAPI router is defined
+from litellm.proxy.proxy_server import (
+    router,
+    save_worker_config,
+    initialize,
+)  # Replace with the actual module where your FastAPI router is defined
 
 
 # Here you create a fixture that will be used by your tests
@@ -26,6 +30,7 @@ from litellm.proxy.proxy_server import router, save_worker_config, initialize  #
 @pytest.fixture(scope="function")
 def client():
     from litellm.proxy.proxy_server import cleanup_router_config_variables
+
     cleanup_router_config_variables()
     filepath = os.path.dirname(os.path.abspath(__file__))
     config_fp = f"{filepath}/test_configs/test_config_custom_auth.yaml"
@@ -39,23 +44,18 @@ def client():
 
 def test_custom_auth(client):
     try:
-         # Your test data
+        # Your test data
         test_data = {
             "model": "openai-model",
             "messages": [
-                {
-                    "role": "user",
-                    "content": "hi"
-                },
+                {"role": "user", "content": "hi"},
             ],
             "max_tokens": 10,
         }
         # Your bearer token
         token = os.getenv("PROXY_MASTER_KEY")
 
-        headers = {
-            "Authorization": f"Bearer {token}"
-        }
+        headers = {"Authorization": f"Bearer {token}"}
         response = client.post("/chat/completions", json=test_data, headers=headers)
         print(f"response: {response.text}")
         assert response.status_code == 401

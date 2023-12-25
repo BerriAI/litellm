@@ -4,16 +4,13 @@ import uuid
 import traceback
 
 
-litellm_client = AsyncOpenAI(
-    api_key="sk-1234",
-    base_url="http://0.0.0.0:8000"
-)
+litellm_client = AsyncOpenAI(api_key="sk-1234", base_url="http://0.0.0.0:8000")
 
 
 async def litellm_completion():
     # Your existing code for litellm_completion goes here
     try:
-        response  = await litellm_client.chat.completions.create(
+        response = await litellm_client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": f"This is a test: {uuid.uuid4()}"}],
         )
@@ -24,7 +21,6 @@ async def litellm_completion():
         with open("error_log.txt", "a") as error_log:
             error_log.write(f"Error during completion: {str(e)}\n")
         pass
-    
 
 
 async def main():
@@ -43,6 +39,7 @@ async def main():
                 error_log.write(completion + "\n")
 
     print(n, time.time() - start, len(successful_completions))
+
 
 if __name__ == "__main__":
     # Blank out contents of error_log.txt

@@ -2,6 +2,7 @@ import requests
 import time
 import os
 from dotenv import load_dotenv
+
 load_dotenv()
 
 
@@ -12,37 +13,35 @@ base_url = "https://api.litellm.ai"
 
 # Step 1 Add a config to the proxy, generate a temp key
 config = {
-  "model_list": [
-    {
-      "model_name": "gpt-3.5-turbo",
-      "litellm_params": {
-        "model": "gpt-3.5-turbo",
-        "api_key": os.environ['OPENAI_API_KEY'],
-      }
-    },
-    {
-      "model_name": "gpt-3.5-turbo",
-      "litellm_params": {
-        "model": "azure/chatgpt-v-2",
-        "api_key": os.environ['AZURE_API_KEY'],
-        "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com/",
-        "api_version": "2023-07-01-preview"
-      }
-    }
-  ]
+    "model_list": [
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {
+                "model": "gpt-3.5-turbo",
+                "api_key": os.environ["OPENAI_API_KEY"],
+            },
+        },
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {
+                "model": "azure/chatgpt-v-2",
+                "api_key": os.environ["AZURE_API_KEY"],
+                "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com/",
+                "api_version": "2023-07-01-preview",
+            },
+        },
+    ]
 }
 print("STARTING LOAD TEST Q")
-print(os.environ['AZURE_API_KEY'])
+print(os.environ["AZURE_API_KEY"])
 
 response = requests.post(
     url=f"{base_url}/key/generate",
     json={
         "config": config,
-        "duration": "30d"  # default to 30d, set it to 30m if you want a temp key
+        "duration": "30d",  # default to 30d, set it to 30m if you want a temp key
     },
-    headers={
-        "Authorization": "Bearer sk-hosted-litellm"
-    }
+    headers={"Authorization": "Bearer sk-hosted-litellm"},
 )
 
 print("\nresponse from generating key", response.text)
@@ -56,19 +55,18 @@ print("\ngenerated key for proxy", generated_key)
 
 import concurrent.futures
 
+
 def create_job_and_poll(request_num):
     print(f"Creating a job on the proxy for request {request_num}")
     job_response = requests.post(
         url=f"{base_url}/queue/request",
         json={
-            'model': 'gpt-3.5-turbo',
-            'messages': [
-                {'role': 'system', 'content': 'write a short poem'},
+            "model": "gpt-3.5-turbo",
+            "messages": [
+                {"role": "system", "content": "write a short poem"},
             ],
         },
-        headers={
-            "Authorization": f"Bearer {generated_key}"
-        }
+        headers={"Authorization": f"Bearer {generated_key}"},
     )
     print(job_response.status_code)
     print(job_response.text)
@@ -84,12 +82,12 @@ def create_job_and_poll(request_num):
         try:
             print(f"\nPolling URL for request {request_num}", polling_url)
             polling_response = requests.get(
-                url=polling_url,
-                headers={
-                    "Authorization": f"Bearer {generated_key}"
-                }
+                url=polling_url, headers={"Authorization": f"Bearer {generated_key}"}
             )
-            print(f"\nResponse from polling url for request {request_num}", polling_response.text)
+            print(
+                f"\nResponse from polling url for request {request_num}",
+                polling_response.text,
+            )
             polling_response = polling_response.json()
             status = polling_response.get("status", None)
             if status == "finished":
@@ -108,6 +106,7 @@ def create_job_and_poll(request_num):
             time.sleep(0.5)
         except Exception as e:
             print("got exception when polling", e)
+
 
 # Number of requests
 num_requests = 100

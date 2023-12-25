@@ -5,14 +5,20 @@ from dotenv import load_dotenv
 
 load_dotenv()
 import os, io, asyncio
+
 sys.path.insert(
     0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path 
+)  # Adds the parent directory to the system path
 import pytest
 import litellm, openai
 from fastapi.testclient import TestClient
 from fastapi import FastAPI
-from litellm.proxy.proxy_server import router, save_worker_config, initialize  # Replace with the actual module where your FastAPI router is defined
+from litellm.proxy.proxy_server import (
+    router,
+    save_worker_config,
+    initialize,
+)  # Replace with the actual module where your FastAPI router is defined
+
 
 @pytest.fixture
 def client():
@@ -23,6 +29,7 @@ def client():
     app.include_router(router)  # Include your router in the test app
     return TestClient(app)
 
+
 # raise openai.AuthenticationError
 def test_chat_completion_exception(client):
     try:
@@ -30,10 +37,7 @@ def test_chat_completion_exception(client):
         test_data = {
             "model": "gpt-3.5-turbo",
             "messages": [
-                {
-                    "role": "user",
-                    "content": "hi"
-                },
+                {"role": "user", "content": "hi"},
             ],
             "max_tokens": 10,
         }
@@ -42,11 +46,14 @@ def test_chat_completion_exception(client):
 
         # make an openai client to call _make_status_error_from_response
         openai_client = openai.OpenAI(api_key="anything")
-        openai_exception = openai_client._make_status_error_from_response(response=response)
+        openai_exception = openai_client._make_status_error_from_response(
+            response=response
+        )
         assert isinstance(openai_exception, openai.AuthenticationError)
 
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception {str(e)}")
+
 
 # raise openai.AuthenticationError
 def test_chat_completion_exception_azure(client):
@@ -55,10 +62,7 @@ def test_chat_completion_exception_azure(client):
         test_data = {
             "model": "azure-gpt-3.5-turbo",
             "messages": [
-                {
-                    "role": "user",
-                    "content": "hi"
-                },
+                {"role": "user", "content": "hi"},
             ],
             "max_tokens": 10,
         }
@@ -67,7 +71,9 @@ def test_chat_completion_exception_azure(client):
 
         # make an openai client to call _make_status_error_from_response
         openai_client = openai.OpenAI(api_key="anything")
-        openai_exception = openai_client._make_status_error_from_response(response=response)
+        openai_exception = openai_client._make_status_error_from_response(
+            response=response
+        )
         print(openai_exception)
         assert isinstance(openai_exception, openai.AuthenticationError)
 
@@ -79,24 +85,21 @@ def test_chat_completion_exception_azure(client):
 def test_embedding_auth_exception_azure(client):
     try:
         # Your test data
-        test_data = {
-            "model": "azure-embedding",
-            "input": ["hi"]
-        }
+        test_data = {"model": "azure-embedding", "input": ["hi"]}
 
         response = client.post("/embeddings", json=test_data)
         print("Response from proxy=", response)
 
         # make an openai client to call _make_status_error_from_response
         openai_client = openai.OpenAI(api_key="anything")
-        openai_exception = openai_client._make_status_error_from_response(response=response)
+        openai_exception = openai_client._make_status_error_from_response(
+            response=response
+        )
         print("Exception raised=", openai_exception)
         assert isinstance(openai_exception, openai.AuthenticationError)
 
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception {str(e)}")
-
-
 
 
 # raise openai.BadRequestError
@@ -107,10 +110,7 @@ def test_exception_openai_bad_model(client):
         test_data = {
             "model": "azure/GPT-12",
             "messages": [
-                {
-                    "role": "user",
-                    "content": "hi"
-                },
+                {"role": "user", "content": "hi"},
             ],
             "max_tokens": 10,
         }
@@ -119,12 +119,15 @@ def test_exception_openai_bad_model(client):
 
         # make an openai client to call _make_status_error_from_response
         openai_client = openai.OpenAI(api_key="anything")
-        openai_exception = openai_client._make_status_error_from_response(response=response)
+        openai_exception = openai_client._make_status_error_from_response(
+            response=response
+        )
         print("Type of exception=", type(openai_exception))
         assert isinstance(openai_exception, openai.NotFoundError)
 
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception {str(e)}")
+
 
 # chat/completions any model
 def test_chat_completion_exception_any_model(client):
@@ -133,10 +136,7 @@ def test_chat_completion_exception_any_model(client):
         test_data = {
             "model": "Lite-GPT-12",
             "messages": [
-                {
-                    "role": "user",
-                    "content": "hi"
-                },
+                {"role": "user", "content": "hi"},
             ],
             "max_tokens": 10,
         }
@@ -145,34 +145,32 @@ def test_chat_completion_exception_any_model(client):
 
         # make an openai client to call _make_status_error_from_response
         openai_client = openai.OpenAI(api_key="anything")
-        openai_exception = openai_client._make_status_error_from_response(response=response)
+        openai_exception = openai_client._make_status_error_from_response(
+            response=response
+        )
         print("Exception raised=", openai_exception)
         assert isinstance(openai_exception, openai.NotFoundError)
 
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception {str(e)}")
-
 
 
 # embeddings any model
 def test_embedding_exception_any_model(client):
     try:
         # Your test data
-        test_data = {
-            "model": "Lite-GPT-12",
-            "input": ["hi"]
-        }
+        test_data = {"model": "Lite-GPT-12", "input": ["hi"]}
 
         response = client.post("/embeddings", json=test_data)
         print("Response from proxy=", response)
 
         # make an openai client to call _make_status_error_from_response
         openai_client = openai.OpenAI(api_key="anything")
-        openai_exception = openai_client._make_status_error_from_response(response=response)
+        openai_exception = openai_client._make_status_error_from_response(
+            response=response
+        )
         print("Exception raised=", openai_exception)
         assert isinstance(openai_exception, openai.NotFoundError)
 
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception {str(e)}")
-
-

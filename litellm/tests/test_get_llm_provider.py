@@ -11,9 +11,11 @@ sys.path.insert(
 import pytest
 import litellm
 
+
 def test_get_llm_provider():
     _, response, _, _ = litellm.get_llm_provider(model="anthropic.claude-v2:1")
 
     assert response == "bedrock"
+
 
 test_get_llm_provider()

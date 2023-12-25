@@ -1,4 +1,4 @@
-# # This tests the litelm proxy 
+# # This tests the litelm proxy
 # # it makes async Completion requests with streaming
 # import openai
 
@@ -8,14 +8,14 @@
 
 # async def test_async_completion():
 #     response = await (
-#         model="gpt-3.5-turbo", 
+#         model="gpt-3.5-turbo",
 #         prompt='this is a test request, write a short poem',
 #     )
 #     print(response)
 
 #     print("test_streaming")
 #     response = await openai.chat.completions.create(
-#         model="gpt-3.5-turbo", 
+#         model="gpt-3.5-turbo",
 #         prompt='this is a test request, write a short poem',
 #         stream=True
 #     )
@@ -26,4 +26,3 @@
 
 # import asyncio
 # asyncio.run(test_async_completion())
-

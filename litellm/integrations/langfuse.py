@@ -64,7 +64,9 @@ class LangFuseLogger:
             # end of processing langfuse ########################
             input = prompt
             output = response_obj["choices"][0]["message"].json()
-            print(f"OUTPUT IN LANGFUSE: {output}; original: {response_obj['choices'][0]['message']}")
+            print(
+                f"OUTPUT IN LANGFUSE: {output}; original: {response_obj['choices'][0]['message']}"
+            )
             self._log_langfuse_v2(
                 user_id,
                 metadata,
@@ -171,7 +173,6 @@ class LangFuseLogger:
             user_id=user_id,
         )
 
-        
         trace.generation(
             name=metadata.get("generation_name", "litellm-completion"),
             startTime=start_time,

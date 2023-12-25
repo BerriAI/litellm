@@ -5,32 +5,33 @@ import requests
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.caching import DualCache
 from typing import Literal
+
 dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
 
 
-class CustomLogger: # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
+class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
     # Class variables or attributes
     def __init__(self):
         pass
 
-    def log_pre_api_call(self, model, messages, kwargs): 
+    def log_pre_api_call(self, model, messages, kwargs):
         pass
 
-    def log_post_api_call(self, kwargs, response_obj, start_time, end_time): 
+    def log_post_api_call(self, kwargs, response_obj, start_time, end_time):
         pass
-    
+
     def log_stream_event(self, kwargs, response_obj, start_time, end_time):
         pass
 
-    def log_success_event(self, kwargs, response_obj, start_time, end_time): 
+    def log_success_event(self, kwargs, response_obj, start_time, end_time):
         pass
 
-    def log_failure_event(self, kwargs, response_obj, start_time, end_time): 
+    def log_failure_event(self, kwargs, response_obj, start_time, end_time):
         pass
 
-    #### ASYNC #### 
-    
+    #### ASYNC ####
+
     async def async_log_stream_event(self, kwargs, response_obj, start_time, end_time):
         pass
 
@@ -43,80 +44,86 @@ class CustomLogger: # https://docs.litellm.ai/docs/observability/custom_callback
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         pass
 
-    #### CALL HOOKS - proxy only #### 
+    #### CALL HOOKS - proxy only ####
     """
     Control the modify incoming / outgoung data before calling the model
     """
-    async def async_pre_call_hook(self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict, call_type: Literal["completion", "embeddings"]):
+
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: DualCache,
+        data: dict,
+        call_type: Literal["completion", "embeddings"],
+    ):
         pass
-    
-    async def async_post_call_failure_hook(self, original_exception: Exception, user_api_key_dict: UserAPIKeyAuth):
+
+    async def async_post_call_failure_hook(
+        self, original_exception: Exception, user_api_key_dict: UserAPIKeyAuth
+    ):
         pass
 
     #### SINGLE-USE #### - https://docs.litellm.ai/docs/observability/custom_callback#using-your-custom-callback-function
 
     def log_input_event(self, model, messages, kwargs, print_verbose, callback_func):
-        try: 
+        try:
             kwargs["model"] = model
             kwargs["messages"] = messages
             kwargs["log_event_type"] = "pre_api_call"
             callback_func(
                 kwargs,
             )
-            print_verbose(
-                f"Custom Logger - model call details: {kwargs}"
-            )
-        except: 
+            print_verbose(f"Custom Logger - model call details: {kwargs}")
+        except:
             traceback.print_exc()
             print_verbose(f"Custom Logger Error - {traceback.format_exc()}")
 
-    async def async_log_input_event(self, model, messages, kwargs, print_verbose, callback_func):
-        try: 
+    async def async_log_input_event(
+        self, model, messages, kwargs, print_verbose, callback_func
+    ):
+        try:
             kwargs["model"] = model
             kwargs["messages"] = messages
             kwargs["log_event_type"] = "pre_api_call"
             await callback_func(
                 kwargs,
             )
-            print_verbose(
-                f"Custom Logger - model call details: {kwargs}"
-            )
-        except: 
+            print_verbose(f"Custom Logger - model call details: {kwargs}")
+        except:
             traceback.print_exc()
             print_verbose(f"Custom Logger Error - {traceback.format_exc()}")
-    
 
-    def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose, callback_func):
+    def log_event(
+        self, kwargs, response_obj, start_time, end_time, print_verbose, callback_func
+    ):
         # Method definition
         try:
             kwargs["log_event_type"] = "post_api_call"
             callback_func(
-                kwargs, # kwargs to func
+                kwargs,  # kwargs to func
                 response_obj,
                 start_time,
                 end_time,
             )
-            print_verbose(
-                f"Custom Logger - final response object: {response_obj}"
-            )
+            print_verbose(f"Custom Logger - final response object: {response_obj}")
         except:
             # traceback.print_exc()
             print_verbose(f"Custom Logger Error - {traceback.format_exc()}")
             pass
-    
-    async def async_log_event(self, kwargs, response_obj, start_time, end_time, print_verbose, callback_func):
+
+    async def async_log_event(
+        self, kwargs, response_obj, start_time, end_time, print_verbose, callback_func
+    ):
         # Method definition
         try:
             kwargs["log_event_type"] = "post_api_call"
             await callback_func(
-                kwargs, # kwargs to func
+                kwargs,  # kwargs to func
                 response_obj,
                 start_time,
                 end_time,
             )
-            print_verbose(
-                f"Custom Logger - final response object: {response_obj}"
-            )
+            print_verbose(f"Custom Logger - final response object: {response_obj}")
         except:
             # traceback.print_exc()
             print_verbose(f"Custom Logger Error - {traceback.format_exc()}")

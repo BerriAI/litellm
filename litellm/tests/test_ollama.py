@@ -7,7 +7,7 @@ import os, io
 
 sys.path.insert(
     0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path    
+)  # Adds the parent directory to the system path
 import pytest
 import litellm
 
@@ -15,13 +15,26 @@ import litellm
 ## for ollama we can't test making the completion call
 from litellm.utils import get_optional_params, get_llm_provider
 
+
 def test_get_ollama_params():
     try:
-        converted_params = get_optional_params(custom_llm_provider="ollama", model="llama2", max_tokens=20, temperature=0.5, stream=True)
+        converted_params = get_optional_params(
+            custom_llm_provider="ollama",
+            model="llama2",
+            max_tokens=20,
+            temperature=0.5,
+            stream=True,
+        )
         print("Converted params", converted_params)
-        assert converted_params == {'num_predict': 20, 'stream': True, 'temperature': 0.5}, f"{converted_params} != {'num_predict': 20, 'stream': True, 'temperature': 0.5}"
+        assert converted_params == {
+            "num_predict": 20,
+            "stream": True,
+            "temperature": 0.5,
+        }, f"{converted_params} != {'num_predict': 20, 'stream': True, 'temperature': 0.5}"
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
 # test_get_ollama_params()
 
 
