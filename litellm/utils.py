@@ -2890,7 +2890,7 @@ def get_optional_params(  # use the openai defaults
             and custom_llm_provider != "text-completion-openai"
             and custom_llm_provider != "azure"
         ):
-            if custom_llm_provider == "ollama":
+            if custom_llm_provider == "ollama" or custom_llm_provider == "ollama_chat":
                 # ollama actually supports json output
                 optional_params["format"] = "json"
                 litellm.add_function_to_prompt = (
@@ -3324,6 +3324,29 @@ def get_optional_params(  # use the openai defaults
         if stop is not None:
             optional_params["stop_sequences"] = stop
     elif custom_llm_provider == "ollama":
+        supported_params = [
+            "max_tokens",
+            "stream",
+            "top_p",
+            "temperature",
+            "frequency_penalty",
+            "stop",
+        ]
+        _check_valid_arg(supported_params=supported_params)
+
+        if max_tokens is not None:
+            optional_params["num_predict"] = max_tokens
+        if stream:
+            optional_params["stream"] = stream
+        if temperature is not None:
+            optional_params["temperature"] = temperature
+        if top_p is not None:
+            optional_params["top_p"] = top_p
+        if frequency_penalty is not None:
+            optional_params["repeat_penalty"] = frequency_penalty
+        if stop is not None:
+            optional_params["stop_sequences"] = stop
+    elif custom_llm_provider == "ollama_chat":
         supported_params = [
             "max_tokens",
             "stream",
