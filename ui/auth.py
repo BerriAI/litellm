@@ -5,9 +5,6 @@ Uses supabase passwordless auth: https://supabase.com/docs/reference/python/auth
 
 Remember to set your redirect url to 8501 (streamlit default).
 """
-import logging
-
-logging.basicConfig(level=logging.DEBUG)
 import streamlit as st
 from dotenv import load_dotenv
 
@@ -21,17 +18,23 @@ key: str = os.environ.get("SUPABASE_KEY")
 supabase: Client = create_client(url, key)
 
 
-def sign_in_with_otp(email: str, redirect_url: str):
+def sign_in_with_otp(email: str, page_param: str):
+    print(f"received page param: {page_param}")
     data = supabase.auth.sign_in_with_otp(
-        {"email": email, "options": {"email_redirect_to": redirect_url}}
+        {"email": email, "options": {"data": {"page_param": page_param}}}
     )
     print(f"data: {data}")
     # Redirect to Supabase UI with the return data
     st.write(f"Please check your email for a login link!")
 
 
+def verify_with_otp(token: str):
+    res = supabase.auth.verify_otp({"token_hash": token, "type": "email"})
+    return res
+
+
 # Create the Streamlit app
-def auth_page(redirect_url: str):
+def auth_page(page_param: str):
     st.title("User Authentication")
 
     # User email input
@@ -39,4 +42,4 @@ def auth_page(redirect_url: str):
 
     # Sign in button
     if st.button("Sign In"):
-        sign_in_with_otp(email, redirect_url=redirect_url)
+        sign_in_with_otp(email, page_param=page_param)
