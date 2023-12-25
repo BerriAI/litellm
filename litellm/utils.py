@@ -5146,6 +5146,14 @@ def exception_type(
                                 llm_provider="together_ai",
                                 request=original_exception.request
                             )
+                    elif original_exception.status_code == 422:
+                        exception_mapping_worked = True
+                        raise BadRequestError(
+                            message=f"TogetherAIException - {error_response['error']}",
+                            model=model,
+                            llm_provider="together_ai",
+                            response=original_exception.response
+                        )
                     elif original_exception.status_code == 429:
                             exception_mapping_worked = True
                             raise RateLimitError(
@@ -5584,7 +5592,7 @@ class CustomStreamWrapper:
         elif "[DONE]" in chunk:
             return {"text": text, "is_finished": True, "finish_reason": "stop"}
         elif "error" in chunk:
-            raise ValueError(chunk)
+            raise litellm.together_ai.TogetherAIError(status_code=422, message=f"{str(chunk)}")
         else:
             return {"text": text, "is_finished": is_finished, "finish_reason": finish_reason}
 
@@ -6131,7 +6139,6 @@ class CustomStreamWrapper:
         except StopIteration:
             raise  # Re-raise StopIteration
         except Exception as e:
-            print_verbose(f"HITS AN ERROR: {str(e)}\n\n {traceback.format_exc()}")
             traceback_exception = traceback.format_exc()
             # LOG FAILURE - handle streaming failure logging in the _next_ object, remove `handle_failure` once it's deprecated
             threading.Thread(target=self.logging_obj.failure_handler, args=(e, traceback_exception)).start()
@@ -6180,7 +6187,7 @@ class CustomStreamWrapper:
             traceback_exception = traceback.format_exc()
             # Handle any exceptions that might occur during streaming
             asyncio.create_task(self.logging_obj.async_failure_handler(e, traceback_exception))
-            raise StopAsyncIteration
+            raise e
 
 class TextCompletionStreamWrapper:
     def __init__(self, completion_stream, model):
