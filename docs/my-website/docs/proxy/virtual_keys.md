@@ -3,6 +3,13 @@ Track Spend, Set budgets and create virtual keys for the proxy
 
 Grant other's temporary access to your proxy, with keys that expire after a set duration.
 
+
+:::info
+
+Complete API documentation in the Swagger docs on your proxy base url (e.g. `http://0.0.0.0:8000)`
+
+:::
+
 ## Quick Start
 
 Requirements: 
@@ -57,6 +64,17 @@ Expected response:
     "key": "sk-kdEXbIqZRwEeEiHwdg7sFA", # Bearer token
     "expires": "2023-11-19T01:38:25.838000+00:00" # datetime object
 }
+```
+
+## Keys that don't expire
+
+Just set duration to None. 
+
+```bash
+curl --location 'http://0.0.0.0:8000/key/generate' \
+--header 'Authorization: Bearer sk-1234' \
+--header 'Content-Type: application/json' \
+--data '{"models": ["azure-models"], "aliases": {"mistral-7b": "gpt-3.5-turbo"}, "duration": null}'
 ```
 
 ## Upgrade/Downgrade Models 
