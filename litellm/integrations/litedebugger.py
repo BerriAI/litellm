@@ -1,6 +1,7 @@
 import requests, traceback, json, os
 import types
 
+
 class LiteDebugger:
     user_email = None
     dashboard_url = None
@@ -12,9 +13,15 @@ class LiteDebugger:
 
     def validate_environment(self, email):
         try:
-            self.user_email = (email or os.getenv("LITELLM_TOKEN") or os.getenv("LITELLM_EMAIL"))
-            if self.user_email == None: # if users are trying to use_client=True but token not set
-                raise ValueError("litellm.use_client = True but no token or email passed. Please set it in litellm.token")
+            self.user_email = (
+                email or os.getenv("LITELLM_TOKEN") or os.getenv("LITELLM_EMAIL")
+            )
+            if (
+                self.user_email == None
+            ):  # if users are trying to use_client=True but token not set
+                raise ValueError(
+                    "litellm.use_client = True but no token or email passed. Please set it in litellm.token"
+                )
             self.dashboard_url = "https://admin.litellm.ai/" + self.user_email
             try:
                 print(
@@ -42,7 +49,9 @@ class LiteDebugger:
         litellm_params,
         optional_params,
     ):
-        print_verbose(f"LiteDebugger: Pre-API Call Logging for call id {litellm_call_id}")
+        print_verbose(
+            f"LiteDebugger: Pre-API Call Logging for call id {litellm_call_id}"
+        )
         try:
             print_verbose(
                 f"LiteLLMDebugger: Logging - Enters input logging function for model {model}"
@@ -56,7 +65,11 @@ class LiteDebugger:
             updated_litellm_params = remove_key_value(litellm_params, "logger_fn")
 
             if call_type == "embedding":
-                for message in messages: # assuming the input is a list as required by the embedding function
+                for (
+                    message
+                ) in (
+                    messages
+                ):  # assuming the input is a list as required by the embedding function
                     litellm_data_obj = {
                         "model": model,
                         "messages": [{"role": "user", "content": message}],
@@ -79,7 +92,9 @@ class LiteDebugger:
             elif call_type == "completion":
                 litellm_data_obj = {
                     "model": model,
-                    "messages": messages if isinstance(messages, list) else [{"role": "user", "content": messages}],
+                    "messages": messages
+                    if isinstance(messages, list)
+                    else [{"role": "user", "content": messages}],
                     "end_user": end_user,
                     "status": "initiated",
                     "litellm_call_id": litellm_call_id,
@@ -95,20 +110,30 @@ class LiteDebugger:
                     headers={"content-type": "application/json"},
                     data=json.dumps(litellm_data_obj),
                 )
-                print_verbose(f"LiteDebugger: completion api response - {response.text}")
+                print_verbose(
+                    f"LiteDebugger: completion api response - {response.text}"
+                )
         except:
             print_verbose(
                 f"[Non-Blocking Error] LiteDebugger: Logging Error - {traceback.format_exc()}"
             )
             pass
 
-    def post_call_log_event(self, original_response, litellm_call_id, print_verbose, call_type, stream):
-        print_verbose(f"LiteDebugger: Post-API Call Logging for call id {litellm_call_id}")
+    def post_call_log_event(
+        self, original_response, litellm_call_id, print_verbose, call_type, stream
+    ):
+        print_verbose(
+            f"LiteDebugger: Post-API Call Logging for call id {litellm_call_id}"
+        )
         try:
             if call_type == "embedding":
                 litellm_data_obj = {
                     "status": "received",
-                    "additional_details": {"original_response": str(original_response["data"][0]["embedding"][:5])}, # don't store the entire vector
+                    "additional_details": {
+                        "original_response": str(
+                            original_response["data"][0]["embedding"][:5]
+                        )
+                    },  # don't store the entire vector
                     "litellm_call_id": litellm_call_id,
                     "user_email": self.user_email,
                 }
@@ -122,7 +147,11 @@ class LiteDebugger:
             elif call_type == "completion" and stream:
                 litellm_data_obj = {
                     "status": "received",
-                    "additional_details": {"original_response": "Streamed response" if isinstance(original_response, types.GeneratorType) else original_response},
+                    "additional_details": {
+                        "original_response": "Streamed response"
+                        if isinstance(original_response, types.GeneratorType)
+                        else original_response
+                    },
                     "litellm_call_id": litellm_call_id,
                     "user_email": self.user_email,
                 }
@@ -146,10 +175,12 @@ class LiteDebugger:
         end_time,
         litellm_call_id,
         print_verbose,
-        call_type, 
-        stream = False
+        call_type,
+        stream=False,
     ):
-        print_verbose(f"LiteDebugger: Success/Failure Call Logging for call id {litellm_call_id}")
+        print_verbose(
+            f"LiteDebugger: Success/Failure Call Logging for call id {litellm_call_id}"
+        )
         try:
             print_verbose(
                 f"LiteLLMDebugger: Success/Failure Logging - Enters handler logging function for function {call_type} and stream set to {stream} with response object {response_obj}"
@@ -186,7 +217,7 @@ class LiteDebugger:
                     data=json.dumps(litellm_data_obj),
                 )
             elif call_type == "completion" and stream == True:
-                if len(response_obj["content"]) > 0: # don't log the empty strings
+                if len(response_obj["content"]) > 0:  # don't log the empty strings
                     litellm_data_obj = {
                         "response_time": response_time,
                         "total_cost": total_cost,

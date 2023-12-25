@@ -8,11 +8,11 @@ from datetime import datetime
 dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
 
+
 class LangsmithLogger:
     # Class variables or attributes
     def __init__(self):
         self.langsmith_api_key = os.getenv("LANGSMITH_API_KEY")
-
 
     def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
         # Method definition
@@ -20,13 +20,15 @@ class LangsmithLogger:
         metadata = {}
         if "litellm_params" in kwargs:
             metadata = kwargs["litellm_params"].get("metadata", {})
-        # set project name and run_name for langsmith logging 
+        # set project name and run_name for langsmith logging
         # users can pass project_name and run name to litellm.completion()
         # Example: litellm.completion(model, messages, metadata={"project_name": "my-litellm-project", "run_name": "my-langsmith-run"})
         # if not set litellm will use default project_name = litellm-completion, run_name = LLMRun
         project_name = metadata.get("project_name", "litellm-completion")
         run_name = metadata.get("run_name", "LLMRun")
-        print_verbose(f"Langsmith Logging - project_name: {project_name}, run_name {run_name}")
+        print_verbose(
+            f"Langsmith Logging - project_name: {project_name}, run_name {run_name}"
+        )
         try:
             print_verbose(
                 f"Langsmith Logging - Enters logging function for model {kwargs}"
@@ -34,6 +36,7 @@ class LangsmithLogger:
             import requests
             import datetime
             from datetime import timezone
+
             try:
                 start_time = kwargs["start_time"].astimezone(timezone.utc).isoformat()
                 end_time = kwargs["end_time"].astimezone(timezone.utc).isoformat()
@@ -45,7 +48,7 @@ class LangsmithLogger:
             new_kwargs = {}
             for key in kwargs:
                 value = kwargs[key]
-                if key == "start_time" or key =="end_time":
+                if key == "start_time" or key == "end_time":
                     pass
                 elif type(value) != dict:
                     new_kwargs[key] = value
@@ -54,18 +57,14 @@ class LangsmithLogger:
                 "https://api.smith.langchain.com/runs",
                 json={
                     "name": run_name,
-                    "run_type": "llm", # this should always be llm, since litellm always logs llm calls. Langsmith allow us to log "chain"
-                    "inputs": {
-                        **new_kwargs
-                    },
+                    "run_type": "llm",  # this should always be llm, since litellm always logs llm calls. Langsmith allow us to log "chain"
+                    "inputs": {**new_kwargs},
                     "outputs": response_obj.json(),
                     "session_name": project_name,
                     "start_time": start_time,
                     "end_time": end_time,
                 },
-                headers={
-                    "x-api-key": self.langsmith_api_key
-                }
+                headers={"x-api-key": self.langsmith_api_key},
             )
             print_verbose(
                 f"Langsmith Layer Logging - final response object: {response_obj}"

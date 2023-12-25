@@ -7,6 +7,7 @@ from typing import Callable, Optional
 import litellm
 from litellm.utils import ModelResponse, Usage
 
+
 class NLPCloudError(Exception):
     def __init__(self, status_code, message):
         self.status_code = status_code
@@ -15,7 +16,8 @@ class NLPCloudError(Exception):
             self.message
         )  # Call the base class constructor with the parameters it needs
 
-class NLPCloudConfig():
+
+class NLPCloudConfig:
     """
     Reference: https://docs.nlpcloud.com/#generation
 
@@ -43,45 +45,57 @@ class NLPCloudConfig():
 
     - `num_return_sequences` (int): Optional. The number of independently computed returned sequences.
     """
-    max_length: Optional[int]=None
-    length_no_input: Optional[bool]=None
-    end_sequence: Optional[str]=None
-    remove_end_sequence: Optional[bool]=None
-    remove_input: Optional[bool]=None
-    bad_words: Optional[list]=None
-    temperature: Optional[float]=None
-    top_p: Optional[float]=None
-    top_k: Optional[int]=None
-    repetition_penalty: Optional[float]=None
-    num_beams: Optional[int]=None
-    num_return_sequences: Optional[int]=None
 
+    max_length: Optional[int] = None
+    length_no_input: Optional[bool] = None
+    end_sequence: Optional[str] = None
+    remove_end_sequence: Optional[bool] = None
+    remove_input: Optional[bool] = None
+    bad_words: Optional[list] = None
+    temperature: Optional[float] = None
+    top_p: Optional[float] = None
+    top_k: Optional[int] = None
+    repetition_penalty: Optional[float] = None
+    num_beams: Optional[int] = None
+    num_return_sequences: Optional[int] = None
 
-    def __init__(self,
-                 max_length: Optional[int]=None,
-                 length_no_input: Optional[bool]=None,
-                 end_sequence: Optional[str]=None,
-                 remove_end_sequence: Optional[bool]=None,
-                 remove_input: Optional[bool]=None,
-                 bad_words: Optional[list]=None,
-                 temperature: Optional[float]=None,
-                 top_p: Optional[float]=None,
-                 top_k: Optional[int]=None,
-                 repetition_penalty: Optional[float]=None,
-                 num_beams: Optional[int]=None,
-                 num_return_sequences: Optional[int]=None) -> None:
-        
+    def __init__(
+        self,
+        max_length: Optional[int] = None,
+        length_no_input: Optional[bool] = None,
+        end_sequence: Optional[str] = None,
+        remove_end_sequence: Optional[bool] = None,
+        remove_input: Optional[bool] = None,
+        bad_words: Optional[list] = None,
+        temperature: Optional[float] = None,
+        top_p: Optional[float] = None,
+        top_k: Optional[int] = None,
+        repetition_penalty: Optional[float] = None,
+        num_beams: Optional[int] = None,
+        num_return_sequences: Optional[int] = None,
+    ) -> None:
         locals_ = locals()
         for key, value in locals_.items():
-            if key != 'self' and value is not None:
+            if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
-    
+
     @classmethod
     def get_config(cls):
-        return {k: v for k, v in cls.__dict__.items() 
-                if not k.startswith('__') 
-                and not isinstance(v, (types.FunctionType, types.BuiltinFunctionType, classmethod, staticmethod)) 
-                and v is not None}
+        return {
+            k: v
+            for k, v in cls.__dict__.items()
+            if not k.startswith("__")
+            and not isinstance(
+                v,
+                (
+                    types.FunctionType,
+                    types.BuiltinFunctionType,
+                    classmethod,
+                    staticmethod,
+                ),
+            )
+            and v is not None
+        }
 
 
 def validate_environment(api_key):
@@ -92,6 +106,7 @@ def validate_environment(api_key):
     if api_key:
         headers["Authorization"] = f"Token {api_key}"
     return headers
+
 
 def completion(
     model: str,
@@ -110,9 +125,11 @@ def completion(
     headers = validate_environment(api_key)
 
     ## Load Config
-    config = litellm.NLPCloudConfig.get_config() 
-    for k, v in config.items(): 
-        if k not in optional_params: # completion(top_k=3) > togetherai_config(top_k=3) <- allows for dynamic variables to be passed in
+    config = litellm.NLPCloudConfig.get_config()
+    for k, v in config.items():
+        if (
+            k not in optional_params
+        ):  # completion(top_k=3) > togetherai_config(top_k=3) <- allows for dynamic variables to be passed in
             optional_params[k] = v
 
     completion_url_fragment_1 = api_base
@@ -129,24 +146,31 @@ def completion(
 
     ## LOGGING
     logging_obj.pre_call(
-            input=text,
-            api_key=api_key,
-            additional_args={"complete_input_dict": data, "headers": headers, "api_base": completion_url},
-        )
+        input=text,
+        api_key=api_key,
+        additional_args={
+            "complete_input_dict": data,
+            "headers": headers,
+            "api_base": completion_url,
+        },
+    )
     ## COMPLETION CALL
     response = requests.post(
-        completion_url, headers=headers, data=json.dumps(data), stream=optional_params["stream"] if "stream" in optional_params else False
+        completion_url,
+        headers=headers,
+        data=json.dumps(data),
+        stream=optional_params["stream"] if "stream" in optional_params else False,
     )
     if "stream" in optional_params and optional_params["stream"] == True:
         return clean_and_iterate_chunks(response)
     else:
         ## LOGGING
         logging_obj.post_call(
-                input=text,
-                api_key=api_key,
-                original_response=response.text,
-                additional_args={"complete_input_dict": data},
-            )
+            input=text,
+            api_key=api_key,
+            original_response=response.text,
+            additional_args={"complete_input_dict": data},
+        )
         print_verbose(f"raw model_response: {response.text}")
         ## RESPONSE OBJECT
         try:
@@ -161,11 +185,16 @@ def completion(
         else:
             try:
                 if len(completion_response["generated_text"]) > 0:
-                    model_response["choices"][0]["message"]["content"] = completion_response["generated_text"]
+                    model_response["choices"][0]["message"][
+                        "content"
+                    ] = completion_response["generated_text"]
             except:
-                raise NLPCloudError(message=json.dumps(completion_response), status_code=response.status_code)
+                raise NLPCloudError(
+                    message=json.dumps(completion_response),
+                    status_code=response.status_code,
+                )
 
-        ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here. 
+        ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here.
         prompt_tokens = completion_response["nb_input_tokens"]
         completion_tokens = completion_response["nb_generated_tokens"]
 
@@ -174,7 +203,7 @@ def completion(
         usage = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
-            total_tokens=prompt_tokens + completion_tokens
+            total_tokens=prompt_tokens + completion_tokens,
         )
         model_response.usage = usage
         return model_response
@@ -187,25 +216,27 @@ def completion(
 #         # Perform further processing based on your needs
 #         return cleaned_chunk
 
+
 #     for line in response.iter_lines():
 #         if line:
 #             yield process_chunk(line)
 def clean_and_iterate_chunks(response):
-    buffer = b''
+    buffer = b""
 
     for chunk in response.iter_content(chunk_size=1024):
         if not chunk:
             break
 
         buffer += chunk
-        while b'\x00' in buffer:
-            buffer = buffer.replace(b'\x00', b'')
-            yield buffer.decode('utf-8')
-            buffer = b''
+        while b"\x00" in buffer:
+            buffer = buffer.replace(b"\x00", b"")
+            yield buffer.decode("utf-8")
+            buffer = b""
 
     # No more data expected, yield any remaining data in the buffer
     if buffer:
-        yield buffer.decode('utf-8')
+        yield buffer.decode("utf-8")
+
 
 def embedding():
     # logic for parsing in - calling - parsing out model embedding calls

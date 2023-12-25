@@ -1,20 +1,24 @@
 import time, json, httpx, asyncio
 
+
 class AsyncCustomHTTPTransport(httpx.AsyncHTTPTransport):
     """
     Async implementation of custom http transport
     """
-    async def handle_async_request(self, request: httpx.Request) -> httpx.Response: 
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         if "images/generations" in request.url.path and request.url.params[
             "api-version"
-        ] in [ # dall-e-3 starts from `2023-12-01-preview` so we should be able to avoid conflict
+        ] in [  # dall-e-3 starts from `2023-12-01-preview` so we should be able to avoid conflict
             "2023-06-01-preview",
             "2023-07-01-preview",
             "2023-08-01-preview",
             "2023-09-01-preview",
-            "2023-10-01-preview", 
+            "2023-10-01-preview",
         ]:
-            request.url = request.url.copy_with(path="/openai/images/generations:submit")
+            request.url = request.url.copy_with(
+                path="/openai/images/generations:submit"
+            )
             response = await super().handle_async_request(request)
             operation_location_url = response.headers["operation-location"]
             request.url = httpx.URL(operation_location_url)
@@ -26,7 +30,12 @@ class AsyncCustomHTTPTransport(httpx.AsyncHTTPTransport):
             start_time = time.time()
             while response.json()["status"] not in ["succeeded", "failed"]:
                 if time.time() - start_time > timeout_secs:
-                    timeout = {"error": {"code": "Timeout", "message": "Operation polling timed out."}}
+                    timeout = {
+                        "error": {
+                            "code": "Timeout",
+                            "message": "Operation polling timed out.",
+                        }
+                    }
                     return httpx.Response(
                         status_code=400,
                         headers=response.headers,
@@ -56,26 +65,30 @@ class AsyncCustomHTTPTransport(httpx.AsyncHTTPTransport):
             )
         return await super().handle_async_request(request)
 
+
 class CustomHTTPTransport(httpx.HTTPTransport):
     """
     This class was written as a workaround to support dall-e-2 on openai > v1.x
 
     Refer to this issue for more: https://github.com/openai/openai-python/issues/692
     """
+
     def handle_request(
         self,
         request: httpx.Request,
     ) -> httpx.Response:
         if "images/generations" in request.url.path and request.url.params[
             "api-version"
-        ] in [ # dall-e-3 starts from `2023-12-01-preview` so we should be able to avoid conflict
+        ] in [  # dall-e-3 starts from `2023-12-01-preview` so we should be able to avoid conflict
             "2023-06-01-preview",
             "2023-07-01-preview",
             "2023-08-01-preview",
             "2023-09-01-preview",
-            "2023-10-01-preview", 
+            "2023-10-01-preview",
         ]:
-            request.url = request.url.copy_with(path="/openai/images/generations:submit")
+            request.url = request.url.copy_with(
+                path="/openai/images/generations:submit"
+            )
             response = super().handle_request(request)
             operation_location_url = response.headers["operation-location"]
             request.url = httpx.URL(operation_location_url)
@@ -87,7 +100,12 @@ class CustomHTTPTransport(httpx.HTTPTransport):
             start_time = time.time()
             while response.json()["status"] not in ["succeeded", "failed"]:
                 if time.time() - start_time > timeout_secs:
-                    timeout = {"error": {"code": "Timeout", "message": "Operation polling timed out."}}
+                    timeout = {
+                        "error": {
+                            "code": "Timeout",
+                            "message": "Operation polling timed out.",
+                        }
+                    }
                     return httpx.Response(
                         status_code=400,
                         headers=response.headers,

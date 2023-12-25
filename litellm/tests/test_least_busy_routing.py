@@ -2,10 +2,10 @@
 # #    This tests the router's ability to identify the least busy deployment
 
 # #
-# # How is this achieved? 
+# # How is this achieved?
 # # - Before each call, have the router print the state of requests {"deployment": "requests_in_flight"}
 # # - use litellm.input_callbacks to log when a request is just about to be made to a model - {"deployment-id": traffic}
-# # - use litellm.success + failure callbacks to log when a request completed 
+# # - use litellm.success + failure callbacks to log when a request completed
 # # - in get_available_deployment, for a given model group name -> pick based on traffic
 
 # import sys, os, asyncio, time
@@ -48,13 +48,13 @@
 #             "rpm": 6
 #         }
 #     }]
-#     router = Router(model_list=model_list, 
+#     router = Router(model_list=model_list,
 # 					routing_strategy="least-busy",
 # 					set_verbose=False,
 #                     num_retries=3) # type: ignore
-    
+
 #     async def call_azure_completion():
-#         try: 
+#         try:
 #             response = await router.acompletion(
 #                 model="azure-model",
 #                 messages=[
@@ -66,9 +66,9 @@
 #             )
 #             print("\n response", response)
 #             return response
-#         except: 
+#         except:
 #             return None
-    
+
 #     n = 1000
 #     start_time = time.time()
 #     tasks = [call_azure_completion() for _ in range(n)]
