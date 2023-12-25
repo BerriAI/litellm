@@ -35,3 +35,13 @@ def test_get_ollama_model():
         pytest.fail(f"Error occurred: {e}")
 
 # test_get_ollama_model()
+        
+def test_ollama_json_mode():
+    # assert that format: json gets passed as is to ollama 
+    try:
+        converted_params = get_optional_params(custom_llm_provider="ollama", model="llama2", format = "json", temperature=0.5)
+        print("Converted params", converted_params)
+        assert converted_params == {'temperature': 0.5, 'format': 'json'}, f"{converted_params} != {'temperature': 0.5, 'format': 'json'}"
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+# test_ollama_json_mode()
