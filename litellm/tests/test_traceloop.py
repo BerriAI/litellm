@@ -1,4 +1,4 @@
-# Commented out for now - since traceloop break ci/cd 
+# Commented out for now - since traceloop break ci/cd
 # import sys
 # import os
 # import io, asyncio
@@ -15,8 +15,8 @@
 # Traceloop.init(app_name="test-litellm", disable_batch=True)
 
 
-# def test_traceloop_logging(): 
-#     try: 
+# def test_traceloop_logging():
+#     try:
 #         litellm.set_verbose = True
 #         response = litellm.completion(
 #             model="gpt-3.5-turbo",
@@ -26,13 +26,13 @@
 #             timeout=5,
 #         )
 #         print(f"response: {response}")
-#     except Exception as e: 
+#     except Exception as e:
 #         pytest.fail(f"An exception occurred - {e}")
 # # test_traceloop_logging()
 
 
-# # def test_traceloop_logging_async(): 
-# #     try: 
+# # def test_traceloop_logging_async():
+# #     try:
 # #         litellm.set_verbose = True
 # #         async def test_acompletion():
 # #             return await litellm.acompletion(
@@ -44,6 +44,6 @@
 # #             )
 # #         response = asyncio.run(test_acompletion())
 # #         print(f"response: {response}")
-# #     except Exception as e: 
+# #     except Exception as e:
 # #         pytest.fail(f"An exception occurred - {e}")
 # # test_traceloop_logging_async()

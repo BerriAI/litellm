@@ -25,7 +25,7 @@
 # asyncio.run(test_ollama_aembeddings())
 
 # def test_ollama_streaming():
-#     try: 
+#     try:
 #         litellm.set_verbose = False
 #         messages = [
 #             {"role": "user", "content": "What is the weather like in Boston?"}
@@ -50,26 +50,26 @@
 #             }
 #             }
 #         ]
-#         response = litellm.completion(model="ollama/mistral", 
+#         response = litellm.completion(model="ollama/mistral",
 #                                              messages=messages,
 #                                              functions=functions,
 #                                              stream=True)
-#         for chunk in response: 
+#         for chunk in response:
 #             print(f"CHUNK: {chunk}")
-#     except Exception as e: 
+#     except Exception as e:
 #         print(e)
 
 # # test_ollama_streaming()
 
 # async def test_async_ollama_streaming():
-#     try: 
+#     try:
 #         litellm.set_verbose = False
-#         response = await litellm.acompletion(model="ollama/mistral-openorca", 
+#         response = await litellm.acompletion(model="ollama/mistral-openorca",
 #                                              messages=[{"role": "user", "content": "Hey, how's it going?"}],
 #                                              stream=True)
-#         async for chunk in response: 
+#         async for chunk in response:
 #             print(f"CHUNK: {chunk}")
-#     except Exception as e: 
+#     except Exception as e:
 #         print(e)
 
 # # asyncio.run(test_async_ollama_streaming())
@@ -78,13 +78,13 @@
 #     try:
 #         litellm.set_verbose = True
 #         response = completion(
-#             model="ollama/mistral", 
-#             messages=[{"role": "user", "content": "Hey, how's it going?"}], 
+#             model="ollama/mistral",
+#             messages=[{"role": "user", "content": "Hey, how's it going?"}],
 #             max_tokens=200,
 #             request_timeout = 10,
 #             stream=True
 #         )
-#         for chunk in response: 
+#         for chunk in response:
 #             print(chunk)
 #         print(response)
 #     except Exception as e:
@@ -119,13 +119,13 @@
 #             }
 #         ]
 #         response = completion(
-#             model="ollama/mistral", 
+#             model="ollama/mistral",
 #             messages=messages,
-#             functions=functions, 
+#             functions=functions,
 #             max_tokens=200,
 #             request_timeout = 10,
 #         )
-#         for chunk in response: 
+#         for chunk in response:
 #             print(chunk)
 #         print(response)
 #     except Exception as e:
@@ -159,9 +159,9 @@
 #             }
 #         ]
 #         response = await litellm.acompletion(
-#             model="ollama/mistral", 
+#             model="ollama/mistral",
 #             messages=messages,
-#             functions=functions, 
+#             functions=functions,
 #             max_tokens=200,
 #             request_timeout = 10,
 #         )
@@ -175,8 +175,8 @@
 # def test_completion_ollama_with_api_base():
 #     try:
 #         response = completion(
-#             model="ollama/llama2", 
-#             messages=messages, 
+#             model="ollama/llama2",
+#             messages=messages,
 #             api_base="http://localhost:11434"
 #         )
 #         print(response)
@@ -200,8 +200,8 @@
 #     litellm.set_verbose = True
 #     try:
 #         response = completion(
-#             model="ollama/llama2", 
-#             messages=messages, 
+#             model="ollama/llama2",
+#             messages=messages,
 #             stream=True
 #         )
 #         print(response)
@@ -220,20 +220,20 @@
 #     messages = [{ "content": user_message,"role": "user"}]
 #     try:
 #         response = await litellm.acompletion(
-#             model="ollama/llama2", 
-#             messages=messages, 
-#             api_base="http://localhost:11434", 
+#             model="ollama/llama2",
+#             messages=messages,
+#             api_base="http://localhost:11434",
 #             stream=True
 #         )
 #         async for chunk in response:
 #             print(chunk['choices'][0]['delta'])
-        
+
 
 #         print("TEST ASYNC NON Stream")
 #         response = await litellm.acompletion(
-#             model="ollama/llama2", 
-#             messages=messages, 
-#             api_base="http://localhost:11434", 
+#             model="ollama/llama2",
+#             messages=messages,
+#             api_base="http://localhost:11434",
 #         )
 #         print(response)
 #     except Exception as e:
@@ -241,7 +241,6 @@
 
 # # import asyncio
 # # asyncio.run(test_completion_ollama_async_stream())
-
 
 
 # def prepare_messages_for_chat(text: str) -> list:
@@ -265,7 +264,7 @@
 #     response = await ask_question()
 #     async for chunk in response:
 #         print(chunk)
-    
+
 #     print("test async completion without streaming")
 #     response = await litellm.acompletion(
 #         model="ollama/llama2",
@@ -282,8 +281,8 @@
 #     messages = [{ "content": user_message,"role": "user"}]
 #     try:
 #         response = completion(
-#             model="ollama/invalid", 
-#             messages=messages, 
+#             model="ollama/invalid",
+#             messages=messages,
 #             stream=True
 #         )
 #         print(response)
@@ -302,7 +301,7 @@
 #     litellm.set_verbose=True
 #     # same params as gpt-4 vision
 #     response = completion(
-#         model = "ollama/llava", 
+#         model = "ollama/llava",
 #         messages=[
 #             {
 #                 "role": "user",
@@ -323,7 +322,7 @@
 #     )
 #     print("Response from ollama/llava")
 #     print(response)
-# # test_ollama_llava() 
+# # test_ollama_llava()
 
 
 # # PROCESSED CHUNK PRE CHUNK CREATOR

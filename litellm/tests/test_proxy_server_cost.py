@@ -30,22 +30,22 @@
 #         yield client
 
 # @pytest.mark.asyncio
-# async def test_proxy_cost_tracking(client): 
+# async def test_proxy_cost_tracking(client):
 #     """
-#     Get min cost. 
+#     Get min cost.
 #     Create new key.
-#     Run 10 parallel calls. 
-#     Check cost for key at the end. 
-#     assert it's > min cost. 
+#     Run 10 parallel calls.
+#     Check cost for key at the end.
+#     assert it's > min cost.
 #     """
 #     model = "gpt-3.5-turbo"
 #     messages = [{"role": "user", "content": "Hey, how's it going?"}]
 #     number_of_calls = 1
 #     min_cost = litellm.completion_cost(model=model, messages=messages) * number_of_calls
-#     try: 
+#     try:
 #         ### CREATE NEW KEY ###
 #         test_data = {
-#             "models": ["azure-model"], 
+#             "models": ["azure-model"],
 #         }
 #         # Your bearer token
 #         token = os.getenv("PROXY_MASTER_KEY")
@@ -57,7 +57,7 @@
 #         key = create_new_key.json()["key"]
 #         print(f"received key: {key}")
 #         ### MAKE PARALLEL CALLS ###
-#         async def test_chat_completions(): 
+#         async def test_chat_completions():
 #             # Your test data
 #             test_data = {
 #                 "model": "azure-model",

@@ -11,42 +11,61 @@ from copy import deepcopy
 import httpx
 from .prompt_templates.factory import prompt_factory, custom_prompt
 
+
 class SagemakerError(Exception):
     def __init__(self, status_code, message):
         self.status_code = status_code
         self.message = message
-        self.request = httpx.Request(method="POST", url="https://us-west-2.console.aws.amazon.com/sagemaker")
+        self.request = httpx.Request(
+            method="POST", url="https://us-west-2.console.aws.amazon.com/sagemaker"
+        )
         self.response = httpx.Response(status_code=status_code, request=self.request)
         super().__init__(
             self.message
         )  # Call the base class constructor with the parameters it needs
 
-class SagemakerConfig(): 
+
+class SagemakerConfig:
     """
     Reference: https://d-uuwbxj1u4cnu.studio.us-west-2.sagemaker.aws/jupyter/default/lab/workspaces/auto-q/tree/DemoNotebooks/meta-textgeneration-llama-2-7b-SDK_1.ipynb
     """
-    max_new_tokens: Optional[int]=None
-    top_p: Optional[float]=None
-    temperature: Optional[float]=None
-    return_full_text: Optional[bool]=None
 
-    def __init__(self,
-                 max_new_tokens: Optional[int]=None,
-                 top_p: Optional[float]=None,
-                 temperature: Optional[float]=None,
-                 return_full_text: Optional[bool]=None) -> None:
+    max_new_tokens: Optional[int] = None
+    top_p: Optional[float] = None
+    temperature: Optional[float] = None
+    return_full_text: Optional[bool] = None
+
+    def __init__(
+        self,
+        max_new_tokens: Optional[int] = None,
+        top_p: Optional[float] = None,
+        temperature: Optional[float] = None,
+        return_full_text: Optional[bool] = None,
+    ) -> None:
         locals_ = locals()
         for key, value in locals_.items():
-            if key != 'self' and value is not None:
+            if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
-   
+
     @classmethod
     def get_config(cls):
-        return {k: v for k, v in cls.__dict__.items() 
-                if not k.startswith('__') 
-                and not isinstance(v, (types.FunctionType, types.BuiltinFunctionType, classmethod, staticmethod)) 
-                and v is not None}
-        
+        return {
+            k: v
+            for k, v in cls.__dict__.items()
+            if not k.startswith("__")
+            and not isinstance(
+                v,
+                (
+                    types.FunctionType,
+                    types.BuiltinFunctionType,
+                    classmethod,
+                    staticmethod,
+                ),
+            )
+            and v is not None
+        }
+
+
 """
 SAGEMAKER AUTH Keys/Vars
 os.environ['AWS_ACCESS_KEY_ID'] = ""
@@ -54,6 +73,7 @@ os.environ['AWS_SECRET_ACCESS_KEY'] = ""
 """
 
 # set os.environ['AWS_REGION_NAME'] = <your-region_name>
+
 
 def completion(
     model: str,
@@ -85,28 +105,30 @@ def completion(
             region_name=aws_region_name,
         )
     else:
-        # aws_access_key_id is None, assume user is trying to auth using env variables 
+        # aws_access_key_id is None, assume user is trying to auth using env variables
         # boto3 automaticaly reads env variables
 
         # we need to read region name from env
-        # I assume majority of users use .env for auth 
+        # I assume majority of users use .env for auth
         region_name = (
-            get_secret("AWS_REGION_NAME") or
-            "us-west-2"  # default to us-west-2 if user not specified
+            get_secret("AWS_REGION_NAME")
+            or "us-west-2"  # default to us-west-2 if user not specified
         )
         client = boto3.client(
             service_name="sagemaker-runtime",
             region_name=region_name,
         )
-    
+
     # pop streaming if it's in the optional params as 'stream' raises an error with sagemaker
     inference_params = deepcopy(optional_params)
     inference_params.pop("stream", None)
 
     ## Load Config
-    config = litellm.SagemakerConfig.get_config() 
-    for k, v in config.items(): 
-        if k not in inference_params: # completion(top_k=3) > sagemaker_config(top_k=3) <- allows for dynamic variables to be passed in
+    config = litellm.SagemakerConfig.get_config()
+    for k, v in config.items():
+        if (
+            k not in inference_params
+        ):  # completion(top_k=3) > sagemaker_config(top_k=3) <- allows for dynamic variables to be passed in
             inference_params[k] = v
 
     model = model
@@ -114,25 +136,26 @@ def completion(
         # check if the model has a registered custom prompt
         model_prompt_details = custom_prompt_dict[model]
         prompt = custom_prompt(
-            role_dict=model_prompt_details.get("roles", None), 
-            initial_prompt_value=model_prompt_details.get("initial_prompt_value", ""),  
-            final_prompt_value=model_prompt_details.get("final_prompt_value", ""), 
-            messages=messages
+            role_dict=model_prompt_details.get("roles", None),
+            initial_prompt_value=model_prompt_details.get("initial_prompt_value", ""),
+            final_prompt_value=model_prompt_details.get("final_prompt_value", ""),
+            messages=messages,
         )
     else:
         if hf_model_name is None:
-            if "llama-2" in model.lower(): # llama-2 model
-                if "chat" in model.lower(): # apply llama2 chat template
+            if "llama-2" in model.lower():  # llama-2 model
+                if "chat" in model.lower():  # apply llama2 chat template
                     hf_model_name = "meta-llama/Llama-2-7b-chat-hf"
-                else: # apply regular llama2 template
+                else:  # apply regular llama2 template
                     hf_model_name = "meta-llama/Llama-2-7b"
-        hf_model_name = hf_model_name or model # pass in hf model name for pulling it's prompt template - (e.g. `hf_model_name="meta-llama/Llama-2-7b-chat-hf` applies the llama2 chat template to the prompt)
+        hf_model_name = (
+            hf_model_name or model
+        )  # pass in hf model name for pulling it's prompt template - (e.g. `hf_model_name="meta-llama/Llama-2-7b-chat-hf` applies the llama2 chat template to the prompt)
         prompt = prompt_factory(model=hf_model_name, messages=messages)
 
-    data = json.dumps({
-        "inputs": prompt,
-        "parameters": inference_params
-    }).encode('utf-8')
+    data = json.dumps({"inputs": prompt, "parameters": inference_params}).encode(
+        "utf-8"
+    )
 
     ## LOGGING
     request_str = f"""
@@ -142,31 +165,35 @@ def completion(
         Body={data},
         CustomAttributes="accept_eula=true",
     )
-    """ # type: ignore
+    """  # type: ignore
     logging_obj.pre_call(
-            input=prompt,
-            api_key="",
-            additional_args={"complete_input_dict": data, "request_str": request_str, "hf_model_name": hf_model_name},
-        )
+        input=prompt,
+        api_key="",
+        additional_args={
+            "complete_input_dict": data,
+            "request_str": request_str,
+            "hf_model_name": hf_model_name,
+        },
+    )
     ## COMPLETION CALL
-    try: 
+    try:
         response = client.invoke_endpoint(
             EndpointName=model,
             ContentType="application/json",
             Body=data,
             CustomAttributes="accept_eula=true",
         )
-    except Exception as e: 
+    except Exception as e:
         raise SagemakerError(status_code=500, message=f"{str(e)}")
-    
+
     response = response["Body"].read().decode("utf8")
     ## LOGGING
     logging_obj.post_call(
-            input=prompt,
-            api_key="",
-            original_response=response,
-            additional_args={"complete_input_dict": data},
-        )
+        input=prompt,
+        api_key="",
+        original_response=response,
+        additional_args={"complete_input_dict": data},
+    )
     print_verbose(f"raw model_response: {response}")
     ## RESPONSE OBJECT
     completion_response = json.loads(response)
@@ -177,19 +204,20 @@ def completion(
             completion_output += completion_response_choices["generation"]
         elif "generated_text" in completion_response_choices:
             completion_output += completion_response_choices["generated_text"]
-        
-        # check if the prompt template is part of output, if so - filter it out 
+
+        # check if the prompt template is part of output, if so - filter it out
         if completion_output.startswith(prompt) and "<s>" in prompt:
             completion_output = completion_output.replace(prompt, "", 1)
 
         model_response["choices"][0]["message"]["content"] = completion_output
     except:
-        raise SagemakerError(message=f"LiteLLM Error: Unable to parse sagemaker RAW RESPONSE {json.dumps(completion_response)}", status_code=500)
+        raise SagemakerError(
+            message=f"LiteLLM Error: Unable to parse sagemaker RAW RESPONSE {json.dumps(completion_response)}",
+            status_code=500,
+        )
 
-    ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here. 
-    prompt_tokens = len(
-        encoding.encode(prompt)
-    ) 
+    ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here.
+    prompt_tokens = len(encoding.encode(prompt))
     completion_tokens = len(
         encoding.encode(model_response["choices"][0]["message"].get("content", ""))
     )
@@ -197,28 +225,32 @@ def completion(
     model_response["created"] = int(time.time())
     model_response["model"] = model
     usage = Usage(
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            total_tokens=prompt_tokens + completion_tokens
-        )
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+    )
     model_response.usage = usage
     return model_response
 
-def embedding(model: str,
-        input: list,
-        model_response: EmbeddingResponse,
-        print_verbose: Callable,
-        encoding,
-        logging_obj,
-        custom_prompt_dict={},
-        optional_params=None,
-        litellm_params=None,
-        logger_fn=None):
+
+def embedding(
+    model: str,
+    input: list,
+    model_response: EmbeddingResponse,
+    print_verbose: Callable,
+    encoding,
+    logging_obj,
+    custom_prompt_dict={},
+    optional_params=None,
+    litellm_params=None,
+    logger_fn=None,
+):
     """
-    Supports Huggingface Jumpstart embeddings like GPT-6B 
+    Supports Huggingface Jumpstart embeddings like GPT-6B
     """
     ### BOTO3 INIT
-    import boto3 
+    import boto3
+
     # pop aws_secret_access_key, aws_access_key_id, aws_region_name from kwargs, since completion calls fail with them
     aws_secret_access_key = optional_params.pop("aws_secret_access_key", None)
     aws_access_key_id = optional_params.pop("aws_access_key_id", None)
@@ -234,34 +266,34 @@ def embedding(model: str,
             region_name=aws_region_name,
         )
     else:
-        # aws_access_key_id is None, assume user is trying to auth using env variables 
+        # aws_access_key_id is None, assume user is trying to auth using env variables
         # boto3 automaticaly reads env variables
 
         # we need to read region name from env
-        # I assume majority of users use .env for auth 
+        # I assume majority of users use .env for auth
         region_name = (
-            get_secret("AWS_REGION_NAME") or
-            "us-west-2"  # default to us-west-2 if user not specified
+            get_secret("AWS_REGION_NAME")
+            or "us-west-2"  # default to us-west-2 if user not specified
         )
         client = boto3.client(
             service_name="sagemaker-runtime",
             region_name=region_name,
         )
-    
+
     # pop streaming if it's in the optional params as 'stream' raises an error with sagemaker
     inference_params = deepcopy(optional_params)
     inference_params.pop("stream", None)
 
     ## Load Config
-    config = litellm.SagemakerConfig.get_config() 
-    for k, v in config.items(): 
-        if k not in inference_params: # completion(top_k=3) > sagemaker_config(top_k=3) <- allows for dynamic variables to be passed in
+    config = litellm.SagemakerConfig.get_config()
+    for k, v in config.items():
+        if (
+            k not in inference_params
+        ):  # completion(top_k=3) > sagemaker_config(top_k=3) <- allows for dynamic variables to be passed in
             inference_params[k] = v
 
-    #### HF EMBEDDING LOGIC 
-    data = json.dumps({
-        "text_inputs": input
-    }).encode('utf-8')
+    #### HF EMBEDDING LOGIC
+    data = json.dumps({"text_inputs": input}).encode("utf-8")
 
     ## LOGGING
     request_str = f"""
@@ -270,67 +302,65 @@ def embedding(model: str,
         ContentType="application/json",
         Body={data},
         CustomAttributes="accept_eula=true",
-    )""" # type: ignore
+    )"""  # type: ignore
     logging_obj.pre_call(
-            input=input,
-            api_key="",
-            additional_args={"complete_input_dict": data, "request_str": request_str},
-        )
+        input=input,
+        api_key="",
+        additional_args={"complete_input_dict": data, "request_str": request_str},
+    )
     ## EMBEDDING CALL
-    try: 
+    try:
         response = client.invoke_endpoint(
             EndpointName=model,
             ContentType="application/json",
             Body=data,
             CustomAttributes="accept_eula=true",
         )
-    except Exception as e: 
+    except Exception as e:
         raise SagemakerError(status_code=500, message=f"{str(e)}")
 
     ## LOGGING
     logging_obj.post_call(
-            input=input,
-            api_key="",
-            additional_args={"complete_input_dict": data},
-            original_response=response,
-        )
-
+        input=input,
+        api_key="",
+        additional_args={"complete_input_dict": data},
+        original_response=response,
+    )
 
     response = json.loads(response["Body"].read().decode("utf8"))
     ## LOGGING
     logging_obj.post_call(
-            input=input,
-            api_key="",
-            original_response=response,
-            additional_args={"complete_input_dict": data},
-        )
+        input=input,
+        api_key="",
+        original_response=response,
+        additional_args={"complete_input_dict": data},
+    )
     print_verbose(f"raw model_response: {response}")
-    if "embedding" not in response: 
+    if "embedding" not in response:
         raise SagemakerError(status_code=500, message="embedding not found in response")
-    embeddings = response['embedding'] 
+    embeddings = response["embedding"]
 
     if not isinstance(embeddings, list):
-        raise SagemakerError(status_code=422, message=f"Response not in expected format - {embeddings}")
-
+        raise SagemakerError(
+            status_code=422, message=f"Response not in expected format - {embeddings}"
+        )
 
     output_data = []
     for idx, embedding in enumerate(embeddings):
         output_data.append(
-            {
-                "object": "embedding",
-                "index": idx,
-                "embedding": embedding
-            }
+            {"object": "embedding", "index": idx, "embedding": embedding}
         )
 
     model_response["object"] = "list"
     model_response["data"] = output_data
     model_response["model"] = model
-    
+
     input_tokens = 0
     for text in input:
-        input_tokens+=len(encoding.encode(text)) 
+        input_tokens += len(encoding.encode(text))
 
-    model_response["usage"] = Usage(prompt_tokens=input_tokens, completion_tokens=0, total_tokens=input_tokens)
-    
+    model_response["usage"] = Usage(
+        prompt_tokens=input_tokens, completion_tokens=0, total_tokens=input_tokens
+    )
+
     return model_response

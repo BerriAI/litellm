@@ -8,7 +8,7 @@
 #     0, os.path.abspath("../..")
 # )  # Adds the parent directory to the system path
 # import litellm
-# import asyncio 
+# import asyncio
 
 # litellm.set_verbose = True
 # from litellm import Router
@@ -18,9 +18,9 @@
 # # This enables response_model keyword
 # # # from client.chat.completions.create
 # # client = instructor.patch(Router(model_list=[{
-# #     "model_name": "gpt-3.5-turbo", # openai model name 
-# #     "litellm_params": { # params for litellm completion/embedding call 
-# #         "model": "azure/chatgpt-v-2", 
+# #     "model_name": "gpt-3.5-turbo", # openai model name
+# #     "litellm_params": { # params for litellm completion/embedding call
+# #         "model": "azure/chatgpt-v-2",
 # #         "api_key": os.getenv("AZURE_API_KEY"),
 # #         "api_version": os.getenv("AZURE_API_VERSION"),
 # #         "api_base": os.getenv("AZURE_API_BASE")
@@ -49,9 +49,9 @@
 # from openai import AsyncOpenAI
 
 # aclient = instructor.apatch(Router(model_list=[{
-#     "model_name": "gpt-3.5-turbo", # openai model name 
-#     "litellm_params": { # params for litellm completion/embedding call 
-#         "model": "azure/chatgpt-v-2", 
+#     "model_name": "gpt-3.5-turbo", # openai model name
+#     "litellm_params": { # params for litellm completion/embedding call
+#         "model": "azure/chatgpt-v-2",
 #         "api_key": os.getenv("AZURE_API_KEY"),
 #         "api_version": os.getenv("AZURE_API_VERSION"),
 #         "api_base": os.getenv("AZURE_API_BASE")
