@@ -59,6 +59,24 @@ import asyncio
 asyncio.run(async_ollama())
 
 ```
+
+## Example Usage - JSON Mode
+To use ollama JSON Mode pass `format="json"` to `litellm.completion()`
+
+```python
+from litellm import completion
+response = completion(
+  model="ollama/llama2",
+  messages=[
+      {
+          "role": "user",
+          "content": "respond in json, what's the weather"
+      }
+  ],
+  max_tokens=10,
+  format = "json"
+)
+```
 ## Ollama Models
 Ollama supported models: https://github.com/jmorganca/ollama
 
