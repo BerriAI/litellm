@@ -1,7 +1,7 @@
 import sys, os, platform, time, copy, re, asyncio, inspect
 import threading, ast
 import shutil, random, traceback, requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List
 import secrets, subprocess
 import hashlib, uuid
@@ -271,7 +271,7 @@ async def user_api_key_auth(request: Request, api_key: str = fastapi.Security(ap
         if valid_token is None: 
             ## check db 
             print(f"api key: {api_key}")
-            valid_token = await prisma_client.get_data(token=api_key, expires=datetime.utcnow())
+            valid_token = await prisma_client.get_data(token=api_key, expires=datetime.utcnow().replace(tzinfo=timezone.utc))
             print(f"valid token from prisma: {valid_token}")
             user_api_key_cache.set_cache(key=api_key, value=valid_token, ttl=60)
         elif valid_token is not None: 
