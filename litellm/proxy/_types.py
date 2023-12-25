@@ -149,7 +149,7 @@ class UserAPIKeyAuth(LiteLLMBase): # the expected response object for user api k
 
 class GenerateKeyResponse(LiteLLMBase):
     key: str
-    expires: datetime
+    expires: Optional[datetime]
     user_id: str
 
 class _DeleteKeyObject(LiteLLMBase):
