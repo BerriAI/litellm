@@ -189,6 +189,7 @@ class PrismaClient:
                         else:
                             # Token exists but is expired.
                             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="expired user key")
+                    return response
                 else:
                     # Token does not exist.
                     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid user key")
