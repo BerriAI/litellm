@@ -6050,7 +6050,9 @@ def exception_type(
                         )
                     raise original_exception
                 raise original_exception
-            elif custom_llm_provider == "ollama":
+            elif (
+                custom_llm_provider == "ollama" or custom_llm_provider == "ollama_chat"
+            ):
                 if isinstance(original_exception, dict):
                     error_str = original_exception.get("error", "")
                 else:
