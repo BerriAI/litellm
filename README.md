@@ -30,6 +30,32 @@ LiteLLM manages
 - Exception mapping - common exceptions across providers are mapped to the OpenAI exception types.
 - Load-balance across multiple deployments (e.g. Azure/OpenAI) - `Router` **1k+ requests/second**
 
+# OpenAI Proxy - ([Docs](https://docs.litellm.ai/docs/simple_proxy))
+
+Track spend across multiple projects/people. 
+
+### Step 1: Start litellm proxy
+```shell
+$ litellm --model huggingface/bigcode/starcoder
+
+#INFO: Proxy running on http://0.0.0.0:8000
+```
+
+### Step 2: Replace openai base
+```python
+import openai # openai v1.0.0+
+client = openai.OpenAI(api_key="anything",base_url="http://0.0.0.0:8000") # set proxy to base_url
+# request sent to model set on litellm proxy, `litellm --model`
+response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
+    {
+        "role": "user",
+        "content": "this is a test request, write a short poem"
+    }
+])
+
+print(response)
+```
+
 # Usage ([**Docs**](https://docs.litellm.ai/docs/))
 
 > [!IMPORTANT]
@@ -91,35 +117,6 @@ for part in response:
 response = completion('claude-2', messages, stream=True)
 for part in response:
     print(part.choices[0].delta.content or "")
-```
-
-## OpenAI Proxy - ([Docs](https://docs.litellm.ai/docs/simple_proxy))
-
-LiteLLM Proxy manages:
-* Calling 100+ LLMs Huggingface/Bedrock/TogetherAI/etc. in the OpenAI ChatCompletions & Completions format
-* Load balancing - between Multiple Models + Deployments of the same model LiteLLM proxy can handle 1k+ requests/second during load tests
-* Authentication & Spend Tracking Virtual Keys
-
-### Step 1: Start litellm proxy
-```shell
-$ litellm --model huggingface/bigcode/starcoder
-
-#INFO: Proxy running on http://0.0.0.0:8000
-```
-
-### Step 2: Replace openai base
-```python
-import openai # openai v1.0.0+
-client = openai.OpenAI(api_key="anything",base_url="http://0.0.0.0:8000") # set proxy to base_url
-# request sent to model set on litellm proxy, `litellm --model`
-response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
-    {
-        "role": "user",
-        "content": "this is a test request, write a short poem"
-    }
-])
-
-print(response)
 ```
 
 ## Logging Observability ([Docs](https://docs.litellm.ai/docs/observability/callbacks))
