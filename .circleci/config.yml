@@ -28,8 +28,8 @@ jobs:
             pip install pytest
             pip install pytest-asyncio
             pip install mypy
-            pip install -q google-generativeai
-            pip install google-cloud-aiplatform
+            pip install "google-generativeai>=0.3.2"
+            pip install "google-cloud-aiplatform>=1.38.0"
             pip install "boto3>=1.28.57"
             pip install appdirs
             pip install langchain
