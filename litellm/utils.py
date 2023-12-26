@@ -303,7 +303,12 @@ class Usage(OpenAIObject):
 
 class StreamingChoices(OpenAIObject):
     def __init__(
-        self, finish_reason=None, index=0, delta: Optional[Delta] = None, **params
+        self,
+        finish_reason=None,
+        index=0,
+        delta: Optional[Delta] = None,
+        logprobs=None,
+        **params,
     ):
         super(StreamingChoices, self).__init__(**params)
         if finish_reason:
@@ -315,6 +320,9 @@ class StreamingChoices(OpenAIObject):
             self.delta = delta
         else:
             self.delta = Delta()
+
+        if logprobs is not None:
+            self.logprobs = logprobs
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -4622,7 +4630,11 @@ async def convert_to_streaming_response_async(response_object: Optional[dict] = 
         if finish_reason is None:
             finish_reason = choice.get("finish_details")
 
-        choice = StreamingChoices(finish_reason=finish_reason, index=idx, delta=delta)
+        logprobs = choice.get("logprobs", None)
+
+        choice = StreamingChoices(
+            finish_reason=finish_reason, index=idx, delta=delta, logprobs=logprobs
+        )
         choice_list.append(choice)
 
     model_response_object.choices = choice_list
@@ -4665,7 +4677,11 @@ def convert_to_streaming_response(response_object: Optional[dict] = None):
         if finish_reason == None:
             # gpt-4 vision can return 'finish_reason' or 'finish_details'
             finish_reason = choice.get("finish_details")
-        choice = StreamingChoices(finish_reason=finish_reason, index=idx, delta=delta)
+        logprobs = choice.get("logprobs", None)
+        choice = StreamingChoices(
+            finish_reason=finish_reason, index=idx, delta=delta, logprobs=logprobs
+        )
+
         choice_list.append(choice)
     model_response_object.choices = choice_list
 
@@ -6675,11 +6691,16 @@ class CustomStreamWrapper:
                 if str_line.choices[0].finish_reason:
                     is_finished = True
                     finish_reason = str_line.choices[0].finish_reason
+                if str_line.choices[0].logprobs is not None:
+                    logprobs = str_line.choices[0].logprobs
+                else:
+                    logprobs = None
 
             return {
                 "text": text,
                 "is_finished": is_finished,
                 "finish_reason": finish_reason,
+                "logprobs": logprobs,
                 "original_chunk": str_line,
             }
         except Exception as e:
@@ -7075,6 +7096,8 @@ class CustomStreamWrapper:
                     model_response.choices[0].finish_reason = response_obj[
                         "finish_reason"
                     ]
+                if response_obj["logprobs"] is not None:
+                    model_response.choices[0].logprobs = response_obj["logprobs"]
 
             model_response.model = self.model
             print_verbose(
