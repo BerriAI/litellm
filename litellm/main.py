@@ -423,6 +423,8 @@ def completion(
         "tools",
         "tool_choice",
         "max_retries",
+        "logprobs",
+        "top_logprobs",
     ]
     litellm_params = [
         "metadata",
@@ -572,6 +574,8 @@ def completion(
             tools=tools,
             tool_choice=tool_choice,
             max_retries=max_retries,
+            logprobs=logprobs,
+            top_logprobs=top_logprobs,
             **non_default_params,
         )
 
