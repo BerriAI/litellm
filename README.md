@@ -139,6 +139,17 @@ response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
 print(response)
 ```
 
+### [Beta] Proxy UI
+
+A simple UI to add new models and let your users create keys. 
+
+Live here: https://litellm-jyqbcbn44mcxqq6ufopuha.streamlit.app/
+
+Code: https://github.com/BerriAI/litellm/tree/main/ui  
+
+  
+<img width="1672" alt="Screenshot 2023-12-26 at 8 33 53 AM" src="https://github.com/BerriAI/litellm/assets/17561003/274254d8-c5fe-4645-9123-100045a7fb21">
+
 ## Supported Provider ([Docs](https://docs.litellm.ai/docs/providers))
 | Provider      | [Completion](https://docs.litellm.ai/docs/#basic-usage) | [Streaming](https://docs.litellm.ai/docs/completion/stream#streaming-responses)  | [Async Completion](https://docs.litellm.ai/docs/completion/stream#async-completion)  | [Async Streaming](https://docs.litellm.ai/docs/completion/stream#async-streaming)  |
 | ------------- | ------------- | ------------- | ------------- | ------------- |
