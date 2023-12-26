@@ -461,7 +461,7 @@ We will use the `--config` to set `litellm.success_callback = ["langfuse"]` this
 **Step 1** Install langfuse
 
 ```shell
-pip install langfuse==1.14.0
+pip install langfuse>=2.0.0
 ```
 
 **Step 2**: Create a `config.yaml` file and set `litellm_settings`: `success_callback`
