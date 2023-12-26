@@ -24,43 +24,14 @@
     </a>
 </h4>
 
-This Package Provides:
-- Python client to call 100+ LLMs in OpenAI Format
-    - Translate inputs to provider's `completion` and `embedding` endpoints
-    - [Consistent output](https://docs.litellm.ai/docs/completion/output), text responses will always be available at `['choices'][0]['message']['content']`
-    - Load-balance multiple deployments (e.g. Azure/OpenAI) - `Router` **1k+ requests/second**
-- OpenAI Proxy Server:
-    - Track spend across multiple projects/people
-    - Call 100+ LLMs in OpenAI Format
+LiteLLM manages:
+- Translate inputs to provider's `completion` and `embedding` endpoints
+- [Consistent output](https://docs.litellm.ai/docs/completion/output), text responses will always be available at `['choices'][0]['message']['content']`
+- Load-balance multiple deployments (e.g. Azure/OpenAI) - `Router` **1k+ requests/second**
 
+[**Jump to OpenAI Proxy Docs**](https://github.com/BerriAI/litellm?tab=readme-ov-file#openai-proxy---docs)
 
-# OpenAI Proxy - ([Docs](https://docs.litellm.ai/docs/simple_proxy))
-
-Track spend across multiple projects/people. 
-
-### Step 1: Start litellm proxy
-```shell
-$ litellm --model huggingface/bigcode/starcoder
-
-#INFO: Proxy running on http://0.0.0.0:8000
-```
-
-### Step 2: Replace openai base
-```python
-import openai # openai v1.0.0+
-client = openai.OpenAI(api_key="anything",base_url="http://0.0.0.0:8000") # set proxy to base_url
-# request sent to model set on litellm proxy, `litellm --model`
-response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
-    {
-        "role": "user",
-        "content": "this is a test request, write a short poem"
-    }
-])
-
-print(response)
-```
-
-# Usage ([**Docs**](https://docs.litellm.ai/docs/))
+# Installation 🚀
 
 > [!IMPORTANT]
 > LiteLLM v1.0.0 now requires `openai>=1.0.0`. Migration guide [here](https://docs.litellm.ai/docs/migration)
@@ -70,9 +41,12 @@ print(response)
   <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
 </a>
 
+
 ```
 pip install litellm
 ```
+
+# Usage ([**Docs**](https://docs.litellm.ai/docs/))
 
 ```python
 from litellm import completion
@@ -140,6 +114,32 @@ litellm.success_callback = ["langfuse", "llmonitor"] # log input/output to langf
 
 #openai call
 response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])
+```
+
+# OpenAI Proxy - ([Docs](https://docs.litellm.ai/docs/simple_proxy))
+
+Track spend across multiple projects/people. 
+
+### Step 1: Start litellm proxy
+```shell
+$ litellm --model huggingface/bigcode/starcoder
+
+#INFO: Proxy running on http://0.0.0.0:8000
+```
+
+### Step 2: Replace openai base
+```python
+import openai # openai v1.0.0+
+client = openai.OpenAI(api_key="anything",base_url="http://0.0.0.0:8000") # set proxy to base_url
+# request sent to model set on litellm proxy, `litellm --model`
+response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
+    {
+        "role": "user",
+        "content": "this is a test request, write a short poem"
+    }
+])
+
+print(response)
 ```
 
 ## Supported Provider ([Docs](https://docs.litellm.ai/docs/providers))
