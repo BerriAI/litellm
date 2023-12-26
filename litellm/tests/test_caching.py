@@ -58,6 +58,28 @@ def test_caching_v2():  # test in memory cache
 # test_caching_v2()
 
 
+def test_caching_with_ttl():
+    try:
+        litellm.set_verbose = True
+        litellm.cache = Cache()
+        response1 = completion(
+            model="gpt-3.5-turbo", messages=messages, caching=True, ttl=0
+        )
+        response2 = completion(model="gpt-3.5-turbo", messages=messages, caching=True)
+        print(f"response1: {response1}")
+        print(f"response2: {response2}")
+        litellm.cache = None  # disable cache
+        litellm.success_callback = []
+        litellm._async_success_callback = []
+        assert (
+            response2["choices"][0]["message"]["content"]
+            != response1["choices"][0]["message"]["content"]
+        )
+    except Exception as e:
+        print(f"error occurred: {traceback.format_exc()}")
+        pytest.fail(f"Error occurred: {e}")
+
+
 def test_caching_with_models_v2():
     messages = [
         {"role": "user", "content": "who is ishaan CTO of litellm from litellm 2023"}
@@ -724,7 +746,7 @@ def test_get_cache_key():
         pytest.fail(f"Error occurred:", e)
 
 
-test_get_cache_key()
+# test_get_cache_key()
 
 # test_custom_redis_cache_params()
 
