@@ -1,5 +1,5 @@
 #
-name: Build_Publish_to_GHCR
+name: Build, Publish LiteLLM Docker Image
 on:
   workflow_dispatch:
     inputs:
