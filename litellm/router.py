@@ -1060,12 +1060,12 @@ class Router:
                 "custom_llm_provider", None
             )  # i.e. azure
             metadata = kwargs.get("litellm_params", {}).get("metadata", None)
-            deployment_id = (
-                kwargs.get("litellm_params", {}).get("model_info", {}).get("id", None)
-            )
-            self._set_cooldown_deployments(
-                deployment_id
-            )  # setting deployment_id in cooldown deployments
+            _model_info = kwargs.get("litellm_params", {}).get("model_info", {})
+            if isinstance(_model_info, dict):
+                deployment_id = _model_info.get("id", None)
+                self._set_cooldown_deployments(
+                    deployment_id
+                )  # setting deployment_id in cooldown deployments
             if metadata:
                 deployment = metadata.get("deployment", None)
                 deployment_exceptions = self.model_exception_map.get(deployment, [])
