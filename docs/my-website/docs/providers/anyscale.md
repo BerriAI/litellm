@@ -38,7 +38,7 @@ for chunk in response:
 
 
 ## Supported Models
-All models listed here https://app.endpoints.anyscale.com/ are supported. We actively maintain the list of models, pricing, token window, etc. [here](https://github.com/BerriAI/litellm/blob/c1b25538277206b9f00de5254d80d6a83bb19a29/model_prices_and_context_window.json#L659).
+All models listed here https://app.endpoints.anyscale.com/ are supported. We actively maintain the list of models, pricing, token window, etc. [here](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json#L659).
 
 | Model Name               | Function Call                                                                                                                                                      |
 |--------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
