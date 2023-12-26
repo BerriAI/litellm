@@ -995,6 +995,20 @@ def get_litellm_model_info(model: dict = {}):
         return {}
 
 
+def parse_cache_control(cache_control):
+    cache_dict = {}
+    directives = cache_control.split(", ")
+
+    for directive in directives:
+        if "=" in directive:
+            key, value = directive.split("=")
+            cache_dict[key] = value
+        else:
+            cache_dict[directive] = True
+
+    return cache_dict
+
+
 @router.on_event("startup")
 async def startup_event():
     global prisma_client, master_key, use_background_health_checks
@@ -1222,6 +1236,14 @@ async def chat_completion(
             "headers": dict(request.headers),
             "body": copy.copy(data),  # use copy instead of deepcopy
         }
+
+        ## Cache Controls
+        headers = request.headers
+        print("Request Headers:", headers)
+        cache_control_header = headers.get("Cache-Control", None)
+        if cache_control_header:
+            cache_dict = parse_cache_control(cache_control_header)
+            data["ttl"] = cache_dict.get("s-maxage")
 
         print_verbose(f"receiving data: {data}")
         data["model"] = (
