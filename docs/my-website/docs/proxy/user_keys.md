@@ -38,7 +38,7 @@ print(response)
 const { OpenAI } = require('openai');
 
 const openai = new OpenAI({
-  apiKey: "sk-1234", // This is the default and can be omitted
+  apiKey: "sk-1234",
   baseURL: "http://0.0.0.0:8000"
 });
 

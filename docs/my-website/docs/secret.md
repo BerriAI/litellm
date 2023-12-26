@@ -2,6 +2,7 @@
 LiteLLM supports reading secrets from Azure Key Vault and Infisical
 
 - [Azure Key Vault](#azure-key-vault)
+- Google Key Management Service
 - [Infisical Secret Manager](#infisical-secret-manager)
 - [.env Files](#env-files)
 
@@ -69,6 +70,42 @@ litellm --config /path/to/config.yaml
 ```
 
 [Quick Test Proxy](./proxy/quick_start#using-litellm-proxy---curl-request-openai-package-langchain-langchain-js)
+
+## Google Key Management Service 
+
+Use encrypted keys from Google KMS on the proxy
+
+### Usage with OpenAI Proxy Server
+
+## Step 1. Add keys to env 
+```
+export GOOGLE_APPLICATION_CREDENTIALS="/path/to/credentials.json"
+export GOOGLE_KMS_RESOURCE_NAME="projects/*/locations/*/keyRings/*/cryptoKeys/*"
+export PROXY_DATABASE_URL_ENCRYPTED=b'\n$\x00D\xac\xb4/\x8e\xc...'
+```
+
+## Step 2: Update Config
+
+```yaml
+general_settings:
+  use_google_kms: true
+  database_url: "os.environ/PROXY_DATABASE_URL_ENCRYPTED"
+  master_key: sk-1234
+```
+
+## Step 3: Start + test proxy
+
+```
+$ litellm --config /path/to/config.yaml
+```
+
+And in another terminal
+```
+$ litellm --test 
+```
+
+[Quick Test Proxy](./proxy/quick_start#using-litellm-proxy---curl-request-openai-package-langchain-langchain-js)
+
 
 ## Infisical Secret Manager
 Integrates with [Infisical's Secret Manager](https://infisical.com/) for secure storage and retrieval of API keys and sensitive data.
