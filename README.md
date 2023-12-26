@@ -24,10 +24,15 @@
     </a>
 </h4>
 
-LiteLLM manages
-- Translating inputs to the provider's `completion` and `embedding` endpoints
-- Guarantees [consistent output](https://docs.litellm.ai/docs/completion/output), text responses will always be available at `['choices'][0]['message']['content']`
-- Load-balance across multiple deployments (e.g. Azure/OpenAI) - `Router` **1k+ requests/second**
+This Package Provides:
+- Python client to call 100+ LLMs in OpenAI Format
+    - Translate inputs to provider's `completion` and `embedding` endpoints
+    - [Consistent output](https://docs.litellm.ai/docs/completion/output), text responses will always be available at `['choices'][0]['message']['content']`
+    - Load-balance multiple deployments (e.g. Azure/OpenAI) - `Router` **1k+ requests/second**
+- OpenAI Proxy Server:
+    - Track spend across multiple projects/people
+    - Call 100+ LLMs in OpenAI Format
+
 
 # OpenAI Proxy - ([Docs](https://docs.litellm.ai/docs/simple_proxy))
 
