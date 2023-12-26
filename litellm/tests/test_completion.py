@@ -250,7 +250,7 @@ def test_completion_azure_gpt4_vision():
         pytest.fail(f"Error occurred: {e}")
 
 
-test_completion_azure_gpt4_vision()
+# test_completion_azure_gpt4_vision()
 
 
 @pytest.mark.skip(reason="this test is flaky")
@@ -613,6 +613,44 @@ def test_completion_openai_with_optional_params():
 
 
 # test_completion_openai_with_optional_params()
+
+
+def test_completion_logprobs():
+    """
+    This function is used to test the litellm.completion logprobs functionality.
+
+    Parameters:
+        None
+
+    Returns:
+        None
+    """
+    try:
+        litellm.set_verbose = True
+        response = completion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "what is the time"}],
+            temperature=0.5,
+            top_p=0.1,
+            seed=12,
+            logit_bias=None,
+            user="ishaans app",
+            logprobs=True,
+            top_logprobs=3,
+        )
+        # Add any assertions here to check the response
+
+        print(response)
+        print(len(response.choices[0].logprobs["content"][0]["top_logprobs"]))
+        assert "logprobs" in response.choices[0]
+        assert "content" in response.choices[0]["logprobs"]
+        assert len(response.choices[0].logprobs["content"][0]["top_logprobs"]) == 3
+
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+test_completion_logprobs()
 
 
 def test_completion_openai_litellm_key():
