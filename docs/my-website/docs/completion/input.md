@@ -66,6 +66,7 @@ def completion(
     model: str,
     messages: List = [],
     # Optional OpenAI params
+    timeout: Optional[Union[float, int]] = None,
     temperature: Optional[float] = None,
     top_p: Optional[float] = None,
     n: Optional[int] = None,
@@ -73,29 +74,28 @@ def completion(
     stop=None,
     max_tokens: Optional[float] = None,
     presence_penalty: Optional[float] = None,
-    frequency_penalty: Optional[float]=None,
-    logit_bias: dict = {},
-    user: str = "",
-    deployment_id = None,
-    request_timeout: Optional[int] = None,
+    frequency_penalty: Optional[float] = None,
+    logit_bias: Optional[dict] = None,
+    user: Optional[str] = None,
+    # openai v1.0+ new params
     response_format: Optional[dict] = None,
     seed: Optional[int] = None,
     tools: Optional[List] = None,
     tool_choice: Optional[str] = None,
-    functions: List = [],       # soon to be deprecated
-    function_call: str = "",    # soon to be deprecated
-
-    # Optional LiteLLM params
-    api_base: Optional[str] = None,
+    logprobs: Optional[bool] = None,
+    top_logprobs: Optional[int] = None,
+    deployment_id=None,
+    # soon to be deprecated params by OpenAI
+    functions: Optional[List] = None,
+    function_call: Optional[str] = None,
+    # set api_base, api_version, api_key
+    base_url: Optional[str] = None,
     api_version: Optional[str] = None,
     api_key: Optional[str] = None,
-    num_retries: Optional[int] = None, # set to retry a model if an APIError, TimeoutError, or ServiceUnavailableError occurs 
-    context_window_fallback_dict: Optional[dict] = None, # mapping of model to use if call fails due to context window error
-    fallbacks: Optional[list] = None, # pass in a list of api_base,keys, etc. 
-    metadata: Optional[dict] = None # additional call metadata, passed to logging integrations / custom callbacks
-    
-
+    model_list: Optional[list] = None,  # pass in a list of api_base,keys, etc.
+    # Optional liteLLM function params
     **kwargs,
+
 ) -> ModelResponse:
 ```
 ### Required Fields
