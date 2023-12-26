@@ -14,12 +14,12 @@ See the latest available ghcr docker image here:
 https://github.com/berriai/litellm/pkgs/container/litellm
 
 ```shell
-docker pull ghcr.io/berriai/litellm:main-v1.12.3
+docker pull ghcr.io/berriai/litellm:main-latest
 ```
 
 ### Run the Docker Image
 ```shell
-docker run ghcr.io/berriai/litellm:main-v1.12.3
+docker run ghcr.io/berriai/litellm:main-latest
 ```
 
 #### Run the Docker Image with LiteLLM CLI args
@@ -28,12 +28,12 @@ See all supported CLI args [here](https://docs.litellm.ai/docs/proxy/cli):
 
 Here's how you can run the docker image and pass your config to `litellm`
 ```shell
-docker run ghcr.io/berriai/litellm:main-v1.12.3 --config your_config.yaml
+docker run ghcr.io/berriai/litellm:main-latest --config your_config.yaml
 ```
 
 Here's how you can run the docker image and start litellm on port 8002 with `num_workers=8`
 ```shell
-docker run ghcr.io/berriai/litellm:main-v1.12.3 --port 8002 --num_workers 8
+docker run ghcr.io/berriai/litellm:main-latest --port 8002 --num_workers 8
 ```
   
 #### Run the Docker Image using docker compose
@@ -53,7 +53,7 @@ services:
       context: .
         args:
           target: runtime
-    image: ghcr.io/berriai/litellm:main
+    image: ghcr.io/berriai/litellm:main-latest
     ports:
       - "8000:8000" # Map the container port to the host, change the host port if necessary
     volumes:
