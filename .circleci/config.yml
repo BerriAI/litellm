@@ -126,6 +126,14 @@ jobs:
                 echo "Version ${VERSION} of package is already published on PyPI. Skipping PyPI publish."
                 circleci step halt
             fi
+      - run:
+        name: Trigger Github Action for new Docker Container
+        command: |
+          curl -X POST \
+            -H "Accept: application/vnd.github.v3+json" \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            "https://api.github.com/repos/BerriAI/litellm/actions/workflows/ghcr_deploy.yml/dispatches" \
+            -d '{"ref":"main"}'
 
 workflows:
   version: 2
