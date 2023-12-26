@@ -2823,8 +2823,9 @@ def get_optional_params_embeddings(
     return final_params
 
 
-def get_optional_params(  # use the openai defaults
-    # 12 optional params
+def get_optional_params(
+    # use the openai defaults
+    # https://platform.openai.com/docs/api-reference/chat/create
     functions=None,
     function_call=None,
     temperature=None,
@@ -3665,7 +3666,6 @@ def get_optional_params(  # use the openai defaults
             optional_params["logprobs"] = logprobs
         if top_logprobs is not None:
             optional_params["top_logprobs"] = top_logprobs
-        optional_params = non_default_params
     # if user passed in non-default kwargs for specific providers/models, pass them along
     for k in passed_params.keys():
         if k not in default_params.keys():
