@@ -321,7 +321,10 @@ def run_server(
         print(json.dumps(response.json(), indent=4))
         return
     if test != False:
-        click.echo("\nLiteLLM: Making a test ChatCompletions request to your proxy")
+        request_model = model or "gpt-3.5-turbo"
+        click.echo(
+            f"\nLiteLLM: Making a test ChatCompletions request to your proxy. Model={request_model}"
+        )
         import openai
 
         if test == True:  # flag value set
@@ -331,7 +334,7 @@ def run_server(
         client = openai.OpenAI(api_key="My API Key", base_url=api_base)
 
         response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
+            model=request_model,
             messages=[
                 {
                     "role": "user",
@@ -342,10 +345,12 @@ def run_server(
         )
         click.echo(f"\nLiteLLM: response from proxy {response}")
 
-        print("\n Making streaming request to proxy")
+        print(
+            f"\n LiteLLM: Making a test ChatCompletions + streaming request to proxy. Model={request_model}"
+        )
 
         response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
+            model=request_model,
             messages=[
                 {
                     "role": "user",
@@ -358,7 +363,7 @@ def run_server(
             click.echo(f"LiteLLM: streaming response from proxy {chunk}")
         print("\n making completion request to proxy")
         response = client.completions.create(
-            model="gpt-3.5-turbo", prompt="this is a test request, write a short poem"
+            model=request_model, prompt="this is a test request, write a short poem"
         )
         print(response)
 
