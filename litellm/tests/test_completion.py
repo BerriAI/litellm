@@ -650,7 +650,54 @@ def test_completion_logprobs():
         pytest.fail(f"Error occurred: {e}")
 
 
-test_completion_logprobs()
+# test_completion_logprobs()
+
+
+def test_completion_logprobs_stream():
+    """
+    This function is used to test the litellm.completion logprobs functionality.
+
+    Parameters:
+        None
+
+    Returns:
+        None
+    """
+    try:
+        litellm.set_verbose = False
+        response = completion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "what is the time"}],
+            temperature=0.5,
+            top_p=0.1,
+            seed=12,
+            max_tokens=5,
+            logit_bias=None,
+            user="ishaans app",
+            logprobs=True,
+            top_logprobs=3,
+            stream=True,
+        )
+        # Add any assertions here to check the response
+
+        print(response)
+
+        found_logprob = False
+        for chunk in response:
+            # check if atleast one chunk has log probs
+            print(chunk)
+            if "logprobs" in chunk.choices[0]:
+                # assert we got a valid logprob in the choices
+                assert len(chunk.choices[0].logprobs.content[0].top_logprobs) == 3
+                found_logprob = True
+                break
+            print(chunk)
+        assert found_logprob == True
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+# test_completion_logprobs_stream()
 
 
 def test_completion_openai_litellm_key():
