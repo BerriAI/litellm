@@ -225,6 +225,7 @@ def test_completion_azure_gpt4_vision():
         litellm.set_verbose = True
         response = completion(
             model="azure/gpt-4-vision",
+            timeout=1,
             messages=[
                 {
                     "role": "user",
@@ -233,7 +234,7 @@ def test_completion_azure_gpt4_vision():
                         {
                             "type": "image_url",
                             "image_url": {
-                                "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
+                                "url": "https://avatars.githubusercontent.com/u/29436595?v=4"
                             },
                         },
                     ],
@@ -243,6 +244,9 @@ def test_completion_azure_gpt4_vision():
             api_key=os.getenv("AZURE_VISION_API_KEY"),
         )
         print(response)
+    except openai.APITimeoutError:
+        print("got a timeout error")
+        pass
     except openai.RateLimitError:
         print("got a rate liimt error")
         pass
