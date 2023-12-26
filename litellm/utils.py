@@ -6705,6 +6705,7 @@ class CustomStreamWrapper:
             text = ""
             is_finished = False
             finish_reason = None
+            logprobs = None
             original_chunk = None  # this is used for function/tool calling
             if len(str_line.choices) > 0:
                 if str_line.choices[0].delta.content is not None:
