@@ -80,6 +80,42 @@ response = litellm.completion(
 | gpt-3.5-turbo-16k    | `completion('azure/<your deployment name>', messages)` |
 | gpt-3.5-turbo-16k-0613    | `completion('azure/<your deployment name>', messages)`
 
+## Azure OpenAI Vision Models 
+| Model Name            | Function Call                                                   |
+|-----------------------|-----------------------------------------------------------------|
+| gpt-4-vision   | `response = completion(model="azure/<your deployment name>", messages=messages)` |
+
+#### Usage
+```python
+import os 
+from litellm import completion
+
+os.environ["AZURE_API_KEY"] = "your-api-key"
+
+# azure call
+response = completion(
+    model = "azure/<your deployment name>", 
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                            {
+                                "type": "text",
+                                "text": "What’s in this image?"
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
+                                }
+                            }
+                        ]
+        }
+    ],
+)
+
+```
+
 ## Advanced
 ### Azure API Load-Balancing
 
