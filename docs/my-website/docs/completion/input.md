@@ -28,10 +28,11 @@ This is a list of openai params we translate across providers.
 
 This list is constantly being updated.
 
-| Provider | temperature | max_tokens | top_p | stream | stop | n | presence_penalty | frequency_penalty | functions | function_call |
-|---|---|---|---|---|---|---|---|---|---|---|
+| Provider | temperature | max_tokens | top_p | stream | stop | n | presence_penalty | frequency_penalty | functions | function_call | logit_bias | user | response_format | seed | tools | tool_choice | logprobs | top_logprobs |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 |Anthropic| ✅ | ✅ | ✅ | ✅ | ✅ |  |  |   |  |   |
-|OpenAI| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+|OpenAI| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |✅ | ✅ | ✅ | ✅ |✅ | ✅ | ✅ | ✅ |
+|Azure OpenAI| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |✅ | ✅ | ✅ | ✅ |✅ | ✅ |  |  |
 |Replicate | ✅ | ✅ | ✅ | ✅ | ✅ | |  |   |  |   |
 |Anyscale | ✅ | ✅ | ✅ | ✅ |
 |Cohere| ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |   |   |
