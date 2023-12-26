@@ -1126,7 +1126,10 @@ async def completion(
             if llm_model_list is not None
             else []
         )
-        if (
+        # skip router if user passed their key
+        if "api_key" in data:
+            response = await litellm.atext_completion(**data)
+        elif (
             llm_router is not None and data["model"] in router_model_names
         ):  # model in router model list
             response = await llm_router.atext_completion(**data)
@@ -1259,7 +1262,10 @@ async def chat_completion(
             if llm_model_list is not None
             else []
         )
-        if (
+        # skip router if user passed their key
+        if "api_key" in data:
+            response = await litellm.acompletion(**data)
+        elif (
             llm_router is not None and data["model"] in router_model_names
         ):  # model in router model list
             response = await llm_router.acompletion(**data)
@@ -1414,7 +1420,10 @@ async def embeddings(
             user_api_key_dict=user_api_key_dict, data=data, call_type="embeddings"
         )
         ## ROUTE TO CORRECT ENDPOINT ##
-        if (
+        # skip router if user passed their key
+        if "api_key" in data:
+            response = await litellm.aembedding(**data)
+        elif (
             llm_router is not None and data["model"] in router_model_names
         ):  # model in router model list
             response = await llm_router.aembedding(**data)
@@ -1515,7 +1524,10 @@ async def image_generation(
             user_api_key_dict=user_api_key_dict, data=data, call_type="embeddings"
         )
         ## ROUTE TO CORRECT ENDPOINT ##
-        if (
+        # skip router if user passed their key
+        if "api_key" in data:
+            response = await litellm.aimage_generation(**data)
+        elif (
             llm_router is not None and data["model"] in router_model_names
         ):  # model in router model list
             response = await llm_router.aimage_generation(**data)
