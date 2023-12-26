@@ -196,6 +196,7 @@ async def acompletion(*args, **kwargs):
             or custom_llm_provider == "text-completion-openai"
             or custom_llm_provider == "huggingface"
             or custom_llm_provider == "ollama"
+            or custom_llm_provider == "ollama_chat"
             or custom_llm_provider == "vertex_ai"
         ):  # currently implemented aiohttp calls for just azure and openai, soon all.
             if kwargs.get("stream", False):
