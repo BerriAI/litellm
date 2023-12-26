@@ -1,5 +1,5 @@
 #
-name: Build & Publish to GHCR
+name: Build_Publish_to_GHCR
 on:
   workflow_dispatch:
     inputs:
