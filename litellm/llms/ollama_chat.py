@@ -283,18 +283,19 @@ async def ollama_acompletion(url, data, model_response, encoding, logging_obj):
                 text = await resp.text()
                 raise OllamaError(status_code=resp.status, message=text)
 
+            response_json = await resp.json()
+
             ## LOGGING
             logging_obj.post_call(
-                input=data["prompt"],
+                input=data,
                 api_key="",
-                original_response=resp.text,
+                original_response=response_json,
                 additional_args={
                     "headers": None,
                     "api_base": url,
                 },
             )
 
-            response_json = await resp.json()
             ## RESPONSE OBJECT
             model_response["choices"][0]["finish_reason"] = "stop"
             if data.get("format", "") == "json":
@@ -313,9 +314,7 @@ async def ollama_acompletion(url, data, model_response, encoding, logging_obj):
                 )
                 model_response["choices"][0]["message"] = message
             else:
-                model_response["choices"][0]["message"]["content"] = response_json[
-                    "response"
-                ]
+                model_response["choices"][0]["message"] = response_json["message"]
             model_response["created"] = int(time.time())
             model_response["model"] = "ollama/" + data["model"]
             prompt_tokens = response_json["prompt_eval_count"]  # type: ignore
