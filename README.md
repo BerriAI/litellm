@@ -31,8 +31,7 @@ LiteLLM manages:
 
 [**Jump to OpenAI Proxy Docs**](https://github.com/BerriAI/litellm?tab=readme-ov-file#openai-proxy---docs)
 
-# Installation 🚀
-
+# Usage ([**Docs**](https://docs.litellm.ai/docs/))
 > [!IMPORTANT]
 > LiteLLM v1.0.0 now requires `openai>=1.0.0`. Migration guide [here](https://docs.litellm.ai/docs/migration)
 
@@ -45,8 +44,6 @@ LiteLLM manages:
 ```
 pip install litellm
 ```
-
-# Usage ([**Docs**](https://docs.litellm.ai/docs/))
 
 ```python
 from litellm import completion
