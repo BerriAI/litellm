@@ -219,6 +219,40 @@ def test_completion_gpt4_vision():
 # test_completion_gpt4_vision()
 
 
+def test_completion_azure_gpt4_vision():
+    # azure gpt-4 vision takes 5s to respond
+    try:
+        litellm.set_verbose = True
+        response = completion(
+            model="azure/gpt-4-vision",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Whats in this image?"},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
+                            },
+                        },
+                    ],
+                }
+            ],
+            base_url="https://gpt-4-vision-resource.openai.azure.com/",
+            api_key=os.getenv("AZURE_VISION_API_KEY"),
+        )
+        print(response)
+    except openai.RateLimitError:
+        print("got a rate liimt error")
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+test_completion_azure_gpt4_vision()
+
+
 @pytest.mark.skip(reason="this test is flaky")
 def test_completion_perplexity_api():
     try:
