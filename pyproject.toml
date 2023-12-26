@@ -37,7 +37,8 @@ proxy = [
 extra_proxy = [
     "prisma",
     "azure-identity",
-    "azure-keyvault-secrets"
+    "azure-keyvault-secrets",
+    "google-cloud-kms"
 ]
 
 proxy_otel = [

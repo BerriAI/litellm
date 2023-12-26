@@ -97,6 +97,7 @@ from litellm.proxy.utils import (
     ProxyLogging,
     _cache_user_row,
 )
+from litellm.proxy.secret_managers.google_kms import load_google_kms
 import pydantic
 from litellm.proxy._types import *
 from litellm.caching import DualCache
@@ -690,13 +691,18 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
     if general_settings is None:
         general_settings = {}
     if general_settings:
+        ### LOAD FROM GOOGLE KMS ###
+        use_google_kms = general_settings.get("use_google_kms", False)
+        load_google_kms(use_google_kms=use_google_kms)
         ### LOAD FROM AZURE KEY VAULT ###
         use_azure_key_vault = general_settings.get("use_azure_key_vault", False)
         load_from_azure_key_vault(use_azure_key_vault=use_azure_key_vault)
         ### CONNECT TO DATABASE ###
         database_url = general_settings.get("database_url", None)
         if database_url and database_url.startswith("os.environ/"):
+            print(f"GOING INTO LITELLM.GET_SECRET!")
             database_url = litellm.get_secret(database_url)
+            print(f"RETRIEVED DB URL: {database_url}")
         prisma_setup(database_url=database_url)
         ## COST TRACKING ##
         cost_tracking()
