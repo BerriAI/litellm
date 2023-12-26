@@ -1641,7 +1641,7 @@ def completion(
             """
             assume input to custom LLM api bases follow this format:
             resp = requests.post(
-                api_base, 
+                api_base,
                 json={
                     'model': 'meta-llama/Llama-2-13b-hf', # model name
                     'params': {

@@ -328,16 +328,16 @@ def test_completion_perplexity_api_2():
 ######### HUGGING FACE TESTS ########################
 #####################################################
 """
-HF Tests we should pass 
-- TGI: 
-    - Pro Inference API 
-    - Deployed Endpoint 
-- Coversational 
-    - Free Inference API 
-    - Deployed Endpoint 
+HF Tests we should pass
+- TGI:
+    - Pro Inference API
+    - Deployed Endpoint
+- Coversational
+    - Free Inference API
+    - Deployed Endpoint
 - Neither TGI or Coversational
-    - Free Inference API 
-    - Deployed Endpoint 
+    - Free Inference API
+    - Deployed Endpoint
 """
 
 

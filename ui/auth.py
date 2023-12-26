@@ -1,5 +1,5 @@
 """
-Auth in user, to proxy ui. 
+Auth in user, to proxy ui.
 
 Uses supabase passwordless auth: https://supabase.com/docs/reference/python/auth-signinwithotp
 

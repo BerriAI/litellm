@@ -1,5 +1,5 @@
 """
-Admin sets proxy url + allowed email subdomain 
+Admin sets proxy url + allowed email subdomain
 """
 from dotenv import load_dotenv
 
