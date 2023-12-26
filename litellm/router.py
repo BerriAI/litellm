@@ -1529,7 +1529,6 @@ class Router:
 
             ############ End of initializing Clients for OpenAI/Azure ###################
             self.deployment_names.append(model["litellm_params"]["model"])
-            self.print_verbose(f"\n Initialized Model List {self.model_list}")
 
             ############ Users can either pass tpm/rpm as a litellm_param or a router param ###########
             # for get_available_deployment, we use the litellm_param["rpm"]
@@ -1545,6 +1544,7 @@ class Router:
             ):
                 model["litellm_params"]["tpm"] = model.get("tpm")
 
+        self.print_verbose(f"\nInitialized Model List {self.model_list}")
         self.model_names = [m["model_name"] for m in model_list]
 
     def get_model_names(self):
