@@ -9,7 +9,7 @@
 
 import sys, re
 import litellm
-import dotenv, json, traceback, threading
+import dotenv, json, traceback, threading, base64
 import subprocess, os
 import litellm, openai
 import itertools
@@ -6341,10 +6341,33 @@ def get_secret(secret_name: str, default_value: Optional[str] = None):
                     == "azure.keyvault.secrets._client.SecretClient"
                 ):  # support Azure Secret Client - from azure.keyvault.secrets import SecretClient
                     secret = retrieved_secret = client.get_secret(secret_name).value
+                elif client.__class__.__name__ == "KeyManagementServiceClient":
+                    encrypted_secret = os.getenv(secret_name)
+                    if encrypted_secret is None:
+                        raise ValueError(
+                            f"Google KMS requires the encrypted secret to be in the environment!"
+                        )
+                    if not isinstance(encrypted_secret, bytes):
+                        # If it's not, assume it's a string and encode it to bytes
+                        ciphertext = eval(
+                            encrypted_secret.encode()
+                        )  # assuming encrypted_secret is something like - b'\n$\x00D\xac\xb4/t)07\xe5\xf6..'
+                    else:
+                        ciphertext = encrypted_secret
+
+                    response = client.decrypt(
+                        request={
+                            "name": litellm._google_kms_resource_name,
+                            "ciphertext": ciphertext,
+                        }
+                    )
+                    secret = response.plaintext.decode(
+                        "utf-8"
+                    )  # assumes the original value was encoded with utf-8
                 else:  # assume the default is infisicial client
                     secret = client.get_secret(secret_name).secret_value
-            except:  # check if it's in os.environ
-                secret = os.environ.get(secret_name)
+            except Exception as e:  # check if it's in os.environ
+                secret = os.getenv(secret_name)
             return secret
         else:
             return os.environ.get(secret_name)
