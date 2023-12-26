@@ -33,3 +33,5 @@ jobs:
       - run: poetry install
       - name: Run flake8 (https://flake8.pycqa.org/en/latest/)
         run: poetry run flake8
+      - name: Run black code formatter (https://black.readthedocs.io/en/stable/)
+        run: poetry run black --check .
