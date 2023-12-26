@@ -54,7 +54,7 @@
 #         print(e)
 
 
-# test_ollama_streaming()
+# # test_ollama_streaming()
 
 
 # async def test_async_ollama_streaming():
@@ -71,7 +71,21 @@
 #         print(e)
 
 
-# asyncio.run(test_async_ollama_streaming())
+# # asyncio.run(test_async_ollama_streaming())
+
+# async def test_async_ollama():
+#     try:
+#         litellm.set_verbose = True
+#         response = await litellm.acompletion(
+#             model="ollama_chat/llama2",
+#             messages=[{"role": "user", "content": "Hey, how's it going?"}],
+#         )
+#         print("\n response", response)
+#     except Exception as e:
+#         print(e)
+
+
+# asyncio.run(test_async_ollama())
 
 
 # def test_completion_ollama():
