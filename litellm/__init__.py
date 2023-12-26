@@ -143,6 +143,7 @@ allowed_fails: int = 0
 secret_manager_client: Optional[
     Any
 ] = None  # list of instantiated key management clients - e.g. azure kv, infisical, etc.
+_google_kms_resource_name: Optional[str] = None
 #############################################
 
 
