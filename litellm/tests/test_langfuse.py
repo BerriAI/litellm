@@ -18,7 +18,7 @@ import time
 import pytest
 
 
-def search_logs(log_file_path):
+def search_logs(log_file_path, num_good_logs=1):
     """
     Searches the given log file for logs containing the "/api/public" string.
 
@@ -48,12 +48,17 @@ def search_logs(log_file_path):
                     print(line.strip())
                     print("\n\n")
                     match = re.search(
-                        r"receive_response_headers.complete return_value=\(b\'HTTP/1.1\', (\d+),",
+                        r'"POST /api/public/ingestion HTTP/1.1" (\d+) (\d+)',
                         line,
                     )
                     if match:
                         status_code = int(match.group(1))
-                        if status_code != 200 and status_code != 201:
+                        print("STATUS CODE", status_code)
+                        if (
+                            status_code != 200
+                            and status_code != 201
+                            and status_code != 207
+                        ):
                             print("got a BAD log")
                             bad_logs.append(line.strip())
                         else:
@@ -62,7 +67,9 @@ def search_logs(log_file_path):
         print(bad_logs)
         if len(bad_logs) > 0:
             raise Exception(f"bad logs, Bad logs = {bad_logs}")
-
+        assert (
+            len(good_logs) == num_good_logs
+        ), f"Did not get expected number of good logs, expected {num_good_logs}, got {len(good_logs)}. All logs \n {all_logs}"
         print("\nGood Logs")
         print(good_logs)
         if len(good_logs) <= 0:
@@ -92,28 +99,28 @@ def pre_langfuse_setup():
     return
 
 
-@pytest.mark.skip(reason="beta test - checking langfuse output")
 def test_langfuse_logging_async():
     try:
         pre_langfuse_setup()
         litellm.set_verbose = True
 
         async def _test_langfuse():
-            return await litellm.acompletion(
-                model="gpt-3.5-turbo",
+            response = await litellm.acompletion(
+                model="azure/chatgpt-v-2",
                 messages=[{"role": "user", "content": "This is a test"}],
                 max_tokens=100,
                 temperature=0.7,
                 timeout=5,
                 user="test_user",
             )
+            asyncio.sleep(1)
+            return response
 
         response = asyncio.run(_test_langfuse())
         print(f"response: {response}")
 
-        # time.sleep(2)
         # # check langfuse.log to see if there was a failed response
-        # search_logs("langfuse.log")
+        search_logs("langfuse.log")
     except litellm.Timeout as e:
         pass
     except Exception as e:
@@ -297,4 +304,4 @@ def test_langfuse_logging_tool_calling():
     tool_calls = response.choices[0].message.tool_calls
 
 
-test_langfuse_logging_tool_calling()
+# test_langfuse_logging_tool_calling()
