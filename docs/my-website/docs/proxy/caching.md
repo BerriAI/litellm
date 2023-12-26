@@ -103,6 +103,32 @@ litellm_settings:
     supported_call_types: ["acompletion", "completion", "embedding", "aembedding"] # defaults to all litellm call types
 ```
 
+### Cache-Controls on requests 
+
+Set ttl per request by passing Cache-Controls. The proxy currently supports just `s-maxage`. 
+
+Comment on this issue if you need additional cache controls - https://github.com/BerriAI/litellm/issues/1218
+
+```javascript
+const { OpenAI } = require('openai');
+
+const openai = new OpenAI({
+  apiKey: "sk-1234", // This is the default and can be omitted
+  baseURL: "http://0.0.0.0:8000"
+});
+
+async function main() {
+  const chatCompletion = await openai.chat.completions.create({
+    messages: [{ role: 'user', content: 'Say this is a test' }],
+    model: 'gpt-3.5-turbo',
+  }, {"headers": {
+    "Cache-Control": "s-maxage=0" // 👈 sets ttl=0
+  }});
+}
+
+main();
+```
+
 ### Override caching per `chat/completions` request
 Caching can be switched on/off per `/chat/completions` request
 - Caching **on** for individual completion - pass `caching=True`:
