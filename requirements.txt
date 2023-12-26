@@ -12,6 +12,7 @@ redis==4.6.0 # caching
 prisma==0.11.0 # for db
 mangum==0.17.0 # for aws lambda functions
 google-generativeai==0.1.0 # for vertex ai calls
+async_generator==1.10.0 # for async ollama calls
 traceloop-sdk==0.5.3 # for open telemetry logging
 langfuse>=2.0.0 # for langfuse self-hosted logging
 ### LITELLM PACKAGE DEPENDENCIES
