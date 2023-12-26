@@ -85,7 +85,7 @@
 #         print(e)
 
 
-# asyncio.run(test_async_ollama())
+# # asyncio.run(test_async_ollama())
 
 
 # def test_completion_ollama():
@@ -130,7 +130,7 @@
 #             }
 #         ]
 #         response = completion(
-#             model="ollama/mistral",
+#             model="ollama_chat/mistral",
 #             messages=messages,
 #             functions=functions,
 #             max_tokens=200,
@@ -143,7 +143,7 @@
 #         pytest.fail(f"Error occurred: {e}")
 
 
-# # test_completion_ollama_function_calling()
+# test_completion_ollama_function_calling()
 
 
 # async def async_test_completion_ollama_function_calling():
