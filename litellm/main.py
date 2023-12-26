@@ -466,6 +466,7 @@ def completion(
         "proxy_server_request",
         "preset_cache_key",
         "caching_groups",
+        "ttl",
     ]
     default_params = openai_params + litellm_params
     non_default_params = {
@@ -2158,6 +2159,7 @@ def embedding(
         "model_info",
         "preset_cache_key",
         "caching_groups",
+        "ttl",
     ]
     default_params = openai_params + litellm_params
     non_default_params = {
@@ -2787,6 +2789,7 @@ def image_generation(
         "model_info",
         "preset_cache_key",
         "caching_groups",
+        "ttl",
     ]
     default_params = openai_params + litellm_params
     non_default_params = {
