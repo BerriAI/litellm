@@ -43,11 +43,12 @@ const sidebars = {
     },
     {
       type: "category",
-      label: "Embedding() & Moderation()",
+      label: "Embedding(), Moderation(), Image Generation()",
       items: [
         "embedding/supported_embedding", 
         "embedding/async_embedding",
         "embedding/moderation",
+        "image_generation"
       ],
     },
     {
