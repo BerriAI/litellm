@@ -3,6 +3,7 @@ import threading, requests
 from typing import Callable, List, Optional, Dict, Union, Any
 from litellm.caching import Cache
 from litellm._logging import set_verbose
+from litellm.proxy._types import KeyManagementSystem
 import httpx
 
 input_callback: List[Union[str, Callable]] = []
@@ -144,6 +145,7 @@ secret_manager_client: Optional[
     Any
 ] = None  # list of instantiated key management clients - e.g. azure kv, infisical, etc.
 _google_kms_resource_name: Optional[str] = None
+_key_management_system: Optional[KeyManagementSystem] = None
 #############################################
 
 
