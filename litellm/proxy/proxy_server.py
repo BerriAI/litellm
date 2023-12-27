@@ -415,6 +415,7 @@ def load_from_azure_key_vault(use_azure_key_vault: bool = False):
             client = SecretClient(vault_url=KVUri, credential=credential)
 
             litellm.secret_manager_client = client
+            litellm._key_management_system = KeyManagementSystem.AZURE_KEY_VAULT
         else:
             raise Exception(
                 f"Missing KVUri or client_id or client_secret or tenant_id from environment"
@@ -691,10 +692,21 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
     if general_settings is None:
         general_settings = {}
     if general_settings:
-        ### LOAD FROM GOOGLE KMS ###
+        ### LOAD SECRET MANAGER ###
+        key_management_system = general_settings.get("key_management_system", None)
+        if key_management_system is not None:
+            if key_management_system == KeyManagementSystem.AZURE_KEY_VAULT.value:
+                ### LOAD FROM AZURE KEY VAULT ###
+                load_from_azure_key_vault(use_azure_key_vault=True)
+            elif key_management_system == KeyManagementSystem.GOOGLE_KMS.value:
+                ### LOAD FROM GOOGLE KMS ###
+                load_google_kms(use_google_kms=True)
+            else:
+                raise ValueError("Invalid Key Management System selected")
+        ### [DEPRECATED] LOAD FROM GOOGLE KMS ###
         use_google_kms = general_settings.get("use_google_kms", False)
         load_google_kms(use_google_kms=use_google_kms)
-        ### LOAD FROM AZURE KEY VAULT ###
+        ### [DEPRECATED] LOAD FROM AZURE KEY VAULT ###
         use_azure_key_vault = general_settings.get("use_azure_key_vault", False)
         load_from_azure_key_vault(use_azure_key_vault=use_azure_key_vault)
         ### CONNECT TO DATABASE ###
