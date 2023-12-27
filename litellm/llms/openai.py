@@ -482,8 +482,7 @@ class OpenAIChatCompletion(BaseLLM):
                 custom_llm_provider="openai",
                 logging_obj=logging_obj,
             )
-            async for transformed_chunk in streamwrapper:
-                yield transformed_chunk
+            return streamwrapper
         except (
             Exception
         ) as e:  # need to exception handle here. async exceptions don't get caught in sync functions.

@@ -198,18 +198,16 @@ async def acompletion(*args, **kwargs):
             or custom_llm_provider == "ollama"
             or custom_llm_provider == "ollama_chat"
             or custom_llm_provider == "vertex_ai"
-        ):  # currently implemented aiohttp calls for just azure and openai, soon all.
-            if kwargs.get("stream", False):
-                response = completion(*args, **kwargs)
+        ):  # currently implemented aiohttp calls for just azure, openai, hf, ollama, vertex ai soon all.
+            init_response = await loop.run_in_executor(None, func_with_context)
+            if isinstance(init_response, dict) or isinstance(
+                init_response, ModelResponse
+            ):  ## CACHING SCENARIO
+                response = init_response
+            elif asyncio.iscoroutine(init_response):
+                response = await init_response
             else:
-                # Await normally
-                init_response = await loop.run_in_executor(None, func_with_context)
-                if isinstance(init_response, dict) or isinstance(
-                    init_response, ModelResponse
-                ):  ## CACHING SCENARIO
-                    response = init_response
-                elif asyncio.iscoroutine(init_response):
-                    response = await init_response
+                response = init_response
         else:
             # Call the synchronous function using run_in_executor
             response = await loop.run_in_executor(None, func_with_context)
