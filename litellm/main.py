@@ -2362,6 +2362,7 @@ def embedding(
 
 
 ###### Text Completion ################
+@client
 async def atext_completion(*args, **kwargs):
     """
     Implemented to handle async streaming for the text completion endpoint
@@ -2426,6 +2427,7 @@ async def atext_completion(*args, **kwargs):
         )
 
 
+@client
 def text_completion(
     prompt: Union[
         str, List[Union[str, List[Union[str, List[int]]]]]
