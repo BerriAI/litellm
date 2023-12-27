@@ -525,7 +525,7 @@ class TextChoices(OpenAIObject):
         if finish_reason:
             self.finish_reason = map_finish_reason(finish_reason)
         else:
-            self.finish_reason = "stop"
+            self.finish_reason = None
         self.index = index
         if text is not None:
             self.text = text
@@ -1438,7 +1438,7 @@ class Logging:
                         )
                 if callback == "langfuse":
                     global langFuseLogger
-                    print_verbose("reaches langfuse for logging!")
+                    print_verbose("reaches Async langfuse for logging!")
                     kwargs = {}
                     for k, v in self.model_call_details.items():
                         if (
@@ -1450,7 +1450,9 @@ class Logging:
                         if "complete_streaming_response" not in kwargs:
                             return
                         else:
-                            print_verbose("reaches langfuse for streaming logging!")
+                            print_verbose(
+                                "reaches Async langfuse for streaming logging!"
+                            )
                             result = kwargs["complete_streaming_response"]
                     if langFuseLogger is None:
                         langFuseLogger = LangFuseLogger()
@@ -1847,6 +1849,11 @@ def client(original_function):
             elif (
                 call_type == CallTypes.image_generation.value
                 or call_type == CallTypes.aimage_generation.value
+            ):
+                messages = args[0] if len(args) > 0 else kwargs["prompt"]
+            elif (
+                call_type == CallTypes.atext_completion.value
+                or call_type == CallTypes.text_completion.value
             ):
                 messages = args[0] if len(args) > 0 else kwargs["prompt"]
             stream = True if "stream" in kwargs and kwargs["stream"] == True else False
@@ -7361,16 +7368,16 @@ class TextCompletionStreamWrapper:
             response = TextCompletionResponse()
             response["id"] = chunk.get("id", None)
             response["object"] = "text_completion"
-            response["created"] = response.get("created", None)
-            response["model"] = response.get("model", None)
+            response["created"] = chunk.get("created", None)
+            response["model"] = chunk.get("model", None)
             text_choices = TextChoices()
             if isinstance(
                 chunk, Choices
             ):  # chunk should always be of type StreamingChoices
                 raise Exception
             text_choices["text"] = chunk["choices"][0]["delta"]["content"]
-            text_choices["index"] = response["choices"][0]["index"]
-            text_choices["finish_reason"] = response["choices"][0]["finish_reason"]
+            text_choices["index"] = chunk["choices"][0]["index"]
+            text_choices["finish_reason"] = chunk["choices"][0]["finish_reason"]
             response["choices"] = [text_choices]
             return response
         except Exception as e:
