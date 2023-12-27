@@ -1,4 +1,5 @@
 from pydantic import BaseModel, Extra, Field, root_validator
+import enum
 from typing import Optional, List, Union, Dict, Literal
 from datetime import datetime
 import uuid, json
@@ -175,6 +176,12 @@ class NewUserResponse(GenerateKeyResponse):
     max_budget: Optional[float] = None
 
 
+class KeyManagementSystem(enum.Enum):
+    GOOGLE_KMS = "google_kms"
+    AZURE_KEY_VAULT = "azure_key_vault"
+    LOCAL = "local"
+
+
 class ConfigGeneralSettings(LiteLLMBase):
     """
     Documents all the fields supported by `general_settings` in config.yaml
@@ -182,6 +189,12 @@ class ConfigGeneralSettings(LiteLLMBase):
 
     completion_model: Optional[str] = Field(
         None, description="proxy level default model for all chat completion calls"
+    )
+    key_management_system: Optional[KeyManagementSystem] = Field(
+        None, description="key manager to load keys from / decrypt keys with"
+    )
+    use_google_kms: Optional[bool] = Field(
+        None, description="decrypt keys with google kms"
     )
     use_azure_key_vault: Optional[bool] = Field(
         None, description="load keys from azure key vault"

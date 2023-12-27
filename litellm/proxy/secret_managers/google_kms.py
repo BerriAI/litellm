@@ -9,6 +9,7 @@ Requires:
 """
 import litellm, os
 from typing import Optional
+from litellm.proxy._types import KeyManagementSystem
 
 
 def validate_environment():
@@ -25,12 +26,15 @@ def validate_environment():
 def load_google_kms(use_google_kms: Optional[bool]):
     if use_google_kms is None or use_google_kms == False:
         return
+    try:
+        from google.cloud import kms_v1  # type: ignore
 
-    from google.cloud import kms_v1  # type: ignore
+        validate_environment()
 
-    validate_environment()
-
-    # Create the KMS client
-    client = kms_v1.KeyManagementServiceClient()
-    litellm.secret_manager_client = client
-    litellm._google_kms_resource_name = os.getenv("GOOGLE_KMS_RESOURCE_NAME")
+        # Create the KMS client
+        client = kms_v1.KeyManagementServiceClient()
+        litellm.secret_manager_client = client
+        litellm._key_management_system = KeyManagementSystem.GOOGLE_KMS
+        litellm._google_kms_resource_name = os.getenv("GOOGLE_KMS_RESOURCE_NAME")
+    except Exception as e:
+        raise e
