@@ -144,11 +144,20 @@ print(response)
 Track Spend, Set budgets and create virtual keys for the proxy
 `POST /key/generate`
 
+### Request
 ```shell
 curl 'http://0.0.0.0:8000/key/generate' \
 --header 'Authorization: Bearer sk-1234' \
 --header 'Content-Type: application/json' \
 --data-raw '{"models": ["gpt-3.5-turbo", "gpt-4", "claude-2"], "duration": "20m","metadata": {"user": "ishaan@berri.ai", "team": "core-infra"}}'
+```
+
+### Expect Response
+```shell
+{
+    "key": "sk-kdEXbIqZRwEeEiHwdg7sFA", # Bearer token
+    "expires": "2023-11-19T01:38:25.838000+00:00" # datetime object
+}
 ```
 
 ### [Beta] Proxy UI
