@@ -136,10 +136,13 @@ suppress_debug_info = False
 dynamodb_table_name: Optional[str] = None
 #### RELIABILITY ####
 request_timeout: Optional[float] = 6000
-num_retries: Optional[int] = None
+num_retries: Optional[int] = None  # per model endpoint
 fallbacks: Optional[List] = None
 context_window_fallbacks: Optional[List] = None
 allowed_fails: int = 0
+num_retries_per_request: Optional[
+    int
+] = None  # for the request overall (incl. fallbacks + model retries)
 ####### SECRET MANAGERS #####################
 secret_manager_client: Optional[
     Any
