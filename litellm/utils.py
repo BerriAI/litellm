@@ -6767,20 +6767,13 @@ class CustomStreamWrapper:
 
     def handle_openai_text_completion_chunk(self, chunk):
         try:
+            print_verbose(f"\nRaw OpenAI Chunk\n{chunk}\n")
             str_line = chunk
             text = ""
             is_finished = False
             finish_reason = None
-            print_verbose(f"str_line: {str_line}")
-            if "data: [DONE]" in str_line:
-                text = ""
-                is_finished = True
-                finish_reason = "stop"
-                return {
-                    "text": text,
-                    "is_finished": is_finished,
-                    "finish_reason": finish_reason,
-                }
+            if "data: [DONE]" in str_line or self.sent_last_chunk == True:
+                raise StopIteration
             elif str_line.startswith("data:"):
                 data_json = json.loads(str_line[5:])
                 print_verbose(f"delta content: {data_json}")
@@ -6788,6 +6781,7 @@ class CustomStreamWrapper:
                 if data_json["choices"][0].get("finish_reason", None):
                     is_finished = True
                     finish_reason = data_json["choices"][0]["finish_reason"]
+                    self.sent_last_chunk = True
                 print_verbose(
                     f"text: {text}; is_finished: {is_finished}; finish_reason: {finish_reason}"
                 )
@@ -6808,7 +6802,6 @@ class CustomStreamWrapper:
                 }
 
         except Exception as e:
-            traceback.print_exc()
             raise e
 
     def handle_baseten_chunk(self, chunk):
