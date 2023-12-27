@@ -114,7 +114,7 @@ def test_langfuse_logging_async():
                 timeout=5,
                 user="test_user",
             )
-            asyncio.sleep(1)
+            await asyncio.sleep(1)
             return response
 
         response = asyncio.run(_test_langfuse())
