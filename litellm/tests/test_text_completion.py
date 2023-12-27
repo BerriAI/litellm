@@ -2889,4 +2889,37 @@ def test_async_text_completion():
     asyncio.run(test_get_response())
 
 
-test_async_text_completion()
+# test_async_text_completion()
+
+
+def test_async_text_completion_stream():
+    # tests atext_completion + streaming - assert only one finish reason sent
+    litellm.set_verbose = False
+    print("test_async_text_completion with stream")
+
+    async def test_get_response():
+        try:
+            response = await litellm.atext_completion(
+                model="gpt-3.5-turbo-instruct",
+                prompt="good morning",
+                stream=True,
+            )
+            print(f"response: {response}")
+
+            num_finish_reason = 0
+            async for chunk in response:
+                print(chunk)
+                if chunk["choices"][0].get("finish_reason") is not None:
+                    num_finish_reason += 1
+                    print("finish_reason", chunk["choices"][0].get("finish_reason"))
+
+            assert (
+                num_finish_reason == 1
+            ), f"expected only one finish reason. Got {num_finish_reason}"
+        except Exception as e:
+            pytest.fail(f"GOT exception for gpt-3.5 instruct In streaming{e}")
+
+    asyncio.run(test_get_response())
+
+
+# test_async_text_completion_stream()
