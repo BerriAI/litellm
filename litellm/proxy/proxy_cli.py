@@ -1,7 +1,7 @@
 import click
 import subprocess, traceback, json
 import os, sys
-import random, appdirs
+import random
 from datetime import datetime
 import importlib
 from dotenv import load_dotenv
@@ -10,11 +10,6 @@ import operator
 sys.path.append(os.getcwd())
 
 config_filename = "litellm.secrets"
-# Using appdirs to determine user-specific config path
-config_dir = appdirs.user_config_dir("litellm")
-user_config_path = os.getenv(
-    "LITELLM_CONFIG_PATH", os.path.join(config_dir, config_filename)
-)
 
 load_dotenv()
 from importlib import resources
