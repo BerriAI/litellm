@@ -588,9 +588,11 @@ def completion(
             functions_unsupported_model = optional_params.pop(
                 "functions_unsupported_model"
             )
-            messages = function_call_prompt(
-                messages=messages, functions=functions_unsupported_model
+            model_response = ModelResponse()
+            response = function_call_prompt(
+                messages=messages, functions=functions_unsupported_model, model_response=model_response
             )
+            
 
         # For logging - save the values of the litellm-specific params passed in
         litellm_params = get_litellm_params(
@@ -615,6 +617,9 @@ def completion(
             optional_params=optional_params,
             litellm_params=litellm_params,
         )
+        if litellm.add_function_to_prompt and optional_params.get("functions_unsupported_model", None):
+            return #trying to exit early while still logging todo fix
+        
         if custom_llm_provider == "azure":
             # azure configs
             api_type = get_secret("AZURE_API_TYPE") or "azure"

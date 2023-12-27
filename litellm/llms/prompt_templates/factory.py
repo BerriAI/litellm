@@ -430,25 +430,285 @@ def gemini_text_image_pt(messages: list):
     return content
 
 
-# Function call template
-def function_call_prompt(messages: list, functions: list):
-    function_prompt = (
-        "Produce JSON OUTPUT ONLY! The following functions are available to you:"
-    )
+import re, json
+from guidance import system, user, assistant, models, select, gen
+import guidance
+
+
+def transform_function_list(functions):
+    transformed = {}
+
     for function in functions:
-        function_prompt += f"""\n{function}\n"""
+        func_name = function['name']
+        new_func = {
+            "description": function['description']
+        }
 
-    function_added_to_prompt = False
-    for message in messages:
-        if "system" in message["role"]:
-            message["content"] += f"""{function_prompt}"""
-            function_added_to_prompt = True
+        # Check if parameters type is object
+        if function['parameters'].get('type') == 'object':
+            properties = function['parameters'].get('properties', {})
+            required_params = function['parameters'].get('required', [])
 
-    if function_added_to_prompt == False:
-        messages.append({"role": "system", "content": f"""{function_prompt}"""})
+            # Update properties to include 'required' field
+            for prop_name, prop_details in properties.items():
+                prop_details['required'] = prop_name in required_params
 
-    return messages
+            new_func['properties'] = properties
+        else:
+            new_func['parameters'] = function['parameters']
 
+        transformed[func_name] = new_func
+
+    return transformed
+  
+  
+
+
+
+@guidance
+def function_call(lm,  messages, functions, patterns=False):
+    functions = transform_function_list(functions)
+    lm +=str(messages)
+    func_names = []
+    params={}
+    with user():
+        lm += "The following are the names and descriptions of available functions. Please choose the appropriate function based on previous chat history\n"
+        
+        for name, details in functions.items():
+            func_names.append(name)
+            description = details["description"]
+            lm += f"Function Name: {name}\nDescription: {description}\n\n"
+            
+            lm += "None\n\n"
+    # func_names.append("None")
+
+    with assistant():
+        lm += f'''\
+            Now I will choose from one of following options:
+            Choice: {select(func_names, name='function_choice')}
+        \n\n
+        '''
+    func_name = lm['function_choice']
+    # print(str(functions[func_name]['properties']))
+
+    args =json.loads(json.dumps(functions[func_name]['properties']))
+    
+    # Starting the prompt engineering section
+    desc=functions[func_name]["description"]
+
+    
+    usr_msg= f'''\
+        Based on this function name and description, generate the appropirate arguments
+        Function Name: {func_name}\nDescription: {desc}
+        \n
+        ''' 
+    for arg in args:
+
+        desc = args[arg].get("description", "No description provided")
+
+        if args[arg].get("required") == False:
+            with user():
+                lm += usr_msg +f'''\
+                Note that this argument is not necessary for parsing and execution however it 
+                may be helpful to include, please make a decision to include this argument or not
+                Argument: {arg}
+                description: {desc}
+                ''' 
+            with assistant():
+                lm += f'''\
+                Understood I will only generate either to include or not_include this parameter based on the messsages
+                Messages:{str(messages)}
+                {arg}:{select(name=arg, options=["include","not_include"])}
+                and here is my justification for my decision:
+                {gen(name="just", max_tokens=50)}
+                '''
+            
+            assert lm[arg] in ["include","not_include"]
+            
+            if lm[arg] == 'not_include':
+                
+                continue
+        
+        if "enum" in args[arg]:
+            with user():
+                lm += usr_msg +f'''\
+                Now please generate the arguments for this function:
+                ensuring that the argument is one of the following:
+                Argument: {arg}
+                description: {desc}
+                ''' 
+            with assistant():
+                lm += f'''\
+                Understood I will only generate an option within the provided list
+                {arg}:{select(name=arg, options=args[arg]["enum"])}
+                '''
+            assert lm[arg] in args[arg]["enum"]
+            params[arg]=lm[arg]
+
+        elif args[arg]["type"] == "string":
+            with user():
+                lm += usr_msg + f'''\
+                Please ensure that your output is only the relevant string and not 
+                any does not contain any unecessary characters or new lines
+                Argument Name: {arg}
+                description: {desc}
+                type: string
+                '''
+            with assistant():
+                lm += f'''\
+                Understood I will only generate a string that best matches the provided argument
+                {arg}:{gen(name=arg, max_tokens=30)}
+                '''
+                resp=(lm[arg].rsplit('\n', 1)[0]).strip()
+                resp =resp.replace("'", "").replace('"', "")
+            params[arg]=resp
+
+        elif args[arg]["type"] == "integer":
+            convert_to_int = lambda s: int(''.join(re.findall(r'\d', s))) if re.search(r'\d', s) else 0
+            if patterns == True:
+                with user():
+                    lm += usr_msg + f'''\
+                    Now please generate the arguments for this function:
+                    ensuring that the argument is one of the following:
+                    Argument: {arg}
+                    description: {desc}
+                    type: int
+                    ''' 
+                with assistant():
+                    lm += f'''\
+                    Understood I will only generate an option which is a valid integer
+                    {arg}:{gen(name=arg,regex="[0-9]+")}
+                    '''
+                num = convert_to_int(lm[arg])
+            else:
+                with user():
+                    lm += usr_msg +f'''\
+                    Now please generate the arguments for this function:
+                    ensuring that the argument is one of the following:
+                    Argument: {arg}
+                    description: {desc}
+                    type: int
+                    ''' 
+                with assistant():
+                    lm += f'''\
+                    Understood I will only generate an option which is a valid integer
+                    {arg}:{gen(name=arg, max_tokens=10)}
+                    '''
+            num = convert_to_int((lm[arg].rsplit('\n', 1)[0]))
+            
+            assert isinstance(num, int)
+            params[arg]=num
+
+        elif args[arg]["type"] == "float":
+
+            if patterns == True:
+                with assistant():
+                    lm += f'''\
+                    Now I will generate the arguments for this function,
+                    ENSURING THAT THE ARGUMENT IS A FLOAT:
+                    Argument: {arg}
+                    description: {desc}
+                    {arg}:{gen(name=arg,regex="[0-9]+")}       
+                    '''
+                assert isinstance(float(lm[arg]), float)
+
+            else:
+                with assistant():
+                    lm += f'''\
+                    Now I will generate the arguments for this function,
+                    ENSURING THAT THE ARGUMENT IS A FLOAT:
+                    Argument: {arg}
+                    description: {desc}
+                    {arg}:{gen(name=arg)}        
+                    '''
+                assert isinstance(float(lm[arg]), float)
+            params[arg]=float(lm[arg])
+            with user():
+                lm += "good now please generate the next argument"
+
+
+        elif args[arg]["type"] == "boolean":
+            with user():
+                lm += f'''\
+                Now please generate the arguments for this function:
+                ensuring that the argument which is a boolean
+                Argument: {arg}
+                description: {desc}
+                type: boolean
+                ''' 
+
+            with assistant():
+                lm += f'''\
+                Now I will generate the arguments for this function:
+                Understood I will only generate an option which is either true or false
+                Argument: {arg}
+                description: {desc}
+                Choice: {select(name=arg, options=["true","false"])}
+                '''
+            choice =bool(lm[arg])
+            assert isinstance(choice, bool)
+            params[arg]=choice
+
+              
+
+    results ={"function_call":{"name": func_name, "arguments": params}}
+
+    lm = lm.set('return_value', results)
+
+    # Return the updated lm
+    return lm
+
+
+
+# Function call template
+def function_call_prompt(messages: list, functions: list, model_response):
+
+
+    from litellm.utils import Choices, Message, FunctionCall, Usage
+    from datetime import datetime
+    import time
+
+    llm =guidance.models.MistralChat("./models/mixtral-8x7b-instruct-v0.1.Q4_0.gguf",echo=False, n_ctx=4096)
+
+    lm =llm+function_call(messages,functions ,patterns=True)
+    results =(lm['return_value'])
+
+
+    model_response.id = "chatcmpl-8aTreRFE763VO0d88d4kUBrqea1tz" #todo
+    current_unix_timestamp = int(time.time())
+
+
+    function_call_arguments = results['function_call']['arguments']
+    function_call_name = results['function_call']['name']
+
+    # Serialize arguments to a JSON string if it is a dictionary
+    if isinstance(function_call_arguments, dict):
+        function_call_arguments = json.dumps(function_call_arguments)
+
+    # Ensure arguments and name are passed as strings to FunctionCall
+    model_response.choices = [
+        Choices(
+            finish_reason='function_call',
+            index=0,
+            message=Message(
+                content=None, 
+                role='assistant',
+                function_call={
+                    'arguments': function_call_arguments,
+                    'name': function_call_name
+                }
+            ),
+            created=current_unix_timestamp,
+            model='random_text', #todo
+            object='chat.completion',
+            system_fingerprint=None,
+            usage=Usage( #todo
+                completion_tokens=18,
+                prompt_tokens=82,
+                total_tokens=100
+            )
+        )
+    ]
 
 # Custom prompt template
 def custom_prompt(
