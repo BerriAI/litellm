@@ -115,8 +115,9 @@ response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content
 
 # OpenAI Proxy - ([Docs](https://docs.litellm.ai/docs/simple_proxy))
 
-Track spend across multiple projects/people. 
+Track spend across multiple projects/people 
 
+## Quick Start Proxy - CLI 
 ### Step 1: Start litellm proxy
 ```shell
 $ litellm --model huggingface/bigcode/starcoder
@@ -124,7 +125,7 @@ $ litellm --model huggingface/bigcode/starcoder
 #INFO: Proxy running on http://0.0.0.0:8000
 ```
 
-### Step 2: Replace openai base
+### Step 2: Make ChatCompletions Request to Proxy
 ```python
 import openai # openai v1.0.0+
 client = openai.OpenAI(api_key="anything",base_url="http://0.0.0.0:8000") # set proxy to base_url
@@ -137,6 +138,17 @@ response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
 ])
 
 print(response)
+```
+
+## Proxy Key Management ([Docs](https://docs.litellm.ai/docs/proxy/virtual_keys))
+Track Spend, Set budgets and create virtual keys for the proxy
+`POST /key/generate`
+
+```shell
+curl 'http://0.0.0.0:8000/key/generate' \
+--header 'Authorization: Bearer sk-1234' \
+--header 'Content-Type: application/json' \
+--data-raw '{"models": ["gpt-3.5-turbo", "gpt-4", "claude-2"], "duration": "20m","metadata": {"user": "ishaan@berri.ai", "team": "core-infra"}}'
 ```
 
 ### [Beta] Proxy UI
