@@ -128,7 +128,40 @@ def test_langfuse_logging_async():
         pytest.fail(f"An exception occurred - {e}")
 
 
-# test_langfuse_logging_async()
+# def test_langfuse_logging_async_text_completion():
+#     try:
+#         pre_langfuse_setup()
+#         litellm.set_verbose = False
+#         litellm.success_callback = ["langfuse"]
+
+#         async def _test_langfuse():
+#             response = await litellm.atext_completion(
+#                 model="gpt-3.5-turbo-instruct",
+#                 prompt="this is a test",
+#                 max_tokens=5,
+#                 temperature=0.7,
+#                 timeout=5,
+#                 user="test_user",
+#                 stream=True
+#             )
+#             async for chunk in response:
+#                 print()
+#                 print(chunk)
+#             await asyncio.sleep(1)
+#             return response
+
+#         response = asyncio.run(_test_langfuse())
+#         print(f"response: {response}")
+
+#         # # check langfuse.log to see if there was a failed response
+#         search_logs("langfuse.log")
+#     except litellm.Timeout as e:
+#         pass
+#     except Exception as e:
+#         pytest.fail(f"An exception occurred - {e}")
+
+
+# test_langfuse_logging_async_text_completion()
 
 
 @pytest.mark.skip(reason="beta test - checking langfuse output")
