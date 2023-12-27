@@ -427,14 +427,14 @@ class AzureChatCompletion(BaseLLM):
             },
         )
         response = await azure_client.chat.completions.create(**data)
+        # return response
         streamwrapper = CustomStreamWrapper(
             completion_stream=response,
             model=model,
             custom_llm_provider="azure",
             logging_obj=logging_obj,
         )
-        async for transformed_chunk in streamwrapper:
-            yield transformed_chunk
+        return streamwrapper  ## DO NOT make this into an async for ... loop, it will yield an async generator, which won't raise errors if the response fails
 
     async def aembedding(
         self,

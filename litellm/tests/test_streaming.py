@@ -271,7 +271,7 @@ def test_completion_azure_stream():
         pytest.fail(f"Error occurred: {e}")
 
 
-# test_completion_azure_stream()
+test_completion_azure_stream()
 
 
 def test_completion_azure_function_calling_stream():
