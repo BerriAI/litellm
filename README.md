@@ -152,7 +152,7 @@ curl 'http://0.0.0.0:8000/key/generate' \
 --data-raw '{"models": ["gpt-3.5-turbo", "gpt-4", "claude-2"], "duration": "20m","metadata": {"user": "ishaan@berri.ai", "team": "core-infra"}}'
 ```
 
-### Expect Response
+### Expected Response
 ```shell
 {
     "key": "sk-kdEXbIqZRwEeEiHwdg7sFA", # Bearer token
