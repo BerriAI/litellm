@@ -290,6 +290,7 @@ class CompletionCustomHandler(
                     kwargs["original_response"], (str, litellm.CustomStreamWrapper)
                 )
                 or inspect.isasyncgen(kwargs["original_response"])
+                or inspect.iscoroutine(kwargs["original_response"])
                 or kwargs["original_response"] == None
             )
             assert isinstance(kwargs["additional_args"], (dict, type(None)))
@@ -439,7 +440,7 @@ async def test_async_chat_azure_stream():
         )
         async for chunk in response:
             continue
-        ## test failure callback
+        # test failure callback
         try:
             response = await litellm.acompletion(
                 model="azure/chatgpt-v-2",
@@ -459,7 +460,7 @@ async def test_async_chat_azure_stream():
         pytest.fail(f"An exception occurred: {str(e)}")
 
 
-# asyncio.run(test_async_chat_azure_stream())
+asyncio.run(test_async_chat_azure_stream())
 
 
 ## Test Bedrock + sync
