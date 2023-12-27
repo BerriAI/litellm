@@ -16,7 +16,6 @@ sys.path.insert(
 try:
     import uvicorn
     import fastapi
-    import appdirs
     import backoff
     import yaml
     import orjson
