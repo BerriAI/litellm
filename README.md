@@ -41,7 +41,7 @@ LiteLLM manages:
 </a>
 
 
-```
+```shell
 pip install litellm
 ```
 
@@ -118,6 +118,11 @@ response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content
 Track spend across multiple projects/people 
 
 ## Quick Start Proxy - CLI 
+
+```shell
+pip install litellm[proxy]
+```
+
 ### Step 1: Start litellm proxy
 ```shell
 $ litellm --model huggingface/bigcode/starcoder
