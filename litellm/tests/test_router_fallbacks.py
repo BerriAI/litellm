@@ -44,13 +44,6 @@ class MyCustomHandler(CustomLogger):
         print(f"On Success")
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        print(
-            f"previous_models: {kwargs['litellm_params']['metadata']['previous_models']}"
-        )
-        self.previous_models += len(
-            kwargs["litellm_params"]["metadata"]["previous_models"]
-        )  # {"previous_models": [{"model": litellm_model_name, "exception_type": AuthenticationError, "exception_string": <complete_traceback>}]}
-        print(f"self.previous_models: {self.previous_models}")
         print(f"On Success")
 
     def log_failure_event(self, kwargs, response_obj, start_time, end_time):
