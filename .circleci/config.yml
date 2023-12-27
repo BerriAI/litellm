@@ -44,6 +44,13 @@ jobs:
             - ./venv
           key: v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
       - run:
+          name: Black Formatting
+          command: |
+            cd litellm
+            python -m pip install black
+            python -m black .
+            cd ..
+      - run:
           name: Linting Testing
           command: |
             cd litellm
