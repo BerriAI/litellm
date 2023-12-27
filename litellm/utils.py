@@ -6746,8 +6746,10 @@ class CustomStreamWrapper:
                 if str_line.choices[0].finish_reason:
                     is_finished = True
                     finish_reason = str_line.choices[0].finish_reason
+
+                # checking for logprobs
                 if (
-                    "logprobs" in str_line.choices[0]
+                    hasattr(str_line.choices[0], "logprobs")
                     and str_line.choices[0].logprobs is not None
                 ):
                     logprobs = str_line.choices[0].logprobs
