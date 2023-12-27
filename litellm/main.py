@@ -592,6 +592,7 @@ def completion(
                 response = openai_chat_completions.completion(
                     model=model,
                     messages=messages,
+                    headers=headers,
                     model_response=model_response,
                     print_verbose=print_verbose,
                     api_key=api_key,
