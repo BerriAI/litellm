@@ -20,33 +20,8 @@ try:
     import backoff
     import yaml
     import orjson
-except ImportError:
-    import sys
-
-    subprocess.check_call(
-        [
-            sys.executable,
-            "-m",
-            "pip",
-            "install",
-            "uvicorn",
-            "fastapi",
-            "appdirs",
-            "backoff",
-            "pyyaml",
-            "orjson",
-        ]
-    )
-    import uvicorn
-    import fastapi
-    import appdirs
-    import backoff
-    import yaml
-    import orjson
-
-    warnings.warn(
-        "Installed runtime dependencies for proxy server. Specify these dependencies explicitly with `pip install litellm[proxy]`"
-    )
+except ImportError as e:
+    raise ImportError(f"Missing dependency {e}. Run `pip install litellm[proxy]`")
 
 import random
 
