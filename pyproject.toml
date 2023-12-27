@@ -28,7 +28,9 @@ rq = {version = "*", optional = true}
 proxy = [
     "uvicorn",
     "fastapi",
+    "appdirs",
     "backoff",
+    "pyyaml",
     "rq",
     "orjson",
     "importlib",
