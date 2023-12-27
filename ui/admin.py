@@ -79,16 +79,17 @@ def admin_page(is_admin="NOT_GIVEN"):
             model_name = st.text_input(
                 "Model Name - user-facing model name", placeholder="gpt-3.5-turbo"
             )
+            st.subheader("LiteLLM Params")
             litellm_model_name = st.text_input(
-                "LiteLLM Model Name", placeholder="azure/gpt-35-turbo-us-east"
+                "Model", placeholder="azure/gpt-35-turbo-us-east"
             )
-            litellm_api_key = st.text_input("LiteLLM API Key")
+            litellm_api_key = st.text_input("API Key")
             litellm_api_base = st.text_input(
-                "[Optional] LiteLLM API Base",
+                "API Base",
                 placeholder="https://my-endpoint.openai.azure.com",
             )
             litellm_api_version = st.text_input(
-                "[Optional] LiteLLM API Version", placeholder="2023-07-01-preview"
+                "API Version", placeholder="2023-07-01-preview"
             )
             litellm_params = json.loads(
                 st.text_area(
@@ -96,6 +97,7 @@ def admin_page(is_admin="NOT_GIVEN"):
                     value={},
                 )
             )
+            st.subheader("Model Info")
             mode_options = ("completion", "embedding", "image generation")
             mode_selected = st.selectbox("Mode", mode_options)
             model_info = json.loads(
