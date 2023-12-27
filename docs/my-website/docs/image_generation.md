@@ -14,7 +14,7 @@ response = image_generation(prompt="A cute baby sea otter", model="dall-e-3")
 print(f"response: {response}")
 ```
 
-### Input Params for `litellm.embedding()`
+### Input Params for `litellm.image_generation()`
 ### Required Fields
 
 - `prompt`: *string* - A text description of the desired image(s).  
