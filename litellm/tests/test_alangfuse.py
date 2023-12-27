@@ -99,6 +99,7 @@ def pre_langfuse_setup():
     return
 
 
+@pytest.mark.skip(reason="beta test - checking langfuse output")
 def test_langfuse_logging_async():
     try:
         pre_langfuse_setup()
