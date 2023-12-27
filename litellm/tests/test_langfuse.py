@@ -103,6 +103,7 @@ def test_langfuse_logging_async():
     try:
         pre_langfuse_setup()
         litellm.set_verbose = True
+        litellm.success_callback = ["langfuse"]
 
         async def _test_langfuse():
             response = await litellm.acompletion(
