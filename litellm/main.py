@@ -2322,7 +2322,7 @@ def embedding(
                 api_base=api_base,
                 logging_obj=logging,
                 optional_params=optional_params,
-                model_response= EmbeddingResponse()
+                model_response=EmbeddingResponse(),
             )
         elif custom_llm_provider == "ollama":
             if aembedding == True:
