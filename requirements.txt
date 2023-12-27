@@ -3,7 +3,6 @@ anyio==4.2.0 # openai + http req.
 openai>=1.0.0 # openai req. 
 fastapi # server dep
 pydantic>=2.5 # openai req. 
-appdirs==1.4.4 # server dep
 backoff==2.2.1 # server dep
 pyyaml==6.0 # server dep
 uvicorn==0.22.0 # server dep
@@ -15,6 +14,7 @@ google-generativeai==0.1.0 # for vertex ai calls
 async_generator==1.10.0 # for async ollama calls
 traceloop-sdk==0.5.3 # for open telemetry logging
 langfuse>=2.0.0 # for langfuse self-hosted logging
+orjson==3.9.7 # fast /embedding responses
 ### LITELLM PACKAGE DEPENDENCIES
 python-dotenv>=0.2.0 # for env 
 tiktoken>=0.4.0 # for calculating usage
