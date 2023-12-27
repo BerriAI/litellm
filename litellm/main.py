@@ -2313,6 +2313,16 @@ def embedding(
                 optional_params=optional_params,
                 model_response=EmbeddingResponse(),
             )
+        elif custom_llm_provider == "oobabooga":
+            response = oobabooga.embedding(
+                model=model,
+                input=input,
+                encoding=encoding,
+                api_base=api_base,
+                logging_obj=logging,
+                optional_params=optional_params,
+                model_response= EmbeddingResponse()
+            )
         elif custom_llm_provider == "ollama":
             if aembedding == True:
                 response = ollama.ollama_aembeddings(
