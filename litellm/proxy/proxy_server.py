@@ -114,60 +114,6 @@ app.add_middleware(
 )
 
 
-def log_input_output(request, response, custom_logger=None):
-    if custom_logger is not None:
-        custom_logger(request, response)
-    global otel_logging
-    if otel_logging != True:
-        return
-    from opentelemetry import trace
-    from opentelemetry.sdk.trace import TracerProvider
-    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-    from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-    from opentelemetry.sdk.resources import Resource
-
-    # Initialize OpenTelemetry components
-    otlp_host = os.environ.get("OTEL_ENDPOINT", "localhost:4317")
-    otlp_exporter = OTLPSpanExporter(endpoint=otlp_host, insecure=True)
-    resource = Resource.create(
-        {
-            "service.name": "LiteLLM Proxy",
-        }
-    )
-    trace.set_tracer_provider(TracerProvider(resource=resource))
-    tracer = trace.get_tracer(__name__)
-    span_processor = SimpleSpanProcessor(otlp_exporter)
-    trace.get_tracer_provider().add_span_processor(span_processor)
-    with tracer.start_as_current_span("litellm-completion") as current_span:
-        input_event_attributes = {
-            f"{key}": str(value)
-            for key, value in dict(request).items()
-            if value is not None
-        }
-        # Log the input event with attributes
-        current_span.add_event(
-            name="LiteLLM: Request Input", attributes=input_event_attributes
-        )
-        event_headers = {
-            f"{key}": str(value)
-            for key, value in dict(request.headers).items()
-            if value is not None
-        }
-        current_span.add_event(
-            name="LiteLLM: Request Headers", attributes=event_headers
-        )
-
-        input_event_attributes.update(event_headers)
-
-        input_event_attributes.update(
-            {f"{key}": str(value) for key, value in dict(response).items()}
-        )
-        current_span.add_event(
-            name="LiteLLM: Request Outpu", attributes=input_event_attributes
-        )
-        return True
-
-
 from typing import Dict
 
 api_key_header = APIKeyHeader(name="Authorization", auto_error=False)
@@ -1165,9 +1111,6 @@ async def completion(
                 media_type="text/event-stream",
             )
 
-        background_tasks.add_task(
-            log_input_output, request, response
-        )  # background task for logging to OTEL
         return response
     except Exception as e:
         print(f"EXCEPTION RAISED IN PROXY MAIN.PY")
@@ -1307,9 +1250,6 @@ async def chat_completion(
                 media_type="text/event-stream",
             )
 
-        background_tasks.add_task(
-            log_input_output, request, response
-        )  # background task for logging to OTEL
         return response
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
@@ -1455,9 +1395,6 @@ async def embeddings(
             )  # ensure this goes the llm_router, router will do the correct alias mapping
         else:
             response = await litellm.aembedding(**data)
-        background_tasks.add_task(
-            log_input_output, request, response
-        )  # background task for logging to OTEL
 
         return response
     except Exception as e:
@@ -1561,9 +1498,6 @@ async def image_generation(
             )  # ensure this goes the llm_router, router will do the correct alias mapping
         else:
             response = await litellm.aimage_generation(**data)
-        background_tasks.add_task(
-            log_input_output, request, response
-        )  # background task for logging to OTEL
 
         return response
     except Exception as e:
@@ -2073,9 +2007,6 @@ async def async_queue_request(
                 media_type="text/event-stream",
             )
 
-        background_tasks.add_task(
-            log_input_output, request, response
-        )  # background task for logging to OTEL
         return response
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
