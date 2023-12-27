@@ -1,9 +1,9 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Pass in User Keys
+# Pass User LLM API Keys
 
-Send user keys to the proxy
+Allows your users to pass in their OpenAI API key (any LiteLLM supported provider) to make requests 
 
 
 Here's how to do it: 
