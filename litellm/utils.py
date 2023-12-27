@@ -691,9 +691,11 @@ from enum import Enum
 
 class CallTypes(Enum):
     embedding = "embedding"
+    aembedding = "aembedding"
     completion = "completion"
     acompletion = "acompletion"
-    aembedding = "aembedding"
+    atext_completion = "atext_completion"
+    text_completion = "text_completion"
     image_generation = "image_generation"
     aimage_generation = "aimage_generation"
 
