@@ -33,12 +33,11 @@ jobs:
             pip install "boto3>=1.28.57"
             pip install appdirs
             pip install langchain
-            pip install langfuse
+            pip install "langfuse>=2.0.0"
             pip install numpydoc
             pip install traceloop-sdk==0.0.69
             pip install openai
             pip install prisma
-            pip install langfuse
       - save_cache:
           paths:
             - ./venv
