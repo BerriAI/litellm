@@ -43,7 +43,7 @@ litellm --test
 
 This will now automatically route any requests for gpt-3.5-turbo to bigcode starcoder, hosted on huggingface inference endpoints. 
 
-### Using LiteLLM Proxy - Curl Request, OpenAI Package, Langchain, Langchain JS
+### Using LiteLLM Proxy - Curl Request, OpenAI Package, Langchain
 
 <Tabs>
 <TabItem value="Curl" label="Curl Request">
@@ -198,6 +198,19 @@ $ export OPENAI_API_KEY=my-api-key
 $ litellm --model openai/<your model name> --api_base <your-api-base> # e.g. http://0.0.0.0:3000
 ```
 </TabItem>
+
+<TabItem value="vertex-ai" label="Vertex AI [Gemini]">
+
+```shell
+$ export VERTEX_PROJECT="hardy-project"
+$ export VERTEX_LOCATION="us-west"
+```
+
+```shell
+$ litellm --model vertex_ai/gemini-pro
+```
+</TabItem>
+
 <TabItem value="huggingface" label="Huggingface (TGI) Deployed">
 
 ```shell
