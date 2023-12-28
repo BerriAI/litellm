@@ -913,6 +913,10 @@ async def async_data_generator(response, user_api_key_dict):
                 yield f"data: {json.dumps(chunk.dict())}\n\n"
             except Exception as e:
                 yield f"data: {str(e)}\n\n"
+
+        # Streaming is done, yield the [DONE] chunk
+        done_message = "[DONE]"
+        yield f"data: {done_message}\n\n"
     except Exception as e:
         yield f"data: {str(e)}\n\n"
 
