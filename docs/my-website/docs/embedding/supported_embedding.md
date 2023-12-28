@@ -201,3 +201,26 @@ response = embedding(
 | microsoft/codebert-base    | `embedding('huggingface/microsoft/codebert-base', input=input)`               | `os.environ['HUGGINGFACE_API_KEY']`                                             |
 | BAAI/bge-large-zh | `embedding('huggingface/BAAI/bge-large-zh', input=input)`         | `os.environ['HUGGINGFACE_API_KEY']`                                             |
 | any-hf-embedding-model | `embedding('huggingface/hf-embedding-model', input=input)`         | `os.environ['HUGGINGFACE_API_KEY']`                                             |
+
+
+## Mistral AI Embedding Models
+All models listed here https://docs.mistral.ai/platform/endpoints are supported
+
+### Usage
+```python
+from litellm import embedding
+import os
+
+os.environ['MISTRAL_API_KEY'] = ""
+response = embedding(
+    model="mistral/mistral-embed",
+    input=["good morning from litellm"],
+)
+print(response)
+```
+
+| Model Name               | Function Call                                                                                                                                                      |
+|--------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| mistral-embed | `embedding(model="mistral/mistral-embed", input)` | 
+
+
