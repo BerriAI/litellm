@@ -3,7 +3,7 @@ from enum import Enum
 import json
 import requests
 import time
-from typing import Callable, Optional
+from typing import Callable, Optional, Any
 import litellm
 from litellm.utils import ModelResponse, EmbeddingResponse, get_secret, Usage
 import sys
@@ -231,6 +231,47 @@ def completion(
     )
     model_response.usage = usage
     return model_response
+
+
+# async def acompletion(
+#     client: Any,
+#     model_response: ModelResponse,
+#     model: str,
+#     logging_obj: Any,
+#     data: dict,
+#     hf_model_name: str,
+# ):
+#     """
+#     Use boto3 create_invocation_async endpoint
+#     """
+#     ## LOGGING
+#     request_str = f"""
+#     response = client.invoke_endpoint(
+#         EndpointName={model},
+#         ContentType="application/json",
+#         Body={data},
+#         CustomAttributes="accept_eula=true",
+#     )
+#     """  # type: ignore
+#     logging_obj.pre_call(
+#         input=data["prompt"],
+#         api_key="",
+#         additional_args={
+#             "complete_input_dict": data,
+#             "request_str": request_str,
+#             "hf_model_name": hf_model_name,
+#         },
+#     )
+#     ## COMPLETION CALL
+#     try:
+#         response = client.invoke_endpoint(
+#             EndpointName=model,
+#             ContentType="application/json",
+#             Body=data,
+#             CustomAttributes="accept_eula=true",
+#         )
+#     except Exception as e:
+#         raise SagemakerError(status_code=500, message=f"{str(e)}")
 
 
 def embedding(

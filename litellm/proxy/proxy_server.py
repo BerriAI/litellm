@@ -347,6 +347,12 @@ def load_from_azure_key_vault(use_azure_key_vault: bool = False):
 
 
 async def run_streamlit_ui():
+    # Save the current working directory
+    original_dir = os.getcwd()
+    # set the working directory to where this script is
+    abspath = os.path.abspath(__file__)
+    dname = os.path.dirname(abspath)
+    os.chdir(dname)
     try:
         # Start Streamlit without opening the browser automatically
         process = subprocess.Popen(
@@ -362,6 +368,7 @@ async def run_streamlit_ui():
         # Wait for the server to start before exiting the context manager
         await asyncio.sleep(1)
         print("Streamlit UI server has started successfully.")
+        os.chdir(original_dir)
         # Keep the background task running
         while True:
             await asyncio.sleep(3600)
