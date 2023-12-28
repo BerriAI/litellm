@@ -81,6 +81,7 @@ const sidebars = {
         "providers/replicate", 
         "providers/cohere", 
         "providers/togetherai", 
+        "providers/voyage", 
         "providers/aleph_alpha", 
         "providers/baseten", 
         "providers/openrouter", 
