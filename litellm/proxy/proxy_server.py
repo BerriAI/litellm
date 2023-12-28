@@ -100,7 +100,7 @@ from typing import Union
 app = FastAPI(
     docs_url="/",
     title="LiteLLM API",
-    description="Proxy Server to call 100+ LLMs in the OpenAI format",
+    description="Proxy Server to call 100+ LLMs in the OpenAI format\n\nAdmin Panel on `/admin` endpoint",
 )
 router = APIRouter()
 origins = ["*"]
@@ -344,6 +344,29 @@ def load_from_azure_key_vault(use_azure_key_vault: bool = False):
         print(
             "Error when loading keys from Azure Key Vault. Ensure you run `pip install azure-identity azure-keyvault-secrets`"
         )
+
+
+async def run_streamlit_ui():
+    try:
+        # Start Streamlit without opening the browser automatically
+        process = subprocess.Popen(
+            [
+                "streamlit",
+                "run",
+                "admin_ui.py",
+                "--server.headless=true",
+                "--browser.serverAddress=0.0.0.0",
+                "--server.enableCORS=false",
+            ]
+        )
+        # Wait for the server to start before exiting the context manager
+        await asyncio.sleep(1)
+        print("Streamlit UI server has started successfully.")
+        # Keep the background task running
+        while True:
+            await asyncio.sleep(3600)
+    except Exception as e:
+        print(f"An error occurred: {e}")
 
 
 def cost_tracking():
@@ -981,6 +1004,9 @@ async def startup_event():
         await generate_key_helper_fn(
             duration=None, models=[], aliases={}, config={}, spend=0, token=master_key
         )
+
+    # Run streamlit_ui as a background task
+    asyncio.create_task(run_streamlit_ui())
 
 
 #### API ENDPOINTS ####
@@ -1728,6 +1754,8 @@ async def add_new_model(model_params: ModelParams):
             }
         )
 
+        print(f"updated model list: {config['model_list']}")
+
         # Save the updated config
         with open(f"{user_config_file_path}", "w") as config_file:
             yaml.dump(config, config_file, default_flow_style=False)
@@ -1737,6 +1765,7 @@ async def add_new_model(model_params: ModelParams):
             router=llm_router, config_file_path=user_config_file_path
         )
 
+        print(f"llm_model_list: {llm_model_list}")
         return {"message": "Model added successfully"}
 
     except Exception as e:
@@ -2034,6 +2063,36 @@ async def async_queue_request(
 async def retrieve_server_log(request: Request):
     filepath = os.path.expanduser("~/.ollama/logs/server.log")
     return FileResponse(filepath)
+
+
+#### ADMIN UI ENDPOINTS ####
+
+
+@router.get("/admin")
+async def admin_page(request: Request):
+    from fastapi.responses import HTMLResponse
+
+    # Assuming your Streamlit app is running on localhost port 8501
+    html_content = """
+    <html>
+    <head>
+        <title>Admin Page</title>
+        <style>
+            html, body, iframe {
+                margin: 0;
+                padding: 0;
+                width: 100%;
+                height: 100%;
+                border: none;
+            }
+        </style>
+    </head>
+    <body>
+        <iframe src="http://localhost:8501"></iframe>
+    </body>
+</html>
+    """
+    return HTMLResponse(content=html_content)
 
 
 #### BASIC ENDPOINTS ####
