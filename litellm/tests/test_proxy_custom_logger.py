@@ -263,6 +263,9 @@ def test_chat_completion_stream(client):
 
                 json_data = line.replace("data: ", "")
 
+                if "[DONE]" in json_data:
+                    break
+
                 # Parse the JSON string
                 data = json.loads(json_data)
 
