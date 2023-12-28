@@ -33,6 +33,7 @@ proxy = [
     "pyyaml",
     "rq",
     "orjson",
+    "streamlit"
 ]
 
 extra_proxy = [
