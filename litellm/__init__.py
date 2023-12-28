@@ -389,6 +389,7 @@ provider_list: List = [
     "anyscale",
     "mistral",
     "maritalk",
+    "voyage",
     "custom",  # custom apis
 ]
 
