@@ -66,15 +66,105 @@ def add_new_model():
             raise e
 
 
-def streamlit_ui():
+def list_models():
     import streamlit as st
     import requests
+
+    # Check if the necessary configuration is available
+    if (
+        st.session_state.get("api_url", None) is not None
+        and st.session_state.get("proxy_key", None) is not None
+    ):
+        # Make the GET request
+        try:
+            complete_url = ""
+            if isinstance(st.session_state["api_url"], str) and st.session_state[
+                "api_url"
+            ].endswith("/"):
+                complete_url = f"{st.session_state['api_url']}models"
+            else:
+                complete_url = f"{st.session_state['api_url']}/models"
+            response = requests.get(
+                complete_url,
+                headers={"Authorization": f"Bearer {st.session_state['proxy_key']}"},
+            )
+            # Check if the request was successful
+            if response.status_code == 200:
+                models = response.json()
+                st.write(models)  # or st.json(models) to pretty print the JSON
+            else:
+                st.error(f"Failed to get models. Status code: {response.status_code}")
+        except Exception as e:
+            st.error(f"An error occurred while requesting models: {e}")
+    else:
+        st.warning(
+            "Please configure the Proxy Endpoint and Proxy Key on the Proxy Setup page."
+        )
+
+
+def create_key():
+    import streamlit as st
+    import json, requests, uuid
+
+    if (
+        st.session_state.get("api_url", None) is not None
+        and st.session_state.get("proxy_key", None) is not None
+    ):
+        duration = st.text_input("Duration - Can be in (h,m,s)", placeholder="1h")
+
+        models = st.text_input("Models it can access (separated by comma)", value="")
+        models = models.split(",") if models else []
+
+        additional_params = json.loads(
+            st.text_area(
+                "Additional Key Params (JSON dictionary). [See all possible inputs](https://litellm-api.up.railway.app/#/key%20management/generate_key_fn_key_generate_post)",
+                value={},
+            )
+        )
+
+        if st.button("Submit"):
+            try:
+                key_post_body = {
+                    "duration": duration,
+                    "models": models,
+                    **additional_params,
+                }
+                # Make the POST request to the specified URL
+                complete_url = ""
+                if st.session_state["api_url"].endswith("/"):
+                    complete_url = f"{st.session_state['api_url']}key/generate"
+                else:
+                    complete_url = f"{st.session_state['api_url']}/key/generate"
+
+                headers = {"Authorization": f"Bearer {st.session_state['proxy_key']}"}
+                response = requests.post(
+                    complete_url, json=key_post_body, headers=headers
+                )
+
+                if response.status_code == 200:
+                    st.success(f"Key added successfully! - {response.json()}")
+                else:
+                    st.error(f"Failed to add Key. Status code: {response.status_code}")
+
+                st.success("Form submitted successfully!")
+            except Exception as e:
+                raise e
+    else:
+        st.warning(
+            "Please configure the Proxy Endpoint and Proxy Key on the Proxy Setup page."
+        )
+
+
+def streamlit_ui():
+    import streamlit as st
 
     st.header("Admin Configuration")
 
     # Add a navigation sidebar
     st.sidebar.title("Navigation")
-    page = st.sidebar.radio("Go to", ("Proxy Setup", "Add Models", "List Models"))
+    page = st.sidebar.radio(
+        "Go to", ("Proxy Setup", "Add Models", "List Models", "Create Key")
+    )
 
     # Initialize session state variables if not already present
     if "api_url" not in st.session_state:
@@ -103,40 +193,9 @@ def streamlit_ui():
     elif page == "Add Models":
         add_new_model()
     elif page == "List Models":
-        # Check if the necessary configuration is available
-        if (
-            st.session_state.get("api_url", None) is not None
-            and st.session_state.get("proxy_key", None) is not None
-        ):
-            # Make the GET request
-            try:
-                complete_url = ""
-                if isinstance(st.session_state["api_url"], str) and st.session_state[
-                    "api_url"
-                ].endswith("/"):
-                    complete_url = f"{st.session_state['api_url']}models"
-                else:
-                    complete_url = f"{st.session_state['api_url']}/models"
-                response = requests.get(
-                    complete_url,
-                    headers={
-                        "Authorization": f"Bearer {st.session_state['proxy_key']}"
-                    },
-                )
-                # Check if the request was successful
-                if response.status_code == 200:
-                    models = response.json()
-                    st.write(models)  # or st.json(models) to pretty print the JSON
-                else:
-                    st.error(
-                        f"Failed to get models. Status code: {response.status_code}"
-                    )
-            except Exception as e:
-                st.error(f"An error occurred while requesting models: {e}")
-        else:
-            st.warning(
-                "Please configure the Proxy Endpoint and Proxy Key on the Proxy Setup page."
-            )
+        list_models()
+    elif page == "Create Key":
+        create_key()
 
 
 if __name__ == "__main__":
