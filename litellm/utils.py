@@ -27,7 +27,12 @@ from dataclasses import (
     dataclass,
     field,
 )  # for storing API inputs, outputs, and metadata
+import pkg_resources
 
+filename = pkg_resources.resource_filename(__name__, "llms/tokenizers")
+os.environ[
+    "TIKTOKEN_CACHE_DIR"
+] = filename  # use local copy of tiktoken b/c of - https://github.com/BerriAI/litellm/issues/1071
 encoding = tiktoken.get_encoding("cl100k_base")
 import importlib.metadata
 from .integrations.traceloop import TraceloopLogger

@@ -46,7 +46,7 @@ def test_token_counter_normal_plus_function_calling():
         pytest.fail(f"An exception occurred - {str(e)}")
 
 
-test_token_counter_normal_plus_function_calling()
+# test_token_counter_normal_plus_function_calling()
 
 
 def test_tokenizers():
