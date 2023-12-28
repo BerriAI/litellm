@@ -1754,7 +1754,7 @@ async def add_new_model(model_params: ModelParams):
             }
         )
 
-        print(f"updated model list: {config['model_list']}")
+        print_verbose(f"updated model list: {config['model_list']}")
 
         # Save the updated config
         with open(f"{user_config_file_path}", "w") as config_file:
@@ -1765,7 +1765,7 @@ async def add_new_model(model_params: ModelParams):
             router=llm_router, config_file_path=user_config_file_path
         )
 
-        print(f"llm_model_list: {llm_model_list}")
+        print_verbose(f"llm_model_list: {llm_model_list}")
         return {"message": "Model added successfully"}
 
     except Exception as e:
