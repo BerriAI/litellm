@@ -318,6 +318,21 @@ def test_mistral_embeddings():
 
 # test_mistral_embeddings()
 
+
+def test_voyage_embeddings():
+    try:
+        litellm.set_verbose = True
+        response = litellm.embedding(
+            model="voyage/voyage-01",
+            input=["good morning from litellm"],
+        )
+        print(f"response: {response}")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+# test_voyage_embeddings()
+
 # test_sagemaker_embeddings()
 # def local_proxy_embeddings():
 #     litellm.set_verbose=True
