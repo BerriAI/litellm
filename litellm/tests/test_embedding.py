@@ -201,7 +201,7 @@ def test_bedrock_embedding_titan():
         pytest.fail(f"Error occurred: {e}")
 
 
-test_bedrock_embedding_titan()
+# test_bedrock_embedding_titan()
 
 
 def test_bedrock_embedding_cohere():
@@ -303,6 +303,20 @@ def test_sagemaker_embeddings():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+
+def test_mistral_embeddings():
+    try:
+        litellm.set_verbose = True
+        response = litellm.embedding(
+            model="mistral/mistral-embed",
+            input=["good morning from litellm"],
+        )
+        print(f"response: {response}")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+# test_mistral_embeddings()
 
 # test_sagemaker_embeddings()
 # def local_proxy_embeddings():
