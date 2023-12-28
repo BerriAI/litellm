@@ -717,6 +717,63 @@ class OpenAIChatCompletion(BaseLLM):
 
                 raise OpenAIError(status_code=500, message=traceback.format_exc())
 
+    async def ahealth_check(
+        self,
+        model: Optional[str],
+        api_key: str,
+        timeout: float,
+        mode: str,
+        messages: Optional[list] = None,
+        input: Optional[list] = None,
+        prompt: Optional[str] = None,
+    ):
+        client = AsyncOpenAI(api_key=api_key, timeout=timeout)
+        if model is None and mode != "image_generation":
+            raise Exception("model is not set")
+
+        completion = None
+
+        if mode == "completion":
+            if messages is None:
+                raise Exception("messages is not set")
+            completion = await client.chat.completions.with_raw_response.create(
+                model=model,  # type: ignore
+                messages=messages,  # type: ignore
+            )
+        elif mode == "embedding":
+            if input is None:
+                raise Exception("input is not set")
+            completion = await client.embeddings.with_raw_response.create(
+                model=model,  # type: ignore
+                input=input,  # type: ignore
+            )
+        elif mode == "image_generation":
+            if prompt is None:
+                raise Exception("prompt is not set")
+            completion = await client.images.with_raw_response.generate(
+                model=model,  # type: ignore
+                prompt=prompt,  # type: ignore
+            )
+        else:
+            raise Exception("mode not set")
+        response = {}
+
+        if completion is None or not hasattr(completion, "headers"):
+            raise Exception("invalid completion response")
+
+        if (
+            completion.headers.get("x-ratelimit-remaining-requests", None) is not None
+        ):  # not provided for dall-e requests
+            response["x-ratelimit-remaining-requests"] = completion.headers[
+                "x-ratelimit-remaining-requests"
+            ]
+
+        if completion.headers.get("x-ratelimit-remaining-tokens", None) is not None:
+            response["x-ratelimit-remaining-tokens"] = completion.headers[
+                "x-ratelimit-remaining-tokens"
+            ]
+        return response
+
 
 class OpenAITextCompletion(BaseLLM):
     _client_session: httpx.Client

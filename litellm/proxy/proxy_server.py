@@ -672,6 +672,10 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
         router_params["model_list"] = model_list
         print(f"\033[32mLiteLLM: Proxy initialized with Config, Set models:\033[0m")
         for model in model_list:
+            ### LOAD FROM os.environ/ ###
+            for k, v in model["litellm_params"].items():
+                if isinstance(v, str) and v.startswith("os.environ/"):
+                    model["litellm_params"][k] = litellm.get_secret(v)
             print(f"\033[32m    {model.get('model_name', '')}\033[0m")
             litellm_model_name = model["litellm_params"]["model"]
             litellm_model_api_base = model["litellm_params"].get("api_base", None)
