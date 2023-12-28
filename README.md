@@ -117,6 +117,8 @@ response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content
 
 Track spend across multiple projects/people 
 
+## 📖 Proxy Endpoints - [Swagger Docs](https://litellm-api.up.railway.app/)
+
 ## Quick Start Proxy - CLI 
 
 ```shell
