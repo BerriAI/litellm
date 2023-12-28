@@ -105,6 +105,14 @@ curl https://litellm-7yjrj3ha2q-uc.a.run.app/v1/chat/completions \
    }'
 ```
 
+## Deploy on Railway https://railway.app
+
+**Step 1: Click the button** to deploy to Railway
+
+[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/template/S7P9sn?referralCode=t3ukrU)
+
+**Step 2:** Set `PORT` = 4000 on Railway Environment Variables
+
 ## LiteLLM Proxy Performance
 
 LiteLLM proxy has been load tested to handle 1500 req/s.
