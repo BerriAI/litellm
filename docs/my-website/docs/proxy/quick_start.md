@@ -17,7 +17,6 @@ LiteLLM Server manages:
 #### 📖 Proxy Endpoints - [Swagger Docs](https://litellm-api.up.railway.app/)
 
 
-
 View all the supported args for the Proxy CLI [here](https://docs.litellm.ai/docs/simple_proxy#proxy-cli-arguments)
 
 ```shell
