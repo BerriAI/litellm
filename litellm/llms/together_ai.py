@@ -215,7 +215,7 @@ def completion(
                 "choices"
             ][0]["finish_reason"]
         model_response["created"] = int(time.time())
-        model_response["model"] = model
+        model_response["model"] = "together_ai/" + model
         usage = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
