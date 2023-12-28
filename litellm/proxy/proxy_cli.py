@@ -205,7 +205,12 @@ def run_server(
         try:
             from .proxy_server import app, save_worker_config, usage_telemetry
         except ImportError as e:
-            from proxy_server import app, save_worker_config, usage_telemetry
+            if "litellm[proxy]" in str(e):
+                # user is missing a proxy dependency, ask them to pip install litellm[proxy]
+                raise e
+            else:
+                # this is just a local/relative import error, user git cloned litellm
+                from proxy_server import app, save_worker_config, usage_telemetry
     feature_telemetry = usage_telemetry
     if logs is not None:
         if logs == 0:  # default to 1
