@@ -18,10 +18,12 @@ jinja2 = "^3.1.2"
 certifi = "^2023.7.22"
 aiohttp = "*"
 
-uvicorn = {version = "^0.24.0.post1", optional = true}
+uvicorn = {version = "^0.22.0", optional = true}
 fastapi = {version = "^0.104.1", optional = true}
 backoff = {version = "*", optional = true}
+pyyaml = {version = "^6.0", optional = true}
 rq = {version = "*", optional = true}
+orjson = {version = "^3.9.7", optional = true}
 
 [tool.poetry.extras]
 proxy = [
@@ -31,7 +33,6 @@ proxy = [
     "pyyaml",
     "rq",
     "orjson",
-    "importlib",
 ]
 
 extra_proxy = [
@@ -41,12 +42,6 @@ extra_proxy = [
     "google-cloud-kms"
 ]
 
-proxy_otel = [
-    "opentelemetry-api",
-    "opentelemetry-sdk",
-    "opentelemetry-exporter-otlp",
-    "opentelemetry-sdk-resources"
-]
 
 [tool.poetry.scripts]
 litellm = 'litellm:run_server'
