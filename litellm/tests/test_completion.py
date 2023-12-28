@@ -406,7 +406,7 @@ def hf_test_completion_tgi():
 # hf_test_completion_conv()
 
 # ################### Hugging Face Neither TGI or Conversational models ########################
-# # Neither TGI or Conversational
+# # Neither TGI or Conversational task
 # def hf_test_completion_none_task():
 #     try:
 #         user_message = "My name is Merve and my favorite"
