@@ -2644,7 +2644,7 @@ def completion_cost(
             completion_tokens = token_counter(model=model, text=completion)
 
         # Calculate cost based on prompt_tokens, completion_tokens
-        if "togethercomputer" in model:
+        if "togethercomputer" in model or "together_ai" in model:
             # together ai prices based on size of llm
             # get_model_params_and_category takes a model name and returns the category of LLM size it is in model_prices_and_context_window.json
             model = get_model_params_and_category(model)
@@ -2661,7 +2661,8 @@ def completion_cost(
             completion_tokens=completion_tokens,
         )
         return prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar
-    except:
+    except Exception as e:
+        print_verbose(f"LiteLLM: Excepton when cost calculating {str(e)}")
         return 0.0  # this should not block a users execution path
 
 
