@@ -14,6 +14,10 @@ LiteLLM Server manages:
 [**See LiteLLM Proxy code**](https://github.com/BerriAI/litellm/tree/main/litellm/proxy)
 
 
+#### 📖 Proxy Endpoints - [Swagger Docs](https://litellm-api.up.railway.app/)
+
+
+
 View all the supported args for the Proxy CLI [here](https://docs.litellm.ai/docs/simple_proxy#proxy-cli-arguments)
 
 ```shell
@@ -361,13 +365,9 @@ litellm --config your_config.yaml
 
 [**More Info**](./configs.md)
 
-## Server Endpoints
 
-:::note
 
-You can see Swagger Docs for the server on root http://0.0.0.0:8000
-
-::: 
+## 📖 Proxy Endpoints - [Swagger Docs](https://litellm-api.up.railway.app/)
 - POST `/chat/completions` - chat completions endpoint to call 100+ LLMs
 - POST `/completions` - completions endpoint
 - POST `/embeddings` - embedding endpoint for Azure, OpenAI, Huggingface endpoints
