@@ -37,11 +37,11 @@ async def test_azure_embedding_health_check():
     response = await litellm.ahealth_check(
         model_params={
             "model": "azure/azure-embedding-model",
-            "messages": [{"role": "user", "content": "Hey, how's it going?"}],
             "api_key": os.getenv("AZURE_API_KEY"),
             "api_base": os.getenv("AZURE_API_BASE"),
             "api_version": os.getenv("AZURE_API_VERSION"),
         },
+        input=["test for litellm"],
         mode="embedding",
     )
     print(f"response: {response}")
