@@ -16,7 +16,6 @@ tokenizers = "*"
 click = "*"
 jinja2 = "^3.1.2"
 certifi = "^2023.7.22"
-appdirs = "^1.4.4"
 aiohttp = "*"
 
 uvicorn = {version = "^0.24.0.post1", optional = true}
