@@ -98,7 +98,8 @@ def test_vertex_ai():
     litellm.vertex_project = "reliablekeys"
 
     test_models = random.sample(test_models, 1)
-    test_models += litellm.vertex_language_models  # always test gemini-pro
+    # test_models += litellm.vertex_language_models  # always test gemini-pro
+    test_models = litellm.vertex_language_models  # always test gemini-pro
     for model in test_models:
         try:
             if model in [
@@ -302,6 +303,69 @@ def test_gemini_pro_vision():
 
 # test_gemini_pro_vision()
 
+
+def gemini_pro_function_calling():
+    load_vertex_ai_credentials()
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
+    completion = litellm.completion(
+        model="gemini-pro", messages=messages, tools=tools, tool_choice="auto"
+    )
+    print(f"completion: {completion}")
+
+
+# gemini_pro_function_calling()
+
+
+async def gemini_pro_async_function_calling():
+    load_vertex_ai_credentials()
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    messages = [{"role": "user", "content": "What's the weather like in Boston today?"}]
+    completion = await litellm.acompletion(
+        model="gemini-pro", messages=messages, tools=tools, tool_choice="auto"
+    )
+    print(f"completion: {completion}")
+
+
+asyncio.run(gemini_pro_async_function_calling())
 
 # Extra gemini Vision tests for completion + stream, async, async + stream
 # if we run into issues with gemini, we will also add these to our ci/cd pipeline
