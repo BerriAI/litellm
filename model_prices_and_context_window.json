@@ -231,6 +231,12 @@
         "litellm_provider": "mistral",
         "mode": "chat"
     },
+    "mistral/mistral-embed": {
+        "max_tokens": 8192,
+        "input_cost_per_token": 0.000000111,
+        "litellm_provider": "mistral",
+        "mode": "embedding"
+    },
     "claude-instant-1.2": {
         "max_tokens": 100000,
         "max_output_tokens": 8191,
