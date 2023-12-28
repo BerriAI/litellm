@@ -984,9 +984,11 @@ async def startup_event():
 
 
 #### API ENDPOINTS ####
-@router.get("/v1/models", dependencies=[Depends(user_api_key_auth)])
 @router.get(
-    "/models", dependencies=[Depends(user_api_key_auth)]
+    "/v1/models", dependencies=[Depends(user_api_key_auth)], tags=["model management"]
+)
+@router.get(
+    "/models", dependencies=[Depends(user_api_key_auth)], tags=["model management"]
 )  # if project requires model list
 def model_list():
     global llm_model_list, general_settings
@@ -2026,7 +2028,9 @@ async def async_queue_request(
         )
 
 
-@router.get("/ollama_logs", dependencies=[Depends(user_api_key_auth)])
+@router.get(
+    "/ollama_logs", dependencies=[Depends(user_api_key_auth)], tags=["experimental"]
+)
 async def retrieve_server_log(request: Request):
     filepath = os.path.expanduser("~/.ollama/logs/server.log")
     return FileResponse(filepath)
