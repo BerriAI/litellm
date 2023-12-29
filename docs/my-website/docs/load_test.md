@@ -1,6 +1,6 @@
 # 🔥 Load Test LiteLLM 
 
-Here is a script to load test LiteLLM 
+Here is a script to load test LiteLLM vs OpenAI 
 
 ```python
 from openai import AsyncOpenAI, AsyncAzureOpenAI
