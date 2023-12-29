@@ -1572,12 +1572,14 @@ def completion(
                 or litellm.api_key
                 or get_secret("CLOUDFLARE_API_KEY")
             )
-            # api_base = (
-            #     api_base
-            #     or litellm.api_base
-            #     or get_secret("CLOUDFLARE_API_BASE")
-            #     or "https://api.anthropic.com/v1/complete"
-            # )
+            account_id = get_secret("CLOUDFLARE_ACCOUNT_ID")
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret("CLOUDFLARE_API_BASE")
+                or f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/"
+            )
+
             custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
             response = cloudflare.completion(
                 model=model,
