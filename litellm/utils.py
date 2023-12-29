@@ -2350,6 +2350,7 @@ def client(original_function):
 def get_model_params_and_category(model_name):
     import re
 
+    model_name = model_name.lower()
     params_match = re.search(
         r"(\d+b)", model_name
     )  # catch all decimals like 3b, 70b, etc
