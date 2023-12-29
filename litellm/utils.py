@@ -5691,6 +5691,23 @@ def exception_type(
                             response=original_exception.response,
                         )
                 # Dailed: Error occurred: 400 Request payload size exceeds the limit: 20000 bytes
+            elif custom_llm_provider == "cloudflare":
+                if "Authentication error" in error_str:
+                    exception_mapping_worked = True
+                    raise AuthenticationError(
+                        message=f"Cloudflare Exception - {original_exception.message}",
+                        llm_provider="cloudflare",
+                        model=model,
+                        response=original_exception.response,
+                    )
+                if "must have required property" in error_str:
+                    exception_mapping_worked = True
+                    raise BadRequestError(
+                        message=f"Cloudflare Exception - {original_exception.message}",
+                        llm_provider="cloudflare",
+                        model=model,
+                        response=original_exception.response,
+                    )
             elif custom_llm_provider == "cohere":  # Cohere
                 if (
                     "invalid api token" in error_str
