@@ -251,6 +251,25 @@ response = router.completion(model="gpt-3.5-turbo", messages=messages)
 print(f"response: {response}")
 ```
 
+We also support setting minimum time to wait before retrying a failed request. This is via the `retry_after` param. 
+
+```python 
+from litellm import Router
+
+model_list = [{...}]
+
+router = Router(model_list=model_list,  
+                num_retries=3, retry_after=5) # waits min 5s before retrying request
+
+user_message = "Hello, whats the weather in San Francisco??"
+messages = [{"content": user_message, "role": "user"}]
+
+# normal call 
+response = router.completion(model="gpt-3.5-turbo", messages=messages)
+
+print(f"response: {response}")
+```
+
 ### Fallbacks 
 
 If a call fails after num_retries, fall back to another model group. 
