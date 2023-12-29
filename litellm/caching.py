@@ -9,7 +9,7 @@
 
 import litellm
 import time, logging
-import json, traceback, ast
+import json, traceback, ast, hashlib
 from typing import Optional, Literal, List
 
 
@@ -301,7 +301,12 @@ class Cache:
                     param_value = kwargs[param]
                 cache_key += f"{str(param)}: {str(param_value)}"
         print_verbose(f"\nCreated cache key: {cache_key}")
-        return cache_key
+        # Use hashlib to create a sha256 hash of the cache key
+        hash_object = hashlib.sha256(cache_key.encode())
+        # Hexadecimal representation of the hash
+        hash_hex = hash_object.hexdigest()
+        print_verbose(f"Hashed cache key (SHA-256): {hash_hex}")
+        return hash_hex
 
     def generate_streaming_content(self, content):
         chunk_size = 5  # Adjust the chunk size as needed
