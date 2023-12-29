@@ -66,6 +66,7 @@ class LowestTPMLoggingHandler(CustomLogger):
                 if self.test_flag:
                     self.logged_success += 1
         except Exception as e:
+            traceback.print_exc()
             pass
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -114,6 +115,7 @@ class LowestTPMLoggingHandler(CustomLogger):
                 if self.test_flag:
                     self.logged_success += 1
         except Exception as e:
+            traceback.print_exc()
             pass
 
     def get_available_deployments(self, model_group: str):
