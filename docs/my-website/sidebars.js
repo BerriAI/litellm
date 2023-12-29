@@ -124,6 +124,7 @@ const sidebars = {
     "budget_manager",
     "secret",
     "completion/token_usage",
+    "load_test",
     {
       type: 'category',
       label: 'Tutorials',
