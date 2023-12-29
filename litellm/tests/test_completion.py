@@ -2009,6 +2009,7 @@ def test_completion_cloudflare():
         response = completion(
             model="cloudflare/@cf/meta/llama-2-7b-chat-int8",
             messages=[{"content": "what llm are you", "role": "user"}],
+            max_tokens=15,
         )
         print(response)
 
@@ -2017,13 +2018,6 @@ def test_completion_cloudflare():
 
 
 test_completion_cloudflare()
-
-# async def get_response(generator):
-#     async for elem in generator:
-#         print(elem)
-#     return
-
-# test_completion_together_ai_stream()
 
 
 def test_moderation():
