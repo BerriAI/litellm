@@ -3398,6 +3398,16 @@ def get_optional_params(
             optional_params["n"] = n
         if stop is not None:
             optional_params["stop_sequences"] = stop
+    elif (
+        custom_llm_provider == "cloudlfare"
+    ):  # https://developers.cloudflare.com/workers-ai/models/text-generation/#input
+        supported_params = ["max_tokens", "stream"]
+        _check_valid_arg(supported_params=supported_params)
+
+        if max_tokens is not None:
+            optional_params["max_tokens"] = temperature
+        if stream is not None:
+            optional_params["stream"] = stream
     elif custom_llm_provider == "ollama":
         supported_params = [
             "max_tokens",
