@@ -2466,6 +2466,9 @@ def openai_token_counter(
     elif model in litellm.open_ai_chat_completion_models:
         tokens_per_message = 3
         tokens_per_name = 1
+    elif model in litellm.azure_llms:
+        tokens_per_message = 3
+        tokens_per_name = 1
     else:
         raise NotImplementedError(
             f"""num_tokens_from_messages() is not implemented for model {model}. See https://github.com/openai/openai-python/blob/main/chatml.md for information on how messages are converted to tokens."""
@@ -2519,7 +2522,10 @@ def token_counter(model="", text=None, messages: Optional[List] = None):
             enc = tokenizer_json["tokenizer"].encode(text)
             num_tokens = len(enc.ids)
         elif tokenizer_json["type"] == "openai_tokenizer":
-            if model in litellm.open_ai_chat_completion_models:
+            if (
+                model in litellm.open_ai_chat_completion_models
+                or model in litellm.azure_llms
+            ):
                 num_tokens = openai_token_counter(
                     text=text, model=model, messages=messages
                 )
@@ -2548,11 +2554,6 @@ def cost_per_token(model="", prompt_tokens=0, completion_tokens=0):
     completion_tokens_cost_usd_dollar = 0
     model_cost_ref = litellm.model_cost
     # see this https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models
-    azure_llms = {
-        "gpt-35-turbo": "azure/gpt-3.5-turbo",
-        "gpt-35-turbo-16k": "azure/gpt-3.5-turbo-16k",
-        "gpt-35-turbo-instruct": "azure/gpt-3.5-turbo-instruct",
-    }
     if model in model_cost_ref:
         prompt_tokens_cost_usd_dollar = (
             model_cost_ref[model]["input_cost_per_token"] * prompt_tokens
@@ -2571,8 +2572,8 @@ def cost_per_token(model="", prompt_tokens=0, completion_tokens=0):
             * completion_tokens
         )
         return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
-    elif model in azure_llms:
-        model = azure_llms[model]
+    elif model in litellm.azure_llms:
+        model = litellm.azure_llms[model]
         prompt_tokens_cost_usd_dollar = (
             model_cost_ref[model]["input_cost_per_token"] * prompt_tokens
         )
