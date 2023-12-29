@@ -294,6 +294,13 @@ def test_gemini_pro_vision():
             ],
         )
         print(resp)
+
+        prompt_tokens = resp.usage.prompt_tokens
+
+        # DO Not DELETE this ASSERT
+        # Google counts the prompt tokens for us, we should ensure we use the tokens from the orignal response
+        assert prompt_tokens == 263  # the gemini api returns 263 to us
+
     except Exception as e:
         import traceback
 
