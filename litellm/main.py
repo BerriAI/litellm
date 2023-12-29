@@ -2472,22 +2472,22 @@ async def atext_completion(*args, **kwargs):
             or custom_llm_provider == "ollama"
             or custom_llm_provider == "vertex_ai"
         ):  # currently implemented aiohttp calls for just azure and openai, soon all.
-            if kwargs.get("stream", False):
-                response = text_completion(*args, **kwargs)
-            else:
-                # Await normally
-                response = await loop.run_in_executor(None, func_with_context)
-                if asyncio.iscoroutine(response):
-                    response = await response
+            # Await normally
+            response = await loop.run_in_executor(None, func_with_context)
+            if asyncio.iscoroutine(response):
+                response = await response
         else:
             # Call the synchronous function using run_in_executor
             response = await loop.run_in_executor(None, func_with_context)
-        if kwargs.get("stream", False):  # return an async generator
-            return _async_streaming(
-                response=response,
+        if kwargs.get("stream", False) == True:  # return an async generator
+            return TextCompletionStreamWrapper(
+                completion_stream=_async_streaming(
+                    response=response,
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
+                    args=args,
+                ),
                 model=model,
-                custom_llm_provider=custom_llm_provider,
-                args=args,
             )
         else:
             return response
@@ -2691,10 +2691,10 @@ def text_completion(
         **kwargs,
         **optional_params,
     )
+    if kwargs.get("acompletion", False) == True:
+        return response
     if stream == True or kwargs.get("stream", False) == True:
         response = TextCompletionStreamWrapper(completion_stream=response, model=model)
-        return response
-    if kwargs.get("acompletion", False) == True:
         return response
     transformed_logprobs = None
     # only supported for TGI models
