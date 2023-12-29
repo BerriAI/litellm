@@ -149,7 +149,7 @@ async def test_acompletion_caching_with_ttl_on_router():
 async def test_acompletion_caching_on_router_caching_groups():
     # tests acompletion + caching on router
     try:
-        litellm.set_verbose = True
+        # litellm.set_verbose = True
         model_list = [
             {
                 "model_name": "openai-gpt-3.5-turbo",
@@ -212,6 +212,7 @@ async def test_acompletion_caching_on_router_caching_groups():
 
 
 def test_usage_based_routing_completion():
+    litellm.set_verbose = True
     model_list = [
         {
             "model_name": "gpt-3.5-turbo",
@@ -249,3 +250,6 @@ def test_usage_based_routing_completion():
         finally:
             max_requests -= 1
     router.reset()
+
+
+test_usage_based_routing_completion()

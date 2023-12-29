@@ -1546,9 +1546,11 @@ class Router:
             ############## Available Deployments passed, we find the relevant item #################
             else:
                 ## check if min deployment is a string, if so, cast it to int
-                if isinstance(min_deployment, str):
-                    min_deployment = int(min_deployment)
                 for m in healthy_deployments:
+                    if isinstance(min_deployment, str) and isinstance(
+                        m["model_info"]["id"], int
+                    ):
+                        min_deployment = int(min_deployment)
                     if m["model_info"]["id"] == min_deployment:
                         return m
                 self.print_verbose(f"no healthy deployment with that id found!")
