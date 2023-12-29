@@ -2447,6 +2447,7 @@ def openai_token_counter(
     messages: Optional[list] = None,
     model="gpt-3.5-turbo-0613",
     text: Optional[str] = None,
+    is_tool_call: Optional[bool] = False,
 ):
     """
     Return the number of tokens used by a list of messages.
@@ -2475,7 +2476,10 @@ def openai_token_counter(
         )
     num_tokens = 0
 
-    if messages is not None:
+    if is_tool_call and text is not None:
+        # if it's a tool call we assembled 'text' in token_counter()
+        num_tokens = len(encoding.encode(text, disallowed_special=()))
+    elif messages is not None:
         for message in messages:
             num_tokens += tokens_per_message
             for key, value in message.items():
@@ -2501,6 +2505,7 @@ def token_counter(model="", text=None, messages: Optional[List] = None):
     int: The number of tokens in the text.
     """
     # use tiktoken, anthropic, cohere or llama2's tokenizer depending on the model
+    is_tool_call = True
     if text == None:
         if messages is not None:
             print_verbose(f"token_counter messages received: {messages}")
@@ -2509,6 +2514,7 @@ def token_counter(model="", text=None, messages: Optional[List] = None):
                 if message.get("content", None):
                     text += message["content"]
                 if "tool_calls" in message:
+                    is_tool_call = True
                     for tool_call in message["tool_calls"]:
                         if "function" in tool_call:
                             function_arguments = tool_call["function"]["arguments"]
@@ -2527,7 +2533,7 @@ def token_counter(model="", text=None, messages: Optional[List] = None):
                 or model in litellm.azure_llms
             ):
                 num_tokens = openai_token_counter(
-                    text=text, model=model, messages=messages
+                    text=text, model=model, messages=messages, is_tool_call=is_tool_call
                 )
             else:
                 enc = tokenizer_json["tokenizer"].encode(text)
