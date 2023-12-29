@@ -6903,6 +6903,36 @@ class CustomStreamWrapper:
             traceback.print_exc()
             return ""
 
+    def handle_cloudlfare_stream(self, chunk):
+        try:
+            print_verbose(f"\nRaw OpenAI Chunk\n{chunk}\n")
+            chunk = chunk.decode("utf-8")
+            str_line = chunk
+            text = ""
+            is_finished = False
+            finish_reason = None
+
+            if "[DONE]" in chunk:
+                return {"text": text, "is_finished": True, "finish_reason": "stop"}
+            elif str_line.startswith("data:"):
+                data_json = json.loads(str_line[5:])
+                print_verbose(f"delta content: {data_json}")
+                text = data_json["response"]
+                return {
+                    "text": text,
+                    "is_finished": is_finished,
+                    "finish_reason": finish_reason,
+                }
+            else:
+                return {
+                    "text": text,
+                    "is_finished": is_finished,
+                    "finish_reason": finish_reason,
+                }
+
+        except Exception as e:
+            raise e
+
     def handle_ollama_stream(self, chunk):
         try:
             if isinstance(chunk, dict):
@@ -7186,6 +7216,14 @@ class CustomStreamWrapper:
                     ]
             elif self.custom_llm_provider == "ollama_chat":
                 response_obj = self.handle_ollama_chat_stream(chunk)
+                completion_obj["content"] = response_obj["text"]
+                print_verbose(f"completion obj content: {completion_obj['content']}")
+                if response_obj["is_finished"]:
+                    model_response.choices[0].finish_reason = response_obj[
+                        "finish_reason"
+                    ]
+            elif self.custom_llm_provider == "cloudflare":
+                response_obj = self.handle_cloudlfare_stream(chunk)
                 completion_obj["content"] = response_obj["text"]
                 print_verbose(f"completion obj content: {completion_obj['content']}")
                 if response_obj["is_finished"]:
