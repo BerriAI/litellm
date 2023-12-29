@@ -287,7 +287,7 @@ class Router:
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
             timeout = kwargs.get("request_timeout", self.timeout)
             kwargs.setdefault("metadata", {}).update({"model_group": model})
-            # response = await asyncio.wait_for(self.async_function_with_fallbacks(**kwargs), timeout=timeout)
+
             response = await self.async_function_with_fallbacks(**kwargs)
 
             return response
@@ -1664,6 +1664,7 @@ class Router:
             deployments = self.leastbusy_logger.get_available_deployments(
                 model_group=model
             )
+            self.print_verbose(f"deployments in least-busy router: {deployments}")
             # pick least busy deployment
             min_traffic = float("inf")
             min_deployment = None
@@ -1671,14 +1672,19 @@ class Router:
                 if v < min_traffic:
                     min_traffic = v
                     min_deployment = k
+            self.print_verbose(f"min_deployment: {min_deployment};")
             ############## No Available Deployments passed, we do a random pick #################
             if min_deployment is None:
                 min_deployment = random.choice(healthy_deployments)
             ############## Available Deployments passed, we find the relevant item #################
             else:
+                ## check if min deployment is a string, if so, cast it to int
+                if isinstance(min_deployment, str):
+                    min_deployment = int(min_deployment)
                 for m in healthy_deployments:
                     if m["model_info"]["id"] == min_deployment:
                         return m
+                self.print_verbose(f"no healthy deployment with that id found!")
                 min_deployment = random.choice(healthy_deployments)
             return min_deployment
         elif self.routing_strategy == "simple-shuffle":

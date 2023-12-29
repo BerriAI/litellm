@@ -30,27 +30,20 @@ class LeastBusyLoggingHandler(CustomLogger):
             if kwargs["litellm_params"].get("metadata") is None:
                 pass
             else:
-                deployment = kwargs["litellm_params"]["metadata"].get(
-                    "deployment", None
-                )
                 model_group = kwargs["litellm_params"]["metadata"].get(
                     "model_group", None
                 )
                 id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
-                if deployment is None or model_group is None or id is None:
+                if model_group is None or id is None:
                     return
-
-                # map deployment to id
-                self.mapping_deployment_to_id[deployment] = id
 
                 request_count_api_key = f"{model_group}_request_count"
                 # update cache
                 request_count_dict = (
                     self.router_cache.get_cache(key=request_count_api_key) or {}
                 )
-                request_count_dict[deployment] = (
-                    request_count_dict.get(deployment, 0) + 1
-                )
+                request_count_dict[id] = request_count_dict.get(id, 0) + 1
+
                 self.router_cache.set_cache(
                     key=request_count_api_key, value=request_count_dict
                 )
@@ -62,13 +55,12 @@ class LeastBusyLoggingHandler(CustomLogger):
             if kwargs["litellm_params"].get("metadata") is None:
                 pass
             else:
-                deployment = kwargs["litellm_params"]["metadata"].get(
-                    "deployment", None
-                )
                 model_group = kwargs["litellm_params"]["metadata"].get(
                     "model_group", None
                 )
-                if deployment is None or model_group is None:
+
+                id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
+                if model_group is None or id is None:
                     return
 
                 request_count_api_key = f"{model_group}_request_count"
@@ -76,7 +68,7 @@ class LeastBusyLoggingHandler(CustomLogger):
                 request_count_dict = (
                     self.router_cache.get_cache(key=request_count_api_key) or {}
                 )
-                request_count_dict[deployment] = request_count_dict.get(deployment)
+                request_count_dict[id] = request_count_dict.get(id) - 1
                 self.router_cache.set_cache(
                     key=request_count_api_key, value=request_count_dict
                 )
@@ -88,13 +80,11 @@ class LeastBusyLoggingHandler(CustomLogger):
             if kwargs["litellm_params"].get("metadata") is None:
                 pass
             else:
-                deployment = kwargs["litellm_params"]["metadata"].get(
-                    "deployment", None
-                )
                 model_group = kwargs["litellm_params"]["metadata"].get(
                     "model_group", None
                 )
-                if deployment is None or model_group is None:
+                id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
+                if model_group is None or id is None:
                     return
 
                 request_count_api_key = f"{model_group}_request_count"
@@ -102,7 +92,7 @@ class LeastBusyLoggingHandler(CustomLogger):
                 request_count_dict = (
                     self.router_cache.get_cache(key=request_count_api_key) or {}
                 )
-                request_count_dict[deployment] = request_count_dict.get(deployment)
+                request_count_dict[id] = request_count_dict.get(id) - 1
                 self.router_cache.set_cache(
                     key=request_count_api_key, value=request_count_dict
                 )
@@ -111,11 +101,6 @@ class LeastBusyLoggingHandler(CustomLogger):
 
     def get_available_deployments(self, model_group: str):
         request_count_api_key = f"{model_group}_request_count"
-        request_count_dict = (
-            self.router_cache.get_cache(key=request_count_api_key) or {}
-        )
+        return_dict = self.router_cache.get_cache(key=request_count_api_key) or {}
         # map deployment to id
-        return_dict = {}
-        for key, value in request_count_dict.items():
-            return_dict[self.mapping_deployment_to_id[key]] = value
         return return_dict
