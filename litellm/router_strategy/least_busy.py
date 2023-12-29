@@ -16,6 +16,10 @@ from litellm.integrations.custom_logger import CustomLogger
 
 
 class LeastBusyLoggingHandler(CustomLogger):
+    test_flag: bool = False
+    logged_success: int = 0
+    logged_failure: int = 0
+
     def __init__(self, router_cache: DualCache):
         self.router_cache = router_cache
         self.mapping_deployment_to_id: dict = {}
@@ -50,6 +54,63 @@ class LeastBusyLoggingHandler(CustomLogger):
         except Exception as e:
             pass
 
+    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+        try:
+            if kwargs["litellm_params"].get("metadata") is None:
+                pass
+            else:
+                model_group = kwargs["litellm_params"]["metadata"].get(
+                    "model_group", None
+                )
+
+                id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
+                if model_group is None or id is None:
+                    return
+
+                request_count_api_key = f"{model_group}_request_count"
+                # decrement count in cache
+                request_count_dict = (
+                    self.router_cache.get_cache(key=request_count_api_key) or {}
+                )
+                request_count_dict[id] = request_count_dict.get(id) - 1
+                self.router_cache.set_cache(
+                    key=request_count_api_key, value=request_count_dict
+                )
+
+                ### TESTING ###
+                if self.test_flag:
+                    self.logged_success += 1
+        except Exception as e:
+            pass
+
+    def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        try:
+            if kwargs["litellm_params"].get("metadata") is None:
+                pass
+            else:
+                model_group = kwargs["litellm_params"]["metadata"].get(
+                    "model_group", None
+                )
+                id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
+                if model_group is None or id is None:
+                    return
+
+                request_count_api_key = f"{model_group}_request_count"
+                # decrement count in cache
+                request_count_dict = (
+                    self.router_cache.get_cache(key=request_count_api_key) or {}
+                )
+                request_count_dict[id] = request_count_dict.get(id) - 1
+                self.router_cache.set_cache(
+                    key=request_count_api_key, value=request_count_dict
+                )
+
+                ### TESTING ###
+                if self.test_flag:
+                    self.logged_failure += 1
+        except Exception as e:
+            pass
+
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
             if kwargs["litellm_params"].get("metadata") is None:
@@ -72,6 +133,10 @@ class LeastBusyLoggingHandler(CustomLogger):
                 self.router_cache.set_cache(
                     key=request_count_api_key, value=request_count_dict
                 )
+
+                ### TESTING ###
+                if self.test_flag:
+                    self.logged_success += 1
         except Exception as e:
             pass
 
@@ -96,6 +161,10 @@ class LeastBusyLoggingHandler(CustomLogger):
                 self.router_cache.set_cache(
                     key=request_count_api_key, value=request_count_dict
                 )
+
+                ### TESTING ###
+                if self.test_flag:
+                    self.logged_failure += 1
         except Exception as e:
             pass
 
