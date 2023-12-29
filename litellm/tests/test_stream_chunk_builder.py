@@ -164,8 +164,8 @@ def test_stream_chunk_builder_count_prompt_tokens():
         non_stream_prompt_tokens = response.usage.prompt_tokens
         non_stream_model = response.model
 
+        assert stream_model == non_stream_model
         assert stream_prompt_tokens == non_stream_prompt_tokens
-        assert stream_model != non_stream_model
 
     except Exception as e:
         pytest.fail(f"An exception occurred - {str(e)}")
