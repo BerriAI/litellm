@@ -130,6 +130,30 @@ def test_async_anyscale_response():
 # test_async_anyscale_response()
 
 
+def test_async_completion_cloudflare():
+    try:
+        litellm.set_verbose = True
+
+        async def test():
+            response = await litellm.acompletion(
+                model="cloudflare/@cf/meta/llama-2-7b-chat-int8",
+                messages=[{"content": "what llm are you", "role": "user"}],
+                max_tokens=50,
+            )
+            print(response)
+            return response
+
+        response = asyncio.run(test())
+        text_response = response["choices"][0]["message"]["content"]
+        assert len(text_response) > 5  # more than 5 chars in response
+
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+test_async_completion_cloudflare()
+
+
 def test_get_response_streaming():
     import asyncio
 
