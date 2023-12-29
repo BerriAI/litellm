@@ -1600,7 +1600,7 @@ def completion(
                 response = CustomStreamWrapper(
                     response,
                     model,
-                    custom_llm_provider="anthropic",
+                    custom_llm_provider="cloudflare",
                     logging_obj=logging,
                 )
 
