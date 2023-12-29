@@ -44,6 +44,7 @@ huggingface_key: Optional[str] = None
 vertex_project: Optional[str] = None
 vertex_location: Optional[str] = None
 togetherai_api_key: Optional[str] = None
+cloudflare_api_key: Optional[str] = None
 baseten_key: Optional[str] = None
 aleph_alpha_key: Optional[str] = None
 nlp_cloud_key: Optional[str] = None
@@ -390,6 +391,7 @@ provider_list: List = [
     "mistral",
     "maritalk",
     "voyage",
+    "cloudflare",
     "custom",  # custom apis
 ]
 
@@ -491,6 +493,7 @@ from .llms.replicate import ReplicateConfig
 from .llms.cohere import CohereConfig
 from .llms.ai21 import AI21Config
 from .llms.together_ai import TogetherAIConfig
+from .llms.cloudflare import CloudflareConfig
 from .llms.palm import PalmConfig
 from .llms.gemini import GeminiConfig
 from .llms.nlp_cloud import NLPCloudConfig
