@@ -151,7 +151,51 @@ def test_async_completion_cloudflare():
         pytest.fail(f"Error occurred: {e}")
 
 
-test_async_completion_cloudflare()
+# test_async_completion_cloudflare()
+
+
+def test_get_cloudflare_response_streaming():
+    import asyncio
+
+    async def test_async_call():
+        user_message = "write a short poem in one sentence"
+        messages = [{"content": user_message, "role": "user"}]
+        try:
+            litellm.set_verbose = False
+            response = await acompletion(
+                model="cloudflare/@cf/meta/llama-2-7b-chat-int8",
+                messages=messages,
+                stream=True,
+                timeout=5,
+            )
+            print(type(response))
+
+            import inspect
+
+            is_async_generator = inspect.isasyncgen(response)
+            print(is_async_generator)
+
+            output = ""
+            i = 0
+            async for chunk in response:
+                print(chunk)
+                token = chunk["choices"][0]["delta"].get("content", "")
+                if token == None:
+                    continue  # openai v1.0.0 returns content=None
+                output += token
+            assert output is not None, "output cannot be None."
+            assert isinstance(output, str), "output needs to be of type str"
+            assert len(output) > 0, "Length of output needs to be greater than 0."
+            print(f"output: {output}")
+        except litellm.Timeout as e:
+            pass
+        except Exception as e:
+            pytest.fail(f"An exception occurred: {e}")
+
+    asyncio.run(test_async_call())
+
+
+test_get_cloudflare_response_streaming()
 
 
 def test_get_response_streaming():
