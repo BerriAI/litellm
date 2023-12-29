@@ -110,6 +110,8 @@ def test_router_get_available_deployments():
         num_retries=3,
     )  # type: ignore
 
+    router.leastbusy_logger.test_flag = True
+
     model_group = "azure-model"
     deployment = "azure/chatgpt-v-2"
     request_count_dict = {1: 10, 2: 54, 3: 100}
@@ -120,15 +122,19 @@ def test_router_get_available_deployments():
     print(f"deployment: {deployment}")
     assert deployment["model_info"]["id"] == 1
 
-    ## run router completion - assert that the least-busy deployment was incremented
+    ## run router completion - assert completion event, no change in 'busy'ness once calls are complete
 
     router.completion(
         model=model_group,
         messages=[{"role": "user", "content": "Hey, how's it going?"}],
     )
 
-    least_busy_dict = router.cache.get_cache(key=cache_key)
-    assert least_busy_dict[1] == 11
+    return_dict = router.cache.get_cache(key=cache_key)
+
+    assert router.leastbusy_logger.logged_success == 1
+    assert return_dict[1] == 10
+    assert return_dict[2] == 54
+    assert return_dict[3] == 100
 
 
-# test_router_get_available_deployments()
+test_router_get_available_deployments()
