@@ -135,4 +135,40 @@ def test_stream_chunk_builder_litellm_tool_call_regular_message():
         pytest.fail(f"An exception occurred - {str(e)}")
 
 
-test_stream_chunk_builder_litellm_tool_call_regular_message()
+# test_stream_chunk_builder_litellm_tool_call_regular_message()
+
+
+def test_stream_chunk_builder_count_prompt_tokens():
+    # test the prompt tokens for streamed responses == prompt tokens for non-streamed
+    # test the model for streamed responses == model for non-streamed
+    try:
+        messages = [{"role": "user", "content": "Hey, how's it going?"}]
+        litellm.set_verbose = False
+        response = litellm.completion(
+            model="azure/chatgpt-v-2",
+            messages=messages,
+            stream=True,
+            max_tokens=1,
+            complete_response=True,
+        )
+        print(f"Stream Assembled response: {response}")
+
+        stream_prompt_tokens = response.usage.prompt_tokens
+        stream_model = response.model
+
+        response = litellm.completion(
+            model="azure/chatgpt-v-2", messages=messages, max_tokens=1
+        )
+        print(f"\nNon Stream Response: {response}")
+
+        non_stream_prompt_tokens = response.usage.prompt_tokens
+        non_stream_model = response.model
+
+        assert stream_prompt_tokens == non_stream_prompt_tokens
+        assert stream_model != non_stream_model
+
+    except Exception as e:
+        pytest.fail(f"An exception occurred - {str(e)}")
+
+
+# test_stream_chunk_builder_count_prompt_tokens()
