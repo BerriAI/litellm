@@ -19,6 +19,8 @@ from litellm import (
 )
 from litellm import RateLimitError
 
+litellm.num_retries = 3
+
 
 token_prompt = [
     [
