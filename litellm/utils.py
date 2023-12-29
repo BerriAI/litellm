@@ -2505,7 +2505,7 @@ def token_counter(model="", text=None, messages: Optional[List] = None):
     int: The number of tokens in the text.
     """
     # use tiktoken, anthropic, cohere or llama2's tokenizer depending on the model
-    is_tool_call = True
+    is_tool_call = False
     if text == None:
         if messages is not None:
             print_verbose(f"token_counter messages received: {messages}")
