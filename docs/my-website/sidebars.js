@@ -75,6 +75,7 @@ const sidebars = {
         "providers/anyscale",
         "providers/perplexity", 
         "providers/vllm", 
+        "providers/cloudflare_workers", 
         "providers/deepinfra",
         "providers/ai21", 
         "providers/nlp_cloud",
