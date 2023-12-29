@@ -487,12 +487,25 @@ def completion(
                 total_tokens=response_obj.usage_metadata.total_token_count,
             )
         else:
-            prompt_tokens = len(encoding.encode(prompt))
-            completion_tokens = len(
-                encoding.encode(
-                    model_response["choices"][0]["message"].get("content", "")
+            # init prompt tokens
+            # this block attempts to get usage from response_obj if it exists, if not it uses the litellm token counter
+            prompt_tokens, completion_tokens, total_tokens = 0, 0, 0
+            if response_obj is not None:
+                if hasattr(response_obj, "usage_metadata") and hasattr(
+                    response_obj.usage_metadata, "prompt_token_count"
+                ):
+                    prompt_tokens = response_obj.usage_metadata.prompt_token_count
+                    completion_tokens = (
+                        response_obj.usage_metadata.candidates_token_count
+                    )
+            else:
+                prompt_tokens = len(encoding.encode(prompt))
+                completion_tokens = len(
+                    encoding.encode(
+                        model_response["choices"][0]["message"].get("content", "")
+                    )
                 )
-            )
+
             usage = Usage(
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
@@ -630,12 +643,26 @@ async def async_completion(
                 total_tokens=response_obj.usage_metadata.total_token_count,
             )
         else:
-            prompt_tokens = len(encoding.encode(prompt))
-            completion_tokens = len(
-                encoding.encode(
-                    model_response["choices"][0]["message"].get("content", "")
+            # init prompt tokens
+            # this block attempts to get usage from response_obj if it exists, if not it uses the litellm token counter
+            prompt_tokens, completion_tokens, total_tokens = 0, 0, 0
+            if response_obj is not None:
+                if hasattr(response_obj, "usage_metadata") and hasattr(
+                    response_obj.usage_metadata, "prompt_token_count"
+                ):
+                    prompt_tokens = response_obj.usage_metadata.prompt_token_count
+                    completion_tokens = (
+                        response_obj.usage_metadata.candidates_token_count
+                    )
+            else:
+                prompt_tokens = len(encoding.encode(prompt))
+                completion_tokens = len(
+                    encoding.encode(
+                        model_response["choices"][0]["message"].get("content", "")
+                    )
                 )
-            )
+
+            # set usage
             usage = Usage(
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
