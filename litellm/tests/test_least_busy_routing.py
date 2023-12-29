@@ -1,13 +1,6 @@
 #### What this tests ####
 #    This tests the router's ability to identify the least busy deployment
 
-#
-# How is this achieved?
-# - Before each call, have the router print the state of requests {"deployment": "requests_in_flight"}
-# - use litellm.input_callbacks to log when a request is just about to be made to a model - {"deployment-id": traffic}
-# - use litellm.success + failure callbacks to log when a request completed
-# - in get_available_deployment, for a given model group name -> pick based on traffic
-
 import sys, os, asyncio, time
 import traceback
 from dotenv import load_dotenv
@@ -137,4 +130,4 @@ def test_router_get_available_deployments():
     assert return_dict[3] == 100
 
 
-test_router_get_available_deployments()
+# test_router_get_available_deployments()

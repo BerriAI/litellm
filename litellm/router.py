@@ -18,6 +18,7 @@ import inspect, concurrent
 from openai import AsyncOpenAI
 from collections import defaultdict
 from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
+from litellm.router_strategy.lowest_tpm_rpm import LowestTPMLoggingHandler
 from litellm.llms.custom_httpx.azure_dall_e_2 import (
     CustomHTTPTransport,
     AsyncCustomHTTPTransport,
@@ -67,6 +68,7 @@ class Router:
     num_retries: int = 0
     tenacity = None
     leastbusy_logger: Optional[LeastBusyLoggingHandler] = None
+    lowesttpm_logger: Optional[LowestTPMLoggingHandler] = None
 
     def __init__(
         self,
@@ -196,12 +198,14 @@ class Router:
                 litellm.input_callback = [self.leastbusy_logger]  # type: ignore
             if isinstance(litellm.callbacks, list):
                 litellm.callbacks.append(self.leastbusy_logger)  # type: ignore
-        ## USAGE TRACKING ##
-        if isinstance(litellm.success_callback, list):
-            litellm.success_callback.append(self.deployment_callback)
-        else:
-            litellm.success_callback = [self.deployment_callback]
+        elif routing_strategy == "usage-based-routing":
+            self.lowesttpm_logger = LowestTPMLoggingHandler(
+                router_cache=self.cache, model_list=self.model_list
+            )
+            if isinstance(litellm.callbacks, list):
+                litellm.callbacks.append(self.lowesttpm_logger)  # type: ignore
 
+        ## COOLDOWNS ##
         if isinstance(litellm.failure_callback, list):
             litellm.failure_callback.append(self.deployment_callback_on_failure)
         else:
@@ -1012,40 +1016,6 @@ class Router:
 
     ### HELPER FUNCTIONS
 
-    def deployment_callback(
-        self,
-        kwargs,  # kwargs to completion
-        completion_response,  # response from completion
-        start_time,
-        end_time,  # start/end time
-    ):
-        """
-        Function LiteLLM submits a callback to after a successful
-        completion. Purpose of this is to update TPM/RPM usage per model
-        """
-        deployment_id = (
-            kwargs.get("litellm_params", {}).get("model_info", {}).get("id", None)
-        )
-        model_name = kwargs.get("model", None)  # i.e. gpt35turbo
-        custom_llm_provider = kwargs.get("litellm_params", {}).get(
-            "custom_llm_provider", None
-        )  # i.e. azure
-        if custom_llm_provider:
-            model_name = f"{custom_llm_provider}/{model_name}"
-        if kwargs["stream"] is True:
-            if kwargs.get("complete_streaming_response"):
-                total_tokens = kwargs.get("complete_streaming_response")["usage"][
-                    "total_tokens"
-                ]
-                self._set_deployment_usage(deployment_id, total_tokens)
-        else:
-            total_tokens = completion_response["usage"]["total_tokens"]
-            self._set_deployment_usage(deployment_id, total_tokens)
-
-        self.deployment_latency_map[model_name] = (
-            end_time - start_time
-        ).total_seconds()
-
     def deployment_callback_on_failure(
         self,
         kwargs,  # kwargs to completion
@@ -1179,109 +1149,6 @@ class Router:
 
         self.print_verbose(f"retrieve cooldown models: {cooldown_models}")
         return cooldown_models
-
-    def get_usage_based_available_deployment(
-        self,
-        model: str,
-        messages: Optional[List[Dict[str, str]]] = None,
-        input: Optional[Union[str, List]] = None,
-    ):
-        """
-        Returns a deployment with the lowest TPM/RPM usage.
-        """
-        # get list of potential deployments
-        potential_deployments = []
-        for item in self.model_list:
-            if item["model_name"] == model:
-                potential_deployments.append(item)
-
-        # get current call usage
-        token_count = 0
-        if messages is not None:
-            token_count = litellm.token_counter(model=model, messages=messages)
-        elif input is not None:
-            if isinstance(input, List):
-                input_text = "".join(text for text in input)
-            else:
-                input_text = input
-            token_count = litellm.token_counter(model=model, text=input_text)
-
-        # -----------------------
-        # Find lowest used model
-        # ----------------------
-        lowest_tpm = float("inf")
-        deployment = None
-
-        # load model context map
-        models_context_map = litellm.model_cost
-
-        # return deployment with lowest tpm usage
-        for item in potential_deployments:
-            model_id = item["model_info"].get("id")
-            item_tpm, item_rpm = self._get_deployment_usage(deployment_name=model_id)
-
-            if item_tpm == 0:
-                return item
-            elif (
-                "tpm" in item
-                and item_tpm + token_count > item["tpm"]
-                or "rpm" in item
-                and item_rpm + 1 >= item["rpm"]
-            ):  # if user passed in tpm / rpm in the model_list
-                continue
-            elif item_tpm < lowest_tpm:
-                lowest_tpm = item_tpm
-                deployment = item
-
-        # if none, raise exception
-        if deployment is None:
-            raise ValueError("No models available.")
-
-        # return model
-        return deployment
-
-    def _get_deployment_usage(self, deployment_name: str):
-        # ------------
-        # Setup values
-        # ------------
-        current_minute = datetime.now().strftime("%H-%M")
-        tpm_key = f"{deployment_name}:tpm:{current_minute}"
-        rpm_key = f"{deployment_name}:rpm:{current_minute}"
-
-        # ------------
-        # Return usage
-        # ------------
-        tpm = self.cache.get_cache(key=tpm_key) or 0
-        rpm = self.cache.get_cache(key=rpm_key) or 0
-
-        return int(tpm), int(rpm)
-
-    def increment(self, key: str, increment_value: int):
-        # get value
-        cached_value = self.cache.get_cache(key=key)
-        # update value
-        try:
-            cached_value = cached_value + increment_value
-        except:
-            cached_value = increment_value
-        # save updated value
-        self.cache.set_cache(
-            value=cached_value, key=key, ttl=self.default_cache_time_seconds
-        )
-
-    def _set_deployment_usage(self, model_name: str, total_tokens: int):
-        # ------------
-        # Setup values
-        # ------------
-        current_minute = datetime.now().strftime("%H-%M")
-        tpm_key = f"{model_name}:tpm:{current_minute}"
-        rpm_key = f"{model_name}:rpm:{current_minute}"
-
-        # ------------
-        # Update usage
-        # ------------
-        self.increment(tpm_key, total_tokens)
-        self.increment(rpm_key, 1)
 
     def _start_health_check_thread(self):
         """
@@ -1733,10 +1600,11 @@ class Router:
                 )
             returned_item = self.weighted_shuffle_by_latency(items_with_latencies)
             return returned_item
-        elif self.routing_strategy == "usage-based-routing":
-            return self.get_usage_based_available_deployment(
-                model=model, messages=messages, input=input
-            )
+        elif (
+            self.routing_strategy == "usage-based-routing"
+            and self.lowesttpm_logger is not None
+        ):
+            return self.lowesttpm_logger.get_available_deployments(model_group=model)
 
         raise ValueError("No models available.")
 
