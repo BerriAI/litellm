@@ -23,10 +23,12 @@ class CloudflareError(Exception):
 
 class CloudflareConfig:
     max_tokens: Optional[int] = None
+    stream: Optional[bool] = None
 
     def __init__(
         self,
         max_tokens: Optional[int] = None,
+        stream: Optional[bool] = None,
     ) -> None:
         locals_ = locals()
         for key, value in locals_.items():
