@@ -3576,15 +3576,15 @@ def get_optional_params(
             "max_tokens",
             "stop",
             "frequency_penalty",
-            "presence_penalty",
+            "presence_penalty"
         ]
-        if model == "mistralai/Mistral-7B-Instruct-v0.1":
-            supported_params += ["functions", "function_call", "tools", "tool_choice"]
+        if model in ["mistralai/Mistral-7B-Instruct-v0.1", "mistralai/Mixtral-8x7B-Instruct-v0.1"]:
+            supported_params += ["functions", "function_call", "tools", "tool_choice", "response_format"]
         _check_valid_arg(supported_params=supported_params)
         optional_params = non_default_params
         if temperature is not None:
             if (
-                temperature == 0 and model == "mistralai/Mistral-7B-Instruct-v0.1"
+                temperature == 0 and model in ["mistralai/Mistral-7B-Instruct-v0.1", "mistralai/Mixtral-8x7B-Instruct-v0.1"]
             ):  # this model does no support temperature == 0
                 temperature = 0.0001  # close to 0
             optional_params["temperature"] = temperature
