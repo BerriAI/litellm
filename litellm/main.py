@@ -50,6 +50,7 @@ from .llms import (
     vllm,
     ollama,
     ollama_chat,
+    cloudflare,
     cohere,
     petals,
     oobabooga,
@@ -1564,6 +1565,51 @@ def completion(
                 return generator
 
             response = generator
+        elif custom_llm_provider == "cloudflare":
+            api_key = (
+                api_key
+                or litellm.cloudflare_api_key
+                or litellm.api_key
+                or get_secret("CLOUDFLARE_API_KEY")
+            )
+            # api_base = (
+            #     api_base
+            #     or litellm.api_base
+            #     or get_secret("CLOUDFLARE_API_BASE")
+            #     or "https://api.anthropic.com/v1/complete"
+            # )
+            custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
+            response = cloudflare.completion(
+                model=model,
+                messages=messages,
+                api_base=api_base,
+                custom_prompt_dict=litellm.custom_prompt_dict,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                encoding=encoding,  # for calculating input/output tokens
+                api_key=api_key,
+                logging_obj=logging,
+            )
+            if "stream" in optional_params and optional_params["stream"] == True:
+                # don't try to access stream object,
+                response = CustomStreamWrapper(
+                    response,
+                    model,
+                    custom_llm_provider="anthropic",
+                    logging_obj=logging,
+                )
+
+            if optional_params.get("stream", False) or acompletion == True:
+                ## LOGGING
+                logging.post_call(
+                    input=messages,
+                    api_key=api_key,
+                    original_response=response,
+                )
+            response = response
         elif (
             custom_llm_provider == "baseten"
             or litellm.api_base == "https://app.baseten.co"
