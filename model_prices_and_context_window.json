@@ -1108,6 +1108,55 @@
         "litellm_provider": "bedrock",
         "mode": "chat"
     },
+    "bedrock/*/1-month-commitment/cohere.command-text-v14": {
+        "max_tokens": 4096, 
+        "input_cost_per_second": 0.011,
+        "output_cost_per_second": 0.011,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/*/6-month-commitment/cohere.command-text-v14": {
+        "max_tokens": 4096, 
+        "input_cost_per_second": 0.0066027,
+        "output_cost_per_second": 0.0066027,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "cohere.command-light-text-v14": {
+        "max_tokens": 4000, 
+        "input_cost_per_token": 0.0000003,
+        "output_cost_per_token": 0.0000006,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/*/1-month-commitment/cohere.command-light-text-v14": {
+        "max_tokens": 4096, 
+        "input_cost_per_second": 0.001902,
+        "output_cost_per_second": 0.001902,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/*/6-month-commitment/cohere.command-light-text-v14": {
+        "max_tokens": 4096, 
+        "input_cost_per_second": 0.0011416,
+        "output_cost_per_second": 0.0011416,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "cohere.embed-english-v3": {
+        "max_tokens": 512, 
+        "input_cost_per_token": 0.0000001,
+        "output_cost_per_token": 0.000000,
+        "litellm_provider": "bedrock",
+        "mode": "embedding"
+    },
+    "cohere.embed-multilingual-v3": {
+        "max_tokens": 512, 
+        "input_cost_per_token": 0.0000001,
+        "output_cost_per_token": 0.000000,
+        "litellm_provider": "bedrock",
+        "mode": "embedding"
+    },
     "meta.llama2-13b-chat-v1": {
         "max_tokens": 4096, 
         "input_cost_per_token": 0.00000075,
