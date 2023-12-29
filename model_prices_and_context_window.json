@@ -693,11 +693,203 @@
         "litellm_provider": "bedrock",
         "mode": "chat"
     },
+    "bedrock/us-east-1/anthropic.claude-v1": {
+        "max_tokens": 100000, 
+        "max_output_tokens": 8191,
+        "input_cost_per_token": 0.000008,
+        "output_cost_per_token": 0.000024,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/us-west-2/anthropic.claude-v1": {
+        "max_tokens": 100000, 
+        "max_output_tokens": 8191,
+        "input_cost_per_token": 0.000008,
+        "output_cost_per_token": 0.000024,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/ap-northeast-1/anthropic.claude-v1": {
+        "max_tokens": 100000, 
+        "max_output_tokens": 8191,
+        "input_cost_per_token": 0.000008,
+        "output_cost_per_token": 0.000024,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/ap-northeast-1/1-month-commitment/anthropic.claude-v1": {
+        "max_tokens": 100000, 
+        "max_output_tokens": 8191,
+        "input_cost_per_second": 0.0455,
+        "output_cost_per_second": 0.0455,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/ap-northeast-1/6-month-commitment/anthropic.claude-v1": {
+        "max_tokens": 100000, 
+        "max_output_tokens": 8191,
+        "input_cost_per_second": 0.02527,
+        "output_cost_per_second": 0.02527,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/eu-central-1/anthropic.claude-v1": {
+        "max_tokens": 100000, 
+        "max_output_tokens": 8191,
+        "input_cost_per_token": 0.000008,
+        "output_cost_per_token": 0.000024,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/eu-central-1/1-month-commitment/anthropic.claude-v1": {
+        "max_tokens": 100000, 
+        "max_output_tokens": 8191,
+        "input_cost_per_second": 0.0415,
+        "output_cost_per_second": 0.0415,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/eu-central-1/6-month-commitment/anthropic.claude-v1": {
+        "max_tokens": 100000, 
+        "max_output_tokens": 8191,
+        "input_cost_per_second": 0.02305,
+        "output_cost_per_second": 0.02305,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/us-east-1/1-month-commitment/anthropic.claude-v1": {
+        "max_tokens": 100000, 
+        "max_output_tokens": 8191,
+        "input_cost_per_second": 0.0175,
+        "output_cost_per_second": 0.0175,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/us-east-1/6-month-commitment/anthropic.claude-v1": {
+        "max_tokens": 100000, 
+        "max_output_tokens": 8191,
+        "input_cost_per_second": 0.00972,
+        "output_cost_per_second": 0.00972,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/us-west-2/1-month-commitment/anthropic.claude-v1": {
+        "max_tokens": 100000, 
+        "max_output_tokens": 8191,
+        "input_cost_per_second": 0.0175,
+        "output_cost_per_second": 0.0175,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/us-west-2/6-month-commitment/anthropic.claude-v1": {
+        "max_tokens": 100000, 
+        "max_output_tokens": 8191,
+        "input_cost_per_second": 0.00972,
+        "output_cost_per_second": 0.00972,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
     "anthropic.claude-v2": {
         "max_tokens": 100000, 
         "max_output_tokens": 8191,
         "input_cost_per_token": 0.000008,
         "output_cost_per_token": 0.000024,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/us-east-1/anthropic.claude-v2": {
+        "max_tokens": 100000, 
+        "max_output_tokens": 8191,
+        "input_cost_per_token": 0.000008,
+        "output_cost_per_token": 0.000024,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/us-west-2/anthropic.claude-v2": {
+        "max_tokens": 100000, 
+        "max_output_tokens": 8191,
+        "input_cost_per_token": 0.000008,
+        "output_cost_per_token": 0.000024,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/ap-northeast-1/anthropic.claude-v2": {
+        "max_tokens": 100000, 
+        "max_output_tokens": 8191,
+        "input_cost_per_token": 0.000008,
+        "output_cost_per_token": 0.000024,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/ap-northeast-1/1-month-commitment/anthropic.claude-v2": {
+        "max_tokens": 100000, 
+        "max_output_tokens": 8191,
+        "input_cost_per_second": 0.0455,
+        "output_cost_per_second": 0.0455,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/ap-northeast-1/6-month-commitment/anthropic.claude-v2": {
+        "max_tokens": 100000, 
+        "max_output_tokens": 8191,
+        "input_cost_per_second": 0.02527,
+        "output_cost_per_second": 0.02527,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/eu-central-1/anthropic.claude-v2": {
+        "max_tokens": 100000, 
+        "max_output_tokens": 8191,
+        "input_cost_per_token": 0.000008,
+        "output_cost_per_token": 0.000024,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/eu-central-1/1-month-commitment/anthropic.claude-v2": {
+        "max_tokens": 100000, 
+        "max_output_tokens": 8191,
+        "input_cost_per_second": 0.0415,
+        "output_cost_per_second": 0.0415,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/eu-central-1/6-month-commitment/anthropic.claude-v2": {
+        "max_tokens": 100000, 
+        "max_output_tokens": 8191,
+        "input_cost_per_second": 0.02305,
+        "output_cost_per_second": 0.02305,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/us-east-1/1-month-commitment/anthropic.claude-v2": {
+        "max_tokens": 100000, 
+        "max_output_tokens": 8191,
+        "input_cost_per_second": 0.0175,
+        "output_cost_per_second": 0.0175,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/us-east-1/6-month-commitment/anthropic.claude-v2": {
+        "max_tokens": 100000, 
+        "max_output_tokens": 8191,
+        "input_cost_per_second": 0.00972,
+        "output_cost_per_second": 0.00972,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/us-west-2/1-month-commitment/anthropic.claude-v2": {
+        "max_tokens": 100000, 
+        "max_output_tokens": 8191,
+        "input_cost_per_second": 0.0175,
+        "output_cost_per_second": 0.0175,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/us-west-2/6-month-commitment/anthropic.claude-v2": {
+        "max_tokens": 100000, 
+        "max_output_tokens": 8191,
+        "input_cost_per_second": 0.00972,
+        "output_cost_per_second": 0.00972,
         "litellm_provider": "bedrock",
         "mode": "chat"
     },
@@ -709,11 +901,203 @@
         "litellm_provider": "bedrock",
         "mode": "chat"
     },
+    "bedrock/us-east-1/anthropic.claude-v2:1": {
+        "max_tokens": 100000, 
+        "max_output_tokens": 8191,
+        "input_cost_per_token": 0.000008,
+        "output_cost_per_token": 0.000024,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/us-west-2/anthropic.claude-v2:1": {
+        "max_tokens": 100000, 
+        "max_output_tokens": 8191,
+        "input_cost_per_token": 0.000008,
+        "output_cost_per_token": 0.000024,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/ap-northeast-1/anthropic.claude-v2:1": {
+        "max_tokens": 100000, 
+        "max_output_tokens": 8191,
+        "input_cost_per_token": 0.000008,
+        "output_cost_per_token": 0.000024,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/ap-northeast-1/1-month-commitment/anthropic.claude-v2:1": {
+        "max_tokens": 100000, 
+        "max_output_tokens": 8191,
+        "input_cost_per_second": 0.0455,
+        "output_cost_per_second": 0.0455,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/ap-northeast-1/6-month-commitment/anthropic.claude-v2:1": {
+        "max_tokens": 100000, 
+        "max_output_tokens": 8191,
+        "input_cost_per_second": 0.02527,
+        "output_cost_per_second": 0.02527,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/eu-central-1/anthropic.claude-v2:1": {
+        "max_tokens": 100000, 
+        "max_output_tokens": 8191,
+        "input_cost_per_token": 0.000008,
+        "output_cost_per_token": 0.000024,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/eu-central-1/1-month-commitment/anthropic.claude-v2:1": {
+        "max_tokens": 100000, 
+        "max_output_tokens": 8191,
+        "input_cost_per_second": 0.0415,
+        "output_cost_per_second": 0.0415,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/eu-central-1/6-month-commitment/anthropic.claude-v2:1": {
+        "max_tokens": 100000, 
+        "max_output_tokens": 8191,
+        "input_cost_per_second": 0.02305,
+        "output_cost_per_second": 0.02305,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/us-east-1/1-month-commitment/anthropic.claude-v2:1": {
+        "max_tokens": 100000, 
+        "max_output_tokens": 8191,
+        "input_cost_per_second": 0.0175,
+        "output_cost_per_second": 0.0175,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/us-east-1/6-month-commitment/anthropic.claude-v2:1": {
+        "max_tokens": 100000, 
+        "max_output_tokens": 8191,
+        "input_cost_per_second": 0.00972,
+        "output_cost_per_second": 0.00972,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/us-west-2/1-month-commitment/anthropic.claude-v2:1": {
+        "max_tokens": 100000, 
+        "max_output_tokens": 8191,
+        "input_cost_per_second": 0.0175,
+        "output_cost_per_second": 0.0175,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/us-west-2/6-month-commitment/anthropic.claude-v2:1": {
+        "max_tokens": 100000, 
+        "max_output_tokens": 8191,
+        "input_cost_per_second": 0.00972,
+        "output_cost_per_second": 0.00972,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
     "anthropic.claude-instant-v1": {
         "max_tokens": 100000, 
         "max_output_tokens": 8191,
         "input_cost_per_token": 0.00000163,
         "output_cost_per_token": 0.00000551,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/us-east-1/anthropic.claude-instant-v1": {
+        "max_tokens": 100000, 
+        "max_output_tokens": 8191,
+        "input_cost_per_token": 0.0000008,
+        "output_cost_per_token": 0.0000024,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/us-east-1/1-month-commitment/anthropic.claude-instant-v1": {
+        "max_tokens": 100000, 
+        "max_output_tokens": 8191,
+        "input_cost_per_second": 0.011,
+        "output_cost_per_second": 0.011,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/us-east-1/6-month-commitment/anthropic.claude-instant-v1": {
+        "max_tokens": 100000, 
+        "max_output_tokens": 8191,
+        "input_cost_per_second": 0.00611,
+        "output_cost_per_second": 0.00611,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/us-west-2/1-month-commitment/anthropic.claude-instant-v1": {
+        "max_tokens": 100000, 
+        "max_output_tokens": 8191,
+        "input_cost_per_second": 0.011,
+        "output_cost_per_second": 0.011,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/us-west-2/6-month-commitment/anthropic.claude-instant-v1": {
+        "max_tokens": 100000, 
+        "max_output_tokens": 8191,
+        "input_cost_per_second": 0.00611,
+        "output_cost_per_second": 0.00611,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/us-west-2/anthropic.claude-instant-v1": {
+        "max_tokens": 100000, 
+        "max_output_tokens": 8191,
+        "input_cost_per_token": 0.0000008,
+        "output_cost_per_token": 0.0000024,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/ap-northeast-1/anthropic.claude-instant-v1": {
+        "max_tokens": 100000, 
+        "max_output_tokens": 8191,
+        "input_cost_per_token": 0.00000223,
+        "output_cost_per_token": 0.00000755,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/ap-northeast-1/1-month-commitment/anthropic.claude-instant-v1": {
+        "max_tokens": 100000, 
+        "max_output_tokens": 8191,
+        "input_cost_per_second": 0.01475,
+        "output_cost_per_second": 0.01475,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/ap-northeast-1/6-month-commitment/anthropic.claude-instant-v1": {
+        "max_tokens": 100000, 
+        "max_output_tokens": 8191,
+        "input_cost_per_second": 0.008194,
+        "output_cost_per_second": 0.008194,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/eu-central-1/anthropic.claude-instant-v1": {
+        "max_tokens": 100000, 
+        "max_output_tokens": 8191,
+        "input_cost_per_token": 0.00000248,
+        "output_cost_per_token": 0.00000838,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/eu-central-1/1-month-commitment/anthropic.claude-instant-v1": {
+        "max_tokens": 100000, 
+        "max_output_tokens": 8191,
+        "input_cost_per_second": 0.01635,
+        "output_cost_per_second": 0.01635,
+        "litellm_provider": "bedrock",
+        "mode": "chat"
+    },
+    "bedrock/eu-central-1/6-month-commitment/anthropic.claude-instant-v1": {
+        "max_tokens": 100000, 
+        "max_output_tokens": 8191,
+        "input_cost_per_second": 0.009083,
+        "output_cost_per_second": 0.009083,
         "litellm_provider": "bedrock",
         "mode": "chat"
     },
