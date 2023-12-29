@@ -316,4 +316,25 @@ def test_token_counter():
         pytest.fail(f"Error occurred: {e}")
 
 
-test_token_counter()
+# test_token_counter()
+
+
+def test_token_counter_azure():
+    # test that prompt_tokens counted == prompt_tokens from Azure API
+    try:
+        messages = [{"role": "user", "content": "hi how are you what time is it"}]
+        tokens_counted = token_counter(model="gpt-3.5-turbo", messages=messages)
+        print("Tokens Counted=", tokens_counted)
+
+        response = litellm.completion(model="azure/chatgpt-v-2", messages=messages)
+
+        prompt_tokens = response.usage.prompt_tokens
+
+        print("Tokens from Azure API=", prompt_tokens)
+
+        assert prompt_tokens == tokens_counted
+    except:
+        pytest.fail(f"Error occurred: {e}")
+
+
+# test_token_counter_azure()
