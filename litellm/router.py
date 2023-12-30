@@ -19,6 +19,7 @@ from openai import AsyncOpenAI
 from collections import defaultdict
 from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
 from litellm.router_strategy.lowest_tpm_rpm import LowestTPMLoggingHandler
+from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
 from litellm.llms.custom_httpx.azure_dall_e_2 import (
     CustomHTTPTransport,
     AsyncCustomHTTPTransport,
@@ -211,7 +212,12 @@ class Router:
             )
             if isinstance(litellm.callbacks, list):
                 litellm.callbacks.append(self.lowesttpm_logger)  # type: ignore
-
+        elif routing_strategy == "latency-based-routing":
+            self.lowestlatency_logger = LowestLatencyLoggingHandler(
+                router_cache=self.cache, model_list=self.model_list
+            )
+            if isinstance(litellm.callbacks, list):
+                litellm.callbacks.append(self.lowestlatency_logger)  # type: ignore
         ## COOLDOWNS ##
         if isinstance(litellm.failure_callback, list):
             litellm.failure_callback.append(self.deployment_callback_on_failure)
@@ -1733,18 +1739,16 @@ class Router:
             ############## No RPM/TPM passed, we do a random pick #################
             item = random.choice(healthy_deployments)
             return item or item[0]
-        elif self.routing_strategy == "latency-based-routing":
-            returned_item = None
-            lowest_latency = float("inf")
-            ### shuffles with priority for lowest latency
-            # items_with_latencies = [('A', 10), ('B', 20), ('C', 30), ('D', 40)]
-            items_with_latencies = []
-            for item in healthy_deployments:
-                items_with_latencies.append(
-                    (item, self.deployment_latency_map[item["litellm_params"]["model"]])
-                )
-            returned_item = self.weighted_shuffle_by_latency(items_with_latencies)
-            return returned_item
+        elif (
+            self.routing_strategy == "latency-based-routing"
+            and self.lowestlatency_logger is not None
+        ):
+            min_deployment = self.lowestlatency_logger.get_available_deployments(
+                model_group=model, healthy_deployments=healthy_deployments
+            )
+            if min_deployment is None:
+                min_deployment = random.choice(healthy_deployments)
+            return min_deployment
         elif (
             self.routing_strategy == "usage-based-routing"
             and self.lowesttpm_logger is not None
