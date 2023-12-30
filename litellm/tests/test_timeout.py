@@ -10,7 +10,7 @@ sys.path.insert(
 import time
 import litellm
 import openai
-import pytest
+import pytest, uuid
 
 
 def test_timeout():
@@ -60,7 +60,7 @@ def test_hanging_request_azure():
         encoded = litellm.utils.encode(model="gpt-3.5-turbo", text="blue")[0]
         response = router.completion(
             model="azure-gpt",
-            messages=[{"role": "user", "content": "what color is red"}],
+            messages=[{"role": "user", "content": f"what color is red {uuid.uuid4()}"}],
             logit_bias={encoded: 100},
             timeout=0.01,
         )
@@ -126,7 +126,7 @@ def test_hanging_request_openai():
         )
 
 
-test_hanging_request_openai()
+# test_hanging_request_openai()
 
 # test_timeout()
 
@@ -155,4 +155,4 @@ def test_timeout_streaming():
         )
 
 
-test_timeout_streaming()
+# test_timeout_streaming()
