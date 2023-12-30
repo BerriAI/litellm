@@ -574,7 +574,6 @@ def completion(
             max_retries=max_retries,
             logprobs=logprobs,
             top_logprobs=top_logprobs,
-            timeout=timeout,
             **non_default_params,
         )
 
