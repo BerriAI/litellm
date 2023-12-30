@@ -195,7 +195,7 @@ def test_get_cloudflare_response_streaming():
     asyncio.run(test_async_call())
 
 
-test_get_cloudflare_response_streaming()
+# test_get_cloudflare_response_streaming()
 
 
 def test_get_response_streaming():

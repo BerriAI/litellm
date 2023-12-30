@@ -2910,7 +2910,6 @@ def get_optional_params(
     max_retries=None,
     logprobs=None,
     top_logprobs=None,
-    timeout=None,
     **kwargs,
 ):
     # retrieve all parameters passed to the function
@@ -2940,7 +2939,6 @@ def get_optional_params(
         "max_retries": None,
         "logprobs": None,
         "top_logprobs": None,
-        "timeout": 600,
     }
     # filter out those parameters that were passed with non-default values
     non_default_params = {
@@ -3734,7 +3732,6 @@ def get_optional_params(
             "max_retries",
             "logprobs",
             "top_logprobs",
-            "timeout",
         ]
         _check_valid_arg(supported_params=supported_params)
         if functions is not None:
@@ -3775,8 +3772,6 @@ def get_optional_params(
             optional_params["logprobs"] = logprobs
         if top_logprobs is not None:
             optional_params["top_logprobs"] = top_logprobs
-        if timeout is not None:
-            optional_params["timeout"] = timeout
     # if user passed in non-default kwargs for specific providers/models, pass them along
     for k in passed_params.keys():
         if k not in default_params.keys():
@@ -6539,12 +6534,14 @@ class CustomStreamWrapper:
         self.special_tokens = ["<|assistant|>", "<|system|>", "<|user|>", "<s>", "</s>"]
         self.holding_chunk = ""
         self.complete_response = ""
-        self._hidden_params = {
-            "model_id": (
-                self.logging_obj.model_call_details.get("litellm_params", {})
-                .get("model_info", {})
-                .get("id", None)
+        _model_info = (
+            self.logging_obj.model_call_details.get("litellm_params", {}).get(
+                "model_info", {}
             )
+            or {}
+        )
+        self._hidden_params = {
+            "model_id": (_model_info.get("id", None))
         }  # returned as x-litellm-model-id response header in proxy
 
     def __iter__(self):
@@ -7437,14 +7434,6 @@ class CustomStreamWrapper:
                         target=self.logging_obj.success_handler, args=(response,)
                     ).start()  # log response
                     # RETURN RESULT
-                    if hasattr(response, "_hidden_params"):
-                        response._hidden_params["model_id"] = (
-                            self.logging_obj.model_call_details.get(
-                                "litellm_params", {}
-                            )
-                            .get("model_info", {})
-                            .get("id", None)
-                        )
                     return response
         except StopIteration:
             raise  # Re-raise StopIteration
@@ -7495,16 +7484,6 @@ class CustomStreamWrapper:
                             processed_chunk,
                         )
                     )
-                    # RETURN RESULT
-                    if hasattr(processed_chunk, "_hidden_params"):
-                        model_id = (
-                            self.logging_obj.model_call_details.get(
-                                "litellm_params", {}
-                            )
-                            .get("model_info", {})
-                            .get("id", None)
-                        )
-                        processed_chunk._hidden_params["model_id"] = model_id
                     return processed_chunk
                 raise StopAsyncIteration
             else:  # temporary patch for non-aiohttp async calls
