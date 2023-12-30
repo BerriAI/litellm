@@ -23,6 +23,7 @@ from litellm.llms.custom_httpx.azure_dall_e_2 import (
     CustomHTTPTransport,
     AsyncCustomHTTPTransport,
 )
+from litellm.utils import ModelResponse, CustomStreamWrapper
 import copy
 
 
@@ -216,7 +217,9 @@ class Router:
 
     ### COMPLETION, EMBEDDING, IMG GENERATION FUNCTIONS
 
-    def completion(self, model: str, messages: List[Dict[str, str]], **kwargs):
+    def completion(
+        self, model: str, messages: List[Dict[str, str]], **kwargs
+    ) -> Union[ModelResponse, CustomStreamWrapper]:
         """
         Example usage:
         response = router.completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hey, how's it going?"}]
