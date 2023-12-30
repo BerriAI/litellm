@@ -2928,7 +2928,7 @@ def get_optional_params(
         "max_retries": None,
         "logprobs": None,
         "top_logprobs": None,
-        "timeout": None,
+        "timeout": 600,
     }
     # filter out those parameters that were passed with non-default values
     non_default_params = {
