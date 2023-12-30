@@ -1,3 +1,7 @@
+import Image from '@theme/IdealImage';
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # Fallbacks, Retries, Timeouts, Cooldowns 
 
 If a call fails after num_retries, fall back to another model group.
@@ -87,3 +91,51 @@ model_list:
 $ litellm --config /path/to/config.yaml
 ```
 
+
+## Setting Dynamic Timeouts - Per Request
+
+LiteLLM Proxy supports setting a `timeout` per request 
+
+**Example Usage**
+<Tabs>
+<TabItem value="Curl" label="Curl Request">
+
+```shell
+curl --location 'http://0.0.0.0:8000/chat/completions' \
+     --header 'Content-Type: application/json' \
+     --data-raw '{
+        "model": "gpt-3.5-turbo",
+        "messages": [
+            {"role": "user", "content": "what color is red"}
+        ],
+        "logit_bias": {12481: 100},
+        "timeout": 1
+     }'
+```
+</TabItem>
+<TabItem value="openai" label="OpenAI v1.0.0+">
+
+```python
+import openai
+
+
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:8000"
+)
+
+response = client.chat.completions.create(
+    model="gpt-3.5-turbo",
+    messages=[
+        {"role": "user", "content": "what color is red"}
+    ],
+    logit_bias={12481: 100},
+    timeout=1
+)
+
+print(response)
+
+
+```
+</TabItem>
+</Tabs>
