@@ -547,10 +547,6 @@ def completion(
         model_api_key = get_api_key(
             llm_provider=custom_llm_provider, dynamic_api_key=api_key
         )  # get the api key from the environment if required for the model
-        if model_api_key and "sk-litellm" in model_api_key:
-            api_base = "https://proxy.litellm.ai"
-            custom_llm_provider = "openai"
-            api_key = model_api_key
 
         if dynamic_api_key is not None:
             api_key = dynamic_api_key
@@ -578,6 +574,7 @@ def completion(
             max_retries=max_retries,
             logprobs=logprobs,
             top_logprobs=top_logprobs,
+            timeout=timeout,
             **non_default_params,
         )
 
