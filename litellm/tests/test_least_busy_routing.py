@@ -22,7 +22,7 @@ from litellm.caching import DualCache
 
 def test_model_added():
     test_cache = DualCache()
-    least_busy_logger = LeastBusyLoggingHandler(router_cache=test_cache)
+    least_busy_logger = LeastBusyLoggingHandler(router_cache=test_cache, model_list=[])
     kwargs = {
         "litellm_params": {
             "metadata": {
@@ -39,7 +39,7 @@ def test_model_added():
 
 def test_get_available_deployments():
     test_cache = DualCache()
-    least_busy_logger = LeastBusyLoggingHandler(router_cache=test_cache)
+    least_busy_logger = LeastBusyLoggingHandler(router_cache=test_cache, model_list=[])
     model_group = "gpt-3.5-turbo"
     deployment = "azure/chatgpt-v-2"
     kwargs = {
