@@ -133,30 +133,31 @@ class DualCache(BaseCache):
         # If redis_cache is not provided, use the default RedisCache
         self.redis_cache = redis_cache
 
-    def set_cache(self, key, value, **kwargs):
+    def set_cache(self, key, value, local_only: bool = False, **kwargs):
         # Update both Redis and in-memory cache
         try:
             print_verbose(f"set cache: key: {key}; value: {value}")
             if self.in_memory_cache is not None:
                 self.in_memory_cache.set_cache(key, value, **kwargs)
 
-            if self.redis_cache is not None:
+            if self.redis_cache is not None and local_only == False:
                 self.redis_cache.set_cache(key, value, **kwargs)
         except Exception as e:
             print_verbose(e)
 
-    def get_cache(self, key, **kwargs):
+    def get_cache(self, key, local_only: bool = False, **kwargs):
         # Try to fetch from in-memory cache first
         try:
-            print_verbose(f"get cache: cache key: {key}")
+            print_verbose(f"get cache: cache key: {key}; local_only: {local_only}")
             result = None
             if self.in_memory_cache is not None:
                 in_memory_result = self.in_memory_cache.get_cache(key, **kwargs)
 
+                print_verbose(f"in_memory_result: {in_memory_result}")
                 if in_memory_result is not None:
                     result = in_memory_result
 
-            if self.redis_cache is not None:
+            if result is None and self.redis_cache is not None and local_only == False:
                 # If not found in in-memory cache, try fetching from Redis
                 redis_result = self.redis_cache.get_cache(key, **kwargs)
 
