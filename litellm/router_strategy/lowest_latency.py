@@ -3,7 +3,7 @@
 
 import dotenv, os, requests, random
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 
 dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
@@ -134,6 +134,9 @@ class LowestLatencyLoggingHandler(CustomLogger):
 
             if _deployment is None:
                 continue  # skip to next one
+
+            if isinstance(item_latency, timedelta):
+                item_latency = float(item_latency.total_seconds())
 
             if item_latency == 0:
                 deployment = _deployment
