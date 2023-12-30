@@ -1448,5 +1448,34 @@
         "output_cost_per_token": 0.000001, 
         "litellm_provider": "anyscale", 
         "mode": "chat"
+      },
+      "cloudflare/@cf/meta/llama-2-7b-chat-fp16": {
+        "max_tokens": 3072, 
+        "input_cost_per_token": 0.000001923, 
+        "output_cost_per_token": 0.000001923, 
+        "litellm_provider": "cloudflare", 
+        "mode": "chat"
+      },
+      "cloudflare/@cf/meta/llama-2-7b-chat-int8": {
+        "max_tokens": 2048, 
+        "input_cost_per_token": 0.000001923, 
+        "output_cost_per_token": 0.000001923, 
+        "litellm_provider": "cloudflare", 
+        "mode": "chat"
+      },
+      "cloudflare/@cf/mistral/mistral-7b-instruct-v0.1": {
+        "max_tokens": 8192, 
+        "input_cost_per_token": 0.000001923, 
+        "output_cost_per_token": 0.000001923, 
+        "litellm_provider": "cloudflare", 
+        "mode": "chat"
+      },
+      "cloudflare/@hf/thebloke/codellama-7b-instruct-awq": {
+        "max_tokens": 4096, 
+        "input_cost_per_token": 0.000001923, 
+        "output_cost_per_token": 0.000001923, 
+        "litellm_provider": "cloudflare", 
+        "mode": "chat"
       }
+
 }
