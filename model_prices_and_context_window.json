@@ -1476,6 +1476,20 @@
         "output_cost_per_token": 0.000001923, 
         "litellm_provider": "cloudflare", 
         "mode": "chat"
-      }
+      },
+      "voyage/voyage-01": {
+        "max_tokens": 4096,
+        "input_cost_per_token": 0.0000001,
+        "output_cost_per_token": 0.000000,
+        "litellm_provider": "voyage",
+        "mode": "embedding"
+    },
+    "voyage/voyage-lite-01": {
+        "max_tokens": 4096,
+        "input_cost_per_token": 0.0000001,
+        "output_cost_per_token": 0.000000,
+        "litellm_provider": "voyage",
+        "mode": "embedding"
+    }
 
 }
