@@ -54,7 +54,6 @@ def test_get_available_deployments():
     least_busy_logger.log_pre_api_call(model="test", messages=[], kwargs=kwargs)
     request_count_api_key = f"{model_group}_request_count"
     assert test_cache.get_cache(key=request_count_api_key) is not None
-    print(least_busy_logger.get_available_deployments(model_group=model_group))
 
 
 # test_get_available_deployments()
