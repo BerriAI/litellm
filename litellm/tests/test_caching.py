@@ -758,6 +758,37 @@ def test_get_cache_key():
 
 # test_get_cache_key()
 
+
+def test_cache_context_managers():
+    litellm.set_verbose = True
+    litellm.cache = Cache(type="redis")
+
+    # cache is on, disable it
+    litellm.disable_cache()
+    assert litellm.cache == None
+    assert "cache" not in litellm.success_callback
+    assert "cache" not in litellm._async_success_callback
+
+    # disable a cache that is off
+    litellm.disable_cache()
+    assert litellm.cache == None
+    assert "cache" not in litellm.success_callback
+    assert "cache" not in litellm._async_success_callback
+
+    litellm.enable_cache(
+        type="redis",
+        host=os.environ["REDIS_HOST"],
+        port=os.environ["REDIS_PORT"],
+    )
+
+    assert litellm.cache != None
+    assert litellm.cache.type == "redis"
+
+    print("VARS of litellm.cache", vars(litellm.cache))
+
+
+# test_cache_context_managers()
+
 # test_custom_redis_cache_params()
 
 # def test_redis_cache_with_ttl():
