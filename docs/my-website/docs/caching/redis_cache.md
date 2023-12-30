@@ -60,6 +60,23 @@ Switch caching off
 litellm.disable_cache()
 ```
 
+### Updating Cache Params (Redis Host, Port etc)
+
+Update the Cache params
+
+```python
+litellm.update_cache(
+    type: Optional[Literal["local", "redis"]] = "local",
+    host: Optional[str] = None,
+    port: Optional[str] = None,
+    password: Optional[str] = None,
+    supported_call_types: Optional[
+        List[Literal["completion", "acompletion", "embedding", "aembedding"]]
+    ] = ["completion", "acompletion", "embedding", "aembedding"],
+    **kwargs,
+)
+```
+
 ## Custom Cache Keys:
 Define function to return cache key
 ```python
