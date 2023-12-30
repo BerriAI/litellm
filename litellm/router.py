@@ -1606,7 +1606,12 @@ class Router:
             self.routing_strategy == "usage-based-routing"
             and self.lowesttpm_logger is not None
         ):
-            return self.lowesttpm_logger.get_available_deployments(model_group=model)
+            min_deployment = self.lowesttpm_logger.get_available_deployments(
+                model_group=model
+            )
+            if min_deployment is None:
+                min_deployment = random.choice(healthy_deployments)
+            return min_deployment
 
         raise ValueError("No models available.")
 
