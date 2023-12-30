@@ -128,6 +128,3 @@ def test_router_get_available_deployments():
     assert return_dict[1] == 10
     assert return_dict[2] == 54
     assert return_dict[3] == 100
-
-
-# test_router_get_available_deployments()
