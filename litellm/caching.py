@@ -388,10 +388,22 @@ def enable_cache(
     **kwargs,
 ):
     """
-    Enable caching.
+    Enable cache with the specified configuration.
 
-    :param attach_cache: If True, attach the cache to litellm.cache
-    :return: None
+    Args:
+        type (Optional[Literal["local", "redis"]]): The type of cache to enable. Defaults to "local".
+        host (Optional[str]): The host address of the cache server. Defaults to None.
+        port (Optional[str]): The port number of the cache server. Defaults to None.
+        password (Optional[str]): The password for the cache server. Defaults to None.
+        supported_call_types (Optional[List[Literal["completion", "acompletion", "embedding", "aembedding"]]]):
+            The supported call types for the cache. Defaults to ["completion", "acompletion", "embedding", "aembedding"].
+        **kwargs: Additional keyword arguments.
+
+    Returns:
+        None
+
+    Raises:
+        None
     """
     print_verbose("LiteLLM: Enabling Cache")
     if "cache" not in litellm.input_callback:
@@ -424,6 +436,22 @@ def update_cache(
     ] = ["completion", "acompletion", "embedding", "aembedding"],
     **kwargs,
 ):
+    """
+    Update the cache for LiteLLM.
+
+    Args:
+        type (Optional[Literal["local", "redis"]]): The type of cache. Defaults to "local".
+        host (Optional[str]): The host of the cache. Defaults to None.
+        port (Optional[str]): The port of the cache. Defaults to None.
+        password (Optional[str]): The password for the cache. Defaults to None.
+        supported_call_types (Optional[List[Literal["completion", "acompletion", "embedding", "aembedding"]]]):
+            The supported call types for the cache. Defaults to ["completion", "acompletion", "embedding", "aembedding"].
+        **kwargs: Additional keyword arguments for the cache.
+
+    Returns:
+        None
+
+    """
     print_verbose("LiteLLM: Updating Cache")
     litellm.cache = Cache(
         type=type,
@@ -438,14 +466,19 @@ def update_cache(
 
 
 def disable_cache():
+    """
+    Disable the cache used by LiteLLM.
+
+    This function disables the cache used by the LiteLLM module. It removes the cache-related callbacks from the input_callback, success_callback, and _async_success_callback lists. It also sets the litellm.cache attribute to None.
+
+    Parameters:
+    None
+
+    Returns:
+    None
+    """
     from contextlib import suppress
 
-    """
-    Disable caching.
-
-    :param detach_cache: If True, detach the cache from litellm.cache
-    :return: None
-    """
     print_verbose("LiteLLM: Disabling Cache")
     with suppress(ValueError):
         litellm.input_callback.remove("cache")
