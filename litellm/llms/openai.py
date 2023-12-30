@@ -674,7 +674,7 @@ class OpenAIChatCompletion(BaseLLM):
                 raise OpenAIError(status_code=422, message="max retries must be an int")
 
             if aimg_generation == True:
-                response = self.aimage_generation(data=data, input=input, logging_obj=logging_obj, model_response=model_response, api_base=api_base, api_key=api_key, timeout=timeout, client=client, max_retries=max_retries)  # type: ignore
+                response = self.aimage_generation(data=data, prompt=prompt, logging_obj=logging_obj, model_response=model_response, api_base=api_base, api_key=api_key, timeout=timeout, client=client, max_retries=max_retries)  # type: ignore
                 return response
 
             if client is None:
