@@ -382,6 +382,7 @@ class OpenAIChatCompletion(BaseLLM):
                     "complete_input_dict": data,
                 },
             )
+
             response = await openai_aclient.chat.completions.create(**data)
             stringified_response = response.model_dump_json()
             logging_obj.post_call(
