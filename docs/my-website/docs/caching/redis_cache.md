@@ -4,7 +4,7 @@
 
 ### Pre-requisites
 Install redis
-```
+```shell
 pip install redis
 ```
 For the hosted version you can setup your own Redis DB here: https://app.redislabs.com/
@@ -18,13 +18,11 @@ litellm.cache = Cache(type="redis", host=<host>, port=<port>, password=<password
 # Make completion calls
 response1 = completion(
     model="gpt-3.5-turbo", 
-    messages=[{"role": "user", "content": "Tell me a joke."}],
-    caching=True
+    messages=[{"role": "user", "content": "Tell me a joke."}]
 )
 response2 = completion(
     model="gpt-3.5-turbo", 
-    messages=[{"role": "user", "content": "Tell me a joke."}],
-    caching=True
+    messages=[{"role": "user", "content": "Tell me a joke."}]
 )
 
 # response1 == response2, response 1 is cached
