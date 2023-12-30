@@ -414,6 +414,29 @@ def enable_cache(
     print_verbose(f"LiteLLM Cache: {vars(litellm.cache)}")
 
 
+def update_cache(
+    type: Optional[Literal["local", "redis"]] = "local",
+    host: Optional[str] = None,
+    port: Optional[str] = None,
+    password: Optional[str] = None,
+    supported_call_types: Optional[
+        List[Literal["completion", "acompletion", "embedding", "aembedding"]]
+    ] = ["completion", "acompletion", "embedding", "aembedding"],
+    **kwargs,
+):
+    print_verbose("LiteLLM: Updating Cache")
+    litellm.cache = Cache(
+        type=type,
+        host=host,
+        port=port,
+        password=password,
+        supported_call_types=supported_call_types,
+        **kwargs,
+    )
+    print_verbose(f"LiteLLM: Cache Updated, litellm.cache={litellm.cache}")
+    print_verbose(f"LiteLLM Cache: {vars(litellm.cache)}")
+
+
 def disable_cache():
     from contextlib import suppress
 
