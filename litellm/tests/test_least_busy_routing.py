@@ -1,7 +1,7 @@
 #### What this tests ####
 #    This tests the router's ability to identify the least busy deployment
 
-import sys, os, asyncio, time
+import sys, os, asyncio, time, random
 import traceback
 from dotenv import load_dotenv
 
@@ -128,3 +128,139 @@ def test_router_get_available_deployments():
     assert return_dict[1] == 10
     assert return_dict[2] == 54
     assert return_dict[3] == 100
+
+
+## Test with Real calls ##
+
+
+@pytest.mark.asyncio
+async def test_router_atext_completion_streaming():
+    prompt = "Hello, can you generate a 500 words poem?"
+    model = "azure-model"
+    model_list = [
+        {
+            "model_name": "azure-model",
+            "litellm_params": {
+                "model": "azure/gpt-turbo",
+                "api_key": "os.environ/AZURE_FRANCE_API_KEY",
+                "api_base": "https://openai-france-1234.openai.azure.com",
+                "rpm": 1440,
+            },
+            "model_info": {"id": 1},
+        },
+        {
+            "model_name": "azure-model",
+            "litellm_params": {
+                "model": "azure/gpt-35-turbo",
+                "api_key": "os.environ/AZURE_EUROPE_API_KEY",
+                "api_base": "https://my-endpoint-europe-berri-992.openai.azure.com",
+                "rpm": 6,
+            },
+            "model_info": {"id": 2},
+        },
+        {
+            "model_name": "azure-model",
+            "litellm_params": {
+                "model": "azure/gpt-35-turbo",
+                "api_key": "os.environ/AZURE_CANADA_API_KEY",
+                "api_base": "https://my-endpoint-canada-berri992.openai.azure.com",
+                "rpm": 6,
+            },
+            "model_info": {"id": 3},
+        },
+    ]
+    router = Router(
+        model_list=model_list,
+        routing_strategy="least-busy",
+        set_verbose=False,
+        num_retries=3,
+    )  # type: ignore
+
+    ### Call the async calls in sequence, so we start 1 call before going to the next.
+
+    ## CALL 1
+    await asyncio.sleep(random.uniform(0, 2))
+    await router.atext_completion(model=model, prompt=prompt, stream=True)
+
+    ## CALL 2
+    await asyncio.sleep(random.uniform(0, 2))
+    await router.atext_completion(model=model, prompt=prompt, stream=True)
+
+    ## CALL 3
+    await asyncio.sleep(random.uniform(0, 2))
+    await router.atext_completion(model=model, prompt=prompt, stream=True)
+
+    cache_key = f"{model}_request_count"
+    ## check if calls equally distributed
+    cache_dict = router.cache.get_cache(key=cache_key)
+    for k, v in cache_dict.items():
+        assert v == 1
+
+
+# asyncio.run(test_router_atext_completion_streaming())
+
+
+@pytest.mark.asyncio
+async def test_router_completion_streaming():
+    messages = [
+        {"role": "user", "content": "Hello, can you generate a 500 words poem?"}
+    ]
+    model = "azure-model"
+    model_list = [
+        {
+            "model_name": "azure-model",
+            "litellm_params": {
+                "model": "azure/gpt-turbo",
+                "api_key": "os.environ/AZURE_FRANCE_API_KEY",
+                "api_base": "https://openai-france-1234.openai.azure.com",
+                "rpm": 1440,
+            },
+            "model_info": {"id": 1},
+        },
+        {
+            "model_name": "azure-model",
+            "litellm_params": {
+                "model": "azure/gpt-35-turbo",
+                "api_key": "os.environ/AZURE_EUROPE_API_KEY",
+                "api_base": "https://my-endpoint-europe-berri-992.openai.azure.com",
+                "rpm": 6,
+            },
+            "model_info": {"id": 2},
+        },
+        {
+            "model_name": "azure-model",
+            "litellm_params": {
+                "model": "azure/gpt-35-turbo",
+                "api_key": "os.environ/AZURE_CANADA_API_KEY",
+                "api_base": "https://my-endpoint-canada-berri992.openai.azure.com",
+                "rpm": 6,
+            },
+            "model_info": {"id": 3},
+        },
+    ]
+    router = Router(
+        model_list=model_list,
+        routing_strategy="least-busy",
+        set_verbose=False,
+        num_retries=3,
+    )  # type: ignore
+
+    ### Call the async calls in sequence, so we start 1 call before going to the next.
+
+    ## CALL 1
+    await asyncio.sleep(random.uniform(0, 2))
+    await router.acompletion(model=model, messages=messages, stream=True)
+
+    ## CALL 2
+    await asyncio.sleep(random.uniform(0, 2))
+    await router.acompletion(model=model, messages=messages, stream=True)
+
+    ## CALL 3
+    await asyncio.sleep(random.uniform(0, 2))
+    await router.acompletion(model=model, messages=messages, stream=True)
+
+    cache_key = f"{model}_request_count"
+    ## check if calls equally distributed
+    cache_dict = router.cache.get_cache(key=cache_key)
+    for k, v in cache_dict.items():
+        assert v == 1
