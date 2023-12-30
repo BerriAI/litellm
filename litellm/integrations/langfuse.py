@@ -170,11 +170,13 @@ class LangFuseLogger:
             name=metadata.get("generation_name", "litellm-completion"),
             input=input,
             output=output,
-            user_id=user_id,
+            user_id=metadata.get("trace_user_id", user_id),
+            id=metadata.get("trace_id", None),
         )
 
         trace.generation(
             name=metadata.get("generation_name", "litellm-completion"),
+            id=metadata.get("generation_id", None),
             startTime=start_time,
             endTime=end_time,
             model=kwargs["model"],
