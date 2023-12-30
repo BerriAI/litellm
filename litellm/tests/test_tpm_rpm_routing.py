@@ -1,7 +1,7 @@
 #### What this tests ####
 #    This tests the router's ability to pick deployment with lowest tpm
 
-import sys, os, asyncio, time
+import sys, os, asyncio, time, random
 from datetime import datetime
 import traceback
 from dotenv import load_dotenv
@@ -120,11 +120,15 @@ def test_get_available_deployments():
     )
 
     ## CHECK WHAT'S SELECTED ##
-    print(lowest_tpm_logger.get_available_deployments(model_group=model_group))
+    print(
+        lowest_tpm_logger.get_available_deployments(
+            model_group=model_group, healthy_deployments=model_list
+        )
+    )
     assert (
-        lowest_tpm_logger.get_available_deployments(model_group=model_group)[
-            "model_info"
-        ]["id"]
+        lowest_tpm_logger.get_available_deployments(
+            model_group=model_group, healthy_deployments=model_list
+        )["model_info"]["id"]
         == "5678"
     )
 
@@ -156,16 +160,6 @@ def test_router_get_available_deployments():
                 "rpm": 6,
             },
             "model_info": {"id": 2},
-        },
-        {
-            "model_name": "azure-model",
-            "litellm_params": {
-                "model": "azure/gpt-35-turbo",
-                "api_key": "os.environ/AZURE_CANADA_API_KEY",
-                "api_base": "https://my-endpoint-canada-berri992.openai.azure.com",
-                "rpm": 6,
-            },
-            "model_info": {"id": 3},
         },
     ]
     router = Router(
@@ -224,3 +218,67 @@ def test_router_get_available_deployments():
 
 
 # test_router_get_available_deployments()
+
+
+@pytest.mark.asyncio
+async def test_router_completion_streaming():
+    messages = [
+        {"role": "user", "content": "Hello, can you generate a 500 words poem?"}
+    ]
+    model = "azure-model"
+    model_list = [
+        {
+            "model_name": "azure-model",
+            "litellm_params": {
+                "model": "azure/gpt-turbo",
+                "api_key": "os.environ/AZURE_FRANCE_API_KEY",
+                "api_base": "https://openai-france-1234.openai.azure.com",
+                "rpm": 1440,
+            },
+            "model_info": {"id": 1},
+        },
+        {
+            "model_name": "azure-model",
+            "litellm_params": {
+                "model": "azure/gpt-35-turbo",
+                "api_key": "os.environ/AZURE_EUROPE_API_KEY",
+                "api_base": "https://my-endpoint-europe-berri-992.openai.azure.com",
+                "rpm": 6,
+            },
+            "model_info": {"id": 2},
+        },
+    ]
+    router = Router(
+        model_list=model_list,
+        routing_strategy="usage-based-routing",
+        set_verbose=False,
+        num_retries=3,
+    )  # type: ignore
+
+    ### Make 3 calls, test if 3rd call goes to lowest tpm deployment
+
+    ## CALL 1+2
+    tasks = []
+    response = None
+    final_response = None
+    for _ in range(2):
+        tasks.append(router.acompletion(model=model, messages=messages))
+    response = await asyncio.gather(*tasks)
+
+    if response is not None:
+        ## CALL 3
+        await asyncio.sleep(1)  # let the token update happen
+        current_minute = datetime.now().strftime("%H-%M")
+        picked_deployment = router.lowesttpm_logger.get_available_deployments(
+            model_group=model, healthy_deployments=router.healthy_deployments
+        )
+        final_response = await router.acompletion(model=model, messages=messages)
+        print(f"min deployment id: {picked_deployment}")
+        print(f"model id: {final_response._hidden_params['model_id']}")
+        assert (
+            final_response._hidden_params["model_id"]
+            == picked_deployment["model_info"]["id"]
+        )
+
+
+# asyncio.run(test_router_completion_streaming())

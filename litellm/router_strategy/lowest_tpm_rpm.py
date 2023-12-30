@@ -1,7 +1,7 @@
 #### What this does ####
 #   identifies lowest tpm deployment
 
-import dotenv, os, requests
+import dotenv, os, requests, random
 from typing import Optional
 from datetime import datetime
 
@@ -118,7 +118,7 @@ class LowestTPMLoggingHandler(CustomLogger):
             traceback.print_exc()
             pass
 
-    def get_available_deployments(self, model_group: str):
+    def get_available_deployments(self, model_group: str, healthy_deployments: list):
         """
         Returns a deployment with the lowest TPM/RPM usage.
         """
@@ -139,15 +139,22 @@ class LowestTPMLoggingHandler(CustomLogger):
         if tpm_dict is None:  # base case
             return
 
-        for item, item_tpm in tpm_dict.items():
+        all_deployments = tpm_dict
+        for d in healthy_deployments:
+            ## if healthy deployment not yet used
+            if d["model_info"]["id"] not in all_deployments:
+                all_deployments[d["model_info"]["id"]] = 0
+
+        for item, item_tpm in all_deployments.items():
             ## get the item from model list
             _deployment = None
-            for m in self.model_list:
+            for m in healthy_deployments:
                 if item == m["model_info"]["id"]:
                     _deployment = m
 
             if _deployment is None:
-                break
+                continue  # skip to next one
+
             _deployment_tpm = (
                 _deployment.get("tpm", None)
                 or _deployment.get("litellm_params", {}).get("tpm", None)
@@ -163,7 +170,8 @@ class LowestTPMLoggingHandler(CustomLogger):
             )
 
             if item_tpm == 0:
-                return item
+                deployment = _deployment
+                break
             elif (
                 item_tpm > _deployment_tpm or rpm_dict[item] + 1 >= _deployment_rpm
             ):  # if user passed in tpm / rpm in the model_list
@@ -171,4 +179,6 @@ class LowestTPMLoggingHandler(CustomLogger):
             elif item_tpm < lowest_tpm:
                 lowest_tpm = item_tpm
                 deployment = _deployment
+        if deployment is None:
+            deployment = random.choice(healthy_deployments)
         return deployment

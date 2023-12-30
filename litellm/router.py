@@ -1622,7 +1622,7 @@ class Router:
             and self.lowesttpm_logger is not None
         ):
             min_deployment = self.lowesttpm_logger.get_available_deployments(
-                model_group=model
+                model_group=model, healthy_deployments=healthy_deployments
             )
             if min_deployment is None:
                 min_deployment = random.choice(healthy_deployments)
