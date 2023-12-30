@@ -1131,17 +1131,17 @@ async def completion(
         ):  # model in router model list
             response = await llm_router.atext_completion(**data)
         elif (
-            llm_router is not None and data["model"] in llm_router.deployment_names
-        ):  # model in router deployments, calling a specific deployment on the router
-            response = await llm_router.atext_completion(
-                **data, specific_deployment=True
-            )
-        elif (
             llm_router is not None
             and llm_router.model_group_alias is not None
             and data["model"] in llm_router.model_group_alias
         ):  # model set in model_group_alias
             response = await llm_router.atext_completion(**data)
+        elif (
+            llm_router is not None and data["model"] in llm_router.deployment_names
+        ):  # model in router deployments, calling a specific deployment on the router
+            response = await llm_router.atext_completion(
+                **data, specific_deployment=True
+            )
         else:  # router is not set
             response = await litellm.atext_completion(**data)
 
@@ -1279,15 +1279,15 @@ async def chat_completion(
         ):  # model in router model list
             response = await llm_router.acompletion(**data)
         elif (
-            llm_router is not None and data["model"] in llm_router.deployment_names
-        ):  # model in router deployments, calling a specific deployment on the router
-            response = await llm_router.acompletion(**data, specific_deployment=True)
-        elif (
             llm_router is not None
             and llm_router.model_group_alias is not None
             and data["model"] in llm_router.model_group_alias
         ):  # model set in model_group_alias
             response = await llm_router.acompletion(**data)
+        elif (
+            llm_router is not None and data["model"] in llm_router.deployment_names
+        ):  # model in router deployments, calling a specific deployment on the router
+            response = await llm_router.acompletion(**data, specific_deployment=True)
         else:  # router is not set
             response = await litellm.acompletion(**data)
 
@@ -1439,10 +1439,6 @@ async def embeddings(
         ):  # model in router model list
             response = await llm_router.aembedding(**data)
         elif (
-            llm_router is not None and data["model"] in llm_router.deployment_names
-        ):  # model in router deployments, calling a specific deployment on the router
-            response = await llm_router.aembedding(**data, specific_deployment=True)
-        elif (
             llm_router is not None
             and llm_router.model_group_alias is not None
             and data["model"] in llm_router.model_group_alias
@@ -1450,6 +1446,10 @@ async def embeddings(
             response = await llm_router.aembedding(
                 **data
             )  # ensure this goes the llm_router, router will do the correct alias mapping
+        elif (
+            llm_router is not None and data["model"] in llm_router.deployment_names
+        ):  # model in router deployments, calling a specific deployment on the router
+            response = await llm_router.aembedding(**data, specific_deployment=True)
         else:
             response = await litellm.aembedding(**data)
 
