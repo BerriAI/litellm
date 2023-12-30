@@ -279,14 +279,14 @@
         "max_tokens": 8192,
         "input_cost_per_token": 0.00001,
         "output_cost_per_token": 0.000028,
-        "litellm_provider": "vertex_ai-chat-models",
+        "litellm_provider": "vertex_ai-text-models",
         "mode": "completion"
     },
     "text-unicorn@001": {
         "max_tokens": 8192,
         "input_cost_per_token": 0.00001,
         "output_cost_per_token": 0.000028,
-        "litellm_provider": "vertex_ai-chat-models",
+        "litellm_provider": "vertex_ai-text-models",
         "mode": "completion"
     },
     "chat-bison": {
