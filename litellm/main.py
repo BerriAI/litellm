@@ -212,15 +212,15 @@ async def acompletion(*args, **kwargs):
         else:
             # Call the synchronous function using run_in_executor
             response = await loop.run_in_executor(None, func_with_context)
-        if kwargs.get("stream", False):  # return an async generator
-            return _async_streaming(
-                response=response,
-                model=model,
-                custom_llm_provider=custom_llm_provider,
-                args=args,
-            )
-        else:
-            return response
+        # if kwargs.get("stream", False):  # return an async generator
+        #     return _async_streaming(
+        #         response=response,
+        #         model=model,
+        #         custom_llm_provider=custom_llm_provider,
+        #         args=args,
+        #     )
+        # else:
+        return response
     except Exception as e:
         custom_llm_provider = custom_llm_provider or "openai"
         raise exception_type(
