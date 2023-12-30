@@ -136,6 +136,9 @@ class LowestTPMLoggingHandler(CustomLogger):
         lowest_tpm = float("inf")
         deployment = None
 
+        if tpm_dict is None:  # base case
+            return
+
         for item, item_tpm in tpm_dict.items():
             ## get the item from model list
             _deployment = None
