@@ -314,6 +314,7 @@ class Router:
             raise e
 
     async def _acompletion(self, model: str, messages: List[Dict[str, str]], **kwargs):
+        model_name = None
         try:
             self.print_verbose(
                 f"Inside _acompletion()- model: {model}; kwargs: {kwargs}"

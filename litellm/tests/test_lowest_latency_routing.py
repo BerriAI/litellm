@@ -69,7 +69,7 @@ def test_get_available_deployments():
             "model_info": {"id": "5678"},
         },
     ]
-    lowest_tpm_logger = LowestLatencyLoggingHandler(
+    lowest_latency_logger = LowestLatencyLoggingHandler(
         router_cache=test_cache, model_list=model_list
     )
     model_group = "gpt-3.5-turbo"
@@ -86,8 +86,9 @@ def test_get_available_deployments():
     }
     start_time = time.time()
     response_obj = {"usage": {"total_tokens": 50}}
+    time.sleep(3)
     end_time = time.time()
-    lowest_tpm_logger.log_success_event(
+    lowest_latency_logger.log_success_event(
         response_obj=response_obj,
         kwargs=kwargs,
         start_time=start_time,
@@ -106,8 +107,9 @@ def test_get_available_deployments():
     }
     start_time = time.time()
     response_obj = {"usage": {"total_tokens": 20}}
+    time.sleep(2)
     end_time = time.time()
-    lowest_tpm_logger.log_success_event(
+    lowest_latency_logger.log_success_event(
         response_obj=response_obj,
         kwargs=kwargs,
         start_time=start_time,
@@ -116,12 +118,12 @@ def test_get_available_deployments():
 
     ## CHECK WHAT'S SELECTED ##
     print(
-        lowest_tpm_logger.get_available_deployments(
+        lowest_latency_logger.get_available_deployments(
             model_group=model_group, healthy_deployments=model_list
         )
     )
     assert (
-        lowest_tpm_logger.get_available_deployments(
+        lowest_latency_logger.get_available_deployments(
             model_group=model_group, healthy_deployments=model_list
         )["model_info"]["id"]
         == "5678"
@@ -131,149 +133,150 @@ def test_get_available_deployments():
 # test_get_available_deployments()
 
 
-# def test_router_get_available_deployments():
-#     """
-#     Test if routers 'get_available_deployments' returns the least busy deployment
-#     """
-#     model_list = [
-#         {
-#             "model_name": "azure-model",
-#             "litellm_params": {
-#                 "model": "azure/gpt-turbo",
-#                 "api_key": "os.environ/AZURE_FRANCE_API_KEY",
-#                 "api_base": "https://openai-france-1234.openai.azure.com",
-#                 "rpm": 1440,
-#             },
-#             "model_info": {"id": 1},
-#         },
-#         {
-#             "model_name": "azure-model",
-#             "litellm_params": {
-#                 "model": "azure/gpt-35-turbo",
-#                 "api_key": "os.environ/AZURE_EUROPE_API_KEY",
-#                 "api_base": "https://my-endpoint-europe-berri-992.openai.azure.com",
-#                 "rpm": 6,
-#             },
-#             "model_info": {"id": 2},
-#         },
-#     ]
-#     router = Router(
-#         model_list=model_list,
-#         routing_strategy="usage-based-routing",
-#         set_verbose=False,
-#         num_retries=3,
-#     )  # type: ignore
+def test_router_get_available_deployments():
+    """
+    Test if routers 'get_available_deployments' returns the fastest deployment
+    """
+    model_list = [
+        {
+            "model_name": "azure-model",
+            "litellm_params": {
+                "model": "azure/gpt-turbo",
+                "api_key": "os.environ/AZURE_FRANCE_API_KEY",
+                "api_base": "https://openai-france-1234.openai.azure.com",
+                "rpm": 1440,
+            },
+            "model_info": {"id": 1},
+        },
+        {
+            "model_name": "azure-model",
+            "litellm_params": {
+                "model": "azure/gpt-35-turbo",
+                "api_key": "os.environ/AZURE_EUROPE_API_KEY",
+                "api_base": "https://my-endpoint-europe-berri-992.openai.azure.com",
+                "rpm": 6,
+            },
+            "model_info": {"id": 2},
+        },
+    ]
+    router = Router(
+        model_list=model_list,
+        routing_strategy="latency-based-routing",
+        set_verbose=False,
+        num_retries=3,
+    )  # type: ignore
 
-#     ## DEPLOYMENT 1 ##
-#     deployment_id = 1
-#     kwargs = {
-#         "litellm_params": {
-#             "metadata": {
-#                 "model_group": "azure-model",
-#             },
-#             "model_info": {"id": 1},
-#         }
-#     }
-#     start_time = time.time()
-#     response_obj = {"usage": {"total_tokens": 50}}
-#     end_time = time.time()
-#     router.lowesttpm_logger.log_success_event(
-#         response_obj=response_obj,
-#         kwargs=kwargs,
-#         start_time=start_time,
-#         end_time=end_time,
-#     )
-#     ## DEPLOYMENT 2 ##
-#     deployment_id = 2
-#     kwargs = {
-#         "litellm_params": {
-#             "metadata": {
-#                 "model_group": "azure-model",
-#             },
-#             "model_info": {"id": 2},
-#         }
-#     }
-#     start_time = time.time()
-#     response_obj = {"usage": {"total_tokens": 20}}
-#     end_time = time.time()
-#     router.lowesttpm_logger.log_success_event(
-#         response_obj=response_obj,
-#         kwargs=kwargs,
-#         start_time=start_time,
-#         end_time=end_time,
-#     )
+    ## DEPLOYMENT 1 ##
+    deployment_id = 1
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "model_group": "azure-model",
+            },
+            "model_info": {"id": 1},
+        }
+    }
+    start_time = time.time()
+    response_obj = {"usage": {"total_tokens": 50}}
+    time.sleep(3)
+    end_time = time.time()
+    router.lowestlatency_logger.log_success_event(
+        response_obj=response_obj,
+        kwargs=kwargs,
+        start_time=start_time,
+        end_time=end_time,
+    )
+    ## DEPLOYMENT 2 ##
+    deployment_id = 2
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "model_group": "azure-model",
+            },
+            "model_info": {"id": 2},
+        }
+    }
+    start_time = time.time()
+    response_obj = {"usage": {"total_tokens": 20}}
+    time.sleep(2)
+    end_time = time.time()
+    router.lowestlatency_logger.log_success_event(
+        response_obj=response_obj,
+        kwargs=kwargs,
+        start_time=start_time,
+        end_time=end_time,
+    )
 
-#     ## CHECK WHAT'S SELECTED ##
-#     # print(router.lowesttpm_logger.get_available_deployments(model_group="azure-model"))
-#     print(router.get_available_deployment(model="azure-model"))
-#     assert router.get_available_deployment(model="azure-model")["model_info"]["id"] == 2
-
-
-# # test_get_available_deployments()
-
-
-# # test_router_get_available_deployments()
+    ## CHECK WHAT'S SELECTED ##
+    # print(router.lowesttpm_logger.get_available_deployments(model_group="azure-model"))
+    print(router.get_available_deployment(model="azure-model"))
+    assert router.get_available_deployment(model="azure-model")["model_info"]["id"] == 2
 
 
-# @pytest.mark.asyncio
-# async def test_router_completion_streaming():
-#     messages = [
-#         {"role": "user", "content": "Hello, can you generate a 500 words poem?"}
-#     ]
-#     model = "azure-model"
-#     model_list = [
-#         {
-#             "model_name": "azure-model",
-#             "litellm_params": {
-#                 "model": "azure/gpt-turbo",
-#                 "api_key": "os.environ/AZURE_FRANCE_API_KEY",
-#                 "api_base": "https://openai-france-1234.openai.azure.com",
-#                 "rpm": 1440,
-#             },
-#             "model_info": {"id": 1},
-#         },
-#         {
-#             "model_name": "azure-model",
-#             "litellm_params": {
-#                 "model": "azure/gpt-35-turbo",
-#                 "api_key": "os.environ/AZURE_EUROPE_API_KEY",
-#                 "api_base": "https://my-endpoint-europe-berri-992.openai.azure.com",
-#                 "rpm": 6,
-#             },
-#             "model_info": {"id": 2},
-#         },
-#     ]
-#     router = Router(
-#         model_list=model_list,
-#         routing_strategy="usage-based-routing",
-#         set_verbose=False,
-#         num_retries=3,
-#     )  # type: ignore
-
-#     ### Make 3 calls, test if 3rd call goes to lowest tpm deployment
-
-#     ## CALL 1+2
-#     tasks = []
-#     response = None
-#     final_response = None
-#     for _ in range(2):
-#         tasks.append(router.acompletion(model=model, messages=messages))
-#     response = await asyncio.gather(*tasks)
-
-#     if response is not None:
-#         ## CALL 3
-#         await asyncio.sleep(1)  # let the token update happen
-#         current_minute = datetime.now().strftime("%H-%M")
-#         picked_deployment = router.lowesttpm_logger.get_available_deployments(
-#             model_group=model, healthy_deployments=router.healthy_deployments
-#         )
-#         final_response = await router.acompletion(model=model, messages=messages)
-#         print(f"min deployment id: {picked_deployment}")
-#         print(f"model id: {final_response._hidden_params['model_id']}")
-#         assert (
-#             final_response._hidden_params["model_id"]
-#             == picked_deployment["model_info"]["id"]
-#         )
+# test_get_available_deployments()
 
 
-# # asyncio.run(test_router_completion_streaming())
+# test_router_get_available_deployments()
+
+
+@pytest.mark.asyncio
+async def test_router_completion_streaming():
+    messages = [
+        {"role": "user", "content": "Hello, can you generate a 500 words poem?"}
+    ]
+    model = "azure-model"
+    model_list = [
+        {
+            "model_name": "azure-model",
+            "litellm_params": {
+                "model": "azure/gpt-turbo",
+                "api_key": "os.environ/AZURE_FRANCE_API_KEY",
+                "api_base": "https://openai-france-1234.openai.azure.com",
+                "rpm": 1440,
+            },
+            "model_info": {"id": 1},
+        },
+        {
+            "model_name": "azure-model",
+            "litellm_params": {
+                "model": "azure/gpt-35-turbo",
+                "api_key": "os.environ/AZURE_EUROPE_API_KEY",
+                "api_base": "https://my-endpoint-europe-berri-992.openai.azure.com",
+                "rpm": 6,
+            },
+            "model_info": {"id": 2},
+        },
+    ]
+    router = Router(
+        model_list=model_list,
+        routing_strategy="latency-based-routing",
+        set_verbose=False,
+        num_retries=3,
+    )  # type: ignore
+
+    ### Make 3 calls, test if 3rd call goes to fastest deployment
+
+    ## CALL 1+2
+    tasks = []
+    response = None
+    final_response = None
+    for _ in range(2):
+        tasks.append(router.acompletion(model=model, messages=messages))
+    response = await asyncio.gather(*tasks)
+
+    if response is not None:
+        ## CALL 3
+        await asyncio.sleep(1)  # let the cache update happen
+        picked_deployment = router.lowestlatency_logger.get_available_deployments(
+            model_group=model, healthy_deployments=router.healthy_deployments
+        )
+        final_response = await router.acompletion(model=model, messages=messages)
+        print(f"min deployment id: {picked_deployment}")
+        print(f"model id: {final_response._hidden_params['model_id']}")
+        assert (
+            final_response._hidden_params["model_id"]
+            == picked_deployment["model_info"]["id"]
+        )
+
+
+# asyncio.run(test_router_completion_streaming())
