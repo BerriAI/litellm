@@ -1820,6 +1820,7 @@ def batch_completion(
     user: Optional[str] = None,
     deployment_id=None,
     request_timeout: Optional[int] = None,
+    timeout: Optional[int] = 600,
     # Optional liteLLM function params
     **kwargs,
 ):
