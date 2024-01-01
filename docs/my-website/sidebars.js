@@ -103,7 +103,6 @@ const sidebars = {
         "proxy/quick_start", 
         "proxy/configs",
         "proxy/user_keys",
-        "proxy/embedding", 
         "proxy/load_balancing", 
         "proxy/virtual_keys",
         "proxy/users",
