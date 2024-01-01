@@ -64,7 +64,7 @@ class LangFuseLogger:
             # end of processing langfuse ########################
             input = prompt
             output = response_obj["choices"][0]["message"].json()
-            print(
+            print_verbose(
                 f"OUTPUT IN LANGFUSE: {output}; original: {response_obj['choices'][0]['message']}"
             )
             self._log_langfuse_v2(

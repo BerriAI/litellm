@@ -1220,7 +1220,7 @@ async def chat_completion(
 
         ## Cache Controls
         headers = request.headers
-        print("Request Headers:", headers)
+        print_verbose(f"Request Headers: {headers}")
         cache_control_header = headers.get("Cache-Control", None)
         if cache_control_header:
             cache_dict = parse_cache_control(cache_control_header)
