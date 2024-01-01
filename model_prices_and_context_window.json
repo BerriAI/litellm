@@ -118,28 +118,56 @@
         "litellm_provider": "azure",
         "mode": "chat"
     },
-    "azure/gpt-4-32k": {
+    "azure/gpt-4-0613": {
         "max_tokens": 8192,
+        "input_cost_per_token": 0.00003,
+        "output_cost_per_token": 0.00006,
+        "litellm_provider": "azure",
+        "mode": "chat"
+    },
+    "azure/gpt-4-32k-0613": {
+        "max_tokens": 32768,
+        "input_cost_per_token": 0.00006,
+        "output_cost_per_token": 0.00012,
+        "litellm_provider": "azure",
+        "mode": "chat"
+    },
+    "azure/gpt-4-32k": {
+        "max_tokens": 32768,
         "input_cost_per_token": 0.00006,
         "output_cost_per_token": 0.00012,
         "litellm_provider": "azure",
         "mode": "chat"
     },
     "azure/gpt-4": {
-        "max_tokens": 16385,
+        "max_tokens": 8192,
         "input_cost_per_token": 0.00003,
         "output_cost_per_token": 0.00006,
         "litellm_provider": "azure",
         "mode": "chat"
     },
-    "azure/gpt-3.5-turbo-16k": {
+    "azure/gpt-35-turbo-16k-0613": {
         "max_tokens": 16385,
         "input_cost_per_token": 0.000003,
         "output_cost_per_token": 0.000004,
         "litellm_provider": "azure",
         "mode": "chat"
     },
-    "azure/gpt-3.5-turbo": {
+    "azure/gpt-35-turbo-1106": {
+        "max_tokens": 16384,
+        "input_cost_per_token": 0.0000015,
+        "output_cost_per_token": 0.000002,
+        "litellm_provider": "azure",
+        "mode": "chat"
+    },
+    "azure/gpt-35-turbo-16k": {
+        "max_tokens": 16385,
+        "input_cost_per_token": 0.000003,
+        "output_cost_per_token": 0.000004,
+        "litellm_provider": "azure",
+        "mode": "chat"
+    },
+    "azure/gpt-35-turbo": {
         "max_tokens": 4097,
         "input_cost_per_token": 0.0000015,
         "output_cost_per_token": 0.000002,
