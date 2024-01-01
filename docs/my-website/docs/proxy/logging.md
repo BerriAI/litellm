@@ -567,9 +567,17 @@ from langchain.prompts.chat import (
 from langchain.schema import HumanMessage, SystemMessage
 
 chat = ChatOpenAI(
-    openai_api_base="http://0.0.0.0:8000", # set openai_api_base to the LiteLLM Proxy
+    openai_api_base="http://0.0.0.0:8000",
     model = "gpt-3.5-turbo",
-    temperature=0.1
+    temperature=0.1,
+    extra_body={
+        "metadata": {
+            "generation_name": "ishaan-generation-langchain-client",
+            "generation_id": "langchain-client-gen-id22",
+            "trace_id": "langchain-client-trace-id22",
+            "trace_user_id": "langchain-client-user-id2"
+        }
+    }
 )
 
 messages = [
