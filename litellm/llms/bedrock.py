@@ -424,16 +424,16 @@ def completion(
         )
 
         # use passed in BedrockRuntime.Client if provided, otherwise create a new one
-        client = optional_params.pop(
-            "aws_bedrock_client",
-            # only pass variables that are not None
-            init_bedrock_client(
+        client = optional_params.pop("aws_bedrock_client", None)
+
+        # only init client, if user did not pass one
+        if client is None:
+            client = init_bedrock_client(
                 aws_access_key_id=aws_access_key_id,
                 aws_secret_access_key=aws_secret_access_key,
                 aws_region_name=aws_region_name,
                 aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
-            ),
-        )
+            )
 
         model = model
         provider = model.split(".")[0]
