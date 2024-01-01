@@ -11,6 +11,7 @@ model LiteLLM_UserTable {
 		user_id    String @unique
 		max_budget Float?
     spend      Float    @default(0.0)
+    user_email    String?
 }
 
 // required for token gen
