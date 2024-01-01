@@ -2,11 +2,12 @@
 #   identifies lowest tpm deployment
 
 import dotenv, os, requests, random
-from typing import Optional
+from typing import Optional, Union, List, Dict
 from datetime import datetime
 
 dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
+from litellm import token_counter
 from litellm.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 
@@ -118,7 +119,13 @@ class LowestTPMLoggingHandler(CustomLogger):
             traceback.print_exc()
             pass
 
-    def get_available_deployments(self, model_group: str, healthy_deployments: list):
+    def get_available_deployments(
+        self,
+        model_group: str,
+        healthy_deployments: list,
+        messages: Optional[List[Dict[str, str]]] = None,
+        input: Optional[Union[str, List]] = None,
+    ):
         """
         Returns a deployment with the lowest TPM/RPM usage.
         """
@@ -145,6 +152,7 @@ class LowestTPMLoggingHandler(CustomLogger):
             if d["model_info"]["id"] not in all_deployments:
                 all_deployments[d["model_info"]["id"]] = 0
 
+        input_tokens = token_counter(messages=messages, text=input)
         for item, item_tpm in all_deployments.items():
             ## get the item from model list
             _deployment = None
@@ -173,12 +181,11 @@ class LowestTPMLoggingHandler(CustomLogger):
                 deployment = _deployment
                 break
             elif (
-                item_tpm > _deployment_tpm or rpm_dict[item] + 1 >= _deployment_rpm
+                item_tpm + input_tokens > _deployment_tpm
+                or rpm_dict[item] + 1 >= _deployment_rpm
             ):  # if user passed in tpm / rpm in the model_list
                 continue
             elif item_tpm < lowest_tpm:
                 lowest_tpm = item_tpm
                 deployment = _deployment
-        if deployment is None:
-            deployment = random.choice(healthy_deployments)
         return deployment

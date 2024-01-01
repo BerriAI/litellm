@@ -2504,7 +2504,11 @@ def openai_token_counter(
     return num_tokens
 
 
-def token_counter(model="", text=None, messages: Optional[List] = None):
+def token_counter(
+    model="",
+    text: Optional[Union[str, List[str]]] = None,
+    messages: Optional[List] = None,
+):
     """
     Count the number of tokens in a given text using a specified model.
 
@@ -2533,6 +2537,8 @@ def token_counter(model="", text=None, messages: Optional[List] = None):
                             text += function_arguments
         else:
             raise ValueError("text and messages cannot both be None")
+    elif isinstance(text, List):
+        text = "".join(t for t in text if isinstance(t, str))
     num_tokens = 0
     if model is not None:
         tokenizer_json = _select_tokenizer(model=model)
@@ -2545,13 +2551,13 @@ def token_counter(model="", text=None, messages: Optional[List] = None):
                 or model in litellm.azure_llms
             ):
                 num_tokens = openai_token_counter(
-                    text=text, model=model, messages=messages, is_tool_call=is_tool_call
+                    text=text, model=model, messages=messages, is_tool_call=is_tool_call  # type: ignore
                 )
             else:
                 enc = tokenizer_json["tokenizer"].encode(text)
                 num_tokens = len(enc)
     else:
-        num_tokens = len(encoding.encode(text))
+        num_tokens = len(encoding.encode(text))  # type: ignore
     return num_tokens
 
 
