@@ -374,7 +374,7 @@ async def run_streamlit_ui():
         while True:
             await asyncio.sleep(3600)
     except Exception as e:
-        print(f"An error occurred: {e}")
+        print_verbose(f"Admin UI - Streamlit. An error occurred: {e}")
 
 
 def cost_tracking():
@@ -1012,9 +1012,6 @@ async def startup_event():
         await generate_key_helper_fn(
             duration=None, models=[], aliases={}, config={}, spend=0, token=master_key
         )
-
-    # Run streamlit_ui as a background task
-    asyncio.create_task(run_streamlit_ui())
 
 
 #### API ENDPOINTS ####
