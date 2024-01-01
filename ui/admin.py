@@ -24,7 +24,7 @@ def update_config(proxy_url, allowed_email_subdomain, admin_emails):
     st.session_state["admin_emails"] = admin_emails
     st.session_state[
         "user_auth_url"
-    ] = f"{your_base_url}/?page={encode_config(proxy_url=proxy_url, allowed_email_subdomain=allowed_email_subdomain, admin_emails=admin_emails)}"
+    ] = f"{your_base_url}/user?page={encode_config(proxy_url=proxy_url, allowed_email_subdomain=allowed_email_subdomain, admin_emails=admin_emails)}"
     st.session_state["is_admin"] = True
 
 
@@ -144,3 +144,6 @@ def admin_page(is_admin="NOT_GIVEN"):
                     st.success("Form submitted successfully!")
                 except Exception as e:
                     raise e
+
+
+admin_page()

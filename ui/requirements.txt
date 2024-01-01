@@ -1,4 +1,3 @@
 streamlit
-streamlit_url_fragment
 python-dotenv
 supabase
