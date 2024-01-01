@@ -76,12 +76,17 @@ def auth_page(page_param: str):
         else:
             post_endpoint = f"{decoded_params['proxy_url']}/user/auth"
 
-        try:
-            assert email.split("@")[1] in decoded_params["accepted_email_subdomain"]
-        except:
-            raise Exception(
-                f"Only emails from {decoded_params['accepted_email_subdomain']} are allowed"
-            )
+        if (
+            decoded_params["accepted_email_subdomain"] == "*"
+        ):  # if user wants to allow all emails
+            pass
+        else:
+            try:
+                assert email.split("@")[1] in decoded_params["accepted_email_subdomain"]
+            except:
+                raise Exception(
+                    f"Only emails from {decoded_params['accepted_email_subdomain']} are allowed"
+                )
         response = requests.post(
             post_endpoint, json={"user_email": email, "page": page_param}
         )
