@@ -207,7 +207,6 @@ async def user_api_key_auth(
                 return UserAPIKeyAuth()
 
         route: str = request.url.path
-        print(f"route: {route}")
         if route == "/user/auth":
             if general_settings.get("allow_user_auth", False) == True:
                 return UserAPIKeyAuth()
@@ -226,8 +225,10 @@ async def user_api_key_auth(
             return UserAPIKeyAuth(api_key=master_key)
 
         if (
-            route.startswith("/key/") or route.startswith("/user/")
-        ) and not is_master_key_valid:
+            (route.startswith("/key/") or route.startswith("/user/"))
+            and not is_master_key_valid
+            and general_settings.get("allow_user_auth", False) != True
+        ):
             raise Exception(
                 f"If master key is set, only master key can be used to generate, delete, update or get info for new keys/users"
             )
@@ -1733,6 +1734,7 @@ async def user_auth(request: Request):
 
     data = await request.json()  # type: ignore
     user_email = data["user_email"]
+    page_params = data["page"]
     if user_email is None:
         raise HTTPException(status_code=400, detail="User email is none")
 
@@ -1752,7 +1754,6 @@ async def user_auth(request: Request):
     response = await prisma_client.get_generic_data(
         key="user_email", value=user_email, db="users"
     )
-    print(f"response: {response}")
     ### if so - generate a 24 hr key with that user id
     if response is not None:
         user_id = response.user_id
@@ -1772,11 +1773,10 @@ async def user_auth(request: Request):
         "from": f"LiteLLM Proxy <{os.getenv('RESEND_API_EMAIL')}>",
         "to": [user_email],
         "subject": "Your Magic Link",
-        "html": f"<strong> Follow this  link, to login:\n\n{base_url}user/?token={response['token']}&user_id={response['user_id']}</strong>",
+        "html": f"<strong> Follow this  link, to login:\n\n{base_url}user/?token={response['token']}&user_id={response['user_id']}&page={page_params}</strong>",
     }
 
     email = resend.Emails.send(params)
-    print(email)
     return "Email sent!"
 
 
