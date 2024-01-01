@@ -118,7 +118,7 @@
         "litellm_provider": "azure",
         "mode": "chat"
     },
-    "azure/ggpt-4-32k-0613": {
+    "azure/gpt-4-32k-0613": {
         "max_tokens": 32768,
         "input_cost_per_token": 0.00006,
         "output_cost_per_token": 0.00012,
