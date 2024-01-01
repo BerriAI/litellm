@@ -1240,7 +1240,7 @@ async def chat_completion(
             data["user"] = user_api_key_dict.user_id
 
         if "metadata" in data:
-            print(f'received metadata: {data["metadata"]}')
+            print_verbose(f'received metadata: {data["metadata"]}')
             data["metadata"]["user_api_key"] = user_api_key_dict.api_key
             data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
             data["metadata"]["headers"] = dict(request.headers)
