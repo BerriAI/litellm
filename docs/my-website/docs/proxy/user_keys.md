@@ -3,6 +3,12 @@ import TabItem from '@theme/TabItem';
 
 # Use with Langchain, OpenAI SDK, Curl
 
+:::info
+
+**Input, Output, Exceptions are mapped to the OpenAI format for all supported models**
+
+:::
+
 How to send requests to the proxy, pass metadata, allow users to pass in their OpenAI API key
 
 ## `/chat/completions`
@@ -139,7 +145,109 @@ print(response)
 
 ```
 
-## Pass User LLM API Keys
+## `/embeddings`
+
+### Request Format
+Input, Output and Exceptions are mapped to the OpenAI format for all supported models
+
+<Tabs>
+<TabItem value="openai" label="OpenAI Python v1.0.0+">
+
+```python
+import openai
+from openai import OpenAI
+
+# set base_url to your proxy server
+# set api_key to send to proxy server
+client = OpenAI(api_key="<proxy-api-key>", base_url="http://0.0.0.0:8000")
+
+response = openai.embeddings.create(
+    input=["hello from litellm"],
+    model="text-embedding-ada-002"
+)
+
+print(response)
+
+```
+</TabItem>
+<TabItem value="Curl" label="Curl Request">
+
+```shell
+curl --location 'http://0.0.0.0:8000/embeddings' \
+  --header 'Content-Type: application/json' \
+  --data ' {
+  "model": "text-embedding-ada-002",
+  "input": ["write a litellm poem"]
+  }'
+```
+</TabItem>
+
+<TabItem value="langchain-embedding" label="Langchain Embeddings">
+
+```python
+from langchain.embeddings import OpenAIEmbeddings
+
+embeddings = OpenAIEmbeddings(model="sagemaker-embeddings", openai_api_base="http://0.0.0.0:8000", openai_api_key="temp-key")
+
+
+text = "This is a test document."
+
+query_result = embeddings.embed_query(text)
+
+print(f"SAGEMAKER EMBEDDINGS")
+print(query_result[:5])
+
+embeddings = OpenAIEmbeddings(model="bedrock-embeddings", openai_api_base="http://0.0.0.0:8000", openai_api_key="temp-key")
+
+text = "This is a test document."
+
+query_result = embeddings.embed_query(text)
+
+print(f"BEDROCK EMBEDDINGS")
+print(query_result[:5])
+
+embeddings = OpenAIEmbeddings(model="bedrock-titan-embeddings", openai_api_base="http://0.0.0.0:8000", openai_api_key="temp-key")
+
+text = "This is a test document."
+
+query_result = embeddings.embed_query(text)
+
+print(f"TITAN EMBEDDINGS")
+print(query_result[:5])
+```
+</TabItem>
+</Tabs>
+
+
+### Response Format
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "object": "embedding",
+      "embedding": [
+        0.0023064255,
+        -0.009327292,
+        .... 
+        -0.0028842222,
+      ],
+      "index": 0
+    }
+  ],
+  "model": "text-embedding-ada-002",
+  "usage": {
+    "prompt_tokens": 8,
+    "total_tokens": 8
+  }
+}
+
+```
+
+
+## Advanced
+### Pass User LLM API Keys
 Allows your users to pass in their OpenAI API key (any LiteLLM supported provider) to make requests 
 
 Here's how to do it: 
