@@ -17,7 +17,7 @@ def test_get_gpt3_tokens():
     # print(results)
 
 
-test_get_gpt3_tokens()
+# test_get_gpt3_tokens()
 
 
 def test_get_palm_tokens():
@@ -27,7 +27,7 @@ def test_get_palm_tokens():
     print(max_tokens)
 
 
-test_get_palm_tokens()
+# test_get_palm_tokens()
 
 
 def test_zephyr_hf_tokens():
@@ -36,7 +36,7 @@ def test_zephyr_hf_tokens():
     assert max_tokens == 32768
 
 
-test_zephyr_hf_tokens()
+# test_zephyr_hf_tokens()
 
 
 def test_cost_ft_gpt_35():
@@ -81,7 +81,7 @@ def test_cost_ft_gpt_35():
         )
 
 
-test_cost_ft_gpt_35()
+# test_cost_ft_gpt_35()
 
 
 def test_cost_azure_gpt_35():
@@ -108,11 +108,11 @@ def test_cost_azure_gpt_35():
         )
 
         cost = litellm.completion_cost(
-            completion_response=resp, model="azure/gpt-3.5-turbo"
+            completion_response=resp, model="azure/gpt-35-turbo"
         )
         print("\n Calculated Cost for azure/gpt-3.5-turbo", cost)
-        input_cost = model_cost["azure/gpt-3.5-turbo"]["input_cost_per_token"]
-        output_cost = model_cost["azure/gpt-3.5-turbo"]["output_cost_per_token"]
+        input_cost = model_cost["azure/gpt-35-turbo"]["input_cost_per_token"]
+        output_cost = model_cost["azure/gpt-35-turbo"]["output_cost_per_token"]
         expected_cost = (input_cost * resp.usage.prompt_tokens) + (
             output_cost * resp.usage.completion_tokens
         )
