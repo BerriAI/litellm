@@ -118,6 +118,13 @@
         "litellm_provider": "azure",
         "mode": "chat"
     },
+    "azure/gpt-4-0613": {
+        "max_tokens": 8192,
+        "input_cost_per_token": 0.00003,
+        "output_cost_per_token": 0.00006,
+        "litellm_provider": "azure",
+        "mode": "chat"
+    },
     "azure/gpt-4-32k-0613": {
         "max_tokens": 32768,
         "input_cost_per_token": 0.00006,
@@ -136,6 +143,13 @@
         "max_tokens": 8192,
         "input_cost_per_token": 0.00003,
         "output_cost_per_token": 0.00006,
+        "litellm_provider": "azure",
+        "mode": "chat"
+    },
+    "azure/gpt-35-turbo-16k-0613": {
+        "max_tokens": 16385,
+        "input_cost_per_token": 0.000003,
+        "output_cost_per_token": 0.000004,
         "litellm_provider": "azure",
         "mode": "chat"
     },
