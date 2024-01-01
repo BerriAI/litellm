@@ -22,9 +22,14 @@ def update_config(proxy_url, allowed_email_subdomain, admin_emails):
     st.session_state["proxy_url"] = proxy_url
     st.session_state["allowed_email_subdomain"] = allowed_email_subdomain
     st.session_state["admin_emails"] = admin_emails
-    st.session_state[
-        "user_auth_url"
-    ] = f"{your_base_url}/user?page={encode_config(proxy_url=proxy_url, allowed_email_subdomain=allowed_email_subdomain, admin_emails=admin_emails)}"
+    if your_base_url.endswith("/"):
+        st.session_state[
+            "user_auth_url"
+        ] = f"{your_base_url}user?page={encode_config(proxy_url=proxy_url, allowed_email_subdomain=allowed_email_subdomain, admin_emails=admin_emails)}"
+    else:
+        st.session_state[
+            "user_auth_url"
+        ] = f"{your_base_url}/user?page={encode_config(proxy_url=proxy_url, allowed_email_subdomain=allowed_email_subdomain, admin_emails=admin_emails)}"
     st.session_state["is_admin"] = True
 
 
