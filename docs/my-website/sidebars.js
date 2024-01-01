@@ -105,6 +105,7 @@ const sidebars = {
         "proxy/user_keys",
         "proxy/load_balancing", 
         "proxy/virtual_keys",
+        "proxy/ui",
         "proxy/users",
         "proxy/model_management",
         "proxy/reliability",
