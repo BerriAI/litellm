@@ -3,7 +3,7 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
 
-# Logging - Custom Callbacks, OpenTelemetry, Langfuse, Sentry
+# Logging - Custom Callbacks, Langfuse, OpenTelemetry, Sentry
 
 Log Proxy Input, Output, Exceptions using Custom Callbacks, Langfuse, OpenTelemetry, LangFuse, DynamoDB
 
@@ -290,6 +290,145 @@ ModelResponse(
 ```
 
 
+## Logging Proxy Input/Output - Langfuse
+We will use the `--config` to set `litellm.success_callback = ["langfuse"]` this will log all successfull LLM calls to langfuse
+
+**Step 1** Install langfuse
+
+```shell
+pip install langfuse>=2.0.0
+```
+
+**Step 2**: Create a `config.yaml` file and set `litellm_settings`: `success_callback`
+```yaml
+model_list:
+ - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+litellm_settings:
+  success_callback: ["langfuse"]
+```
+
+**Step 3**: Start the proxy, make a test request
+
+Start proxy
+```shell
+litellm --config config.yaml --debug
+```
+
+Test Request
+```
+litellm --test
+```
+
+Expected output on Langfuse
+
+<Image img={require('../../img/langfuse_small.png')} />
+
+### Logging Metadata to Langfuse
+
+
+<Tabs>
+
+<TabItem value="Curl" label="Curl Request">
+
+Pass `metadata` as part of the request body
+
+```shell
+curl --location 'http://0.0.0.0:8000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ],
+    "metadata": {
+        "generation_name": "ishaan-test-generation",
+        "generation_id": "gen-id22",
+        "trace_id": "trace-id22",
+        "trace_user_id": "user-id2"
+    }
+}'
+```
+</TabItem>
+<TabItem value="openai" label="OpenAI v1.0.0+">
+
+Set `extra_body={"metadata": { }}` to `metadata` you want to pass
+
+```python
+import openai
+client = openai.OpenAI(
+    api_key="anything",
+    base_url="http://0.0.0.0:8000"
+)
+
+# request sent to model set on litellm proxy, `litellm --model`
+response = client.chat.completions.create(
+    model="gpt-3.5-turbo",
+    messages = [
+        {
+            "role": "user",
+            "content": "this is a test request, write a short poem"
+        }
+    ],
+    extra_body={
+        "metadata": {
+            "generation_name": "ishaan-generation-openai-client",
+            "generation_id": "openai-client-gen-id22",
+            "trace_id": "openai-client-trace-id22",
+            "trace_user_id": "openai-client-user-id2"
+        }
+    }
+)
+
+print(response)
+```
+</TabItem>
+<TabItem value="langchain" label="Langchain">
+
+```python
+from langchain.chat_models import ChatOpenAI
+from langchain.prompts.chat import (
+    ChatPromptTemplate,
+    HumanMessagePromptTemplate,
+    SystemMessagePromptTemplate,
+)
+from langchain.schema import HumanMessage, SystemMessage
+
+chat = ChatOpenAI(
+    openai_api_base="http://0.0.0.0:8000",
+    model = "gpt-3.5-turbo",
+    temperature=0.1,
+    extra_body={
+        "metadata": {
+            "generation_name": "ishaan-generation-langchain-client",
+            "generation_id": "langchain-client-gen-id22",
+            "trace_id": "langchain-client-trace-id22",
+            "trace_user_id": "langchain-client-user-id2"
+        }
+    }
+)
+
+messages = [
+    SystemMessage(
+        content="You are a helpful assistant that im using to make a test request to."
+    ),
+    HumanMessage(
+        content="test from litellm. tell me why it's amazing in 1 sentence"
+    ),
+]
+response = chat(messages)
+
+print(response)
+```
+
+</TabItem>
+</Tabs>
+
+
 ## OpenTelemetry - Traceloop
 
 Traceloop allows you to log LLM Input/Output in the OpenTelemetry format
@@ -457,144 +596,6 @@ Events:
 Here's the log view on Elastic Search. You can see the request `input`, `output` and `headers`
 
 <Image img={require('../../img/elastic_otel.png')} /> -->
-
-## Logging Proxy Input/Output - Langfuse
-We will use the `--config` to set `litellm.success_callback = ["langfuse"]` this will log all successfull LLM calls to langfuse
-
-**Step 1** Install langfuse
-
-```shell
-pip install langfuse>=2.0.0
-```
-
-**Step 2**: Create a `config.yaml` file and set `litellm_settings`: `success_callback`
-```yaml
-model_list:
- - model_name: gpt-3.5-turbo
-    litellm_params:
-      model: gpt-3.5-turbo
-litellm_settings:
-  success_callback: ["langfuse"]
-```
-
-**Step 3**: Start the proxy, make a test request
-
-Start proxy
-```shell
-litellm --config config.yaml --debug
-```
-
-Test Request
-```
-litellm --test
-```
-
-Expected output on Langfuse
-
-<Image img={require('../../img/langfuse_small.png')} />
-
-### Logging Metadata to Langfuse
-
-
-<Tabs>
-
-<TabItem value="Curl" label="Curl Request">
-
-Pass `metadata` as part of the request body
-
-```shell
-curl --location 'http://0.0.0.0:8000/chat/completions' \
-    --header 'Content-Type: application/json' \
-    --data '{
-    "model": "gpt-3.5-turbo",
-    "messages": [
-        {
-        "role": "user",
-        "content": "what llm are you"
-        }
-    ],
-    "metadata": {
-        "generation_name": "ishaan-test-generation",
-        "generation_id": "gen-id22",
-        "trace_id": "trace-id22",
-        "trace_user_id": "user-id2"
-    }
-}'
-```
-</TabItem>
-<TabItem value="openai" label="OpenAI v1.0.0+">
-
-Set `extra_body={"metadata": { }}` to `metadata` you want to pass
-
-```python
-import openai
-client = openai.OpenAI(
-    api_key="anything",
-    base_url="http://0.0.0.0:8000"
-)
-
-# request sent to model set on litellm proxy, `litellm --model`
-response = client.chat.completions.create(
-    model="gpt-3.5-turbo",
-    messages = [
-        {
-            "role": "user",
-            "content": "this is a test request, write a short poem"
-        }
-    ],
-    extra_body={
-        "metadata": {
-            "generation_name": "ishaan-generation-openai-client",
-            "generation_id": "openai-client-gen-id22",
-            "trace_id": "openai-client-trace-id22",
-            "trace_user_id": "openai-client-user-id2"
-        }
-    }
-)
-
-print(response)
-```
-</TabItem>
-<TabItem value="langchain" label="Langchain">
-
-```python
-from langchain.chat_models import ChatOpenAI
-from langchain.prompts.chat import (
-    ChatPromptTemplate,
-    HumanMessagePromptTemplate,
-    SystemMessagePromptTemplate,
-)
-from langchain.schema import HumanMessage, SystemMessage
-
-chat = ChatOpenAI(
-    openai_api_base="http://0.0.0.0:8000",
-    model = "gpt-3.5-turbo",
-    temperature=0.1,
-    extra_body={
-        "metadata": {
-            "generation_name": "ishaan-generation-langchain-client",
-            "generation_id": "langchain-client-gen-id22",
-            "trace_id": "langchain-client-trace-id22",
-            "trace_user_id": "langchain-client-user-id2"
-        }
-    }
-)
-
-messages = [
-    SystemMessage(
-        content="You are a helpful assistant that im using to make a test request to."
-    ),
-    HumanMessage(
-        content="test from litellm. tell me why it's amazing in 1 sentence"
-    ),
-]
-response = chat(messages)
-
-print(response)
-```
-
-</TabItem>
-</Tabs>
 
 ## Logging Proxy Input/Output - DynamoDB
 

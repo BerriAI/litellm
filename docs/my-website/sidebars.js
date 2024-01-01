@@ -111,10 +111,10 @@ const sidebars = {
         "proxy/health",
         "proxy/call_hooks",
         "proxy/caching",
-        "proxy/streaming_logging",
         "proxy/logging", 
-        "proxy/cli", 
+        "proxy/streaming_logging",
         "proxy/deploy", 
+        "proxy/cli", 
       ]
     },
     "routing",
