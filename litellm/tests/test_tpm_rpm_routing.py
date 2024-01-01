@@ -215,9 +215,62 @@ def test_router_get_available_deployments():
 
 
 # test_get_available_deployments()
-
-
 # test_router_get_available_deployments()
+
+
+def test_router_skip_rate_limited_deployments():
+    """
+    Test if routers 'get_available_deployments' raises No Models Available error if max tpm would be reached by message
+    """
+    model_list = [
+        {
+            "model_name": "azure-model",
+            "litellm_params": {
+                "model": "azure/gpt-turbo",
+                "api_key": "os.environ/AZURE_FRANCE_API_KEY",
+                "api_base": "https://openai-france-1234.openai.azure.com",
+                "tpm": 1440,
+            },
+            "model_info": {"id": 1},
+        },
+    ]
+    router = Router(
+        model_list=model_list,
+        routing_strategy="usage-based-routing",
+        set_verbose=False,
+        num_retries=3,
+    )  # type: ignore
+
+    ## DEPLOYMENT 1 ##
+    deployment_id = 1
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "model_group": "azure-model",
+            },
+            "model_info": {"id": deployment_id},
+        }
+    }
+    start_time = time.time()
+    response_obj = {"usage": {"total_tokens": 1439}}
+    end_time = time.time()
+    router.lowesttpm_logger.log_success_event(
+        response_obj=response_obj,
+        kwargs=kwargs,
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+    ## CHECK WHAT'S SELECTED ## - should skip 2, and pick 1
+    # print(router.lowesttpm_logger.get_available_deployments(model_group="azure-model"))
+    try:
+        router.get_available_deployment(
+            model="azure-model",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        )
+        pytest.fail(f"Should have raised No Models Available error")
+    except Exception as e:
+        pass
 
 
 @pytest.mark.asyncio

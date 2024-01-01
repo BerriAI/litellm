@@ -1705,7 +1705,6 @@ class Router:
             deployment = self.leastbusy_logger.get_available_deployments(
                 model_group=model, healthy_deployments=healthy_deployments
             )
-            return deployment
         elif self.routing_strategy == "simple-shuffle":
             # if users pass rpm or tpm, we do a random weighted pick - based on rpm/tpm
             ############## Check if we can do a RPM/TPM based weighted pick #################
@@ -1744,24 +1743,24 @@ class Router:
             self.routing_strategy == "latency-based-routing"
             and self.lowestlatency_logger is not None
         ):
-            min_deployment = self.lowestlatency_logger.get_available_deployments(
+            deployment = self.lowestlatency_logger.get_available_deployments(
                 model_group=model, healthy_deployments=healthy_deployments
             )
-            if min_deployment is None:
-                min_deployment = random.choice(healthy_deployments)
-            return min_deployment
         elif (
             self.routing_strategy == "usage-based-routing"
             and self.lowesttpm_logger is not None
         ):
-            min_deployment = self.lowesttpm_logger.get_available_deployments(
-                model_group=model, healthy_deployments=healthy_deployments
+            deployment = self.lowesttpm_logger.get_available_deployments(
+                model_group=model,
+                healthy_deployments=healthy_deployments,
+                messages=messages,
+                input=input,
             )
-            if min_deployment is None:
-                min_deployment = random.choice(healthy_deployments)
-            return min_deployment
 
-        raise ValueError("No models available.")
+        if deployment is None:
+            raise ValueError("No models available.")
+
+        return deployment
 
     def flush_cache(self):
         litellm.cache = None
