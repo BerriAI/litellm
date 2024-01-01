@@ -15,7 +15,6 @@ async_generator==1.10.0 # for async ollama calls
 traceloop-sdk==0.5.3 # for open telemetry logging
 langfuse>=2.0.0 # for langfuse self-hosted logging
 orjson==3.9.7 # fast /embedding responses
-streamlit==1.27.2 # for admin ui
 ### LITELLM PACKAGE DEPENDENCIES
 python-dotenv>=0.2.0 # for env 
 tiktoken>=0.4.0 # for calculating usage
