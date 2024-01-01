@@ -1,4 +1,4 @@
-# [Tutorial] Streaming token usage Logging
+# Track Token Usage (Streaming) 
 
 ### Step 1 - Create your custom `litellm` callback class
 We use `litellm.integrations.custom_logger` for this, **more details about litellm custom callbacks [here](https://docs.litellm.ai/docs/observability/custom_callback)**
