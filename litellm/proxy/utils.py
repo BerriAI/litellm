@@ -189,6 +189,38 @@ class PrismaClient:
         max_time=10,  # maximum total time to retry for
         on_backoff=on_backoff,  # specifying the function to call on backoff
     )
+    async def get_generic_data(
+        self,
+        key: str,
+        value: Any,
+        db: Literal["users", "keys"],
+    ):
+        """
+        Generic implementation of get data
+        """
+        try:
+            if db == "users":
+                response = await self.db.litellm_usertable.find_first(
+                    where={key: value}  # type: ignore
+                )
+            elif db == "keys":
+                response = await self.db.litellm_verificationtoken.find_first(  # type: ignore
+                    where={key: value}  # type: ignore
+                )
+            return response
+        except Exception as e:
+            asyncio.create_task(
+                self.proxy_logging_obj.failure_handler(original_exception=e)
+            )
+            raise e
+
+    @backoff.on_exception(
+        backoff.expo,
+        Exception,  # base exception to catch for the backoff
+        max_tries=3,  # maximum number of retries
+        max_time=10,  # maximum total time to retry for
+        on_backoff=on_backoff,  # specifying the function to call on backoff
+    )
     async def get_data(
         self,
         token: Optional[str] = None,
@@ -255,6 +287,7 @@ class PrismaClient:
             db_data = self.jsonify_object(data=data)
             db_data["token"] = hashed_token
             max_budget = db_data.pop("max_budget", None)
+            user_email = db_data.pop("user_email", None)
             new_verification_token = await self.db.litellm_verificationtoken.upsert(  # type: ignore
                 where={
                     "token": hashed_token,
@@ -268,7 +301,11 @@ class PrismaClient:
             new_user_row = await self.db.litellm_usertable.upsert(
                 where={"user_id": data["user_id"]},
                 data={
-                    "create": {"user_id": data["user_id"], "max_budget": max_budget},
+                    "create": {
+                        "user_id": data["user_id"],
+                        "max_budget": max_budget,
+                        "user_email": user_email,
+                    },
                     "update": {},  # don't do anything if it already exists
                 },
             )

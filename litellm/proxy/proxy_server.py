@@ -725,6 +725,7 @@ async def generate_key_helper_fn(
     max_budget: Optional[float] = None,
     token: Optional[str] = None,
     user_id: Optional[str] = None,
+    user_email: Optional[str] = None,
     max_parallel_requests: Optional[int] = None,
     metadata: Optional[dict] = {},
 ):
@@ -780,6 +781,7 @@ async def generate_key_helper_fn(
             "max_parallel_requests": max_parallel_requests,
             "metadata": metadata_json,
             "max_budget": max_budget,
+            "user_email": user_email,
         }
         new_verification_token = await prisma_client.insert_data(
             data=verification_token_data
@@ -1727,15 +1729,40 @@ async def user_auth(request: Request):
     RESEND_API_EMAIL = "my-sending-email"
     ```
     """
+    global prisma_client
+
     data = await request.json()  # type: ignore
     user_email = data["user_email"]
-    import os
-    import resend
+    if user_email is None:
+        raise HTTPException(status_code=400, detail="User email is none")
 
-    ## [TODO]: Check if user exists, if so - use an existing key, if not - create new user -> return new key
-    response = await generate_key_helper_fn(
-        **{"duration": "1hr", "models": [], "aliases": {}, "config": {}, "spend": 0}  # type: ignore
+    import os
+
+    try:
+        import resend
+    except ImportError:
+        raise Exception(
+            "Resend package missing. Run `pip install litellm[extra_proxy]` to add missing dependencies."
+        )
+
+    if prisma_client is None:  # if no db connected, raise an error
+        raise Exception("No connected db.")
+
+    ### Check if user email in user table
+    response = await prisma_client.get_generic_data(
+        key="user_email", value=user_email, db="users"
     )
+    print(f"response: {response}")
+    ### if so - generate a 24 hr key with that user id
+    if response is not None:
+        user_id = response.user_id
+        response = await generate_key_helper_fn(
+            **{"duration": "24hr", "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": user_id}  # type: ignore
+        )
+    else:  ### else - create new user
+        response = await generate_key_helper_fn(
+            **{"duration": "24hr", "models": [], "aliases": {}, "config": {}, "spend": 0, "user_email": user_email}  # type: ignore
+        )
 
     base_url = os.getenv("LITELLM_HOSTED_UI", "https://dashboard.litellm.ai/")
 
