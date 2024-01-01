@@ -42,26 +42,26 @@ def generate_feedback_box():
     # Select a random message
     message = random.choice(list_of_messages)
 
-    print()
-    print("\033[1;37m" + "#" + "-" * box_width + "#\033[0m")
-    print("\033[1;37m" + "#" + " " * box_width + "#\033[0m")
-    print("\033[1;37m" + "# {:^59} #\033[0m".format(message))
-    print(
+    print()  # noqa
+    print("\033[1;37m" + "#" + "-" * box_width + "#\033[0m")  # noqa
+    print("\033[1;37m" + "#" + " " * box_width + "#\033[0m")  # noqa
+    print("\033[1;37m" + "# {:^59} #\033[0m".format(message))  # noqa
+    print(  # noqa
         "\033[1;37m"
         + "# {:^59} #\033[0m".format("https://github.com/BerriAI/litellm/issues/new")
-    )
-    print("\033[1;37m" + "#" + " " * box_width + "#\033[0m")
-    print("\033[1;37m" + "#" + "-" * box_width + "#\033[0m")
-    print()
-    print(" Thank you for using LiteLLM! - Krrish & Ishaan")
-    print()
-    print()
-    print()
-    print(
+    )  # noqa
+    print("\033[1;37m" + "#" + " " * box_width + "#\033[0m")  # noqa
+    print("\033[1;37m" + "#" + "-" * box_width + "#\033[0m")  # noqa
+    print()  # noqa
+    print(" Thank you for using LiteLLM! - Krrish & Ishaan")  # noqa
+    print()  # noqa
+    print()  # noqa
+    print()  # noqa
+    print(  # noqa
         "\033[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new\033[0m"
-    )
-    print()
-    print()
+    )  # noqa
+    print()  # noqa
+    print()  # noqa
 
 
 import litellm
@@ -159,7 +159,7 @@ def print_verbose(print_statement):
     try:
         global user_debug
         if user_debug:
-            print(print_statement)
+            print(print_statement)  # noqa
     except:
         pass
 
@@ -239,24 +239,24 @@ async def user_api_key_auth(
 
         ## check for cache hit (In-Memory Cache)
         valid_token = user_api_key_cache.get_cache(key=api_key)
-        print(f"valid_token from cache: {valid_token}")
+        print_verbose(f"valid_token from cache: {valid_token}")
         if valid_token is None:
             ## check db
-            print(f"api key: {api_key}")
+            print_verbose(f"api key: {api_key}")
             valid_token = await prisma_client.get_data(
                 token=api_key, expires=datetime.utcnow().replace(tzinfo=timezone.utc)
             )
-            print(f"valid token from prisma: {valid_token}")
+            print_verbose(f"valid token from prisma: {valid_token}")
             user_api_key_cache.set_cache(key=api_key, value=valid_token, ttl=60)
         elif valid_token is not None:
-            print(f"API Key Cache Hit!")
+            print_verbose(f"API Key Cache Hit!")
         if valid_token:
             litellm.model_alias_map = valid_token.aliases
             config = valid_token.config
             if config != {}:
                 model_list = config.get("model_list", [])
                 llm_model_list = model_list
-                print("\n new llm router model list", llm_model_list)
+                print_verbose(f"\n new llm router model list {llm_model_list}")
             if (
                 len(valid_token.models) == 0
             ):  # assume an empty model list means all models are allowed to be called
@@ -290,7 +290,7 @@ async def user_api_key_auth(
         else:
             raise Exception(f"Invalid token")
     except Exception as e:
-        print(f"An exception occurred - {traceback.format_exc()}")
+        print_verbose(f"An exception occurred - {traceback.format_exc()}")
         if isinstance(e, HTTPException):
             raise e
         else:
@@ -309,8 +309,8 @@ def prisma_setup(database_url: Optional[str]):
                 database_url=database_url, proxy_logging_obj=proxy_logging_obj
             )
         except Exception as e:
-            print(
-                "Error when initializing prisma, Ensure you run pip install prisma", e
+            print_verbose(
+                f"Error when initializing prisma, Ensure you run pip install prisma {str(e)}"
             )
 
 
@@ -351,7 +351,7 @@ def load_from_azure_key_vault(use_azure_key_vault: bool = False):
                 f"Missing KVUri or client_id or client_secret or tenant_id from environment"
             )
     except Exception as e:
-        print(
+        print_verbose(
             "Error when loading keys from Azure Key Vault. Ensure you run `pip install azure-identity azure-keyvault-secrets`"
         )
 
@@ -360,7 +360,7 @@ def cost_tracking():
     global prisma_client
     if prisma_client is not None:
         if isinstance(litellm.success_callback, list):
-            print("setting litellm success callback to track cost")
+            print_verbose("setting litellm success callback to track cost")
             if (track_cost_callback) not in litellm.success_callback:  # type: ignore
                 litellm.success_callback.append(track_cost_callback)  # type: ignore
 
@@ -374,7 +374,7 @@ async def track_cost_callback(
     global prisma_client
     try:
         # check if it has collected an entire stream response
-        print(
+        print_verbose(
             f"kwargs stream: {kwargs.get('stream', None)} + complete streaming response: {kwargs.get('complete_streaming_response', None)}"
         )
         if "complete_streaming_response" in kwargs:
@@ -383,7 +383,7 @@ async def track_cost_callback(
             response_cost = litellm.completion_cost(
                 completion_response=completion_response
             )
-            print("streaming response_cost", response_cost)
+            print_verbose(f"streaming response_cost {response_cost}")
             user_api_key = kwargs["litellm_params"]["metadata"].get(
                 "user_api_key", None
             )
@@ -409,12 +409,12 @@ async def track_cost_callback(
                     token=user_api_key, response_cost=response_cost, user_id=user_id
                 )
     except Exception as e:
-        print(f"error in tracking cost callback - {str(e)}")
+        print_verbose(f"error in tracking cost callback - {str(e)}")
 
 
 async def update_prisma_database(token, response_cost, user_id=None):
     try:
-        print(f"Enters prisma db call, token: {token}; user_id: {user_id}")
+        print_verbose(f"Enters prisma db call, token: {token}; user_id: {user_id}")
 
         ### UPDATE USER SPEND ###
         async def _update_user_db():
@@ -429,7 +429,7 @@ async def update_prisma_database(token, response_cost, user_id=None):
             # Calculate the new cost by adding the existing cost and response_cost
             new_spend = existing_spend + response_cost
 
-            print(f"new cost: {new_spend}")
+            print_verbose(f"new cost: {new_spend}")
             # Update the cost column for the given user id
             await prisma_client.update_data(user_id=user_id, data={"spend": new_spend})
 
@@ -437,7 +437,7 @@ async def update_prisma_database(token, response_cost, user_id=None):
         async def _update_key_db():
             # Fetch the existing cost for the given token
             existing_spend_obj = await prisma_client.get_data(token=token)
-            print(f"existing spend: {existing_spend_obj}")
+            print_verbose(f"existing spend: {existing_spend_obj}")
             if existing_spend_obj is None:
                 existing_spend = 0
             else:
@@ -445,7 +445,7 @@ async def update_prisma_database(token, response_cost, user_id=None):
             # Calculate the new cost by adding the existing cost and response_cost
             new_spend = existing_spend + response_cost
 
-            print(f"new cost: {new_spend}")
+            print_verbose(f"new cost: {new_spend}")
             # Update the cost column for the given token
             await prisma_client.update_data(token=token, data={"spend": new_spend})
 
@@ -454,7 +454,7 @@ async def update_prisma_database(token, response_cost, user_id=None):
         tasks.append(_update_key_db())
         await asyncio.gather(*tasks)
     except Exception as e:
-        print(f"Error updating Prisma database: {traceback.format_exc()}")
+        print_verbose(f"Error updating Prisma database: {traceback.format_exc()}")
         pass
 
 
@@ -465,7 +465,7 @@ def run_ollama_serve():
         with open(os.devnull, "w") as devnull:
             process = subprocess.Popen(command, stdout=devnull, stderr=devnull)
     except Exception as e:
-        print(
+        print_verbose(
             f"""
             LiteLLM Warning: proxy started with `ollama` model\n`ollama serve` failed with Exception{e}. \nEnsure you run `ollama serve`
         """
@@ -532,7 +532,7 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
         reset_color_code = "\033[0m"
         for key, value in litellm_settings.items():
             if key == "cache":
-                print(f"{blue_color_code}\nSetting Cache on Proxy")
+                print(f"{blue_color_code}\nSetting Cache on Proxy")  # noqa
                 from litellm.caching import Cache
 
                 if isinstance(value, dict):
@@ -557,17 +557,23 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
                     cache_params.update(cache_params_in_config)
 
                 # Assuming cache_type, cache_host, cache_port, and cache_password are strings
-                print(f"{blue_color_code}Cache Type:{reset_color_code} {cache_type}")
-                print(f"{blue_color_code}Cache Host:{reset_color_code} {cache_host}")
-                print(f"{blue_color_code}Cache Port:{reset_color_code} {cache_port}")
-                print(
+                print(  # noqa
+                    f"{blue_color_code}Cache Type:{reset_color_code} {cache_type}"
+                )  # noqa
+                print(  # noqa
+                    f"{blue_color_code}Cache Host:{reset_color_code} {cache_host}"
+                )  # noqa
+                print(  # noqa
+                    f"{blue_color_code}Cache Port:{reset_color_code} {cache_port}"
+                )  # noqa
+                print(  # noqa
                     f"{blue_color_code}Cache Password:{reset_color_code} {cache_password}"
                 )
-                print()
+                print()  # noqa
 
                 ## to pass a complete url, or set ssl=True, etc. just set it as `os.environ[REDIS_URL] = <your-redis-url>`, _redis.py checks for REDIS specific environment variables
                 litellm.cache = Cache(**cache_params)
-                print(
+                print(  # noqa
                     f"{blue_color_code}Set Cache on LiteLLM Proxy: {litellm.cache.cache}{reset_color_code} {cache_password}"
                 )
             elif key == "callbacks":
@@ -581,7 +587,7 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
                 litellm.post_call_rules = [
                     get_instance_fn(value=value, config_file_path=config_file_path)
                 ]
-                print(f"litellm.post_call_rules: {litellm.post_call_rules}")
+                print_verbose(f"litellm.post_call_rules: {litellm.post_call_rules}")
             elif key == "success_callback":
                 litellm.success_callback = []
 
@@ -642,9 +648,9 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
         ### CONNECT TO DATABASE ###
         database_url = general_settings.get("database_url", None)
         if database_url and database_url.startswith("os.environ/"):
-            print(f"GOING INTO LITELLM.GET_SECRET!")
+            print_verbose(f"GOING INTO LITELLM.GET_SECRET!")
             database_url = litellm.get_secret(database_url)
-            print(f"RETRIEVED DB URL: {database_url}")
+            print_verbose(f"RETRIEVED DB URL: {database_url}")
         prisma_setup(database_url=database_url)
         ## COST TRACKING ##
         cost_tracking()
@@ -654,10 +660,6 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
         master_key = general_settings.get("master_key", None)
         if master_key and master_key.startswith("os.environ/"):
             master_key = litellm.get_secret(master_key)
-        #### OpenTelemetry Logging (OTEL) ########
-        otel_logging = general_settings.get("otel", False)
-        if otel_logging == True:
-            print("\nOpenTelemetry Logging Activated")
         ### CUSTOM API KEY AUTH ###
         custom_auth = general_settings.get("custom_auth", None)
         if custom_auth:
@@ -680,13 +682,15 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
     model_list = config.get("model_list", None)
     if model_list:
         router_params["model_list"] = model_list
-        print(f"\033[32mLiteLLM: Proxy initialized with Config, Set models:\033[0m")
+        print(  # noqa
+            f"\033[32mLiteLLM: Proxy initialized with Config, Set models:\033[0m"
+        )  # noqa
         for model in model_list:
             ### LOAD FROM os.environ/ ###
             for k, v in model["litellm_params"].items():
                 if isinstance(v, str) and v.startswith("os.environ/"):
                     model["litellm_params"][k] = litellm.get_secret(v)
-            print(f"\033[32m    {model.get('model_name', '')}\033[0m")
+            print(f"\033[32m    {model.get('model_name', '')}\033[0m")  # noqa
             litellm_model_name = model["litellm_params"]["model"]
             litellm_model_api_base = model["litellm_params"].get("api_base", None)
             if "ollama" in litellm_model_name and litellm_model_api_base is None:
@@ -892,15 +896,17 @@ def initialize(
     }'
     \n
     """
-    print()
-    print(
+    print()  # noqa
+    print(  # noqa
         f'\033[1;34mLiteLLM: Test your local proxy with: "litellm --test" This runs an openai.ChatCompletion request to your proxy [In a new terminal tab]\033[0m\n'
     )
-    print(
+    print(  # noqa
         f"\033[1;34mLiteLLM: Curl Command Test for your local proxy\n {curl_command} \033[0m\n"
     )
-    print("\033[1;34mDocs: https://docs.litellm.ai/docs/simple_proxy\033[0m\n")
-    print(f"\033[1;34mSee all Router/Swagger docs on http://0.0.0.0:8000 \033[0m\n")
+    print("\033[1;34mDocs: https://docs.litellm.ai/docs/simple_proxy\033[0m\n")  # noqa
+    print(  # noqa
+        f"\033[1;34mSee all Router/Swagger docs on http://0.0.0.0:8000 \033[0m\n"
+    )  # noqa
 
 
 # for streaming
@@ -1093,7 +1099,7 @@ async def completion(
             user_api_key_dict=user_api_key_dict, data=data, call_type="completion"
         )
 
-        ### ROUTE THE REQUEST ###
+        ### ROUTE THE REQUESTs ###
         router_model_names = (
             [m["model_name"] for m in llm_model_list]
             if llm_model_list is not None
@@ -1123,7 +1129,7 @@ async def completion(
 
         model_id = response._hidden_params.get("model_id", None) or ""
 
-        print(f"final response: {response}")
+        print_verbose(f"final response: {response}")
         if (
             "stream" in data and data["stream"] == True
         ):  # use generate_responses to stream responses
@@ -1140,8 +1146,8 @@ async def completion(
         fastapi_response.headers["x-litellm-model-id"] = model_id
         return response
     except Exception as e:
-        print(f"EXCEPTION RAISED IN PROXY MAIN.PY")
-        print(
+        print_verbose(f"EXCEPTION RAISED IN PROXY MAIN.PY")
+        print_verbose(
             f"\033[1;31mAn error occurred: {e}\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`"
         )
         traceback.print_exc()
@@ -1288,7 +1294,7 @@ async def chat_completion(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e
         )
-        print(
+        print_verbose(
             f"\033[1;31mAn error occurred: {e}\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`"
         )
         router_model_names = (
@@ -1297,17 +1303,17 @@ async def chat_completion(
             else []
         )
         if llm_router is not None and data.get("model", "") in router_model_names:
-            print("Results from router")
-            print("\nRouter stats")
-            print("\nTotal Calls made")
+            print_verbose("Results from router")
+            print_verbose("\nRouter stats")
+            print_verbose("\nTotal Calls made")
             for key, value in llm_router.total_calls.items():
-                print(f"{key}: {value}")
-            print("\nSuccess Calls made")
+                print_verbose(f"{key}: {value}")
+            print_verbose("\nSuccess Calls made")
             for key, value in llm_router.success_calls.items():
-                print(f"{key}: {value}")
-            print("\nFail Calls made")
+                print_verbose(f"{key}: {value}")
+            print_verbose("\nFail Calls made")
             for key, value in llm_router.fail_calls.items():
-                print(f"{key}: {value}")
+                print_verbose(f"{key}: {value}")
         if user_debug:
             traceback.print_exc()
 
@@ -1922,7 +1928,7 @@ async def _litellm_chat_completions_worker(data, user_api_key_dict):
                 user_api_key_dict=user_api_key_dict, data=data, call_type="completion"
             )
 
-            print(f"_litellm_chat_completions_worker started")
+            print_verbose(f"_litellm_chat_completions_worker started")
             ### ROUTE THE REQUEST ###
             router_model_names = (
                 [m["model_name"] for m in llm_model_list]
@@ -1948,17 +1954,17 @@ async def _litellm_chat_completions_worker(data, user_api_key_dict):
             else:  # router is not set
                 response = await litellm.acompletion(**data)
 
-            print(f"final response: {response}")
+            print_verbose(f"final response: {response}")
             return response
         except HTTPException as e:
-            print(
+            print_verbose(
                 f"EXCEPTION RAISED IN _litellm_chat_completions_worker - {e.status_code}; {e.detail}"
             )
             if (
                 e.status_code == 429
                 and "Max parallel request limit reached" in e.detail
             ):
-                print(f"Max parallel request limit reached!")
+                print_verbose(f"Max parallel request limit reached!")
                 timeout = litellm._calculate_retry_after(
                     remaining_retries=3, max_retries=3, min_timeout=1
                 )
@@ -2012,7 +2018,7 @@ async def async_queue_request(
             data["user"] = user_api_key_dict.user_id
 
         if "metadata" in data:
-            print(f'received metadata: {data["metadata"]}')
+            print_verbose(f'received metadata: {data["metadata"]}')
             data["metadata"]["user_api_key"] = user_api_key_dict.api_key
             data["metadata"]["headers"] = dict(request.headers)
             data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
@@ -2186,7 +2192,7 @@ async def get_routes():
 async def shutdown_event():
     global prisma_client, master_key, user_custom_auth
     if prisma_client:
-        print("Disconnecting from Prisma")
+        print_verbose("Disconnecting from Prisma")
         await prisma_client.disconnect()
 
     ## RESET CUSTOM VARIABLES ##
