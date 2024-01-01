@@ -117,19 +117,20 @@ def user_page(page_param: str, user_id: str, token: str):
 
 def router():
     query_params = st.experimental_get_query_params()
-    page_param = query_params.get("page", None)[0]
+    page_param = query_params.get("page", None)
     if (
         query_params.get("token", None) is not None
         and query_params.get("user_id", None) is not None
+        and page_param is not None
     ):
         # render user page
         user_page(
-            page_param=page_param,
+            page_param=page_param[0],
             user_id=query_params.get("user_id")[0],
             token=query_params.get("token")[0],
         )
     elif page_param is not None:
-        auth_page(page_param=page_param)
+        auth_page(page_param=page_param[0])
     else:
         st.write("Please setup proxy")
 
