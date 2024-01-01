@@ -36,15 +36,13 @@ proxy = [
     "orjson",
 ]
 
-proxy-ui = [
-    "streamlit"
-]
-
 extra_proxy = [
     "prisma",
     "azure-identity",
     "azure-keyvault-secrets",
-    "google-cloud-kms"
+    "google-cloud-kms",
+    "streamlit",
+    "resend"
 ]
 
 
