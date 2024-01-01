@@ -524,6 +524,8 @@ curl --location 'http://0.0.0.0:8000/chat/completions' \
 </TabItem>
 <TabItem value="openai" label="OpenAI v1.0.0+">
 
+Set `extra_body={"metadata": { }}` to `metadata` you want to pass
+
 ```python
 import openai
 client = openai.OpenAI(
@@ -532,15 +534,25 @@ client = openai.OpenAI(
 )
 
 # request sent to model set on litellm proxy, `litellm --model`
-response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
-    {
-        "role": "user",
-        "content": "this is a test request, write a short poem"
+response = client.chat.completions.create(
+    model="gpt-3.5-turbo",
+    messages = [
+        {
+            "role": "user",
+            "content": "this is a test request, write a short poem"
+        }
+    ],
+    extra_body={
+        "metadata": {
+            "generation_name": "ishaan-generation-openai-client",
+            "generation_id": "openai-client-gen-id22",
+            "trace_id": "openai-client-trace-id22",
+            "trace_user_id": "openai-client-user-id2"
+        }
     }
-])
+)
 
 print(response)
-
 ```
 </TabItem>
 <TabItem value="langchain" label="Langchain">
