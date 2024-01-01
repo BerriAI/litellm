@@ -1130,7 +1130,10 @@ async def completion(
         else:  # router is not set
             response = await litellm.atext_completion(**data)
 
-        model_id = response._hidden_params.get("model_id", None) or ""
+        if hasattr(response, "_hidden_params"):
+            model_id = response._hidden_params.get("model_id", None) or ""
+        else:
+            model_id = ""
 
         print_verbose(f"final response: {response}")
         if (
