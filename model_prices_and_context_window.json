@@ -111,6 +111,60 @@
         "litellm_provider": "openai",
         "mode": "embedding"
     },
+    "256-x-256/dall-e-2": {
+        "mode": "image_generation",
+        "input_cost_per_pixel": 0.00000024414,
+        "output_cost_per_pixel": 0.0,
+        "litellm_provider": "openai"
+    },
+    "512-x-512/dall-e-2": {
+        "mode": "image_generation",
+        "input_cost_per_pixel": 0.0000000686,
+        "output_cost_per_pixel": 0.0,
+        "litellm_provider": "openai"
+    },
+    "1024-x-1024/dall-e-2": {
+        "mode": "image_generation",
+        "input_cost_per_pixel": 0.000000019,
+        "output_cost_per_pixel": 0.0,
+        "litellm_provider": "openai"
+    },
+    "hd/1024-x-1792/dall-e-3": {
+        "mode": "image_generation",
+        "input_cost_per_pixel": 0.00000006539,
+        "output_cost_per_pixel": 0.0,
+        "litellm_provider": "openai"
+    },
+    "hd/1792-x-1024/dall-e-3": {
+        "mode": "image_generation",
+        "input_cost_per_pixel": 0.00000006539,
+        "output_cost_per_pixel": 0.0,
+        "litellm_provider": "openai"
+    },
+    "hd/1024-x-1024/dall-e-3": {
+        "mode": "image_generation",
+        "input_cost_per_pixel": 0.00000007629,
+        "output_cost_per_pixel": 0.0,
+        "litellm_provider": "openai"
+    },
+    "standard/1024-x-1792/dall-e-3": {
+        "mode": "image_generation",
+        "input_cost_per_pixel": 0.00000004359,
+        "output_cost_per_pixel": 0.0,
+        "litellm_provider": "openai"
+    },
+    "standard/1792-x-1024/dall-e-3": {
+        "mode": "image_generation",
+        "input_cost_per_pixel": 0.00000004359,
+        "output_cost_per_pixel": 0.0,
+        "litellm_provider": "openai"
+    },
+    "standard/1024-x-1024/dall-e-3": {
+        "mode": "image_generation",
+        "input_cost_per_pixel": 0.0000000381469,
+        "output_cost_per_pixel": 0.0,
+        "litellm_provider": "openai"
+    },
     "azure/gpt-4-1106-preview": {
         "max_tokens": 128000,
         "input_cost_per_token": 0.00001,
