@@ -1567,7 +1567,7 @@ class Router:
             #### VALIDATE MODEL ########
             # check if model provider in supported providers
             (
-                model,
+                _model,
                 custom_llm_provider,
                 dynamic_api_key,
                 api_base,
