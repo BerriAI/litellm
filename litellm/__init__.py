@@ -260,7 +260,13 @@ openai_compatible_endpoints: List = [
 ]
 
 # this is maintained for Exception Mapping
-openai_compatible_providers: List = ["anyscale", "mistral", "deepinfra", "perplexity"]
+openai_compatible_providers: List = [
+    "anyscale",
+    "mistral",
+    "deepinfra",
+    "perplexity",
+    "xinference",
+]
 
 
 # well supported replicate llms
@@ -401,6 +407,7 @@ provider_list: List = [
     "maritalk",
     "voyage",
     "cloudflare",
+    "xinference",
     "custom",  # custom apis
 ]
 
