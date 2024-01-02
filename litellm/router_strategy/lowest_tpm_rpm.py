@@ -151,7 +151,6 @@ class LowestTPMLoggingHandler(CustomLogger):
             ## if healthy deployment not yet used
             if d["model_info"]["id"] not in all_deployments:
                 all_deployments[d["model_info"]["id"]] = 0
-
         input_tokens = token_counter(messages=messages, text=input)
         for item, item_tpm in all_deployments.items():
             ## get the item from model list

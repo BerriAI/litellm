@@ -686,48 +686,72 @@ class Router:
         is_async: Optional[bool] = True,
         **kwargs,
     ) -> Union[List[float], None]:
-        # pick the one that is available (lowest TPM/RPM)
-        deployment = self.get_available_deployment(
-            model=model,
-            input=input,
-            specific_deployment=kwargs.pop("specific_deployment", None),
-        )
-        kwargs.setdefault("metadata", {}).update(
-            {"model_group": model, "deployment": deployment["litellm_params"]["model"]}
-        )
-        data = deployment["litellm_params"].copy()
-        kwargs["model_info"] = deployment.get("model_info", {})
-        for k, v in self.default_litellm_params.items():
+        try:
+            kwargs["model"] = model
+            kwargs["input"] = input
+            kwargs["original_function"] = self._aembedding
+            kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
+            timeout = kwargs.get("request_timeout", self.timeout)
+            kwargs.setdefault("metadata", {}).update({"model_group": model})
+            response = await self.async_function_with_fallbacks(**kwargs)
+            return response
+        except Exception as e:
+            raise e
+
+    async def _aembedding(self, input: Union[str, List], model: str, **kwargs):
+        try:
+            self.print_verbose(
+                f"Inside _aembedding()- model: {model}; kwargs: {kwargs}"
+            )
+            deployment = self.get_available_deployment(
+                model=model,
+                input=input,
+                specific_deployment=kwargs.pop("specific_deployment", None),
+            )
+            kwargs.setdefault("metadata", {}).update(
+                {"deployment": deployment["litellm_params"]["model"]}
+            )
+            kwargs["model_info"] = deployment.get("model_info", {})
+            data = deployment["litellm_params"].copy()
+            model_name = data["model"]
+            for k, v in self.default_litellm_params.items():
+                if (
+                    k not in kwargs
+                ):  # prioritize model-specific params > default router params
+                    kwargs[k] = v
+                elif k == "metadata":
+                    kwargs[k].update(v)
+
+            potential_model_client = self._get_client(
+                deployment=deployment, kwargs=kwargs, client_type="async"
+            )
+            # check if provided keys == client keys #
+            dynamic_api_key = kwargs.get("api_key", None)
             if (
-                k not in kwargs
-            ):  # prioritize model-specific params > default router params
-                kwargs[k] = v
-            elif k == "metadata":
-                kwargs[k].update(v)
+                dynamic_api_key is not None
+                and potential_model_client is not None
+                and dynamic_api_key != potential_model_client.api_key
+            ):
+                model_client = None
+            else:
+                model_client = potential_model_client
 
-        potential_model_client = self._get_client(
-            deployment=deployment, kwargs=kwargs, client_type="async"
-        )
-        # check if provided keys == client keys #
-        dynamic_api_key = kwargs.get("api_key", None)
-        if (
-            dynamic_api_key is not None
-            and potential_model_client is not None
-            and dynamic_api_key != potential_model_client.api_key
-        ):
-            model_client = None
-        else:
-            model_client = potential_model_client
-
-        return await litellm.aembedding(
-            **{
-                **data,
-                "input": input,
-                "caching": self.cache_responses,
-                "client": model_client,
-                **kwargs,
-            }
-        )
+            self.total_calls[model_name] += 1
+            response = await litellm.aembedding(
+                **{
+                    **data,
+                    "input": input,
+                    "caching": self.cache_responses,
+                    "client": model_client,
+                    **kwargs,
+                }
+            )
+            self.success_calls[model_name] += 1
+            return response
+        except Exception as e:
+            if model_name is not None:
+                self.fail_calls[model_name] += 1
+            raise e
 
     async def async_function_with_fallbacks(self, *args, **kwargs):
         """
@@ -1199,65 +1223,6 @@ class Router:
 
         self.print_verbose(f"retrieve cooldown models: {cooldown_models}")
         return cooldown_models
-
-    def _start_health_check_thread(self):
-        """
-        Starts a separate thread to perform health checks periodically.
-        """
-        health_check_thread = threading.Thread(
-            target=self._perform_health_checks, daemon=True
-        )
-        health_check_thread.start()
-
-    def _perform_health_checks(self):
-        """
-        Periodically performs health checks on the servers.
-        Updates the list of healthy servers accordingly.
-        """
-        while True:
-            self.healthy_deployments = self._health_check()
-            # Adjust the time interval based on your needs
-            time.sleep(15)
-
-    def _health_check(self):
-        """
-        Performs a health check on the deployments
-        Returns the list of healthy deployments
-        """
-        healthy_deployments = []
-        for deployment in self.model_list:
-            litellm_args = deployment["litellm_params"]
-            try:
-                start_time = time.time()
-                litellm.completion(
-                    messages=[{"role": "user", "content": ""}],
-                    max_tokens=1,
-                    **litellm_args,
-                )  # hit the server with a blank message to see how long it takes to respond
-                end_time = time.time()
-                response_time = end_time - start_time
-                logging.debug(f"response_time: {response_time}")
-                healthy_deployments.append((deployment, response_time))
-                healthy_deployments.sort(key=lambda x: x[1])
-            except Exception as e:
-                pass
-        return healthy_deployments
-
-    def weighted_shuffle_by_latency(self, items):
-        # Sort the items by latency
-        sorted_items = sorted(items, key=lambda x: x[1])
-        # Get only the latencies
-        latencies = [i[1] for i in sorted_items]
-        # Calculate the sum of all latencies
-        total_latency = sum(latencies)
-        # Calculate the weight for each latency (lower latency = higher weight)
-        weights = [total_latency - latency for latency in latencies]
-        # Get a weighted random item
-        if sum(weights) == 0:
-            chosen_item = random.choice(sorted_items)[0]
-        else:
-            chosen_item = random.choices(sorted_items, weights=weights, k=1)[0][0]
-        return chosen_item
 
     def set_client(self, model: dict):
         """
