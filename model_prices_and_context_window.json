@@ -200,6 +200,20 @@
         "litellm_provider": "azure",
         "mode": "chat"
     },
+    "azure/gpt-4-turbo": {
+        "max_tokens": 128000,
+        "input_cost_per_token": 0.00001,
+        "output_cost_per_token": 0.00003,
+        "litellm_provider": "azure", 
+        "mode": "chat"
+    },
+    "azure/gpt-4-turbo-vision-preview": {
+        "max_tokens": 128000,
+        "input_cost_per_token": 0.00001,
+        "output_cost_per_token": 0.00003,
+        "litellm_provider": "azure", 
+        "mode": "chat"
+    },
     "azure/gpt-35-turbo-16k-0613": {
         "max_tokens": 16385,
         "input_cost_per_token": 0.000003,
@@ -234,6 +248,48 @@
         "output_cost_per_token": 0.000000,
         "litellm_provider": "azure",
         "mode": "embedding"
+    },
+    "azure/standard/1024-x-1024/dall-e-3": {
+        "input_cost_per_pixel": 0.0000000381469,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "azure", 
+        "mode": "image_generation"
+    },
+    "azure/hd/1024-x-1024/dall-e-3": {
+        "input_cost_per_pixel": 0.00000007629,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "azure", 
+        "mode": "image_generation"
+    },
+    "azure/standard/1024-x-1792/dall-e-3": {
+        "input_cost_per_pixel": 0.00000004359,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "azure", 
+        "mode": "image_generation"
+    },
+    "azure/standard/1792-x-1024/dall-e-3": {
+        "input_cost_per_pixel": 0.00000004359,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "azure", 
+        "mode": "image_generation"
+    },
+    "azure/hd/1024-x-1792/dall-e-3": {
+        "input_cost_per_pixel": 0.00000006539,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "azure", 
+        "mode": "image_generation"
+    },
+    "azure/hd/1792-x-1024/dall-e-3": {
+        "input_cost_per_pixel": 0.00000006539,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "azure", 
+        "mode": "image_generation"
+    },
+    "azure/standard/1024-x-1024/dall-e-2": {
+        "input_cost_per_pixel": 0.0,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "azure", 
+        "mode": "image_generation"
     },
     "text-davinci-003": {
         "max_tokens": 4097,
