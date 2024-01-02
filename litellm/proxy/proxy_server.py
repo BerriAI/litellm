@@ -101,7 +101,7 @@ from typing import Union
 app = FastAPI(
     docs_url="/",
     title="LiteLLM API",
-    description="Proxy Server to call 100+ LLMs in the OpenAI format\n\nAdmin Panel on `https://dashboard.litellm.ai/admin`",
+    description="Proxy Server to call 100+ LLMs in the OpenAI format\n\nAdmin Panel on [https://dashboard.litellm.ai/admin](https://dashboard.litellm.ai/admin)",
 )
 router = APIRouter()
 origins = ["*"]
