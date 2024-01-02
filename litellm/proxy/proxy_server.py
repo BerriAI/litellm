@@ -1283,8 +1283,11 @@ async def chat_completion(
             response = await llm_router.acompletion(**data, specific_deployment=True)
         else:  # router is not set
             response = await litellm.acompletion(**data)
-
-        model_id = response._hidden_params.get("model_id", None) or ""
+        
+        if not hasattr(response, '_hidden_params'):
+            model_id = ""
+        else:
+            model_id = response._hidden_params.get("model_id", None) or ""
         if (
             "stream" in data and data["stream"] == True
         ):  # use generate_responses to stream responses
