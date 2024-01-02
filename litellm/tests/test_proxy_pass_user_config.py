@@ -24,6 +24,7 @@ logging.basicConfig(
 # test /chat/completion request to the proxy
 from fastapi.testclient import TestClient
 from fastapi import FastAPI
+import os
 from litellm.proxy.proxy_server import (
     router,
     save_worker_config,
@@ -54,6 +55,40 @@ def client_no_auth():
 
 def test_chat_completion(client_no_auth):
     global headers
+
+    from litellm.types.router import RouterConfig, ModelConfig
+    from litellm.types.completion import CompletionRequest
+
+    user_config = RouterConfig(
+        model_list=[
+            ModelConfig(
+                model_name="user-azure-instance",
+                litellm_params=CompletionRequest(
+                    model="azure/chatgpt-v-2",
+                    api_key=os.getenv("AZURE_API_KEY"),
+                    api_version=os.getenv("AZURE_API_VERSION"),
+                    api_base=os.getenv("AZURE_API_BASE"),
+                    timeout=10,
+                ),
+                tpm=240000,
+                rpm=1800,
+            ),
+            ModelConfig(
+                model_name="user-openai-instance",
+                litellm_params=CompletionRequest(
+                    model="gpt-3.5-turbo",
+                    api_key=os.getenv("OPENAI_API_KEY"),
+                    timeout=10,
+                ),
+                tpm=240000,
+                rpm=1800,
+            ),
+        ],
+        num_retries=2,
+        allowed_fails=3,
+        fallbacks=[{"user-azure-instance": ["user-openai-instance"]}],
+    ).dict()
+
     try:
         # Your test data
         test_data = {
@@ -62,21 +97,7 @@ def test_chat_completion(client_no_auth):
                 {"role": "user", "content": "hi"},
             ],
             "max_tokens": 10,
-            "user_config": {
-                "model_list": [
-                    {
-                        "model_name": "user-azure-instance",  # openai model name
-                        "litellm_params": {  # params for litellm completion/embedding call
-                            "model": "azure/chatgpt-v-2",
-                            "api_key": os.getenv("AZURE_API_KEY"),
-                            "api_version": os.getenv("AZURE_API_VERSION"),
-                            "api_base": os.getenv("AZURE_API_BASE"),
-                        },
-                        "tpm": 240000,
-                        "rpm": 1800,
-                    }
-                ]
-            },
+            "user_config": user_config,
         }
 
         print("testing proxy server with chat completions")
