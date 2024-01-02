@@ -1262,6 +1262,11 @@ async def chat_completion(
         # skip router if user passed their key
         if "api_key" in data:
             response = await litellm.acompletion(**data)
+        elif "user_config" in data:
+            # initialize a new router instance. make request using this Router
+            router_config = data.pop("user_config")
+            user_router = litellm.Router(**router_config)
+            response = await user_router.acompletion(**data)
         elif (
             llm_router is not None and data["model"] in router_model_names
         ):  # model in router model list
