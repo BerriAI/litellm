@@ -214,7 +214,6 @@ def test_router_get_available_deployments():
 
     ## CHECK WHAT'S SELECTED ##
     # print(router.lowesttpm_logger.get_available_deployments(model_group="azure-model"))
-    print(router.get_available_deployment(model="azure-model"))
     assert router.get_available_deployment(model="azure-model")["model_info"]["id"] == 2
 
 
@@ -309,7 +308,6 @@ async def test_router_completion_streaming():
         model_list=model_list,
         routing_strategy="usage-based-routing",
         set_verbose=False,
-        num_retries=3,
     )  # type: ignore
 
     ### Make 3 calls, test if 3rd call goes to lowest tpm deployment
@@ -327,7 +325,9 @@ async def test_router_completion_streaming():
         await asyncio.sleep(1)  # let the token update happen
         current_minute = datetime.now().strftime("%H-%M")
         picked_deployment = router.lowesttpm_logger.get_available_deployments(
-            model_group=model, healthy_deployments=router.healthy_deployments
+            model_group=model,
+            healthy_deployments=router.healthy_deployments,
+            messages=messages,
         )
         final_response = await router.acompletion(model=model, messages=messages)
         print(f"min deployment id: {picked_deployment}")
