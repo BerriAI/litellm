@@ -122,12 +122,16 @@ def test_get_available_deployments():
     ## CHECK WHAT'S SELECTED ##
     print(
         lowest_tpm_logger.get_available_deployments(
-            model_group=model_group, healthy_deployments=model_list
+            model_group=model_group,
+            healthy_deployments=model_list,
+            input=["Hello world"],
         )
     )
     assert (
         lowest_tpm_logger.get_available_deployments(
-            model_group=model_group, healthy_deployments=model_list
+            model_group=model_group,
+            healthy_deployments=model_list,
+            input=["Hello world"],
         )["model_info"]["id"]
         == "5678"
     )
