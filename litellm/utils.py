@@ -4221,11 +4221,7 @@ def get_model_info(model: str):
             return None
 
     try:
-        azure_llms = {
-            "gpt-35-turbo": "azure/gpt-3.5-turbo",
-            "gpt-35-turbo-16k": "azure/gpt-3.5-turbo-16k",
-            "gpt-35-turbo-instruct": "azure/gpt-3.5-turbo-instruct",
-        }
+        azure_llms = litellm.azure_llms
         if model in azure_llms:
             model = azure_llms[model]
         if model in litellm.model_cost:
