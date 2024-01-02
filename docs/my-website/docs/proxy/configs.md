@@ -392,6 +392,23 @@ model_list:
 
 </TabItem>
 
+
+<TabItem value="xinf" label="XInference">
+
+https://docs.litellm.ai/docs/providers/xinference
+
+**Note add `xinference/` prefix to `litellm_params`: `model` so litellm knows to route to OpenAI**
+
+```yaml
+model_list:
+- model_name: xinference-model  # model group
+  litellm_params:
+    model: xinference/bge-base-en   # model name for litellm.embedding(model=xinference/bge-base-en) 
+    api_base: http://0.0.0.0:9997/v1
+```
+
+</TabItem>
+
 <TabItem value="openai emb" label="OpenAI Compatible Embeddings">
 
 <p>Use this for calling <a href="https://github.com/xorbitsai/inference">/embedding endpoints on OpenAI Compatible Servers</a>.</p>
