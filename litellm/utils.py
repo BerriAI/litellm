@@ -3008,7 +3008,11 @@ def get_optional_params_embeddings(
         if (k in default_params and v != default_params[k])
     }
     ## raise exception if non-default value passed for non-openai/azure embedding calls
-    if custom_llm_provider != "openai" and custom_llm_provider != "azure":
+    if (
+        custom_llm_provider != "openai"
+        and custom_llm_provider != "azure"
+        and custom_llm_provider not in litellm.openai_compatible_providers
+    ):
         if len(non_default_params.keys()) > 0:
             if litellm.drop_params is True:  # drop the unsupported non-default values
                 keys = list(non_default_params.keys())
