@@ -251,6 +251,12 @@ print(query_result[:5])
 ### Pass User LLM API Keys, Fallbacks
 Allows users to pass their model list, api base, OpenAI API key (any LiteLLM supported provider) to make requests 
 
+:::info
+
+**You can pass a litellm.RouterConfig as `user_config`, See all supported params here https://github.com/BerriAI/litellm/blob/main/litellm/types/router.py **
+
+:::
+
 <Tabs>
 
 <TabItem value="openai-py" label="OpenAI Python">
