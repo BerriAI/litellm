@@ -401,7 +401,7 @@ https://docs.litellm.ai/docs/providers/xinference
 
 ```yaml
 model_list:
-- model_name: xinference-model  # model group
+- model_name: embedding-model  # model group
   litellm_params:
     model: xinference/bge-base-en   # model name for litellm.embedding(model=xinference/bge-base-en) 
     api_base: http://0.0.0.0:9997/v1
