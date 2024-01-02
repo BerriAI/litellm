@@ -1,8 +1,8 @@
 from typing import List, Optional, Union, Dict, Tuple, Literal
 
 from pydantic import BaseModel, validator
-from completion import CompletionRequest
-from embedding import EmbeddingRequest
+from .completion import CompletionRequest
+from .embedding import EmbeddingRequest
 
 
 class ModelConfig(BaseModel):
@@ -15,10 +15,10 @@ class ModelConfig(BaseModel):
 class RouterConfig(BaseModel):
     model_list: List[ModelConfig]
 
-    redis_url: Optional[str]
-    redis_host: Optional[str]
-    redis_port: Optional[int]
-    redis_password: Optional[str]
+    redis_url: Optional[str] = None
+    redis_host: Optional[str] = None
+    redis_port: Optional[int] = None
+    redis_password: Optional[str] = None
 
     cache_responses: Optional[bool] = False
     cache_kwargs: Optional[Dict] = {}
@@ -28,9 +28,9 @@ class RouterConfig(BaseModel):
     timeout: Optional[float] = None
     default_litellm_params: Optional[Dict[str, str]] = {}
     set_verbose: Optional[bool] = False
-    fallbacks: Optional[List[str]] = []
+    fallbacks: Optional[List] = []
     allowed_fails: Optional[int] = None
-    context_window_fallbacks: Optional[List[str]] = []
+    context_window_fallbacks: Optional[List] = []
     model_group_alias: Optional[Dict[str, List[str]]] = {}
     retry_after: Optional[int] = 0
     routing_strategy: Literal[
