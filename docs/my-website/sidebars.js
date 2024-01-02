@@ -113,6 +113,7 @@ const sidebars = {
         "proxy/health",
         "proxy/call_hooks",
         "proxy/caching",
+        "proxy/alerting",
         "proxy/logging", 
         "proxy/streaming_logging",
         "proxy/deploy", 
