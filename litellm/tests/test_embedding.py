@@ -332,6 +332,17 @@ def test_voyage_embeddings():
 
 
 # test_voyage_embeddings()
+# def test_xinference_embeddings():
+#     try:
+#         litellm.set_verbose = True
+#         response = litellm.embedding(
+#             model="xinference/bge-base-en",
+#             input=["good morning from litellm"],
+#         )
+#         print(f"response: {response}")
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
+# test_xinference_embeddings()
 
 # test_sagemaker_embeddings()
 # def local_proxy_embeddings():
