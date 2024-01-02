@@ -117,6 +117,12 @@ response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content
 
 Track spend across multiple projects/people 
 
+The proxy provides: 
+1. [Hooks for auth](https://docs.litellm.ai/docs/proxy/virtual_keys#custom-auth)
+2. [Hooks for logging](https://docs.litellm.ai/docs/proxy/logging#step-1---create-your-custom-litellm-callback-class)
+3. [Cost tracking](https://docs.litellm.ai/docs/proxy/virtual_keys#tracking-spend)
+4. [Rate Limiting](https://docs.litellm.ai/docs/proxy/users#set-rate-limits)
+
 ## 📖 Proxy Endpoints - [Swagger Docs](https://litellm-api.up.railway.app/)
 
 ## Quick Start Proxy - CLI 
