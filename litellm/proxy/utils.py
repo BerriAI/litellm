@@ -7,6 +7,9 @@ from litellm.proxy.hooks.parallel_request_limiter import MaxParallelRequestsHand
 from litellm.proxy.hooks.max_budget_limiter import MaxBudgetLimiter
 from litellm.integrations.custom_logger import CustomLogger
 from fastapi import HTTPException, status
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 
 def print_verbose(print_statement):
@@ -548,3 +551,42 @@ async def _cache_user_row(user_id: str, cache: DualCache, db: PrismaClient):
             key=cache_key, value=cache_value, ttl=600
         )  # store for 10 minutes
     return
+
+
+async def send_email(sender_name, sender_email, receiver_email, subject, html):
+    """
+    smtp_host,
+    smtp_port,
+    smtp_username,
+    smtp_password,
+    sender_name,
+    sender_email,
+    """
+    ## SERVER SETUP ##
+    smtp_host = os.getenv("SMTP_HOST")
+    smtp_port = os.getenv("SMTP_PORT", 587)  # default to port 587
+    smtp_username = os.getenv("SMTP_USERNAME")
+    smtp_password = os.getenv("SMTP_PASSWORD")
+    ## EMAIL SETUP ##
+    email_message = MIMEMultipart()
+    email_message["From"] = f"{sender_name} <{sender_email}>"
+    email_message["To"] = receiver_email
+    email_message["Subject"] = subject
+
+    # Attach the body to the email
+    email_message.attach(MIMEText(html, "html"))
+
+    try:
+        print_verbose(f"SMTP Connection Init")
+        # Establish a secure connection with the SMTP server
+        with smtplib.SMTP(smtp_host, smtp_port) as server:
+            server.starttls()
+
+            # Login to your email account
+            server.login(smtp_username, smtp_password)
+
+            # Send the email
+            server.send_message(email_message)
+
+    except Exception as e:
+        print_verbose("An error occurred while sending the email:", str(e))
