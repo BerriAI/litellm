@@ -70,6 +70,7 @@ from litellm.proxy.utils import (
     get_instance_fn,
     ProxyLogging,
     _cache_user_row,
+    send_email,
 )
 from litellm.proxy.secret_managers.google_kms import load_google_kms
 import pydantic
@@ -1742,11 +1743,12 @@ async def user_auth(request: Request):
     ```
 
     Requirements:
-    This uses [Resend](https://resend.com/) for sending emails. Needs these 2 keys in your .env:
-    ```env
-    RESEND_API_KEY = "my-resend-api-key"
-    RESEND_API_EMAIL = "my-sending-email"
-    ```
+    SMTP server details saved in .env:
+    - os.environ["SMTP_HOST"]
+    - os.environ["SMTP_PORT"]
+    - os.environ["SMTP_USERNAME"]
+    - os.environ["SMTP_PASSWORD"]
+    - os.environ["SMTP_SENDER_EMAIL"]
     """
     global prisma_client
 
@@ -1755,15 +1757,6 @@ async def user_auth(request: Request):
     page_params = data["page"]
     if user_email is None:
         raise HTTPException(status_code=400, detail="User email is none")
-
-    import os
-
-    try:
-        import resend
-    except ImportError:
-        raise Exception(
-            "Resend package missing. Run `pip install litellm[extra_proxy]` to add missing dependencies."
-        )
 
     if prisma_client is None:  # if no db connected, raise an error
         raise Exception("No connected db.")
@@ -1785,16 +1778,15 @@ async def user_auth(request: Request):
 
     base_url = os.getenv("LITELLM_HOSTED_UI", "https://dashboard.litellm.ai/")
 
-    resend.api_key = os.getenv("RESEND_API_KEY")
-
     params = {
-        "from": f"LiteLLM Proxy <{os.getenv('RESEND_API_EMAIL')}>",
-        "to": [user_email],
+        "sender_name": "LiteLLM Proxy",
+        "sender_email": os.getenv("SMTP_SENDER_EMAIL"),
+        "receiver_email": user_email,
         "subject": "Your Magic Link",
         "html": f"<strong> Follow this  link, to login:\n\n{base_url}user/?token={response['token']}&user_id={response['user_id']}&page={page_params}</strong>",
     }
 
-    email = resend.Emails.send(params)
+    await send_email(**params)
     return "Email sent!"
 
 
