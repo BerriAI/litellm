@@ -1564,6 +1564,23 @@ class Router:
             ):
                 model["litellm_params"]["tpm"] = model.get("tpm")
 
+            #### VALIDATE MODEL ########
+            # check if model provider in supported providers
+            (
+                model,
+                custom_llm_provider,
+                dynamic_api_key,
+                api_base,
+            ) = litellm.get_llm_provider(
+                model=model["litellm_params"]["model"],
+                custom_llm_provider=model["litellm_params"].get(
+                    "custom_llm_provider", None
+                ),
+            )
+
+            if custom_llm_provider not in litellm.provider_list:
+                raise Exception(f"Unsupported provider - {custom_llm_provider}")
+
             self.set_client(model=model)
 
         self.print_verbose(f"\nInitialized Model List {self.model_list}")
