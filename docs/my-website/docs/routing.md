@@ -571,3 +571,41 @@ print(f"response: {response}")
 ## Deploy Router 
 
 If you want a server to load balance across different LLM APIs, use our [OpenAI Proxy Server](./simple_proxy#load-balancing---multiple-instances-of-1-model)
+
+
+## Init Params for the litellm.Router
+
+```python
+def __init__(
+	model_list: Optional[list] = None,
+	
+	## CACHING ##
+	redis_url: Optional[str] = None,
+	redis_host: Optional[str] = None,
+	redis_port: Optional[int] = None,
+	redis_password: Optional[str] = None,
+	cache_responses: Optional[bool] = False,
+	cache_kwargs: dict = {},  # additional kwargs to pass to RedisCache (see caching.py)
+	caching_groups: Optional[
+		List[tuple]
+	] = None,  # if you want to cache across model groups
+	client_ttl: int = 3600,  # ttl for cached clients - will re-initialize after this time in seconds
+
+	## RELIABILITY ##
+	num_retries: int = 0,
+	timeout: Optional[float] = None,
+	default_litellm_params={},  # default params for Router.chat.completion.create
+	set_verbose: bool = False,
+	fallbacks: List = [],
+	allowed_fails: Optional[int] = None,
+	context_window_fallbacks: List = [],
+	model_group_alias: Optional[dict] = {},
+	retry_after: int = 0,  # min time to wait before retrying a failed request
+	routing_strategy: Literal[
+		"simple-shuffle",
+		"least-busy",
+		"usage-based-routing",
+		"latency-based-routing",
+	] = "simple-shuffle",
+):
+```
