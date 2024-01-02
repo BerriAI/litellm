@@ -640,12 +640,14 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
                 load_google_kms(use_google_kms=True)
             else:
                 raise ValueError("Invalid Key Management System selected")
-        ### [DEPRECATED] LOAD FROM GOOGLE KMS ###
+        ### [DEPRECATED] LOAD FROM GOOGLE KMS ### old way of loading from google kms
         use_google_kms = general_settings.get("use_google_kms", False)
         load_google_kms(use_google_kms=use_google_kms)
-        ### [DEPRECATED] LOAD FROM AZURE KEY VAULT ###
+        ### [DEPRECATED] LOAD FROM AZURE KEY VAULT ### old way of loading from azure secret manager
         use_azure_key_vault = general_settings.get("use_azure_key_vault", False)
         load_from_azure_key_vault(use_azure_key_vault=use_azure_key_vault)
+        ### ALERTING ###
+        proxy_logging_obj.update_values(alerting=general_settings.get("alerting", None))
         ### CONNECT TO DATABASE ###
         database_url = general_settings.get("database_url", None)
         if database_url and database_url.startswith("os.environ/"):
@@ -655,8 +657,6 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
         prisma_setup(database_url=database_url)
         ## COST TRACKING ##
         cost_tracking()
-        ### START REDIS QUEUE ###
-        use_queue = general_settings.get("use_queue", False)
         ### MASTER KEY ###
         master_key = general_settings.get("master_key", None)
         if master_key and master_key.startswith("os.environ/"):
@@ -1423,6 +1423,7 @@ async def embeddings(
         data = await proxy_logging_obj.pre_call_hook(
             user_api_key_dict=user_api_key_dict, data=data, call_type="embeddings"
         )
+
         ## ROUTE TO CORRECT ENDPOINT ##
         # skip router if user passed their key
         if "api_key" in data:
@@ -1529,6 +1530,7 @@ async def image_generation(
         data = await proxy_logging_obj.pre_call_hook(
             user_api_key_dict=user_api_key_dict, data=data, call_type="embeddings"
         )
+
         ## ROUTE TO CORRECT ENDPOINT ##
         # skip router if user passed their key
         if "api_key" in data:
