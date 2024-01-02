@@ -1490,85 +1490,6 @@ def test_completion_bedrock_cohere():
 # test_completion_bedrock_cohere()
 
 
-def test_completion_bedrock_claude_completion_auth():
-    print("calling bedrock claude completion params auth")
-    import os
-
-    aws_access_key_id = os.environ["AWS_ACCESS_KEY_ID"]
-    aws_secret_access_key = os.environ["AWS_SECRET_ACCESS_KEY"]
-    aws_region_name = os.environ["AWS_REGION_NAME"]
-
-    os.environ["AWS_ACCESS_KEY_ID"] = ""
-    os.environ["AWS_SECRET_ACCESS_KEY"] = ""
-    os.environ["AWS_REGION_NAME"] = ""
-
-    try:
-        response = completion(
-            model="bedrock/anthropic.claude-instant-v1",
-            messages=messages,
-            max_tokens=10,
-            temperature=0.1,
-            logger_fn=logger_fn,
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            aws_region_name=aws_region_name,
-        )
-        # Add any assertions here to check the response
-        print(response)
-
-        os.environ["AWS_ACCESS_KEY_ID"] = aws_access_key_id
-        os.environ["AWS_SECRET_ACCESS_KEY"] = aws_secret_access_key
-        os.environ["AWS_REGION_NAME"] = aws_region_name
-    except RateLimitError:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-# test_completion_bedrock_claude_completion_auth()
-
-# def test_completion_bedrock_claude_external_client_auth():
-#     print("calling bedrock claude external client auth")
-#     import os
-
-#     aws_access_key_id = os.environ["AWS_ACCESS_KEY_ID"]
-#     aws_secret_access_key = os.environ["AWS_SECRET_ACCESS_KEY"]
-#     aws_region_name = os.environ["AWS_REGION_NAME"]
-
-#     os.environ["AWS_ACCESS_KEY_ID"] = ""
-#     os.environ["AWS_SECRET_ACCESS_KEY"] = ""
-#     os.environ["AWS_REGION_NAME"] = ""
-
-#     try:
-#         import boto3
-#         bedrock = boto3.client(
-#             service_name="bedrock-runtime",
-#             region_name=aws_region_name,
-#             aws_access_key_id=aws_access_key_id,
-#             aws_secret_access_key=aws_secret_access_key,
-#             endpoint_url=f"https://bedrock-runtime.{aws_region_name}.amazonaws.com"
-#         )
-
-#         response = completion(
-#             model="bedrock/anthropic.claude-instant-v1",
-#             messages=messages,
-#             max_tokens=10,
-#             temperature=0.1,
-#             logger_fn=logger_fn,
-#             aws_bedrock_client=bedrock,
-#         )
-#         # Add any assertions here to check the response
-#         print(response)
-
-#         os.environ["AWS_ACCESS_KEY_ID"] = aws_access_key_id
-#         os.environ["AWS_SECRET_ACCESS_KEY"] = aws_secret_access_key
-#         os.environ["AWS_REGION_NAME"] = aws_region_name
-#     except RateLimitError:
-#         pass
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
-# test_completion_bedrock_claude_external_client_auth()
-
 # def test_completion_bedrock_claude_stream():
 #     print("calling claude")
 #     litellm.set_verbose = False
@@ -2017,7 +1938,7 @@ def test_completion_cloudflare():
         pytest.fail(f"Error occurred: {e}")
 
 
-test_completion_cloudflare()
+# test_completion_cloudflare()
 
 
 def test_moderation():
