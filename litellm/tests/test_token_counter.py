@@ -119,3 +119,23 @@ def test_encoding_and_decoding():
 
 
 # test_encoding_and_decoding()
+
+
+def test_gpt_vision_token_counting():
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What’s in this image?"},
+                {
+                    "type": "image_url",
+                    "image_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg",
+                },
+            ],
+        }
+    ]
+    tokens = token_counter(model="gpt-4-vision-preview", messages=messages)
+    print(f"tokens: {tokens}")
+
+
+# test_gpt_vision_token_counting()
