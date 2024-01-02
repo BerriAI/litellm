@@ -4,14 +4,14 @@ import uuid
 import traceback
 
 
-litellm_client = AsyncOpenAI(api_key="sk-1234", base_url="http://0.0.0.0:8000")
+litellm_client = AsyncOpenAI(base_url="http://0.0.0.0:8001", api_key="any")
 
 
 async def litellm_completion():
     # Your existing code for litellm_completion goes here
     try:
         response = await litellm_client.chat.completions.create(
-            model="gpt-3.5-turbo",
+            model="azure-gpt-3.5",
             messages=[{"role": "user", "content": f"This is a test: {uuid.uuid4()}"}],
         )
         return response
@@ -24,21 +24,23 @@ async def litellm_completion():
 
 
 async def main():
-    start = time.time()
-    n = 1000  # Number of concurrent tasks
-    tasks = [litellm_completion() for _ in range(n)]
+    for i in range(1000000):
+        start = time.time()
+        n = 500  # Number of concurrent tasks
+        tasks = [litellm_completion() for _ in range(n)]
 
-    chat_completions = await asyncio.gather(*tasks)
+        chat_completions = await asyncio.gather(*tasks)
 
-    successful_completions = [c for c in chat_completions if c is not None]
+        successful_completions = [c for c in chat_completions if c is not None]
 
-    # Write errors to error_log.txt
-    with open("error_log.txt", "a") as error_log:
-        for completion in chat_completions:
-            if isinstance(completion, str):
-                error_log.write(completion + "\n")
+        # Write errors to error_log.txt
+        with open("error_log.txt", "a") as error_log:
+            for completion in chat_completions:
+                if isinstance(completion, str):
+                    error_log.write(completion + "\n")
 
-    print(n, time.time() - start, len(successful_completions))
+        print(n, time.time() - start, len(successful_completions))
+        time.sleep(10)
 
 
 if __name__ == "__main__":
