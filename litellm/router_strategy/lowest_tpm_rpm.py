@@ -142,16 +142,21 @@ class LowestTPMLoggingHandler(CustomLogger):
         # ----------------------
         lowest_tpm = float("inf")
         deployment = None
-
         if tpm_dict is None:  # base case
-            return
+            item = random.choice(healthy_deployments)
+            return item
 
         all_deployments = tpm_dict
         for d in healthy_deployments:
             ## if healthy deployment not yet used
             if d["model_info"]["id"] not in all_deployments:
                 all_deployments[d["model_info"]["id"]] = 0
-        input_tokens = token_counter(messages=messages, text=input)
+
+        try:
+            input_tokens = token_counter(messages=messages, text=input)
+        except:
+            input_tokens = 0
+
         for item, item_tpm in all_deployments.items():
             ## get the item from model list
             _deployment = None
