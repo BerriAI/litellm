@@ -247,6 +247,146 @@ print(query_result[:5])
 
 
 ## Advanced
+
+### Pass User LLM API Keys, Fallbacks
+Allows users to pass their model list, api base, OpenAI API key (any LiteLLM supported provider) to make requests 
+
+<Tabs>
+
+<TabItem value="openai-py" label="OpenAI Python">
+
+#### Step 1: Define user model list & config
+```python
+import os
+
+user_config = {
+    'model_list': [
+        {
+            'model_name': 'user-azure-instance',
+            'litellm_params': {
+                'model': 'azure/chatgpt-v-2',
+                'api_key': os.getenv('AZURE_API_KEY'),
+                'api_version': os.getenv('AZURE_API_VERSION'),
+                'api_base': os.getenv('AZURE_API_BASE'),
+                'timeout': 10,
+            },
+            'tpm': 240000,
+            'rpm': 1800,
+        },
+        {
+            'model_name': 'user-openai-instance',
+            'litellm_params': {
+                'model': 'gpt-3.5-turbo',
+                'api_key': os.getenv('OPENAI_API_KEY'),
+                'timeout': 10,
+            },
+            'tpm': 240000,
+            'rpm': 1800,
+        },
+    ],
+    'num_retries': 2,
+    'allowed_fails': 3,
+    'fallbacks': [
+        {
+            'user-azure-instance': ['user-openai-instance']
+        }
+    ]
+}
+
+
+```
+
+#### Step 2: Send user_config in `extra_body`
+```python
+import openai
+client = openai.OpenAI(
+    api_key="sk-1234",
+    base_url="http://0.0.0.0:8000"
+)
+
+# send request to `user-azure-instance`
+response = client.chat.completions.create(model="user-azure-instance", messages = [
+    {
+        "role": "user",
+        "content": "this is a test request, write a short poem"
+    }
+], 
+    extra_body={
+      "user_config": user_config
+    }
+) # 👈 User config
+
+print(response)
+```
+
+</TabItem>
+
+<TabItem value="openai-js" label="OpenAI JS">
+
+#### Step 1: Define user model list & config
+```javascript
+const os = require('os');
+
+const userConfig = {
+    model_list: [
+        {
+            model_name: 'user-azure-instance',
+            litellm_params: {
+                model: 'azure/chatgpt-v-2',
+                api_key: process.env.AZURE_API_KEY,
+                api_version: process.env.AZURE_API_VERSION,
+                api_base: process.env.AZURE_API_BASE,
+                timeout: 10,
+            },
+            tpm: 240000,
+            rpm: 1800,
+        },
+        {
+            model_name: 'user-openai-instance',
+            litellm_params: {
+                model: 'gpt-3.5-turbo',
+                api_key: process.env.OPENAI_API_KEY,
+                timeout: 10,
+            },
+            tpm: 240000,
+            rpm: 1800,
+        },
+    ],
+    num_retries: 2,
+    allowed_fails: 3,
+    fallbacks: [
+        {
+            'user-azure-instance': ['user-openai-instance']
+        }
+    ]
+};
+```
+
+#### Step 2: Send `user_config` as a param to `openai.chat.completions.create`
+
+```javascript
+const { OpenAI } = require('openai');
+
+const openai = new OpenAI({
+  apiKey: "sk-1234",
+  baseURL: "http://0.0.0.0:8000"
+});
+
+async function main() {
+  const chatCompletion = await openai.chat.completions.create({
+    messages: [{ role: 'user', content: 'Say this is a test' }],
+    model: 'gpt-3.5-turbo',
+    user_config: userConfig // 👈 User Key
+  });
+}
+
+main();
+```
+
+</TabItem>
+
+</Tabs>
+
 ### Pass User LLM API Keys
 Allows your users to pass in their OpenAI API key (any LiteLLM supported provider) to make requests 
 
