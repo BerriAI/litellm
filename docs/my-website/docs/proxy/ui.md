@@ -14,15 +14,17 @@ This is in beta, so things may change. If you have feedback, [let us know](https
 
 Requirements: 
 
-- Need to a [Resend](https://resend.com/) account for sending emails 
+- Need to a SMTP server connection to send emails (e.g. [Resend](https://resend.com/docs/send-with-smtp))
 
 [**See code**](https://github.com/BerriAI/litellm/blob/61cd800b9ffbb02c286481d2056b65c7fb5447bf/litellm/proxy/proxy_server.py#L1782)
 
-### Step 1. Save Resend keys
+### Step 1. Save SMTP server credentials
 
 ```env
-export RESEND_API_KEY="my-resend-api-key" 
-export RESEND_API_EMAIL="my-resend-sending-email" # e.g. krrish@berri.ai
+export SMTP_HOST="my-smtp-host"
+export SMTP_USERNAME="my-smtp-password"
+export SMTP_PASSWORD="my-smtp-password"
+export SMTP_SENDER_EMAIL="krrish@berri.ai"
 ```
 
 ### Step 2. Enable user auth 
