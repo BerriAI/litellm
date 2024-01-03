@@ -127,6 +127,7 @@ def admin_page(is_admin="NOT_GIVEN"):
                             "mode": mode_selected,
                         },
                     }
+                    print(f"model_info: {model_info}")
                     # Make the POST request to the specified URL
                     complete_url = ""
                     if st.session_state["proxy_url"].endswith("/"):
@@ -143,7 +144,7 @@ def admin_page(is_admin="NOT_GIVEN"):
                         st.success("Model added successfully!")
                     else:
                         st.error(
-                            f"Failed to add model. Status code: {response.status_code}"
+                            f"Failed to add model. Status code: {response.status_code}; Error Message: {response.json()['detail']}"
                         )
 
                     st.success("Form submitted successfully!")

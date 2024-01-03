@@ -1888,7 +1888,7 @@ async def add_new_model(model_params: ModelParams):
                 config = yaml.safe_load(config_file)
         else:
             config = {"model_list": []}
-
+        backup_config = copy.deepcopy(config)
         print_verbose(f"Loaded config: {config}")
         # Add the new model to the config
         model_info = model_params.model_info.json()
@@ -1908,16 +1908,27 @@ async def add_new_model(model_params: ModelParams):
             yaml.dump(config, config_file, default_flow_style=False)
 
         # update Router
-        llm_router, llm_model_list, general_settings = load_router_config(
-            router=llm_router, config_file_path=user_config_file_path
-        )
+        try:
+            llm_router, llm_model_list, general_settings = load_router_config(
+                router=llm_router, config_file_path=user_config_file_path
+            )
+        except Exception as e:
+            # Rever to old config instead
+            with open(f"{user_config_file_path}", "w") as config_file:
+                yaml.dump(backup_config, config_file, default_flow_style=False)
+            raise HTTPException(status_code=400, detail="Invalid Model passed in")
 
         print_verbose(f"llm_model_list: {llm_model_list}")
         return {"message": "Model added successfully"}
 
     except Exception as e:
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
+        if isinstance(e, HTTPException):
+            raise e
+        else:
+            raise HTTPException(
+                status_code=500, detail=f"Internal Server Error: {str(e)}"
+            )
 
 
 #### [BETA] - This is a beta endpoint, format might change based on user feedback https://github.com/BerriAI/litellm/issues/933. If you need a stable endpoint use /model/info
