@@ -549,8 +549,10 @@ def test_s3_cache_acompletion_stream_bedrock():
                 "content": f"write a one sentence poem about: {random_word}",
             }
         ]
-        litellm.cache = Cache(type="s3")
-        print("test for caching, streaming + completion")
+        litellm.cache = Cache(
+            type="s3", s3_bucket_name="cache-bucket-litellm", s3_region_name="us-west-2"
+        )
+        print("s3 Cache: test for caching, streaming + completion")
         response_1_content = ""
         response_2_content = ""
 
@@ -600,7 +602,7 @@ def test_s3_cache_acompletion_stream_bedrock():
         raise e
 
 
-# test_s3_cache_acompletion_stream_bedrock()
+test_s3_cache_acompletion_stream_bedrock()
 
 
 # test_redis_cache_acompletion_stream_bedrock()
