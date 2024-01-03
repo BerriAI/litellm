@@ -117,11 +117,13 @@ litellm_settings:
 
 ### Turn on / off caching per request.  
 
-The proxy support 2 cache-controls:
+The proxy support 3 cache-controls:
 
 - `ttl`: Will cache the response for the user-defined amount of time (in seconds).
 - `s-max-age`: Will only accept cached responses that are within user-defined range (in seconds).
 - `no-cache`: Will not return a cached response, but instead call the actual endpoint. 
+
+[Let us know if you need more](https://github.com/BerriAI/litellm/issues/1218)
 
 **Turn off caching**
 
