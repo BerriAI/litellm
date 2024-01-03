@@ -2460,12 +2460,16 @@ def openai_token_counter(
     model="gpt-3.5-turbo-0613",
     text: Optional[str] = None,
     is_tool_call: Optional[bool] = False,
+    count_response_tokens: Optional[
+        bool
+    ] = False,  # Flag passed from litellm.stream_chunk_builder, to indicate counting tokens for LLM Response. We need this because for LLM input we add +3 tokens per message - based on OpenAI's token counter
 ):
     """
     Return the number of tokens used by a list of messages.
 
     Borrowed from https://github.com/openai/openai-cookbook/blob/main/examples/How_to_count_tokens_with_tiktoken.ipynb.
     """
+    print_verbose(f"LiteLLM: Utils - Counting tokens for OpenAI model={model}")
     try:
         encoding = tiktoken.encoding_for_model(model)
     except KeyError:
@@ -2516,8 +2520,10 @@ def openai_token_counter(
                                 num_tokens += calculage_img_tokens(
                                     data=image_url_str, mode="auto"
                                 )
-    elif text is not None:
+    elif text is not None and count_response_tokens == True:
+        # This is the case where we need to count tokens for a streamed response. We should NOT add +3 tokens per message in this branch
         num_tokens = len(encoding.encode(text, disallowed_special=()))
+        return num_tokens
     num_tokens += 3  # every reply is primed with <|start|>assistant<|message|>
     return num_tokens
 
@@ -2620,6 +2626,7 @@ def token_counter(
     model="",
     text: Optional[Union[str, List[str]]] = None,
     messages: Optional[List] = None,
+    count_response_tokens: Optional[bool] = False,
 ):
     """
     Count the number of tokens in a given text using a specified model.
@@ -2683,7 +2690,11 @@ def token_counter(
                 or model in litellm.azure_llms
             ):
                 num_tokens = openai_token_counter(
-                    text=text, model=model, messages=messages, is_tool_call=is_tool_call  # type: ignore
+                    text=text,  # type: ignore
+                    model=model,
+                    messages=messages,
+                    is_tool_call=is_tool_call,
+                    count_response_tokens=count_response_tokens,
                 )
             else:
                 enc = tokenizer_json["tokenizer"].encode(text)

@@ -3268,7 +3268,9 @@ def stream_chunk_builder(chunks: list, messages: Optional[list] = None):
         print_verbose(f"token_counter failed, assuming prompt tokens is 0")
         response["usage"]["prompt_tokens"] = 0
     response["usage"]["completion_tokens"] = token_counter(
-        model=model, text=completion_output
+        model=model,
+        text=combined_content,
+        count_response_tokens=True,  # count_response_tokens is a Flag to tell token counter this is a response, No need to add extra tokens we do for input messages
     )
     response["usage"]["total_tokens"] = (
         response["usage"]["prompt_tokens"] + response["usage"]["completion_tokens"]
