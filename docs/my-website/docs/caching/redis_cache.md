@@ -1,7 +1,7 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Redis Cache, s3 Cache
+# Caching - In-Memory, Redis, s3
 
 [**See Code**](https://github.com/BerriAI/litellm/blob/main/litellm/caching.py)
 
@@ -78,6 +78,36 @@ response2 = completion(
 ```
 
 </TabItem>
+
+
+<TabItem value="in-mem" label="in memory cache">
+
+### Quick Start
+
+```python
+import litellm
+from litellm import completion
+from litellm.caching import Cache
+litellm.cache = Cache()
+
+# Make completion calls
+response1 = completion(
+    model="gpt-3.5-turbo", 
+    messages=[{"role": "user", "content": "Tell me a joke."}]
+    caching=True
+)
+response2 = completion(
+    model="gpt-3.5-turbo", 
+    messages=[{"role": "user", "content": "Tell me a joke."}],
+    caching=True
+)
+
+# response1 == response2, response 1 is cached
+
+```
+
+</TabItem>
+
 
 </Tabs>
 
