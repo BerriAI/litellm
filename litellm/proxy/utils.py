@@ -34,10 +34,15 @@ class ProxyLogging:
         self.max_parallel_request_limiter = MaxParallelRequestsHandler()
         self.max_budget_limiter = MaxBudgetLimiter()
         self.alerting: Optional[List] = None
+        self.alerting_threshold: float = 300  # default to 5 min. threshold
         pass
 
-    def update_values(self, alerting: Optional[List]):
+    def update_values(
+        self, alerting: Optional[List], alerting_threshold: Optional[float]
+    ):
         self.alerting = alerting
+        if alerting_threshold is not None:
+            self.alerting_threshold = alerting_threshold
 
     def _init_litellm_callbacks(self):
         print_verbose(f"INITIALIZING LITELLM CALLBACKS!")
@@ -105,18 +110,45 @@ class ProxyLogging:
         except Exception as e:
             raise e
 
-    async def success_handler(self, *args, **kwargs):
+    async def success_handler(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: Any,
+        call_type: Literal["completion", "embeddings"],
+        start_time,
+        end_time,
+    ):
         """
-        Log successful db read/writes
+        Log successful API calls / db read/writes
         """
+
         pass
 
-    async def response_taking_too_long(self):
-        # Simulate a long-running operation that could take more than 5 minutes
-        await asyncio.sleep(
-            300
-        )  # Set it to 5 minutes - i'd imagine this might be different for streaming, non-streaming, non-completion (embedding + img) requests
-        await self.alerting_handler(message="Requests are hanging", level="Medium")
+    async def response_taking_too_long(
+        self,
+        start_time: Optional[float] = None,
+        end_time: Optional[float] = None,
+        type: Literal["hanging_request", "slow_response"] = "hanging_request",
+    ):
+        if type == "hanging_request":
+            # Simulate a long-running operation that could take more than 5 minutes
+            await asyncio.sleep(
+                self.alerting_threshold
+            )  # Set it to 5 minutes - i'd imagine this might be different for streaming, non-streaming, non-completion (embedding + img) requests
+
+            await self.alerting_handler(
+                message=f"Requests are hanging - {self.alerting_threshold}s+ request time",
+                level="Medium",
+            )
+
+        elif (
+            type == "slow_response" and start_time is not None and end_time is not None
+        ):
+            if end_time - start_time > self.alerting_threshold:
+                await self.alerting_handler(
+                    message=f"Responses are slow - {round(end_time-start_time,2)}s response time",
+                    level="Low",
+                )
 
     async def alerting_handler(
         self, message: str, level: Literal["Low", "Medium", "High"]
