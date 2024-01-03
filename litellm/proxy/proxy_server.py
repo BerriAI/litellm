@@ -128,7 +128,7 @@ user_temperature = None
 user_telemetry = True
 user_config = None
 user_headers = None
-user_config_file_path = f"config_{time.time()}.yaml"
+user_config_file_path = f"config_{int(time.time())}.yaml"
 local_logging = True  # writes logs to a local api_log.json file for debugging
 experimental = False
 #### GLOBAL VARIABLES ####
@@ -1936,8 +1936,12 @@ async def add_new_model(model_params: ModelParams):
 async def model_info_v1(request: Request):
     global llm_model_list, general_settings, user_config_file_path
     # Load existing config
-    with open(f"{user_config_file_path}", "r") as config_file:
-        config = yaml.safe_load(config_file)
+    if os.path.exists(f"{user_config_file_path}"):
+        with open(f"{user_config_file_path}", "r") as config_file:
+            config = yaml.safe_load(config_file)
+    else:
+        config = {"model_list": []}  # handle base case
+
     all_models = config["model_list"]
     for model in all_models:
         # provided model_info in config.yaml
