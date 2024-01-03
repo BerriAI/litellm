@@ -292,7 +292,8 @@ async def user_api_key_auth(
         else:
             raise Exception(f"Invalid token")
     except Exception as e:
-        print_verbose(f"An exception occurred - {traceback.format_exc()}")
+        # print_verbose(f"An exception occurred - {traceback.format_exc()}")
+        traceback.print_exc()
         if isinstance(e, HTTPException):
             raise e
         else:
