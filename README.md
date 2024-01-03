@@ -30,7 +30,7 @@ LiteLLM manages:
 - Load-balance multiple deployments (e.g. Azure/OpenAI) - `Router` **1k+ requests/second**
 
 [**Jump to OpenAI Proxy Docs**](https://github.com/BerriAI/litellm?tab=readme-ov-file#openai-proxy---docs) <br>
-[**Jump to Supported Providers**](https://github.com/BerriAI/litellm?tab=readme-ov-file#supported-provider-docs)
+[**Jump to Supported LLM / Embedding Providers**](https://github.com/BerriAI/litellm?tab=readme-ov-file#supported-provider-docs)
 
 # Usage ([**Docs**](https://docs.litellm.ai/docs/))
 > [!IMPORTANT]
