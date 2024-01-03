@@ -227,6 +227,14 @@ class ConfigGeneralSettings(LiteLLMBase):
     health_check_interval: int = Field(
         300, description="background health check interval in seconds"
     )
+    alerting: Optional[List] = Field(
+        None,
+        description="List of alerting integrations. Today, just slack - `alerting: ['slack']`",
+    )
+    alerting_threshold: Optional[int] = Field(
+        None,
+        description="sends alerts if requests hang for 5min+",
+    )
 
 
 class ConfigYAML(LiteLLMBase):
@@ -234,6 +242,10 @@ class ConfigYAML(LiteLLMBase):
     Documents all the fields supported by the config.yaml
     """
 
+    environment_variables: Optional[dict] = Field(
+        None,
+        description="Object to pass in additional environment variables via POST request",
+    )
     model_list: Optional[List[ModelParams]] = Field(
         None,
         description="List of supported models on the server, with model-specific configs",

@@ -225,8 +225,12 @@ async def user_api_key_auth(
         if is_master_key_valid:
             return UserAPIKeyAuth(api_key=master_key)
 
+        if route.startswith("/config/") and not is_master_key_valid:
+            raise Exception(f"Only admin can modify config")
+
         if (
             (route.startswith("/key/") or route.startswith("/user/"))
+            or route.startswith("/model/")
             and not is_master_key_valid
             and general_settings.get("allow_user_auth", False) != True
         ):
@@ -2185,6 +2189,78 @@ async def retrieve_server_log(request: Request):
 
 
 #### BASIC ENDPOINTS ####
+@router.post(
+    "/config/update",
+    tags=["config.yaml"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def update_config(config_info: ConfigYAML):
+    """
+    For Admin UI - allows admin to update config via UI
+
+    Currently supports modifying General Settings + LiteLLM settings
+    """
+    global llm_router, llm_model_list, general_settings
+    try:
+        # Load existing config
+        if os.path.exists(f"{user_config_file_path}"):
+            with open(f"{user_config_file_path}", "r") as config_file:
+                config = yaml.safe_load(config_file)
+        else:
+            config = {}
+        backup_config = copy.deepcopy(config)
+        print_verbose(f"Loaded config: {config}")
+
+        # update the general settings
+        if config_info.general_settings is not None:
+            config.setdefault("general_settings", {})
+            updated_general_settings = config_info.general_settings.dict(
+                exclude_none=True
+            )
+            config["general_settings"] = {
+                **updated_general_settings,
+                **config["general_settings"],
+            }
+
+        if config_info.environment_variables is not None:
+            config.setdefault("environment_variables", {})
+            updated_environment_variables = config_info.environment_variables
+            config["environment_variables"] = {
+                **updated_environment_variables,
+                **config["environment_variables"],
+            }
+
+        # update the litellm settings
+        if config_info.litellm_settings is not None:
+            config.setdefault("litellm_settings", {})
+            updated_litellm_settings = config_info.litellm_settings
+            config["litellm_settings"] = {
+                **updated_litellm_settings,
+                **config["litellm_settings"],
+            }
+
+        # Save the updated config
+        with open(f"{user_config_file_path}", "w") as config_file:
+            yaml.dump(config, config_file, default_flow_style=False)
+
+        # update Router
+        try:
+            llm_router, llm_model_list, general_settings = load_router_config(
+                router=llm_router, config_file_path=user_config_file_path
+            )
+        except Exception as e:
+            # Rever to old config instead
+            with open(f"{user_config_file_path}", "w") as config_file:
+                yaml.dump(backup_config, config_file, default_flow_style=False)
+            raise HTTPException(
+                status_code=400, detail=f"Invalid config passed in. Errror - {str(e)}"
+            )
+        return {"message": "Config updated successfully"}
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"An error occurred - {str(e)}")
 
 
 @router.get("/config/yaml", tags=["config.yaml"])
