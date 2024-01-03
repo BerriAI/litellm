@@ -1,4 +1,4 @@
-# Redis Cache
+# Redis Cache, s3 Cache
 
 [**See Code**](https://github.com/BerriAI/litellm/blob/4d7ff1b33b9991dcf38d821266290631d9bcd2dd/litellm/caching.py#L71)
 
