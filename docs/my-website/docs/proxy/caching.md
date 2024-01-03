@@ -1,3 +1,6 @@
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # Caching 
 Cache LLM Responses
 
@@ -41,7 +44,13 @@ REDIS_<redis-kwarg-name> = ""
 $ litellm --config /path/to/config.yaml
 ```
 
+
+
 ## Using Caching - /chat/completions
+
+<Tabs>
+<TabItem value="chat_completions" label="/chat/completions">
+
 Send the same request twice:
 ```shell
 curl http://0.0.0.0:8000/v1/chat/completions \
@@ -60,8 +69,9 @@ curl http://0.0.0.0:8000/v1/chat/completions \
      "temperature": 0.7
    }'
 ```
+</TabItem>
+<TabItem value="embeddings" label="/embeddings">
 
-## Using Caching - /embeddings
 Send the same request twice:
 ```shell
 curl --location 'http://0.0.0.0:8000/embeddings' \
@@ -78,6 +88,8 @@ curl --location 'http://0.0.0.0:8000/embeddings' \
   "input": ["write a litellm poem"]
   }'
 ```
+</TabItem>
+</Tabs>
 
 ## Advanced
 ### Set Cache Params on config.yaml
@@ -103,78 +115,86 @@ litellm_settings:
     supported_call_types: ["acompletion", "completion", "embedding", "aembedding"] # defaults to all litellm call types
 ```
 
-### Cache-Controls on requests 
+### Turn on / off caching per request.  
 
-Set ttl per request by passing Cache-Controls. The proxy currently supports just `s-maxage`. 
+The proxy support 2 cache-controls:
 
-Comment on this issue if you need additional cache controls - https://github.com/BerriAI/litellm/issues/1218
+- `ttl`: Will cache the response for the user-defined amount of time (in seconds).
+- `s-max-age`: Will only accept cached responses that are within user-defined range (in seconds).
+- `no-cache`: Will not return a cached response, but instead call the actual endpoint. 
 
-```javascript
-const { OpenAI } = require('openai');
+**Turn off caching**
 
-const openai = new OpenAI({
-  apiKey: "sk-1234", // This is the default and can be omitted
-  baseURL: "http://0.0.0.0:8000"
-});
+```python
+import os
+from openai import OpenAI
 
-async function main() {
-  const chatCompletion = await openai.chat.completions.create({
-    messages: [{ role: 'user', content: 'Say this is a test' }],
-    model: 'gpt-3.5-turbo',
-  }, {"headers": {
-    "Cache-Control": "s-maxage=0" // 👈 sets ttl=0
-  }});
-}
+client = OpenAI(
+    # This is the default and can be omitted
+    api_key=os.environ.get("OPENAI_API_KEY"),
+		base_url="http://0.0.0.0:8000"
+)
 
-main();
+chat_completion = client.chat.completions.create(
+    messages=[
+        {
+            "role": "user",
+            "content": "Say this is a test",
+        }
+    ],
+    model="gpt-3.5-turbo",
+    cache={
+			"no-cache": True # will not return a cached response 
+		}
+)
 ```
 
-### Override caching per `chat/completions` request
-Caching can be switched on/off per `/chat/completions` request
-- Caching **on** for individual completion - pass `caching=True`:
-  ```shell
-  curl http://0.0.0.0:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-     "model": "gpt-3.5-turbo",
-     "messages": [{"role": "user", "content": "write a poem about litellm!"}],
-     "temperature": 0.7,
-     "caching": true
-   }'
-  ```
-- Caching **off** for individual completion - pass `caching=False`:
-  ```shell
-  curl http://0.0.0.0:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-     "model": "gpt-3.5-turbo",
-     "messages": [{"role": "user", "content": "write a poem about litellm!"}],
-     "temperature": 0.7,
-     "caching": false
-   }'
-  ```
+**Turn on caching**
 
+```python
+import os
+from openai import OpenAI
 
-### Override caching per `/embeddings` request
+client = OpenAI(
+    # This is the default and can be omitted
+    api_key=os.environ.get("OPENAI_API_KEY"),
+		base_url="http://0.0.0.0:8000"
+)
 
-Caching can be switched on/off per `/embeddings` request
-- Caching **on** for embedding - pass `caching=True`:
-  ```shell
-  curl --location 'http://0.0.0.0:8000/embeddings' \
-    --header 'Content-Type: application/json' \
-    --data ' {
-    "model": "text-embedding-ada-002",
-    "input": ["write a litellm poem"],
-    "caching": true
-    }'
-  ```
-- Caching **off** for completion - pass `caching=False`:
-  ```shell
-    curl --location 'http://0.0.0.0:8000/embeddings' \
-    --header 'Content-Type: application/json' \
-    --data ' {
-    "model": "text-embedding-ada-002",
-    "input": ["write a litellm poem"],
-    "caching": false
-    }'
-  ```
+chat_completion = client.chat.completions.create(
+    messages=[
+        {
+            "role": "user",
+            "content": "Say this is a test",
+        }
+    ],
+    model="gpt-3.5-turbo",
+    cache={
+			"ttl": 600 # caches response for 10 minutes 
+		}
+)
+```
+
+```python
+import os
+from openai import OpenAI
+
+client = OpenAI(
+    # This is the default and can be omitted
+    api_key=os.environ.get("OPENAI_API_KEY"),
+		base_url="http://0.0.0.0:8000"
+)
+
+chat_completion = client.chat.completions.create(
+    messages=[
+        {
+            "role": "user",
+            "content": "Say this is a test",
+        }
+    ],
+    model="gpt-3.5-turbo",
+    cache={
+			"s-max-age": 600 # only get responses cached within last 10 minutes 
+		}
+)
+```

@@ -1971,12 +1971,12 @@ def client(original_function):
             print_verbose(
                 f"kwargs[caching]: {kwargs.get('caching', False)}; litellm.cache: {litellm.cache}"
             )
-            # if caching is false, don't run this
+            # if caching is false or cache["no-cache"]==True, don't run this
             if (
-                kwargs.get("caching", None) is None and litellm.cache is not None
-            ) or kwargs.get(
-                "caching", False
-            ) == True:  # allow users to control returning cached responses from the completion function
+                (kwargs.get("caching", None) is None and litellm.cache is not None)
+                or kwargs.get("caching", False) == True
+                or kwargs.get("cache", {}).get("no-cache", False) != True
+            ):  # allow users to control returning cached responses from the completion function
                 # checking cache
                 print_verbose(f"INSIDE CHECKING CACHE")
                 if (
@@ -2148,10 +2148,13 @@ def client(original_function):
             )
             # if caching is false, don't run this
             if (
-                kwargs.get("caching", None) is None and litellm.cache is not None
-            ) or kwargs.get(
-                "caching", False
-            ) == True:  # allow users to control returning cached responses from the completion function
+                (kwargs.get("caching", None) is None and litellm.cache is not None)
+                or kwargs.get("caching", False) == True
+                or (
+                    kwargs.get("cache", None) is not None
+                    and kwargs.get("cache").get("no-cache", False) != True
+                )
+            ):  # allow users to control returning cached responses from the completion function
                 # checking cache
                 print_verbose(f"INSIDE CHECKING CACHE")
                 if (
