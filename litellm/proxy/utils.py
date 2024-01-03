@@ -33,6 +33,7 @@ class ProxyLogging:
         self.call_details["user_api_key_cache"] = user_api_key_cache
         self.max_parallel_request_limiter = MaxParallelRequestsHandler()
         self.max_budget_limiter = MaxBudgetLimiter()
+        self.alerting: Optional[List] = None
         pass
 
     def update_values(self, alerting: Optional[List]):
