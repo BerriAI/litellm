@@ -142,30 +142,30 @@ def test_stream_chunk_builder_count_prompt_tokens():
     # test the prompt tokens for streamed responses == prompt tokens for non-streamed
     # test the model for streamed responses == model for non-streamed
     try:
-        messages = [{"role": "user", "content": "Hey, how's it going?"}]
-        litellm.set_verbose = False
+        messages = [{"role": "user", "content": "say 1"}]
+        litellm.set_verbose = True
         response = litellm.completion(
             model="azure/chatgpt-v-2",
             messages=messages,
             stream=True,
-            max_tokens=1,
             complete_response=True,
         )
         print(f"Stream Assembled response: {response}")
 
         stream_prompt_tokens = response.usage.prompt_tokens
         stream_model = response.model
+        stream_completion_tokens = response.usage.completion_tokens
 
-        response = litellm.completion(
-            model="azure/chatgpt-v-2", messages=messages, max_tokens=1
-        )
+        response = litellm.completion(model="azure/chatgpt-v-2", messages=messages)
         print(f"\nNon Stream Response: {response}")
 
         non_stream_prompt_tokens = response.usage.prompt_tokens
+        non_stream_completion_tokens = response.usage.completion_tokens
         non_stream_model = response.model
 
         assert stream_model == non_stream_model
         assert stream_prompt_tokens == non_stream_prompt_tokens
+        assert stream_completion_tokens == non_stream_completion_tokens
 
     except Exception as e:
         pytest.fail(f"An exception occurred - {str(e)}")
