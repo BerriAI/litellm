@@ -29,7 +29,7 @@ LiteLLM manages:
 - [Consistent output](https://docs.litellm.ai/docs/completion/output), text responses will always be available at `['choices'][0]['message']['content']`
 - Load-balance multiple deployments (e.g. Azure/OpenAI) - `Router` **1k+ requests/second**
 
-[**Jump to OpenAI Proxy Docs**](https://github.com/BerriAI/litellm?tab=readme-ov-file#openai-proxy---docs)
+[**Jump to OpenAI Proxy Docs**](https://github.com/BerriAI/litellm?tab=readme-ov-file#openai-proxy---docs) <br>
 [**Jump to Supported Providers**](https://github.com/BerriAI/litellm?tab=readme-ov-file#supported-provider-docs)
 
 # Usage ([**Docs**](https://docs.litellm.ai/docs/))
