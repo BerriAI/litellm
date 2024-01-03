@@ -1014,7 +1014,7 @@ async def startup_event():
         )  # start the background health check coroutine.
 
     print_verbose(f"prisma client - {prisma_client}")
-    if prisma_client:
+    if prisma_client is not None:
         await prisma_client.connect()
 
     if prisma_client is not None and master_key is not None:
