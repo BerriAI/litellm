@@ -4,16 +4,19 @@ import uuid
 import traceback
 
 
-litellm_client = AsyncOpenAI(base_url="http://0.0.0.0:8001", api_key="any")
+litellm_client = AsyncOpenAI(base_url="http://0.0.0.0:8000", api_key="any")
 
 
 async def litellm_completion():
     # Your existing code for litellm_completion goes here
     try:
         response = await litellm_client.chat.completions.create(
-            model="azure-gpt-3.5",
+            model="Azure OpenAI GPT-4 Canada-East (External)",
+            stream=True,
             messages=[{"role": "user", "content": f"This is a test: {uuid.uuid4()}"}],
         )
+        async for chunk in response:
+            print(chunk)
         return response
 
     except Exception as e:
@@ -26,7 +29,7 @@ async def litellm_completion():
 async def main():
     for i in range(1000000):
         start = time.time()
-        n = 500  # Number of concurrent tasks
+        n = 1000  # Number of concurrent tasks
         tasks = [litellm_completion() for _ in range(n)]
 
         chat_completions = await asyncio.gather(*tasks)
