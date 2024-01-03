@@ -4,6 +4,11 @@ import TabItem from '@theme/TabItem';
 # Caching 
 Cache LLM Responses
 
+LiteLLM supports:
+- In Memory Cache
+- Redis Cache 
+- s3 Bucket Cache 
+
 ## Quick Start
 Caching can be enabled by adding the `cache` key in the `config.yaml`
 ### Step 1: Add `cache` to the config.yaml
@@ -199,4 +204,37 @@ chat_completion = client.chat.completions.create(
 			"s-max-age": 600 # only get responses cached within last 10 minutes 
 		}
 )
+```
+
+## Supported `cache_params`
+
+```yaml
+cache_params:
+  # Type of cache (options: "local", "redis", "s3")
+  type: s3
+
+  # List of litellm call types to cache for
+  # Options: "completion", "acompletion", "embedding", "aembedding"
+  supported_call_types:
+    - completion
+    - acompletion
+    - embedding
+    - aembedding
+
+  # Redis cache parameters
+  host: localhost  # Redis server hostname or IP address
+  port: "6379"  # Redis server port (as a string)
+  password: secret_password  # Redis server password
+
+  # S3 cache parameters
+  s3_bucket_name: your_s3_bucket_name  # Name of the S3 bucket
+  s3_region_name: us-west-2  # AWS region of the S3 bucket
+  s3_api_version: 2006-03-01  # AWS S3 API version
+  s3_use_ssl: true  # Use SSL for S3 connections (options: true, false)
+  s3_verify: true  # SSL certificate verification for S3 connections (options: true, false)
+  s3_endpoint_url: https://s3.amazonaws.com  # S3 endpoint URL
+  s3_aws_access_key_id: your_access_key  # AWS Access Key ID for S3
+  s3_aws_secret_access_key: your_secret_key  # AWS Secret Access Key for S3
+  s3_aws_session_token: your_session_token  # AWS Session Token for temporary credentials
+
 ```
