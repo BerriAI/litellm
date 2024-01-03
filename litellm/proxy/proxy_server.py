@@ -306,7 +306,9 @@ async def user_api_key_auth(
 def prisma_setup(database_url: Optional[str]):
     global prisma_client, proxy_logging_obj, user_api_key_cache
 
-    if database_url is not None:
+    if (
+        database_url is not None and prisma_client is None
+    ):  # don't re-initialize prisma client after initial init
         try:
             prisma_client = PrismaClient(
                 database_url=database_url, proxy_logging_obj=proxy_logging_obj
@@ -663,7 +665,9 @@ def load_router_config(router: Optional[litellm.Router], config_file_path: str):
         ## COST TRACKING ##
         cost_tracking()
         ### MASTER KEY ###
-        master_key = general_settings.get("master_key", None)
+        master_key = general_settings.get(
+            "master_key", litellm.get_secret("LITELLM_MASTER_KEY", None)
+        )
         if master_key and master_key.startswith("os.environ/"):
             master_key = litellm.get_secret(master_key)
         ### CUSTOM API KEY AUTH ###
