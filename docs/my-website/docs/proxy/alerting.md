@@ -24,6 +24,7 @@ model_list:
 
 general_settings: 
     alerting: ["slack"]
+    alerting_threshold: 300 # sends alerts if requests hang for 5min+ and responses take 5min+ 
 
 environment_variables:
     SLACK_WEBHOOK_URL: "https://hooks.slack.com/services/<>/<>/<>"
