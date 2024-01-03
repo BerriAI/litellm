@@ -1,4 +1,4 @@
-import sys, os
+import sys, os, uuid
 import time
 import traceback
 from dotenv import load_dotenv
@@ -79,6 +79,46 @@ def test_caching_with_ttl():
     except Exception as e:
         print(f"error occurred: {traceback.format_exc()}")
         pytest.fail(f"Error occurred: {e}")
+
+
+def test_caching_with_cache_controls():
+    try:
+        litellm.set_verbose = True
+        litellm.cache = Cache()
+        message = [{"role": "user", "content": f"Hey, how's it going? {uuid.uuid4()}"}]
+        ## TTL = 0
+        response1 = completion(
+            model="gpt-3.5-turbo", messages=messages, cache={"ttl": 0}
+        )
+        response2 = completion(
+            model="gpt-3.5-turbo", messages=messages, cache={"s-max-age": 10}
+        )
+        print(f"response1: {response1}")
+        print(f"response2: {response2}")
+        assert (
+            response2["choices"][0]["message"]["content"]
+            != response1["choices"][0]["message"]["content"]
+        )
+        message = [{"role": "user", "content": f"Hey, how's it going? {uuid.uuid4()}"}]
+        ## TTL = 5
+        response1 = completion(
+            model="gpt-3.5-turbo", messages=messages, cache={"ttl": 5}
+        )
+        response2 = completion(
+            model="gpt-3.5-turbo", messages=messages, cache={"s-max-age": 5}
+        )
+        print(f"response1: {response1}")
+        print(f"response2: {response2}")
+        assert (
+            response2["choices"][0]["message"]["content"]
+            == response1["choices"][0]["message"]["content"]
+        )
+    except Exception as e:
+        print(f"error occurred: {traceback.format_exc()}")
+        pytest.fail(f"Error occurred: {e}")
+
+
+# test_caching_with_cache_controls()
 
 
 def test_caching_with_models_v2():
