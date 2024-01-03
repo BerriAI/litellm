@@ -2682,6 +2682,9 @@ def token_counter(
     if model is not None:
         tokenizer_json = _select_tokenizer(model=model)
         if tokenizer_json["type"] == "huggingface_tokenizer":
+            print_verbose(
+                f"Token Counter - using hugging face token counter, for model={model}"
+            )
             enc = tokenizer_json["tokenizer"].encode(text)
             num_tokens = len(enc.ids)
         elif tokenizer_json["type"] == "openai_tokenizer":
@@ -2689,6 +2692,13 @@ def token_counter(
                 model in litellm.open_ai_chat_completion_models
                 or model in litellm.azure_llms
             ):
+                if model in litellm.azure_llms:
+                    # azure llms use gpt-35-turbo instead of gpt-3.5-turbo 🙃
+                    model = model.replace("-35", "-3.5")
+
+                print_verbose(
+                    f"Token Counter - using OpenAI token counter, for model={model}"
+                )
                 num_tokens = openai_token_counter(
                     text=text,  # type: ignore
                     model=model,
@@ -2697,6 +2707,9 @@ def token_counter(
                     count_response_tokens=count_response_tokens,
                 )
             else:
+                print_verbose(
+                    f"Token Counter - using generic token counter, for model={model}"
+                )
                 enc = tokenizer_json["tokenizer"].encode(text)
                 num_tokens = len(enc)
     else:
