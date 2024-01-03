@@ -9,8 +9,13 @@ LiteLLM supports:
 - Redis Cache 
 - s3 Bucket Cache 
 
-## Quick Start
+## Quick Start - Redis, s3 Cache
+<Tabs>
+
+<TabItem value="redis" label="redis cache">
+
 Caching can be enabled by adding the `cache` key in the `config.yaml`
+
 ### Step 1: Add `cache` to the config.yaml
 ```yaml
 model_list:
@@ -48,7 +53,37 @@ REDIS_<redis-kwarg-name> = ""
 ```shell
 $ litellm --config /path/to/config.yaml
 ```
+</TabItem>
 
+<TabItem value="s3" label="s3 cache">
+
+### Step 1: Add `cache` to the config.yaml
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+  - model_name: text-embedding-ada-002
+    litellm_params:
+      model: text-embedding-ada-002
+
+litellm_settings:
+  set_verbose: True
+  cache: True          # set cache responses to True
+  cache_params:        # set cache params for s3
+    type: s3
+    s3_bucket_name: cache-bucket-litellm   # AWS Bucket Name for S3
+    s3_region_name: us-west-2              # AWS Region Name for S3
+    s3_aws_access_key_id: your_access_key  # AWS Access Key ID for S3
+    s3_aws_secret_access_key: your_secret_key  # AWS Secret Access Key for S3
+```
+
+### Step 2: Run proxy with config
+```shell
+$ litellm --config /path/to/config.yaml
+```
+</TabItem>
+</Tabs>
 
 
 ## Using Caching - /chat/completions
