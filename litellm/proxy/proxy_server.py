@@ -856,10 +856,6 @@ def initialize(
         llm_router, llm_model_list, general_settings = load_router_config(
             router=llm_router, config_file_path=config
         )
-    else:
-        # reset auth if config not passed, needed for consecutive tests on proxy
-        master_key = None
-        user_custom_auth = None
     if headers:  # model-specific param
         user_headers = headers
         dynamic_config[user_model]["headers"] = headers
@@ -990,6 +986,10 @@ def parse_cache_control(cache_control):
 async def startup_event():
     global prisma_client, master_key, use_background_health_checks
     import json
+
+    ### LOAD MASTER KEY ###
+    # check if master key set in environment - load from there
+    master_key = litellm.get_secret("LITELLM_MASTER_KEY", None)
 
     ### LOAD CONFIG ###
     worker_config = litellm.get_secret("WORKER_CONFIG")
