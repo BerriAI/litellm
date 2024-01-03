@@ -342,7 +342,38 @@ class Cache:
             else:
                 cache_key = self.get_cache_key(*args, **kwargs)
             if cache_key is not None:
+                max_age = kwargs.get("cache", {}).get("s-max-age", float("inf"))
                 cached_result = self.cache.get_cache(cache_key)
+                # Check if a timestamp was stored with the cached response
+                if (
+                    cached_result is not None
+                    and isinstance(cached_result, dict)
+                    and "timestamp" in cached_result
+                    and max_age is not None
+                ):
+                    timestamp = cached_result["timestamp"]
+                    current_time = time.time()
+
+                    # Calculate age of the cached response
+                    response_age = current_time - timestamp
+
+                    # Check if the cached response is older than the max-age
+                    if response_age > max_age:
+                        print_verbose(
+                            f"Cached response for key {cache_key} is too old. Max-age: {max_age}s, Age: {response_age}s"
+                        )
+                        return None  # Cached response is too old
+
+                    # If the response is fresh, or there's no max-age requirement, return the cached response
+                    # cached_response is in `b{} convert it to ModelResponse
+                    cached_response = cached_result.get("response")
+                    try:
+                        cached_response = json.loads(
+                            cached_response
+                        )  # Convert string to dictionary
+                    except:
+                        cached_response = ast.literal_eval(cached_response)
+                    return cached_response
                 return cached_result
         except Exception as e:
             logging.debug(f"An exception occurred: {traceback.format_exc()}")
@@ -367,7 +398,16 @@ class Cache:
             if cache_key is not None:
                 if isinstance(result, litellm.ModelResponse):
                     result = result.model_dump_json()
-                self.cache.set_cache(cache_key, result, **kwargs)
+
+                ## Get Cache-Controls ##
+                if kwargs.get("cache", None) is not None and isinstance(
+                    kwargs.get("cache"), dict
+                ):
+                    for k, v in kwargs.get("cache").items():
+                        if k == "ttl":
+                            kwargs["ttl"] = v
+                cached_data = {"timestamp": time.time(), "response": result}
+                self.cache.set_cache(cache_key, cached_data, **kwargs)
         except Exception as e:
             print_verbose(f"LiteLLM Cache: Excepton add_cache: {str(e)}")
             traceback.print_exc()

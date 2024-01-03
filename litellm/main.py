@@ -468,6 +468,7 @@ def completion(
         "preset_cache_key",
         "caching_groups",
         "ttl",
+        "cache",
     ]
     default_params = openai_params + litellm_params
     non_default_params = {
@@ -2209,6 +2210,7 @@ def embedding(
         "preset_cache_key",
         "caching_groups",
         "ttl",
+        "cache",
     ]
     default_params = openai_params + litellm_params
     non_default_params = {
@@ -2904,6 +2906,7 @@ def image_generation(
         "preset_cache_key",
         "caching_groups",
         "ttl",
+        "cache",
     ]
     default_params = openai_params + litellm_params
     non_default_params = {
