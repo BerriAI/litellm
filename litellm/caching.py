@@ -498,9 +498,12 @@ class Cache:
                     # cached_response is in `b{} convert it to ModelResponse
                     cached_response = cached_result.get("response")
                     try:
-                        cached_response = json.loads(
-                            cached_response
-                        )  # Convert string to dictionary
+                        if isinstance(cached_response, dict):
+                            pass
+                        else:
+                            cached_response = json.loads(
+                                cached_response
+                            )  # Convert string to dictionary
                     except:
                         cached_response = ast.literal_eval(cached_response)
                     return cached_response
