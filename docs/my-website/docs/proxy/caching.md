@@ -161,7 +161,7 @@ litellm_settings:
 The proxy support 3 cache-controls:
 
 - `ttl`: Will cache the response for the user-defined amount of time (in seconds).
-- `s-max-age`: Will only accept cached responses that are within user-defined range (in seconds).
+- `s-maxage`: Will only accept cached responses that are within user-defined range (in seconds).
 - `no-cache`: Will not return a cached response, but instead call the actual endpoint. 
 
 [Let us know if you need more](https://github.com/BerriAI/litellm/issues/1218)
@@ -237,7 +237,7 @@ chat_completion = client.chat.completions.create(
     ],
     model="gpt-3.5-turbo",
     cache={
-			"s-max-age": 600 # only get responses cached within last 10 minutes 
+			"s-maxage": 600 # only get responses cached within last 10 minutes 
 		}
 )
 ```

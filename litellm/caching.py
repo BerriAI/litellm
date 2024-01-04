@@ -11,6 +11,7 @@ import litellm
 import time, logging
 import json, traceback, ast, hashlib
 from typing import Optional, Literal, List, Union, Any
+from openai._models import BaseModel as OpenAIObject
 
 
 def print_verbose(print_statement):
@@ -472,7 +473,10 @@ class Cache:
             else:
                 cache_key = self.get_cache_key(*args, **kwargs)
             if cache_key is not None:
-                max_age = kwargs.get("cache", {}).get("s-max-age", float("inf"))
+                cache_control_args = kwargs.get("cache", {})
+                max_age = cache_control_args.get(
+                    "s-max-age", cache_control_args.get("s-maxage", float("inf"))
+                )
                 cached_result = self.cache.get_cache(cache_key)
                 # Check if a timestamp was stored with the cached response
                 if (
@@ -529,7 +533,7 @@ class Cache:
             else:
                 cache_key = self.get_cache_key(*args, **kwargs)
             if cache_key is not None:
-                if isinstance(result, litellm.ModelResponse):
+                if isinstance(result, OpenAIObject):
                     result = result.model_dump_json()
 
                 ## Get Cache-Controls ##
