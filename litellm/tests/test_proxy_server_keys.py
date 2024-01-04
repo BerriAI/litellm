@@ -39,7 +39,7 @@ save_worker_config(
     alias=None,
     api_base=None,
     api_version=None,
-    debug=False,
+    debug=True,
     temperature=None,
     max_tokens=None,
     request_timeout=600,
