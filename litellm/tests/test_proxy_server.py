@@ -10,7 +10,7 @@ import os, io
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-import pytest, logging
+import pytest, logging, asyncio
 import litellm
 from litellm import embedding, completion, completion_cost, Timeout
 from litellm import RateLimitError
@@ -45,7 +45,7 @@ def client_no_auth():
     filepath = os.path.dirname(os.path.abspath(__file__))
     config_fp = f"{filepath}/test_configs/test_config_no_auth.yaml"
     # initialize can get run in parallel, it sets specific variables for the fast api app, sinc eit gets run in parallel different tests use the wrong variables
-    initialize(config=config_fp, debug=True)
+    asyncio.run(initialize(config=config_fp, debug=True))
     app = FastAPI()
     app.include_router(router)  # Include your router in the test app
 
