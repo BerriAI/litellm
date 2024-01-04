@@ -82,9 +82,22 @@ def test_chat_completion(client_no_auth):
         print(response)
 
         content = response["choices"][0]["message"]["content"]
+        response1_id = response["id"]
 
         print("\n content", content)
 
         assert len(content) > 1
+
+        print("\nmaking 2nd request to proxy. Testing caching + non streaming")
+        response = client_no_auth.post("/v1/chat/completions", json=test_data)
+        print(f"response - {response.text}")
+        assert response.status_code == 200
+
+        response = response.json()
+        print(response)
+        response2_id = response["id"]
+        assert response1_id == response2_id
+        litellm.disable_cache()
+
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception - {str(e)}")
