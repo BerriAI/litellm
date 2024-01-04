@@ -1,12 +1,10 @@
-#
+# this workflow is triggered by an API call when there is a new PyPI release of LiteLLM
 name: Build, Publish LiteLLM Docker Image. New Release
 on:
   workflow_dispatch:
     inputs:
       tag:
         description: "The tag version you want to build"
-  release:
-    types: [published]
 
 # Defines two custom environment variables for the workflow. Used for the Container registry domain, and a name for the Docker image that this workflow builds.
 env:
@@ -15,6 +13,27 @@ env:
 
 # There is a single job in this workflow. It's configured to run on the latest available version of Ubuntu.
 jobs:
+  read-version:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: 3.8  # Adjust the Python version as needed
+
+      - name: Install dependencies
+        run: pip install toml
+
+      - name: Read version from pyproject.toml
+        id: read-version
+        run: echo "VERSION=$(python -c \"import toml; print(toml.load('pyproject.toml')['tool']['commitizen']['version'])\") >> $GITHUB_ENV"
+
+      - name: Display version
+        run: echo "Current LiteLLM version in pyproject.toml is $VERSION"
   build-and-push-image:
     runs-on: ubuntu-latest
     # Sets the permissions granted to the `GITHUB_TOKEN` for the actions in this job.
@@ -46,7 +65,7 @@ jobs:
         with:
           context: .
           push: true
-          tags: ${{ steps.meta.outputs.tags }}-${{ github.event.inputs.tag || github.event.release.tag_name || 'latest' }} # if a tag is provided, use that, otherwise use the release tag, and if neither is available, use 'latest'
+          tags: ${{ steps.meta.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }} # if a tag is provided, use that, otherwise use the release tag, and if neither is available, use 'latest'
           labels: ${{ steps.meta.outputs.labels }}
   build-and-push-image-alpine:
     runs-on: ubuntu-latest
@@ -76,17 +95,17 @@ jobs:
           context: .
           dockerfile: Dockerfile.alpine
           push: true
-          tags: ${{ steps.meta-alpine.outputs.tags }}-${{ github.event.inputs.tag || github.event.release.tag_name || 'latest' }}
+          tags: ${{ steps.meta-alpine.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}
           labels: ${{ steps.meta-alpine.outputs.labels }}
   release:
+    needs: read-version
     name: "New LiteLLM Release"
 
     runs-on: "ubuntu-latest"
 
     steps:
       - name: "Set Release Tag"
-        run: echo "RELEASE_TAG=${{ github.event.inputs.tag }}" >> $GITHUB_ENV
-
+        run: echo "RELEASE_TAG=$VERSION" >> $GITHUB_ENV
       - name: "Create release"
         uses: "actions/github-script@v6"
         with:
