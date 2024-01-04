@@ -9,17 +9,17 @@ jobs:
       - checkout
 
       - run:
-          name: Trigger Github Action for new Docker Container
-          command: |
-          echo "Install TOML package."
-          python3 -m pip install toml
-          VERSION=$(python3 -c "import toml; print(toml.load('pyproject.toml')['tool']['poetry']['version'])")
-          echo "LiteLLM Version ${VERSION}"
-          curl -X POST \
-            -H "Accept: application/vnd.github.v3+json" \
-            -H "Authorization: Bearer $GITHUB_TOKEN" \
-            "https://api.github.com/repos/BerriAI/litellm/actions/workflows/ghcr_deploy.yml/dispatches" \
-            -d "{\"ref\":\"main\", \"inputs\":{\"tag\":\"${VERSION}\"}}"
+        name: test-release
+        command: |
+            echo "Install TOML package."
+            python -m pip install toml
+            VERSION=$(python -c "import toml; print(toml.load('pyproject.toml')['tool']['poetry']['version'])")
+            echo "LiteLLM Version ${VERSION}"
+            curl -X POST \
+              -H "Accept: application/vnd.github.v3+json" \
+              -H "Authorization: Bearer $GITHUB_TOKEN" \
+              "https://api.github.com/repos/BerriAI/litellm/actions/workflows/ghcr_deploy.yml/dispatches" \
+              -d "{\"ref\":\"main\", \"inputs\":{\"tag\":\"${VERSION}\"}}"
 
       - run:
           name: Check if litellm dir was updated or if pyproject.toml was modified
@@ -156,6 +156,15 @@ jobs:
             -H "Authorization: Bearer $GITHUB_TOKEN" \
             "https://api.github.com/repos/BerriAI/litellm/actions/workflows/ghcr_deploy.yml/dispatches" \
             -d "{\"ref\":\"main\", \"inputs\":{\"tag\":\"${VERSION}\"}}"
+            echo "Install TOML package."
+            python -m pip install toml
+            VERSION=$(python -c "import toml; print(toml.load('pyproject.toml')['tool']['poetry']['version'])")
+            echo "LiteLLM Version ${VERSION}"
+            curl -X POST \
+              -H "Accept: application/vnd.github.v3+json" \
+              -H "Authorization: Bearer $GITHUB_TOKEN" \
+              "https://api.github.com/repos/BerriAI/litellm/actions/workflows/ghcr_deploy.yml/dispatches" \
+              -d "{\"ref\":\"main\", \"inputs\":{\"tag\":\"${VERSION}\"}}"
 
 workflows:
   version: 2
