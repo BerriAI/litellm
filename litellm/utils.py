@@ -4081,11 +4081,11 @@ def get_llm_provider(
                 print()  # noqa
             error_str = f"LLM Provider NOT provided. Pass in the LLM provider you are trying to call. You passed model={model}\n Pass model as E.g. For 'Huggingface' inference endpoints pass in `completion(model='huggingface/starcoder',..)` Learn more: https://docs.litellm.ai/docs/providers"
             # maps to openai.NotFoundError, this is raised when openai does not recognize the llm
-            raise litellm.exceptions.NotFoundError(  # type: ignore
+            raise litellm.exceptions.BadRequestError(  # type: ignore
                 message=error_str,
                 model=model,
                 response=httpx.Response(
-                    status_code=404,
+                    status_code=400,
                     content=error_str,
                     request=httpx.request(method="completion", url="https://github.com/BerriAI/litellm"),  # type: ignore
                 ),
