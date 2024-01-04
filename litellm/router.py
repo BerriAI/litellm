@@ -773,6 +773,10 @@ class Router:
             )
             original_exception = e
             try:
+                if (
+                    hasattr(e, "status_code") and e.status_code == 400
+                ):  # don't retry a malformed request
+                    raise e
                 self.print_verbose(f"Trying to fallback b/w models")
                 if (
                     isinstance(e, litellm.ContextWindowExceededError)
@@ -846,7 +850,7 @@ class Router:
             return response
         except Exception as e:
             original_exception = e
-            ### CHECK IF RATE LIMIT / CONTEXT WINDOW ERROR w/ fallbacks available
+            ### CHECK IF RATE LIMIT / CONTEXT WINDOW ERROR w/ fallbacks available / Bad Request Error
             if (
                 isinstance(original_exception, litellm.ContextWindowExceededError)
                 and context_window_fallbacks is None
@@ -864,12 +868,12 @@ class Router:
                     min_timeout=self.retry_after,
                 )
                 await asyncio.sleep(timeout)
-            elif (
-                hasattr(original_exception, "status_code")
-                and hasattr(original_exception, "response")
-                and litellm._should_retry(status_code=original_exception.status_code)
+            elif hasattr(original_exception, "status_code") and litellm._should_retry(
+                status_code=original_exception.status_code
             ):
-                if hasattr(original_exception.response, "headers"):
+                if hasattr(original_exception, "response") and hasattr(
+                    original_exception.response, "headers"
+                ):
                     timeout = litellm._calculate_retry_after(
                         remaining_retries=num_retries,
                         max_retries=num_retries,
