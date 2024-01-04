@@ -1,11 +1,9 @@
 name: Read Version from pyproject.toml
 
 on:
-    workflow_dispatch:
-      inputs:
-        tag:
-          description: "The tag version you want to build"
-
+  push:
+    branches:
+      - main  # Change this to the default branch of your repository
 
 jobs:
   read-version:
@@ -25,7 +23,7 @@ jobs:
 
       - name: Read version from pyproject.toml
         id: read-version
-        run: echo "::set-output name=version::$(toml get pyproject.toml tool.commitizen.version)"
+        run: echo "::set-output name=version::$(python -c "import toml; print(toml.load('pyproject.toml')['tool']['commitizen']['version'])")"
 
       - name: Display version
         run: echo "Current version is ${{ steps.read-version.outputs.version }}"
