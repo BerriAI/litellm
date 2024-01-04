@@ -23,7 +23,9 @@ jobs:
 
       - name: Read version from pyproject.toml
         id: read-version
-        run: echo "::set-output name=version::$(python -c "import toml; print(toml.load('pyproject.toml')['tool']['commitizen']['version'])")"
+        run: |
+          export LITELLM_VERSION=$(python -c "import toml; print(toml.load('pyproject.toml')['tool']['commitizen']['version'])")
+          echo "::set-env name=LITELLM_VERSION::$LITELLM_VERSION"
 
       - name: Display version
-        run: echo "Current version is ${{ steps.read-version.outputs.version }}"
+        run: echo "Current version is ${{ env.LITELLM_VERSION }}"
