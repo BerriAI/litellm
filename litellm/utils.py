@@ -9,7 +9,7 @@
 
 import sys, re, binascii, struct
 import litellm
-import dotenv, json, traceback, threading, base64
+import dotenv, json, traceback, threading, base64, ast
 import subprocess, os
 import litellm, openai
 import itertools
@@ -6621,7 +6621,7 @@ def _is_base64(s):
 
 def get_secret(
     secret_name: str,
-    default_value: Optional[str] = None,
+    default_value: Optional[Union[str, bool]] = None,
 ):
     key_management_system = litellm._key_management_system
     if secret_name.startswith("os.environ/"):
@@ -6672,9 +6672,24 @@ def get_secret(
                     secret = client.get_secret(secret_name).secret_value
             except Exception as e:  # check if it's in os.environ
                 secret = os.getenv(secret_name)
-            return secret
+            try:
+                secret_value_as_bool = ast.literal_eval(secret)
+                if isinstance(secret_value_as_bool, bool):
+                    return secret_value_as_bool
+                else:
+                    return secret
+            except:
+                return secret
         else:
-            return os.environ.get(secret_name)
+            secret = os.environ.get(secret_name)
+            try:
+                secret_value_as_bool = ast.literal_eval(secret)
+                if isinstance(secret_value_as_bool, bool):
+                    return secret_value_as_bool
+                else:
+                    return secret
+            except:
+                return secret
     except Exception as e:
         if default_value is not None:
             return default_value
