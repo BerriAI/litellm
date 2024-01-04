@@ -78,3 +78,26 @@ jobs:
           push: true
           tags: ${{ steps.meta-alpine.outputs.tags }}-${{ github.event.inputs.tag || github.event.release.tag_name || 'latest' }}
           labels: ${{ steps.meta-alpine.outputs.labels }}
+      - name: Trigger new LiteLLM Release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: workflows } = await octokit.actions.listRepoWorkflows({
+              owner: context.repo.owner,
+              repo: context.repo.repo
+            });
+
+            const workflowB = workflows.workflows.find(workflow => workflow.name === 'Release');
+            
+            if (workflowB) {
+              await octokit.actions.createWorkflowDispatch({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: workflowB.id,
+                ref: 'main'  // Set the branch as needed
+              });
+            } else {
+              throw new Error('Workflow B not found');
+            }
+          env:
+            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
