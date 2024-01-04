@@ -280,7 +280,7 @@ def test_chat_completion_optional_params(client_no_auth):
 # test_chat_completion_optional_params()
 
 # Test Reading config.yaml file
-from litellm.proxy.proxy_server import load_router_config
+from litellm.proxy.proxy_server import ProxyConfig
 
 
 def test_load_router_config():
@@ -288,7 +288,8 @@ def test_load_router_config():
         print("testing reading config")
         # this is a basic config.yaml with only a model
         filepath = os.path.dirname(os.path.abspath(__file__))
-        result = load_router_config(
+        proxy_config = ProxyConfig()
+        result = proxy_config.load_config(
             router=None,
             config_file_path=f"{filepath}/example_config_yaml/simple_config.yaml",
         )
