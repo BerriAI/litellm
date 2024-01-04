@@ -99,5 +99,3 @@ jobs:
             } else {
               throw new Error('Workflow B not found');
             }
-          env:
-            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
