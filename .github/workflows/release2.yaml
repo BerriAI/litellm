@@ -2,10 +2,11 @@
 
 name: "Release"
 
-on: # yamllint disable-line rule:truthy
-  push:
-    tags:
-      - "**"
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "The tag version you want to release"
 
 jobs:
   release:
