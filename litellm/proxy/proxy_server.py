@@ -307,9 +307,8 @@ async def user_api_key_auth(
             )
 
 
-def prisma_setup(database_url: Optional[str]):
+async def prisma_setup(database_url: Optional[str]):
     global prisma_client, proxy_logging_obj, user_api_key_cache
-
     if (
         database_url is not None and prisma_client is None
     ):  # don't re-initialize prisma client after initial init
@@ -321,6 +320,8 @@ def prisma_setup(database_url: Optional[str]):
             print_verbose(
                 f"Error when initializing prisma, Ensure you run pip install prisma {str(e)}"
             )
+    if prisma_client is not None and prisma_client.db.is_connected() == False:
+        await prisma_client.connect()
 
 
 def load_from_azure_key_vault(use_azure_key_vault: bool = False):
@@ -534,6 +535,7 @@ class ProxyConfig:
             prisma_client is not None
             and litellm.get_secret("SAVE_CONFIG_TO_DB", False) == True
         ):
+            await prisma_setup(database_url=None)  # in case it's not been connected yet
             _tasks = []
             keys = [
                 "model_list",
@@ -761,7 +763,7 @@ class ProxyConfig:
                 print_verbose(f"GOING INTO LITELLM.GET_SECRET!")
                 database_url = litellm.get_secret(database_url)
                 print_verbose(f"RETRIEVED DB URL: {database_url}")
-            prisma_setup(database_url=database_url)
+            await prisma_setup(database_url=database_url)
             ## COST TRACKING ##
             cost_tracking()
             ### MASTER KEY ###
@@ -930,7 +932,7 @@ def save_worker_config(**data):
     os.environ["WORKER_CONFIG"] = json.dumps(data)
 
 
-def initialize(
+async def initialize(
     model=None,
     alias=None,
     api_base=None,
@@ -948,13 +950,19 @@ def initialize(
     use_queue=False,
     config=None,
 ):
-    global user_model, user_api_base, user_debug, user_max_tokens, user_request_timeout, user_temperature, user_telemetry, user_headers, experimental, llm_model_list, llm_router, general_settings, master_key, user_custom_auth
+    global user_model, user_api_base, user_debug, user_max_tokens, user_request_timeout, user_temperature, user_telemetry, user_headers, experimental, llm_model_list, llm_router, general_settings, master_key, user_custom_auth, prisma_client
     generate_feedback_box()
     user_model = model
     user_debug = debug
     if debug == True:  # this needs to be first, so users can see Router init debugg
         litellm.set_verbose = True
     dynamic_config = {"general": {}, user_model: {}}
+    if config:
+        (
+            llm_router,
+            llm_model_list,
+            general_settings,
+        ) = await proxy_config.load_config(router=llm_router, config_file_path=config)
     if headers:  # model-specific param
         user_headers = headers
         dynamic_config[user_model]["headers"] = headers
@@ -1095,38 +1103,17 @@ async def startup_event():
     print_verbose(f"worker_config: {worker_config}")
     # check if it's a valid file path
     if os.path.isfile(worker_config):
-        if worker_config.get("config", None) is not None:
-            (
-                llm_router,
-                llm_model_list,
-                general_settings,
-            ) = await proxy_config.load_config(
-                router=llm_router, config_file_path=worker_config.pop("config")
-            )
-        initialize(**worker_config)
+        await initialize(**worker_config)
     else:
         # if not, assume it's a json string
         worker_config = json.loads(os.getenv("WORKER_CONFIG"))
-        if worker_config.get("config", None) is not None:
-            (
-                llm_router,
-                llm_model_list,
-                general_settings,
-            ) = await proxy_config.load_config(
-                router=llm_router, config_file_path=worker_config.pop("config")
-            )
-        initialize(**worker_config)
-
+        await initialize(**worker_config)
     proxy_logging_obj._init_litellm_callbacks()  # INITIALIZE LITELLM CALLBACKS ON SERVER STARTUP <- do this to catch any logging errors on startup, not when calls are being made
 
     if use_background_health_checks:
         asyncio.create_task(
             _run_background_health_check()
         )  # start the background health check coroutine.
-
-    print_verbose(f"prisma client - {prisma_client}")
-    if prisma_client is not None:
-        await prisma_client.connect()
 
     if prisma_client is not None and master_key is not None:
         # add master key to db
@@ -1331,7 +1318,7 @@ async def chat_completion(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     background_tasks: BackgroundTasks = BackgroundTasks(),
 ):
-    global general_settings, user_debug, proxy_logging_obj
+    global general_settings, user_debug, proxy_logging_obj, llm_model_list
     try:
         data = {}
         body = await request.body()

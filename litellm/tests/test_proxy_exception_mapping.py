@@ -24,7 +24,7 @@ from litellm.proxy.proxy_server import (
 def client():
     filepath = os.path.dirname(os.path.abspath(__file__))
     config_fp = f"{filepath}/test_configs/test_bad_config.yaml"
-    initialize(config=config_fp)
+    asyncio.run(initialize(config=config_fp))
     app = FastAPI()
     app.include_router(router)  # Include your router in the test app
     return TestClient(app)
