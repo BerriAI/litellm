@@ -1326,6 +1326,7 @@ class Router:
                         local_only=True,
                     )  # cache for 1 hr
 
+                    cache_key = f"{model_id}_client"
                     _client = openai.AzureOpenAI(  # type: ignore
                         api_key=api_key,
                         base_url=api_base,
