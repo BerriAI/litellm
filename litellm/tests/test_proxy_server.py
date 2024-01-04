@@ -45,7 +45,7 @@ def client_no_auth():
     filepath = os.path.dirname(os.path.abspath(__file__))
     config_fp = f"{filepath}/test_configs/test_config_no_auth.yaml"
     # initialize can get run in parallel, it sets specific variables for the fast api app, sinc eit gets run in parallel different tests use the wrong variables
-    initialize(config=config_fp)
+    initialize(config=config_fp, debug=True)
     app = FastAPI()
     app.include_router(router)  # Include your router in the test app
 
