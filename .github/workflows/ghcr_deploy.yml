@@ -13,31 +13,6 @@ env:
 
 # There is a single job in this workflow. It's configured to run on the latest available version of Ubuntu.
 jobs:
-  read-version:
-    runs-on: ubuntu-latest
-    outputs:
-      id: read-version
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v2
-
-      - name: Set up Python
-        uses: actions/setup-python@v2
-        with:
-          python-version: 3.8  # Adjust the Python version as needed
-
-      - name: Install dependencies
-        run: pip install toml
-
-      - name: Read version from pyproject.toml
-        id: read-version
-        run: |
-          version=$(python -c 'import toml; print(toml.load("pyproject.toml")["tool"]["commitizen"]["version"])')
-          printf "LITELLM_VERSION=%s" "$version" >> $GITHUB_OUTPUT
-
-      - name: Display version
-        run: echo "Current version is ${{ steps.read-version.outputs.LITELLM_VERSION }}"
   build-and-push-image:
     runs-on: ubuntu-latest
     # Sets the permissions granted to the `GITHUB_TOKEN` for the actions in this job.
@@ -102,16 +77,15 @@ jobs:
           tags: ${{ steps.meta-alpine.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}
           labels: ${{ steps.meta-alpine.outputs.labels }}
   release:
-    needs: read-version
     name: "New LiteLLM Release"
 
     runs-on: "ubuntu-latest"
    
     steps:
       - name: Display version
-        run: echo "Current version is ${{ needs.read-version.outputs.LITELLM_VERSION }}"
+        run: echo "Current version is ${{ github.event.inputs.tag }}"
       - name: "Set Release Tag"
-        run: echo "RELEASE_TAG=${{ needs.read-version.outputs.LITELLM_VERSION }}" >> $GITHUB_ENV
+        run: echo "RELEASE_TAG=${{ github.event.inputs.tag }}" >> $GITHUB_ENV
       - name: Display release tag
         run: echo "RELEASE_TAG is $RELEASE_TAG"
       - name: "Create release"
