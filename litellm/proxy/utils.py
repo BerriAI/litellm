@@ -255,7 +255,6 @@ class PrismaClient:
         )
         ## init logging object
         self.proxy_logging_obj = proxy_logging_obj
-        self.connected = False
         os.environ["DATABASE_URL"] = database_url
         # Save the current working directory
         original_dir = os.getcwd()
@@ -536,11 +535,7 @@ class PrismaClient:
     )
     async def connect(self):
         try:
-            if self.connected == False:
-                await self.db.connect()
-                self.connected = True
-            else:
-                return
+            await self.db.connect()
         except Exception as e:
             asyncio.create_task(
                 self.proxy_logging_obj.failure_handler(original_exception=e)
@@ -558,7 +553,6 @@ class PrismaClient:
     async def disconnect(self):
         try:
             await self.db.disconnect()
-            self.connected = False
         except Exception as e:
             asyncio.create_task(
                 self.proxy_logging_obj.failure_handler(original_exception=e)

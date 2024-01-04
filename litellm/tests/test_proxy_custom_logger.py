@@ -23,6 +23,7 @@ from litellm.proxy.proxy_server import (
     router,
     save_worker_config,
     initialize,
+    startup_event,
 )  # Replace with the actual module where your FastAPI router is defined
 
 filepath = os.path.dirname(os.path.abspath(__file__))
@@ -39,8 +40,8 @@ python_file_path = f"{filepath}/test_configs/custom_callbacks.py"
 def client():
     filepath = os.path.dirname(os.path.abspath(__file__))
     config_fp = f"{filepath}/test_configs/test_custom_logger.yaml"
-    initialize(config=config_fp)
     app = FastAPI()
+    asyncio.run(initialize(config=config_fp))
     app.include_router(router)  # Include your router in the test app
     return TestClient(app)
 
