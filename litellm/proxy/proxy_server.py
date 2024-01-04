@@ -552,7 +552,7 @@ class ProxyConfig:
         return config
 
     async def save_config(self, new_config: dict):
-        global prisma_client, llm_router, user_config_file_path
+        global prisma_client, llm_router, user_config_file_path, llm_model_list, general_settings
         # Load existing config
         backup_config = await self.get_config()
 
