@@ -15,6 +15,8 @@ env:
 jobs:
   read-version:
     runs-on: ubuntu-latest
+    outputs:
+      id: read-version
 
     steps:
       - name: Checkout code
@@ -32,10 +34,10 @@ jobs:
         id: read-version
         run: |
           version=$(python -c 'import toml; print(toml.load("pyproject.toml")["tool"]["commitizen"]["version"])')
-          printf "LITELLM_VERSION=%s" "$version" >> $GITHUB_ENV
+          printf "LITELLM_VERSION=%s" "$version" >> $GITHUB_OUTPUT
 
       - name: Display version
-        run: echo "Current version is $LITELLM_VERSION"
+        run: echo "Current version is ${{ steps.read-version.outputs.LITELLM_VERSION }}"
   build-and-push-image:
     runs-on: ubuntu-latest
     # Sets the permissions granted to the `GITHUB_TOKEN` for the actions in this job.
@@ -104,12 +106,12 @@ jobs:
     name: "New LiteLLM Release"
 
     runs-on: "ubuntu-latest"
-
+   
     steps:
       - name: Display version
-        run: echo "Current version is $LITELLM_VERSION"
+        run: echo "Current version is ${{ needs.read-version.outputs.LITELLM_VERSION }}"
       - name: "Set Release Tag"
-        run: echo "RELEASE_TAG=$LITELLM_VERSION" >> $GITHUB_ENV
+        run: echo "RELEASE_TAG=${{ needs.read-version.outputs.LITELLM_VERSION }}" >> $GITHUB_ENV
       - name: Display release tag
         run: echo "RELEASE_TAG is $RELEASE_TAG"
       - name: "Create release"
