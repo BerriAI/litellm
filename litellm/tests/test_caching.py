@@ -91,7 +91,7 @@ def test_caching_with_cache_controls():
             model="gpt-3.5-turbo", messages=messages, cache={"ttl": 0}
         )
         response2 = completion(
-            model="gpt-3.5-turbo", messages=messages, cache={"s-max-age": 10}
+            model="gpt-3.5-turbo", messages=messages, cache={"s-maxage": 10}
         )
         print(f"response1: {response1}")
         print(f"response2: {response2}")
@@ -105,7 +105,7 @@ def test_caching_with_cache_controls():
             model="gpt-3.5-turbo", messages=messages, cache={"ttl": 5}
         )
         response2 = completion(
-            model="gpt-3.5-turbo", messages=messages, cache={"s-max-age": 5}
+            model="gpt-3.5-turbo", messages=messages, cache={"s-maxage": 5}
         )
         print(f"response1: {response1}")
         print(f"response2: {response2}")
@@ -167,6 +167,8 @@ small text
 def test_embedding_caching():
     import time
 
+    # litellm.set_verbose = True
+
     litellm.cache = Cache()
     text_to_embed = [embedding_large_text]
     start_time = time.time()
@@ -182,7 +184,7 @@ def test_embedding_caching():
         model="text-embedding-ada-002", input=text_to_embed, caching=True
     )
     end_time = time.time()
-    print(f"embedding2: {embedding2}")
+    # print(f"embedding2: {embedding2}")
     print(f"Embedding 2 response time: {end_time - start_time} seconds")
 
     litellm.cache = None
