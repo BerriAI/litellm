@@ -1,5 +1,5 @@
 #
-name: Build, Publish LiteLLM Docker Image
+name: Build, Publish LiteLLM Docker Image. New Release
 on:
   workflow_dispatch:
     inputs:
@@ -78,24 +78,33 @@ jobs:
           push: true
           tags: ${{ steps.meta-alpine.outputs.tags }}-${{ github.event.inputs.tag || github.event.release.tag_name || 'latest' }}
           labels: ${{ steps.meta-alpine.outputs.labels }}
-      - name: Trigger new LiteLLM Release
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const { data: workflows } = await octokit.actions.listRepoWorkflows({
-              owner: context.repo.owner,
-              repo: context.repo.repo
-            });
+  release:
+    name: "New LiteLLM Release"
 
-            const workflowB = workflows.workflows.find(workflow => workflow.name === 'Release');
-            
-            if (workflowB) {
-              await octokit.actions.createWorkflowDispatch({
+    runs-on: "ubuntu-latest"
+
+    steps:
+      - name: "Set Release Tag"
+        run: echo "RELEASE_TAG=${{ github.event.inputs.tag }}" >> $GITHUB_ENV
+
+      - name: "Create release"
+        uses: "actions/github-script@v6"
+        with:
+          github-token: "${{ secrets.GITHUB_TOKEN }}"
+          script: |
+            try {
+              const response = await github.rest.repos.createRelease({
+                draft: false,
+                generate_release_notes: true,
+                name: process.env.RELEASE_TAG,
                 owner: context.repo.owner,
+                prerelease: false,
                 repo: context.repo.repo,
-                workflow_id: workflowB.id,
-                ref: 'main'  // Set the branch as needed
+                tag_name: process.env.RELEASE_TAG,
               });
-            } else {
-              throw new Error('Workflow B not found');
+
+              core.exportVariable('RELEASE_ID', response.data.id);
+              core.exportVariable('RELEASE_UPLOAD_URL', response.data.upload_url);
+            } catch (error) {
+              core.setFailed(error.message);
             }
