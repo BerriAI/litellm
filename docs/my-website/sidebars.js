@@ -112,6 +112,7 @@ const sidebars = {
         "proxy/reliability",
         "proxy/health",
         "proxy/call_hooks",
+        "proxy/rules",
         "proxy/caching",
         "proxy/alerting",
         "proxy/logging", 
