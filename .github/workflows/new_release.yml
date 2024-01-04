@@ -1,0 +1,32 @@
+name: New LiteLLM Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "The tag version you want to release"
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Set up Git
+        uses: actions/setup-node@v3
+        with:
+          node-version: 14
+
+      - name: Create GitHub Release
+        if: success()
+        run: |
+          # Install gh CLI
+          npm install -g gh
+
+          # Set up git configuration
+          git config --global user.email "actions@github.com"
+          git config --global user.name "GitHub Actions"
+
+          # Create a release with the specified tag
+          gh release create ${{ github.event.inputs.tag }} -t "${{ github.event.inputs.tag }}" -n "Release ${{ github.event.inputs.tag }}"
