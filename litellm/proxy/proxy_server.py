@@ -2286,7 +2286,7 @@ async def update_config(config_info: ConfigYAML):
 
     Currently supports modifying General Settings + LiteLLM settings
     """
-    global llm_router, llm_model_list, general_settings, proxy_config
+    global llm_router, llm_model_list, general_settings, proxy_config, proxy_logging_obj
     try:
         # Load existing config
         config = await proxy_config.get_config()
@@ -2323,7 +2323,14 @@ async def update_config(config_info: ConfigYAML):
             }
 
         # Save the updated config
-        config = await proxy_config.save_config(new_config=config)
+        await proxy_config.save_config(new_config=config)
+
+        # Test new connections
+        ## Slack
+        if "slack" in config.get("general_settings", {}).get("alerting", []):
+            await proxy_logging_obj.alerting_handler(
+                message="This is a test", level="Low"
+            )
         return {"message": "Config updated successfully"}
     except HTTPException as e:
         raise e
