@@ -27,7 +27,7 @@ jobs:
           git config --global user.name "GitHub Actions"
 
       - name: Login to GitHub with token
-        run: gh auth login --with-token <<<"${{ secrets.GH_TOKEN }}"
+        run: gh auth login --with-token <<<"${{ secrets.GITHUB_TOKEN }}"
 
       - name: Create GitHub Release
         if: success()
