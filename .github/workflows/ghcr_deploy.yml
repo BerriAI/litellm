@@ -107,7 +107,7 @@ jobs:
 
     steps:
       - name: "Set Release Tag"
-        run: echo "RELEASE_TAG=$LITELLM_VERSION"" >> $GITHUB_ENV
+        run: echo "RELEASE_TAG=$LITELLM_VERSION" >> $GITHUB_ENV
       - name: "Create release"
         uses: "actions/github-script@v6"
         with:
