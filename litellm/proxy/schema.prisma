@@ -26,3 +26,8 @@ model LiteLLM_VerificationToken {
     max_parallel_requests Int?
     metadata   Json  @default("{}")
 }
+
+model LiteLLM_Config {
+  param_name String @id
+  param_value Json?
+}
