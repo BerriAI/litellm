@@ -1626,6 +1626,7 @@ def test_completion_anyscale_api():
 
 
 def test_azure_cloudflare_api():
+    litellm.set_verbose = True
     try:
         messages = [
             {
@@ -1641,11 +1642,12 @@ def test_azure_cloudflare_api():
         )
         print(f"response: {response}")
     except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
         traceback.print_exc()
         pass
 
 
-# test_azure_cloudflare_api()
+test_azure_cloudflare_api()
 
 
 def test_completion_anyscale_2():
