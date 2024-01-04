@@ -1,0 +1,31 @@
+name: Read Version from pyproject.toml
+
+on:
+    workflow_dispatch:
+      inputs:
+        tag:
+          description: "The tag version you want to build"
+
+
+jobs:
+  read-version:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: 3.8  # Adjust the Python version as needed
+
+      - name: Install dependencies
+        run: pip install toml
+
+      - name: Read version from pyproject.toml
+        id: read-version
+        run: echo "::set-output name=version::$(toml get pyproject.toml tool.commitizen.version)"
+
+      - name: Display version
+        run: echo "Current version is ${{ steps.read-version.outputs.version }}"
