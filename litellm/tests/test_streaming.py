@@ -306,6 +306,8 @@ def test_completion_ollama_hosted_stream():
             model="ollama/phi",
             messages=messages,
             max_tokens=10,
+            num_retries=3,
+            timeout=90,
             api_base="https://test-ollama-endpoint.onrender.com",
             stream=True,
         )

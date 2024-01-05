@@ -724,16 +724,32 @@ class AzureChatCompletion(BaseLLM):
         client_session = litellm.aclient_session or httpx.AsyncClient(
             transport=AsyncCustomHTTPTransport(),  # handle dall-e-2 calls
         )
-        client = AsyncAzureOpenAI(
-            api_version=api_version,
-            azure_endpoint=api_base,
-            api_key=api_key,
-            timeout=timeout,
-            http_client=client_session,
-        )
+        if "gateway.ai.cloudflare.com" in api_base:
+            ## build base url - assume api base includes resource name
+            if not api_base.endswith("/"):
+                api_base += "/"
+            api_base += f"{model}"
+            client = AsyncAzureOpenAI(
+                base_url=api_base,
+                api_version=api_version,
+                api_key=api_key,
+                timeout=timeout,
+                http_client=client_session,
+            )
+            model = None
+            # cloudflare ai gateway, needs model=None
+        else:
+            client = AsyncAzureOpenAI(
+                api_version=api_version,
+                azure_endpoint=api_base,
+                api_key=api_key,
+                timeout=timeout,
+                http_client=client_session,
+            )
 
-        if model is None and mode != "image_generation":
-            raise Exception("model is not set")
+            # only run this check if it's not cloudflare ai gateway
+            if model is None and mode != "image_generation":
+                raise Exception("model is not set")
 
         completion = None
 

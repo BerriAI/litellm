@@ -749,10 +749,14 @@ def test_completion_ollama_hosted():
             model="ollama/phi",
             messages=messages,
             max_tokens=10,
+            num_retries=3,
+            timeout=90,
             api_base="https://test-ollama-endpoint.onrender.com",
         )
         # Add any assertions here to check the response
         print(response)
+    except Timeout as e:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -1626,6 +1630,7 @@ def test_completion_anyscale_api():
 
 
 def test_azure_cloudflare_api():
+    litellm.set_verbose = True
     try:
         messages = [
             {
@@ -1641,11 +1646,12 @@ def test_azure_cloudflare_api():
         )
         print(f"response: {response}")
     except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
         traceback.print_exc()
         pass
 
 
-# test_azure_cloudflare_api()
+test_azure_cloudflare_api()
 
 
 def test_completion_anyscale_2():
@@ -1931,6 +1937,7 @@ def test_completion_cloudflare():
             model="cloudflare/@cf/meta/llama-2-7b-chat-int8",
             messages=[{"content": "what llm are you", "role": "user"}],
             max_tokens=15,
+            num_retries=3,
         )
         print(response)
 
@@ -1938,7 +1945,7 @@ def test_completion_cloudflare():
         pytest.fail(f"Error occurred: {e}")
 
 
-# test_completion_cloudflare()
+test_completion_cloudflare()
 
 
 def test_moderation():

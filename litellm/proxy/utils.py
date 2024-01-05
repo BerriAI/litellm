@@ -250,31 +250,37 @@ def on_backoff(details):
 
 class PrismaClient:
     def __init__(self, database_url: str, proxy_logging_obj: ProxyLogging):
-        print_verbose(
-            "LiteLLM: DATABASE_URL Set in config, trying to 'pip install prisma'"
-        )
-        ## init logging object
-        self.proxy_logging_obj = proxy_logging_obj
-        self.connected = False
-        os.environ["DATABASE_URL"] = database_url
-        # Save the current working directory
-        original_dir = os.getcwd()
-        # set the working directory to where this script is
-        abspath = os.path.abspath(__file__)
-        dname = os.path.dirname(abspath)
-        os.chdir(dname)
-
+        ### Check if prisma client can be imported (setup done in Docker build)
         try:
-            subprocess.run(["prisma", "generate"])
-            subprocess.run(
-                ["prisma", "db", "push", "--accept-data-loss"]
-            )  # this looks like a weird edge case when prisma just wont start on render. we need to have the --accept-data-loss
-        finally:
-            os.chdir(original_dir)
-        # Now you can import the Prisma Client
-        from prisma import Client  # type: ignore
+            from prisma import Client  # type: ignore
 
-        self.db = Client()  # Client to connect to Prisma db
+            os.environ["DATABASE_URL"] = database_url
+            self.db = Client()  # Client to connect to Prisma db
+        except:  # if not - go through normal setup process
+            print_verbose(
+                "LiteLLM: DATABASE_URL Set in config, trying to 'pip install prisma'"
+            )
+            ## init logging object
+            self.proxy_logging_obj = proxy_logging_obj
+            os.environ["DATABASE_URL"] = database_url
+            # Save the current working directory
+            original_dir = os.getcwd()
+            # set the working directory to where this script is
+            abspath = os.path.abspath(__file__)
+            dname = os.path.dirname(abspath)
+            os.chdir(dname)
+
+            try:
+                subprocess.run(["prisma", "generate"])
+                subprocess.run(
+                    ["prisma", "db", "push", "--accept-data-loss"]
+                )  # this looks like a weird edge case when prisma just wont start on render. we need to have the --accept-data-loss
+            finally:
+                os.chdir(original_dir)
+            # Now you can import the Prisma Client
+            from prisma import Client  # type: ignore
+
+            self.db = Client()  # Client to connect to Prisma db
 
     def hash_token(self, token: str):
         # Hash the string using SHA-256
@@ -301,18 +307,22 @@ class PrismaClient:
         self,
         key: str,
         value: Any,
-        db: Literal["users", "keys"],
+        table_name: Literal["users", "keys", "config"],
     ):
         """
         Generic implementation of get data
         """
         try:
-            if db == "users":
+            if table_name == "users":
                 response = await self.db.litellm_usertable.find_first(
                     where={key: value}  # type: ignore
                 )
-            elif db == "keys":
+            elif table_name == "keys":
                 response = await self.db.litellm_verificationtoken.find_first(  # type: ignore
+                    where={key: value}  # type: ignore
+                )
+            elif table_name == "config":
+                response = await self.db.litellm_config.find_first(  # type: ignore
                     where={key: value}  # type: ignore
                 )
             return response
@@ -336,15 +346,19 @@ class PrismaClient:
         user_id: Optional[str] = None,
     ):
         try:
+            print_verbose("PrismaClient: get_data")
+
             response = None
             if token is not None:
                 # check if plain text or hash
                 hashed_token = token
                 if token.startswith("sk-"):
                     hashed_token = self.hash_token(token=token)
+                print_verbose("PrismaClient: find_unique")
                 response = await self.db.litellm_verificationtoken.find_unique(
                     where={"token": hashed_token}
                 )
+                print_verbose(f"PrismaClient: response={response}")
                 if response:
                     # Token exists, now check expiration.
                     if response.expires is not None and expires is not None:
@@ -372,6 +386,10 @@ class PrismaClient:
                 )
                 return response
         except Exception as e:
+            print_verbose(f"LiteLLM Prisma Client Exception: {e}")
+            import traceback
+
+            traceback.print_exc()
             asyncio.create_task(
                 self.proxy_logging_obj.failure_handler(original_exception=e)
             )
@@ -385,40 +403,71 @@ class PrismaClient:
         max_time=10,  # maximum total time to retry for
         on_backoff=on_backoff,  # specifying the function to call on backoff
     )
-    async def insert_data(self, data: dict):
+    async def insert_data(
+        self, data: dict, table_name: Literal["user+key", "config"] = "user+key"
+    ):
         """
         Add a key to the database. If it already exists, do nothing.
         """
         try:
-            token = data["token"]
-            hashed_token = self.hash_token(token=token)
-            db_data = self.jsonify_object(data=data)
-            db_data["token"] = hashed_token
-            max_budget = db_data.pop("max_budget", None)
-            user_email = db_data.pop("user_email", None)
-            new_verification_token = await self.db.litellm_verificationtoken.upsert(  # type: ignore
-                where={
-                    "token": hashed_token,
-                },
-                data={
-                    "create": {**db_data},  # type: ignore
-                    "update": {},  # don't do anything if it already exists
-                },
-            )
-
-            new_user_row = await self.db.litellm_usertable.upsert(
-                where={"user_id": data["user_id"]},
-                data={
-                    "create": {
-                        "user_id": data["user_id"],
-                        "max_budget": max_budget,
-                        "user_email": user_email,
+            if table_name == "user+key":
+                token = data["token"]
+                hashed_token = self.hash_token(token=token)
+                db_data = self.jsonify_object(data=data)
+                db_data["token"] = hashed_token
+                max_budget = db_data.pop("max_budget", None)
+                user_email = db_data.pop("user_email", None)
+                print_verbose(
+                    "PrismaClient: Before upsert into litellm_verificationtoken"
+                )
+                new_verification_token = await self.db.litellm_verificationtoken.upsert(  # type: ignore
+                    where={
+                        "token": hashed_token,
                     },
-                    "update": {},  # don't do anything if it already exists
-                },
-            )
-            return new_verification_token
+                    data={
+                        "create": {**db_data},  # type: ignore
+                        "update": {},  # don't do anything if it already exists
+                    },
+                )
+
+                new_user_row = await self.db.litellm_usertable.upsert(
+                    where={"user_id": data["user_id"]},
+                    data={
+                        "create": {
+                            "user_id": data["user_id"],
+                            "max_budget": max_budget,
+                            "user_email": user_email,
+                        },
+                        "update": {},  # don't do anything if it already exists
+                    },
+                )
+                return new_verification_token
+            elif table_name == "config":
+                """
+                For each param,
+                get the existing table values
+
+                Add the new values
+
+                Update DB
+                """
+                tasks = []
+                for k, v in data.items():
+                    updated_data = v
+                    updated_data = json.dumps(updated_data)
+                    updated_table_row = self.db.litellm_config.upsert(
+                        where={"param_name": k},
+                        data={
+                            "create": {"param_name": k, "param_value": updated_data},
+                            "update": {"param_value": updated_data},
+                        },
+                    )
+
+                    tasks.append(updated_table_row)
+
+                await asyncio.gather(*tasks)
         except Exception as e:
+            print_verbose(f"LiteLLM Prisma Client Exception: {e}")
             asyncio.create_task(
                 self.proxy_logging_obj.failure_handler(original_exception=e)
             )
@@ -505,11 +554,7 @@ class PrismaClient:
     )
     async def connect(self):
         try:
-            if self.connected == False:
-                await self.db.connect()
-                self.connected = True
-            else:
-                return
+            await self.db.connect()
         except Exception as e:
             asyncio.create_task(
                 self.proxy_logging_obj.failure_handler(original_exception=e)

@@ -1,12 +1,10 @@
-#
-name: Build, Publish LiteLLM Docker Image
+# this workflow is triggered by an API call when there is a new PyPI release of LiteLLM
+name: Build, Publish LiteLLM Docker Image. New Release
 on:
   workflow_dispatch:
     inputs:
       tag:
         description: "The tag version you want to build"
-  release:
-    types: [published]
 
 # Defines two custom environment variables for the workflow. Used for the Container registry domain, and a name for the Docker image that this workflow builds.
 env:
@@ -46,7 +44,7 @@ jobs:
         with:
           context: .
           push: true
-          tags: ${{ steps.meta.outputs.tags }}-${{ github.event.inputs.tag || github.event.release.tag_name || 'latest' }} # if a tag is provided, use that, otherwise use the release tag, and if neither is available, use 'latest'
+          tags: ${{ steps.meta.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }} # if a tag is provided, use that, otherwise use the release tag, and if neither is available, use 'latest'
           labels: ${{ steps.meta.outputs.labels }}
   build-and-push-image-alpine:
     runs-on: ubuntu-latest
@@ -76,5 +74,38 @@ jobs:
           context: .
           dockerfile: Dockerfile.alpine
           push: true
-          tags: ${{ steps.meta-alpine.outputs.tags }}-${{ github.event.inputs.tag || github.event.release.tag_name || 'latest' }}
+          tags: ${{ steps.meta-alpine.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}
           labels: ${{ steps.meta-alpine.outputs.labels }}
+  release:
+    name: "New LiteLLM Release"
+
+    runs-on: "ubuntu-latest"
+   
+    steps:
+      - name: Display version
+        run: echo "Current version is ${{ github.event.inputs.tag }}"
+      - name: "Set Release Tag"
+        run: echo "RELEASE_TAG=${{ github.event.inputs.tag }}" >> $GITHUB_ENV
+      - name: Display release tag
+        run: echo "RELEASE_TAG is $RELEASE_TAG"
+      - name: "Create release"
+        uses: "actions/github-script@v6"
+        with:
+          github-token: "${{ secrets.GITHUB_TOKEN }}"
+          script: |
+            try {
+              const response = await github.rest.repos.createRelease({
+                draft: false,
+                generate_release_notes: true,
+                name: process.env.RELEASE_TAG,
+                owner: context.repo.owner,
+                prerelease: false,
+                repo: context.repo.repo,
+                tag_name: process.env.RELEASE_TAG,
+              });
+
+              core.exportVariable('RELEASE_ID', response.data.id);
+              core.exportVariable('RELEASE_UPLOAD_URL', response.data.upload_url);
+            } catch (error) {
+              core.setFailed(error.message);
+            }

@@ -375,6 +375,45 @@ response = completion(
 
 Need a dedicated key? Email us @ krrish@berri.ai
 
+## OpenAI Proxy
+
+Track spend across multiple projects/people 
+
+The proxy provides: 
+1. [Hooks for auth](https://docs.litellm.ai/docs/proxy/virtual_keys#custom-auth)
+2. [Hooks for logging](https://docs.litellm.ai/docs/proxy/logging#step-1---create-your-custom-litellm-callback-class)
+3. [Cost tracking](https://docs.litellm.ai/docs/proxy/virtual_keys#tracking-spend)
+4. [Rate Limiting](https://docs.litellm.ai/docs/proxy/users#set-rate-limits)
+
+### 📖 Proxy Endpoints - [Swagger Docs](https://litellm-api.up.railway.app/)
+
+### Quick Start Proxy - CLI 
+
+```shell
+pip install litellm[proxy]
+```
+
+#### Step 1: Start litellm proxy
+```shell
+$ litellm --model huggingface/bigcode/starcoder
+
+#INFO: Proxy running on http://0.0.0.0:8000
+```
+
+#### Step 2: Make ChatCompletions Request to Proxy
+```python
+import openai # openai v1.0.0+
+client = openai.OpenAI(api_key="anything",base_url="http://0.0.0.0:8000") # set proxy to base_url
+# request sent to model set on litellm proxy, `litellm --model`
+response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
+    {
+        "role": "user",
+        "content": "this is a test request, write a short poem"
+    }
+])
+
+print(response)
+```
 
 ## More details
 * [exception mapping](./exception_mapping.md)
