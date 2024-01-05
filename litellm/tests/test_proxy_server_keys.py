@@ -29,6 +29,7 @@ from litellm.proxy.proxy_server import (
     router,
     save_worker_config,
     startup_event,
+    asyncio,
 )  # Replace with the actual module where your FastAPI router is defined
 
 filepath = os.path.dirname(os.path.abspath(__file__))
@@ -39,7 +40,7 @@ save_worker_config(
     alias=None,
     api_base=None,
     api_version=None,
-    debug=False,
+    debug=True,
     temperature=None,
     max_tokens=None,
     request_timeout=600,
@@ -51,24 +52,38 @@ save_worker_config(
     save=False,
     use_queue=False,
 )
-app = FastAPI()
-app.include_router(router)  # Include your router in the test app
 
 
-@app.on_event("startup")
-async def wrapper_startup_event():
-    await startup_event()
+import asyncio
+
+
+@pytest.fixture
+def event_loop():
+    """Create an instance of the default event loop for each test case."""
+    policy = asyncio.WindowsSelectorEventLoopPolicy()
+    res = policy.new_event_loop()
+    asyncio.set_event_loop(res)
+    res._close = res.close
+    res.close = lambda: None
+
+    yield res
+
+    res._close()
 
 
 # Here you create a fixture that will be used by your tests
 # Make sure the fixture returns TestClient(app)
-@pytest.fixture(autouse=True)
+@pytest.fixture(scope="function")
 def client():
-    from litellm.proxy.proxy_server import cleanup_router_config_variables
+    from litellm.proxy.proxy_server import cleanup_router_config_variables, initialize
 
-    cleanup_router_config_variables()
-    with TestClient(app) as client:
-        yield client
+    cleanup_router_config_variables()  # rest proxy before test
+
+    asyncio.run(initialize(config=config_fp, debug=True))
+    app = FastAPI()
+    app.include_router(router)  # Include your router in the test app
+
+    return TestClient(app)
 
 
 def test_add_new_key(client):
@@ -79,7 +94,7 @@ def test_add_new_key(client):
             "aliases": {"mistral-7b": "gpt-3.5-turbo"},
             "duration": "20m",
         }
-        print("testing proxy server")
+        print("testing proxy server - test_add_new_key")
         # Your bearer token
         token = os.getenv("PROXY_MASTER_KEY")
 
@@ -121,7 +136,7 @@ def test_update_new_key(client):
             "aliases": {"mistral-7b": "gpt-3.5-turbo"},
             "duration": "20m",
         }
-        print("testing proxy server")
+        print("testing proxy server-test_update_new_key")
         # Your bearer token
         token = os.getenv("PROXY_MASTER_KEY")
 

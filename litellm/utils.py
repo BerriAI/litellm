@@ -9,7 +9,7 @@
 
 import sys, re, binascii, struct
 import litellm
-import dotenv, json, traceback, threading, base64
+import dotenv, json, traceback, threading, base64, ast
 import subprocess, os
 import litellm, openai
 import itertools
@@ -1975,7 +1975,10 @@ def client(original_function):
             if (
                 (kwargs.get("caching", None) is None and litellm.cache is not None)
                 or kwargs.get("caching", False) == True
-                or kwargs.get("cache", {}).get("no-cache", False) != True
+                or (
+                    kwargs.get("cache", None) is not None
+                    and kwargs.get("cache", {}).get("no-cache", False) != True
+                )
             ):  # allow users to control returning cached responses from the completion function
                 # checking cache
                 print_verbose(f"INSIDE CHECKING CACHE")
@@ -2737,6 +2740,8 @@ def cost_per_token(model="", prompt_tokens=0, completion_tokens=0):
     completion_tokens_cost_usd_dollar = 0
     model_cost_ref = litellm.model_cost
     # see this https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models
+    print_verbose(f"Looking up model={model} in model_cost_map")
+
     if model in model_cost_ref:
         prompt_tokens_cost_usd_dollar = (
             model_cost_ref[model]["input_cost_per_token"] * prompt_tokens
@@ -2746,6 +2751,7 @@ def cost_per_token(model="", prompt_tokens=0, completion_tokens=0):
         )
         return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
     elif "ft:gpt-3.5-turbo" in model:
+        print_verbose(f"Cost Tracking: {model} is an OpenAI FinteTuned LLM")
         # fuzzy match ft:gpt-3.5-turbo:abcd-id-cool-litellm
         prompt_tokens_cost_usd_dollar = (
             model_cost_ref["ft:gpt-3.5-turbo"]["input_cost_per_token"] * prompt_tokens
@@ -2756,6 +2762,7 @@ def cost_per_token(model="", prompt_tokens=0, completion_tokens=0):
         )
         return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
     elif model in litellm.azure_llms:
+        print_verbose(f"Cost Tracking: {model} is an Azure LLM")
         model = litellm.azure_llms[model]
         prompt_tokens_cost_usd_dollar = (
             model_cost_ref[model]["input_cost_per_token"] * prompt_tokens
@@ -2764,19 +2771,29 @@ def cost_per_token(model="", prompt_tokens=0, completion_tokens=0):
             model_cost_ref[model]["output_cost_per_token"] * completion_tokens
         )
         return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
-    else:
-        # calculate average input cost, azure/gpt-deployments can potentially go here if users don't specify, gpt-4, gpt-3.5-turbo. LLMs litellm knows
-        input_cost_sum = 0
-        output_cost_sum = 0
-        model_cost_ref = litellm.model_cost
-        for model in model_cost_ref:
-            input_cost_sum += model_cost_ref[model]["input_cost_per_token"]
-            output_cost_sum += model_cost_ref[model]["output_cost_per_token"]
-        avg_input_cost = input_cost_sum / len(model_cost_ref.keys())
-        avg_output_cost = output_cost_sum / len(model_cost_ref.keys())
-        prompt_tokens_cost_usd_dollar = avg_input_cost * prompt_tokens
-        completion_tokens_cost_usd_dollar = avg_output_cost * completion_tokens
+    elif model in litellm.azure_embedding_models:
+        print_verbose(f"Cost Tracking: {model} is an Azure Embedding Model")
+        model = litellm.azure_embedding_models[model]
+        prompt_tokens_cost_usd_dollar = (
+            model_cost_ref[model]["input_cost_per_token"] * prompt_tokens
+        )
+        completion_tokens_cost_usd_dollar = (
+            model_cost_ref[model]["output_cost_per_token"] * completion_tokens
+        )
         return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
+    else:
+        # if model is not in model_prices_and_context_window.json. Raise an exception-let users know
+        error_str = f"Model not in model_prices_and_context_window.json. You passed model={model}\n"
+        raise litellm.exceptions.NotFoundError(  # type: ignore
+            message=error_str,
+            model=model,
+            response=httpx.Response(
+                status_code=404,
+                content=error_str,
+                request=httpx.request(method="cost_per_token", url="https://github.com/BerriAI/litellm"),  # type: ignore
+            ),
+            llm_provider="",
+        )
 
 
 def completion_cost(
@@ -2818,8 +2835,10 @@ def completion_cost(
         completion_tokens = 0
         if completion_response is not None:
             # get input/output tokens from completion_response
-            prompt_tokens = completion_response["usage"]["prompt_tokens"]
-            completion_tokens = completion_response["usage"]["completion_tokens"]
+            prompt_tokens = completion_response.get("usage", {}).get("prompt_tokens", 0)
+            completion_tokens = completion_response.get("usage", {}).get(
+                "completion_tokens", 0
+            )
             model = (
                 model or completion_response["model"]
             )  # check if user passed an override for model, if it's none check completion_response['model']
@@ -2829,6 +2848,10 @@ def completion_cost(
             elif len(prompt) > 0:
                 prompt_tokens = token_counter(model=model, text=prompt)
             completion_tokens = token_counter(model=model, text=completion)
+        if model == None:
+            raise ValueError(
+                f"Model is None and does not exist in passed completion_response. Passed completion_response={completion_response}, model={model}"
+            )
 
         # Calculate cost based on prompt_tokens, completion_tokens
         if "togethercomputer" in model or "together_ai" in model:
@@ -2849,8 +2872,7 @@ def completion_cost(
         )
         return prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar
     except Exception as e:
-        print_verbose(f"LiteLLM: Excepton when cost calculating {str(e)}")
-        return 0.0  # this should not block a users execution path
+        raise e
 
 
 ####### HELPER FUNCTIONS ################
@@ -4081,11 +4103,11 @@ def get_llm_provider(
                 print()  # noqa
             error_str = f"LLM Provider NOT provided. Pass in the LLM provider you are trying to call. You passed model={model}\n Pass model as E.g. For 'Huggingface' inference endpoints pass in `completion(model='huggingface/starcoder',..)` Learn more: https://docs.litellm.ai/docs/providers"
             # maps to openai.NotFoundError, this is raised when openai does not recognize the llm
-            raise litellm.exceptions.NotFoundError(  # type: ignore
+            raise litellm.exceptions.BadRequestError(  # type: ignore
                 message=error_str,
                 model=model,
                 response=httpx.Response(
-                    status_code=404,
+                    status_code=400,
                     content=error_str,
                     request=httpx.request(method="completion", url="https://github.com/BerriAI/litellm"),  # type: ignore
                 ),
@@ -4915,6 +4937,9 @@ async def convert_to_streaming_response_async(response_object: Optional[dict] = 
     if "id" in response_object:
         model_response_object.id = response_object["id"]
 
+    if "created" in response_object:
+        model_response_object.created = response_object["created"]
+
     if "system_fingerprint" in response_object:
         model_response_object.system_fingerprint = response_object["system_fingerprint"]
 
@@ -4958,6 +4983,9 @@ def convert_to_streaming_response(response_object: Optional[dict] = None):
 
     if "id" in response_object:
         model_response_object.id = response_object["id"]
+
+    if "created" in response_object:
+        model_response_object.created = response_object["created"]
 
     if "system_fingerprint" in response_object:
         model_response_object.system_fingerprint = response_object["system_fingerprint"]
@@ -5013,6 +5041,9 @@ def convert_to_model_response_object(
                 model_response_object.usage.completion_tokens = response_object["usage"].get("completion_tokens", 0)  # type: ignore
                 model_response_object.usage.prompt_tokens = response_object["usage"].get("prompt_tokens", 0)  # type: ignore
                 model_response_object.usage.total_tokens = response_object["usage"].get("total_tokens", 0)  # type: ignore
+
+            if "created" in response_object:
+                model_response_object.created = response_object["created"]
 
             if "id" in response_object:
                 model_response_object.id = response_object["id"]
@@ -6621,7 +6652,7 @@ def _is_base64(s):
 
 def get_secret(
     secret_name: str,
-    default_value: Optional[str] = None,
+    default_value: Optional[Union[str, bool]] = None,
 ):
     key_management_system = litellm._key_management_system
     if secret_name.startswith("os.environ/"):
@@ -6672,9 +6703,24 @@ def get_secret(
                     secret = client.get_secret(secret_name).secret_value
             except Exception as e:  # check if it's in os.environ
                 secret = os.getenv(secret_name)
-            return secret
+            try:
+                secret_value_as_bool = ast.literal_eval(secret)
+                if isinstance(secret_value_as_bool, bool):
+                    return secret_value_as_bool
+                else:
+                    return secret
+            except:
+                return secret
         else:
-            return os.environ.get(secret_name)
+            secret = os.environ.get(secret_name)
+            try:
+                secret_value_as_bool = ast.literal_eval(secret)
+                if isinstance(secret_value_as_bool, bool):
+                    return secret_value_as_bool
+                else:
+                    return secret
+            except:
+                return secret
     except Exception as e:
         if default_value is not None:
             return default_value

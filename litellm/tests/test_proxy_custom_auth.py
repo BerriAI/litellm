@@ -10,7 +10,7 @@ import os, io
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-import pytest
+import pytest, asyncio
 import litellm
 from litellm import embedding, completion, completion_cost, Timeout
 from litellm import RateLimitError
@@ -22,6 +22,7 @@ from litellm.proxy.proxy_server import (
     router,
     save_worker_config,
     initialize,
+    ProxyConfig,
 )  # Replace with the actual module where your FastAPI router is defined
 
 
@@ -36,7 +37,7 @@ def client():
     config_fp = f"{filepath}/test_configs/test_config_custom_auth.yaml"
     # initialize can get run in parallel, it sets specific variables for the fast api app, sinc eit gets run in parallel different tests use the wrong variables
     app = FastAPI()
-    initialize(config=config_fp)
+    asyncio.run(initialize(config=config_fp))
 
     app.include_router(router)  # Include your router in the test app
     return TestClient(app)
