@@ -347,9 +347,7 @@ class PrismaClient:
     ):
         try:
             print_verbose("PrismaClient: get_data")
-            # incase prisma is not connected
-            if self.db.is_connected() == False:
-                await self.connect()
+
             response = None
             if token is not None:
                 # check if plain text or hash
@@ -412,10 +410,6 @@ class PrismaClient:
         Add a key to the database. If it already exists, do nothing.
         """
         try:
-            # incase prisma is not connected
-            if self.db.is_connected() == False:
-                await self.connect()
-
             if table_name == "user+key":
                 token = data["token"]
                 hashed_token = self.hash_token(token=token)
@@ -494,10 +488,6 @@ class PrismaClient:
         Update existing data
         """
         try:
-            # incase prisma is not connected
-            if self.db.is_connected() == False:
-                await self.connect()
-
             db_data = self.jsonify_object(data=data)
             if token is not None:
                 print_verbose(f"token: {token}")
@@ -540,9 +530,6 @@ class PrismaClient:
         Allow user to delete a key(s)
         """
         try:
-            # incase prisma is not connected
-            if self.db.is_connected() == False:
-                await self.connect()
             hashed_tokens = [self.hash_token(token=token) for token in tokens]
             await self.db.litellm_verificationtoken.delete_many(
                 where={"token": {"in": hashed_tokens}}
