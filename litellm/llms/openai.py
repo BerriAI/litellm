@@ -386,13 +386,13 @@ class OpenAIChatCompletion(BaseLLM):
             response = await openai_aclient.chat.completions.create(
                 **data, timeout=timeout
             )
+            stringified_response = response.model_dump_json()
             logging_obj.post_call(
                 input=data["messages"],
                 api_key=api_key,
-                original_response=response,
+                original_response=stringified_response,
                 additional_args={"complete_input_dict": data},
             )
-            stringified_response = response.model_dump_json()
             return convert_to_model_response_object(
                 response_object=json.loads(stringified_response),
                 model_response_object=model_response,
