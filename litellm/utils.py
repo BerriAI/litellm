@@ -2848,6 +2848,10 @@ def completion_cost(
             elif len(prompt) > 0:
                 prompt_tokens = token_counter(model=model, text=prompt)
             completion_tokens = token_counter(model=model, text=completion)
+        if model == None:
+            raise ValueError(
+                f"Model is None and does not exist in passed completion_response. Passed completion_response={completion_response}, model={model}"
+            )
 
         # Calculate cost based on prompt_tokens, completion_tokens
         if "togethercomputer" in model or "together_ai" in model:
