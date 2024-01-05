@@ -64,7 +64,7 @@ async def wrapper_startup_event():
 import asyncio
 
 
-@pytest.yield_fixture
+@pytest.fixture
 def event_loop():
     """Create an instance of the default event loop for each test case."""
     policy = asyncio.WindowsSelectorEventLoopPolicy()
@@ -99,7 +99,7 @@ def test_add_new_key(client):
             "aliases": {"mistral-7b": "gpt-3.5-turbo"},
             "duration": "20m",
         }
-        print("testing proxy server")
+        print("testing proxy server - test_add_new_key")
         # Your bearer token
         token = os.getenv("PROXY_MASTER_KEY")
 
