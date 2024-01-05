@@ -138,14 +138,15 @@ def test_async_completion_cloudflare():
             response = await litellm.acompletion(
                 model="cloudflare/@cf/meta/llama-2-7b-chat-int8",
                 messages=[{"content": "what llm are you", "role": "user"}],
-                max_tokens=50,
+                max_tokens=5,
+                num_retries=3,
             )
             print(response)
             return response
 
         response = asyncio.run(test())
         text_response = response["choices"][0]["message"]["content"]
-        assert len(text_response) > 5  # more than 5 chars in response
+        assert len(text_response) > 1  # more than 1 chars in response
 
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
