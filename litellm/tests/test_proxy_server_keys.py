@@ -63,7 +63,7 @@ async def wrapper_startup_event():
 
 # Here you create a fixture that will be used by your tests
 # Make sure the fixture returns TestClient(app)
-@pytest.fixture(autouse=True)
+@pytest.fixture(scope="function")
 def client():
     from litellm.proxy.proxy_server import cleanup_router_config_variables, initialize
 
