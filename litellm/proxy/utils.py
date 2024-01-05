@@ -449,6 +449,7 @@ class PrismaClient:
 
                 await asyncio.gather(*tasks)
         except Exception as e:
+            print_verbose(f"LiteLLM Prisma Client Exception: {e}")
             asyncio.create_task(
                 self.proxy_logging_obj.failure_handler(original_exception=e)
             )
