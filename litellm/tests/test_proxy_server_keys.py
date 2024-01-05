@@ -29,6 +29,7 @@ from litellm.proxy.proxy_server import (
     router,
     save_worker_config,
     startup_event,
+    asyncio,
 )  # Replace with the actual module where your FastAPI router is defined
 
 filepath = os.path.dirname(os.path.abspath(__file__))
@@ -64,9 +65,11 @@ async def wrapper_startup_event():
 # Make sure the fixture returns TestClient(app)
 @pytest.fixture(autouse=True)
 def client():
-    from litellm.proxy.proxy_server import cleanup_router_config_variables
+    from litellm.proxy.proxy_server import cleanup_router_config_variables, initialize
 
-    cleanup_router_config_variables()
+    cleanup_router_config_variables()  # rest proxy before test
+
+    asyncio.run(initialize(config=config_fp, debug=True))
     with TestClient(app) as client:
         yield client
 
@@ -121,7 +124,7 @@ def test_update_new_key(client):
             "aliases": {"mistral-7b": "gpt-3.5-turbo"},
             "duration": "20m",
         }
-        print("testing proxy server")
+        print("testing proxy server-test_update_new_key")
         # Your bearer token
         token = os.getenv("PROXY_MASTER_KEY")
 
