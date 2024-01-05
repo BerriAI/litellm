@@ -57,8 +57,8 @@ RUN if [ "$with_database" = "true" ]; then \
       /app/retry_push.sh; \
     fi
 
-EXPOSE 8000/tcp
+EXPOSE 4000/tcp
 
 # Set your entrypoint and command
 ENTRYPOINT ["litellm"]
-CMD ["--config", "./hosted_config.yaml", "--port", "8000", "--num_workers", "8"]
+CMD ["--config", "./hosted_config.yaml", "--port", "4000", "--num_workers", "8"]
