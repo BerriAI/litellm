@@ -125,3 +125,36 @@ def test_cost_azure_gpt_35():
 
 
 test_cost_azure_gpt_35()
+
+
+def test_cost_azure_embedding():
+    try:
+        import asyncio
+
+        litellm.set_verbose = True
+
+        async def _test():
+            response = await litellm.aembedding(
+                model="azure/azure-embedding-model",
+                input=["good morning from litellm", "gm"],
+            )
+
+            print(response)
+
+            return response
+
+        response = asyncio.run(_test())
+
+        cost = litellm.completion_cost(completion_response=response)
+
+        print("Cost", cost)
+        expected_cost = float("7e-07")
+        assert cost == expected_cost
+
+    except Exception as e:
+        pytest.fail(
+            f"Cost Calc failed for azure/gpt-3.5-turbo. Expected {expected_cost}, Calculated cost {cost}"
+        )
+
+
+# test_cost_azure_embedding()
