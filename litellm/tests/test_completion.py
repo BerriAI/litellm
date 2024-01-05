@@ -1933,6 +1933,7 @@ def test_completion_cloudflare():
             model="cloudflare/@cf/meta/llama-2-7b-chat-int8",
             messages=[{"content": "what llm are you", "role": "user"}],
             max_tokens=15,
+            num_retries=3,
         )
         print(response)
 
@@ -1940,7 +1941,7 @@ def test_completion_cloudflare():
         pytest.fail(f"Error occurred: {e}")
 
 
-# test_completion_cloudflare()
+test_completion_cloudflare()
 
 
 def test_moderation():
