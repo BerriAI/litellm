@@ -59,6 +59,7 @@ def test_openai_embedding():
 
 def test_openai_azure_embedding_simple():
     try:
+        litellm.set_verbose = True
         response = embedding(
             model="azure/azure-embedding-model",
             input=["good morning from litellm"],
@@ -70,11 +71,15 @@ def test_openai_azure_embedding_simple():
             response_keys
         )  # assert litellm response has expected keys from OpenAI embedding response
 
+        request_cost = litellm.completion_cost(completion_response=response)
+
+        print("Calculated request cost=", request_cost)
+
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
 
-# test_openai_azure_embedding_simple()
+test_openai_azure_embedding_simple()
 
 
 def test_openai_azure_embedding_timeouts():
