@@ -417,6 +417,9 @@ class PrismaClient:
                 db_data["token"] = hashed_token
                 max_budget = db_data.pop("max_budget", None)
                 user_email = db_data.pop("user_email", None)
+                print_verbose(
+                    "PrismaClient: Before upsert into litellm_verificationtoken"
+                )
                 new_verification_token = await self.db.litellm_verificationtoken.upsert(  # type: ignore
                     where={
                         "token": hashed_token,
