@@ -397,7 +397,7 @@ def test_redis_cache_completion_stream():
     """
 
 
-# test_redis_cache_completion_stream()
+test_redis_cache_completion_stream()
 
 
 def test_redis_cache_acompletion_stream():
@@ -531,6 +531,7 @@ def test_redis_cache_acompletion_stream_bedrock():
         assert (
             response_1_content == response_2_content
         ), f"Response 1 != Response 2. Same params, Response 1{response_1_content} != Response 2{response_2_content}"
+
         litellm.cache = None
         litellm.success_callback = []
         litellm._async_success_callback = []
@@ -539,7 +540,7 @@ def test_redis_cache_acompletion_stream_bedrock():
         raise e
 
 
-def test_s3_cache_acompletion_stream_bedrock():
+def test_s3_cache_acompletion_stream_azure():
     import asyncio
 
     try:
@@ -561,7 +562,7 @@ def test_s3_cache_acompletion_stream_bedrock():
         async def call1():
             nonlocal response_1_content
             response1 = await litellm.acompletion(
-                model="bedrock/anthropic.claude-v1",
+                model="azure/chatgpt-v-2",
                 messages=messages,
                 max_tokens=40,
                 temperature=1,
@@ -579,7 +580,7 @@ def test_s3_cache_acompletion_stream_bedrock():
         async def call2():
             nonlocal response_2_content
             response2 = await litellm.acompletion(
-                model="bedrock/anthropic.claude-v1",
+                model="azure/chatgpt-v-2",
                 messages=messages,
                 max_tokens=40,
                 temperature=1,
@@ -604,7 +605,7 @@ def test_s3_cache_acompletion_stream_bedrock():
         raise e
 
 
-test_s3_cache_acompletion_stream_bedrock()
+test_s3_cache_acompletion_stream_azure()
 
 
 # test_redis_cache_acompletion_stream_bedrock()
