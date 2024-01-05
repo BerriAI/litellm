@@ -61,4 +61,4 @@ EXPOSE 4000/tcp
 
 # Set your entrypoint and command
 ENTRYPOINT ["litellm"]
-CMD ["--config", "./hosted_config.yaml", "--port", "4000", "--num_workers", "8"]
+CMD ["--port", "4000"]
