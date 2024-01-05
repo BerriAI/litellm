@@ -254,6 +254,7 @@ class PrismaClient:
         try:
             from prisma import Client  # type: ignore
 
+            os.environ["DATABASE_URL"] = database_url
             self.db = Client()  # Client to connect to Prisma db
         except:  # if not - go through normal setup process
             print_verbose(
