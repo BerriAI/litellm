@@ -519,16 +519,12 @@ class ProxyConfig:
             user_config_file_path = config_file_path
         # Load existing config
         ## Yaml
-        if os.path.exists(f"{file_path}"):
-            with open(f"{file_path}", "r") as config_file:
-                config = yaml.safe_load(config_file)
-        else:
-            config = {
-                "model_list": [],
-                "general_settings": {},
-                "router_settings": {},
-                "litellm_settings": {},
-            }
+        if file_path is not None:
+            if os.path.exists(f"{file_path}"):
+                with open(f"{file_path}", "r") as config_file:
+                    config = yaml.safe_load(config_file)
+            else:
+                raise Exception(f"File not found! - {file_path}")
 
         ## DB
         if (
@@ -2328,6 +2324,21 @@ async def update_config(config_info: ConfigYAML):
         raise HTTPException(status_code=500, detail=f"An error occurred - {str(e)}")
 
 
+@router.get(
+    "/config/get",
+    tags=["config.yaml"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_config():
+    """
+    Master key only.
+
+    Returns the config. Mainly used for testing.
+    """
+    global proxy_config
+    return await proxy_config.get_config()
+
+
 @router.get("/config/yaml", tags=["config.yaml"])
 async def config_yaml_endpoint(config_info: ConfigYAML):
     """
@@ -2414,6 +2425,28 @@ async def health_endpoint(
             "healthy_count": len(healthy_endpoints),
             "unhealthy_count": len(unhealthy_endpoints),
         }
+
+
+@router.get("/health/readiness", tags=["health"])
+async def health_readiness():
+    """
+    Unprotected endpoint for checking if worker can receive requests
+    """
+    global prisma_client
+    if prisma_client is not None:  # if db passed in, check if it's connected
+        if prisma_client.db.is_connected() == True:
+            return {"status": "healthy"}
+    else:
+        return {"status": "healthy"}
+    raise HTTPException(status_code=503, detail="Service Unhealthy")
+
+
+@router.get("/health/liveliness", tags=["health"])
+async def health_liveliness():
+    """
+    Unprotected endpoint for checking if worker is alive
+    """
+    return "I'm alive!"
 
 
 @router.get("/")
