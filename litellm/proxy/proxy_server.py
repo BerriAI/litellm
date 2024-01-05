@@ -896,6 +896,7 @@ async def generate_key_helper_fn(
             "max_budget": max_budget,
             "user_email": user_email,
         }
+        print_verbose("PrismaClient: Before Insert Data")
         new_verification_token = await prisma_client.insert_data(
             data=verification_token_data
         )
@@ -1769,6 +1770,7 @@ async def generate_key_fn(
     - expires: (datetime) Datetime object for when key expires.
     - user_id: (str) Unique user id - used for tracking spend across multiple keys for same user id.
     """
+    print_verbose("entered /key/generate")
     data_json = data.json()  # type: ignore
     response = await generate_key_helper_fn(**data_json)
     return GenerateKeyResponse(
