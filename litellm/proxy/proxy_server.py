@@ -653,12 +653,14 @@ class ProxyConfig:
                         cache_port = litellm.get_secret("REDIS_PORT", None)
                         cache_password = litellm.get_secret("REDIS_PASSWORD", None)
 
-                        cache_params = {
-                            "type": cache_type,
-                            "host": cache_host,
-                            "port": cache_port,
-                            "password": cache_password,
-                        }
+                        cache_params.update(
+                            {
+                                "type": cache_type,
+                                "host": cache_host,
+                                "port": cache_port,
+                                "password": cache_password,
+                            }
+                        )
                         # Assuming cache_type, cache_host, cache_port, and cache_password are strings
                         print(  # noqa
                             f"{blue_color_code}Cache Type:{reset_color_code} {cache_type}"
