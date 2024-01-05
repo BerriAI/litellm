@@ -338,12 +338,17 @@ baseten_models: List = [
 ]  # FALCON 7B  # WizardLM  # Mosaic ML
 
 
-# used for token counting
+# used for Cost Tracking & Token counting
+# https://azure.microsoft.com/en-in/pricing/details/cognitive-services/openai-service/
 # Azure returns gpt-35-turbo in their responses, we need to map this to azure/gpt-3.5-turbo for token counting
 azure_llms = {
     "gpt-35-turbo": "azure/gpt-35-turbo",
     "gpt-35-turbo-16k": "azure/gpt-35-turbo-16k",
     "gpt-35-turbo-instruct": "azure/gpt-35-turbo-instruct",
+}
+
+azure_embedding_models = {
+    "ada": "azure/ada",
 }
 
 petals_models = [
