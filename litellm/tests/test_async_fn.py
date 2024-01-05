@@ -167,7 +167,7 @@ def test_get_cloudflare_response_streaming():
                 model="cloudflare/@cf/meta/llama-2-7b-chat-int8",
                 messages=messages,
                 stream=True,
-                timeout=5,
+                num_retries=3,  # cloudflare ai workers is EXTREMELY UNSTABLE
             )
             print(type(response))
 
