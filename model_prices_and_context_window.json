@@ -111,6 +111,13 @@
         "litellm_provider": "openai",
         "mode": "embedding"
     },
+    "text-embedding-ada-002-v2": {
+        "max_tokens": 8191,
+        "input_cost_per_token": 0.0000001,
+        "output_cost_per_token": 0.000000,
+        "litellm_provider": "openai",
+        "mode": "embedding"
+    },
     "256-x-256/dall-e-2": {
         "mode": "image_generation",
         "input_cost_per_pixel": 0.00000024414,
