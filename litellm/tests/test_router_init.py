@@ -98,6 +98,73 @@ def test_init_clients_basic():
 # test_init_clients_basic()
 
 
+def test_init_clients_basic_azure_cloudflare():
+    # init azure + cloudflare
+    # init OpenAI gpt-3.5
+    # init OpenAI text-embedding
+    # init OpenAI comptaible - Mistral/mistral-medium
+    # init OpenAI compatible - xinference/bge
+    litellm.set_verbose = True
+    try:
+        print("Test basic client init")
+        model_list = [
+            {
+                "model_name": "azure-cloudflare",
+                "litellm_params": {
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": "https://gateway.ai.cloudflare.com/v1/0399b10e77ac6668c80404a5ff49eb37/litellm-test/azure-openai/openai-gpt-4-test-v-1",
+                },
+            },
+            {
+                "model_name": "gpt-openai",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+            },
+            {
+                "model_name": "text-embedding-ada-002",
+                "litellm_params": {
+                    "model": "text-embedding-ada-002",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+            },
+            {
+                "model_name": "mistral",
+                "litellm_params": {
+                    "model": "mistral/mistral-tiny",
+                    "api_key": os.getenv("MISTRAL_API_KEY"),
+                },
+            },
+            {
+                "model_name": "bge-base-en",
+                "litellm_params": {
+                    "model": "xinference/bge-base-en",
+                    "api_base": "http://127.0.0.1:9997/v1",
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                },
+            },
+        ]
+        router = Router(model_list=model_list)
+        for elem in router.model_list:
+            model_id = elem["model_info"]["id"]
+            assert router.cache.get_cache(f"{model_id}_client") is not None
+            assert router.cache.get_cache(f"{model_id}_async_client") is not None
+            assert router.cache.get_cache(f"{model_id}_stream_client") is not None
+            assert router.cache.get_cache(f"{model_id}_stream_async_client") is not None
+        print("PASSED !")
+
+        # see if we can init clients without timeout or max retries set
+    except Exception as e:
+        traceback.print_exc()
+        pytest.fail(f"Error occurred: {e}")
+
+
+# test_init_clients_basic_azure_cloudflare()
+
+
 def test_timeouts_router():
     """
     Test the timeouts of the router with multiple clients. This HASas to raise a timeout error

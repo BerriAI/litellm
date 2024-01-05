@@ -10,7 +10,7 @@ import os, io
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-import pytest, logging
+import pytest, logging, asyncio
 import litellm
 from litellm import embedding, completion, completion_cost, Timeout
 from litellm import RateLimitError
@@ -45,7 +45,7 @@ def client_no_auth():
     filepath = os.path.dirname(os.path.abspath(__file__))
     config_fp = f"{filepath}/test_configs/test_config_no_auth.yaml"
     # initialize can get run in parallel, it sets specific variables for the fast api app, sinc eit gets run in parallel different tests use the wrong variables
-    initialize(config=config_fp)
+    asyncio.run(initialize(config=config_fp, debug=True))
     app = FastAPI()
     app.include_router(router)  # Include your router in the test app
 
@@ -280,33 +280,42 @@ def test_chat_completion_optional_params(client_no_auth):
 # test_chat_completion_optional_params()
 
 # Test Reading config.yaml file
-from litellm.proxy.proxy_server import load_router_config
+from litellm.proxy.proxy_server import ProxyConfig
 
 
 def test_load_router_config():
     try:
+        import asyncio
+
         print("testing reading config")
         # this is a basic config.yaml with only a model
         filepath = os.path.dirname(os.path.abspath(__file__))
-        result = load_router_config(
-            router=None,
-            config_file_path=f"{filepath}/example_config_yaml/simple_config.yaml",
+        proxy_config = ProxyConfig()
+        result = asyncio.run(
+            proxy_config.load_config(
+                router=None,
+                config_file_path=f"{filepath}/example_config_yaml/simple_config.yaml",
+            )
         )
         print(result)
         assert len(result[1]) == 1
 
         # this is a load balancing config yaml
-        result = load_router_config(
-            router=None,
-            config_file_path=f"{filepath}/example_config_yaml/azure_config.yaml",
+        result = asyncio.run(
+            proxy_config.load_config(
+                router=None,
+                config_file_path=f"{filepath}/example_config_yaml/azure_config.yaml",
+            )
         )
         print(result)
         assert len(result[1]) == 2
 
         # config with general settings - custom callbacks
-        result = load_router_config(
-            router=None,
-            config_file_path=f"{filepath}/example_config_yaml/azure_config.yaml",
+        result = asyncio.run(
+            proxy_config.load_config(
+                router=None,
+                config_file_path=f"{filepath}/example_config_yaml/azure_config.yaml",
+            )
         )
         print(result)
         assert len(result[1]) == 2
@@ -314,9 +323,11 @@ def test_load_router_config():
         # tests for litellm.cache set from config
         print("testing reading proxy config for cache")
         litellm.cache = None
-        load_router_config(
-            router=None,
-            config_file_path=f"{filepath}/example_config_yaml/cache_no_params.yaml",
+        asyncio.run(
+            proxy_config.load_config(
+                router=None,
+                config_file_path=f"{filepath}/example_config_yaml/cache_no_params.yaml",
+            )
         )
         assert litellm.cache is not None
         assert "redis_client" in vars(
@@ -329,10 +340,14 @@ def test_load_router_config():
             "aembedding",
         ]  # init with all call types
 
+        litellm.disable_cache()
+
         print("testing reading proxy config for cache with params")
-        load_router_config(
-            router=None,
-            config_file_path=f"{filepath}/example_config_yaml/cache_with_params.yaml",
+        asyncio.run(
+            proxy_config.load_config(
+                router=None,
+                config_file_path=f"{filepath}/example_config_yaml/cache_with_params.yaml",
+            )
         )
         assert litellm.cache is not None
         print(litellm.cache)

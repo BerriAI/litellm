@@ -24,7 +24,7 @@ from litellm.proxy.proxy_server import (
 def client():
     filepath = os.path.dirname(os.path.abspath(__file__))
     config_fp = f"{filepath}/test_configs/test_bad_config.yaml"
-    initialize(config=config_fp)
+    asyncio.run(initialize(config=config_fp))
     app = FastAPI()
     app.include_router(router)  # Include your router in the test app
     return TestClient(app)
@@ -149,7 +149,7 @@ def test_chat_completion_exception_any_model(client):
             response=response
         )
         print("Exception raised=", openai_exception)
-        assert isinstance(openai_exception, openai.NotFoundError)
+        assert isinstance(openai_exception, openai.BadRequestError)
 
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception {str(e)}")
@@ -170,7 +170,7 @@ def test_embedding_exception_any_model(client):
             response=response
         )
         print("Exception raised=", openai_exception)
-        assert isinstance(openai_exception, openai.NotFoundError)
+        assert isinstance(openai_exception, openai.BadRequestError)
 
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception {str(e)}")
