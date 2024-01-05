@@ -200,6 +200,7 @@ Here's an example of using a bedrock model with LiteLLM
 
 | Model Name               | Command                                                          |
 |--------------------------|------------------------------------------------------------------|
+| Anthropic Claude-V2.1      | `completion(model='anthropic.claude-v2:1', messages=messages)`   | `os.environ['ANTHROPIC_ACCESS_KEY_ID']`, `os.environ['ANTHROPIC_SECRET_ACCESS_KEY']`           |
 | Anthropic Claude-V2      | `completion(model='anthropic.claude-v2', messages=messages)`   | `os.environ['ANTHROPIC_ACCESS_KEY_ID']`, `os.environ['ANTHROPIC_SECRET_ACCESS_KEY']`           |
 | Anthropic Claude-Instant V1 | `completion(model='anthropic.claude-instant-v1', messages=messages)` | `os.environ['ANTHROPIC_ACCESS_KEY_ID']`, `os.environ['ANTHROPIC_SECRET_ACCESS_KEY']`           |
 | Anthropic Claude-V1      | `completion(model='anthropic.claude-v1', messages=messages)`   | `os.environ['ANTHROPIC_ACCESS_KEY_ID']`, `os.environ['ANTHROPIC_SECRET_ACCESS_KEY']`           |
