@@ -79,7 +79,7 @@ def test_openai_azure_embedding_simple():
         pytest.fail(f"Error occurred: {e}")
 
 
-test_openai_azure_embedding_simple()
+# test_openai_azure_embedding_simple()
 
 
 def test_openai_azure_embedding_timeouts():
@@ -265,15 +265,22 @@ def test_aembedding():
                     input=["good morning from litellm", "this is another item"],
                 )
                 print(response)
+                return response
             except Exception as e:
                 pytest.fail(f"Error occurred: {e}")
 
-        asyncio.run(embedding_call())
+        response = asyncio.run(embedding_call())
+        print("Before caclulating cost, response", response)
+
+        cost = litellm.completion_cost(completion_response=response)
+
+        print("COST=", cost)
+        assert cost == float("1e-06")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
 
-# test_aembedding()
+test_aembedding()
 
 
 def test_aembedding_azure():
