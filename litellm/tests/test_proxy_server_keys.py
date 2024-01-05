@@ -52,13 +52,6 @@ save_worker_config(
     save=False,
     use_queue=False,
 )
-app = FastAPI()
-app.include_router(router)  # Include your router in the test app
-
-
-@app.on_event("startup")
-async def wrapper_startup_event():
-    await startup_event()
 
 
 import asyncio
@@ -87,8 +80,10 @@ def client():
     cleanup_router_config_variables()  # rest proxy before test
 
     asyncio.run(initialize(config=config_fp, debug=True))
-    with TestClient(app) as client:
-        yield client
+    app = FastAPI()
+    app.include_router(router)  # Include your router in the test app
+
+    return TestClient(app)
 
 
 def test_add_new_key(client):
