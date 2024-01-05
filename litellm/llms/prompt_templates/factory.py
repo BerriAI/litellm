@@ -510,7 +510,7 @@ def prompt_factory(
     if custom_llm_provider == "ollama":
         return ollama_pt(model=model, messages=messages)
     elif custom_llm_provider == "anthropic":
-        if "claude-2.1" in model:
+        if any(_ in model for _ in ["claude-2.1","claude-v2:1"]):
             return claude_2_1_pt(messages=messages)
         else:
             return anthropic_pt(messages=messages)
