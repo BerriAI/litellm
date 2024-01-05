@@ -4937,6 +4937,9 @@ async def convert_to_streaming_response_async(response_object: Optional[dict] = 
     if "id" in response_object:
         model_response_object.id = response_object["id"]
 
+    if "created" in response_object:
+        model_response_object.created = response_object["created"]
+
     if "system_fingerprint" in response_object:
         model_response_object.system_fingerprint = response_object["system_fingerprint"]
 
@@ -4980,6 +4983,9 @@ def convert_to_streaming_response(response_object: Optional[dict] = None):
 
     if "id" in response_object:
         model_response_object.id = response_object["id"]
+
+    if "created" in response_object:
+        model_response_object.created = response_object["created"]
 
     if "system_fingerprint" in response_object:
         model_response_object.system_fingerprint = response_object["system_fingerprint"]
@@ -5035,6 +5041,9 @@ def convert_to_model_response_object(
                 model_response_object.usage.completion_tokens = response_object["usage"].get("completion_tokens", 0)  # type: ignore
                 model_response_object.usage.prompt_tokens = response_object["usage"].get("prompt_tokens", 0)  # type: ignore
                 model_response_object.usage.total_tokens = response_object["usage"].get("total_tokens", 0)  # type: ignore
+
+            if "created" in response_object:
+                model_response_object.created = response_object["created"]
 
             if "id" in response_object:
                 model_response_object.id = response_object["id"]
