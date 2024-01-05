@@ -345,15 +345,21 @@ class PrismaClient:
         user_id: Optional[str] = None,
     ):
         try:
+            print_verbose("PrismaClient: get_data")
+            # incase prisma is not connected
+            if self.db.is_connected() == False:
+                await self.connect()
             response = None
             if token is not None:
                 # check if plain text or hash
                 hashed_token = token
                 if token.startswith("sk-"):
                     hashed_token = self.hash_token(token=token)
+                print_verbose("PrismaClient: find_unique")
                 response = await self.db.litellm_verificationtoken.find_unique(
                     where={"token": hashed_token}
                 )
+                print_verbose(f"PrismaClient: response={response}")
                 if response:
                     # Token exists, now check expiration.
                     if response.expires is not None and expires is not None:
@@ -381,6 +387,10 @@ class PrismaClient:
                 )
                 return response
         except Exception as e:
+            print_verbose(f"LiteLLM Prisma Client Exception: {e}")
+            import traceback
+
+            traceback.print_exc()
             asyncio.create_task(
                 self.proxy_logging_obj.failure_handler(original_exception=e)
             )
