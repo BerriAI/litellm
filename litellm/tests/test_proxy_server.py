@@ -285,29 +285,37 @@ from litellm.proxy.proxy_server import ProxyConfig
 
 def test_load_router_config():
     try:
+        import asyncio
+
         print("testing reading config")
         # this is a basic config.yaml with only a model
         filepath = os.path.dirname(os.path.abspath(__file__))
         proxy_config = ProxyConfig()
-        result = proxy_config.load_config(
-            router=None,
-            config_file_path=f"{filepath}/example_config_yaml/simple_config.yaml",
+        result = asyncio.run(
+            proxy_config.load_config(
+                router=None,
+                config_file_path=f"{filepath}/example_config_yaml/simple_config.yaml",
+            )
         )
         print(result)
         assert len(result[1]) == 1
 
         # this is a load balancing config yaml
-        result = load_router_config(
-            router=None,
-            config_file_path=f"{filepath}/example_config_yaml/azure_config.yaml",
+        result = asyncio.run(
+            proxy_config.load_config(
+                router=None,
+                config_file_path=f"{filepath}/example_config_yaml/azure_config.yaml",
+            )
         )
         print(result)
         assert len(result[1]) == 2
 
         # config with general settings - custom callbacks
-        result = load_router_config(
-            router=None,
-            config_file_path=f"{filepath}/example_config_yaml/azure_config.yaml",
+        result = asyncio.run(
+            proxy_config.load_config(
+                router=None,
+                config_file_path=f"{filepath}/example_config_yaml/azure_config.yaml",
+            )
         )
         print(result)
         assert len(result[1]) == 2
@@ -315,9 +323,11 @@ def test_load_router_config():
         # tests for litellm.cache set from config
         print("testing reading proxy config for cache")
         litellm.cache = None
-        load_router_config(
-            router=None,
-            config_file_path=f"{filepath}/example_config_yaml/cache_no_params.yaml",
+        asyncio.run(
+            proxy_config.load_config(
+                router=None,
+                config_file_path=f"{filepath}/example_config_yaml/cache_no_params.yaml",
+            )
         )
         assert litellm.cache is not None
         assert "redis_client" in vars(
@@ -330,10 +340,14 @@ def test_load_router_config():
             "aembedding",
         ]  # init with all call types
 
+        litellm.disable_cache()
+
         print("testing reading proxy config for cache with params")
-        load_router_config(
-            router=None,
-            config_file_path=f"{filepath}/example_config_yaml/cache_with_params.yaml",
+        asyncio.run(
+            proxy_config.load_config(
+                router=None,
+                config_file_path=f"{filepath}/example_config_yaml/cache_with_params.yaml",
+            )
         )
         assert litellm.cache is not None
         print(litellm.cache)
