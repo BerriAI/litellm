@@ -242,6 +242,13 @@
         "litellm_provider": "azure",
         "mode": "chat"
     },
+    "azure/ada": {
+        "max_tokens": 8191,
+        "input_cost_per_token": 0.0000001,
+        "output_cost_per_token": 0.000000,
+        "litellm_provider": "azure",
+        "mode": "embedding"
+    },
     "azure/text-embedding-ada-002": {
         "max_tokens": 8191,
         "input_cost_per_token": 0.0000001,
