@@ -43,11 +43,49 @@ from litellm import completion
 os.environ["ANTHROPIC_API_KEY"] = "your-api-key"
 
 messages = [
-    {"role": "user", "content": "How do you say 'Hello' in German? Return your answer as a JSON object, like this:\n\n{ \"Hello\": \"Hallo\"}"},
+    {"role": "user", "content": "How do you say 'Hello' in German? Return your answer as a JSON object, like this:\n\n{ \"Hello\": \"Hallo\" }"},
     {"role": "assistant", "content": "{"},
 ]
 response = completion(model="claude-2.1", messages=messages)
 print(response)
+```
+
+### Example prompt sent to Claude
+
+```
+
+Human: How do you say 'Hello' in German? Return your answer as a JSON object, like this:
+
+{ "Hello": "Hallo" }
+
+Assistant: {
+```
+
+## Usage - "System" messages
+If you're using Anthropic's Claude 2.1 with Bedrock, `system` role messages are properly formatted for you.
+
+```python
+import os
+from litellm import completion
+
+# set env - [OPTIONAL] replace with your anthropic key
+os.environ["ANTHROPIC_API_KEY"] = "your-api-key"
+
+messages = [
+    {"role": "system", "content": "You are a snarky assistant."},
+    {"role": "user", "content": "How do I boil water?"},
+]
+response = completion(model="claude-2.1", messages=messages)
+```
+
+### Example prompt sent to Claude
+
+```
+You are a snarky assistant.
+
+Human: How do I boil water?
+
+Assistant:
 ```
 
 ## Streaming

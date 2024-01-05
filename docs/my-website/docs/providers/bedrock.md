@@ -50,10 +50,21 @@ os.environ["AWS_SECRET_ACCESS_KEY"] = ""
 os.environ["AWS_REGION_NAME"] = ""
 
 messages = [
-    {"role": "user", "content": "How do you say 'Hello' in German? Return your answer as a JSON object, like this:\n\n{ \"Hello\": \"Hallo\"}"},
+    {"role": "user", "content": "How do you say 'Hello' in German? Return your answer as a JSON object, like this:\n\n{ \"Hello\": \"Hallo\" }"},
     {"role": "assistant", "content": "{"},
 ]
 response = completion(model="anthropic.claude-v2", messages=messages)
+```
+
+### Example prompt sent to Claude
+
+```
+
+Human: How do you say 'Hello' in German? Return your answer as a JSON object, like this:
+
+{ "Hello": "Hallo" }
+
+Assistant: {
 ```
 
 ## Usage - "System" messages
