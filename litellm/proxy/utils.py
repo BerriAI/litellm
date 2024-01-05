@@ -250,30 +250,36 @@ def on_backoff(details):
 
 class PrismaClient:
     def __init__(self, database_url: str, proxy_logging_obj: ProxyLogging):
-        print_verbose(
-            "LiteLLM: DATABASE_URL Set in config, trying to 'pip install prisma'"
-        )
-        ## init logging object
-        self.proxy_logging_obj = proxy_logging_obj
-        os.environ["DATABASE_URL"] = database_url
-        # Save the current working directory
-        original_dir = os.getcwd()
-        # set the working directory to where this script is
-        abspath = os.path.abspath(__file__)
-        dname = os.path.dirname(abspath)
-        os.chdir(dname)
-
+        ### Check if prisma client can be imported (setup done in Docker build)
         try:
-            subprocess.run(["prisma", "generate"])
-            subprocess.run(
-                ["prisma", "db", "push", "--accept-data-loss"]
-            )  # this looks like a weird edge case when prisma just wont start on render. we need to have the --accept-data-loss
-        finally:
-            os.chdir(original_dir)
-        # Now you can import the Prisma Client
-        from prisma import Client  # type: ignore
+            from prisma import Client  # type: ignore
 
-        self.db = Client()  # Client to connect to Prisma db
+            self.db = Client()  # Client to connect to Prisma db
+        except:  # if not - go through normal setup process
+            print_verbose(
+                "LiteLLM: DATABASE_URL Set in config, trying to 'pip install prisma'"
+            )
+            ## init logging object
+            self.proxy_logging_obj = proxy_logging_obj
+            os.environ["DATABASE_URL"] = database_url
+            # Save the current working directory
+            original_dir = os.getcwd()
+            # set the working directory to where this script is
+            abspath = os.path.abspath(__file__)
+            dname = os.path.dirname(abspath)
+            os.chdir(dname)
+
+            try:
+                subprocess.run(["prisma", "generate"])
+                subprocess.run(
+                    ["prisma", "db", "push", "--accept-data-loss"]
+                )  # this looks like a weird edge case when prisma just wont start on render. we need to have the --accept-data-loss
+            finally:
+                os.chdir(original_dir)
+            # Now you can import the Prisma Client
+            from prisma import Client  # type: ignore
+
+            self.db = Client()  # Client to connect to Prisma db
 
     def hash_token(self, token: str):
         # Hash the string using SHA-256
