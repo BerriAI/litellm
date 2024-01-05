@@ -103,7 +103,7 @@ def test_cost_azure_gpt_35():
                     ),
                 )
             ],
-            model="azure/gpt-35-turbo",  # azure always has model written like this
+            model="gpt-35-turbo",  # azure always has model written like this
             usage=Usage(prompt_tokens=21, completion_tokens=17, total_tokens=38),
         )
 
