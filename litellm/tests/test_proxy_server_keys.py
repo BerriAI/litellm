@@ -61,6 +61,23 @@ async def wrapper_startup_event():
     await startup_event()
 
 
+import asyncio
+
+
+@pytest.yield_fixture
+def event_loop():
+    """Create an instance of the default event loop for each test case."""
+    policy = asyncio.WindowsSelectorEventLoopPolicy()
+    res = policy.new_event_loop()
+    asyncio.set_event_loop(res)
+    res._close = res.close
+    res.close = lambda: None
+
+    yield res
+
+    res._close()
+
+
 # Here you create a fixture that will be used by your tests
 # Make sure the fixture returns TestClient(app)
 @pytest.fixture(scope="function")
