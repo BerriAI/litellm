@@ -280,18 +280,6 @@ class OpenAIChatCompletion(BaseLLM):
                             max_retries=max_retries,
                         )
                     else:
-                        ## LOGGING
-                        logging_obj.pre_call(
-                            input=messages,
-                            api_key=api_key,
-                            additional_args={
-                                "headers": headers,
-                                "api_base": api_base,
-                                "acompletion": acompletion,
-                                "complete_input_dict": data,
-                            },
-                        )
-
                         if not isinstance(max_retries, int):
                             raise OpenAIError(
                                 status_code=422, message="max retries must be an int"
@@ -306,8 +294,21 @@ class OpenAIChatCompletion(BaseLLM):
                             )
                         else:
                             openai_client = client
+
+                        ## LOGGING
+                        logging_obj.pre_call(
+                            input=messages,
+                            api_key=openai_client.api_key,
+                            additional_args={
+                                "headers": headers,
+                                "api_base": openai_client._base_url._uri_reference,
+                                "acompletion": acompletion,
+                                "complete_input_dict": data,
+                            },
+                        )
+
                         response = openai_client.chat.completions.create(**data, timeout=timeout)  # type: ignore
-                        stringified_response = response.model_dump_json()
+                        stringified_response = response.model_dump()
                         logging_obj.post_call(
                             input=messages,
                             api_key=api_key,
@@ -315,7 +316,7 @@ class OpenAIChatCompletion(BaseLLM):
                             additional_args={"complete_input_dict": data},
                         )
                         return convert_to_model_response_object(
-                            response_object=json.loads(stringified_response),
+                            response_object=stringified_response,
                             model_response_object=model_response,
                         )
                 except Exception as e:
@@ -386,7 +387,7 @@ class OpenAIChatCompletion(BaseLLM):
             response = await openai_aclient.chat.completions.create(
                 **data, timeout=timeout
             )
-            stringified_response = response.model_dump_json()
+            stringified_response = response.model_dump()
             logging_obj.post_call(
                 input=data["messages"],
                 api_key=api_key,
@@ -394,7 +395,7 @@ class OpenAIChatCompletion(BaseLLM):
                 additional_args={"complete_input_dict": data},
             )
             return convert_to_model_response_object(
-                response_object=json.loads(stringified_response),
+                response_object=stringified_response,
                 model_response_object=model_response,
             )
         except Exception as e:
@@ -527,7 +528,7 @@ class OpenAIChatCompletion(BaseLLM):
             else:
                 openai_aclient = client
             response = await openai_aclient.embeddings.create(**data, timeout=timeout)  # type: ignore
-            stringified_response = response.model_dump_json()
+            stringified_response = response.model_dump()
             ## LOGGING
             logging_obj.post_call(
                 input=input,
@@ -535,7 +536,7 @@ class OpenAIChatCompletion(BaseLLM):
                 additional_args={"complete_input_dict": data},
                 original_response=stringified_response,
             )
-            return convert_to_model_response_object(response_object=json.loads(stringified_response), model_response_object=model_response, response_type="embedding")  # type: ignore
+            return convert_to_model_response_object(response_object=stringified_response, model_response_object=model_response, response_type="embedding")  # type: ignore
         except Exception as e:
             ## LOGGING
             logging_obj.post_call(
@@ -597,7 +598,7 @@ class OpenAIChatCompletion(BaseLLM):
                 original_response=response,
             )
 
-            return convert_to_model_response_object(response_object=json.loads(response.model_dump_json()), model_response_object=model_response, response_type="embedding")  # type: ignore
+            return convert_to_model_response_object(response_object=response.model_dump(), model_response_object=model_response, response_type="embedding")  # type: ignore
         except OpenAIError as e:
             exception_mapping_worked = True
             raise e
@@ -634,7 +635,7 @@ class OpenAIChatCompletion(BaseLLM):
             else:
                 openai_aclient = client
             response = await openai_aclient.images.generate(**data, timeout=timeout)  # type: ignore
-            stringified_response = response.model_dump_json()
+            stringified_response = response.model_dump()
             ## LOGGING
             logging_obj.post_call(
                 input=prompt,
@@ -642,7 +643,7 @@ class OpenAIChatCompletion(BaseLLM):
                 additional_args={"complete_input_dict": data},
                 original_response=stringified_response,
             )
-            return convert_to_model_response_object(response_object=json.loads(stringified_response), model_response_object=model_response, response_type="image_generation")  # type: ignore
+            return convert_to_model_response_object(response_object=stringified_response, model_response_object=model_response, response_type="image_generation")  # type: ignore
         except Exception as e:
             ## LOGGING
             logging_obj.post_call(
@@ -710,7 +711,7 @@ class OpenAIChatCompletion(BaseLLM):
                 original_response=response,
             )
             # return response
-            return convert_to_model_response_object(response_object=json.loads(response.model_dump_json()), model_response_object=model_response, response_type="image_generation")  # type: ignore
+            return convert_to_model_response_object(response_object=response.model_dump(), model_response_object=model_response, response_type="image_generation")  # type: ignore
         except OpenAIError as e:
             exception_mapping_worked = True
             raise e
