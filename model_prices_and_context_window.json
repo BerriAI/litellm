@@ -583,6 +583,22 @@
         "litellm_provider": "palm",
         "mode": "completion"
     },
+    "gemini/gemini-pro": {
+        "max_tokens": 30720,
+        "max_output_tokens": 2048,
+        "input_cost_per_token": 0.0, 
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "gemini",
+        "mode": "chat"
+    },
+    "gemini/gemini-pro-vision": {
+        "max_tokens": 30720,
+        "max_output_tokens": 2048,
+        "input_cost_per_token": 0.0, 
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "gemini",
+        "mode": "chat"
+    },
     "command-nightly": {
         "max_tokens": 4096,
         "input_cost_per_token": 0.000015,
