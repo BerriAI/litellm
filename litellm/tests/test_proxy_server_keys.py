@@ -29,6 +29,7 @@ from litellm.proxy.proxy_server import (
     router,
     save_worker_config,
     startup_event,
+    shutdown_event,
 )  # Replace with the actual module where your FastAPI router is defined
 
 filepath = os.path.dirname(os.path.abspath(__file__))
@@ -58,6 +59,11 @@ app.include_router(router)  # Include your router in the test app
 @app.on_event("startup")
 async def wrapper_startup_event():
     await startup_event()
+
+
+@app.on_event("shutdown")
+async def wrapper_shutdown_event():
+    await shutdown_event()
 
 
 # Here you create a fixture that will be used by your tests
