@@ -673,6 +673,11 @@ class ProxyConfig:
                         )
                         print()  # noqa
 
+                    # users can pass os.environ/ variables on the proxy - we should read them from the env
+                    for key, value in cache_params.items():
+                        if value.startswith("os.environ/"):
+                            cache_params[key] = litellm.get_secret(value)
+
                     ## to pass a complete url, or set ssl=True, etc. just set it as `os.environ[REDIS_URL] = <your-redis-url>`, _redis.py checks for REDIS specific environment variables
                     litellm.cache = Cache(**cache_params)
                     print(  # noqa
