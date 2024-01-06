@@ -386,27 +386,31 @@ def anthropic_pt(
     return prompt
 
     
-def _load_image_from_url(image_url: str):
-    """
-    Loads an image from a URL.
-
-    Args:
-        image_url (str): The URL of the image.
-
-    Returns:
-        Image: The loaded image.
-    """
-    from io import BytesIO
+def _load_image_from_url(image_url):
     try:
         from PIL import Image
     except:
         raise Exception("gemini image conversion failed please run `pip install Pillow`")
-    
-    # Download the image from the URL
-    response = requests.get(image_url)
-    image = Image.open(BytesIO(response.content))
+    from io import BytesIO
+    try:
+        # Send a GET request to the image URL
+        response = requests.get(image_url)
+        response.raise_for_status()  # Raise an exception for HTTP errors
 
-    return image
+        # Check the response's content type to ensure it is an image
+        content_type = response.headers.get('content-type')
+        if not content_type or 'image' not in content_type:
+            raise ValueError(f"URL does not point to a valid image (content-type: {content_type})")
+
+        # Load the image from the response content
+        return Image.open(BytesIO(response.content))
+        
+    except requests.RequestException as e:
+        print(f"Request failed: {e}")
+    except UnidentifiedImageError:
+        print("Cannot identify image file (it may not be a supported image format or might be corrupted).")
+    except ValueError as e:
+        print(e)
 
 
 def _gemini_vision_convert_messages(messages: list):

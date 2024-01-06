@@ -27,6 +27,7 @@ def generate_text():
         ]
         response = litellm.completion(model="gemini/gemini-pro-vision", messages=messages)
         print(response)
+        assert isinstance(response.choices[0].message.content, str) == True
     except Exception as exception:
         raise Exception("An error occurred during text generation:", exception)
 
