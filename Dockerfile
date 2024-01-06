@@ -30,8 +30,8 @@ RUN if [ "$with_database" = "true" ]; then \
       /app/retry_push.sh; \
     fi
 
-EXPOSE 8000/tcp
+EXPOSE 4000/tcp
 
 # Set your entrypoint and command
 ENTRYPOINT ["litellm"]
-CMD ["--config", "./proxy_server_config.yaml", "--port", "8000", "--num_workers", "8"]
+CMD ["--port", "4000"]
