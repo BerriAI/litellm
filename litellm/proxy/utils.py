@@ -617,11 +617,13 @@ async def _cache_user_row(user_id: str, cache: DualCache, db: PrismaClient):
     Check if a user_id exists in cache,
     if not retrieve it.
     """
+    print_verbose(f"Prisma: _cache_user_row, user_id: {user_id}")
     cache_key = f"{user_id}_user_api_key_user_id"
     response = cache.get_cache(key=cache_key)
     if response is None:  # Cache miss
         user_row = await db.get_data(user_id=user_id)
         if user_row is not None:
+            print_verbose(f"User Row: {user_row}")
             cache_value = user_row.model_dump_json()
             cache.set_cache(
                 key=cache_key, value=cache_value, ttl=600
