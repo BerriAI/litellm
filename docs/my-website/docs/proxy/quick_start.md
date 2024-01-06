@@ -191,6 +191,13 @@ $ export OPENAI_API_KEY=my-api-key
 $ litellm --model gpt-3.5-turbo
 ```
 </TabItem>
+<TabItem value="ollama" label="Ollama">
+
+```
+$ litellm --model ollama/<ollama-model-name>
+```
+
+</TabItem>
 <TabItem value="openai-proxy" label="OpenAI Compatible Endpoint">
 
 ```shell
