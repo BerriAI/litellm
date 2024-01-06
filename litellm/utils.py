@@ -4012,7 +4012,10 @@ def get_llm_provider(
                 api_base = "https://api.voyageai.com/v1"
                 dynamic_api_key = get_secret("VOYAGE_API_KEY")
             return model, custom_llm_provider, dynamic_api_key, api_base
-
+        elif model.split("/", 1)[0] in litellm.provider_list:
+            custom_llm_provider = model.split("/", 1)[0]
+            model = model.split("/", 1)[1]
+            return model, custom_llm_provider, dynamic_api_key, api_base
         # check if api base is a known openai compatible endpoint
         if api_base:
             for endpoint in litellm.openai_compatible_endpoints:
