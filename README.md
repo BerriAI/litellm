@@ -129,7 +129,7 @@ The proxy provides:
 ## Quick Start Proxy - CLI 
 
 ```shell
-pip install litellm[proxy]
+pip install 'litellm[proxy]'
 ```
 
 ### Step 1: Start litellm proxy
