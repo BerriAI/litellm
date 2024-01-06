@@ -360,14 +360,6 @@ def embedding(
     except Exception as e:
         raise SagemakerError(status_code=500, message=f"{str(e)}")
 
-    ## LOGGING
-    logging_obj.post_call(
-        input=input,
-        api_key="",
-        additional_args={"complete_input_dict": data},
-        original_response=response,
-    )
-
     response = json.loads(response["Body"].read().decode("utf8"))
     ## LOGGING
     logging_obj.post_call(
@@ -376,6 +368,7 @@ def embedding(
         original_response=response,
         additional_args={"complete_input_dict": data},
     )
+    
     print_verbose(f"raw model_response: {response}")
     if "embedding" not in response:
         raise SagemakerError(status_code=500, message="embedding not found in response")
