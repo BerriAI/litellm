@@ -557,7 +557,11 @@ def test_s3_cache_acompletion_stream_azure():
             }
         ]
         litellm.cache = Cache(
-            type="s3", s3_bucket_name="cache-bucket-litellm", s3_region_name="us-west-2"
+            type="s3",
+            s3_bucket_name="cache-bucket-litellm",
+            s3_region_name="os.environ/AWS_REGION",
+            s3_aws_access_key_id="os.environ/AWS_ACCESS_KEY_ID",
+            s3_aws_secret_access_key="os.environ/AWS_SECRET_ACCESS_KEY",
         )
         print("s3 Cache: test for caching, streaming + completion")
         response_1_content = ""
