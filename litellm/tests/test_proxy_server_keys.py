@@ -172,7 +172,7 @@ async def test_update_new_key(client):
         pytest.fail(f"LiteLLM Proxy test failed. Exception: {str(e)}")
 
 
-# # Run the test - only runs via pytest
+# Run the test - only runs via pytest
 
 
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
