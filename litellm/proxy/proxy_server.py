@@ -2424,6 +2424,28 @@ async def health_endpoint(
         }
 
 
+@router.get("/health/readiness", tags=["health"])
+async def health_readiness():
+    """
+    Unprotected endpoint for checking if worker can receive requests
+    """
+    global prisma_client
+    if prisma_client is not None:  # if db passed in, check if it's connected
+        if prisma_client.db.is_connected() == True:
+            return {"status": "healthy"}
+    else:
+        return {"status": "healthy"}
+    raise HTTPException(status_code=503, detail="Service Unhealthy")
+
+
+@router.get("/health/liveliness", tags=["health"])
+async def health_liveliness():
+    """
+    Unprotected endpoint for checking if worker is alive
+    """
+    return "I'm alive!"
+
+
 @router.get("/")
 async def home(request: Request):
     return "LiteLLM: RUNNING"
