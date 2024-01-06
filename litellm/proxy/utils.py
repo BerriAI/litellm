@@ -623,11 +623,14 @@ async def _cache_user_row(user_id: str, cache: DualCache, db: PrismaClient):
     if response is None:  # Cache miss
         user_row = await db.get_data(user_id=user_id)
         if user_row is not None:
-            print_verbose(f"User Row: {user_row}")
-            cache_value = user_row.model_dump_json()
-            cache.set_cache(
-                key=cache_key, value=cache_value, ttl=600
-            )  # store for 10 minutes
+            print_verbose(f"User Row: {user_row}, type = {type(user_row)}")
+            if hasattr(user_row, "model_dump_json") and callable(
+                getattr(user_row, "model_dump_json")
+            ):
+                cache_value = user_row.model_dump_json()
+                cache.set_cache(
+                    key=cache_key, value=cache_value, ttl=600
+                )  # store for 10 minutes
     return
 
 
