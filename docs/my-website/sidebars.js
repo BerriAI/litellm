@@ -112,6 +112,7 @@ const sidebars = {
         "proxy/reliability",
         "proxy/health",
         "proxy/call_hooks",
+        "proxy/rules",
         "proxy/caching",
         "proxy/alerting",
         "proxy/logging", 
@@ -167,20 +168,7 @@ const sidebars = {
         `observability/telemetry`,
       ],
     },
-    {
-      type: "category",
-      label: "Caching",
-      link: {
-        type: 'generated-index',
-        title: 'Providers',
-        description: 'Learn how to deploy + call models from different providers on LiteLLM',
-        slug: '/caching',
-      },
-      items: [
-        "caching/local_caching",
-        "caching/redis_cache",
-      ],
-    },
+    "caching/redis_cache",
     {
       type: "category",
       label: "LangChain, LlamaIndex Integration",

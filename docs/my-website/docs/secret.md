@@ -40,7 +40,7 @@ litellm.get_secret("your-test-key")
 
 1. Install Proxy dependencies 
 ```bash
-pip install litellm[proxy] litellm[extra_proxy]
+pip install 'litellm[proxy]' 'litellm[extra_proxy]'
 ```
 
 2. Save Azure details in your environment

@@ -20,12 +20,6 @@ LiteLLM Server manages:
 View all the supported args for the Proxy CLI [here](https://docs.litellm.ai/docs/simple_proxy#proxy-cli-arguments)
 
 ```shell
-$ pip install litellm[proxy]
-```
-
-If this fails try running
-
-```shell
 $ pip install 'litellm[proxy]'
 ```
 
@@ -190,6 +184,13 @@ $ export OPENAI_API_KEY=my-api-key
 ```shell
 $ litellm --model gpt-3.5-turbo
 ```
+</TabItem>
+<TabItem value="ollama" label="Ollama">
+
+```
+$ litellm --model ollama/<ollama-model-name>
+```
+
 </TabItem>
 <TabItem value="openai-proxy" label="OpenAI Compatible Endpoint">
 
