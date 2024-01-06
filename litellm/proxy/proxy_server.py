@@ -1103,6 +1103,11 @@ async def startup_event():
     # check if master key set in environment - load from there
     master_key = litellm.get_secret("LITELLM_MASTER_KEY", None)
 
+    ### CONNECT TO DB ###
+    # check if DATABASE_URL in environment - load from there
+    if os.getenv("DATABASE_URL", None) is not None and prisma_client is None:
+        prisma_setup(database_url=os.getenv("DATABASE_URL"))
+
     ### LOAD CONFIG ###
     worker_config = litellm.get_secret("WORKER_CONFIG")
     print_verbose(f"worker_config: {worker_config}")
