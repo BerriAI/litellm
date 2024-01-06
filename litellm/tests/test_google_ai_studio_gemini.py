@@ -19,7 +19,7 @@ def generate_text():
                     {
                         "type": "image_url",
                         "image_url": {
-                            "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
+                            "url": "https://avatars.githubusercontent.com/u/17561003?v=4"
                         }
                     }
                 ]
