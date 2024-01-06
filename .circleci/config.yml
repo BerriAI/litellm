@@ -37,7 +37,6 @@ jobs:
             pip install traceloop-sdk==0.0.69
             pip install openai
             pip install prisma
-            pip install "pydantic==2.5.3"
       - save_cache:
           paths:
             - ./venv

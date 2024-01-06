@@ -9,4 +9,5 @@ redis
 anthropic
 boto3
 orjson
+pydantic
 google-cloud-aiplatform
