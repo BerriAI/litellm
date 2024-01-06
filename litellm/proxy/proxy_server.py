@@ -20,7 +20,7 @@ try:
     import yaml
     import orjson
 except ImportError as e:
-    raise ImportError(f"Missing dependency {e}. Run `pip install litellm[proxy]`")
+    raise ImportError(f"Missing dependency {e}. Run `pip install 'litellm[proxy]'`")
 
 import random
 
