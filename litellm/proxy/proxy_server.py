@@ -307,11 +307,10 @@ async def user_api_key_auth(
             )
 
 
-async def prisma_setup(database_url: Optional[str]):
+def prisma_setup(database_url: Optional[str]):
     global prisma_client, proxy_logging_obj, user_api_key_cache
-    if (
-        database_url is not None and prisma_client is None
-    ):  # don't re-initialize prisma client after initial init
+
+    if database_url is not None:
         try:
             prisma_client = PrismaClient(
                 database_url=database_url, proxy_logging_obj=proxy_logging_obj
@@ -320,8 +319,6 @@ async def prisma_setup(database_url: Optional[str]):
             print_verbose(
                 f"Error when initializing prisma, Ensure you run pip install prisma {str(e)}"
             )
-    if prisma_client is not None and prisma_client.db.is_connected() == False:
-        await prisma_client.connect()
 
 
 def load_from_azure_key_vault(use_azure_key_vault: bool = False):
@@ -535,7 +532,7 @@ class ProxyConfig:
             prisma_client is not None
             and litellm.get_secret("SAVE_CONFIG_TO_DB", False) == True
         ):
-            await prisma_setup(database_url=None)  # in case it's not been connected yet
+            prisma_setup(database_url=None)  # in case it's not been connected yet
             _tasks = []
             keys = [
                 "model_list",
@@ -765,7 +762,7 @@ class ProxyConfig:
                 print_verbose(f"GOING INTO LITELLM.GET_SECRET!")
                 database_url = litellm.get_secret(database_url)
                 print_verbose(f"RETRIEVED DB URL: {database_url}")
-            await prisma_setup(database_url=database_url)
+            prisma_setup(database_url=database_url)
             ## COST TRACKING ##
             cost_tracking()
             ### MASTER KEY ###
@@ -1117,6 +1114,10 @@ async def startup_event():
         asyncio.create_task(
             _run_background_health_check()
         )  # start the background health check coroutine.
+
+    print_verbose(f"prisma client - {prisma_client}")
+    if prisma_client:
+        await prisma_client.connect()
 
     if prisma_client is not None and master_key is not None:
         # add master key to db
