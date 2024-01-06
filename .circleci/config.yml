@@ -145,7 +145,7 @@ jobs:
               -H "Accept: application/vnd.github.v3+json" \
               -H "Authorization: Bearer $GITHUB_TOKEN" \
               "https://api.github.com/repos/BerriAI/litellm/actions/workflows/ghcr_deploy.yml/dispatches" \
-              -d "{\"ref\":\"main\", \"inputs\":{\"tag\":\"${VERSION}\"}}"
+              -d "{\"ref\":\"main\", \"inputs\":{\"tag\":\"v${VERSION}\"}}"
 
 workflows:
   version: 2
