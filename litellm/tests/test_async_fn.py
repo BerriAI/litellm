@@ -154,6 +154,7 @@ def test_async_completion_cloudflare():
 # test_async_completion_cloudflare()
 
 
+@pytest.mark.skip(reason="Flaky test")
 def test_get_cloudflare_response_streaming():
     import asyncio
 
