@@ -74,8 +74,8 @@ litellm_settings:
     type: s3
     s3_bucket_name: cache-bucket-litellm   # AWS Bucket Name for S3
     s3_region_name: us-west-2              # AWS Region Name for S3
-    s3_aws_access_key_id: your_access_key  # AWS Access Key ID for S3
-    s3_aws_secret_access_key: your_secret_key  # AWS Secret Access Key for S3
+    s3_aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID  # us os.environ/<variable name> to pass environment variables. This is AWS Access Key ID for S3
+    s3_aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY  # AWS Secret Access Key for S3
     s3_endpoint_url: https://s3.amazonaws.com  # [OPTIONAL] S3 endpoint URL, if you want to use Backblaze/cloudflare s3 buckets
 ```
 
