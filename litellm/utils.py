@@ -956,6 +956,8 @@ class Logging:
     ):
         # Log the exact result from the LLM API, for streaming - log the type of response received
         litellm.error_logs["POST_CALL"] = locals()
+        if isinstance(original_response, dict):
+            original_response = json.dumps(original_response)
         try:
             self.model_call_details["input"] = input
             self.model_call_details["api_key"] = api_key

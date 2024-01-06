@@ -352,18 +352,16 @@ class Router:
             else:
                 model_client = potential_model_client
             self.total_calls[model_name] += 1
-            response = await asyncio.wait_for(
-                litellm.acompletion(
+            response = await litellm.acompletion(
                     **{
                         **data,
                         "messages": messages,
                         "caching": self.cache_responses,
                         "client": model_client,
+                        "timeout": self.timeout,
                         **kwargs,
                     }
-                ),
-                timeout=self.timeout,
-            )
+                )
             self.success_calls[model_name] += 1
             return response
         except Exception as e:
@@ -614,18 +612,16 @@ class Router:
             else:
                 model_client = potential_model_client
             self.total_calls[model_name] += 1
-            response = await asyncio.wait_for(
-                litellm.atext_completion(
+            response = await litellm.atext_completion(
                     **{
                         **data,
                         "prompt": prompt,
                         "caching": self.cache_responses,
                         "client": model_client,
+                        "timeout": self.timeout,
                         **kwargs,
                     }
-                ),
-                timeout=self.timeout,
-            )
+                )
             self.success_calls[model_name] += 1
             return response
         except Exception as e:
