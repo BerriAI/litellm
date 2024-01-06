@@ -1,5 +1,5 @@
 from typing import Optional, List, Any, Literal
-import os, subprocess, hashlib, importlib, asyncio, copy, json, aiohttp
+import os, subprocess, hashlib, importlib, asyncio, copy, json, aiohttp, httpx
 import litellm, backoff
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.caching import DualCache
@@ -271,9 +271,15 @@ class PrismaClient:
         finally:
             os.chdir(original_dir)
         # Now you can import the Prisma Client
-        from prisma import Client  # type: ignore
+        from prisma import Prisma  # type: ignore
 
-        self.db = Client()  # Client to connect to Prisma db
+        self.db = Prisma(
+            http={
+                "limits": httpx.Limits(
+                    max_connections=1000, max_keepalive_connections=100
+                )
+            }
+        )  # Client to connect to Prisma db
 
     def hash_token(self, token: str):
         # Hash the string using SHA-256
