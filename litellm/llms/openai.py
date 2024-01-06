@@ -711,7 +711,7 @@ class OpenAIChatCompletion(BaseLLM):
                 original_response=response,
             )
             # return response
-            return convert_to_model_response_object(response_object=model_dump(), model_response_object=model_response, response_type="image_generation")  # type: ignore
+            return convert_to_model_response_object(response_object=response.model_dump(), model_response_object=model_response, response_type="image_generation")  # type: ignore
         except OpenAIError as e:
             exception_mapping_worked = True
             raise e
