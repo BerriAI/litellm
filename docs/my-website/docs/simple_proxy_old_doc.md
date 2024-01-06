@@ -16,7 +16,7 @@ LiteLLM Server manages:
 View all the supported args for the Proxy CLI [here](https://docs.litellm.ai/docs/simple_proxy#proxy-cli-arguments)
 
 ```shell
-$ pip install litellm[proxy]
+$ pip install 'litellm[proxy]'
 ```
 
 ```shell
