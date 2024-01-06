@@ -130,6 +130,7 @@ def test_async_anyscale_response():
 # test_async_anyscale_response()
 
 
+@pytest.mark.skip(reason="Flaky test-cloudflare is very unstable")
 def test_async_completion_cloudflare():
     try:
         litellm.set_verbose = True
