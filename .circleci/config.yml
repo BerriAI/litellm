@@ -164,4 +164,3 @@ workflows:
             branches:
               only:
                 - main
-                - /litellm_.*/

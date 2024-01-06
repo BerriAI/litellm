@@ -248,7 +248,7 @@ class AzureChatCompletion(BaseLLM):
                 else:
                     azure_client = client
                 response = azure_client.chat.completions.create(**data, timeout=timeout)  # type: ignore
-                stringified_response = response.model_dump_json()
+                stringified_response = response.model_dump()
                 ## LOGGING
                 logging_obj.post_call(
                     input=messages,
@@ -261,7 +261,7 @@ class AzureChatCompletion(BaseLLM):
                     },
                 )
                 return convert_to_model_response_object(
-                    response_object=json.loads(stringified_response),
+                    response_object=stringified_response,
                     model_response_object=model_response,
                 )
         except AzureOpenAIError as e:
@@ -323,7 +323,7 @@ class AzureChatCompletion(BaseLLM):
                 **data, timeout=timeout
             )
             return convert_to_model_response_object(
-                response_object=json.loads(response.model_dump_json()),
+                response_object=response.model_dump(),
                 model_response_object=model_response,
             )
         except AzureOpenAIError as e:
@@ -465,7 +465,7 @@ class AzureChatCompletion(BaseLLM):
             else:
                 openai_aclient = client
             response = await openai_aclient.embeddings.create(**data, timeout=timeout)
-            stringified_response = response.model_dump_json()
+            stringified_response = response.model_dump()
             ## LOGGING
             logging_obj.post_call(
                 input=input,
@@ -474,7 +474,7 @@ class AzureChatCompletion(BaseLLM):
                 original_response=stringified_response,
             )
             return convert_to_model_response_object(
-                response_object=json.loads(stringified_response),
+                response_object=stringified_response,
                 model_response_object=model_response,
                 response_type="embedding",
             )
@@ -564,7 +564,7 @@ class AzureChatCompletion(BaseLLM):
                 original_response=response,
             )
 
-            return convert_to_model_response_object(response_object=json.loads(response.model_dump_json()), model_response_object=model_response, response_type="embedding")  # type: ignore
+            return convert_to_model_response_object(response_object=response.model_dump(), model_response_object=model_response, response_type="embedding")  # type: ignore
         except AzureOpenAIError as e:
             exception_mapping_worked = True
             raise e
@@ -599,7 +599,7 @@ class AzureChatCompletion(BaseLLM):
             else:
                 openai_aclient = client
             response = await openai_aclient.images.generate(**data, timeout=timeout)
-            stringified_response = response.model_dump_json()
+            stringified_response = response.model_dump()
             ## LOGGING
             logging_obj.post_call(
                 input=input,
@@ -608,7 +608,7 @@ class AzureChatCompletion(BaseLLM):
                 original_response=stringified_response,
             )
             return convert_to_model_response_object(
-                response_object=json.loads(stringified_response),
+                response_object=stringified_response,
                 model_response_object=model_response,
                 response_type="image_generation",
             )
@@ -697,7 +697,7 @@ class AzureChatCompletion(BaseLLM):
                 original_response=response,
             )
             # return response
-            return convert_to_model_response_object(response_object=json.loads(response.model_dump_json()), model_response_object=model_response, response_type="image_generation")  # type: ignore
+            return convert_to_model_response_object(response_object=response.model_dump(), model_response_object=model_response, response_type="image_generation")  # type: ignore
         except AzureOpenAIError as e:
             exception_mapping_worked = True
             raise e
