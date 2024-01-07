@@ -168,7 +168,9 @@ class S3Cache(BaseCache):
                     Body=serialized_value,
                     Expires=expiration_time,
                     CacheControl=cache_control,
-                    ContentType="application/json"
+                    ContentType="application/json",
+                    ContentLanguage="en",
+                    ContentDisposition=f"inline; filename=\"{key}.json\""
                 )
             else:
                 cache_control = "immutable, max-age=31536000, s-maxage=31536000"
@@ -178,7 +180,9 @@ class S3Cache(BaseCache):
                     Key=key,
                     Body=serialized_value,
                     CacheControl=cache_control,
-                    ContentType="application/json"
+                    ContentType="application/json",
+                    ContentLanguage="en",
+                    ContentDisposition=f"inline; filename=\"{key}.json\""
                 )
         except Exception as e:
             # NON blocking - notify users S3 is throwing an exception
