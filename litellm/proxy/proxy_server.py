@@ -1142,6 +1142,16 @@ async def startup_event():
     global prisma_client, master_key, use_background_health_checks, llm_router, llm_model_list, general_settings
     import json
 
+    ### LOAD MASTER KEY ###
+    # check if master key set in environment - load from there
+    master_key = litellm.get_secret("LITELLM_MASTER_KEY", None)
+
+    ### CONNECT TO DB ###
+    verbose_proxy_logger.info(f"env vatiables {os.environ}")
+    # check if DATABASE_URL in environment - load from there
+    if os.getenv("DATABASE_URL", None) is not None and prisma_client is None:
+        prisma_setup(database_url=os.getenv("DATABASE_URL"))
+
     ### LOAD CONFIG ###
     worker_config = litellm.get_secret("WORKER_CONFIG")
     verbose_proxy_logger.debug(f"worker_config: {worker_config}")
@@ -1158,16 +1168,6 @@ async def startup_event():
         asyncio.create_task(
             _run_background_health_check()
         )  # start the background health check coroutine.
-
-    ### LOAD MASTER KEY ###
-    # check if master key set in environment - load from there
-    master_key = litellm.get_secret("LITELLM_MASTER_KEY", None)
-
-    ### CONNECT TO DB ###
-    verbose_proxy_logger.info(f"env vatiables {os.environ}")
-    # check if DATABASE_URL in environment - load from there
-    if os.getenv("DATABASE_URL", None) is not None and prisma_client is None:
-        prisma_setup(database_url=os.getenv("DATABASE_URL"))
 
     verbose_proxy_logger.debug(f"prisma client - {prisma_client}")
     if prisma_client:
