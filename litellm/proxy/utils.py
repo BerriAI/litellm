@@ -253,10 +253,10 @@ class PrismaClient:
         print_verbose(
             "LiteLLM: DATABASE_URL Set in config, trying to 'pip install prisma'"
         )
-         ## init logging object
+        ## init logging object
         self.proxy_logging_obj = proxy_logging_obj
 
-        if os.getenv("DATABASE_URL", None) is None: # setup hasn't taken place
+        if os.getenv("DATABASE_URL", None) is None:  # setup hasn't taken place
             os.environ["DATABASE_URL"] = database_url
             # Save the current working directory
             original_dir = os.getcwd()
@@ -597,10 +597,10 @@ def get_instance_fn(value: str, config_file_path: Optional[str] = None) -> Any:
             module_file_path = os.path.join(directory, *module_name.split("."))
             module_file_path += ".py"
 
-            spec = importlib.util.spec_from_file_location(module_name, module_file_path)
+            spec = importlib.util.spec_from_file_location(module_name, module_file_path)  # type: ignore
             if spec is None:
                 raise ImportError(
-                    f"Could not find a module specification for {module_file_path}"
+                    f"Could not find a module specification for {module_file_path}"  # type: ignore
                 )
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)  # type: ignore
