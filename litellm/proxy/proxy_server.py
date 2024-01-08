@@ -1164,6 +1164,7 @@ async def startup_event():
     master_key = litellm.get_secret("LITELLM_MASTER_KEY", None)
 
     ### CONNECT TO DB ###
+    verbose_proxy_logger.info(f"env vatiables {os.environ}")
     # check if DATABASE_URL in environment - load from there
     if os.getenv("DATABASE_URL", None) is not None and prisma_client is None:
         prisma_setup(database_url=os.getenv("DATABASE_URL"))
