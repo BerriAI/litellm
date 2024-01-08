@@ -259,9 +259,11 @@ class PrismaClient:
         if os.getenv("DATABASE_URL", None) is None:  # setup hasn't taken place
             os.environ["DATABASE_URL"] = database_url
 
-        from prisma import Prisma  # type: ignore
-
         try:
+            print_verbose("about to init prisma")
+            from prisma import Prisma  # type: ignore
+
+            print_verbose("imported prisma")
             self.db = Prisma(
                 http={
                     "limits": httpx.Limits(
@@ -269,7 +271,10 @@ class PrismaClient:
                     )
                 }
             )  # Client to connect to Prisma db
+            print_verbose(self.db)
         except Exception as e:
+            print_verbose(f"EXCEPTION E {str(e)}")
+
             # prisma raises - run `prisma generate` before you can use the client.
             if "run `prisma generate` before you can use the client" in str(e):
                 # Save the current working directory
@@ -280,12 +285,15 @@ class PrismaClient:
                 os.chdir(dname)
 
                 try:
-                    if not os.path.exists("prisma"):
-                        subprocess.run(["prisma", "generate"])
+                    subprocess.run(["prisma", "generate"])
 
-                        subprocess.run(
-                            ["prisma", "db", "push", "--accept-data-loss"]
-                        )  # this looks like a weird edge case when prisma just wont start on render. we need to have the --accept-data-loss
+                    subprocess.run(
+                        ["prisma", "db", "push", "--accept-data-loss"]
+                    )  # this looks like a weird edge case when prisma just wont start on render. we need to have the --accept-data-loss
+                except Exception as gen_error:
+                    print_verbose(
+                        f"EXCEPTION when doing prisma generate E {str(gen_error)}"
+                    )
                 finally:
                     os.chdir(original_dir)
                     self.db = Prisma(
