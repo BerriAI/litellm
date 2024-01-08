@@ -20,8 +20,8 @@ jobs:
       - run:
           name: Install Dependencies
           command: |
-            poetry self update
-            poetry install
+            python3 -m pip install poetry -U
+            python3 -m poetry install
       - run:
           name: Black Formatting
           command: |
