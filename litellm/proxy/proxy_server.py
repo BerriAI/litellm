@@ -976,6 +976,33 @@ async def initialize(
         verbose_router_logger.setLevel(level=logging.DEBUG)  # set router logs to info
         verbose_proxy_logger.setLevel(level=logging.DEBUG)  # set proxy logs to debug
         litellm.set_verbose = True
+    elif debug == False and detailed_debug == False:
+        # users can control proxy debugging using env variable = 'LITELLM_LOG'
+        litellm_log_setting = os.environ.get("LITELLM_LOG", "")
+        if litellm_log_setting != None:
+            if litellm_log_setting.upper() == "INFO":
+                from litellm._logging import verbose_router_logger, verbose_proxy_logger
+                import logging
+
+                # this must ALWAYS remain logging.INFO, DO NOT MODIFY THIS
+
+                verbose_router_logger.setLevel(
+                    level=logging.INFO
+                )  # set router logs to info
+                verbose_proxy_logger.setLevel(
+                    level=logging.INFO
+                )  # set proxy logs to info
+            elif litellm_log_setting.upper() == "DEBUG":
+                from litellm._logging import verbose_router_logger, verbose_proxy_logger
+                import logging
+
+                verbose_router_logger.setLevel(
+                    level=logging.DEBUG
+                )  # set router logs to info
+                verbose_proxy_logger.setLevel(
+                    level=logging.DEBUG
+                )  # set proxy logs to debug
+                litellm.set_verbose = True
 
     dynamic_config = {"general": {}, user_model: {}}
     if config:
