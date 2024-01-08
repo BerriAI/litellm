@@ -353,15 +353,15 @@ class Router:
                 model_client = potential_model_client
             self.total_calls[model_name] += 1
             response = await litellm.acompletion(
-                    **{
-                        **data,
-                        "messages": messages,
-                        "caching": self.cache_responses,
-                        "client": model_client,
-                        "timeout": self.timeout,
-                        **kwargs,
-                    }
-                )
+                **{
+                    **data,
+                    "messages": messages,
+                    "caching": self.cache_responses,
+                    "client": model_client,
+                    "timeout": self.timeout,
+                    **kwargs,
+                }
+            )
             self.success_calls[model_name] += 1
             return response
         except Exception as e:
@@ -613,15 +613,15 @@ class Router:
                 model_client = potential_model_client
             self.total_calls[model_name] += 1
             response = await litellm.atext_completion(
-                    **{
-                        **data,
-                        "prompt": prompt,
-                        "caching": self.cache_responses,
-                        "client": model_client,
-                        "timeout": self.timeout,
-                        **kwargs,
-                    }
-                )
+                **{
+                    **data,
+                    "prompt": prompt,
+                    "caching": self.cache_responses,
+                    "client": model_client,
+                    "timeout": self.timeout,
+                    **kwargs,
+                }
+            )
             self.success_calls[model_name] += 1
             return response
         except Exception as e:
@@ -768,6 +768,7 @@ class Router:
                 f"An exception occurs: {e}\n\n Traceback{traceback.format_exc()}"
             )
             original_exception = e
+            fallback_model_group = None
             try:
                 if (
                     hasattr(e, "status_code") and e.status_code == 400
@@ -807,6 +808,11 @@ class Router:
                         if list(item.keys())[0] == model_group:
                             fallback_model_group = item[model_group]
                             break
+                    if fallback_model_group is None:
+                        self.print_verbose(
+                            f"No fallback model group found for original model_group={model_group}. Fallbacks={fallbacks}"
+                        )
+                        raise original_exception
                     for mg in fallback_model_group:
                         """
                         Iterate through the model groups and try calling that deployment
