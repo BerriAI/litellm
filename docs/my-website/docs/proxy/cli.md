@@ -82,6 +82,15 @@ Cli arguments,  --host, --port, --num_workers
      litellm --debug
      ```
 
+#### --detailed_debug
+   - **Default:** `False`
+   - **Type:** `bool` (Flag)
+   - Enable debugging mode for the input.
+   - **Usage:** 
+     ```shell
+     litellm --detailed_debug
+     ``
+
 #### --temperature
    - **Default:** `None`
    - **Type:** `float`
