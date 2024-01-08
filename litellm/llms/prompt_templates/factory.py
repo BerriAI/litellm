@@ -295,6 +295,9 @@ def claude_2_1_pt(
     if system message is passed in, you can only do system, human, assistant or system, human
 
     if a system message is passed in and followed by an assistant message, insert a blank human message between them.
+
+    Additionally, you can "put words in Claude's mouth" by ending with an assistant message.
+    See: https://docs.anthropic.com/claude/docs/put-words-in-claudes-mouth
     """
 
     class AnthropicConstants(Enum):
@@ -311,7 +314,8 @@ def claude_2_1_pt(
             if idx > 0 and messages[idx - 1]["role"] == "system":
                 prompt += f"{AnthropicConstants.HUMAN_PROMPT.value}"  # Insert a blank human message
             prompt += f"{AnthropicConstants.AI_PROMPT.value}{message['content']}"
-    prompt += f"{AnthropicConstants.AI_PROMPT.value}"  # prompt must end with \"\n\nAssistant: " turn
+    if messages[-1]["role"] != "assistant":
+        prompt += f"{AnthropicConstants.AI_PROMPT.value}"  # prompt must end with \"\n\nAssistant: " turn
     return prompt
 
 
@@ -364,6 +368,10 @@ def format_prompt_togetherai(messages, prompt_format, chat_template):
 def anthropic_pt(
     messages: list,
 ):  # format - https://docs.anthropic.com/claude/reference/complete_post
+    """
+    You can "put words in Claude's mouth" by ending with an assistant message.
+    See: https://docs.anthropic.com/claude/docs/put-words-in-claudes-mouth
+    """
     class AnthropicConstants(Enum):
         HUMAN_PROMPT = "\n\nHuman: "
         AI_PROMPT = "\n\nAssistant: "
@@ -382,7 +390,8 @@ def anthropic_pt(
             idx == 0 and message["role"] == "assistant"
         ):  # ensure the prompt always starts with `\n\nHuman: `
             prompt = f"{AnthropicConstants.HUMAN_PROMPT.value}" + prompt
-    prompt += f"{AnthropicConstants.AI_PROMPT.value}"
+    if messages[-1]["role"] != "assistant":
+        prompt += f"{AnthropicConstants.AI_PROMPT.value}"
     return prompt
 
     
@@ -580,7 +589,7 @@ def prompt_factory(
     if custom_llm_provider == "ollama":
         return ollama_pt(model=model, messages=messages)
     elif custom_llm_provider == "anthropic":
-        if "claude-2.1" in model:
+        if any(_ in model for _ in ["claude-2.1","claude-v2:1"]):
             return claude_2_1_pt(messages=messages)
         else:
             return anthropic_pt(messages=messages)
