@@ -102,7 +102,7 @@ jobs:
         uses: docker/build-push-action@f2a1d5e99d037542a71f64918e516c093c6f3fc4
         with:
           context: .
-          dockerfile: Dockerfile.database
+          file: Dockerfile.database
           push: true
           tags: ${{ steps.meta-database.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}
           labels: ${{ steps.meta-database.outputs.labels }}
