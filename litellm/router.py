@@ -766,9 +766,8 @@ class Router:
             verbose_router_logger.debug(f"Async Response: {response}")
             return response
         except Exception as e:
-            verbose_router_logger.info(
-                f"An exception occurs: {e}\n\n Traceback{traceback.format_exc()}"
-            )
+            verbose_router_logger.info(f"An exception occurs: {e}")
+            verbose_router_logger.debug(f"Traceback{traceback.format_exc()}")
             original_exception = e
             fallback_model_group = None
             try:
@@ -822,6 +821,7 @@ class Router:
                         try:
                             ## LOGGING
                             kwargs = self.log_retry(kwargs=kwargs, e=original_exception)
+                            verbose_router_logger.info(f"Falling back to {mg}")
                             kwargs["model"] = mg
                             kwargs["metadata"]["model_group"] = mg
                             response = await self.async_function_with_retries(
