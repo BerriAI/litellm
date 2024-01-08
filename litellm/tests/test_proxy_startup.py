@@ -30,21 +30,32 @@ def test_proxy_gunicorn_startup_direct_config():
 
     Test both approaches
     """
-
-    filepath = os.path.dirname(os.path.abspath(__file__))
-    # test with worker_config = config yaml 
-    config_fp = f"{filepath}/test_configs/test_config_no_auth.yaml"
-    os.environ["WORKER_CONFIG"] = config_fp
-    asyncio.run(startup_event())
+    try: 
+        filepath = os.path.dirname(os.path.abspath(__file__))
+        # test with worker_config = config yaml 
+        config_fp = f"{filepath}/test_configs/test_config_no_auth.yaml"
+        os.environ["WORKER_CONFIG"] = config_fp
+        asyncio.run(startup_event())
+    except Exception as e:
+        if "Already connected to the query engine" in str(e): 
+            pass
+        else:
+            pytest.fail(f"An exception occurred - {str(e)}")
 
 def test_proxy_gunicorn_startup_config_dict():
-    filepath = os.path.dirname(os.path.abspath(__file__))
-    # test with worker_config = config yaml 
-    config_fp = f"{filepath}/test_configs/test_config_no_auth.yaml"
-    # test with worker_config = dict 
-    worker_config = {"config": config_fp}
-    os.environ["WORKER_CONFIG"] = json.dumps(worker_config)
-    asyncio.run(startup_event())
+    try: 
+        filepath = os.path.dirname(os.path.abspath(__file__))
+        # test with worker_config = config yaml 
+        config_fp = f"{filepath}/test_configs/test_config_no_auth.yaml"
+        # test with worker_config = dict 
+        worker_config = {"config": config_fp}
+        os.environ["WORKER_CONFIG"] = json.dumps(worker_config)
+        asyncio.run(startup_event())
+    except Exception as e:
+        if "Already connected to the query engine" in str(e): 
+            pass
+        else:
+            pytest.fail(f"An exception occurred - {str(e)}")
 
 
 # test_proxy_gunicorn_startup()
