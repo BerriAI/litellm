@@ -186,7 +186,7 @@ def completion(
             if "SAFETY" in original_response: 
                 original_response += "\nThe candidate content was flagged for safety reasons."
             elif "RECITATION" in original_response:
-                original_response += "\The candidate content was flagged for recitation reasons."
+                original_response += "\nThe candidate content was flagged for recitation reasons."
         raise GeminiError(
             status_code=400,
             message=f"No response received. Original response - {original_response}",
