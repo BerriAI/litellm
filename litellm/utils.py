@@ -2038,13 +2038,20 @@ def client(original_function):
                 if (
                     "complete_response" in kwargs
                     and kwargs["complete_response"] == True
+                    and kwargs.get("parent_call", None) is None
                 ):
                     chunks = []
                     for idx, chunk in enumerate(result):
                         chunks.append(chunk)
-                    return litellm.stream_chunk_builder(
-                        chunks, messages=kwargs.get("messages", None)
-                    )
+                    call_type = original_function.__name__
+                    if call_type == CallTypes.completion.value:
+                        return litellm.stream_chunk_builder(
+                            chunks, messages=kwargs.get("messages")
+                        )
+                    elif call_type == CallTypes.text_completion.value:
+                        return litellm.stream_chunk_builder(
+                            chunks, messages=[{"role": "user", "content": kwargs.get("prompt")}]
+                        )
                 else:
                     return result
             elif "acompletion" in kwargs and kwargs["acompletion"] == True:
@@ -2695,9 +2702,10 @@ def token_counter(
             raise ValueError("text and messages cannot both be None")
     elif isinstance(text, List):
         text = "".join(t for t in text if isinstance(t, str))
-
+    print_verbose(f"text: {text}")
     if model is not None:
         tokenizer_json = _select_tokenizer(model=model)
+        print(f"tokenizer_json['type']: {tokenizer_json['type']}")
         if tokenizer_json["type"] == "huggingface_tokenizer":
             print_verbose(
                 f"Token Counter - using hugging face token counter, for model={model}"
@@ -2731,6 +2739,7 @@ def token_counter(
                 num_tokens = len(enc)
     else:
         num_tokens = len(encoding.encode(text))  # type: ignore
+    print_verbose(f"final num tokens returned: {num_tokens}")
     return num_tokens
 
 
@@ -7760,6 +7769,8 @@ class TextCompletionStreamWrapper:
 
     def convert_to_text_completion_object(self, chunk: ModelResponse):
         try:
+            if not isinstance(chunk, ModelResponse):
+                return
             response = TextCompletionResponse()
             response["id"] = chunk.get("id", None)
             response["object"] = "text_completion"
@@ -7784,12 +7795,18 @@ class TextCompletionStreamWrapper:
         # model_response = ModelResponse(stream=True, model=self.model)
         response = TextCompletionResponse()
         try:
-            for chunk in self.completion_stream:
+            while True:
+                if isinstance(self.completion_stream, str) or isinstance(
+                    self.completion_stream, bytes
+                ) or isinstance(self.completion_stream, ModelResponse):
+                    chunk = self.completion_stream
+                else:
+                    chunk = next(self.completion_stream)
+
                 if chunk == "None" or chunk is None:
                     raise Exception
                 processed_chunk = self.convert_to_text_completion_object(chunk=chunk)
                 return processed_chunk
-            raise StopIteration
         except StopIteration:
             raise StopIteration
         except Exception as e:
