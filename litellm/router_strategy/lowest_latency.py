@@ -142,7 +142,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 continue  # skip to next one
             
             # get average latency 
-            total = 0.0
+            total = 0
             for _call_latency in item_latency:
                 if isinstance(_call_latency, timedelta):
                     total += float(_call_latency.total_seconds())
