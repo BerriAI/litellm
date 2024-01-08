@@ -602,7 +602,7 @@ def openai_text_completion_test():
     try:
         # OVERRIDE WITH DYNAMIC MAX TOKENS
         response_1 = litellm.completion(
-            model="text-davinci-003",
+            model="gpt-3.5-turbo-instruct",
             messages=[
                 {
                     "content": "Hello, how are you? Be as verbose as possible",
@@ -616,7 +616,7 @@ def openai_text_completion_test():
 
         # USE CONFIG TOKENS
         response_2 = litellm.completion(
-            model="text-davinci-003",
+            model="gpt-3.5-turbo-instruct",
             messages=[
                 {
                     "content": "Hello, how are you? Be as verbose as possible",
@@ -630,7 +630,7 @@ def openai_text_completion_test():
         assert len(response_2_text) < len(response_1_text)
 
         response_3 = litellm.completion(
-            model="text-davinci-003",
+            model="gpt-3.5-turbo-instruct",
             messages=[{"content": "Hello, how are you?", "role": "user"}],
             n=2,
         )
