@@ -814,6 +814,7 @@ def completion(
                 optional_params=optional_params,
                 litellm_params=litellm_params,
                 logger_fn=logger_fn,
+                timeout=timeout,
             )
 
             if optional_params.get("stream", False) or acompletion == True:
@@ -1116,6 +1117,7 @@ def completion(
                 acompletion=acompletion,
                 logging_obj=logging,
                 custom_prompt_dict=custom_prompt_dict,
+                timeout=timeout
             )
             if (
                 "stream" in optional_params

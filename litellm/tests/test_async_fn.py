@@ -197,6 +197,20 @@ def test_get_cloudflare_response_streaming():
 
     asyncio.run(test_async_call())
 
+@pytest.mark.asyncio
+async def test_hf_completion_tgi():
+    # litellm.set_verbose=True
+    try:
+        response = await acompletion(
+            model="huggingface/HuggingFaceH4/zephyr-7b-beta",
+            messages=[{"content": "Hello, how are you?", "role": "user"}],
+        )
+        # Add any assertions here to check the response
+        print(response)
+    except litellm.Timeout as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 # test_get_cloudflare_response_streaming()
 
