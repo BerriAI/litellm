@@ -4123,7 +4123,19 @@ def get_llm_provider(
             )
         return model, custom_llm_provider, dynamic_api_key, api_base
     except Exception as e:
-        raise Exception(f"GetLLMProvider Exception - {str(e)}\n\noriginal model: {model}")
+        if isinstance(e, litellm.exceptions.BadRequestError):
+            raise e
+        else:
+            raise litellm.exceptions.BadRequestError(  # type: ignore
+                        message=f"GetLLMProvider Exception - {str(e)}\n\noriginal model: {model}",
+                        model=model,
+                        response=httpx.Response(
+                            status_code=400,
+                            content=error_str,
+                            request=httpx.request(method="completion", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                        ),
+                        llm_provider="",
+                    )
 
 
 def get_api_key(llm_provider: str, dynamic_api_key: Optional[str]):
