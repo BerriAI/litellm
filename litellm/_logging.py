@@ -11,6 +11,6 @@ def print_verbose(print_statement):
         pass
 
 
-logging.basicConfig(level=logging.INFO)
-# Create a custom logger for "debug-proxy"
-debug_proxy_logger = logging.getLogger("LiteLLM Proxy")
+verbose_proxy_logger = logging.getLogger("LiteLLM Proxy")
+verbose_router_logger = logging.getLogger("LiteLLM Router")
+verbose_logger = logging.getLogger("LiteLLM")
