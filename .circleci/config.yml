@@ -22,8 +22,6 @@ jobs:
             - v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
       - run:
           name: Install Dependencies
-      - run:
-          name: Install Dependencies
           command: |
             poetry install
       - save_cache:
