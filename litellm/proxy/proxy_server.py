@@ -507,6 +507,14 @@ class ProxyConfig:
     def __init__(self) -> None:
         pass
 
+    def is_yaml(self, config_file_path: str) -> bool:
+        if not os.path.isfile(config_file_path):
+            return False
+        
+        _, file_extension = os.path.splitext(config_file_path)
+        return file_extension.lower() == '.yaml' or file_extension.lower() == '.yml'
+            
+
     async def get_config(self, config_file_path: Optional[str] = None) -> dict:
         global prisma_client, user_config_file_path
 
@@ -1147,7 +1155,14 @@ async def startup_event():
     verbose_proxy_logger.debug(f"worker_config: {worker_config}")
     # check if it's a valid file path
     if os.path.isfile(worker_config):
-        await initialize(**worker_config)
+        if proxy_config.is_yaml(config_file_path=worker_config):
+            (
+                llm_router,
+                llm_model_list,
+                general_settings,
+            ) = await proxy_config.load_config(router=llm_router, config_file_path=worker_config)
+        else:
+            await initialize(**worker_config)
     else:
         # if not, assume it's a json string
         worker_config = json.loads(os.getenv("WORKER_CONFIG"))
