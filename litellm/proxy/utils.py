@@ -253,35 +253,58 @@ class PrismaClient:
         print_verbose(
             "LiteLLM: DATABASE_URL Set in config, trying to 'pip install prisma'"
         )
-         ## init logging object
+        ## init logging object
         self.proxy_logging_obj = proxy_logging_obj
 
-        if os.getenv("DATABASE_URL", None) is None: # setup hasn't taken place
+        if os.getenv("DATABASE_URL", None) is None:  # setup hasn't taken place
             os.environ["DATABASE_URL"] = database_url
-            # Save the current working directory
-            original_dir = os.getcwd()
-            # set the working directory to where this script is
-            abspath = os.path.abspath(__file__)
-            dname = os.path.dirname(abspath)
-            os.chdir(dname)
 
-            try:
-                subprocess.run(["prisma", "generate"])
-                subprocess.run(
-                    ["prisma", "db", "push", "--accept-data-loss"]
-                )  # this looks like a weird edge case when prisma just wont start on render. we need to have the --accept-data-loss
-            finally:
-                os.chdir(original_dir)
-        # Now you can import the Prisma Client
-        from prisma import Prisma  # type: ignore
+        try:
+            print_verbose("about to init prisma")
+            from prisma import Prisma  # type: ignore
 
-        self.db = Prisma(
-            http={
-                "limits": httpx.Limits(
-                    max_connections=1000, max_keepalive_connections=100
-                )
-            }
-        )  # Client to connect to Prisma db
+            print_verbose("imported prisma")
+            self.db = Prisma(
+                http={
+                    "limits": httpx.Limits(
+                        max_connections=1000, max_keepalive_connections=100
+                    )
+                }
+            )  # Client to connect to Prisma db
+            print_verbose(self.db)
+        except Exception as e:
+            print_verbose(f"EXCEPTION E {str(e)}")
+
+            # prisma raises - run `prisma generate` before you can use the client.
+            if "run `prisma generate` before you can use the client" in str(e):
+                # Save the current working directory
+                original_dir = os.getcwd()
+                # set the working directory to where this script is
+                abspath = os.path.abspath(__file__)
+                dname = os.path.dirname(abspath)
+                os.chdir(dname)
+
+                try:
+                    subprocess.run(["prisma", "generate"])
+
+                    subprocess.run(
+                        ["prisma", "db", "push", "--accept-data-loss"]
+                    )  # this looks like a weird edge case when prisma just wont start on render. we need to have the --accept-data-loss
+                except Exception as gen_error:
+                    print_verbose(
+                        f"EXCEPTION when doing prisma generate E {str(gen_error)}"
+                    )
+                finally:
+                    os.chdir(original_dir)
+                    self.db = Prisma(
+                        http={
+                            "limits": httpx.Limits(
+                                max_connections=1000, max_keepalive_connections=100
+                            )
+                        }
+                    )  # Client to connect to Prisma db
+            else:
+                raise e
 
     def hash_token(self, token: str):
         # Hash the string using SHA-256
