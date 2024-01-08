@@ -2,7 +2,7 @@ version: 2.1
 jobs:
   local_testing:
     docker:
-      - image: circleci/python:3.9
+      - image: circleci/python:3.10
     working_directory: ~/project
 
     steps:
@@ -20,7 +20,6 @@ jobs:
       - run:
           name: Install Dependencies
           command: |
-            python3 -m pip install poetry -U
             python3 -m poetry install
       - run:
           name: Black Formatting
