@@ -50,16 +50,6 @@ RUN pip install --no-cache-dir --find-links=/wheels/ -r requirements.txt \
     && pip install *.whl \
     && rm -f *.whl
 
-
-# Check if the with_database argument is set to 'true'
-RUN echo "Value of with_database is: ${with_database}"
-# If true, execute the following instructions
-RUN if [ "$with_database" = "true" ]; then \
-      prisma generate; \
-      chmod +x /app/retry_push.sh; \
-      /app/retry_push.sh; \
-    fi
-
 EXPOSE 4000/tcp
 
 # Set your entrypoint and command
