@@ -1469,7 +1469,7 @@ class Router:
                         api_version=api_version,
                         timeout=stream_timeout,
                         max_retries=max_retries,
-                        http_client=httpx.Client(
+                        http_client=httpx.AsyncClient(
                             limits=httpx.Limits(
                             max_connections=1000,
                             max_keepalive_connections=100
