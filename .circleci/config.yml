@@ -22,24 +22,10 @@ jobs:
             - v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
       - run:
           name: Install Dependencies
+      - run:
+          name: Install Dependencies
           command: |
-            python -m pip install --upgrade pip
-            python -m pip install -r .circleci/requirements.txt
-            pip install "pytest==7.3.1"
-            pip install "pytest-asyncio==0.21.1"
-            pip install mypy
-            pip install "google-generativeai>=0.3.2"
-            pip install "google-cloud-aiplatform>=1.38.0"
-            pip install "boto3>=1.28.57"
-            pip install langchain
-            pip install "langfuse>=2.0.0"
-            pip install numpydoc
-            pip install traceloop-sdk==0.0.69
-            pip install openai
-            pip install prisma
-            pip install "httpx==0.24.1"
-            pip install "anyio==3.7.1"
-            pip install "asyncio==3.4.3"
+            poetry install
       - save_cache:
           paths:
             - ./venv
