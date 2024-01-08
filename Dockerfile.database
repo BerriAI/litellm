@@ -45,20 +45,14 @@ COPY --from=builder /app/dist/*.whl .
 COPY --from=builder /wheels/ /wheels/
 
 # Install the built wheel using pip; again using a wildcard if it's the only file
-RUN pip install --no-cache-dir --find-links=/wheels/ -r requirements.txt \
-    && pip install *.whl \
+RUN pip install *.whl \
     && rm -f *.whl
 
-
-# If true, execute the following instructions
+# Generate prisma client
 RUN prisma generate
-
-RUN chmod +x /app/retry_push.sh
-
-RUN /app/retry_push.sh
+RUN chmod +x entrypoint.sh
 
 EXPOSE 4000/tcp
 
 # Set your entrypoint and command
-ENTRYPOINT ["litellm"]
-CMD ["--num_workers", "8", "--port", "4000"]
+CMD ["./entrypoint.sh"]
