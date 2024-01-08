@@ -19,6 +19,7 @@ try:
     import backoff
     import yaml
     import orjson
+    import logging
 except ImportError as e:
     raise ImportError(f"Missing dependency {e}. Run `pip install 'litellm[proxy]'`")
 
@@ -153,6 +154,11 @@ proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
 async_result = None
 celery_app_conn = None
 celery_fn = None  # Redis Queue for handling requests
+### logger ###
+# Configure the logging settings (you can customize this based on your needs)
+logging.basicConfig(level=logging.INFO)
+# Create a custom logger for "debug-proxy"
+debug_proxy_logger = logging.getLogger("LiteLLM Proxy")
 
 
 #### HELPER FUNCTIONS ####
