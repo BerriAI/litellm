@@ -22,6 +22,11 @@ jobs:
       - python/install-packages:
           pkg-manager: poetry
       - run:
+          name: Install litellm extra dependencies
+          command: |
+            poetry install --extras=proxy
+            poetry install --extras=extra_proxy
+      - run:
           name: Black Formatting
           command: |
             cd litellm
