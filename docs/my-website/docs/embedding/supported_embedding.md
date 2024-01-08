@@ -201,3 +201,49 @@ response = embedding(
 | microsoft/codebert-base    | `embedding('huggingface/microsoft/codebert-base', input=input)`               | `os.environ['HUGGINGFACE_API_KEY']`                                             |
 | BAAI/bge-large-zh | `embedding('huggingface/BAAI/bge-large-zh', input=input)`         | `os.environ['HUGGINGFACE_API_KEY']`                                             |
 | any-hf-embedding-model | `embedding('huggingface/hf-embedding-model', input=input)`         | `os.environ['HUGGINGFACE_API_KEY']`                                             |
+
+
+## Mistral AI Embedding Models
+All models listed here https://docs.mistral.ai/platform/endpoints are supported
+
+### Usage
+```python
+from litellm import embedding
+import os
+
+os.environ['MISTRAL_API_KEY'] = ""
+response = embedding(
+    model="mistral/mistral-embed",
+    input=["good morning from litellm"],
+)
+print(response)
+```
+
+| Model Name               | Function Call                                                                                                                                                      |
+|--------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| mistral-embed | `embedding(model="mistral/mistral-embed", input)` | 
+
+
+## Voyage AI Embedding Models
+
+### Usage - Embedding
+```python
+from litellm import embedding
+import os
+
+os.environ['VOYAGE_API_KEY'] = ""
+response = embedding(
+    model="voyage/voyage-01",
+    input=["good morning from litellm"],
+)
+print(response)
+```
+
+## Supported Models
+All models listed here https://docs.voyageai.com/embeddings/#models-and-specifics are supported
+
+| Model Name               | Function Call                                                                                                                                                      |
+|--------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| voyage-01 | `embedding(model="voyage/voyage-01", input)` | 
+| voyage-lite-01 | `embedding(model="voyage/voyage-lite-01", input)` | 
+| voyage-lite-01-instruct | `embedding(model="voyage/voyage-lite-01-instruct", input)` | 

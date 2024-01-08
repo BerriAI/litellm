@@ -1,7 +1,14 @@
 # Key Management
-Track Spend and create virtual keys for the proxy
+Track Spend, Set budgets and create virtual keys for the proxy
 
 Grant other's temporary access to your proxy, with keys that expire after a set duration.
+
+
+:::info
+
+Complete API documentation in the Swagger docs on your proxy base url (e.g. `http://0.0.0.0:8000)`
+
+:::
 
 ## Quick Start
 
@@ -40,12 +47,15 @@ litellm --config /path/to/config.yaml
 ```shell 
 curl 'http://0.0.0.0:8000/key/generate' \
 --header 'Authorization: Bearer sk-1234' \
---data '{"models": ["gpt-3.5-turbo", "gpt-4", "claude-2"], "duration": "20m"}'
+--header 'Content-Type: application/json' \
+--data-raw '{"models": ["gpt-3.5-turbo", "gpt-4", "claude-2"], "duration": "20m","metadata": {"user": "ishaan@berri.ai", "team": "core-infra"}}'
 ```
 
 - `models`: *list or null (optional)* - Specify the models a token has access too. If null, then token has access to all models on server. 
 
 - `duration`: *str or null (optional)* Specify the length of time the token is valid for. If null, default is set to 1 hour. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
+
+- `metadata`: *dict or null (optional)* Pass metadata for the created token. If null defaults to {}
 
 Expected response: 
 
@@ -56,7 +66,18 @@ Expected response:
 }
 ```
 
-## Managing Auth - Upgrade/Downgrade Models 
+## Keys that don't expire
+
+Just set duration to None. 
+
+```bash
+curl --location 'http://0.0.0.0:8000/key/generate' \
+--header 'Authorization: Bearer sk-1234' \
+--header 'Content-Type: application/json' \
+--data '{"models": ["azure-models"], "aliases": {"mistral-7b": "gpt-3.5-turbo"}, "duration": null}'
+```
+
+## Upgrade/Downgrade Models 
 
 If a user is expected to use a given model (i.e. gpt3-5), and you want to:
 
@@ -105,7 +126,7 @@ curl -X POST "https://0.0.0.0:8000/key/generate" \
 - **How to upgrade / downgrade request?** Change the alias mapping
 - **How are routing between diff keys/api bases done?** litellm handles this by shuffling between different models in the model list with the same model_name. [**See Code**](https://github.com/BerriAI/litellm/blob/main/litellm/router.py)
 
-## Managing Auth - Tracking Spend 
+## Tracking Spend 
 
 You can get spend for a key by using the `/key/info` endpoint. 
 
@@ -136,6 +157,33 @@ This is automatically updated (in USD) when calls are made to /completions, /cha
         },
         "config": {}
     }
+}
+```
+
+
+
+## Set Budgets 
+
+LiteLLM exposes a `/user/new` endpoint to create budgets for users, that persist across multiple keys. 
+
+This is documented in the swagger (live on your server root endpoint - e.g. `http://0.0.0.0:8000/`). Here's an example request. 
+
+```curl 
+curl --location 'http://localhost:8000/user/new' \
+--header 'Authorization: Bearer <your-master-key>' \
+--header 'Content-Type: application/json' \
+--data-raw '{"models": ["azure-models"], "max_budget": 0, "user_id": "krrish3@berri.ai"}' 
+```
+The request is a normal `/key/generate` request body + a `max_budget` field. 
+
+**Sample Response**
+
+```curl
+{
+    "key": "sk-YF2OxDbrgd1y2KgwxmEA2w",
+    "expires": "2023-12-22T09:53:13.861000Z",
+    "user_id": "krrish3@berri.ai",
+    "max_budget": 0.0
 }
 ```
 

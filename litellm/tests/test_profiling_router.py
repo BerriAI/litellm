@@ -33,7 +33,7 @@
 
 # litellm.telemetry = False
 
-# num_task_cancelled_errors = 0 
+# num_task_cancelled_errors = 0
 
 # model_list = [{
 #     "model_name": "azure-model",
@@ -63,23 +63,23 @@
 
 # router = Router(model_list=model_list, set_verbose=False, num_retries=3)
 
-# async def router_completion(): 
+# async def router_completion():
 #     global num_task_cancelled_errors, exception_counts
-#     try: 
+#     try:
 #         messages=[{"role": "user", "content": f"This is a test: {uuid.uuid4()}"}]
 #         response = await router.acompletion(model="azure-model", messages=messages)
 #         return response
 #     except asyncio.exceptions.CancelledError:
 #         exception_type = "CancelledError"
 #         exception_counts[exception_type] = exception_counts.get(exception_type, 0) + 1
-#         print("Task was cancelled") 
+#         print("Task was cancelled")
 #         num_task_cancelled_errors += 1
 #         exception_data.append({
 #             "type": exception_type,
 #             "traceback": None
 #         })
 #         return None
-#     except Exception as e: 
+#     except Exception as e:
 #         exception_type = type(e).__name__
 #         exception_counts[exception_type] = exception_counts.get(exception_type, 0) + 1
 #         exception_data.append({
@@ -95,12 +95,12 @@
 #     chat_completions = await asyncio.gather(*tasks)
 #     successful_completions = [c for c in chat_completions if c is not None]
 #     print(n, time.time() - start, len(successful_completions))
-    
+
 #     # Print exception breakdown
 #     print("Exception Breakdown:")
 #     for exception_type, count in exception_counts.items():
 #         print(f"{exception_type}: {count}")
-    
+
 #     # Store exception_data in a file
 #     with open('exception_data.txt', 'w') as file:
 #         for data in exception_data:
@@ -130,7 +130,7 @@
 # #   total_successful_requests = 0
 # #   request_limit = 1000
 # #   batches = 2  # batches of 1k requests
-# #   start = time.time() 
+# #   start = time.time()
 # #   tasks = []  # list to hold all tasks
 
 # #   async def request_loop():
@@ -139,7 +139,7 @@
 # #         # Make 1,000 requests
 # #         task = asyncio.create_task(make_requests(request_limit))
 # #         tasks.append(task)
-        
+
 # #         # Introduce a delay to achieve 1,000 requests per second
 # #         await asyncio.sleep(1)
 

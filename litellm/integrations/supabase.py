@@ -9,6 +9,7 @@ import traceback
 import datetime, subprocess, sys
 import litellm
 
+
 class Supabase:
     # Class variables or attributes
     supabase_table_name = "request_logs"

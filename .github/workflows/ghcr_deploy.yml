@@ -1,5 +1,5 @@
-#
-name: Build & Publich to GHCR
+# this workflow is triggered by an API call when there is a new PyPI release of LiteLLM
+name: Build, Publish LiteLLM Docker Image. New Release
 on:
   workflow_dispatch:
     inputs:
@@ -19,7 +19,7 @@ jobs:
     permissions:
       contents: read
       packages: write
-      # 
+      #
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -44,5 +44,98 @@ jobs:
         with:
           context: .
           push: true
-          tags: ${{ steps.meta.outputs.tags }}-${{ github.event.inputs.tag }}  # Add the input tag to the image tags
+          tags: ${{ steps.meta.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }} # if a tag is provided, use that, otherwise use the release tag, and if neither is available, use 'latest'
           labels: ${{ steps.meta.outputs.labels }}
+  build-and-push-image-alpine:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for Alpine Dockerfile
+        id: meta-alpine
+        uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-alpine
+
+      - name: Build and push Alpine Docker image
+        uses: docker/build-push-action@f2a1d5e99d037542a71f64918e516c093c6f3fc4
+        with:
+          context: .
+          dockerfile: Dockerfile.alpine
+          push: true
+          tags: ${{ steps.meta-alpine.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}
+          labels: ${{ steps.meta-alpine.outputs.labels }}
+  build-and-push-image-database:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for database Dockerfile
+        id: meta-database
+        uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-database
+
+      - name: Build and push Database Docker image
+        uses: docker/build-push-action@f2a1d5e99d037542a71f64918e516c093c6f3fc4
+        with:
+          context: .
+          file: Dockerfile.database
+          push: true
+          tags: ${{ steps.meta-database.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}
+          labels: ${{ steps.meta-database.outputs.labels }}
+  release:
+    name: "New LiteLLM Release"
+
+    runs-on: "ubuntu-latest"
+   
+    steps:
+      - name: Display version
+        run: echo "Current version is ${{ github.event.inputs.tag }}"
+      - name: "Set Release Tag"
+        run: echo "RELEASE_TAG=${{ github.event.inputs.tag }}" >> $GITHUB_ENV
+      - name: Display release tag
+        run: echo "RELEASE_TAG is $RELEASE_TAG"
+      - name: "Create release"
+        uses: "actions/github-script@v6"
+        with:
+          github-token: "${{ secrets.GITHUB_TOKEN }}"
+          script: |
+            try {
+              const response = await github.rest.repos.createRelease({
+                draft: false,
+                generate_release_notes: true,
+                name: process.env.RELEASE_TAG,
+                owner: context.repo.owner,
+                prerelease: false,
+                repo: context.repo.repo,
+                tag_name: process.env.RELEASE_TAG,
+              });
+
+              core.exportVariable('RELEASE_ID', response.data.id);
+              core.exportVariable('RELEASE_UPLOAD_URL', response.data.upload_url);
+            } catch (error) {
+              core.setFailed(error.message);
+            }

@@ -104,4 +104,3 @@
 # #         pytest.fail(f"Error occurred: {e}")
 
 # # test_openai_with_params()
-

@@ -3,15 +3,22 @@ import threading, requests
 from typing import Callable, List, Optional, Dict, Union, Any
 from litellm.caching import Cache
 from litellm._logging import set_verbose
+from litellm.proxy._types import KeyManagementSystem
 import httpx
 
 input_callback: List[Union[str, Callable]] = []
 success_callback: List[Union[str, Callable]] = []
 failure_callback: List[Union[str, Callable]] = []
 callbacks: List[Callable] = []
-_async_input_callback: List[Callable] = [] # internal variable - async custom callbacks are routed here. 
-_async_success_callback: List[Union[str, Callable]] = [] # internal variable - async custom callbacks are routed here. 
-_async_failure_callback: List[Callable] = [] # internal variable - async custom callbacks are routed here. 
+_async_input_callback: List[
+    Callable
+] = []  # internal variable - async custom callbacks are routed here.
+_async_success_callback: List[
+    Union[str, Callable]
+] = []  # internal variable - async custom callbacks are routed here.
+_async_failure_callback: List[
+    Callable
+] = []  # internal variable - async custom callbacks are routed here.
 pre_call_rules: List[Callable] = []
 post_call_rules: List[Callable] = []
 email: Optional[
@@ -37,52 +44,138 @@ huggingface_key: Optional[str] = None
 vertex_project: Optional[str] = None
 vertex_location: Optional[str] = None
 togetherai_api_key: Optional[str] = None
+cloudflare_api_key: Optional[str] = None
 baseten_key: Optional[str] = None
 aleph_alpha_key: Optional[str] = None
 nlp_cloud_key: Optional[str] = None
 use_client: bool = False
 logging: bool = True
-caching: bool = False # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
+caching: bool = False  # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
 caching_with_models: bool = False  # # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
-cache: Optional[Cache] = None # cache object <- use this - https://docs.litellm.ai/docs/caching
+cache: Optional[
+    Cache
+] = None  # cache object <- use this - https://docs.litellm.ai/docs/caching
 model_alias_map: Dict[str, str] = {}
 model_group_alias_map: Dict[str, str] = {}
-max_budget: float = 0.0 # set the max budget across all providers
-_openai_completion_params = ["functions", "function_call", "temperature", "temperature", "top_p", "n", "stream", "stop", "max_tokens", "presence_penalty", "frequency_penalty", "logit_bias", "user", "request_timeout", "api_base", "api_version", "api_key", "deployment_id", "organization", "base_url", "default_headers", "timeout", "response_format", "seed", "tools", "tool_choice", "max_retries"]
-_litellm_completion_params = ["metadata", "acompletion", "caching", "mock_response", "api_key", "api_version", "api_base", "force_timeout", "logger_fn", "verbose", "custom_llm_provider", "litellm_logging_obj", "litellm_call_id", "use_client", "id", "fallbacks", "azure", "headers", "model_list", "num_retries", "context_window_fallback_dict", "roles", "final_prompt_value", "bos_token", "eos_token", "request_timeout", "complete_response", "self", "client", "rpm", "tpm", "input_cost_per_token", "output_cost_per_token", "hf_model_name", "model_info", "proxy_server_request", "preset_cache_key"]
-_current_cost = 0 # private variable, used if max budget is set 
+max_budget: float = 0.0  # set the max budget across all providers
+_openai_completion_params = [
+    "functions",
+    "function_call",
+    "temperature",
+    "temperature",
+    "top_p",
+    "n",
+    "stream",
+    "stop",
+    "max_tokens",
+    "presence_penalty",
+    "frequency_penalty",
+    "logit_bias",
+    "user",
+    "request_timeout",
+    "api_base",
+    "api_version",
+    "api_key",
+    "deployment_id",
+    "organization",
+    "base_url",
+    "default_headers",
+    "timeout",
+    "response_format",
+    "seed",
+    "tools",
+    "tool_choice",
+    "max_retries",
+]
+_litellm_completion_params = [
+    "metadata",
+    "acompletion",
+    "caching",
+    "mock_response",
+    "api_key",
+    "api_version",
+    "api_base",
+    "force_timeout",
+    "logger_fn",
+    "verbose",
+    "custom_llm_provider",
+    "litellm_logging_obj",
+    "litellm_call_id",
+    "use_client",
+    "id",
+    "fallbacks",
+    "azure",
+    "headers",
+    "model_list",
+    "num_retries",
+    "context_window_fallback_dict",
+    "roles",
+    "final_prompt_value",
+    "bos_token",
+    "eos_token",
+    "request_timeout",
+    "complete_response",
+    "self",
+    "client",
+    "rpm",
+    "tpm",
+    "input_cost_per_token",
+    "output_cost_per_token",
+    "hf_model_name",
+    "model_info",
+    "proxy_server_request",
+    "preset_cache_key",
+]
+_current_cost = 0  # private variable, used if max budget is set
 error_logs: Dict = {}
-add_function_to_prompt: bool = False # if function calling not supported by api, append function call details to system prompt
+add_function_to_prompt: bool = False  # if function calling not supported by api, append function call details to system prompt
 client_session: Optional[httpx.Client] = None
 aclient_session: Optional[httpx.AsyncClient] = None
-model_fallbacks: Optional[List] = None # Deprecated for 'litellm.fallbacks'
+model_fallbacks: Optional[List] = None  # Deprecated for 'litellm.fallbacks'
 model_cost_map_url: str = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
 suppress_debug_info = False
 dynamodb_table_name: Optional[str] = None
 #### RELIABILITY ####
 request_timeout: Optional[float] = 6000
-num_retries: Optional[int] = None
+num_retries: Optional[int] = None  # per model endpoint
 fallbacks: Optional[List] = None
 context_window_fallbacks: Optional[List] = None
 allowed_fails: int = 0
+num_retries_per_request: Optional[
+    int
+] = None  # for the request overall (incl. fallbacks + model retries)
 ####### SECRET MANAGERS #####################
-secret_manager_client: Optional[Any] = None # list of instantiated key management clients - e.g. azure kv, infisical, etc. 
+secret_manager_client: Optional[
+    Any
+] = None  # list of instantiated key management clients - e.g. azure kv, infisical, etc.
+_google_kms_resource_name: Optional[str] = None
+_key_management_system: Optional[KeyManagementSystem] = None
 #############################################
+
 
 def get_model_cost_map(url: str):
     try:
-        with requests.get(url, timeout=5) as response:  # set a 5 second timeout for the get request
-            response.raise_for_status()                 # Raise an exception if the request is unsuccessful
+        with requests.get(
+            url, timeout=5
+        ) as response:  # set a 5 second timeout for the get request
+            response.raise_for_status()  # Raise an exception if the request is unsuccessful
             content = response.json()
             return content
     except Exception as e:
         import importlib.resources
         import json
-        with importlib.resources.open_text("litellm", "model_prices_and_context_window_backup.json") as f:
+
+        with importlib.resources.open_text(
+            "litellm", "model_prices_and_context_window_backup.json"
+        ) as f:
             content = json.load(f)
             return content
+
+
 model_cost = get_model_cost_map(url=model_cost_map_url)
-custom_prompt_dict:Dict[str, dict] = {}
+custom_prompt_dict: Dict[str, dict] = {}
+
+
 ####### THREAD-SPECIFIC DATA ###################
 class MyLocal(threading.local):
     def __init__(self):
@@ -123,47 +216,47 @@ bedrock_models: List = []
 deepinfra_models: List = []
 perplexity_models: List = []
 for key, value in model_cost.items():
-    if value.get('litellm_provider') == 'openai':
+    if value.get("litellm_provider") == "openai":
         open_ai_chat_completion_models.append(key)
-    elif value.get('litellm_provider') == 'text-completion-openai':
+    elif value.get("litellm_provider") == "text-completion-openai":
         open_ai_text_completion_models.append(key)
-    elif value.get('litellm_provider') == 'cohere':
+    elif value.get("litellm_provider") == "cohere":
         cohere_models.append(key)
-    elif value.get('litellm_provider') == 'anthropic':
+    elif value.get("litellm_provider") == "anthropic":
         anthropic_models.append(key)
-    elif value.get('litellm_provider') == 'openrouter':
+    elif value.get("litellm_provider") == "openrouter":
         openrouter_models.append(key)
-    elif value.get('litellm_provider') == 'vertex_ai-text-models':
+    elif value.get("litellm_provider") == "vertex_ai-text-models":
         vertex_text_models.append(key)
-    elif value.get('litellm_provider') == 'vertex_ai-code-text-models':
+    elif value.get("litellm_provider") == "vertex_ai-code-text-models":
         vertex_code_text_models.append(key)
-    elif value.get('litellm_provider') == 'vertex_ai-language-models':
+    elif value.get("litellm_provider") == "vertex_ai-language-models":
         vertex_language_models.append(key)
-    elif value.get('litellm_provider') == 'vertex_ai-vision-models':
+    elif value.get("litellm_provider") == "vertex_ai-vision-models":
         vertex_vision_models.append(key)
-    elif value.get('litellm_provider') == 'vertex_ai-chat-models':
+    elif value.get("litellm_provider") == "vertex_ai-chat-models":
         vertex_chat_models.append(key)
-    elif value.get('litellm_provider') == 'vertex_ai-code-chat-models':
+    elif value.get("litellm_provider") == "vertex_ai-code-chat-models":
         vertex_code_chat_models.append(key)
-    elif value.get('litellm_provider') == 'ai21':
+    elif value.get("litellm_provider") == "ai21":
         ai21_models.append(key)
-    elif value.get('litellm_provider') == 'nlp_cloud':
+    elif value.get("litellm_provider") == "nlp_cloud":
         nlp_cloud_models.append(key)
-    elif value.get('litellm_provider') == 'aleph_alpha':
+    elif value.get("litellm_provider") == "aleph_alpha":
         aleph_alpha_models.append(key)
-    elif value.get('litellm_provider') == 'bedrock': 
+    elif value.get("litellm_provider") == "bedrock":
         bedrock_models.append(key)
-    elif value.get('litellm_provider') == 'deepinfra':
+    elif value.get("litellm_provider") == "deepinfra":
         deepinfra_models.append(key)
-    elif value.get('litellm_provider') == 'perplexity':
+    elif value.get("litellm_provider") == "perplexity":
         perplexity_models.append(key)
 
 # known openai compatible endpoints - we'll eventually move this list to the model_prices_and_context_window.json dictionary
 openai_compatible_endpoints: List = [
-    "api.perplexity.ai", 
+    "api.perplexity.ai",
     "api.endpoints.anyscale.com/v1",
     "api.deepinfra.com/v1/openai",
-    "api.mistral.ai/v1"
+    "api.mistral.ai/v1",
 ]
 
 # this is maintained for Exception Mapping
@@ -171,7 +264,8 @@ openai_compatible_providers: List = [
     "anyscale",
     "mistral",
     "deepinfra",
-    "perplexity"
+    "perplexity",
+    "xinference",
 ]
 
 
@@ -209,23 +303,18 @@ huggingface_models: List = [
 together_ai_models: List = [
     # llama llms - chat
     "togethercomputer/llama-2-70b-chat",
-
-    # llama llms - language / instruct 
+    # llama llms - language / instruct
     "togethercomputer/llama-2-70b",
     "togethercomputer/LLaMA-2-7B-32K",
     "togethercomputer/Llama-2-7B-32K-Instruct",
     "togethercomputer/llama-2-7b",
-
     # falcon llms
     "togethercomputer/falcon-40b-instruct",
     "togethercomputer/falcon-7b-instruct",
-
     # alpaca
     "togethercomputer/alpaca-7b",
-
     # chat llms
     "HuggingFaceH4/starchat-alpha",
-
     # code llms
     "togethercomputer/CodeLlama-34b",
     "togethercomputer/CodeLlama-34b-Instruct",
@@ -234,29 +323,41 @@ together_ai_models: List = [
     "NumbersStation/nsql-llama-2-7B",
     "WizardLM/WizardCoder-15B-V1.0",
     "WizardLM/WizardCoder-Python-34B-V1.0",
-
     # language llms
     "NousResearch/Nous-Hermes-Llama2-13b",
     "Austism/chronos-hermes-13b",
     "upstage/SOLAR-0-70b-16bit",
     "WizardLM/WizardLM-70B-V1.0",
+]  # supports all together ai models, just pass in the model id e.g. completion(model="together_computer/replit_code_3b",...)
 
-] # supports all together ai models, just pass in the model id e.g. completion(model="together_computer/replit_code_3b",...)
+
+baseten_models: List = [
+    "qvv0xeq",
+    "q841o8w",
+    "31dxrj3",
+]  # FALCON 7B  # WizardLM  # Mosaic ML
 
 
-baseten_models: List = ["qvv0xeq", "q841o8w", "31dxrj3"]  # FALCON 7B  # WizardLM  # Mosaic ML
+# used for Cost Tracking & Token counting
+# https://azure.microsoft.com/en-in/pricing/details/cognitive-services/openai-service/
+# Azure returns gpt-35-turbo in their responses, we need to map this to azure/gpt-3.5-turbo for token counting
+azure_llms = {
+    "gpt-35-turbo": "azure/gpt-35-turbo",
+    "gpt-35-turbo-16k": "azure/gpt-35-turbo-16k",
+    "gpt-35-turbo-instruct": "azure/gpt-35-turbo-instruct",
+}
+
+azure_embedding_models = {
+    "ada": "azure/ada",
+}
 
 petals_models = [
     "petals-team/StableBeluga2",
 ]
 
-ollama_models = [
-    "llama2"
-]
+ollama_models = ["llama2"]
 
-maritalk_models = [
-    "maritalk"
-]
+maritalk_models = ["maritalk"]
 
 model_list = (
     open_ai_chat_completion_models
@@ -292,6 +393,7 @@ provider_list: List = [
     "openrouter",
     "vertex_ai",
     "palm",
+    "gemini",
     "ai21",
     "baseten",
     "azure",
@@ -302,12 +404,16 @@ provider_list: List = [
     "petals",
     "oobabooga",
     "ollama",
+    "ollama_chat",
     "deepinfra",
     "perplexity",
     "anyscale",
     "mistral",
     "maritalk",
-    "custom", # custom apis
+    "voyage",
+    "cloudflare",
+    "xinference",
+    "custom",  # custom apis
 ]
 
 models_by_provider: dict = {
@@ -326,28 +432,28 @@ models_by_provider: dict = {
     "ollama": ollama_models,
     "deepinfra": deepinfra_models,
     "perplexity": perplexity_models,
-    "maritalk": maritalk_models
+    "maritalk": maritalk_models,
 }
 
-# mapping for those models which have larger equivalents 
+# mapping for those models which have larger equivalents
 longer_context_model_fallback_dict: dict = {
     # openai chat completion models
-    "gpt-3.5-turbo": "gpt-3.5-turbo-16k", 
-    "gpt-3.5-turbo-0301": "gpt-3.5-turbo-16k-0301", 
-    "gpt-3.5-turbo-0613": "gpt-3.5-turbo-16k-0613", 
-    "gpt-4": "gpt-4-32k", 
-    "gpt-4-0314": "gpt-4-32k-0314", 
-    "gpt-4-0613": "gpt-4-32k-0613", 
-    # anthropic 
-    "claude-instant-1": "claude-2", 
+    "gpt-3.5-turbo": "gpt-3.5-turbo-16k",
+    "gpt-3.5-turbo-0301": "gpt-3.5-turbo-16k-0301",
+    "gpt-3.5-turbo-0613": "gpt-3.5-turbo-16k-0613",
+    "gpt-4": "gpt-4-32k",
+    "gpt-4-0314": "gpt-4-32k-0314",
+    "gpt-4-0613": "gpt-4-32k-0613",
+    # anthropic
+    "claude-instant-1": "claude-2",
     "claude-instant-1.2": "claude-2",
     # vertexai
     "chat-bison": "chat-bison-32k",
     "chat-bison@001": "chat-bison-32k",
-    "codechat-bison": "codechat-bison-32k", 
+    "codechat-bison": "codechat-bison-32k",
     "codechat-bison@001": "codechat-bison-32k",
-    # openrouter 
-    "openrouter/openai/gpt-3.5-turbo": "openrouter/openai/gpt-3.5-turbo-16k", 
+    # openrouter
+    "openrouter/openai/gpt-3.5-turbo": "openrouter/openai/gpt-3.5-turbo-16k",
     "openrouter/anthropic/claude-instant-v1": "openrouter/anthropic/claude-2",
 }
 
@@ -356,20 +462,23 @@ open_ai_embedding_models: List = ["text-embedding-ada-002"]
 cohere_embedding_models: List = [
     "embed-english-v3.0",
     "embed-english-light-v3.0",
-    "embed-multilingual-v3.0", 
-    "embed-english-v2.0", 
-    "embed-english-light-v2.0", 
-    "embed-multilingual-v2.0", 
+    "embed-multilingual-v3.0",
+    "embed-english-v2.0",
+    "embed-english-light-v2.0",
+    "embed-multilingual-v2.0",
 ]
-bedrock_embedding_models: List = ["amazon.titan-embed-text-v1", "cohere.embed-english-v3", "cohere.embed-multilingual-v3"]
+bedrock_embedding_models: List = [
+    "amazon.titan-embed-text-v1",
+    "cohere.embed-english-v3",
+    "cohere.embed-multilingual-v3",
+]
 
-all_embedding_models = open_ai_embedding_models + cohere_embedding_models + bedrock_embedding_models
+all_embedding_models = (
+    open_ai_embedding_models + cohere_embedding_models + bedrock_embedding_models
+)
 
 ####### IMAGE GENERATION MODELS ###################
-openai_image_generation_models = [
-    "dall-e-2",
-    "dall-e-3"
-]
+openai_image_generation_models = ["dall-e-2", "dall-e-3"]
 
 
 from .timeout import timeout
@@ -393,11 +502,11 @@ from .utils import (
     get_llm_provider,
     completion_with_config,
     register_model,
-    encode, 
-    decode, 
+    encode,
+    decode,
     _calculate_retry_after,
     _should_retry,
-    get_secret
+    get_secret,
 )
 from .llms.huggingface_restapi import HuggingfaceConfig
 from .llms.anthropic import AnthropicConfig
@@ -405,7 +514,9 @@ from .llms.replicate import ReplicateConfig
 from .llms.cohere import CohereConfig
 from .llms.ai21 import AI21Config
 from .llms.together_ai import TogetherAIConfig
+from .llms.cloudflare import CloudflareConfig
 from .llms.palm import PalmConfig
+from .llms.gemini import GeminiConfig
 from .llms.nlp_cloud import NLPCloudConfig
 from .llms.aleph_alpha import AlephAlphaConfig
 from .llms.petals import PetalsConfig
@@ -413,7 +524,13 @@ from .llms.vertex_ai import VertexAIConfig
 from .llms.sagemaker import SagemakerConfig
 from .llms.ollama import OllamaConfig
 from .llms.maritalk import MaritTalkConfig
-from .llms.bedrock import AmazonTitanConfig, AmazonAI21Config, AmazonAnthropicConfig, AmazonCohereConfig, AmazonLlamaConfig
+from .llms.bedrock import (
+    AmazonTitanConfig,
+    AmazonAI21Config,
+    AmazonAnthropicConfig,
+    AmazonCohereConfig,
+    AmazonLlamaConfig,
+)
 from .llms.openai import OpenAIConfig, OpenAITextCompletionConfig
 from .llms.azure import AzureOpenAIConfig
 from .main import *  # type: ignore
@@ -427,12 +544,12 @@ from .exceptions import (
     ServiceUnavailableError,
     OpenAIError,
     ContextWindowExceededError,
-    BudgetExceededError, 
+    BudgetExceededError,
     APIError,
     Timeout,
     APIConnectionError,
-    APIResponseValidationError, 
-    UnprocessableEntityError
+    APIResponseValidationError,
+    UnprocessableEntityError,
 )
 from .budget_manager import BudgetManager
 from .proxy.proxy_cli import run_server
