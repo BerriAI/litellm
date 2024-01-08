@@ -1384,6 +1384,10 @@ class Router:
                         max_retries=max_retries,
                         http_client=httpx.AsyncClient(
                             transport=AsyncCustomHTTPTransport(),
+                            limits=httpx.Limits(
+                                max_connections=1000,
+                                max_keepalive_connections=100
+                            )
                         ),  # type: ignore
                     )
                     self.cache.set_cache(
@@ -1402,6 +1406,10 @@ class Router:
                         max_retries=max_retries,
                         http_client=httpx.Client(
                             transport=CustomHTTPTransport(),
+                            limits=httpx.Limits(
+                                max_connections=1000,
+                                max_keepalive_connections=100
+                            )
                         ),  # type: ignore
                     )
                     self.cache.set_cache(
@@ -1419,6 +1427,12 @@ class Router:
                         api_version=api_version,
                         timeout=stream_timeout,
                         max_retries=max_retries,
+                        http_client=httpx.Client(
+                            limits=httpx.Limits(
+                            max_connections=1000,
+                            max_keepalive_connections=100
+                            )
+                        )
                     )
                     self.cache.set_cache(
                         key=cache_key,
@@ -1434,6 +1448,12 @@ class Router:
                         api_version=api_version,
                         timeout=stream_timeout,
                         max_retries=max_retries,
+                        http_client=httpx.Client(
+                            limits=httpx.Limits(
+                            max_connections=1000,
+                            max_keepalive_connections=100
+                            )
+                        )
                     )
                     self.cache.set_cache(
                         key=cache_key,
