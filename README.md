@@ -178,7 +178,7 @@ curl 'http://0.0.0.0:8000/key/generate' \
 
 A simple UI to add new models and let your users create keys. 
 
-Live here: https://litellm-jyqbcbn44mcxqq6ufopuha.streamlit.app/
+Live here: https://dashboard.litellm.ai/
 
 Code: https://github.com/BerriAI/litellm/tree/main/ui  
 
