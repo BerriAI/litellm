@@ -947,6 +947,13 @@ Run the proxy with `--debug` to easily view debug logs
 litellm --model gpt-3.5-turbo --debug
 ```
 
+### Detailed Debug Logs 
+
+Run the proxy with `--detailed_debug` to view detailed debug logs
+```shell
+litellm --model gpt-3.5-turbo --detailed_debug
+```
+
 When making requests you should see the POST request sent by LiteLLM to the LLM on the Terminal output
 ```shell
 POST Request Sent from LiteLLM:
@@ -1280,6 +1287,14 @@ LiteLLM proxy adds **0.00325 seconds** latency as compared to using the Raw Open
    - **Usage:** 
      ```shell
      litellm --debug
+     ```
+#### --detailed_debug
+   - **Default:** `False`
+   - **Type:** `bool` (Flag)
+   - Enable debugging mode for the input.
+   - **Usage:** 
+     ```shell
+     litellm --detailed_debug
      ```
 
 #### --temperature
