@@ -27,3 +27,4 @@ verbose_logger = logging.getLogger("LiteLLM")
 
 # Add the handler to the logger
 verbose_router_logger.addHandler(handler)
+verbose_proxy_logger.addHandler(handler)
