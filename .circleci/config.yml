@@ -21,7 +21,7 @@ jobs:
 
       - python/install-packages:
           pkg-manager: poetry
-          args: --extras=proxy
+          args: --extras=proxy --verbose
       - run:
           name: Black Formatting
           command: |
