@@ -545,6 +545,45 @@ async def test_async_chat_bedrock_stream():
 
 # asyncio.run(test_async_chat_bedrock_stream())
 
+# Text Completion 
+        
+## Test OpenAI text completion + Async
+@pytest.mark.asyncio
+async def test_async_text_completion_openai_stream():
+    try:
+        customHandler = CompletionCustomHandler()
+        litellm.callbacks = [customHandler]
+        response = await litellm.atext_completion(
+            model="gpt-3.5-turbo",
+            prompt="Hi 👋 - i'm async text completion openai",
+        )
+        # test streaming
+        response = await litellm.atext_completion(
+            model="gpt-3.5-turbo",
+            prompt="Hi 👋 - i'm async text completion openai",
+            stream=True,
+        )
+        async for chunk in response:
+            print(f"chunk: {chunk}")
+            continue
+        ## test failure callback
+        try:
+            response = await litellm.atext_completion(
+                model="gpt-3.5-turbo",
+                prompt="Hi 👋 - i'm async text completion openai",
+                stream=True,
+                api_key="my-bad-key",
+            )
+            async for chunk in response:
+                continue
+        except:
+            pass
+        time.sleep(1)
+        print(f"customHandler.errors: {customHandler.errors}")
+        assert len(customHandler.errors) == 0
+        litellm.callbacks = []
+    except Exception as e:
+        pytest.fail(f"An exception occurred: {str(e)}")
 
 # EMBEDDING
 ## Test OpenAI + Async

@@ -710,7 +710,7 @@ class CallTypes(Enum):
     aimage_generation = "aimage_generation"
 
 
-# Logging function -> log the exact model details + what's being sent | Non-Blocking
+# Logging function -> log the exact model details + what's being sent | Non-BlockingP
 class Logging:
     global supabaseClient, liteDebuggerClient, promptLayerLogger, weightsBiasesLogger, langsmithLogger, capture_exception, add_breadcrumb, llmonitorLogger
 
@@ -729,6 +729,8 @@ class Logging:
             raise ValueError(
                 f"Invalid call_type {call_type}. Allowed values: {allowed_values}"
             )
+        if messages is not None and isinstance(messages, str):
+            messages = [{"role": "user", "content": messages}] # convert text completion input to the chat completion format
         self.model = model
         self.messages = messages
         self.stream = stream
