@@ -26,6 +26,8 @@ from litellm.llms.custom_httpx.azure_dall_e_2 import (
 )
 from litellm.utils import ModelResponse, CustomStreamWrapper
 import copy
+from litellm._logging import verbose_router_logger
+import logging
 
 
 class Router:
@@ -223,7 +225,7 @@ class Router:
             litellm.failure_callback.append(self.deployment_callback_on_failure)
         else:
             litellm.failure_callback = [self.deployment_callback_on_failure]
-        self.print_verbose(
+        verbose_router_logger.debug(
             f"Intialized router with Routing strategy: {self.routing_strategy}\n"
         )
 
@@ -316,7 +318,7 @@ class Router:
     async def _acompletion(self, model: str, messages: List[Dict[str, str]], **kwargs):
         model_name = None
         try:
-            self.print_verbose(
+            verbose_router_logger.info(
                 f"Inside _acompletion()- model: {model}; kwargs: {kwargs}"
             )
             deployment = self.get_available_deployment(
@@ -385,7 +387,7 @@ class Router:
 
     def _image_generation(self, prompt: str, model: str, **kwargs):
         try:
-            self.print_verbose(
+            verbose_router_logger.info(
                 f"Inside _image_generation()- model: {model}; kwargs: {kwargs}"
             )
             deployment = self.get_available_deployment(
@@ -454,7 +456,7 @@ class Router:
 
     async def _aimage_generation(self, prompt: str, model: str, **kwargs):
         try:
-            self.print_verbose(
+            verbose_router_logger.info(
                 f"Inside _image_generation()- model: {model}; kwargs: {kwargs}"
             )
             deployment = self.get_available_deployment(
@@ -576,7 +578,7 @@ class Router:
 
     async def _atext_completion(self, model: str, prompt: str, **kwargs):
         try:
-            self.print_verbose(
+            verbose_router_logger.info(
                 f"Inside _atext_completion()- model: {model}; kwargs: {kwargs}"
             )
             deployment = self.get_available_deployment(
@@ -696,7 +698,7 @@ class Router:
 
     async def _aembedding(self, input: Union[str, List], model: str, **kwargs):
         try:
-            self.print_verbose(
+            verbose_router_logger.info(
                 f"Inside _aembedding()- model: {model}; kwargs: {kwargs}"
             )
             deployment = self.get_available_deployment(
@@ -761,10 +763,10 @@ class Router:
         )
         try:
             response = await self.async_function_with_retries(*args, **kwargs)
-            self.print_verbose(f"Async Response: {response}")
+            verbose_router_logger.debug(f"Async Response: {response}")
             return response
         except Exception as e:
-            self.print_verbose(
+            verbose_router_logger.info(
                 f"An exception occurs: {e}\n\n Traceback{traceback.format_exc()}"
             )
             original_exception = e
@@ -774,7 +776,7 @@ class Router:
                     hasattr(e, "status_code") and e.status_code == 400
                 ):  # don't retry a malformed request
                     raise e
-                self.print_verbose(f"Trying to fallback b/w models")
+                verbose_router_logger.debug(f"Trying to fallback b/w models")
                 if (
                     isinstance(e, litellm.ContextWindowExceededError)
                     and context_window_fallbacks is not None
@@ -803,13 +805,13 @@ class Router:
                         except Exception as e:
                             pass
                 elif fallbacks is not None:
-                    self.print_verbose(f"inside model fallbacks: {fallbacks}")
+                    verbose_router_logger.debug(f"inside model fallbacks: {fallbacks}")
                     for item in fallbacks:
                         if list(item.keys())[0] == model_group:
                             fallback_model_group = item[model_group]
                             break
                     if fallback_model_group is None:
-                        self.print_verbose(
+                        verbose_router_logger.info(
                             f"No fallback model group found for original model_group={model_group}. Fallbacks={fallbacks}"
                         )
                         raise original_exception
@@ -829,12 +831,12 @@ class Router:
                         except Exception as e:
                             raise e
             except Exception as e:
-                self.print_verbose(f"An exception occurred - {str(e)}")
+                verbose_router_logger.debug(f"An exception occurred - {str(e)}")
                 traceback.print_exc()
             raise original_exception
 
     async def async_function_with_retries(self, *args, **kwargs):
-        self.print_verbose(
+        verbose_router_logger.debug(
             f"Inside async function with retries: args - {args}; kwargs - {kwargs}"
         )
         original_function = kwargs.pop("original_function")
@@ -842,7 +844,7 @@ class Router:
         context_window_fallbacks = kwargs.pop(
             "context_window_fallbacks", self.context_window_fallbacks
         )
-        self.print_verbose(
+        verbose_router_logger.debug(
             f"async function w/ retries: original_function - {original_function}"
         )
         num_retries = kwargs.pop("num_retries")
@@ -897,7 +899,7 @@ class Router:
                 kwargs = self.log_retry(kwargs=kwargs, e=original_exception)
 
             for current_attempt in range(num_retries):
-                self.print_verbose(
+                verbose_router_logger.debug(
                     f"retrying request. Current attempt - {current_attempt}; num retries: {num_retries}"
                 )
                 try:
@@ -958,9 +960,9 @@ class Router:
             return response
         except Exception as e:
             original_exception = e
-            self.print_verbose(f"An exception occurs {original_exception}")
+            verbose_router_logger.debug(f"An exception occurs {original_exception}")
             try:
-                self.print_verbose(
+                verbose_router_logger.debug(
                     f"Trying to fallback b/w models. Initial model group: {model_group}"
                 )
                 if (
@@ -992,7 +994,7 @@ class Router:
                         except Exception as e:
                             pass
                 elif fallbacks is not None:
-                    self.print_verbose(f"inside model fallbacks: {fallbacks}")
+                    verbose_router_logger.debug(f"inside model fallbacks: {fallbacks}")
                     fallback_model_group = None
                     for item in fallbacks:
                         if list(item.keys())[0] == model_group:
@@ -1022,7 +1024,7 @@ class Router:
         """
         Try calling the model 3 times. Shuffle between available deployments.
         """
-        self.print_verbose(
+        verbose_router_logger.debug(
             f"Inside function with retries: args - {args}; kwargs - {kwargs}"
         )
         original_function = kwargs.pop("original_function")
@@ -1037,7 +1039,9 @@ class Router:
             return response
         except Exception as e:
             original_exception = e
-            self.print_verbose(f"num retries in function with retries: {num_retries}")
+            verbose_router_logger.debug(
+                f"num retries in function with retries: {num_retries}"
+            )
             ### CHECK IF RATE LIMIT / CONTEXT WINDOW ERROR
             if (
                 isinstance(original_exception, litellm.ContextWindowExceededError)
@@ -1052,7 +1056,7 @@ class Router:
                 kwargs = self.log_retry(kwargs=kwargs, e=original_exception)
             ### RETRY
             for current_attempt in range(num_retries):
-                self.print_verbose(
+                verbose_router_logger.debug(
                     f"retrying request. Current attempt - {current_attempt}; retries left: {num_retries}"
                 )
                 try:
@@ -1135,10 +1139,10 @@ class Router:
                 deployment_exceptions = self.model_exception_map.get(deployment, [])
                 deployment_exceptions.append(exception_str)
                 self.model_exception_map[deployment] = deployment_exceptions
-                self.print_verbose("\nEXCEPTION FOR DEPLOYMENTS\n")
-                self.print_verbose(self.model_exception_map)
+                verbose_router_logger.debug("\nEXCEPTION FOR DEPLOYMENTS\n")
+                verbose_router_logger.debug(self.model_exception_map)
                 for model in self.model_exception_map:
-                    self.print_verbose(
+                    verbose_router_logger.debug(
                         f"Model {model} had {len(self.model_exception_map[model])} exception"
                     )
             if custom_llm_provider:
@@ -1190,7 +1194,7 @@ class Router:
         # cooldown deployment
         current_fails = self.failed_calls.get_cache(key=deployment) or 0
         updated_fails = current_fails + 1
-        self.print_verbose(
+        verbose_router_logger.debug(
             f"Attempting to add {deployment} to cooldown list. updated_fails: {updated_fails}; self.allowed_fails: {self.allowed_fails}"
         )
         if updated_fails > self.allowed_fails:
@@ -1198,7 +1202,7 @@ class Router:
             cooldown_key = f"{current_minute}:cooldown_models"  # group cooldown models by minute to reduce number of redis calls
             cached_value = self.cache.get_cache(key=cooldown_key)
 
-            self.print_verbose(f"adding {deployment} to cooldown models")
+            verbose_router_logger.debug(f"adding {deployment} to cooldown models")
             # update value
             try:
                 if deployment in cached_value:
@@ -1227,7 +1231,7 @@ class Router:
         # ----------------------
         cooldown_models = self.cache.get_cache(key=cooldown_key) or []
 
-        self.print_verbose(f"retrieve cooldown models: {cooldown_models}")
+        verbose_router_logger.debug(f"retrieve cooldown models: {cooldown_models}")
         return cooldown_models
 
     def set_client(self, model: dict):
@@ -1377,7 +1381,7 @@ class Router:
                         local_only=True,
                     )  # cache for 1 hr
                 else:
-                    self.print_verbose(
+                    verbose_router_logger.debug(
                         f"Initializing Azure OpenAI Client for {model_name}, Api Base: {str(api_base)}, Api Key:{api_key}"
                     )
 
@@ -1449,7 +1453,7 @@ class Router:
                     )  # cache for 1 hr
 
             else:
-                self.print_verbose(
+                verbose_router_logger.debug(
                     f"Initializing OpenAI Client for {model_name}, Api Base:{str(api_base)}, Api Key:{api_key}"
                 )
                 cache_key = f"{model_id}_async_client"
@@ -1555,7 +1559,7 @@ class Router:
 
             self.set_client(model=model)
 
-        self.print_verbose(f"\nInitialized Model List {self.model_list}")
+        verbose_router_logger.debug(f"\nInitialized Model List {self.model_list}")
         self.model_names = [m["model_name"] for m in model_list]
 
     def get_model_names(self):
@@ -1617,13 +1621,6 @@ class Router:
                     client = self.cache.get_cache(key=cache_key)
                 return client
 
-    def print_verbose(self, print_statement):
-        try:
-            if self.set_verbose or litellm.set_verbose:
-                print(f"LiteLLM.Router: {print_statement}")  # noqa
-        except:
-            pass
-
     def get_available_deployment(
         self,
         model: str,
@@ -1651,7 +1648,7 @@ class Router:
 
         # check if aliases set on litellm model alias map
         if model in self.model_group_alias:
-            self.print_verbose(
+            verbose_router_logger.debug(
                 f"Using a model alias. Got Request for {model}, sending requests to {self.model_group_alias.get(model)}"
             )
             model = self.model_group_alias[model]
@@ -1665,13 +1662,15 @@ class Router:
                 m for m in self.model_list if m["litellm_params"]["model"] == model
             ]
 
-        self.print_verbose(f"initial list of deployments: {healthy_deployments}")
+        verbose_router_logger.debug(
+            f"initial list of deployments: {healthy_deployments}"
+        )
 
         # filter out the deployments currently cooling down
         deployments_to_remove = []
         # cooldown_deployments is a list of model_id's cooling down, cooldown_deployments = ["16700539-b3cd-42f4-b426-6a12a1bb706a", "16700539-b3cd-42f4-b426-7899"]
         cooldown_deployments = self._get_cooldown_deployments()
-        self.print_verbose(f"cooldown deployments: {cooldown_deployments}")
+        verbose_router_logger.debug(f"cooldown deployments: {cooldown_deployments}")
         # Find deployments in model_list whose model_id is cooling down
         for deployment in healthy_deployments:
             deployment_id = deployment["model_info"]["id"]
@@ -1681,7 +1680,7 @@ class Router:
         for deployment in deployments_to_remove:
             healthy_deployments.remove(deployment)
 
-        self.print_verbose(
+        verbose_router_logger.debug(
             f"healthy deployments: length {len(healthy_deployments)} {healthy_deployments}"
         )
         if len(healthy_deployments) == 0:
@@ -1701,13 +1700,13 @@ class Router:
             if rpm is not None:
                 # use weight-random pick if rpms provided
                 rpms = [m["litellm_params"].get("rpm", 0) for m in healthy_deployments]
-                self.print_verbose(f"\nrpms {rpms}")
+                verbose_router_logger.debug(f"\nrpms {rpms}")
                 total_rpm = sum(rpms)
                 weights = [rpm / total_rpm for rpm in rpms]
-                self.print_verbose(f"\n weights {weights}")
+                verbose_router_logger.debug(f"\n weights {weights}")
                 # Perform weighted random pick
                 selected_index = random.choices(range(len(rpms)), weights=weights)[0]
-                self.print_verbose(f"\n selected index, {selected_index}")
+                verbose_router_logger.debug(f"\n selected index, {selected_index}")
                 deployment = healthy_deployments[selected_index]
                 return deployment or deployment[0]
             ############## Check if we can do a RPM/TPM based weighted pick #################
@@ -1715,13 +1714,13 @@ class Router:
             if tpm is not None:
                 # use weight-random pick if rpms provided
                 tpms = [m["litellm_params"].get("tpm", 0) for m in healthy_deployments]
-                self.print_verbose(f"\ntpms {tpms}")
+                verbose_router_logger.debug(f"\ntpms {tpms}")
                 total_tpm = sum(tpms)
                 weights = [tpm / total_tpm for tpm in tpms]
-                self.print_verbose(f"\n weights {weights}")
+                verbose_router_logger.debug(f"\n weights {weights}")
                 # Perform weighted random pick
                 selected_index = random.choices(range(len(tpms)), weights=weights)[0]
-                self.print_verbose(f"\n selected index, {selected_index}")
+                verbose_router_logger.debug(f"\n selected index, {selected_index}")
                 deployment = healthy_deployments[selected_index]
                 return deployment or deployment[0]
 
