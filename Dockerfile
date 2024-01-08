@@ -12,8 +12,8 @@ COPY . .
 RUN ls -la /app
 
 # Copy the built wheel from the builder stage to the runtime stage; assumes only one wheel file is present
-COPY --from=builder /app/dist/*.whl .
-COPY --from=builder /wheels/ /wheels/
+COPY --from=runtime /app/dist/*.whl .
+COPY --from=runtime /wheels/ /wheels/
 
 # Install the built wheel using pip; again using a wildcard if it's the only file
 RUN pip install --no-cache-dir --find-links=/wheels/ -r requirements.txt \
