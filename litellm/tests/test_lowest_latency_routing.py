@@ -49,7 +49,7 @@ def test_latency_updated():
         end_time=end_time,
     )
     latency_key = f"{model_group}_latency_map"
-    assert end_time - start_time == test_cache.get_cache(key=latency_key)[deployment_id]
+    assert end_time - start_time == test_cache.get_cache(key=latency_key)[deployment_id][0]
 
 
 # test_tpm_rpm_updated()
