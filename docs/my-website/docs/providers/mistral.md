@@ -52,5 +52,25 @@ All models listed here https://docs.mistral.ai/platform/endpoints are supported.
 
 
 
+## Sample Usage - Embedding
+```python
+from litellm import embedding
+import os
+
+os.environ['MISTRAL_API_KEY'] = ""
+response = embedding(
+    model="mistral/mistral-embed",
+    input=["good morning from litellm"],
+)
+print(response)
+```
+
+
+## Supported Models
+All models listed here https://docs.mistral.ai/platform/endpoints are supported
+
+| Model Name               | Function Call                                                                                                                                                      |
+|--------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| mistral-embed | `embedding(model="mistral/mistral-embed", input)` | 
 
 

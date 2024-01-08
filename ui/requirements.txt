@@ -1,0 +1,3 @@
+streamlit
+python-dotenv
+supabase

@@ -14,13 +14,10 @@ LiteLLM Server manages:
 [**See LiteLLM Proxy code**](https://github.com/BerriAI/litellm/tree/main/litellm/proxy)
 
 
+#### 📖 Proxy Endpoints - [Swagger Docs](https://litellm-api.up.railway.app/)
+
+
 View all the supported args for the Proxy CLI [here](https://docs.litellm.ai/docs/simple_proxy#proxy-cli-arguments)
-
-```shell
-$ pip install litellm[proxy]
-```
-
-If this fails try running
 
 ```shell
 $ pip install 'litellm[proxy]'
@@ -43,7 +40,7 @@ litellm --test
 
 This will now automatically route any requests for gpt-3.5-turbo to bigcode starcoder, hosted on huggingface inference endpoints. 
 
-### Using LiteLLM Proxy - Curl Request, OpenAI Package, Langchain, Langchain JS
+### Using LiteLLM Proxy - Curl Request, OpenAI Package, Langchain
 
 <Tabs>
 <TabItem value="Curl" label="Curl Request">
@@ -188,6 +185,13 @@ $ export OPENAI_API_KEY=my-api-key
 $ litellm --model gpt-3.5-turbo
 ```
 </TabItem>
+<TabItem value="ollama" label="Ollama">
+
+```
+$ litellm --model ollama/<ollama-model-name>
+```
+
+</TabItem>
 <TabItem value="openai-proxy" label="OpenAI Compatible Endpoint">
 
 ```shell
@@ -198,6 +202,19 @@ $ export OPENAI_API_KEY=my-api-key
 $ litellm --model openai/<your model name> --api_base <your-api-base> # e.g. http://0.0.0.0:3000
 ```
 </TabItem>
+
+<TabItem value="vertex-ai" label="Vertex AI [Gemini]">
+
+```shell
+$ export VERTEX_PROJECT="hardy-project"
+$ export VERTEX_LOCATION="us-west"
+```
+
+```shell
+$ litellm --model vertex_ai/gemini-pro
+```
+</TabItem>
+
 <TabItem value="huggingface" label="Huggingface (TGI) Deployed">
 
 ```shell
@@ -348,13 +365,9 @@ litellm --config your_config.yaml
 
 [**More Info**](./configs.md)
 
-## Server Endpoints
 
-:::note
 
-You can see Swagger Docs for the server on root http://0.0.0.0:8000
-
-::: 
+## 📖 Proxy Endpoints - [Swagger Docs](https://litellm-api.up.railway.app/)
 - POST `/chat/completions` - chat completions endpoint to call 100+ LLMs
 - POST `/completions` - completions endpoint
 - POST `/embeddings` - embedding endpoint for Azure, OpenAI, Huggingface endpoints
@@ -376,12 +389,12 @@ See the latest available ghcr docker image here:
 https://github.com/berriai/litellm/pkgs/container/litellm
 
 ```shell
-docker pull ghcr.io/berriai/litellm:main-v1.10.1
+docker pull ghcr.io/berriai/litellm:main-latest
 ```
 
 ### Run the Docker Image
 ```shell
-docker run ghcr.io/berriai/litellm:main-v1.10.0
+docker run ghcr.io/berriai/litellm:main-latest
 ```
 
 #### Run the Docker Image with LiteLLM CLI args
@@ -390,12 +403,12 @@ See all supported CLI args [here](https://docs.litellm.ai/docs/proxy/cli):
 
 Here's how you can run the docker image and pass your config to `litellm`
 ```shell
-docker run ghcr.io/berriai/litellm:main-v1.10.0 --config your_config.yaml
+docker run ghcr.io/berriai/litellm:main-latest --config your_config.yaml
 ```
 
 Here's how you can run the docker image and start litellm on port 8002 with `num_workers=8`
 ```shell
-docker run ghcr.io/berriai/litellm:main-v1.10.0 --port 8002 --num_workers 8
+docker run ghcr.io/berriai/litellm:main-latest --port 8002 --num_workers 8
 ```
   
 #### Run the Docker Image using docker compose
@@ -598,16 +611,31 @@ print(result)
 </Tabs>
 
 ## Debugging Proxy 
-Run the proxy with `--debug` to easily view debug logs 
+
+Events that occur during normal operation
 ```shell
 litellm --model gpt-3.5-turbo --debug
 ```
 
-When making requests you should see the POST request sent by LiteLLM to the LLM on the Terminal output
+Detailed information
 ```shell
-POST Request Sent from LiteLLM:
-curl -X POST \
-https://api.openai.com/v1/chat/completions \
--H 'content-type: application/json' -H 'Authorization: Bearer sk-qnWGUIW9****************************************' \
--d '{"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "this is a test request, write a short poem"}]}'
+litellm --model gpt-3.5-turbo --detailed_debug
 ```
+
+### Set Debug Level using env variables
+
+Events that occur during normal operation
+```shell
+export LITELLM_LOG=INFO
+```
+
+Detailed information
+```shell
+export LITELLM_LOG=DEBUG
+```
+
+No Logs
+```shell
+export LITELLM_LOG=None
+```
+

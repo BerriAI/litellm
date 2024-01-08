@@ -14,52 +14,70 @@ from litellm import embedding, completion
 
 litellm.set_verbose = False
 
+
 def test_openai_embedding():
     try:
-        litellm.set_verbose=True
+        litellm.set_verbose = True
         response = embedding(
-            model="text-embedding-ada-002", 
-            input=["good morning from litellm", "this is another item"], 
-            metadata =  {"anything": "good day"}
+            model="text-embedding-ada-002",
+            input=["good morning from litellm", "this is another item"],
+            metadata={"anything": "good day"},
         )
         litellm_response = dict(response)
         litellm_response_keys = set(litellm_response.keys())
-        litellm_response_keys.discard('_response_ms')
+        litellm_response_keys.discard("_response_ms")
 
         print(litellm_response_keys)
         print("LiteLLM Response\n")
         # print(litellm_response)
-        
-        # same request with OpenAI 1.0+ 
+
+        # same request with OpenAI 1.0+
         import openai
-        client = openai.OpenAI(api_key=os.environ['OPENAI_API_KEY'])
+
+        client = openai.OpenAI(api_key=os.environ["OPENAI_API_KEY"])
         response = client.embeddings.create(
-            model="text-embedding-ada-002", input=["good morning from litellm", "this is another item"]
+            model="text-embedding-ada-002",
+            input=["good morning from litellm", "this is another item"],
         )
 
         response = dict(response)
         openai_response_keys = set(response.keys())
         print(openai_response_keys)
-        assert litellm_response_keys == openai_response_keys # ENSURE the Keys in litellm response is exactly what the openai package returns
-        assert len(litellm_response["data"]) == 2 # expect two embedding responses from litellm_response since input had two
+        assert (
+            litellm_response_keys == openai_response_keys
+        )  # ENSURE the Keys in litellm response is exactly what the openai package returns
+        assert (
+            len(litellm_response["data"]) == 2
+        )  # expect two embedding responses from litellm_response since input had two
         print(openai_response_keys)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
 # test_openai_embedding()
+
 
 def test_openai_azure_embedding_simple():
     try:
+        litellm.set_verbose = True
         response = embedding(
             model="azure/azure-embedding-model",
             input=["good morning from litellm"],
         )
         print(response)
         response_keys = set(dict(response).keys())
-        response_keys.discard('_response_ms')
-        assert set(["usage", "model", "object", "data"]) == set(response_keys) #assert litellm response has expected keys from OpenAI embedding response
+        response_keys.discard("_response_ms")
+        assert set(["usage", "model", "object", "data"]) == set(
+            response_keys
+        )  # assert litellm response has expected keys from OpenAI embedding response
+
+        request_cost = litellm.completion_cost(completion_response=response)
+
+        print("Calculated request cost=", request_cost)
 
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
 
 # test_openai_azure_embedding_simple()
 
@@ -69,41 +87,50 @@ def test_openai_azure_embedding_timeouts():
         response = embedding(
             model="azure/azure-embedding-model",
             input=["good morning from litellm"],
-            timeout=0.00001
+            timeout=0.00001,
         )
         print(response)
     except openai.APITimeoutError:
         print("Good job got timeout error!")
         pass
     except Exception as e:
-        pytest.fail(f"Expected timeout error, did not get the correct error. Instead got {e}")
+        pytest.fail(
+            f"Expected timeout error, did not get the correct error. Instead got {e}"
+        )
+
 
 # test_openai_azure_embedding_timeouts()
+
 
 def test_openai_embedding_timeouts():
     try:
         response = embedding(
             model="text-embedding-ada-002",
             input=["good morning from litellm"],
-            timeout=0.00001
+            timeout=0.00001,
         )
         print(response)
     except openai.APITimeoutError:
         print("Good job got OpenAI timeout error!")
         pass
     except Exception as e:
-        pytest.fail(f"Expected timeout error, did not get the correct error. Instead got {e}")
+        pytest.fail(
+            f"Expected timeout error, did not get the correct error. Instead got {e}"
+        )
+
+
 # test_openai_embedding_timeouts()
+
 
 def test_openai_azure_embedding():
     try:
-        api_key = os.environ['AZURE_API_KEY']
-        api_base = os.environ['AZURE_API_BASE']
-        api_version = os.environ['AZURE_API_VERSION']
+        api_key = os.environ["AZURE_API_KEY"]
+        api_base = os.environ["AZURE_API_BASE"]
+        api_version = os.environ["AZURE_API_VERSION"]
 
-        os.environ['AZURE_API_VERSION'] = ""
-        os.environ['AZURE_API_BASE'] = ""
-        os.environ['AZURE_API_KEY'] = ""
+        os.environ["AZURE_API_VERSION"] = ""
+        os.environ["AZURE_API_BASE"] = ""
+        os.environ["AZURE_API_KEY"] = ""
 
         response = embedding(
             model="azure/azure-embedding-model",
@@ -114,73 +141,99 @@ def test_openai_azure_embedding():
         )
         print(response)
 
-
-        os.environ['AZURE_API_VERSION'] = api_version
-        os.environ['AZURE_API_BASE'] = api_base
-        os.environ['AZURE_API_KEY'] = api_key
+        os.environ["AZURE_API_VERSION"] = api_version
+        os.environ["AZURE_API_BASE"] = api_base
+        os.environ["AZURE_API_KEY"] = api_key
 
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
 
 # test_openai_azure_embedding()
 
 # test_openai_embedding()
 
+
 def test_cohere_embedding():
     try:
         # litellm.set_verbose=True
         response = embedding(
-            model="embed-english-v2.0", input=["good morning from litellm", "this is another item"]
+            model="embed-english-v2.0",
+            input=["good morning from litellm", "this is another item"],
         )
         print(f"response:", response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
 
 # test_cohere_embedding()
 
+
 def test_cohere_embedding3():
     try:
-        litellm.set_verbose=True
+        litellm.set_verbose = True
         response = embedding(
-            model="embed-english-v3.0", 
-            input=["good morning from litellm", "this is another item"], 
+            model="embed-english-v3.0",
+            input=["good morning from litellm", "this is another item"],
         )
         print(f"response:", response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
 
 # test_cohere_embedding3()
 
+
 def test_bedrock_embedding_titan():
     try:
-        litellm.set_verbose=True
+        litellm.set_verbose = True
         response = embedding(
-            model="amazon.titan-embed-text-v1", input=["good morning from litellm, attempting to embed data",
-                                                       "lets test a second string for good measure"]
+            model="amazon.titan-embed-text-v1",
+            input=[
+                "good morning from litellm, attempting to embed data",
+                "lets test a second string for good measure",
+            ],
         )
         print(f"response:", response)
-        assert isinstance(response['data'][0]['embedding'], list), "Expected response to be a list"
-        print(f"type of first embedding:", type(response['data'][0]['embedding'][0]))
-        assert all(isinstance(x, float) for x in response['data'][0]['embedding']), "Expected response to be a list of floats"
+        assert isinstance(
+            response["data"][0]["embedding"], list
+        ), "Expected response to be a list"
+        print(f"type of first embedding:", type(response["data"][0]["embedding"][0]))
+        assert all(
+            isinstance(x, float) for x in response["data"][0]["embedding"]
+        ), "Expected response to be a list of floats"
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
-test_bedrock_embedding_titan()
+
+
+# test_bedrock_embedding_titan()
+
 
 def test_bedrock_embedding_cohere():
     try:
-        litellm.set_verbose=False
+        litellm.set_verbose = False
         response = embedding(
-            model="cohere.embed-multilingual-v3", input=["good morning from litellm, attempting to embed data", "lets test a second string for good measure"],
-            aws_region_name="os.environ/AWS_REGION_NAME_2"
+            model="cohere.embed-multilingual-v3",
+            input=[
+                "good morning from litellm, attempting to embed data",
+                "lets test a second string for good measure",
+            ],
+            aws_region_name="os.environ/AWS_REGION_NAME_2",
         )
-        assert isinstance(response['data'][0]['embedding'], list), "Expected response to be a list"
-        print(f"type of first embedding:", type(response['data'][0]['embedding'][0]))
-        assert all(isinstance(x, float) for x in response['data'][0]['embedding']), "Expected response to be a list of floats"
+        assert isinstance(
+            response["data"][0]["embedding"], list
+        ), "Expected response to be a list"
+        print(f"type of first embedding:", type(response["data"][0]["embedding"][0]))
+        assert all(
+            isinstance(x, float) for x in response["data"][0]["embedding"]
+        ), "Expected response to be a list of floats"
         # print(f"response:", response)
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+
 # test_bedrock_embedding_cohere()
+
 
 # comment out hf tests - since hf endpoints are unstable
 def test_hf_embedding():
@@ -188,63 +241,126 @@ def test_hf_embedding():
         # huggingface/microsoft/codebert-base
         # huggingface/facebook/bart-large
         response = embedding(
-            model="huggingface/sentence-transformers/all-MiniLM-L6-v2", input=["good morning from litellm", "this is another item"]
+            model="huggingface/sentence-transformers/all-MiniLM-L6-v2",
+            input=["good morning from litellm", "this is another item"],
         )
         print(f"response:", response)
     except Exception as e:
         # Note: Huggingface inference API is unstable and fails with "model loading errors all the time"
         pass
+
+
 # test_hf_embedding()
+
 
 # test async embeddings
 def test_aembedding():
     try:
         import asyncio
+
         async def embedding_call():
             try:
                 response = await litellm.aembedding(
-                    model="text-embedding-ada-002", 
-                    input=["good morning from litellm", "this is another item"]
+                    model="text-embedding-ada-002",
+                    input=["good morning from litellm", "this is another item"],
                 )
                 print(response)
+                return response
             except Exception as e:
                 pytest.fail(f"Error occurred: {e}")
-        asyncio.run(embedding_call())
+
+        response = asyncio.run(embedding_call())
+        print("Before caclulating cost, response", response)
+
+        cost = litellm.completion_cost(completion_response=response)
+
+        print("COST=", cost)
+        assert cost == float("1e-06")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-# test_aembedding()
+
+test_aembedding()
 
 
 def test_aembedding_azure():
     try:
         import asyncio
+
         async def embedding_call():
             try:
                 response = await litellm.aembedding(
-                    model="azure/azure-embedding-model", 
-                    input=["good morning from litellm", "this is another item"]
+                    model="azure/azure-embedding-model",
+                    input=["good morning from litellm", "this is another item"],
                 )
                 print(response)
             except Exception as e:
                 pytest.fail(f"Error occurred: {e}")
+
         asyncio.run(embedding_call())
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
+
 # test_aembedding_azure()
 
-def test_sagemaker_embeddings(): 
-    try: 
-        response = litellm.embedding(model="sagemaker/berri-benchmarking-gpt-j-6b-fp16", input=["good morning from litellm", "this is another item"])
+
+def test_sagemaker_embeddings():
+    try:
+        response = litellm.embedding(
+            model="sagemaker/berri-benchmarking-gpt-j-6b-fp16",
+            input=["good morning from litellm", "this is another item"],
+        )
         print(f"response: {response}")
-    except Exception as e: 
+    except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
+def test_mistral_embeddings():
+    try:
+        litellm.set_verbose = True
+        response = litellm.embedding(
+            model="mistral/mistral-embed",
+            input=["good morning from litellm"],
+        )
+        print(f"response: {response}")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+# test_mistral_embeddings()
+
+
+def test_voyage_embeddings():
+    try:
+        litellm.set_verbose = True
+        response = litellm.embedding(
+            model="voyage/voyage-01",
+            input=["good morning from litellm"],
+        )
+        print(f"response: {response}")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+# test_voyage_embeddings()
+# def test_xinference_embeddings():
+#     try:
+#         litellm.set_verbose = True
+#         response = litellm.embedding(
+#             model="xinference/bge-base-en",
+#             input=["good morning from litellm"],
+#         )
+#         print(f"response: {response}")
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
+# test_xinference_embeddings()
+
 # test_sagemaker_embeddings()
 # def local_proxy_embeddings():
 #     litellm.set_verbose=True
 #     response = embedding(
-#             model="openai/custom_embedding", 
+#             model="openai/custom_embedding",
 #             input=["good morning from litellm"],
 #             api_base="http://0.0.0.0:8000/"
 #         )

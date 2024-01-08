@@ -1,6 +1,6 @@
 # #### What this tests ####
 # #  Allow the user to easily run the local proxy server with Gunicorn
-# # LOCAL TESTING ONLY 
+# # LOCAL TESTING ONLY
 # import sys, os, subprocess
 # import traceback
 # from dotenv import load_dotenv
@@ -12,15 +12,15 @@
 
 # sys.path.insert(
 #     0, os.path.abspath("../..")
-# )  # Adds the parent directory to the system path 
+# )  # Adds the parent directory to the system path
 # import pytest
-# import litellm 
+# import litellm
 
 # ### LOCAL Proxy Server INIT ###
 # from litellm.proxy.proxy_server import save_worker_config  # Replace with the actual module where your FastAPI router is defined
 # filepath = os.path.dirname(os.path.abspath(__file__))
 # config_fp = f"{filepath}/test_configs/test_config_custom_auth.yaml"
-# def get_openai_info(): 
+# def get_openai_info():
 #     return {
 #         "api_key": os.getenv("AZURE_API_KEY"),
 #         "api_base": os.getenv("AZURE_API_BASE"),
@@ -41,7 +41,7 @@
 #     os.environ["AZURE_API_BASE"] = azure_info['api_base']
 #     os.environ["AZURE_API_VERSION"] = "2023-09-01-preview"
 
-#     ### SAVE CONFIG ### 
+#     ### SAVE CONFIG ###
 
 #     os.environ["WORKER_CONFIG"] = config_fp
 

@@ -20,6 +20,8 @@ litellm/tests/aiologs.log
 litellm/tests/exception_data.txt
 litellm/tests/config_*.yaml
 litellm/tests/langfuse.log
+langfuse.log
+.langfuse.log
 litellm/tests/test_custom_logger.py
 litellm/tests/langfuse.log
 litellm/tests/dynamo*.log
@@ -28,3 +30,5 @@ litellm/proxy/log.txt
 proxy_server_config_@.yaml
 .gitignore
 proxy_server_config_2.yaml
+litellm/proxy/secret_managers/credentials.json
+hosted_config.yaml

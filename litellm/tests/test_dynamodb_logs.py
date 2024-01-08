@@ -1,12 +1,14 @@
 import sys
 import os
 import io, asyncio
+
 # import logging
 # logging.basicConfig(level=logging.DEBUG)
-sys.path.insert(0, os.path.abspath('../..'))
+sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm import completion
 import litellm
+
 litellm.num_retries = 3
 
 import time, random
@@ -29,11 +31,14 @@ def pre_request():
 
 
 import re
-def verify_log_file(log_file_path):
 
-    with open(log_file_path, 'r') as log_file:
+
+def verify_log_file(log_file_path):
+    with open(log_file_path, "r") as log_file:
         log_content = log_file.read()
-        print(f"\nVerifying DynamoDB file = {log_file_path}. File content=", log_content)
+        print(
+            f"\nVerifying DynamoDB file = {log_file_path}. File content=", log_content
+        )
 
         # Define the pattern to search for in the log file
         pattern = r"Response from DynamoDB:{.*?}"
@@ -50,17 +55,21 @@ def verify_log_file(log_file_path):
         print(f"Total occurrences of specified response: {len(matches)}")
 
         # Count the occurrences of successful responses (status code 200 or 201)
-        success_count = sum(1 for match in matches if "'HTTPStatusCode': 200" in match or "'HTTPStatusCode': 201" in match)
+        success_count = sum(
+            1
+            for match in matches
+            if "'HTTPStatusCode': 200" in match or "'HTTPStatusCode': 201" in match
+        )
 
         # Print the count of successful responses
         print(f"Count of successful responses from DynamoDB: {success_count}")
-    assert success_count == 3 # Expect 3 success logs from dynamoDB
+    assert success_count == 3  # Expect 3 success logs from dynamoDB
 
 
-def test_dynamo_logging(): 
+def test_dynamo_logging():
     # all dynamodb requests need to be in one test function
     # since we are modifying stdout, and pytests runs tests in parallel
-    try: 
+    try:
         # pre
         # redirect stdout to log_file
 
@@ -69,44 +78,44 @@ def test_dynamo_logging():
         litellm.set_verbose = True
         original_stdout, log_file, file_name = pre_request()
 
-
         print("Testing async dynamoDB logging")
+
         async def _test():
             return await litellm.acompletion(
                 model="gpt-3.5-turbo",
-                messages=[{"role": "user", "content":"This is a test"}],
+                messages=[{"role": "user", "content": "This is a test"}],
                 max_tokens=100,
                 temperature=0.7,
-                user = "ishaan-2"
+                user="ishaan-2",
             )
+
         response = asyncio.run(_test())
         print(f"response: {response}")
 
-    
-        # streaming + async 
+        # streaming + async
         async def _test2():
-            response =  await litellm.acompletion(
+            response = await litellm.acompletion(
                 model="gpt-3.5-turbo",
-                messages=[{"role": "user", "content":"This is a test"}],
+                messages=[{"role": "user", "content": "This is a test"}],
                 max_tokens=10,
                 temperature=0.7,
-                user = "ishaan-2",
-                stream=True
+                user="ishaan-2",
+                stream=True,
             )
             async for chunk in response:
                 pass
+
         asyncio.run(_test2())
 
         # aembedding()
         async def _test3():
             return await litellm.aembedding(
-                model="text-embedding-ada-002",
-                input = ["hi"],
-                user = "ishaan-2"
+                model="text-embedding-ada-002", input=["hi"], user="ishaan-2"
             )
+
         response = asyncio.run(_test3())
         time.sleep(1)
-    except Exception as e: 
+    except Exception as e:
         pytest.fail(f"An exception occurred - {e}")
     finally:
         # post, close log file and verify
@@ -116,5 +125,6 @@ def test_dynamo_logging():
         log_file.close()
         verify_log_file(file_name)
         print("Passed! Testing async dynamoDB logging")
+
 
 # test_dynamo_logging_async()
