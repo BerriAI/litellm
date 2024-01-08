@@ -17,17 +17,11 @@ jobs:
               echo "No changes to litellm or pyproject.toml. Skipping tests."
               circleci step halt
             fi
-      - restore_cache:
-          keys:
-            - v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
       - run:
           name: Install Dependencies
           command: |
+            poetry self update
             poetry install
-      - save_cache:
-          paths:
-            - ./venv
-          key: v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
       - run:
           name: Black Formatting
           command: |
