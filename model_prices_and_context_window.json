@@ -1477,48 +1477,132 @@
         "litellm_provider": "ollama",
         "mode": "completion"
     },
+    "deepinfra/lizpreciatior/lzlv_70b_fp16_hf": {
+        "max_tokens": 4096,
+        "input_cost_per_token": 0.00000070,
+        "output_cost_per_token": 0.00000090,
+        "litellm_provider": "deepinfra",
+        "mode": "chat"
+    },
+    "deepinfra/Gryphe/MythoMax-L2-13b": {
+        "max_tokens": 4096,
+        "input_cost_per_token": 0.00000022,
+        "output_cost_per_token": 0.00000022,
+        "litellm_provider": "deepinfra",
+        "mode": "chat"
+    },
+    "deepinfra/mistralai/Mistral-7B-Instruct-v0.1": {
+        "max_tokens": 32768,
+        "input_cost_per_token": 0.00000013,
+        "output_cost_per_token": 0.00000013,
+        "litellm_provider": "deepinfra",
+        "mode": "chat"
+    },
     "deepinfra/meta-llama/Llama-2-70b-chat-hf": {
         "max_tokens": 4096,
-        "input_cost_per_token": 0.000000700,
-        "output_cost_per_token": 0.000000950,
+        "input_cost_per_token": 0.00000070,
+        "output_cost_per_token": 0.00000090,
+        "litellm_provider": "deepinfra",
+        "mode": "chat"
+    },
+    "deepinfra/cognitivecomputations/dolphin-2.6-mixtral-8x7b": {
+        "max_tokens": 32768,
+        "input_cost_per_token": 0.00000027,
+        "output_cost_per_token": 0.00000027,
         "litellm_provider": "deepinfra",
         "mode": "chat"
     },
     "deepinfra/codellama/CodeLlama-34b-Instruct-hf": {
         "max_tokens": 4096,
-        "input_cost_per_token": 0.0000006,
-        "output_cost_per_token": 0.0000006,
+        "input_cost_per_token": 0.00000060,
+        "output_cost_per_token": 0.00000060,
         "litellm_provider": "deepinfra",
         "mode": "chat"
-      },
-      "deepinfra/meta-llama/Llama-2-13b-chat-hf": {
+    },
+    "deepinfra/deepinfra/mixtral": {
         "max_tokens": 4096,
-        "input_cost_per_token": 0.00000035,
-        "output_cost_per_token": 0.00000035,
+        "input_cost_per_token": 0.00000027,
+        "output_cost_per_token": 0.00000027,
         "litellm_provider": "deepinfra",
-        "mode": "chat"
-      },
-      "deepinfra/meta-llama/Llama-2-7b-chat-hf": {
+        "mode": "completion"
+    },
+    "deepinfra/Phind/Phind-CodeLlama-34B-v2": {
         "max_tokens": 4096,
-        "input_cost_per_token": 0.0000002,
-        "output_cost_per_token": 0.0000002,
+        "input_cost_per_token": 0.00000060,
+        "output_cost_per_token": 0.00000060,
         "litellm_provider": "deepinfra",
         "mode": "chat"
-      },
-      "deepinfra/mistralai/Mistral-7B-Instruct-v0.1": {
+    },
+    "deepinfra/mistralai/Mixtral-8x7B-Instruct-v0.1": {
+        "max_tokens": 32768,
+        "input_cost_per_token": 0.00000027,
+        "output_cost_per_token": 0.00000027,
+        "litellm_provider": "deepinfra",
+        "mode": "chat"
+    },
+    "deepinfra/deepinfra/airoboros-70b": {
         "max_tokens": 4096,
-        "input_cost_per_token": 0.0000002,
-        "output_cost_per_token": 0.0000002,
+        "input_cost_per_token": 0.00000070,
+        "output_cost_per_token": 0.00000090,
         "litellm_provider": "deepinfra",
         "mode": "chat"
-      },
-      "deepinfra/jondurbin/airoboros-l2-70b-gpt4-1.4.1": {
+    },
+    "deepinfra/01-ai/Yi-34B-Chat": {
         "max_tokens": 4096,
-        "input_cost_per_token": 0.0000007,
-        "output_cost_per_token": 0.00000095,
+        "input_cost_per_token": 0.00000060,
+        "output_cost_per_token": 0.00000060,
         "litellm_provider": "deepinfra",
         "mode": "chat"
-      },
+    },
+    "deepinfra/01-ai/Yi-6B-200K": {
+        "max_tokens": 4096,
+        "input_cost_per_token": 0.00000013,
+        "output_cost_per_token": 0.00000013,
+        "litellm_provider": "deepinfra",
+        "mode": "completion"
+    },
+    "deepinfra/jondurbin/airoboros-l2-70b-gpt4-1.4.1": {
+        "max_tokens": 4096,
+        "input_cost_per_token": 0.00000070,
+        "output_cost_per_token": 0.00000090,
+        "litellm_provider": "deepinfra",
+        "mode": "chat"
+    },
+    "deepinfra/meta-llama/Llama-2-13b-chat-hf": {
+        "max_tokens": 4096,
+        "input_cost_per_token": 0.00000022,
+        "output_cost_per_token": 0.00000022,
+        "litellm_provider": "deepinfra",
+        "mode": "chat"
+    },
+    "deepinfra/amazon/MistralLite": {
+        "max_tokens": 32768,
+        "input_cost_per_token": 0.00000020,
+        "output_cost_per_token": 0.00000020,
+        "litellm_provider": "deepinfra",
+        "mode": "chat"
+    },
+    "deepinfra/meta-llama/Llama-2-7b-chat-hf": {
+        "max_tokens": 4096,
+        "input_cost_per_token": 0.00000013,
+        "output_cost_per_token": 0.00000013,
+        "litellm_provider": "deepinfra",
+        "mode": "chat"
+    },
+    "deepinfra/01-ai/Yi-34B-200K": {
+        "max_tokens": 4096,
+        "input_cost_per_token": 0.00000060,
+        "output_cost_per_token": 0.00000060,
+        "litellm_provider": "deepinfra",
+        "mode": "completion"
+    },
+    "deepinfra/openchat/openchat_3.5": {
+        "max_tokens": 4096,
+        "input_cost_per_token": 0.00000013,
+        "output_cost_per_token": 0.00000013,
+        "litellm_provider": "deepinfra",
+        "mode": "chat"
+    },
       "perplexity/pplx-7b-chat": { 
         "max_tokens": 8192, 
         "input_cost_per_token": 0.0000000, 
