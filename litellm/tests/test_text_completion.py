@@ -2930,9 +2930,10 @@ test_async_text_completion_stream()
 @pytest.mark.asyncio
 async def test_async_text_completion_chat_model_stream():
     try:
+        prompt="good morning"
         response = await litellm.atext_completion(
             model="gpt-3.5-turbo",
-            prompt="good morning",
+            prompt=prompt,
             stream=True,
             max_tokens=10,
         )
@@ -2948,7 +2949,7 @@ async def test_async_text_completion_chat_model_stream():
         assert (
             num_finish_reason == 1
         ), f"expected only one finish reason. Got {num_finish_reason}"
-        response_obj = litellm.stream_chunk_builder(chunks=chunks)
+        response_obj = litellm.stream_chunk_builder(chunks=chunks, messages=[{"role": "user", "content": prompt}])
         cost = litellm.completion_cost(completion_response=response_obj)
         assert cost > 0
     except Exception as e:

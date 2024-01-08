@@ -2267,11 +2267,16 @@ def client(original_function):
                     and kwargs["complete_response"] == True
                 ):
                     chunks = []
-                    for idx, chunk in enumerate(result):
+                    async for chunk in result:
                         chunks.append(chunk)
-                    return litellm.stream_chunk_builder(
-                        chunks, messages=kwargs.get("messages", None)
-                    )
+                    if call_type == CallTypes.acompletion.value:
+                        return litellm.stream_chunk_builder(
+                            chunks, messages=kwargs.get("messages")
+                        )
+                    elif call_type == CallTypes.atext_completion.value:
+                        return litellm.stream_chunk_builder(
+                            chunks, messages=[{"role": "user", "content": kwargs.get("prompt")}]
+                        )
                 else:
                     return result
 

@@ -3164,8 +3164,7 @@ def stream_chunk_builder_text_completion(chunks: list, messages: Optional[List]=
     else:
         completion_output = ""
     # # Update usage information if needed
-    print(f"INSIDE TEXT COMPLETION STREAM CHUNK BUILDER")
-    _usage = litellm.Usage
+    _usage = litellm.Usage()
     print(f"messages: {messages}")
     _usage.prompt_tokens = token_counter(
         model=model, messages=messages, count_response_tokens=True
@@ -3180,6 +3179,7 @@ def stream_chunk_builder_text_completion(chunks: list, messages: Optional[List]=
         _usage.prompt_tokens + _usage.completion_tokens
     )
     response["usage"] = _usage
+    print(f"final usage: {_usage}")
     return litellm.TextCompletionResponse(**response)
 
 def stream_chunk_builder(chunks: list, messages: Optional[list] = None):
