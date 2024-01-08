@@ -24,8 +24,7 @@ jobs:
       - run:
           name: Install litellm extra dependencies
           command: |
-            poetry install --extras=proxy
-            poetry install --extras=extra_proxy
+            python -m poetry install --extras=proxy
       - run:
           name: Black Formatting
           command: |
