@@ -22,7 +22,7 @@ from litellm.proxy.proxy_server import (
     llm_model_list
 )
 
-def test_proxy_gunicorn_startup():
+def test_proxy_gunicorn_startup_direct_config():
     """
     gunicorn startup requires the config to be passed in via environment variables
 
@@ -36,6 +36,11 @@ def test_proxy_gunicorn_startup():
     config_fp = f"{filepath}/test_configs/test_config_no_auth.yaml"
     os.environ["WORKER_CONFIG"] = config_fp
     asyncio.run(startup_event())
+
+def test_proxy_gunicorn_startup_config_dict():
+    filepath = os.path.dirname(os.path.abspath(__file__))
+    # test with worker_config = config yaml 
+    config_fp = f"{filepath}/test_configs/test_config_no_auth.yaml"
     # test with worker_config = dict 
     worker_config = {"config": config_fp}
     os.environ["WORKER_CONFIG"] = json.dumps(worker_config)
