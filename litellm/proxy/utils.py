@@ -268,9 +268,10 @@ class PrismaClient:
         try:
             if not os.path.exists("prisma"):
                 subprocess.run(["prisma", "generate"])
-            subprocess.run(
-                ["prisma", "db", "push", "--accept-data-loss"]
-            )  # this looks like a weird edge case when prisma just wont start on render. we need to have the --accept-data-loss
+
+                subprocess.run(
+                    ["prisma", "db", "push", "--accept-data-loss"]
+                )  # this looks like a weird edge case when prisma just wont start on render. we need to have the --accept-data-loss
         finally:
             os.chdir(original_dir)
         # Now you can import the Prisma Client
