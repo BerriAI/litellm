@@ -68,6 +68,7 @@ const sidebars = {
         "providers/ollama", 
         "providers/vertex", 
         "providers/palm", 
+        "providers/gemini", 
         "providers/mistral", 
         "providers/anthropic", 
         "providers/aws_sagemaker",

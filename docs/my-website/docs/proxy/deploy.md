@@ -80,6 +80,32 @@ Run the command `docker-compose up` or `docker compose up` as per your docker in
 Your LiteLLM container should be running now on the defined port e.g. `8000`.
 
 
+## Deploy with Database 
+
+#### Step 1. Save the database url in your environment
+.env example: https://github.com/BerriAI/litellm/blob/main/docker/.env.example
+
+
+```env
+DATABASE_URL = "my-postgres-db-url"
+```
+
+#### Step 2. Build docker image with build-args 
+
+Set `with_database=true` in the docker build, to trigger the prisma logic to be run
+
+Example build command:
+```bash
+docker build -t my-docker-build --build-arg with_database=true .
+```
+
+#### Step 3. Run docker image 
+
+```bash
+docker run -it -p 8000:4000 my-docker-build
+```
+
+
 ## Deploy on Render https://render.com/
 
 <iframe width="840" height="500" src="https://www.loom.com/embed/805964b3c8384b41be180a61442389a3" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
