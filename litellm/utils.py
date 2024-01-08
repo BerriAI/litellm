@@ -3435,7 +3435,7 @@ def get_optional_params(
         if presence_penalty is not None:
             optional_params["presencePenalty"] = {"scale": presence_penalty}
     elif (
-        custom_llm_provider == "palm"
+        custom_llm_provider == "palm" or custom_llm_provider == "gemini"
     ):  # https://developers.generativeai.google/tutorials/curl_quickstart
         ## check if unsupported param passed in
         supported_params = ["temperature", "top_p", "stream", "n", "stop", "max_tokens"]
@@ -3450,7 +3450,10 @@ def get_optional_params(
         if n is not None:
             optional_params["candidate_count"] = n
         if stop is not None:
-            optional_params["stop_sequences"] = stop
+            if isinstance(stop, str):
+                optional_params["stop_sequences"] = [stop]
+            elif isinstance(stop, list):
+                optional_params["stop_sequences"] = stop
         if max_tokens is not None:
             optional_params["max_output_tokens"] = max_tokens
     elif custom_llm_provider == "vertex_ai":
