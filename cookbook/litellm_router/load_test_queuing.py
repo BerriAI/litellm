@@ -12,42 +12,51 @@ import pytest
 
 from litellm import Router
 import litellm
-litellm.set_verbose=False
+
+litellm.set_verbose = False
 # os.environ.pop("AZURE_AD_TOKEN")
 
-model_list = [{ # list of model deployments 
-    "model_name": "gpt-3.5-turbo", # model alias 
-    "litellm_params": { # params for litellm completion/embedding call 
-        "model": "azure/chatgpt-v-2", # actual model name
-        "api_key": os.getenv("AZURE_API_KEY"),
-        "api_version": os.getenv("AZURE_API_VERSION"),
-        "api_base": os.getenv("AZURE_API_BASE")
-    }
-}, {
-    "model_name": "gpt-3.5-turbo", 
-    "litellm_params": { # params for litellm completion/embedding call 
-        "model": "azure/chatgpt-functioncalling", 
-        "api_key": os.getenv("AZURE_API_KEY"),
-        "api_version": os.getenv("AZURE_API_VERSION"),
-        "api_base": os.getenv("AZURE_API_BASE")
-    }
-}, {
-    "model_name": "gpt-3.5-turbo", 
-    "litellm_params": { # params for litellm completion/embedding call 
-        "model": "gpt-3.5-turbo", 
-        "api_key": os.getenv("OPENAI_API_KEY"),
-    }
-}]
+model_list = [
+    {  # list of model deployments
+        "model_name": "gpt-3.5-turbo",  # model alias
+        "litellm_params": {  # params for litellm completion/embedding call
+            "model": "azure/chatgpt-v-2",  # actual model name
+            "api_key": os.getenv("AZURE_API_KEY"),
+            "api_version": os.getenv("AZURE_API_VERSION"),
+            "api_base": os.getenv("AZURE_API_BASE"),
+        },
+    },
+    {
+        "model_name": "gpt-3.5-turbo",
+        "litellm_params": {  # params for litellm completion/embedding call
+            "model": "azure/chatgpt-functioncalling",
+            "api_key": os.getenv("AZURE_API_KEY"),
+            "api_version": os.getenv("AZURE_API_VERSION"),
+            "api_base": os.getenv("AZURE_API_BASE"),
+        },
+    },
+    {
+        "model_name": "gpt-3.5-turbo",
+        "litellm_params": {  # params for litellm completion/embedding call
+            "model": "gpt-3.5-turbo",
+            "api_key": os.getenv("OPENAI_API_KEY"),
+        },
+    },
+]
 router = Router(model_list=model_list)
 
 
-file_paths = ["test_questions/question1.txt", "test_questions/question2.txt", "test_questions/question3.txt"]
+file_paths = [
+    "test_questions/question1.txt",
+    "test_questions/question2.txt",
+    "test_questions/question3.txt",
+]
 questions = []
 
 for file_path in file_paths:
     try:
         print(file_path)
-        with open(file_path, 'r') as file:
+        with open(file_path, "r") as file:
             content = file.read()
             questions.append(content)
     except FileNotFoundError as e:
@@ -59,10 +68,9 @@ for file_path in file_paths:
 #     print(q)
 
 
-
 # make X concurrent calls to litellm.completion(model=gpt-35-turbo, messages=[]), pick a random question in questions array.
-#  Allow me to tune X concurrent calls.. Log question, output/exception, response time somewhere 
-# show me a summary of requests made, success full calls, failed calls. For failed calls show me the exceptions 
+#  Allow me to tune X concurrent calls.. Log question, output/exception, response time somewhere
+# show me a summary of requests made, success full calls, failed calls. For failed calls show me the exceptions
 
 import concurrent.futures
 import random
@@ -76,9 +84,12 @@ def make_openai_completion(question):
         import requests
 
         data = {
-            'model': 'gpt-3.5-turbo',
-            'messages': [
-                {'role': 'system', 'content': f'You are a helpful assistant. Answer this question{question}'},
+            "model": "gpt-3.5-turbo",
+            "messages": [
+                {
+                    "role": "system",
+                    "content": f"You are a helpful assistant. Answer this question{question}",
+                },
             ],
         }
         response = requests.post("http://0.0.0.0:8000/queue/request", json=data)
@@ -89,8 +100,8 @@ def make_openai_completion(question):
             log_file.write(
                 f"Question: {question[:100]}\nResponse ID: {response.get('id', 'N/A')} Url: {response.get('url', 'N/A')}\nTime: {end_time - start_time:.2f} seconds\n\n"
             )
-        
-        # polling the url 
+
+        # polling the url
         while True:
             try:
                 url = response["url"]
@@ -107,7 +118,9 @@ def make_openai_completion(question):
                         )
 
                     break
-                print(f"POLLING JOB{polling_url}\nSTATUS: {status}, \n Response {polling_response}")
+                print(
+                    f"POLLING JOB{polling_url}\nSTATUS: {status}, \n Response {polling_response}"
+                )
                 time.sleep(0.5)
             except Exception as e:
                 print("got exception in polling", e)
@@ -117,10 +130,9 @@ def make_openai_completion(question):
     except Exception as e:
         # Log exceptions for failed calls
         with open("error_log.txt", "a") as error_log_file:
-            error_log_file.write(
-                f"Question: {question[:100]}\nException: {str(e)}\n\n"
-            )
+            error_log_file.write(f"Question: {question[:100]}\nException: {str(e)}\n\n")
         return None
+
 
 # Number of concurrent calls (you can adjust this)
 concurrent_calls = 10
@@ -142,7 +154,7 @@ successful_calls = 0
 failed_calls = 0
 
 for future in futures:
-    if future.done(): 
+    if future.done():
         if future.result() is not None:
             successful_calls += 1
         else:
@@ -152,4 +164,3 @@ print(f"Load test Summary:")
 print(f"Total Requests: {concurrent_calls}")
 print(f"Successful Calls: {successful_calls}")
 print(f"Failed Calls: {failed_calls}")
-

@@ -1,5 +1,5 @@
 model_list:
-  - model_name: Azure OpenAI GPT-4 Canada-East (External)
+  - model_name: azure-gpt-3.5
     litellm_params:
       model: azure/chatgpt-v-2
       api_base: os.environ/AZURE_API_BASE
@@ -14,12 +14,18 @@ model_list:
   - model_name: BEDROCK_GROUP
     litellm_params:
       model: bedrock/cohere.command-text-v14
-  - model_name: Azure OpenAI GPT-4 Canada-East (External)
+  - model_name: openai-gpt-3.5
     litellm_params:
       model: gpt-3.5-turbo
       api_key: os.environ/OPENAI_API_KEY
     model_info:
       mode: chat
+  - model_name: azure-cloudflare
+    litellm_params:
+      model: azure/chatgpt-v-2
+      api_base: https://gateway.ai.cloudflare.com/v1/0399b10e77ac6668c80404a5ff49eb37/litellm-test/azure-openai/openai-gpt-4-test-v-1
+      api_key: os.environ/AZURE_API_KEY
+      api_version: "2023-07-01-preview"
   - model_name: azure-embedding-model
     litellm_params:
       model: azure/azure-embedding-model
@@ -43,6 +49,7 @@ model_list:
       mode: completion
 
 litellm_settings:
+  fallbacks: [{"openai-gpt-3.5": ["azure-gpt-3.5"]}]
   # cache: True     
   # setting callback class
   # callbacks: custom_callbacks.proxy_handler_instance # sets litellm.callbacks = [proxy_handler_instance]

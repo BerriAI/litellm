@@ -39,7 +39,7 @@
 # messages = [{"content": user_message, "role": "user"}]
 
 # # 1. On Call Success
-# # normal completion 
+# # normal completion
 # # test on openai completion call
 # def test_logging_success_completion():
 #     global score
@@ -73,7 +73,7 @@
 # #         sys.stdout = new_stdout = io.StringIO()
 
 # #         response = completion(model="claude-instant-1", messages=messages)
-        
+
 # #         # Restore stdout
 # #         sys.stdout = old_stdout
 # #         output = new_stdout.getvalue().strip()
@@ -100,9 +100,9 @@
 #             completion_response,    # response from completion
 #             start_time, end_time    # start/end time
 #         ):
-#             if "complete_streaming_response" in kwargs: 
+#             if "complete_streaming_response" in kwargs:
 #                 print(f"Complete Streaming Response: {kwargs['complete_streaming_response']}")
-        
+
 #         # Assign the custom callback function
 #         litellm.success_callback = [custom_callback]
 
@@ -111,7 +111,7 @@
 #         sys.stdout = new_stdout = io.StringIO()
 
 #         response = completion(model="gpt-3.5-turbo", messages=messages, stream=True)
-#         for chunk in response: 
+#         for chunk in response:
 #             pass
 
 #         # Restore stdout
@@ -131,7 +131,7 @@
 #         pytest.fail(f"Error occurred: {e}")
 #         pass
 
-# # test_logging_success_streaming_openai() 
+# # test_logging_success_streaming_openai()
 
 # ## test on non-openai completion call
 # def test_logging_success_streaming_non_openai():
@@ -144,9 +144,9 @@
 #             start_time, end_time    # start/end time
 #         ):
 #             # print(f"streaming response: {completion_response}")
-#             if "complete_streaming_response" in kwargs: 
+#             if "complete_streaming_response" in kwargs:
 #                 print(f"Complete Streaming Response: {kwargs['complete_streaming_response']}")
-        
+
 #         # Assign the custom callback function
 #         litellm.success_callback = [custom_callback]
 
@@ -155,9 +155,9 @@
 #         sys.stdout = new_stdout = io.StringIO()
 
 #         response = completion(model="claude-instant-1", messages=messages, stream=True)
-#         for idx, chunk in enumerate(response): 
+#         for idx, chunk in enumerate(response):
 #             pass
-        
+
 #         # Restore stdout
 #         sys.stdout = old_stdout
 #         output = new_stdout.getvalue().strip()
@@ -175,7 +175,7 @@
 #         pytest.fail(f"Error occurred: {e}")
 #         pass
 
-# # test_logging_success_streaming_non_openai() 
+# # test_logging_success_streaming_non_openai()
 # # embedding
 
 # def test_logging_success_embedding_openai():
@@ -202,7 +202,7 @@
 # # ## 2. On LiteLLM Call failure
 # # ## TEST BAD KEY
 
-# # # normal completion 
+# # # normal completion
 # # ## test on openai completion call
 # # try:
 # #     temporary_oai_key = os.environ["OPENAI_API_KEY"]
@@ -215,7 +215,7 @@
 # #     # Redirect stdout
 # #     old_stdout = sys.stdout
 # #     sys.stdout = new_stdout = io.StringIO()
-    
+
 # #     try:
 # #         response = completion(model="gpt-3.5-turbo", messages=messages)
 # #     except AuthenticationError:
@@ -229,14 +229,14 @@
 
 # #     if "Logging Details Pre-API Call" not in output:
 # #         raise Exception("Required log message not found!")
-# #     elif "Logging Details Post-API Call" not in output: 
+# #     elif "Logging Details Post-API Call" not in output:
 # #         raise Exception("Required log message not found!")
 # #     elif "Logging Details LiteLLM-Failure Call" not in output:
 # #         raise Exception("Required log message not found!")
 
 # #     os.environ["OPENAI_API_KEY"] = temporary_oai_key
 # #     os.environ["ANTHROPIC_API_KEY"] = temporary_anthropic_key
-    
+
 # #     score += 1
 # # except Exception as e:
 # #     print(f"exception type: {type(e).__name__}")
@@ -307,7 +307,7 @@
 # #         raise Exception("Required log message not found!")
 # #     elif "Logging Details LiteLLM-Failure Call" not in output:
 # #         raise Exception("Required log message not found!")
-    
+
 # #     os.environ["OPENAI_API_KEY"] = temporary_oai_key
 # #     os.environ["ANTHROPIC_API_KEY"] = temporary_anthropic_key
 # #     score += 1
@@ -330,7 +330,7 @@
 # #         response = completion(model="claude-instant-1", messages=messages)
 # #     except AuthenticationError:
 # #         pass
-    
+
 # #     # Restore stdout
 # #     sys.stdout = old_stdout
 # #     output = new_stdout.getvalue().strip()

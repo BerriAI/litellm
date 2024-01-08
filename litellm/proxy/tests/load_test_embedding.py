@@ -1,4 +1,4 @@
-# test time it takes to make 100 concurrent embedding requests to OpenaI 
+# test time it takes to make 100 concurrent embedding requests to OpenaI
 
 import sys, os
 import traceback
@@ -14,16 +14,16 @@ import pytest
 
 
 import litellm
-litellm.set_verbose=False
 
+litellm.set_verbose = False
 
 
 question = "embed this very long text" * 100
 
 
 # make X concurrent calls to litellm.completion(model=gpt-35-turbo, messages=[]), pick a random question in questions array.
-#  Allow me to tune X concurrent calls.. Log question, output/exception, response time somewhere 
-# show me a summary of requests made, success full calls, failed calls. For failed calls show me the exceptions 
+#  Allow me to tune X concurrent calls.. Log question, output/exception, response time somewhere
+# show me a summary of requests made, success full calls, failed calls. For failed calls show me the exceptions
 
 import concurrent.futures
 import random
@@ -35,7 +35,10 @@ def make_openai_completion(question):
     try:
         start_time = time.time()
         import openai
-        client = openai.OpenAI(api_key=os.environ['OPENAI_API_KEY']) #base_url="http://0.0.0.0:8000",
+
+        client = openai.OpenAI(
+            api_key=os.environ["OPENAI_API_KEY"]
+        )  # base_url="http://0.0.0.0:8000",
         response = client.embeddings.create(
             model="text-embedding-ada-002",
             input=[question],
@@ -57,6 +60,7 @@ def make_openai_completion(question):
         #         f"\nException: {str(e)}\n\n"
         #     )
         return None
+
 
 start_time = time.time()
 # Number of concurrent calls (you can adjust this)

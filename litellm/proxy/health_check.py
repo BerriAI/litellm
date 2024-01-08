@@ -12,25 +12,16 @@ from litellm._logging import print_verbose
 logger = logging.getLogger(__name__)
 
 
-ILLEGAL_DISPLAY_PARAMS = [
-    "messages",
-    "api_key"
-]
+ILLEGAL_DISPLAY_PARAMS = ["messages", "api_key", "prompt", "input"]
 
 
 def _get_random_llm_message():
     """
     Get a random message from the LLM.
     """
-    messages = [
-        "Hey how's it going?",
-        "What's 1 + 1?"
-    ]
+    messages = ["Hey how's it going?", "What's 1 + 1?"]
 
-
-    return [
-        {"role": "user", "content": random.choice(messages)}
-    ]
+    return [{"role": "user", "content": random.choice(messages)}]
 
 
 def _clean_litellm_params(litellm_params: dict):
@@ -44,39 +35,20 @@ async def _perform_health_check(model_list: list):
     """
     Perform a health check for each model in the list.
     """
-    async def _check_embedding_model(model_params: dict):
-        model_params.pop("messages", None)
-        model_params["input"] = ["test from litellm"]
-        try:
-            await litellm.aembedding(**model_params)
-        except Exception as e:
-            print_verbose(f"Health check failed for model {model_params['model']}. Error: {e}")
-            return False
-        return True
-
-
-    async def _check_model(model_params: dict):
-        try:
-            await litellm.acompletion(**model_params)
-        except Exception as e:            
-            print_verbose(f"Health check failed for model {model_params['model']}. Error: {e}")
-            return False
-        
-        return True
-
-    prepped_params = []
     tasks = []
     for model in model_list:
         litellm_params = model["litellm_params"]
         model_info = model.get("model_info", {})
         litellm_params["messages"] = _get_random_llm_message()
-
-        prepped_params.append(litellm_params)
-        if model_info.get("mode", None) == "embedding":
-            # this is an embedding model
-            tasks.append(_check_embedding_model(litellm_params))
-        else:
-            tasks.append(_check_model(litellm_params))
+        mode = model_info.get("mode", None)
+        tasks.append(
+            litellm.ahealth_check(
+                litellm_params,
+                mode=mode,
+                prompt="test from litellm",
+                input=["test from litellm"],
+            )
+        )
 
     results = await asyncio.gather(*tasks)
 
@@ -86,17 +58,19 @@ async def _perform_health_check(model_list: list):
     for is_healthy, model in zip(results, model_list):
         cleaned_litellm_params = _clean_litellm_params(model["litellm_params"])
 
-        if is_healthy:
-            healthy_endpoints.append(cleaned_litellm_params)
+        if isinstance(is_healthy, dict) and "error" not in is_healthy:
+            healthy_endpoints.append({**cleaned_litellm_params, **is_healthy})
+        elif isinstance(is_healthy, dict):
+            unhealthy_endpoints.append({**cleaned_litellm_params, **is_healthy})
         else:
             unhealthy_endpoints.append(cleaned_litellm_params)
 
     return healthy_endpoints, unhealthy_endpoints
 
 
-
-
-async def perform_health_check(model_list: list, model: Optional[str] = None, cli_model: Optional[str] = None):
+async def perform_health_check(
+    model_list: list, model: Optional[str] = None, cli_model: Optional[str] = None
+):
     """
     Perform a health check on the system.
 
@@ -105,7 +79,9 @@ async def perform_health_check(model_list: list, model: Optional[str] = None, cl
     """
     if not model_list:
         if cli_model:
-            model_list = [{"model_name": cli_model, "litellm_params": {"model": cli_model}}]
+            model_list = [
+                {"model_name": cli_model, "litellm_params": {"model": cli_model}}
+            ]
         else:
             return [], []
 
@@ -115,5 +91,3 @@ async def perform_health_check(model_list: list, model: Optional[str] = None, cl
     healthy_endpoints, unhealthy_endpoints = await _perform_health_check(model_list)
 
     return healthy_endpoints, unhealthy_endpoints
-
-    

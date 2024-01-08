@@ -1,4 +1,4 @@
-## LOCAL TEST
+# # LOCAL TEST
 # from langchain.chat_models import ChatOpenAI
 # from langchain.prompts.chat import (
 #     ChatPromptTemplate,
@@ -9,8 +9,16 @@
 
 # chat = ChatOpenAI(
 #     openai_api_base="http://0.0.0.0:8000",
-#     model = "gpt-3.5-turbo",
-#     temperature=0.1
+#     model = "azure/chatgpt-v-2",
+#     temperature=0.1,
+#     extra_body={
+#         "metadata": {
+#             "generation_name": "ishaan-generation-langchain-client",
+#             "generation_id": "langchain-client-gen-id22",
+#             "trace_id": "langchain-client-trace-id22",
+#             "trace_user_id": "langchain-client-user-id2"
+#         }
+#     }
 # )
 
 # messages = [
@@ -25,16 +33,12 @@
 
 # print(response)
 
-# claude_chat = ChatOpenAI(
-#     openai_api_base="http://0.0.0.0:8000",
-#     model = "claude-v1",
-#     temperature=0.1
-# )
+# # claude_chat = ChatOpenAI(
+# #     openai_api_base="http://0.0.0.0:8000",
+# #     model = "claude-v1",
+# #     temperature=0.1
+# # )
 
-# response = claude_chat(messages)
+# # response = claude_chat(messages)
 
-# print(response)
-
-
-
-
+# # print(response)

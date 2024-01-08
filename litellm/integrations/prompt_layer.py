@@ -18,18 +18,16 @@ class PromptLayerLogger:
         # Method definition
         try:
             new_kwargs = {}
-            new_kwargs['model'] = kwargs['model']
-            new_kwargs['messages'] = kwargs['messages']
+            new_kwargs["model"] = kwargs["model"]
+            new_kwargs["messages"] = kwargs["messages"]
 
             # add kwargs["optional_params"] to new_kwargs
             for optional_param in kwargs["optional_params"]:
                 new_kwargs[optional_param] = kwargs["optional_params"][optional_param]
 
-
             print_verbose(
                 f"Prompt Layer Logging - Enters logging function for model kwargs: {new_kwargs}\n, response: {response_obj}"
             )
-
 
             request_response = requests.post(
                 "https://api.promptlayer.com/rest/track-request",
@@ -51,8 +49,8 @@ class PromptLayerLogger:
                 f"Prompt Layer Logging: success - final response object: {request_response.text}"
             )
             response_json = request_response.json()
-            if "success" not in request_response.json(): 
-                raise Exception("Promptlayer did not successfully log the response!") 
+            if "success" not in request_response.json():
+                raise Exception("Promptlayer did not successfully log the response!")
 
             if "request_id" in response_json:
                 print(kwargs["litellm_params"]["metadata"])
@@ -62,10 +60,12 @@ class PromptLayerLogger:
                         json={
                             "request_id": response_json["request_id"],
                             "api_key": self.key,
-                            "metadata": kwargs["litellm_params"]["metadata"]
+                            "metadata": kwargs["litellm_params"]["metadata"],
                         },
                     )
-                    print_verbose(f"Prompt Layer Logging: success - metadata post response object: {response.text}")
+                    print_verbose(
+                        f"Prompt Layer Logging: success - metadata post response object: {response.text}"
+                    )
 
         except:
             print_verbose(f"error: Prompt Layer Error - {traceback.format_exc()}")

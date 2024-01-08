@@ -14,12 +14,12 @@ See the latest available ghcr docker image here:
 https://github.com/berriai/litellm/pkgs/container/litellm
 
 ```shell
-docker pull ghcr.io/berriai/litellm:main-v1.12.3
+docker pull ghcr.io/berriai/litellm:main-latest
 ```
 
 ### Run the Docker Image
 ```shell
-docker run ghcr.io/berriai/litellm:main-v1.12.3
+docker run ghcr.io/berriai/litellm:main-latest
 ```
 
 #### Run the Docker Image with LiteLLM CLI args
@@ -28,12 +28,12 @@ See all supported CLI args [here](https://docs.litellm.ai/docs/proxy/cli):
 
 Here's how you can run the docker image and pass your config to `litellm`
 ```shell
-docker run ghcr.io/berriai/litellm:main-v1.12.3 --config your_config.yaml
+docker run ghcr.io/berriai/litellm:main-latest --config your_config.yaml
 ```
 
 Here's how you can run the docker image and start litellm on port 8002 with `num_workers=8`
 ```shell
-docker run ghcr.io/berriai/litellm:main-v1.12.3 --port 8002 --num_workers 8
+docker run ghcr.io/berriai/litellm:main-latest --port 8002 --num_workers 8
 ```
   
 #### Run the Docker Image using docker compose
@@ -53,7 +53,7 @@ services:
       context: .
         args:
           target: runtime
-    image: ghcr.io/berriai/litellm:main
+    image: ghcr.io/berriai/litellm:main-latest
     ports:
       - "8000:8000" # Map the container port to the host, change the host port if necessary
     volumes:
@@ -80,6 +80,32 @@ Run the command `docker-compose up` or `docker compose up` as per your docker in
 Your LiteLLM container should be running now on the defined port e.g. `8000`.
 
 
+## Deploy with Database 
+
+#### Step 1. Save the database url in your environment
+.env example: https://github.com/BerriAI/litellm/blob/main/docker/.env.example
+
+
+```env
+DATABASE_URL = "my-postgres-db-url"
+```
+
+#### Step 2. Build docker image with build-args 
+
+Set `with_database=true` in the docker build, to trigger the prisma logic to be run
+
+Example build command:
+```bash
+docker build -t my-docker-build --build-arg with_database=true .
+```
+
+#### Step 3. Run docker image 
+
+```bash
+docker run -it -p 8000:4000 my-docker-build
+```
+
+
 ## Deploy on Render https://render.com/
 
 <iframe width="840" height="500" src="https://www.loom.com/embed/805964b3c8384b41be180a61442389a3" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen></iframe>
@@ -104,6 +130,14 @@ curl https://litellm-7yjrj3ha2q-uc.a.run.app/v1/chat/completions \
      "temperature": 0.7
    }'
 ```
+
+## Deploy on Railway https://railway.app
+
+**Step 1: Click the button** to deploy to Railway
+
+[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/template/S7P9sn?referralCode=t3ukrU)
+
+**Step 2:** Set `PORT` = 4000 on Railway Environment Variables
 
 ## LiteLLM Proxy Performance
 

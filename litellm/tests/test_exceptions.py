@@ -11,17 +11,18 @@ import litellm
 from litellm import (
     embedding,
     completion,
-#     AuthenticationError,
+    #     AuthenticationError,
     ContextWindowExceededError,
-#     RateLimitError,
-#     ServiceUnavailableError,
-#     OpenAIError,
+    #     RateLimitError,
+    #     ServiceUnavailableError,
+    #     OpenAIError,
 )
 from concurrent.futures import ThreadPoolExecutor
 import pytest
+
 litellm.vertex_project = "pathrise-convert-1606954137718"
 litellm.vertex_location = "us-central1"
-litellm.num_retries=0
+litellm.num_retries = 0
 
 # litellm.failure_callback = ["sentry"]
 #### What this tests ####
@@ -36,7 +37,8 @@ litellm.num_retries=0
 
 models = ["command-nightly"]
 
-# Test 1: Context Window Errors 
+
+# Test 1: Context Window Errors
 @pytest.mark.parametrize("model", models)
 def test_context_window(model):
     print("Testing context window error")
@@ -52,17 +54,27 @@ def test_context_window(model):
         print(f"Worked!")
     except RateLimitError:
         print("RateLimited!")
-    except Exception as e: 
+    except Exception as e:
         print(f"{e}")
         pytest.fail(f"An error occcurred - {e}")
-        
+
+
 @pytest.mark.parametrize("model", models)
 def test_context_window_with_fallbacks(model):
-    ctx_window_fallback_dict = {"command-nightly": "claude-2", "gpt-3.5-turbo-instruct": "gpt-3.5-turbo-16k", "azure/chatgpt-v-2": "gpt-3.5-turbo-16k"}
+    ctx_window_fallback_dict = {
+        "command-nightly": "claude-2",
+        "gpt-3.5-turbo-instruct": "gpt-3.5-turbo-16k",
+        "azure/chatgpt-v-2": "gpt-3.5-turbo-16k",
+    }
     sample_text = "how does a court case get to the Supreme Court?" * 1000
     messages = [{"content": sample_text, "role": "user"}]
 
-    completion(model=model, messages=messages, context_window_fallback_dict=ctx_window_fallback_dict)
+    completion(
+        model=model,
+        messages=messages,
+        context_window_fallback_dict=ctx_window_fallback_dict,
+    )
+
 
 # for model in litellm.models_by_provider["bedrock"]:
 #     test_context_window(model=model)
@@ -98,7 +110,9 @@ def invalid_auth(model):  # set the model key to an invalid key, depending on th
             os.environ["AI21_API_KEY"] = "bad-key"
         elif "togethercomputer" in model:
             temporary_key = os.environ["TOGETHERAI_API_KEY"]
-            os.environ["TOGETHERAI_API_KEY"] = "84060c79880fc49df126d3e87b53f8a463ff6e1c6d27fe64207cde25cdfcd1f24a"
+            os.environ[
+                "TOGETHERAI_API_KEY"
+            ] = "84060c79880fc49df126d3e87b53f8a463ff6e1c6d27fe64207cde25cdfcd1f24a"
         elif model in litellm.openrouter_models:
             temporary_key = os.environ["OPENROUTER_API_KEY"]
             os.environ["OPENROUTER_API_KEY"] = "bad-key"
@@ -115,9 +129,7 @@ def invalid_auth(model):  # set the model key to an invalid key, depending on th
             temporary_key = os.environ["REPLICATE_API_KEY"]
             os.environ["REPLICATE_API_KEY"] = "bad-key"
         print(f"model: {model}")
-        response = completion(
-            model=model, messages=messages
-        )
+        response = completion(model=model, messages=messages)
         print(f"response: {response}")
     except AuthenticationError as e:
         print(f"AuthenticationError Caught Exception - {str(e)}")
@@ -148,23 +160,25 @@ def invalid_auth(model):  # set the model key to an invalid key, depending on th
             os.environ["REPLICATE_API_KEY"] = temporary_key
         elif "j2" in model:
             os.environ["AI21_API_KEY"] = temporary_key
-        elif ("togethercomputer" in model):
+        elif "togethercomputer" in model:
             os.environ["TOGETHERAI_API_KEY"] = temporary_key
         elif model in litellm.aleph_alpha_models:
             os.environ["ALEPH_ALPHA_API_KEY"] = temporary_key
         elif model in litellm.nlp_cloud_models:
             os.environ["NLP_CLOUD_API_KEY"] = temporary_key
-        elif "bedrock" in model: 
+        elif "bedrock" in model:
             os.environ["AWS_ACCESS_KEY_ID"] = temporary_aws_access_key
             os.environ["AWS_REGION_NAME"] = temporary_aws_region_name
             os.environ["AWS_SECRET_ACCESS_KEY"] = temporary_secret_key
     return
 
+
 # for model in litellm.models_by_provider["bedrock"]:
 #     invalid_auth(model=model)
 # invalid_auth(model="command-nightly")
 
-# Test 3: Invalid Request Error 
+
+# Test 3: Invalid Request Error
 @pytest.mark.parametrize("model", models)
 def test_invalid_request_error(model):
     messages = [{"content": "hey, how's it going?", "role": "user"}]
@@ -173,23 +187,18 @@ def test_invalid_request_error(model):
         completion(model=model, messages=messages, max_tokens="hello world")
 
 
-
 def test_completion_azure_exception():
     try:
         import openai
+
         print("azure gpt-3.5 test\n\n")
-        litellm.set_verbose=True
+        litellm.set_verbose = True
         ## Test azure call
         old_azure_key = os.environ["AZURE_API_KEY"]
         os.environ["AZURE_API_KEY"] = "good morning"
         response = completion(
             model="azure/chatgpt-v-2",
-            messages=[
-                {
-                    "role": "user",
-                    "content": "hello"
-                }
-            ],
+            messages=[{"role": "user", "content": "hello"}],
         )
         os.environ["AZURE_API_KEY"] = old_azure_key
         print(f"response: {response}")
@@ -199,25 +208,24 @@ def test_completion_azure_exception():
         print("good job got the correct error for azure when key not set")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
 # test_completion_azure_exception()
+
 
 async def asynctest_completion_azure_exception():
     try:
         import openai
         import litellm
+
         print("azure gpt-3.5 test\n\n")
-        litellm.set_verbose=True
+        litellm.set_verbose = True
         ## Test azure call
         old_azure_key = os.environ["AZURE_API_KEY"]
         os.environ["AZURE_API_KEY"] = "good morning"
         response = await litellm.acompletion(
             model="azure/chatgpt-v-2",
-            messages=[
-                {
-                    "role": "user",
-                    "content": "hello"
-                }
-            ],
+            messages=[{"role": "user", "content": "hello"}],
         )
         print(f"response: {response}")
         print(response)
@@ -229,6 +237,8 @@ async def asynctest_completion_azure_exception():
         print("Got wrong exception")
         print("exception", e)
         pytest.fail(f"Error occurred: {e}")
+
+
 # import asyncio
 # asyncio.run(
 #     asynctest_completion_azure_exception()
@@ -239,19 +249,17 @@ def asynctest_completion_openai_exception_bad_model():
     try:
         import openai
         import litellm, asyncio
+
         print("azure exception bad model\n\n")
-        litellm.set_verbose=True
+        litellm.set_verbose = True
+
         ## Test azure call
         async def test():
             response = await litellm.acompletion(
                 model="openai/gpt-6",
-                messages=[
-                    {
-                        "role": "user",
-                        "content": "hello"
-                    }
-                ],
+                messages=[{"role": "user", "content": "hello"}],
             )
+
         asyncio.run(test())
     except openai.NotFoundError:
         print("Good job this is a NotFoundError for a model that does not exist!")
@@ -261,27 +269,25 @@ def asynctest_completion_openai_exception_bad_model():
         assert isinstance(e, openai.BadRequestError)
         pytest.fail(f"Error occurred: {e}")
 
-# asynctest_completion_openai_exception_bad_model()
 
+# asynctest_completion_openai_exception_bad_model()
 
 
 def asynctest_completion_azure_exception_bad_model():
     try:
         import openai
         import litellm, asyncio
+
         print("azure exception bad model\n\n")
-        litellm.set_verbose=True
+        litellm.set_verbose = True
+
         ## Test azure call
         async def test():
             response = await litellm.acompletion(
                 model="azure/gpt-12",
-                messages=[
-                    {
-                        "role": "user",
-                        "content": "hello"
-                    }
-                ],
+                messages=[{"role": "user", "content": "hello"}],
             )
+
         asyncio.run(test())
     except openai.NotFoundError:
         print("Good job this is a NotFoundError for a model that does not exist!")
@@ -290,25 +296,23 @@ def asynctest_completion_azure_exception_bad_model():
         print("Raised wrong type of exception", type(e))
         pytest.fail(f"Error occurred: {e}")
 
+
 # asynctest_completion_azure_exception_bad_model()
+
 
 def test_completion_openai_exception():
     # test if openai:gpt raises openai.AuthenticationError
     try:
         import openai
+
         print("openai gpt-3.5 test\n\n")
-        litellm.set_verbose=True
+        litellm.set_verbose = True
         ## Test azure call
         old_azure_key = os.environ["OPENAI_API_KEY"]
         os.environ["OPENAI_API_KEY"] = "good morning"
         response = completion(
             model="gpt-4",
-            messages=[
-                {
-                    "role": "user",
-                    "content": "hello"
-                }
-            ],
+            messages=[{"role": "user", "content": "hello"}],
         )
         print(f"response: {response}")
         print(response)
@@ -317,25 +321,24 @@ def test_completion_openai_exception():
         print("OpenAI: good job got the correct error for openai when key not set")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
 # test_completion_openai_exception()
+
 
 def test_completion_mistral_exception():
     # test if mistral/mistral-tiny raises openai.AuthenticationError
     try:
         import openai
+
         print("Testing mistral ai exception mapping")
-        litellm.set_verbose=True
+        litellm.set_verbose = True
         ## Test azure call
         old_azure_key = os.environ["MISTRAL_API_KEY"]
         os.environ["MISTRAL_API_KEY"] = "good morning"
         response = completion(
             model="mistral/mistral-tiny",
-            messages=[
-                {
-                    "role": "user",
-                    "content": "hello"
-                }
-            ],
+            messages=[{"role": "user", "content": "hello"}],
         )
         print(f"response: {response}")
         print(response)
@@ -344,9 +347,9 @@ def test_completion_mistral_exception():
         print("good job got the correct error for openai when key not set")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
 # test_completion_mistral_exception()
-
-
 
 
 # # test_invalid_request_error(model="command-nightly")

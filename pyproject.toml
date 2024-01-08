@@ -1,13 +1,13 @@
 [tool.poetry]
 name = "litellm"
-version = "1.15.1"
+version = "1.16.20"
 description = "Library to easily interface with LLM API providers"
 authors = ["BerriAI"]
 license = "MIT License"
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = "^3.8"
+python = ">=3.8.1,<3.9.7 || >3.9.7"
 openai = ">=1.0.0"
 python-dotenv = ">=0.2.0"
 tiktoken = ">=0.4.0"
@@ -16,46 +16,50 @@ tokenizers = "*"
 click = "*"
 jinja2 = "^3.1.2"
 certifi = "^2023.7.22"
-appdirs = "^1.4.4"
 aiohttp = "*"
 
-uvicorn = {version = "^0.24.0.post1", optional = true}
+uvicorn = {version = "^0.22.0", optional = true}
 fastapi = {version = "^0.104.1", optional = true}
 backoff = {version = "*", optional = true}
+pyyaml = {version = "^6.0", optional = true}
 rq = {version = "*", optional = true}
+orjson = {version = "^3.9.7", optional = true}
+streamlit = {version = "^1.29.0", optional = true}
 
 [tool.poetry.extras]
 proxy = [
     "uvicorn",
     "fastapi",
     "backoff",
+    "pyyaml",
     "rq",
     "orjson",
-    "importlib",
 ]
 
 extra_proxy = [
     "prisma",
     "azure-identity",
-    "azure-keyvault-secrets"
+    "azure-keyvault-secrets",
+    "google-cloud-kms",
+    "streamlit",
+    "resend"
 ]
 
-proxy_otel = [
-    "opentelemetry-api",
-    "opentelemetry-sdk",
-    "opentelemetry-exporter-otlp",
-    "opentelemetry-sdk-resources"
-]
 
 [tool.poetry.scripts]
 litellm = 'litellm:run_server'
+
+[tool.poetry.group.dev.dependencies]
+flake8 = "^6.1.0"
+black = "^23.12.0"
+pytest = "^7.4.3"
 
 [build-system]
 requires = ["poetry-core", "wheel"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.commitizen]
-version = "1.15.1"
+version = "1.16.20"
 version_files = [
     "pyproject.toml:^version"
 ]
