@@ -158,3 +158,5 @@ def test_cost_azure_embedding():
 
 
 # test_cost_azure_embedding()
+
+
