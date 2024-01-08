@@ -944,6 +944,7 @@ async def initialize(
     api_base=None,
     api_version=None,
     debug=False,
+    detailed_debug=False,
     temperature=None,
     max_tokens=None,
     request_timeout=600,
@@ -956,7 +957,7 @@ async def initialize(
     use_queue=False,
     config=None,
 ):
-    global user_model, user_api_base, user_debug, user_max_tokens, user_request_timeout, user_temperature, user_telemetry, user_headers, experimental, llm_model_list, llm_router, general_settings, master_key, user_custom_auth, prisma_client
+    global user_model, user_api_base, user_debug, user_detailed_debug, user_user_max_tokens, user_request_timeout, user_temperature, user_telemetry, user_headers, experimental, llm_model_list, llm_router, general_settings, master_key, user_custom_auth, prisma_client
     generate_feedback_box()
     user_model = model
     user_debug = debug
@@ -964,8 +965,14 @@ async def initialize(
         from litellm._logging import verbose_router_logger, verbose_proxy_logger
         import logging
 
-        verbose_router_logger.setLevel(level=logging.INFO)
-        verbose_router_logger.debug("initilized verbose router logger")
+        verbose_router_logger.setLevel(level=logging.INFO)  # set router logs to info
+    if detailed_debug == True:
+        from litellm._logging import verbose_router_logger, verbose_proxy_logger
+        import logging
+
+        verbose_router_logger.setLevel(level=logging.DEBUG)  # set router logs to info
+        litellm.set_verbose = True
+
     dynamic_config = {"general": {}, user_model: {}}
     if config:
         (
