@@ -14,7 +14,7 @@ def generate_text():
                 "content": [
                     {
                         "type": "text",
-                        "text": "What's in this image?"
+                        "text": "What is this image?"
                     },
                     {
                         "type": "image_url",
