@@ -25,7 +25,7 @@ def generate_text():
                 ]
             }
         ]
-        response = litellm.completion(model="gemini/gemini-pro-vision", messages=messages)
+        response = litellm.completion(model="gemini/gemini-pro-vision", messages=messages, stop="Hello world")
         print(response)
         assert isinstance(response.choices[0].message.content, str) == True
     except Exception as exception:
