@@ -318,7 +318,7 @@ class Router:
     async def _acompletion(self, model: str, messages: List[Dict[str, str]], **kwargs):
         model_name = None
         try:
-            verbose_router_logger.info(
+            verbose_router_logger.debug(
                 f"Inside _acompletion()- model: {model}; kwargs: {kwargs}"
             )
             deployment = self.get_available_deployment(
@@ -365,8 +365,14 @@ class Router:
                 }
             )
             self.success_calls[model_name] += 1
+            verbose_router_logger.info(
+                f"litellm.acompletion(model={model_name})\033[32m 200 OK\033[0m"
+            )
             return response
         except Exception as e:
+            verbose_router_logger.info(
+                f"litellm.acompletion(model={model_name})\033[31m Exception {str(e)}\033[0m"
+            )
             if model_name is not None:
                 self.fail_calls[model_name] += 1
             raise e
@@ -387,7 +393,7 @@ class Router:
 
     def _image_generation(self, prompt: str, model: str, **kwargs):
         try:
-            verbose_router_logger.info(
+            verbose_router_logger.debug(
                 f"Inside _image_generation()- model: {model}; kwargs: {kwargs}"
             )
             deployment = self.get_available_deployment(
@@ -434,8 +440,14 @@ class Router:
                 }
             )
             self.success_calls[model_name] += 1
+            verbose_router_logger.info(
+                f"litellm.image_generation(model={model_name})\033[32m 200 OK\033[0m"
+            )
             return response
         except Exception as e:
+            verbose_router_logger.info(
+                f"litellm.image_generation(model={model_name})\033[31m Exception {str(e)}\033[0m"
+            )
             if model_name is not None:
                 self.fail_calls[model_name] += 1
             raise e
@@ -456,7 +468,7 @@ class Router:
 
     async def _aimage_generation(self, prompt: str, model: str, **kwargs):
         try:
-            verbose_router_logger.info(
+            verbose_router_logger.debug(
                 f"Inside _image_generation()- model: {model}; kwargs: {kwargs}"
             )
             deployment = self.get_available_deployment(
@@ -503,8 +515,14 @@ class Router:
                 }
             )
             self.success_calls[model_name] += 1
+            verbose_router_logger.info(
+                f"litellm.aimage_generation(model={model_name})\033[32m 200 OK\033[0m"
+            )
             return response
         except Exception as e:
+            verbose_router_logger.info(
+                f"litellm.aimage_generation(model={model_name})\033[31m Exception {str(e)}\033[0m"
+            )
             if model_name is not None:
                 self.fail_calls[model_name] += 1
             raise e
@@ -578,7 +596,7 @@ class Router:
 
     async def _atext_completion(self, model: str, prompt: str, **kwargs):
         try:
-            verbose_router_logger.info(
+            verbose_router_logger.debug(
                 f"Inside _atext_completion()- model: {model}; kwargs: {kwargs}"
             )
             deployment = self.get_available_deployment(
@@ -625,8 +643,14 @@ class Router:
                 }
             )
             self.success_calls[model_name] += 1
+            verbose_router_logger.info(
+                f"litellm.atext_completion(model={model_name})\033[32m 200 OK\033[0m"
+            )
             return response
         except Exception as e:
+            verbose_router_logger.info(
+                f"litellm.atext_completion(model={model_name})\033[31m Exception {str(e)}\033[0m"
+            )
             if model_name is not None:
                 self.fail_calls[model_name] += 1
             raise e
@@ -698,7 +722,7 @@ class Router:
 
     async def _aembedding(self, input: Union[str, List], model: str, **kwargs):
         try:
-            verbose_router_logger.info(
+            verbose_router_logger.debug(
                 f"Inside _aembedding()- model: {model}; kwargs: {kwargs}"
             )
             deployment = self.get_available_deployment(
@@ -745,8 +769,14 @@ class Router:
                 }
             )
             self.success_calls[model_name] += 1
+            verbose_router_logger.info(
+                f"litellm.aembedding(model={model_name})\033[32m 200 OK\033[0m"
+            )
             return response
         except Exception as e:
+            verbose_router_logger.info(
+                f"litellm.aembedding(model={model_name})\033[31m Exception {str(e)}\033[0m"
+            )
             if model_name is not None:
                 self.fail_calls[model_name] += 1
             raise e
@@ -766,7 +796,6 @@ class Router:
             verbose_router_logger.debug(f"Async Response: {response}")
             return response
         except Exception as e:
-            verbose_router_logger.info(f"An exception occurs: {e}")
             verbose_router_logger.debug(f"Traceback{traceback.format_exc()}")
             original_exception = e
             fallback_model_group = None
@@ -821,7 +850,9 @@ class Router:
                         try:
                             ## LOGGING
                             kwargs = self.log_retry(kwargs=kwargs, e=original_exception)
-                            verbose_router_logger.info(f"Falling back to {mg}")
+                            verbose_router_logger.info(
+                                f"Falling back to model_group = {mg}"
+                            )
                             kwargs["model"] = mg
                             kwargs["metadata"]["model_group"] = mg
                             response = await self.async_function_with_retries(
