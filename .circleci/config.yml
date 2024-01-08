@@ -74,7 +74,7 @@ jobs:
           command: |
             cd litellm
             python -m pip install black
-            python -m black .
+            python -m black --check .
             cd ..
       - run:
           name: Linting Testing
