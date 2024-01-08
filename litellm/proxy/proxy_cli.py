@@ -89,6 +89,13 @@ def is_port_in_use(port):
     "--debug", default=False, is_flag=True, type=bool, help="To debug the input"
 )
 @click.option(
+    "--detailed_debug",
+    default=False,
+    is_flag=True,
+    type=bool,
+    help="To view detailed debug logs",
+)
+@click.option(
     "--use_queue",
     default=False,
     is_flag=True,
@@ -140,12 +147,6 @@ def is_port_in_use(port):
     help="Print LiteLLM version",
 )
 @click.option(
-    "--logs",
-    flag_value=False,
-    type=int,
-    help='Gets the "n" most recent logs. By default gets most recent log.',
-)
-@click.option(
     "--health",
     flag_value=True,
     help="Make a chat/completions request to all llms in config.yaml",
@@ -179,6 +180,7 @@ def run_server(
     headers,
     save,
     debug,
+    detailed_debug,
     temperature,
     max_tokens,
     request_timeout,
@@ -187,7 +189,6 @@ def run_server(
     config,
     max_budget,
     telemetry,
-    logs,
     test,
     local,
     num_workers,
@@ -212,32 +213,6 @@ def run_server(
                 # this is just a local/relative import error, user git cloned litellm
                 from proxy_server import app, save_worker_config, usage_telemetry
     feature_telemetry = usage_telemetry
-    if logs is not None:
-        if logs == 0:  # default to 1
-            logs = 1
-        try:
-            with open("api_log.json") as f:
-                data = json.load(f)
-
-            # convert keys to datetime objects
-            log_times = {
-                datetime.strptime(k, "%Y%m%d%H%M%S%f"): v for k, v in data.items()
-            }
-
-            # sort by timestamp
-            sorted_times = sorted(
-                log_times.items(), key=operator.itemgetter(0), reverse=True
-            )
-
-            # get n recent logs
-            recent_logs = {
-                k.strftime("%Y%m%d%H%M%S%f"): v for k, v in sorted_times[:logs]
-            }
-
-            print(json.dumps(recent_logs, indent=4))  # noqa
-        except:
-            raise Exception("LiteLLM: No logs saved!")
-        return
     if version == True:
         pkg_version = importlib.metadata.version("litellm")
         click.echo(f"\nLiteLLM: Current Version = {pkg_version}\n")
@@ -377,6 +352,7 @@ def run_server(
             api_base=api_base,
             api_version=api_version,
             debug=debug,
+            detailed_debug=detailed_debug,
             temperature=temperature,
             max_tokens=max_tokens,
             request_timeout=request_timeout,
