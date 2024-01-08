@@ -260,7 +260,7 @@ def test_completion_azure_gpt4_vision():
 @pytest.mark.skip(reason="this test is flaky")
 def test_completion_perplexity_api():
     try:
-        # litellm.set_verbose=True
+        # litellm.set_verbose= True
         messages = [
             {"role": "system", "content": "You're a good bot"},
             {
