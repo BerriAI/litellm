@@ -45,9 +45,7 @@ COPY --from=builder /app/dist/*.whl .
 COPY --from=builder /wheels/ /wheels/
 
 # Install the built wheel using pip; again using a wildcard if it's the only file
-RUN pip install --no-cache-dir --find-links=/wheels/ -r requirements.txt \
-    && pip install *.whl \
-    && rm -f *.whl
+RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ && rm -f *.whl && rm -rf /wheels
 
 # Generate prisma client
 RUN prisma generate
