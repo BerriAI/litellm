@@ -600,9 +600,9 @@ def get_instance_fn(value: str, config_file_path: Optional[str] = None) -> Any:
             spec = importlib.util.spec_from_file_location(module_name, module_file_path)  # type: ignore
             if spec is None:
                 raise ImportError(
-                    f"Could not find a module specification for {module_file_path}"  # type: ignore
+                    f"Could not find a module specification for {module_file_path}"
                 )
-            module = importlib.util.module_from_spec(spec)
+            module = importlib.util.module_from_spec(spec)  # type: ignore
             spec.loader.exec_module(module)  # type: ignore
         else:
             # Dynamically import the module
