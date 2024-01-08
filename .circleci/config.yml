@@ -54,13 +54,7 @@ jobs:
           path: test-results
 
   publish_to_pypi:
-    docker:
-      - image: cimg/python:3.8
-    working_directory: ~/project
-
-    environment:
-      TWINE_USERNAME: __token__
-
+    executor: python/default
     steps:
       - checkout
 
@@ -128,7 +122,7 @@ workflows:
   version: 2
   build_and_test:
     jobs:
-      - local_testing:
+      - build_and_test:
           filters:
             branches:
               only:
@@ -136,7 +130,7 @@ workflows:
                 - /litellm_.*/
       - publish_to_pypi:
           requires:
-            - local_testing
+            - build_and_test
           filters:
             branches:
               only:
