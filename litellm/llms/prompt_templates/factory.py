@@ -372,6 +372,7 @@ def anthropic_pt(
     You can "put words in Claude's mouth" by ending with an assistant message.
     See: https://docs.anthropic.com/claude/docs/put-words-in-claudes-mouth
     """
+
     class AnthropicConstants(Enum):
         HUMAN_PROMPT = "\n\nHuman: "
         AI_PROMPT = "\n\nAssistant: "
@@ -394,30 +395,37 @@ def anthropic_pt(
         prompt += f"{AnthropicConstants.AI_PROMPT.value}"
     return prompt
 
-    
+
 def _load_image_from_url(image_url):
     try:
         from PIL import Image
     except:
-        raise Exception("gemini image conversion failed please run `pip install Pillow`")
+        raise Exception(
+            "gemini image conversion failed please run `pip install Pillow`"
+        )
     from io import BytesIO
+
     try:
         # Send a GET request to the image URL
         response = requests.get(image_url)
         response.raise_for_status()  # Raise an exception for HTTP errors
 
         # Check the response's content type to ensure it is an image
-        content_type = response.headers.get('content-type')
-        if not content_type or 'image' not in content_type:
-            raise ValueError(f"URL does not point to a valid image (content-type: {content_type})")
+        content_type = response.headers.get("content-type")
+        if not content_type or "image" not in content_type:
+            raise ValueError(
+                f"URL does not point to a valid image (content-type: {content_type})"
+            )
 
         # Load the image from the response content
         return Image.open(BytesIO(response.content))
-        
+
     except requests.RequestException as e:
         print(f"Request failed: {e}")
     except UnidentifiedImageError:
-        print("Cannot identify image file (it may not be a supported image format or might be corrupted).")
+        print(
+            "Cannot identify image file (it may not be a supported image format or might be corrupted)."
+        )
     except ValueError as e:
         print(e)
 
@@ -437,10 +445,11 @@ def _gemini_vision_convert_messages(messages: list):
     try:
         from PIL import Image
     except:
-        raise Exception("gemini image conversion failed please run `pip install Pillow`")
+        raise Exception(
+            "gemini image conversion failed please run `pip install Pillow`"
+        )
 
     try:
-
         # given messages for gpt-4 vision, convert them for gemini
         # https://github.com/GoogleCloudPlatform/generative-ai/blob/main/gemini/getting-started/intro_gemini_python.ipynb
         prompt = ""
@@ -589,7 +598,7 @@ def prompt_factory(
     if custom_llm_provider == "ollama":
         return ollama_pt(model=model, messages=messages)
     elif custom_llm_provider == "anthropic":
-        if any(_ in model for _ in ["claude-2.1","claude-v2:1"]):
+        if any(_ in model for _ in ["claude-2.1", "claude-v2:1"]):
             return claude_2_1_pt(messages=messages)
         else:
             return anthropic_pt(messages=messages)

@@ -253,10 +253,10 @@ class PrismaClient:
         print_verbose(
             "LiteLLM: DATABASE_URL Set in config, trying to 'pip install prisma'"
         )
-         ## init logging object
+        ## init logging object
         self.proxy_logging_obj = proxy_logging_obj
 
-        if os.getenv("DATABASE_URL", None) is None: # setup hasn't taken place
+        if os.getenv("DATABASE_URL", None) is None:  # setup hasn't taken place
             os.environ["DATABASE_URL"] = database_url
             # Save the current working directory
             original_dir = os.getcwd()

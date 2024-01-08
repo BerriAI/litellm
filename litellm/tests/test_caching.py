@@ -297,7 +297,7 @@ def test_redis_cache_completion():
     litellm._async_success_callback = []
 
     """
-    1 & 2 should be exactly the same 
+    1 & 2 should be exactly the same
     1 & 3 should be different, since input params are diff
     1 & 4 should be diff, since models are diff
     """
@@ -397,7 +397,7 @@ def test_redis_cache_completion_stream():
         raise e
     """
 
-    1 & 2 should be exactly the same 
+    1 & 2 should be exactly the same
     """
 
 

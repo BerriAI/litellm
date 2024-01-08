@@ -2938,7 +2938,7 @@ async def test_async_text_completion_chat_model_stream():
         )
 
         num_finish_reason = 0
-        chunks = [] 
+        chunks = []
         async for chunk in response:
             print(chunk)
             chunks.append(chunk)
