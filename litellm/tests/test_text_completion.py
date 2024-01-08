@@ -2936,18 +2936,21 @@ async def test_async_text_completion_chat_model_stream():
             stream=True,
             max_tokens=10,
         )
-        print(f"response: {response}")
 
         num_finish_reason = 0
+        chunks = [] 
         async for chunk in response:
             print(chunk)
+            chunks.append(chunk)
             if chunk["choices"][0].get("finish_reason") is not None:
                 num_finish_reason += 1
-                print("finish_reason", chunk["choices"][0].get("finish_reason"))
 
         assert (
             num_finish_reason == 1
         ), f"expected only one finish reason. Got {num_finish_reason}"
+        response_obj = litellm.stream_chunk_builder(chunks=chunks)
+        cost = litellm.completion_cost(completion_response=response_obj)
+        assert cost > 0
     except Exception as e:
         pytest.fail(f"GOT exception for gpt-3.5 In streaming{e}")
 
