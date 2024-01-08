@@ -1,10 +1,11 @@
-version: 2.1
-jobs:
-  local_testing:
-    docker:
-      - image: circleci/python:3.10
-    working_directory: ~/project
+version: '2.1'
 
+orbs:
+  python: circleci/python@1.0.0
+
+jobs:
+  build_and_test:
+    executor: python/default
     steps:
       - checkout
 
@@ -17,10 +18,9 @@ jobs:
               echo "No changes to litellm or pyproject.toml. Skipping tests."
               circleci step halt
             fi
-      - run:
-          name: Install Dependencies
-          command: |
-            python3 -m poetry install
+
+      - python/install-packages:
+          pkg-manager: poetry
       - run:
           name: Black Formatting
           command: |
