@@ -923,10 +923,10 @@ def ai21_completion_call_bad_key():
 
 # ai21_completion_call_bad_key()
 
-
-def hf_test_completion_tgi_stream():
+@pytest.mark.asyncio
+async def test_hf_completion_tgi_stream():
     try:
-        response = completion(
+        response = await acompletion(
             model="huggingface/HuggingFaceH4/zephyr-7b-beta",
             messages=[{"content": "Hello, how are you?", "role": "user"}],
             stream=True,
@@ -935,11 +935,13 @@ def hf_test_completion_tgi_stream():
         print(f"response: {response}")
         complete_response = ""
         start_time = time.time()
-        for idx, chunk in enumerate(response):
+        idx = 0
+        async for chunk in response:
             chunk, finished = streaming_format_tests(idx, chunk)
             complete_response += chunk
             if finished:
                 break
+            idx += 1
         if complete_response.strip() == "":
             raise Exception("Empty response received")
         print(f"completion_response: {complete_response}")

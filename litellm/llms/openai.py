@@ -836,6 +836,7 @@ class OpenAITextCompletion(BaseLLM):
         api_key: str,
         model: str,
         messages: list,
+        timeout: float,
         print_verbose: Optional[Callable] = None,
         api_base: Optional[str] = None,
         logging_obj=None,
@@ -887,9 +888,10 @@ class OpenAITextCompletion(BaseLLM):
                         headers=headers,
                         model_response=model_response,
                         model=model,
+                        timeout=timeout
                     )
                 else:
-                    return self.acompletion(api_base=api_base, data=data, headers=headers, model_response=model_response, prompt=prompt, api_key=api_key, logging_obj=logging_obj, model=model)  # type: ignore
+                    return self.acompletion(api_base=api_base, data=data, headers=headers, model_response=model_response, prompt=prompt, api_key=api_key, logging_obj=logging_obj, model=model, timeout=timeout)  # type: ignore
             elif optional_params.get("stream", False):
                 return self.streaming(
                     logging_obj=logging_obj,
@@ -898,12 +900,14 @@ class OpenAITextCompletion(BaseLLM):
                     headers=headers,
                     model_response=model_response,
                     model=model,
+                    timeout=timeout
                 )
             else:
                 response = httpx.post(
                     url=f"{api_base}",
                     json=data,
                     headers=headers,
+                    timeout=timeout
                 )
                 if response.status_code != 200:
                     raise OpenAIError(
@@ -939,8 +943,9 @@ class OpenAITextCompletion(BaseLLM):
         prompt: str,
         api_key: str,
         model: str,
+        timeout: float
     ):
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=timeout) as client:
             try:
                 response = await client.post(
                     api_base,
@@ -980,13 +985,14 @@ class OpenAITextCompletion(BaseLLM):
         headers: dict,
         model_response: ModelResponse,
         model: str,
+        timeout: float
     ):
         with httpx.stream(
             url=f"{api_base}",
             json=data,
             headers=headers,
             method="POST",
-            timeout=litellm.request_timeout,
+            timeout=timeout,
         ) as response:
             if response.status_code != 200:
                 raise OpenAIError(
@@ -1010,6 +1016,7 @@ class OpenAITextCompletion(BaseLLM):
         headers: dict,
         model_response: ModelResponse,
         model: str,
+        timeout: float
     ):
         client = httpx.AsyncClient()
         async with client.stream(
@@ -1017,7 +1024,7 @@ class OpenAITextCompletion(BaseLLM):
             json=data,
             headers=headers,
             method="POST",
-            timeout=litellm.request_timeout,
+            timeout=timeout,
         ) as response:
             try:
                 if response.status_code != 200:
