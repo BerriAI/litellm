@@ -558,7 +558,7 @@ class TextChoices(OpenAIObject):
     def __setitem__(self, key, value):
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
-    
+
     def json(self, **kwargs):
         try:
             return self.model_dump()  # noqa
@@ -737,7 +737,9 @@ class Logging:
                 f"Invalid call_type {call_type}. Allowed values: {allowed_values}"
             )
         if messages is not None and isinstance(messages, str):
-            messages = [{"role": "user", "content": messages}] # convert text completion input to the chat completion format
+            messages = [
+                {"role": "user", "content": messages}
+            ]  # convert text completion input to the chat completion format
         self.model = model
         self.messages = messages
         self.stream = stream
@@ -4136,15 +4138,15 @@ def get_llm_provider(
             raise e
         else:
             raise litellm.exceptions.BadRequestError(  # type: ignore
-                        message=f"GetLLMProvider Exception - {str(e)}\n\noriginal model: {model}",
-                        model=model,
-                        response=httpx.Response(
-                            status_code=400,
-                            content=error_str,
-                            request=httpx.request(method="completion", url="https://github.com/BerriAI/litellm"),  # type: ignore
-                        ),
-                        llm_provider="",
-                    )
+                message=f"GetLLMProvider Exception - {str(e)}\n\noriginal model: {model}",
+                model=model,
+                response=httpx.Response(
+                    status_code=400,
+                    content=error_str,
+                    request=httpx.request(method="completion", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                ),
+                llm_provider="",
+            )
 
 
 def get_api_key(llm_provider: str, dynamic_api_key: Optional[str]):

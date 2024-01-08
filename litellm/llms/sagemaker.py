@@ -368,7 +368,7 @@ def embedding(
         original_response=response,
         additional_args={"complete_input_dict": data},
     )
-    
+
     print_verbose(f"raw model_response: {response}")
     if "embedding" not in response:
         raise SagemakerError(status_code=500, message="embedding not found in response")

@@ -1117,7 +1117,7 @@ def completion(
                 acompletion=acompletion,
                 logging_obj=logging,
                 custom_prompt_dict=custom_prompt_dict,
-                timeout=timeout
+                timeout=timeout,
             )
             if (
                 "stream" in optional_params
@@ -1688,7 +1688,7 @@ def completion(
             """
             assume input to custom LLM api bases follow this format:
             resp = requests.post(
-                api_base, 
+                api_base,
                 json={
                     'model': 'meta-llama/Llama-2-13b-hf', # model name
                     'params': {
@@ -3114,7 +3114,8 @@ def config_completion(**kwargs):
             "No config path set, please set a config path using `litellm.config_path = 'path/to/config.json'`"
         )
 
-def stream_chunk_builder_text_completion(chunks: list, messages: Optional[List]=None):
+
+def stream_chunk_builder_text_completion(chunks: list, messages: Optional[List] = None):
     id = chunks[0]["id"]
     object = chunks[0]["object"]
     created = chunks[0]["created"]
@@ -3131,23 +3132,27 @@ def stream_chunk_builder_text_completion(chunks: list, messages: Optional[List]=
         "system_fingerprint": system_fingerprint,
         "choices": [
             {
-            "text": None,
-            "index": 0,
-            "logprobs": logprobs,
-            "finish_reason": finish_reason
+                "text": None,
+                "index": 0,
+                "logprobs": logprobs,
+                "finish_reason": finish_reason,
             }
         ],
         "usage": {
             "prompt_tokens": None,
             "completion_tokens": None,
-            "total_tokens": None
-        }
+            "total_tokens": None,
+        },
     }
     content_list = []
     for chunk in chunks:
         choices = chunk["choices"]
         for choice in choices:
-            if choice is not None and hasattr(choice, "text") and choice.get("text") is not None:
+            if (
+                choice is not None
+                and hasattr(choice, "text")
+                and choice.get("text") is not None
+            ):
                 _choice = choice.get("text")
                 content_list.append(_choice)
 
@@ -3179,13 +3184,16 @@ def stream_chunk_builder_text_completion(chunks: list, messages: Optional[List]=
     )
     return response
 
+
 def stream_chunk_builder(chunks: list, messages: Optional[list] = None):
     id = chunks[0]["id"]
     object = chunks[0]["object"]
     created = chunks[0]["created"]
     model = chunks[0]["model"]
     system_fingerprint = chunks[0].get("system_fingerprint", None)
-    if isinstance(chunks[0]["choices"][0], litellm.utils.TextChoices): # route to the text completion logic 
+    if isinstance(
+        chunks[0]["choices"][0], litellm.utils.TextChoices
+    ):  # route to the text completion logic
         return stream_chunk_builder_text_completion(chunks=chunks, messages=messages)
     role = chunks[0]["choices"][0]["delta"]["role"]
     finish_reason = chunks[-1]["choices"][0]["finish_reason"]

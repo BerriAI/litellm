@@ -561,14 +561,12 @@ class Huggingface(BaseLLM):
         input_text: str,
         model: str,
         optional_params: dict,
-        timeout: float
+        timeout: float,
     ):
         response = None
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
-                response = await client.post(
-                    url=api_base, json=data, headers=headers
-                )
+                response = await client.post(url=api_base, json=data, headers=headers)
                 response_json = response.json()
                 if response.status_code != 200:
                     raise HuggingfaceError(
@@ -607,7 +605,7 @@ class Huggingface(BaseLLM):
         headers: dict,
         model_response: ModelResponse,
         model: str,
-        timeout: float
+        timeout: float,
     ):
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = client.stream(
