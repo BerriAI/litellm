@@ -611,16 +611,31 @@ print(result)
 </Tabs>
 
 ## Debugging Proxy 
-Run the proxy with `--debug` to easily view debug logs 
+
+Events that occur during normal operation
 ```shell
 litellm --model gpt-3.5-turbo --debug
 ```
 
-When making requests you should see the POST request sent by LiteLLM to the LLM on the Terminal output
+Detailed information
 ```shell
-POST Request Sent from LiteLLM:
-curl -X POST \
-https://api.openai.com/v1/chat/completions \
--H 'content-type: application/json' -H 'Authorization: Bearer sk-qnWGUIW9****************************************' \
--d '{"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "this is a test request, write a short poem"}]}'
+litellm --model gpt-3.5-turbo --detailed_debug
 ```
+
+### Set Debug Level using env variables
+
+Events that occur during normal operation
+```shell
+export LITELLM_LOG=INFO
+```
+
+Detailed information
+```shell
+export LITELLM_LOG=DEBUG
+```
+
+No Logs
+```shell
+export LITELLM_LOG=None
+```
+
