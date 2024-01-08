@@ -4120,7 +4120,7 @@ def get_llm_provider(
             )
         return model, custom_llm_provider, dynamic_api_key, api_base
     except Exception as e:
-        raise e
+        raise Exception(f"GetLLMProvider Exception - {str(e)}\n\noriginal model: {model}")
 
 
 def get_api_key(llm_provider: str, dynamic_api_key: Optional[str]):
