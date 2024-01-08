@@ -1310,12 +1310,13 @@ def test_completion_together_ai_mixtral():
 
 
 def test_completion_together_ai_yi_chat():
+    litellm.set_verbose = True
     model_name = "together_ai/zero-one-ai/Yi-34B-Chat"
     try:
         messages = [
             {"role": "user", "content": "What llm are you?"},
         ]
-        response = completion(model=model_name, messages=messages)
+        response = completion(model=model_name, messages=messages, max_tokens=5)
         # Add any assertions here to check the response
         print(response)
         cost = completion_cost(completion_response=response)

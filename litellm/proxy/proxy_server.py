@@ -19,6 +19,7 @@ try:
     import backoff
     import yaml
     import orjson
+    import logging
 except ImportError as e:
     raise ImportError(f"Missing dependency {e}. Run `pip install 'litellm[proxy]'`")
 
@@ -77,6 +78,7 @@ import pydantic
 from litellm.proxy._types import *
 from litellm.caching import DualCache
 from litellm.proxy.health_check import perform_health_check
+from litellm._logging import verbose_router_logger, verbose_proxy_logger
 
 litellm.suppress_debug_info = True
 from fastapi import (
@@ -153,16 +155,7 @@ proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
 async_result = None
 celery_app_conn = None
 celery_fn = None  # Redis Queue for handling requests
-
-
-#### HELPER FUNCTIONS ####
-def print_verbose(print_statement):
-    try:
-        global user_debug
-        if user_debug:
-            print(print_statement)  # noqa
-    except:
-        pass
+### logger ###
 
 
 def usage_telemetry(
@@ -245,24 +238,26 @@ async def user_api_key_auth(
 
         ## check for cache hit (In-Memory Cache)
         valid_token = user_api_key_cache.get_cache(key=api_key)
-        print_verbose(f"valid_token from cache: {valid_token}")
+        verbose_proxy_logger.debug(f"valid_token from cache: {valid_token}")
         if valid_token is None:
             ## check db
-            print_verbose(f"api key: {api_key}")
+            verbose_proxy_logger.debug(f"api key: {api_key}")
             valid_token = await prisma_client.get_data(
                 token=api_key, expires=datetime.utcnow().replace(tzinfo=timezone.utc)
             )
-            print_verbose(f"valid token from prisma: {valid_token}")
+            verbose_proxy_logger.debug(f"valid token from prisma: {valid_token}")
             user_api_key_cache.set_cache(key=api_key, value=valid_token, ttl=60)
         elif valid_token is not None:
-            print_verbose(f"API Key Cache Hit!")
+            verbose_proxy_logger.debug(f"API Key Cache Hit!")
         if valid_token:
             litellm.model_alias_map = valid_token.aliases
             config = valid_token.config
             if config != {}:
                 model_list = config.get("model_list", [])
                 llm_model_list = model_list
-                print_verbose(f"\n new llm router model list {llm_model_list}")
+                verbose_proxy_logger.debug(
+                    f"\n new llm router model list {llm_model_list}"
+                )
             if (
                 len(valid_token.models) == 0
             ):  # assume an empty model list means all models are allowed to be called
@@ -296,7 +291,7 @@ async def user_api_key_auth(
         else:
             raise Exception(f"Invalid token")
     except Exception as e:
-        # print_verbose(f"An exception occurred - {traceback.format_exc()}")
+        # verbose_proxy_logger.debug(f"An exception occurred - {traceback.format_exc()}")
         traceback.print_exc()
         if isinstance(e, HTTPException):
             raise e
@@ -316,7 +311,7 @@ def prisma_setup(database_url: Optional[str]):
                 database_url=database_url, proxy_logging_obj=proxy_logging_obj
             )
         except Exception as e:
-            print_verbose(
+            verbose_proxy_logger.debug(
                 f"Error when initializing prisma, Ensure you run pip install prisma {str(e)}"
             )
 
@@ -358,7 +353,7 @@ def load_from_azure_key_vault(use_azure_key_vault: bool = False):
                 f"Missing KVUri or client_id or client_secret or tenant_id from environment"
             )
     except Exception as e:
-        print_verbose(
+        verbose_proxy_logger.debug(
             "Error when loading keys from Azure Key Vault. Ensure you run `pip install azure-identity azure-keyvault-secrets`"
         )
 
@@ -367,7 +362,7 @@ def cost_tracking():
     global prisma_client
     if prisma_client is not None:
         if isinstance(litellm.success_callback, list):
-            print_verbose("setting litellm success callback to track cost")
+            verbose_proxy_logger.debug("setting litellm success callback to track cost")
             if (track_cost_callback) not in litellm.success_callback:  # type: ignore
                 litellm.success_callback.append(track_cost_callback)  # type: ignore
 
@@ -381,7 +376,7 @@ async def track_cost_callback(
     global prisma_client
     try:
         # check if it has collected an entire stream response
-        print_verbose(
+        verbose_proxy_logger.debug(
             f"kwargs stream: {kwargs.get('stream', None)} + complete streaming response: {kwargs.get('complete_streaming_response', None)}"
         )
         if "complete_streaming_response" in kwargs:
@@ -390,7 +385,7 @@ async def track_cost_callback(
             response_cost = litellm.completion_cost(
                 completion_response=completion_response
             )
-            print_verbose(f"streaming response_cost {response_cost}")
+            verbose_proxy_logger.debug(f"streaming response_cost {response_cost}")
             user_api_key = kwargs["litellm_params"]["metadata"].get(
                 "user_api_key", None
             )
@@ -416,12 +411,14 @@ async def track_cost_callback(
                     token=user_api_key, response_cost=response_cost, user_id=user_id
                 )
     except Exception as e:
-        print_verbose(f"error in tracking cost callback - {str(e)}")
+        verbose_proxy_logger.debug(f"error in tracking cost callback - {str(e)}")
 
 
 async def update_prisma_database(token, response_cost, user_id=None):
     try:
-        print_verbose(f"Enters prisma db call, token: {token}; user_id: {user_id}")
+        verbose_proxy_logger.debug(
+            f"Enters prisma db call, token: {token}; user_id: {user_id}"
+        )
 
         ### UPDATE USER SPEND ###
         async def _update_user_db():
@@ -436,7 +433,7 @@ async def update_prisma_database(token, response_cost, user_id=None):
             # Calculate the new cost by adding the existing cost and response_cost
             new_spend = existing_spend + response_cost
 
-            print_verbose(f"new cost: {new_spend}")
+            verbose_proxy_logger.debug(f"new cost: {new_spend}")
             # Update the cost column for the given user id
             await prisma_client.update_data(user_id=user_id, data={"spend": new_spend})
 
@@ -444,7 +441,7 @@ async def update_prisma_database(token, response_cost, user_id=None):
         async def _update_key_db():
             # Fetch the existing cost for the given token
             existing_spend_obj = await prisma_client.get_data(token=token)
-            print_verbose(f"existing spend: {existing_spend_obj}")
+            verbose_proxy_logger.debug(f"existing spend: {existing_spend_obj}")
             if existing_spend_obj is None:
                 existing_spend = 0
             else:
@@ -452,7 +449,7 @@ async def update_prisma_database(token, response_cost, user_id=None):
             # Calculate the new cost by adding the existing cost and response_cost
             new_spend = existing_spend + response_cost
 
-            print_verbose(f"new cost: {new_spend}")
+            verbose_proxy_logger.debug(f"new cost: {new_spend}")
             # Update the cost column for the given token
             await prisma_client.update_data(token=token, data={"spend": new_spend})
 
@@ -461,7 +458,9 @@ async def update_prisma_database(token, response_cost, user_id=None):
         tasks.append(_update_key_db())
         await asyncio.gather(*tasks)
     except Exception as e:
-        print_verbose(f"Error updating Prisma database: {traceback.format_exc()}")
+        verbose_proxy_logger.debug(
+            f"Error updating Prisma database: {traceback.format_exc()}"
+        )
         pass
 
 
@@ -472,7 +471,7 @@ def run_ollama_serve():
         with open(os.devnull, "w") as devnull:
             process = subprocess.Popen(command, stdout=devnull, stderr=devnull)
     except Exception as e:
-        print_verbose(
+        verbose_proxy_logger.debug(
             f"""
             LiteLLM Warning: proxy started with `ollama` model\n`ollama serve` failed with Exception{e}. \nEnsure you run `ollama serve`
         """
@@ -612,7 +611,7 @@ class ProxyConfig:
         printed_yaml = copy.deepcopy(config)
         printed_yaml.pop("environment_variables", None)
 
-        print_verbose(
+        verbose_proxy_logger.debug(
             f"Loaded config YAML (api_key and environment_variables are not shown):\n{json.dumps(printed_yaml, indent=2)}"
         )
 
@@ -643,7 +642,7 @@ class ProxyConfig:
 
                     cache_type = cache_params.get("type", "redis")
 
-                    print_verbose(f"passed cache type={cache_type}")
+                    verbose_proxy_logger.debug(f"passed cache type={cache_type}")
 
                     if cache_type == "redis":
                         cache_host = litellm.get_secret("REDIS_HOST", None)
@@ -687,14 +686,16 @@ class ProxyConfig:
                     litellm.callbacks = [
                         get_instance_fn(value=value, config_file_path=config_file_path)
                     ]
-                    print_verbose(
+                    verbose_proxy_logger.debug(
                         f"{blue_color_code} Initialized Callbacks - {litellm.callbacks} {reset_color_code}"
                     )
                 elif key == "post_call_rules":
                     litellm.post_call_rules = [
                         get_instance_fn(value=value, config_file_path=config_file_path)
                     ]
-                    print_verbose(f"litellm.post_call_rules: {litellm.post_call_rules}")
+                    verbose_proxy_logger.debug(
+                        f"litellm.post_call_rules: {litellm.post_call_rules}"
+                    )
                 elif key == "success_callback":
                     litellm.success_callback = []
 
@@ -708,7 +709,7 @@ class ProxyConfig:
                         # these are litellm callbacks - "langfuse", "sentry", "wandb"
                         else:
                             litellm.success_callback.append(callback)
-                    print_verbose(
+                    verbose_proxy_logger.debug(
                         f"{blue_color_code} Initialized Success Callbacks - {litellm.success_callback} {reset_color_code}"
                     )
                 elif key == "failure_callback":
@@ -724,7 +725,7 @@ class ProxyConfig:
                         # these are litellm callbacks - "langfuse", "sentry", "wandb"
                         else:
                             litellm.failure_callback.append(callback)
-                    print_verbose(
+                    verbose_proxy_logger.debug(
                         f"{blue_color_code} Initialized Success Callbacks - {litellm.failure_callback} {reset_color_code}"
                     )
                 elif key == "cache_params":
@@ -764,9 +765,9 @@ class ProxyConfig:
             ### CONNECT TO DATABASE ###
             database_url = general_settings.get("database_url", None)
             if database_url and database_url.startswith("os.environ/"):
-                print_verbose(f"GOING INTO LITELLM.GET_SECRET!")
+                verbose_proxy_logger.debug(f"GOING INTO LITELLM.GET_SECRET!")
                 database_url = litellm.get_secret(database_url)
-                print_verbose(f"RETRIEVED DB URL: {database_url}")
+                verbose_proxy_logger.debug(f"RETRIEVED DB URL: {database_url}")
             prisma_setup(database_url=database_url)
             ## COST TRACKING ##
             cost_tracking()
@@ -902,7 +903,7 @@ async def generate_key_helper_fn(
             "max_budget": max_budget,
             "user_email": user_email,
         }
-        print_verbose("PrismaClient: Before Insert Data")
+        verbose_proxy_logger.debug("PrismaClient: Before Insert Data")
         new_verification_token = await prisma_client.insert_data(
             data=verification_token_data
         )
@@ -943,6 +944,7 @@ async def initialize(
     api_base=None,
     api_version=None,
     debug=False,
+    detailed_debug=False,
     temperature=None,
     max_tokens=None,
     request_timeout=600,
@@ -955,12 +957,22 @@ async def initialize(
     use_queue=False,
     config=None,
 ):
-    global user_model, user_api_base, user_debug, user_max_tokens, user_request_timeout, user_temperature, user_telemetry, user_headers, experimental, llm_model_list, llm_router, general_settings, master_key, user_custom_auth, prisma_client
+    global user_model, user_api_base, user_debug, user_detailed_debug, user_user_max_tokens, user_request_timeout, user_temperature, user_telemetry, user_headers, experimental, llm_model_list, llm_router, general_settings, master_key, user_custom_auth, prisma_client
     generate_feedback_box()
     user_model = model
     user_debug = debug
     if debug == True:  # this needs to be first, so users can see Router init debugg
+        from litellm._logging import verbose_router_logger, verbose_proxy_logger
+        import logging
+
+        verbose_router_logger.setLevel(level=logging.INFO)  # set router logs to info
+    if detailed_debug == True:
+        from litellm._logging import verbose_router_logger, verbose_proxy_logger
+        import logging
+
+        verbose_router_logger.setLevel(level=logging.DEBUG)  # set router logs to info
         litellm.set_verbose = True
+
     dynamic_config = {"general": {}, user_model: {}}
     if config:
         (
@@ -1031,9 +1043,9 @@ async def initialize(
 
 # for streaming
 def data_generator(response):
-    print_verbose("inside generator")
+    verbose_proxy_logger.debug("inside generator")
     for chunk in response:
-        print_verbose(f"returned chunk: {chunk}")
+        verbose_proxy_logger.debug(f"returned chunk: {chunk}")
         try:
             yield f"data: {json.dumps(chunk.dict())}\n\n"
         except:
@@ -1041,11 +1053,11 @@ def data_generator(response):
 
 
 async def async_data_generator(response, user_api_key_dict):
-    print_verbose("inside generator")
+    verbose_proxy_logger.debug("inside generator")
     try:
         start_time = time.time()
         async for chunk in response:
-            print_verbose(f"returned chunk: {chunk}")
+            verbose_proxy_logger.debug(f"returned chunk: {chunk}")
             try:
                 yield f"data: {json.dumps(chunk.dict())}\n\n"
             except Exception as e:
@@ -1110,7 +1122,7 @@ async def startup_event():
 
     ### LOAD CONFIG ###
     worker_config = litellm.get_secret("WORKER_CONFIG")
-    print_verbose(f"worker_config: {worker_config}")
+    verbose_proxy_logger.debug(f"worker_config: {worker_config}")
     # check if it's a valid file path
     if os.path.isfile(worker_config):
         await initialize(**worker_config)
@@ -1125,7 +1137,7 @@ async def startup_event():
             _run_background_health_check()
         )  # start the background health check coroutine.
 
-    print_verbose(f"prisma client - {prisma_client}")
+    verbose_proxy_logger.debug(f"prisma client - {prisma_client}")
     if prisma_client:
         await prisma_client.connect()
 
@@ -1152,7 +1164,7 @@ def model_list():
         all_models = list(set(all_models + [m["model_name"] for m in llm_model_list]))
     if user_model is not None:
         all_models += [user_model]
-    print_verbose(f"all_models: {all_models}")
+    verbose_proxy_logger.debug(f"all_models: {all_models}")
     ### CHECK OLLAMA MODELS ###
     try:
         response = requests.get("http://0.0.0.0:11434/api/tags")
@@ -1271,7 +1283,7 @@ async def completion(
         else:
             model_id = ""
 
-        print_verbose(f"final response: {response}")
+        verbose_proxy_logger.debug(f"final response: {response}")
         if (
             "stream" in data and data["stream"] == True
         ):  # use generate_responses to stream responses
@@ -1296,8 +1308,8 @@ async def completion(
         fastapi_response.headers["x-litellm-model-id"] = model_id
         return response
     except Exception as e:
-        print_verbose(f"EXCEPTION RAISED IN PROXY MAIN.PY")
-        print_verbose(
+        verbose_proxy_logger.debug(f"EXCEPTION RAISED IN PROXY MAIN.PY")
+        verbose_proxy_logger.debug(
             f"\033[1;31mAn error occurred: {e}\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`"
         )
         traceback.print_exc()
@@ -1352,13 +1364,13 @@ async def chat_completion(
 
         ## Cache Controls
         headers = request.headers
-        print_verbose(f"Request Headers: {headers}")
+        verbose_proxy_logger.debug(f"Request Headers: {headers}")
         cache_control_header = headers.get("Cache-Control", None)
         if cache_control_header:
             cache_dict = parse_cache_control(cache_control_header)
             data["ttl"] = cache_dict.get("s-maxage")
 
-        print_verbose(f"receiving data: {data}")
+        verbose_proxy_logger.debug(f"receiving data: {data}")
         data["model"] = (
             general_settings.get("completion_model", None)  # server default
             or user_model  # model name passed via cli args
@@ -1372,7 +1384,7 @@ async def chat_completion(
             data["user"] = user_api_key_dict.user_id
 
         if "metadata" in data:
-            print_verbose(f'received metadata: {data["metadata"]}')
+            verbose_proxy_logger.debug(f'received metadata: {data["metadata"]}')
             data["metadata"]["user_api_key"] = user_api_key_dict.api_key
             data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
             data["metadata"]["headers"] = dict(request.headers)
@@ -1463,7 +1475,7 @@ async def chat_completion(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e
         )
-        print_verbose(
+        verbose_proxy_logger.debug(
             f"\033[1;31mAn error occurred: {e}\n\n Debug this by setting `--debug`, e.g. `litellm --model gpt-3.5-turbo --debug`"
         )
         router_model_names = (
@@ -1472,17 +1484,17 @@ async def chat_completion(
             else []
         )
         if llm_router is not None and data.get("model", "") in router_model_names:
-            print_verbose("Results from router")
-            print_verbose("\nRouter stats")
-            print_verbose("\nTotal Calls made")
+            verbose_proxy_logger.debug("Results from router")
+            verbose_proxy_logger.debug("\nRouter stats")
+            verbose_proxy_logger.debug("\nTotal Calls made")
             for key, value in llm_router.total_calls.items():
-                print_verbose(f"{key}: {value}")
-            print_verbose("\nSuccess Calls made")
+                verbose_proxy_logger.debug(f"{key}: {value}")
+            verbose_proxy_logger.debug("\nSuccess Calls made")
             for key, value in llm_router.success_calls.items():
-                print_verbose(f"{key}: {value}")
-            print_verbose("\nFail Calls made")
+                verbose_proxy_logger.debug(f"{key}: {value}")
+            verbose_proxy_logger.debug("\nFail Calls made")
             for key, value in llm_router.fail_calls.items():
-                print_verbose(f"{key}: {value}")
+                verbose_proxy_logger.debug(f"{key}: {value}")
         if user_debug:
             traceback.print_exc()
 
@@ -1785,7 +1797,7 @@ async def generate_key_fn(
     - expires: (datetime) Datetime object for when key expires.
     - user_id: (str) Unique user id - used for tracking spend across multiple keys for same user id.
     """
-    print_verbose("entered /key/generate")
+    verbose_proxy_logger.debug("entered /key/generate")
     data_json = data.json()  # type: ignore
     response = await generate_key_helper_fn(**data_json)
     return GenerateKeyResponse(
@@ -2001,9 +2013,9 @@ async def add_new_model(model_params: ModelParams):
         # Load existing config
         config = await proxy_config.get_config()
 
-        print_verbose(f"User config path: {user_config_file_path}")
+        verbose_proxy_logger.debug(f"User config path: {user_config_file_path}")
 
-        print_verbose(f"Loaded config: {config}")
+        verbose_proxy_logger.debug(f"Loaded config: {config}")
         # Add the new model to the config
         model_info = model_params.model_info.json()
         model_info = {k: v for k, v in model_info.items() if v is not None}
@@ -2015,7 +2027,7 @@ async def add_new_model(model_params: ModelParams):
             }
         )
 
-        print_verbose(f"updated model list: {config['model_list']}")
+        verbose_proxy_logger.debug(f"updated model list: {config['model_list']}")
 
         # Save new config
         await proxy_config.save_config(new_config=config)
@@ -2065,7 +2077,7 @@ async def model_info_v1(request: Request):
         # don't return the api key
         model["litellm_params"].pop("api_key", None)
 
-    print_verbose(f"all_models: {all_models}")
+    verbose_proxy_logger.debug(f"all_models: {all_models}")
     return {"data": all_models}
 
 
@@ -2130,7 +2142,7 @@ async def _litellm_chat_completions_worker(data, user_api_key_dict):
                 user_api_key_dict=user_api_key_dict, data=data, call_type="completion"
             )
 
-            print_verbose(f"_litellm_chat_completions_worker started")
+            verbose_proxy_logger.debug(f"_litellm_chat_completions_worker started")
             ### ROUTE THE REQUEST ###
             router_model_names = (
                 [m["model_name"] for m in llm_model_list]
@@ -2156,17 +2168,17 @@ async def _litellm_chat_completions_worker(data, user_api_key_dict):
             else:  # router is not set
                 response = await litellm.acompletion(**data)
 
-            print_verbose(f"final response: {response}")
+            verbose_proxy_logger.debug(f"final response: {response}")
             return response
         except HTTPException as e:
-            print_verbose(
+            verbose_proxy_logger.debug(
                 f"EXCEPTION RAISED IN _litellm_chat_completions_worker - {e.status_code}; {e.detail}"
             )
             if (
                 e.status_code == 429
                 and "Max parallel request limit reached" in e.detail
             ):
-                print_verbose(f"Max parallel request limit reached!")
+                verbose_proxy_logger.debug(f"Max parallel request limit reached!")
                 timeout = litellm._calculate_retry_after(
                     remaining_retries=3, max_retries=3, min_timeout=1
                 )
@@ -2206,7 +2218,7 @@ async def async_queue_request(
             "body": copy.copy(data),  # use copy instead of deepcopy
         }
 
-        print_verbose(f"receiving data: {data}")
+        verbose_proxy_logger.debug(f"receiving data: {data}")
         data["model"] = (
             general_settings.get("completion_model", None)  # server default
             or user_model  # model name passed via cli args
@@ -2220,7 +2232,7 @@ async def async_queue_request(
             data["user"] = user_api_key_dict.user_id
 
         if "metadata" in data:
-            print_verbose(f'received metadata: {data["metadata"]}')
+            verbose_proxy_logger.debug(f'received metadata: {data["metadata"]}')
             data["metadata"]["user_api_key"] = user_api_key_dict.api_key
             data["metadata"]["headers"] = dict(request.headers)
             data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
@@ -2294,7 +2306,7 @@ async def update_config(config_info: ConfigYAML):
         config = await proxy_config.get_config()
 
         backup_config = copy.deepcopy(config)
-        print_verbose(f"Loaded config: {config}")
+        verbose_proxy_logger.debug(f"Loaded config: {config}")
 
         # update the general settings
         if config_info.general_settings is not None:
@@ -2478,7 +2490,7 @@ async def get_routes():
 async def shutdown_event():
     global prisma_client, master_key, user_custom_auth
     if prisma_client:
-        print_verbose("Disconnecting from Prisma")
+        verbose_proxy_logger.debug("Disconnecting from Prisma")
         await prisma_client.disconnect()
 
     ## RESET CUSTOM VARIABLES ##
