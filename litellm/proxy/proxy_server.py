@@ -1156,7 +1156,7 @@ async def startup_event():
 
     ### CONNECT TO DB ###
     # check if DATABASE_URL in environment - load from there
-    if os.getenv("DATABASE_URL", None) is not None and prisma_client is None:
+    if prisma_client is None:
         prisma_setup(database_url=os.getenv("DATABASE_URL"))
 
     ### LOAD CONFIG ###
@@ -1184,7 +1184,7 @@ async def startup_event():
         )  # start the background health check coroutine.
 
     verbose_proxy_logger.debug(f"prisma client - {prisma_client}")
-    if prisma_client:
+    if prisma_client is not None:
         await prisma_client.connect()
 
     if prisma_client is not None and master_key is not None:

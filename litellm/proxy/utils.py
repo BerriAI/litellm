@@ -555,7 +555,8 @@ class PrismaClient:
     )
     async def connect(self):
         try:
-            await self.db.connect()
+            if self.db.is_connected() == False:
+                await self.db.connect()
         except Exception as e:
             asyncio.create_task(
                 self.proxy_logging_obj.failure_handler(original_exception=e)
