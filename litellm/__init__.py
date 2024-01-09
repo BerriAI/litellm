@@ -500,7 +500,6 @@ from .utils import (
     validate_environment,
     check_valid_key,
     get_llm_provider,
-    completion_with_config,
     register_model,
     encode,
     decode,
