@@ -214,6 +214,7 @@ Code: https://github.com/BerriAI/litellm/tree/main/ui
 | [anyscale](https://docs.litellm.ai/docs/providers/anyscale)  | ✅ | ✅ | ✅ | ✅ |
 | [voyage ai](https://docs.litellm.ai/docs/providers/voyage)  |  |  |  |  | ✅ |
 | [xinference [Xorbits Inference]](https://docs.litellm.ai/docs/providers/xinference)  |  |  |  |  | ✅ |
+| [Google AI Studio](https://docs.litellm.ai/docs/providers/gemini)  | ✅ |  | ✅ |  | |
 
 [**Read the Docs**](https://docs.litellm.ai/docs/)
 
