@@ -2721,7 +2721,9 @@ def test_completion_openai_engine():
         print("\n text 003 test\n")
         litellm.set_verbose = True
         response = text_completion(
-            engine="gpt-3.5-turbo-instruct", prompt="What's the weather in SF?", max_tokens=5
+            engine="gpt-3.5-turbo-instruct",
+            prompt="What's the weather in SF?",
+            max_tokens=5,
         )
         print(response)
         response_str = response["choices"][0]["text"]
@@ -2761,7 +2763,6 @@ def test_text_completion_basic():
             prompt="good morning",
             max_tokens=10,
             logprobs=10,
-            echo=True,
         )
         print(response)
         print(response.choices)
@@ -2938,7 +2939,7 @@ async def test_async_text_completion_chat_model_stream():
         )
 
         num_finish_reason = 0
-        chunks = [] 
+        chunks = []
         async for chunk in response:
             print(chunk)
             chunks.append(chunk)
