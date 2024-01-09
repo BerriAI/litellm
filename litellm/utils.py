@@ -59,6 +59,7 @@ from .exceptions import (
     ServiceUnavailableError,
     OpenAIError,
     ContextWindowExceededError,
+    ContentPolicyViolationError,
     Timeout,
     APIConnectionError,
     APIError,
@@ -5550,6 +5551,17 @@ def exception_type(
                     )
                 elif (
                     "invalid_request_error" in error_str
+                    and "content_policy_violation" in error_str
+                ):
+                    exception_mapping_worked = True
+                    raise ContentPolicyViolationError(
+                        message=f"OpenAIException - {original_exception.message}",
+                        llm_provider="openai",
+                        model=model,
+                        response=original_exception.response,
+                    )
+                elif (
+                    "invalid_request_error" in error_str
                     and "Incorrect API key provided" not in error_str
                 ):
                     exception_mapping_worked = True
@@ -6492,6 +6504,17 @@ def exception_type(
                 elif "DeploymentNotFound" in error_str:
                     exception_mapping_worked = True
                     raise NotFoundError(
+                        message=f"AzureException - {original_exception.message}",
+                        llm_provider="azure",
+                        model=model,
+                        response=original_exception.response,
+                    )
+                elif (
+                    "invalid_request_error" in error_str
+                    and "content_policy_violation" in error_str
+                ):
+                    exception_mapping_worked = True
+                    raise ContentPolicyViolationError(
                         message=f"AzureException - {original_exception.message}",
                         llm_provider="azure",
                         model=model,
