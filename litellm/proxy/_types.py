@@ -4,7 +4,6 @@ from typing import Optional, List, Union, Dict, Literal
 from datetime import datetime
 import uuid, json
 
-
 class LiteLLMBase(BaseModel):
     """
     Implements default functions, all pydantic objects should have.
@@ -181,6 +180,12 @@ class KeyManagementSystem(enum.Enum):
     AZURE_KEY_VAULT = "azure_key_vault"
     LOCAL = "local"
 
+class DynamoDBArgs(LiteLLMBase):
+    billing_mode: Literal["PROVISIONED_THROUGHPUT", "PAY_PER_REQUEST"]
+    read_capacity_units: Optional[int] = None
+    write_capacity_units: Optional[int] = None
+    region_name: Optional[str] = None
+
 
 class ConfigGeneralSettings(LiteLLMBase):
     """
@@ -206,6 +211,8 @@ class ConfigGeneralSettings(LiteLLMBase):
         None,
         description="connect to a postgres db - needed for generating temporary keys + tracking spend / key",
     )
+    database_type: Optional[Literal["dynamo_db"]] = Field(None, description="to use dynamodb instead of postgres db")
+    database_args: Optional[DynamoDBArgs] = Field(None, description="custom args for instantiating dynamodb client - e.g. billing provision")
     otel: Optional[bool] = Field(
         None,
         description="[BETA] OpenTelemetry support - this might change, use with caution.",
@@ -258,3 +265,35 @@ class ConfigYAML(LiteLLMBase):
 
     class Config:
         protected_namespaces = ()
+
+class DBTableNames(enum.Enum):
+    user = "LiteLLM_UserTable"
+    key = "LiteLLM_VerificationToken"
+    config = "LiteLLM_Config"
+
+class LiteLLM_VerificationToken(LiteLLMBase):
+    token: str
+    spend: float = 0.0
+    expires: Union[str, None]
+    models: List[str]
+    aliases: Dict[str, str] = {}
+    config: Dict[str, str] = {}
+    user_id: Union[str, None]
+    max_parallel_requests: Union[int, None]
+    metadata: Dict[str, str] = {}
+
+class LiteLLM_Config(LiteLLMBase):
+    param_name: str
+    param_value: Dict
+
+class LiteLLM_UserTable(LiteLLMBase):
+    user_id: str
+    max_budget: Optional[float]
+    spend: float = 0.0
+    user_email: Optional[str]
+
+    @root_validator(pre=True)
+    def set_model_info(cls, values):
+        if values.get("spend") is None:
+            values.update({"spend": 0.0})
+        return values
