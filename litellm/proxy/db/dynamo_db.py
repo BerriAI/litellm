@@ -128,7 +128,7 @@ class DynamoDBWrapper(CustomDB):
             
 
             actions: List = []
-            for field in data_obj.model_fields_set:
+            for field in data_obj.fields_set():
                 field_value = getattr(data_obj, field)
 
                 # Convert datetime object to ISO8601 string
