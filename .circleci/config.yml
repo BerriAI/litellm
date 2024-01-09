@@ -8,17 +8,6 @@ jobs:
     executor: python/default
     steps:
       - checkout
-
-      - run:
-          name: Check if litellm dir was updated or if pyproject.toml was modified
-          command: |
-            if [ -n "$(git diff --name-only $CIRCLE_SHA1^..$CIRCLE_SHA1 | grep -E 'pyproject\.toml|litellm/')" ]; then
-              echo "litellm updated"
-            else
-              echo "No changes to litellm or pyproject.toml. Skipping tests."
-              circleci step halt
-            fi
-
       - python/install-packages:
           pkg-manager: poetry
           args: --extras=proxy --verbose
