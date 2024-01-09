@@ -25,7 +25,7 @@
 </h4>
 
 LiteLLM manages:
-- Translate inputs to provider's `completion` and `embedding` endpoints
+- Translate inputs to provider's `completion`, `embedding`, and `image_generation` endpoints
 - [Consistent output](https://docs.litellm.ai/docs/completion/output), text responses will always be available at `['choices'][0]['message']['content']`
 - Load-balance multiple deployments (e.g. Azure/OpenAI) - `Router` **1k+ requests/second**
 
