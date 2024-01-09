@@ -179,10 +179,7 @@ def get_ollama_response(
     elif optional_params.get("stream", False) == True:
         return ollama_completion_stream(url=url, data=data, logging_obj=logging_obj)
 
-    response = requests.post(
-        url=f"{url}",
-        json=data,
-    )
+    response = requests.post(url=f"{url}", json=data, timeout=litellm.request_timeout)
     if response.status_code != 200:
         raise OllamaError(status_code=response.status_code, message=response.text)
 
