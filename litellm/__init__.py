@@ -544,6 +544,7 @@ from .exceptions import (
     ServiceUnavailableError,
     OpenAIError,
     ContextWindowExceededError,
+    ContentPolicyViolationError,
     BudgetExceededError,
     APIError,
     Timeout,
