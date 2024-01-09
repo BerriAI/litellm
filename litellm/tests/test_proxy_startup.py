@@ -19,7 +19,8 @@ from litellm.proxy.proxy_server import (
     save_worker_config,
     initialize,
     startup_event,
-    llm_model_list
+    llm_model_list,
+    shutdown_event
 )
 
 def test_proxy_gunicorn_startup_direct_config():
@@ -36,6 +37,7 @@ def test_proxy_gunicorn_startup_direct_config():
         config_fp = f"{filepath}/test_configs/test_config_no_auth.yaml"
         os.environ["WORKER_CONFIG"] = config_fp
         asyncio.run(startup_event())
+        asyncio.run(shutdown_event())
     except Exception as e:
         if "Already connected to the query engine" in str(e): 
             pass
@@ -51,6 +53,7 @@ def test_proxy_gunicorn_startup_config_dict():
         worker_config = {"config": config_fp}
         os.environ["WORKER_CONFIG"] = json.dumps(worker_config)
         asyncio.run(startup_event())
+        asyncio.run(shutdown_event())
     except Exception as e:
         if "Already connected to the query engine" in str(e): 
             pass

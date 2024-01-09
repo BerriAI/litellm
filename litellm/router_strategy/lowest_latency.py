@@ -50,9 +50,12 @@ class LowestLatencyLoggingHandler(CustomLogger):
 
                 ## Latency
                 request_count_dict = self.router_cache.get_cache(key=latency_key) or {}
-                request_count_dict[id] = response_ms
+                if id in request_count_dict and isinstance(request_count_dict[id], list):
+                    request_count_dict[id] = request_count_dict[id].append(response_ms)
+                else:
+                    request_count_dict[id] = [response_ms]
 
-                self.router_cache.set_cache(key=latency_key, value=request_count_dict)
+                self.router_cache.set_cache(key=latency_key, value=request_count_dict, ttl=self.default_cache_time_seconds) # reset map within window 
 
                 ### TESTING ###
                 if self.test_flag:
@@ -90,9 +93,12 @@ class LowestLatencyLoggingHandler(CustomLogger):
 
                 ## Latency
                 request_count_dict = self.router_cache.get_cache(key=latency_key) or {}
-                request_count_dict[id] = response_ms
+                if id in request_count_dict and isinstance(request_count_dict[id], list):
+                    request_count_dict[id] = request_count_dict[id] + [response_ms]
+                else:
+                    request_count_dict[id] = [response_ms]
 
-                self.router_cache.set_cache(key=latency_key, value=request_count_dict)
+                self.router_cache.set_cache(key=latency_key, value=request_count_dict, ttl=self.default_cache_time_seconds) # reset map within window 
 
                 ### TESTING ###
                 if self.test_flag:
@@ -123,7 +129,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
         for d in healthy_deployments:
             ## if healthy deployment not yet used
             if d["model_info"]["id"] not in all_deployments:
-                all_deployments[d["model_info"]["id"]] = 0
+                all_deployments[d["model_info"]["id"]] = [0]
 
         for item, item_latency in all_deployments.items():
             ## get the item from model list
@@ -134,10 +140,15 @@ class LowestLatencyLoggingHandler(CustomLogger):
 
             if _deployment is None:
                 continue  # skip to next one
-
-            if isinstance(item_latency, timedelta):
-                item_latency = float(item_latency.total_seconds())
-
+            
+            # get average latency 
+            total = 0.0
+            for _call_latency in item_latency:
+                if isinstance(_call_latency, timedelta):
+                    total += float(_call_latency.total_seconds())
+                elif isinstance(_call_latency, float):
+                    total += _call_latency
+            item_latency = total/len(item_latency)
             if item_latency == 0:
                 deployment = _deployment
                 break
