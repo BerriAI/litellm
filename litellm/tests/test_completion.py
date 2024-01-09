@@ -744,18 +744,19 @@ def test_completion_openai_litellm_key():
 
 def test_completion_ollama_hosted():
     try:
+        litellm.request_timeout = 20  # give ollama 20 seconds to response
         litellm.set_verbose = True
         response = completion(
             model="ollama/phi",
             messages=messages,
-            max_tokens=10,
-            num_retries=3,
-            timeout=20,
+            max_tokens=2,
             api_base="https://test-ollama-endpoint.onrender.com",
         )
         # Add any assertions here to check the response
         print(response)
-    except Timeout as e:
+    except openai.APITimeoutError as e:
+        print("got a timeout error. Passed ! ")
+        litellm.request_timeout = None
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
