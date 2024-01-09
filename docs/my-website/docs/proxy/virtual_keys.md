@@ -15,6 +15,14 @@ Complete API documentation in the Swagger docs on your proxy base url (e.g. `htt
 Requirements: 
 
 - Need to a postgres database (e.g. [Supabase](https://supabase.com/), [Neon](https://neon.tech/), etc)
+- Set `DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/<dbname>` in your env 
+
+(the proxy Dockerfile checks if the `DATABASE_URL` is set and then intializes the DB connection)
+
+```shell
+export DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/<dbname>
+```
+
 
 You can then generate temporary keys by hitting the `/key/generate` endpoint.
 
