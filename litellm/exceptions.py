@@ -108,6 +108,21 @@ class ContextWindowExceededError(BadRequestError):  # type: ignore
         )  # Call the base class constructor with the parameters it needs
 
 
+class ContentPolicyViolationError(BadRequestError):  # type: ignore
+    #  Error code: 400 - {'error': {'code': 'content_policy_violation', 'message': 'Your request was rejected as a result of our safety system. Image descriptions generated from your prompt may contain text that is not allowed by our safety system. If you believe this was done in error, your request may succeed if retried, or by adjusting your prompt.', 'param': None, 'type': 'invalid_request_error'}}
+    def __init__(self, message, model, llm_provider, response: httpx.Response):
+        self.status_code = 400
+        self.message = message
+        self.model = model
+        self.llm_provider = llm_provider
+        super().__init__(
+            message=self.message,
+            model=self.model,  # type: ignore
+            llm_provider=self.llm_provider,  # type: ignore
+            response=response,
+        )  # Call the base class constructor with the parameters it needs
+
+
 class ServiceUnavailableError(APIStatusError):  # type: ignore
     def __init__(self, message, llm_provider, model, response: httpx.Response):
         self.status_code = 503
