@@ -80,7 +80,7 @@ def test_hanging_request_azure():
         )
 
 
-test_hanging_request_azure()
+# test_hanging_request_azure()
 
 
 def test_hanging_request_openai():
@@ -156,3 +156,28 @@ def test_timeout_streaming():
 
 
 # test_timeout_streaming()
+
+
+def test_timeout_ollama():
+    # this Will Raise a timeout
+    import litellm
+
+    litellm.set_verbose = True
+    try:
+        litellm.request_timeout = 0.1
+        litellm.set_verbose = True
+        response = litellm.completion(
+            model="ollama/phi",
+            messages=[{"role": "user", "content": "hello, what llm are u"}],
+            max_tokens=1,
+            api_base="https://test-ollama-endpoint.onrender.com",
+        )
+        # Add any assertions here to check the response
+        litellm.request_timeout = None
+        print(response)
+    except openai.APITimeoutError as e:
+        print("got a timeout error! Passed ! ")
+        pass
+
+
+# test_timeout_ollama()

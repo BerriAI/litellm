@@ -34,7 +34,6 @@ RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
 
 # Runtime stage
 FROM $LITELLM_RUNTIME_IMAGE as runtime
-ARG with_database
 
 WORKDIR /app
 # Copy the current directory contents into the container at /app
@@ -46,12 +45,14 @@ COPY --from=builder /app/dist/*.whl .
 COPY --from=builder /wheels/ /wheels/
 
 # Install the built wheel using pip; again using a wildcard if it's the only file
-RUN pip install --no-cache-dir --find-links=/wheels/ -r requirements.txt \
-    && pip install *.whl \
-    && rm -f *.whl
+RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ && rm -f *.whl && rm -rf /wheels
+
+RUN chmod +x entrypoint.sh
 
 EXPOSE 4000/tcp
 
 # Set your entrypoint and command
-ENTRYPOINT ["litellm"]
-CMD ["--port", "4000"]
+CMD [ \
+    "sh", "-c", \
+    "if [ -n \"$DATABASE_URL\" ]; then ./entrypoint.sh; else litellm --port 4000 --num_workers 8; fi" \
+]

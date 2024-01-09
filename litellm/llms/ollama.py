@@ -179,10 +179,7 @@ def get_ollama_response(
     elif optional_params.get("stream", False) == True:
         return ollama_completion_stream(url=url, data=data, logging_obj=logging_obj)
 
-    response = requests.post(
-        url=f"{url}",
-        json=data,
-    )
+    response = requests.post(url=f"{url}", json=data, timeout=litellm.request_timeout)
     if response.status_code != 200:
         raise OllamaError(status_code=response.status_code, message=response.text)
 
@@ -217,7 +214,7 @@ def get_ollama_response(
         model_response["choices"][0]["message"]["content"] = response_json["response"]
     model_response["created"] = int(time.time())
     model_response["model"] = "ollama/" + model
-    prompt_tokens = response_json["prompt_eval_count"]  # type: ignore
+    prompt_tokens = response_json.get("prompt_eval_count", len(encoding.encode(prompt)))  # type: ignore
     completion_tokens = response_json["eval_count"]
     model_response["usage"] = litellm.Usage(
         prompt_tokens=prompt_tokens,
@@ -318,7 +315,7 @@ async def ollama_acompletion(url, data, model_response, encoding, logging_obj):
                 ]
             model_response["created"] = int(time.time())
             model_response["model"] = "ollama/" + data["model"]
-            prompt_tokens = response_json["prompt_eval_count"]  # type: ignore
+            prompt_tokens = response_json.get("prompt_eval_count", len(encoding.encode(data["prompt"])))  # type: ignore
             completion_tokens = response_json["eval_count"]
             model_response["usage"] = litellm.Usage(
                 prompt_tokens=prompt_tokens,
