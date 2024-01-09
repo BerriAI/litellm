@@ -72,6 +72,12 @@ mypy = "^1.8.0"
 pytest-async = "^0.1.1"
 numpydoc = "^1.6.0"
 setuptools = "^69.0.3"
+types-setuptools = "^69.0.0.20240106"
+types-redis = "^4.6.0.20240106"
+types-pyyaml = "^6.0.12.12"
+types-tabulate = "^0.9.0.20240106"
+types-waitress = "^2.1.4.20240106"
+types-requests = "2.31.0"
 
 [build-system]
 requires = ["poetry-core", "wheel"]

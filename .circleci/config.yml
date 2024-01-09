@@ -22,17 +22,11 @@ jobs:
           command: |
             poetry run flake8
       - run:
-          name: Linting Testing
+          name: mypy
           command: |
-            cd litellm
-            python -m pip install 'mypy==1.8.0'
-            python -m pip install types-requests types-setuptools types-redis types-PyYAML
-            if ! python -m mypy . --ignore-missing-imports; then
-              echo "mypy detected errors"
-              exit 1
-            fi
-            cd ..
-  
+            poetry run mypy litellm --ignore-missing-imports
+          # TODO: change litellm to . to cover the whole project
+
 
       # Run pytest and generate JUnit XML report
       - run:
