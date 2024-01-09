@@ -3125,7 +3125,7 @@ crt = ["botocore[crt] (>=1.33.2,<2.0a.0)"]
 name = "setuptools"
 version = "69.0.3"
 description = "Easily download, build, install, upgrade, and uninstall Python packages"
-optional = true
+optional = false
 python-versions = ">=3.8"
 files = [
     {file = "setuptools-69.0.3-py3-none-any.whl", hash = "sha256:385eb4edd9c9d5c17540511303e39a147ce2fc04bc55289c322b9e5904fe2c05"},
@@ -4165,4 +4165,4 @@ proxy = ["backoff", "fastapi", "orjson", "pyyaml", "rq", "uvicorn"]
 [metadata]
 lock-version = "2.0"
 python-versions = ">3.9.7, <3.12"
-content-hash = "c6653d13572bd58d896da8fa60415bb755d65d1dab14f9c995edf60e567220e6"
+content-hash = "06b2fcda1823ecf193385e2b8cc7eacd6f158bb808a125ceb1606474430fd9f2"

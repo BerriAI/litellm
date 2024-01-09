@@ -71,6 +71,7 @@ pytest = "^7.4.3"
 mypy = "^1.8.0"
 pytest-async = "^0.1.1"
 numpydoc = "^1.6.0"
+setuptools = "^69.0.3"
 
 [build-system]
 requires = ["poetry-core", "wheel"]
