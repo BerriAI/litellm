@@ -25,10 +25,11 @@ jobs:
       - run:
           name: Black Formatting
           command: |
-            cd litellm
-            python -m pip install black
-            python -m black .
-            cd ..
+            poetry run black .
+      - run:
+          name: Flake8
+          command: |
+            poetry run flake8
       - run:
           name: Linting Testing
           command: |
