@@ -60,6 +60,7 @@ from .exceptions import (
     ServiceUnavailableError,
     OpenAIError,
     ContextWindowExceededError,
+    ContentPolicyViolationError,
     Timeout,
     APIConnectionError,
     APIError,
@@ -5553,6 +5554,17 @@ def exception_type(
                     )
                 elif (
                     "invalid_request_error" in error_str
+                    and "content_policy_violation" in error_str
+                ):
+                    exception_mapping_worked = True
+                    raise ContentPolicyViolationError(
+                        message=f"OpenAIException - {original_exception.message}",
+                        llm_provider="openai",
+                        model=model,
+                        response=original_exception.response,
+                    )
+                elif (
+                    "invalid_request_error" in error_str
                     and "Incorrect API key provided" not in error_str
                 ):
                     exception_mapping_worked = True
@@ -6495,6 +6507,17 @@ def exception_type(
                 elif "DeploymentNotFound" in error_str:
                     exception_mapping_worked = True
                     raise NotFoundError(
+                        message=f"AzureException - {original_exception.message}",
+                        llm_provider="azure",
+                        model=model,
+                        response=original_exception.response,
+                    )
+                elif (
+                    "invalid_request_error" in error_str
+                    and "content_policy_violation" in error_str
+                ):
+                    exception_mapping_worked = True
+                    raise ContentPolicyViolationError(
                         message=f"AzureException - {original_exception.message}",
                         llm_provider="azure",
                         model=model,
@@ -7844,133 +7867,6 @@ def read_config_args(config_path) -> dict:
 
 
 ########## experimental completion variants ############################
-
-
-def completion_with_config(config: Union[dict, str], **kwargs):
-    """
-    Generate a litellm.completion() using a config dict and all supported completion args
-
-    Example config;
-    config = {
-        "default_fallback_models": # [Optional] List of model names to try if a call fails
-        "available_models": # [Optional] List of all possible models you could call
-        "adapt_to_prompt_size": # [Optional] True/False - if you want to select model based on prompt size (will pick from available_models)
-        "model": {
-            "model-name": {
-                "needs_moderation": # [Optional] True/False - if you want to call openai moderations endpoint before making completion call. Will raise exception, if flagged.
-                "error_handling": {
-                    "error-type": { # One of the errors listed here - https://docs.litellm.ai/docs/exception_mapping#custom-mapping-list
-                        "fallback_model": "" # str, name of the model it should try instead, when that error occurs
-                    }
-                }
-            }
-        }
-    }
-
-    Parameters:
-        config (Union[dict, str]): A configuration for litellm
-        **kwargs: Additional keyword arguments for litellm.completion
-
-    Returns:
-        litellm.ModelResponse: A ModelResponse with the generated completion
-
-    """
-    if config is not None:
-        if isinstance(config, str):
-            config = read_config_args(config)
-        elif isinstance(config, dict):
-            config = config
-        else:
-            raise Exception("Config path must be a string or a dictionary.")
-    else:
-        raise Exception("Config path not passed in.")
-
-    if config is None:
-        raise Exception("No completion config in the config file")
-
-    models_with_config = config["model"].keys()
-    model = kwargs["model"]
-    messages = kwargs["messages"]
-
-    ## completion config
-    fallback_models = config.get("default_fallback_models", None)
-    available_models = config.get("available_models", None)
-    adapt_to_prompt_size = config.get("adapt_to_prompt_size", False)
-    trim_messages_flag = config.get("trim_messages", False)
-    prompt_larger_than_model = False
-    max_model = model
-    try:
-        max_tokens = litellm.get_max_tokens(model)["max_tokens"]
-    except:
-        max_tokens = 2048  # assume curr model's max window is 2048 tokens
-    if adapt_to_prompt_size:
-        ## Pick model based on token window
-        prompt_tokens = litellm.token_counter(
-            model="gpt-3.5-turbo",
-            text="".join(message["content"] for message in messages),
-        )
-        try:
-            curr_max_tokens = litellm.get_max_tokens(model)["max_tokens"]
-        except:
-            curr_max_tokens = 2048
-        if curr_max_tokens < prompt_tokens:
-            prompt_larger_than_model = True
-            for available_model in available_models:
-                try:
-                    curr_max_tokens = litellm.get_max_tokens(available_model)[
-                        "max_tokens"
-                    ]
-                    if curr_max_tokens > max_tokens:
-                        max_tokens = curr_max_tokens
-                        max_model = available_model
-                    if curr_max_tokens > prompt_tokens:
-                        model = available_model
-                        prompt_larger_than_model = False
-                except:
-                    continue
-        if prompt_larger_than_model:
-            messages = trim_messages(messages=messages, model=max_model)
-            kwargs["messages"] = messages
-
-    kwargs["model"] = model
-    try:
-        if model in models_with_config:
-            ## Moderation check
-            if config["model"][model].get("needs_moderation"):
-                input = " ".join(message["content"] for message in messages)
-                response = litellm.moderation(input=input)
-                flagged = response["results"][0]["flagged"]
-                if flagged:
-                    raise Exception("This response was flagged as inappropriate")
-
-            ## Model-specific Error Handling
-            error_handling = None
-            if config["model"][model].get("error_handling"):
-                error_handling = config["model"][model]["error_handling"]
-
-            try:
-                response = litellm.completion(**kwargs)
-                return response
-            except Exception as e:
-                exception_name = type(e).__name__
-                fallback_model = None
-                if error_handling and exception_name in error_handling:
-                    error_handler = error_handling[exception_name]
-                    # either switch model or api key
-                    fallback_model = error_handler.get("fallback_model", None)
-                if fallback_model:
-                    kwargs["model"] = fallback_model
-                    return litellm.completion(**kwargs)
-                raise e
-        else:
-            return litellm.completion(**kwargs)
-    except Exception as e:
-        if fallback_models:
-            model = fallback_models.pop(0)
-            return completion_with_fallbacks(
-                model=model, messages=messages, fallbacks=fallback_models
-            )
-        raise e
 
 
 def completion_with_fallbacks(**kwargs):

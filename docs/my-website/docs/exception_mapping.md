@@ -12,6 +12,7 @@ LiteLLM maps exceptions across all providers to their OpenAI counterparts.
 | 429         | RateLimitError           |
 | >=500       | InternalServerError      |
 | N/A         | ContextWindowExceededError|
+| 400         | ContentPolicyViolationError|
 | N/A         | APIConnectionError       |
 
 
