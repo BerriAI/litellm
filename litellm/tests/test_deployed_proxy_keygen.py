@@ -30,7 +30,7 @@ def test_add_new_key():
 
         headers = {"Authorization": f"Bearer {token}"}
 
-        staging_endpoint = "https://litellm-litellm-pr-1366.up.railway.app"
+        staging_endpoint = "https://litellm-litellm-pr-1376.up.railway.app"
 
         # Your bearer token
         token = os.getenv("PROXY_MASTER_KEY")

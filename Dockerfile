@@ -51,6 +51,7 @@ RUN pip install --no-cache-dir --find-links=/wheels/ -r requirements.txt \
     && rm -f *.whl
 
 # if user has set os.environ['DATABASE_URL'] != None, run prisma generate 
+RUN echo "DATABASE_URL is set to: $DATABASE_URL"
 RUN if [ -n "$DATABASE_URL" ]; then \
       echo "DATABASE_URL is set to: $DATABASE_URL"; \
       prisma generate; \
