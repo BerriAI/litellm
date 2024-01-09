@@ -588,7 +588,7 @@ class DBClient:
 
     [TODO] route b/w customauth and prisma
     """
-    def __init__(self, custom_db_type: Literal["dynamo_db"], custom_db_args: Optional[dict]=None) -> None:
+    def __init__(self, custom_db_type: Literal["dynamo_db"], custom_db_args: dict) -> None:
         if custom_db_type == "dynamo_db":
             self.db = DynamoDBWrapper(database_arguments=DynamoDBArgs(**custom_db_args))
 
