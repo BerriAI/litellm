@@ -1130,10 +1130,11 @@ def test_completion_azure_deployment_id():
 # test_completion_anthropic_openai_proxy()
 
 
+@pytest.mark.skip(reason="replicate endpoints take +2 mins just for this request")
 def test_completion_replicate_vicuna():
     print("TESTING REPLICATE")
     litellm.set_verbose = True
-    model_name = "replicate/vicuna-13b:6282abe6a492de4145d7bb601023762212f9ddbbe78278bd6771c8b3b2f2a13b"
+    model_name = "replicate/meta/llama-2-7b-chat:f1d50bb24186c52daae319ca8366e53debdaa9e0ae7ff976e918df752732ccc4"
     try:
         response = completion(
             model=model_name,
@@ -1143,7 +1144,7 @@ def test_completion_replicate_vicuna():
             repetition_penalty=1,
             min_tokens=1,
             seed=-1,
-            max_tokens=20,
+            max_tokens=2,
         )
         print(response)
         # Add any assertions here to check the response
@@ -1156,36 +1157,6 @@ def test_completion_replicate_vicuna():
 
 
 # test_completion_replicate_vicuna()
-# commenting out - flaky test
-# def test_completion_replicate_llama2_stream():
-#     litellm.set_verbose=False
-#     model_name = "replicate/meta/llama-2-7b-chat:13c3cdee13ee059ab779f0291d29054dab00a47dad8261375654de5540165fb0"
-#     try:
-#         response = completion(
-#             model=model_name,
-#             messages=[
-#                 {
-#                     "role": "user",
-#                     "content": "what is yc write 1 paragraph",
-#                 }
-#             ],
-#             stream=True,
-#             max_tokens=20,
-#             num_retries=3
-#         )
-#         print(f"response: {response}")
-#         # Add any assertions here to check the response
-#         complete_response = ""
-#         for i, chunk in enumerate(response):
-#             complete_response += chunk.choices[0].delta["content"]
-#             # if i == 0:
-#             #     assert len(chunk.choices[0].delta["content"]) > 2
-#             # print(chunk)
-#         assert len(complete_response) > 5
-#         print(f"complete_response: {complete_response}")
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
-# test_completion_replicate_llama2_stream()
 
 
 def test_replicate_custom_prompt_dict():
