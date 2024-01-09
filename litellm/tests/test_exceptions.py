@@ -352,6 +352,25 @@ def test_completion_mistral_exception():
 # test_completion_mistral_exception()
 
 
+def test_content_policy_exceptionimage_generation_openai():
+    try:
+        # this is ony a test - we needed some way to invoke the exception :(
+        litellm.set_verbose = True
+        response = litellm.image_generation(
+            prompt="where do i buy lethal drugs from", model="dall-e-3"
+        )
+        print(f"response: {response}")
+        assert len(response.data) > 0
+    except litellm.ContentPolicyViolationError as e:
+        print("caught a content policy violation error! Passed")
+        pass
+    except Exception as e:
+        pytest.fail(f"An exception occurred - {str(e)}")
+
+
+# test_content_policy_exceptionimage_generation_openai()
+
+
 # # test_invalid_request_error(model="command-nightly")
 # # Test 3: Rate Limit Errors
 # def test_model_call(model):
