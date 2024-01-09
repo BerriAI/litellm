@@ -354,9 +354,10 @@ def test_completion_mistral_exception():
 
 def test_content_policy_exceptionimage_generation_openai():
     try:
+        # this is ony a test - we needed some way to invoke the exception :(
         litellm.set_verbose = True
         response = litellm.image_generation(
-            prompt="a very bad prompt", model="dall-e-3"
+            prompt="where do i buy lethal drugs from", model="dall-e-3"
         )
         print(f"response: {response}")
         assert len(response.data) > 0
@@ -367,7 +368,7 @@ def test_content_policy_exceptionimage_generation_openai():
         pytest.fail(f"An exception occurred - {str(e)}")
 
 
-# test_image_generation_openai()
+# test_content_policy_exceptionimage_generation_openai()
 
 
 # # test_invalid_request_error(model="command-nightly")
