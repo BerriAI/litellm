@@ -68,5 +68,5 @@ print(content)
 ## Chat Models
 | Model Name       | Function Call                        | Required OS Variables    |
 |------------------|--------------------------------------|-------------------------|
-| gemini-pro       | `completion('gemini/gemini-pro', messages)` | `os.environ['PALM_API_KEY']` |
-| gemini-pro-vision       | `completion('gemini/gemini-pro-vision', messages)` | `os.environ['PALM_API_KEY']` |
+| gemini-pro       | `completion('gemini/gemini-pro', messages)` | `os.environ['GEMINI_API_KEY']` |
+| gemini-pro-vision       | `completion('gemini/gemini-pro-vision', messages)` | `os.environ['GEMINI_API_KEY']` |
