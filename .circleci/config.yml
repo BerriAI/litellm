@@ -37,6 +37,7 @@ jobs:
             pip install traceloop-sdk==0.0.69
             pip install openai
             pip install prisma
+            prisma generate
             pip install "httpx==0.24.1"
             pip install "anyio==3.7.1"
             pip install "asyncio==3.4.3"
