@@ -48,7 +48,10 @@ COPY --from=builder /wheels/ /wheels/
 RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ && rm -f *.whl && rm -rf /wheels
 
 # Generate prisma client
-RUN prisma generate
+RUN env
+# Check if the database_url is set before running prisma generate
+RUN if [ -n "$DATABASE_URL" ]; then prisma generate; fi
+# RUN prisma generate
 RUN chmod +x entrypoint.sh
 
 EXPOSE 4000/tcp
