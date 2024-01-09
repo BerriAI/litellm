@@ -15,6 +15,13 @@ class LiteLLMBase(BaseModel):
         except:
             # if using pydantic v1
             return self.dict()
+    
+    def fields_set(self):
+        try:
+            return self.model_fields_set # noqa
+        except:
+            # if using pydantic v1
+            return self.__fields_set__ 
 
 
 ######### Request Class Definition ######
