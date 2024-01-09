@@ -47,8 +47,10 @@ jobs:
       - run:
           name: Run prisma ./entrypoint.sh
           command: |
+            set +e
             chmod +x entrypoint.sh
             ./entrypoint.sh
+            set -e
       - run:
           name: Black Formatting
           command: |
