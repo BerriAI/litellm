@@ -1,5 +1,5 @@
 general_settings:
-  database_url: os.environ/PROXY_DATABASE_URL
+  database_url: os.environ/DATABASE_URL
   master_key: os.environ/PROXY_MASTER_KEY
 litellm_settings:
   drop_params: true
