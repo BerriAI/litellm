@@ -456,8 +456,11 @@ async def test_aimg_gen_on_router():
 
         router.reset()
     except Exception as e:
-        traceback.print_exc()
-        pytest.fail(f"Error occurred: {e}")
+        if "Your task failed as a result of our safety system." in str(e):
+            pass
+        else:
+            traceback.print_exc()
+            pytest.fail(f"Error occurred: {e}")
 
 
 # asyncio.run(test_aimg_gen_on_router())
