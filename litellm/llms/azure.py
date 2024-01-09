@@ -268,7 +268,10 @@ class AzureChatCompletion(BaseLLM):
             exception_mapping_worked = True
             raise e
         except Exception as e:
-            raise e
+            if hasattr(e, "status_code"):
+                raise AzureOpenAIError(status_code=e.status_code, message=str(e))
+            else:
+                raise AzureOpenAIError(status_code=500, message=str(e))
 
     async def acompletion(
         self,
@@ -569,12 +572,10 @@ class AzureChatCompletion(BaseLLM):
             exception_mapping_worked = True
             raise e
         except Exception as e:
-            if exception_mapping_worked:
-                raise e
+            if hasattr(e, "status_code"):
+                raise AzureOpenAIError(status_code=e.status_code, message=str(e))
             else:
-                import traceback
-
-                raise AzureOpenAIError(status_code=500, message=traceback.format_exc())
+                raise AzureOpenAIError(status_code=500, message=str(e))
 
     async def aimage_generation(
         self,
@@ -702,14 +703,10 @@ class AzureChatCompletion(BaseLLM):
             exception_mapping_worked = True
             raise e
         except Exception as e:
-            if hasattr(e, "status_code"): 
-                raise e
-            elif exception_mapping_worked:
-                raise e
+            if hasattr(e, "status_code"):
+                raise AzureOpenAIError(status_code=e.status_code, message=str(e))
             else:
-                import traceback
-
-                raise AzureOpenAIError(status_code=500, message=traceback.format_exc())
+                raise AzureOpenAIError(status_code=500, message=str(e))
 
     async def ahealth_check(
         self,
