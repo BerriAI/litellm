@@ -5,51 +5,33 @@ orbs:
 
 jobs:
   build_and_test:
-    executor: python/default
+    executor:
+      name: python/default
+      tag: '3.9'
     steps:
       - checkout
-
-      - run:
-          name: Check if litellm dir was updated or if pyproject.toml was modified
-          command: |
-            if [ -n "$(git diff --name-only $CIRCLE_SHA1^..$CIRCLE_SHA1 | grep -E 'pyproject\.toml|litellm/')" ]; then
-              echo "litellm updated"
-            else
-              echo "No changes to litellm or pyproject.toml. Skipping tests."
-              circleci step halt
-            fi
-
       - python/install-packages:
           pkg-manager: poetry
           args: --extras=proxy --verbose
       - run:
           name: Black Formatting
           command: |
-            cd litellm
-            python -m pip install black
-            python -m black .
-            cd ..
+            poetry run black .
       - run:
-          name: Linting Testing
+          name: Flake8
           command: |
-            cd litellm
-            python -m pip install 'mypy==1.8.0'
-            python -m pip install types-requests types-setuptools types-redis types-PyYAML
-            if ! python -m mypy . --ignore-missing-imports; then
-              echo "mypy detected errors"
-              exit 1
-            fi
-            cd ..
-  
+            poetry run flake8
+      - run:
+          name: mypy
+          command: |
+            poetry run mypy litellm --ignore-missing-imports
+          # TODO: change litellm to . to cover the whole project
+
 
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
-            python -m pip install "pytest==7.3.1"
-            python -m pip install "pytest-asyncio==0.21.1"
             poetry run pytest -vv litellm/tests/ -x --junitxml=test-results/junit.xml --durations=5 
           no_output_timeout: 120m
 
