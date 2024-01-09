@@ -18,7 +18,7 @@ def encode_config(proxy_url, allowed_email_subdomain, admin_emails):
 
 
 # Simple function to update config values
-def update_config(proxy_url, allowed_email_subdomain, admin_emails):
+def update_config_values(proxy_url, allowed_email_subdomain, admin_emails):
     st.session_state["proxy_url"] = proxy_url
     st.session_state["allowed_email_subdomain"] = allowed_email_subdomain
     st.session_state["admin_emails"] = admin_emails
@@ -53,6 +53,7 @@ def proxy_setup():
 
         if submitted:
             update_config(
+            update_config_values(
                 proxy_url=proxy_url,
                 allowed_email_subdomain=allowed_email_subdomain,
                 admin_emails=admin_emails,
