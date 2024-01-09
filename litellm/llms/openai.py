@@ -716,12 +716,14 @@ class OpenAIChatCompletion(BaseLLM):
             exception_mapping_worked = True
             raise e
         except Exception as e:
-            if exception_mapping_worked:
+            if hasattr(e, "status_code"): 
+                raise e
+            elif exception_mapping_worked:
                 raise e
             else:
                 import traceback
 
-                raise OpenAIError(status_code=500, message=traceback.format_exc())
+                raise AzureOpenAIError(status_code=500, message=traceback.format_exc())
 
     async def ahealth_check(
         self,

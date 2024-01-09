@@ -702,7 +702,9 @@ class AzureChatCompletion(BaseLLM):
             exception_mapping_worked = True
             raise e
         except Exception as e:
-            if exception_mapping_worked:
+            if hasattr(e, "status_code"): 
+                raise e
+            elif exception_mapping_worked:
                 raise e
             else:
                 import traceback
