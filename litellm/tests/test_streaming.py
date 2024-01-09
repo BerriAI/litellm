@@ -307,7 +307,7 @@ def test_completion_ollama_hosted_stream():
             messages=messages,
             max_tokens=10,
             num_retries=3,
-            timeout=90,
+            timeout=20,
             api_base="https://test-ollama-endpoint.onrender.com",
             stream=True,
         )
