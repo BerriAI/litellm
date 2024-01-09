@@ -10,7 +10,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import pytest
 import litellm
-from litellm import embedding, completion, completion_cost, Timeout
+from litellm import embedding, completion, completion_cost, Timeout, acompletion
 from litellm import RateLimitError
 
 # litellm.num_retries = 3
@@ -857,6 +857,28 @@ def test_completion_azure_key_completion_arg():
 
 
 # test_completion_azure_key_completion_arg()
+
+
+def test_acompletion_params():
+    import inspect
+    from litellm.types.completion import CompletionRequest
+
+    acompletion_params_odict = inspect.signature(acompletion).parameters
+    acompletion_params = {name: param.annotation for name, param in acompletion_params_odict.items()}
+    completion_params = {field_name: field_type for field_name, field_type in CompletionRequest.__annotations__.items()}
+
+    # remove kwargs
+    acompletion_params.pop("kwargs", None)
+
+    keys_acompletion = set(acompletion_params.keys())
+    keys_completion = set(completion_params.keys())
+
+    # Assert that the parameters are the same
+    if keys_acompletion != keys_completion:
+        pytest.fail("The parameters of the acompletion function and the CompletionRequest class are not the same.")
+
+
+# test_acompletion_params()
 
 
 async def test_re_use_azure_async_client():
