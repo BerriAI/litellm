@@ -27,7 +27,7 @@
 LiteLLM manages:
 - Translate inputs to provider's `completion`, `embedding`, and `image_generation` endpoints
 - [Consistent output](https://docs.litellm.ai/docs/completion/output), text responses will always be available at `['choices'][0]['message']['content']`
-- Load-balance multiple deployments (e.g. Azure/OpenAI) - `Router` **1k+ requests/second**
+- [Retry/fallback logic](https://docs.litellm.ai/docs/routing) across multiple deployments (e.g. Azure/OpenAI) 
 
 [**Jump to OpenAI Proxy Docs**](https://github.com/BerriAI/litellm?tab=readme-ov-file#openai-proxy---docs) <br>
 [**Jump to Supported LLM Providers**](https://github.com/BerriAI/litellm?tab=readme-ov-file#supported-provider-docs)
