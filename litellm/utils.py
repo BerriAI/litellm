@@ -59,6 +59,7 @@ from .exceptions import (
     ServiceUnavailableError,
     OpenAIError,
     ContextWindowExceededError,
+    ContentPolicyViolationError,
     Timeout,
     APIConnectionError,
     APIError,
@@ -5554,6 +5555,17 @@ def exception_type(
                 ):
                     exception_mapping_worked = True
                     raise BadRequestError(
+                        message=f"OpenAIException - {original_exception.message}",
+                        llm_provider="openai",
+                        model=model,
+                        response=original_exception.response,
+                    )
+                elif (
+                    "invalid_request_error" in error_str
+                    and "content_policy_violation" in error_str
+                ):
+                    exception_mapping_worked = True
+                    raise Con(
                         message=f"OpenAIException - {original_exception.message}",
                         llm_provider="openai",
                         model=model,
