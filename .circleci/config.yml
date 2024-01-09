@@ -47,10 +47,8 @@ jobs:
       - run:
           name: Run prisma ./entrypoint.sh
           command: |
-            cd litellm
             chmod +x entrypoint.sh
             ./entrypoint.sh
-            cd ..
       - run:
           name: Black Formatting
           command: |
