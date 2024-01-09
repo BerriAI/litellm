@@ -1150,6 +1150,15 @@ async def startup_event():
     global prisma_client, master_key, use_background_health_checks, llm_router, llm_model_list, general_settings
     import json
 
+    ### LOAD MASTER KEY ###
+    # check if master key set in environment - load from there
+    master_key = litellm.get_secret("LITELLM_MASTER_KEY", None)
+
+    ### CONNECT TO DB ###
+    # check if DATABASE_URL in environment - load from there
+    if prisma_client is None:
+        prisma_setup(database_url=os.getenv("DATABASE_URL"))
+
     ### LOAD CONFIG ###
     worker_config = litellm.get_secret("WORKER_CONFIG")
     verbose_proxy_logger.debug(f"worker_config: {worker_config}")
@@ -1184,7 +1193,7 @@ async def startup_event():
         prisma_setup(database_url=os.getenv("DATABASE_URL"))
 
     verbose_proxy_logger.debug(f"prisma client - {prisma_client}")
-    if prisma_client:
+    if prisma_client is not None:
         await prisma_client.connect()
 
     if prisma_client is not None and master_key is not None:
