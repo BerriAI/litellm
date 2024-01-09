@@ -346,7 +346,10 @@ class OpenAIChatCompletion(BaseLLM):
             exception_mapping_worked = True
             raise e
         except Exception as e:
-            raise e
+            if hasattr(e, "status_code"):
+                raise OpenAIError(status_code=e.status_code, message=str(e))
+            else:
+                raise OpenAIError(status_code=500, message=str(e))
 
     async def acompletion(
         self,
@@ -500,6 +503,8 @@ class OpenAIChatCompletion(BaseLLM):
             else:
                 if type(e).__name__ == "ReadTimeout":
                     raise OpenAIError(status_code=408, message=f"{type(e).__name__}")
+                elif hasattr(e, "status_code"):
+                    raise OpenAIError(status_code=e.status_code, message=str(e))
                 else:
                     raise OpenAIError(status_code=500, message=f"{str(e)}")
 
@@ -603,12 +608,10 @@ class OpenAIChatCompletion(BaseLLM):
             exception_mapping_worked = True
             raise e
         except Exception as e:
-            if exception_mapping_worked:
-                raise e
+            if hasattr(e, "status_code"):
+                raise OpenAIError(status_code=e.status_code, message=str(e))
             else:
-                import traceback
-
-                raise OpenAIError(status_code=500, message=traceback.format_exc())
+                raise OpenAIError(status_code=500, message=str(e))
 
     async def aimage_generation(
         self,
@@ -716,12 +719,10 @@ class OpenAIChatCompletion(BaseLLM):
             exception_mapping_worked = True
             raise e
         except Exception as e:
-            if exception_mapping_worked:
-                raise e
+            if hasattr(e, "status_code"):
+                raise OpenAIError(status_code=e.status_code, message=str(e))
             else:
-                import traceback
-
-                raise OpenAIError(status_code=500, message=traceback.format_exc())
+                raise OpenAIError(status_code=500, message=str(e))
 
     async def ahealth_check(
         self,

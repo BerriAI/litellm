@@ -311,6 +311,7 @@ def prisma_setup(database_url: Optional[str]):
                 database_url=database_url, proxy_logging_obj=proxy_logging_obj
             )
         except Exception as e:
+            raise e
             verbose_proxy_logger.debug(
                 f"Error when initializing prisma, Ensure you run pip install prisma {str(e)}"
             )
@@ -510,10 +511,9 @@ class ProxyConfig:
     def is_yaml(self, config_file_path: str) -> bool:
         if not os.path.isfile(config_file_path):
             return False
-        
+
         _, file_extension = os.path.splitext(config_file_path)
-        return file_extension.lower() == '.yaml' or file_extension.lower() == '.yml'
-            
+        return file_extension.lower() == ".yaml" or file_extension.lower() == ".yml"
 
     async def get_config(self, config_file_path: Optional[str] = None) -> dict:
         global prisma_client, user_config_file_path
@@ -776,7 +776,6 @@ class ProxyConfig:
                 verbose_proxy_logger.debug(f"GOING INTO LITELLM.GET_SECRET!")
                 database_url = litellm.get_secret(database_url)
                 verbose_proxy_logger.debug(f"RETRIEVED DB URL: {database_url}")
-            prisma_setup(database_url=database_url)
             ## COST TRACKING ##
             cost_tracking()
             ### MASTER KEY ###
@@ -1156,7 +1155,7 @@ async def startup_event():
 
     ### CONNECT TO DB ###
     # check if DATABASE_URL in environment - load from there
-    if os.getenv("DATABASE_URL", None) is not None and prisma_client is None:
+    if prisma_client is None:
         prisma_setup(database_url=os.getenv("DATABASE_URL"))
 
     ### LOAD CONFIG ###
@@ -1169,7 +1168,9 @@ async def startup_event():
                 llm_router,
                 llm_model_list,
                 general_settings,
-            ) = await proxy_config.load_config(router=llm_router, config_file_path=worker_config)
+            ) = await proxy_config.load_config(
+                router=llm_router, config_file_path=worker_config
+            )
         else:
             await initialize(**worker_config)
     else:
@@ -1184,7 +1185,7 @@ async def startup_event():
         )  # start the background health check coroutine.
 
     verbose_proxy_logger.debug(f"prisma client - {prisma_client}")
-    if prisma_client:
+    if prisma_client is not None:
         await prisma_client.connect()
 
     if prisma_client is not None and master_key is not None:

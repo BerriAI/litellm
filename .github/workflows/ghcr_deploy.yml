@@ -44,7 +44,7 @@ jobs:
         with:
           context: .
           push: true
-          tags: ${{ steps.meta.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }} # if a tag is provided, use that, otherwise use the release tag, and if neither is available, use 'latest'
+          tags: ${{ steps.meta.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, latest # if a tag is provided, use that, otherwise use the release tag, and if neither is available, use 'latest'
           labels: ${{ steps.meta.outputs.labels }}
   build-and-push-image-alpine:
     runs-on: ubuntu-latest
@@ -74,7 +74,7 @@ jobs:
           context: .
           dockerfile: Dockerfile.alpine
           push: true
-          tags: ${{ steps.meta-alpine.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}
+          tags: ${{ steps.meta-alpine.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, latest
           labels: ${{ steps.meta-alpine.outputs.labels }}
   build-and-push-image-database:
     runs-on: ubuntu-latest
@@ -104,7 +104,7 @@ jobs:
           context: .
           file: Dockerfile.database
           push: true
-          tags: ${{ steps.meta-database.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}
+          tags: ${{ steps.meta-database.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, latest
           labels: ${{ steps.meta-database.outputs.labels }}
   release:
     name: "New LiteLLM Release"

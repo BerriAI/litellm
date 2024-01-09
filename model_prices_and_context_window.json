@@ -1,6 +1,8 @@
 {
     "gpt-4": {
-        "max_tokens": 8192,
+        "max_tokens": 8192, 
+        "max_input_tokens": 8192,
+        "max_output_tokens": 4096, 
         "input_cost_per_token": 0.00003,
         "output_cost_per_token": 0.00006,
         "litellm_provider": "openai",
@@ -8,6 +10,8 @@
     },
     "gpt-4-0314": {
         "max_tokens": 8192,
+        "max_input_tokens": 8192,
+        "max_output_tokens": 4096,
         "input_cost_per_token": 0.00003,
         "output_cost_per_token": 0.00006,
         "litellm_provider": "openai",
@@ -15,6 +19,8 @@
     },
     "gpt-4-0613": {
         "max_tokens": 8192,
+        "max_input_tokens": 8192,
+        "max_output_tokens": 4096,
         "input_cost_per_token": 0.00003,
         "output_cost_per_token": 0.00006,
         "litellm_provider": "openai",
@@ -22,6 +28,8 @@
     },
     "gpt-4-32k": {
         "max_tokens": 32768,
+        "max_input_tokens": 32768,
+        "max_output_tokens": 4096,
         "input_cost_per_token": 0.00006,
         "output_cost_per_token": 0.00012,
         "litellm_provider": "openai",
@@ -29,6 +37,8 @@
     },
     "gpt-4-32k-0314": {
         "max_tokens": 32768,
+        "max_input_tokens": 32768,
+        "max_output_tokens": 4096,
         "input_cost_per_token": 0.00006,
         "output_cost_per_token": 0.00012,
         "litellm_provider": "openai",
@@ -36,6 +46,8 @@
     },
     "gpt-4-32k-0613": {
         "max_tokens": 32768,
+        "max_input_tokens": 32768,
+        "max_output_tokens": 4096,
         "input_cost_per_token": 0.00006,
         "output_cost_per_token": 0.00012,
         "litellm_provider": "openai",
@@ -43,6 +55,8 @@
     },
     "gpt-4-1106-preview": {
         "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
         "input_cost_per_token": 0.00001,
         "output_cost_per_token": 0.00003,
         "litellm_provider": "openai",
@@ -50,6 +64,8 @@
     },
     "gpt-4-vision-preview": {
         "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
         "input_cost_per_token": 0.00001,
         "output_cost_per_token": 0.00003,
         "litellm_provider": "openai",
@@ -57,6 +73,8 @@
     },
     "gpt-3.5-turbo": {
         "max_tokens": 4097,
+        "max_input_tokens": 4097,
+        "max_output_tokens": 4096,
         "input_cost_per_token": 0.0000015,
         "output_cost_per_token": 0.000002,
         "litellm_provider": "openai",
@@ -64,6 +82,8 @@
     },
     "gpt-3.5-turbo-0301": {
         "max_tokens": 4097,
+        "max_input_tokens": 4097,
+        "max_output_tokens": 4096,
         "input_cost_per_token": 0.0000015,
         "output_cost_per_token": 0.000002,
         "litellm_provider": "openai",
@@ -71,6 +91,8 @@
     },
     "gpt-3.5-turbo-0613": {
         "max_tokens": 4097,
+        "max_input_tokens": 4097,
+        "max_output_tokens": 4096,
         "input_cost_per_token": 0.0000015,
         "output_cost_per_token": 0.000002,
         "litellm_provider": "openai",
@@ -78,6 +100,8 @@
     },
     "gpt-3.5-turbo-1106": {
         "max_tokens": 16385,
+        "max_input_tokens": 16385,
+        "max_output_tokens": 4096,
         "input_cost_per_token": 0.0000010,
         "output_cost_per_token": 0.0000020,
         "litellm_provider": "openai",
@@ -85,6 +109,8 @@
     },
     "gpt-3.5-turbo-16k": {
         "max_tokens": 16385,
+        "max_input_tokens": 16385,
+        "max_output_tokens": 4096,
         "input_cost_per_token": 0.000003,
         "output_cost_per_token": 0.000004,
         "litellm_provider": "openai",
@@ -92,6 +118,8 @@
     },
     "gpt-3.5-turbo-16k-0613": {
         "max_tokens": 16385,
+        "max_input_tokens": 16385,
+        "max_output_tokens": 4096,
         "input_cost_per_token": 0.000003,
         "output_cost_per_token": 0.000004,
         "litellm_provider": "openai",
@@ -99,6 +127,8 @@
     },
     "ft:gpt-3.5-turbo": {
         "max_tokens": 4097,
+        "max_input_tokens": 4097,
+        "max_output_tokens": 4096,
         "input_cost_per_token": 0.000012,
         "output_cost_per_token": 0.000016,
         "litellm_provider": "openai",
@@ -174,6 +204,8 @@
     },
     "azure/gpt-4-1106-preview": {
         "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
         "input_cost_per_token": 0.00001,
         "output_cost_per_token": 0.00003,
         "litellm_provider": "azure",
@@ -181,6 +213,8 @@
     },
     "azure/gpt-4-0613": {
         "max_tokens": 8192,
+        "max_input_tokens": 8192,
+        "max_output_tokens": 4096,
         "input_cost_per_token": 0.00003,
         "output_cost_per_token": 0.00006,
         "litellm_provider": "azure",
@@ -188,6 +222,8 @@
     },
     "azure/gpt-4-32k-0613": {
         "max_tokens": 32768,
+        "max_input_tokens": 32768,
+        "max_output_tokens": 4096,
         "input_cost_per_token": 0.00006,
         "output_cost_per_token": 0.00012,
         "litellm_provider": "azure",
@@ -195,6 +231,8 @@
     },
     "azure/gpt-4-32k": {
         "max_tokens": 32768,
+        "max_input_tokens": 32768,
+        "max_output_tokens": 4096,
         "input_cost_per_token": 0.00006,
         "output_cost_per_token": 0.00012,
         "litellm_provider": "azure",
@@ -202,6 +240,8 @@
     },
     "azure/gpt-4": {
         "max_tokens": 8192,
+        "max_input_tokens": 8192,
+        "max_output_tokens": 4096,
         "input_cost_per_token": 0.00003,
         "output_cost_per_token": 0.00006,
         "litellm_provider": "azure",
@@ -209,6 +249,8 @@
     },
     "azure/gpt-4-turbo": {
         "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
         "input_cost_per_token": 0.00001,
         "output_cost_per_token": 0.00003,
         "litellm_provider": "azure", 
@@ -216,6 +258,8 @@
     },
     "azure/gpt-4-turbo-vision-preview": {
         "max_tokens": 128000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096,
         "input_cost_per_token": 0.00001,
         "output_cost_per_token": 0.00003,
         "litellm_provider": "azure", 
@@ -223,6 +267,8 @@
     },
     "azure/gpt-35-turbo-16k-0613": {
         "max_tokens": 16385,
+        "max_input_tokens": 16385,
+        "max_output_tokens": 4096,
         "input_cost_per_token": 0.000003,
         "output_cost_per_token": 0.000004,
         "litellm_provider": "azure",
@@ -230,6 +276,8 @@
     },
     "azure/gpt-35-turbo-1106": {
         "max_tokens": 16384,
+        "max_input_tokens": 16384,
+        "max_output_tokens": 4096,
         "input_cost_per_token": 0.0000015,
         "output_cost_per_token": 0.000002,
         "litellm_provider": "azure",
@@ -237,6 +285,8 @@
     },
     "azure/gpt-35-turbo-16k": {
         "max_tokens": 16385,
+        "max_input_tokens": 16385,
+        "max_output_tokens": 4096,
         "input_cost_per_token": 0.000003,
         "output_cost_per_token": 0.000004,
         "litellm_provider": "azure",
@@ -244,6 +294,8 @@
     },
     "azure/gpt-35-turbo": {
         "max_tokens": 4097,
+        "max_input_tokens": 4097,
+        "max_output_tokens": 4096,
         "input_cost_per_token": 0.0000015,
         "output_cost_per_token": 0.000002,
         "litellm_provider": "azure",
@@ -305,36 +357,10 @@
         "litellm_provider": "azure", 
         "mode": "image_generation"
     },
-    "text-davinci-003": {
-        "max_tokens": 4097,
-        "input_cost_per_token": 0.000002,
-        "output_cost_per_token": 0.000002,
-        "litellm_provider": "text-completion-openai",
-        "mode": "completion"
-    },
-    "text-curie-001": {
-        "max_tokens": 2049,
-        "input_cost_per_token": 0.000002,
-        "output_cost_per_token": 0.000002,
-        "litellm_provider": "text-completion-openai",
-        "mode": "completion"
-    },
-    "text-babbage-001": {
-        "max_tokens": 2049,
-        "input_cost_per_token": 0.0000004,
-        "output_cost_per_token": 0.0000004,
-        "litellm_provider": "text-completion-openai",
-        "mode": "completion"
-    },
-    "text-ada-001": {
-        "max_tokens": 2049,
-        "input_cost_per_token": 0.0000004,
-        "output_cost_per_token": 0.0000004,
-        "litellm_provider": "text-completion-openai",
-        "mode": "completion"
-    },
     "babbage-002": {
         "max_tokens": 16384,
+        "max_input_tokens": 16384,
+        "max_output_tokens": 4096,
         "input_cost_per_token": 0.0000004,
         "output_cost_per_token": 0.0000004,
         "litellm_provider": "text-completion-openai",
@@ -342,6 +368,8 @@
     },
     "davinci-002": {
         "max_tokens": 16384,
+        "max_input_tokens": 16384,
+        "max_output_tokens": 4096,
         "input_cost_per_token": 0.000002,
         "output_cost_per_token": 0.000002,
         "litellm_provider": "text-completion-openai",
@@ -349,6 +377,8 @@
     },    
     "gpt-3.5-turbo-instruct": {
         "max_tokens": 8192,
+        "max_input_tokens": 8192,
+        "max_output_tokens": 4096,
         "input_cost_per_token": 0.0000015,
         "output_cost_per_token": 0.000002,
         "litellm_provider": "text-completion-openai",
