@@ -21,7 +21,7 @@ import litellm
 def test_image_generation_openai():
     litellm.set_verbose = True
     response = litellm.image_generation(
-        prompt="A cute baby sea otter", model="dall-e-3"
+        prompt="A cute baby sea otter", model="dall-e-3", num_retries=3
     )
     print(f"response: {response}")
     assert len(response.data) > 0
@@ -32,7 +32,10 @@ def test_image_generation_openai():
 
 def test_image_generation_azure():
     response = litellm.image_generation(
-        prompt="A cute baby sea otter", model="azure/", api_version="2023-06-01-preview"
+        prompt="A cute baby sea otter",
+        model="azure/",
+        api_version="2023-06-01-preview",
+        num_retries=3,
     )
     print(f"response: {response}")
     assert len(response.data) > 0
@@ -49,6 +52,7 @@ def test_image_generation_azure_dall_e_3():
         api_version="2023-12-01-preview",
         api_base=os.getenv("AZURE_SWEDEN_API_BASE"),
         api_key=os.getenv("AZURE_SWEDEN_API_KEY"),
+        num_retries=3,
     )
     print(f"response: {response}")
     assert len(response.data) > 0
@@ -58,7 +62,7 @@ def test_image_generation_azure_dall_e_3():
 @pytest.mark.asyncio
 async def test_async_image_generation_openai():
     response = litellm.image_generation(
-        prompt="A cute baby sea otter", model="dall-e-3"
+        prompt="A cute baby sea otter", model="dall-e-3", num_retries=3
     )
     print(f"response: {response}")
     assert len(response.data) > 0
@@ -70,6 +74,6 @@ async def test_async_image_generation_openai():
 @pytest.mark.asyncio
 async def test_async_image_generation_azure():
     response = await litellm.aimage_generation(
-        prompt="A cute baby sea otter", model="azure/dall-e-3-test"
+        prompt="A cute baby sea otter", model="azure/dall-e-3-test", num_retries=3
     )
     print(f"response: {response}")
