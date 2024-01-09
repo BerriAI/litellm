@@ -184,7 +184,7 @@ class DynamoDBArgs(LiteLLMBase):
     billing_mode: Literal["PROVISIONED_THROUGHPUT", "PAY_PER_REQUEST"]
     read_capacity_units: Optional[int] = None
     write_capacity_units: Optional[int] = None
-    region_name: Optional[str] = None
+    region_name: str
 
 
 class ConfigGeneralSettings(LiteLLMBase):
