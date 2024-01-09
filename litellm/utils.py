@@ -5551,10 +5551,10 @@ def exception_type(
                     )
                 elif (
                     "invalid_request_error" in error_str
-                    and "Incorrect API key provided" not in error_str
+                    and "content_policy_violation" in error_str
                 ):
                     exception_mapping_worked = True
-                    raise BadRequestError(
+                    raise ContentPolicyViolationError(
                         message=f"OpenAIException - {original_exception.message}",
                         llm_provider="openai",
                         model=model,
@@ -5562,10 +5562,10 @@ def exception_type(
                     )
                 elif (
                     "invalid_request_error" in error_str
-                    and "content_policy_violation" in error_str
+                    and "Incorrect API key provided" not in error_str
                 ):
                     exception_mapping_worked = True
-                    raise Con(
+                    raise BadRequestError(
                         message=f"OpenAIException - {original_exception.message}",
                         llm_provider="openai",
                         model=model,
