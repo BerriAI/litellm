@@ -7,8 +7,8 @@ from yarl import URL
 from litellm.proxy.db.base_client import CustomDB
 from litellm.proxy._types import DynamoDBArgs, DBTableNames, LiteLLM_VerificationToken, LiteLLM_Config, LiteLLM_UserTable
 from litellm import get_secret
-from typing import Any, List, Literal, Optional
-from aiodynamo.expressions import UpdateExpression, F
+from typing import Any, List, Literal, Optional, Union
+from aiodynamo.expressions import (UpdateExpression, F, Value)
 from aiodynamo.models import ReturnValues
 from aiodynamo.http.aiohttp import AIOHTTP
 from aiohttp import ClientSession
@@ -21,7 +21,10 @@ class DynamoDBWrapper(CustomDB):
         if database_arguments.billing_mode == "PAY_PER_REQUEST":
             self.throughput_type = PayPerRequest()
         elif database_arguments.billing_mode == "PROVISIONED_THROUGHPUT":
-            self.throughput_type = Throughput(read=database_arguments.read_capacity_units, write=database_arguments.write_capacity_units)
+            if database_arguments.read_capacity_units is not None and isinstance(database_arguments.read_capacity_units, int) and database_arguments.write_capacity_units is not None and isinstance(database_arguments.write_capacity_units, int):
+                self.throughput_type = Throughput(read=database_arguments.read_capacity_units, write=database_arguments.write_capacity_units) # type: ignore
+            else: 
+                raise Exception(f"Invalid args passed in. Need to set both read_capacity_units and write_capacity_units. Args passed in - {database_arguments}")
         self.region_name = database_arguments.region_name
 
     async def connect(self):
@@ -82,7 +85,7 @@ class DynamoDBWrapper(CustomDB):
             
             response = await table.get_item({key: value})
 
-
+            new_response: Any = None
             if table_name == DBTableNames.user.name:
                 new_response = LiteLLM_UserTable(**response)
             elif table_name == DBTableNames.key.name:
@@ -103,7 +106,7 @@ class DynamoDBWrapper(CustomDB):
             client = Client(AIOHTTP(session), Credentials.auto(), self.region_name)
             table = None
             key_name = None
-            data_obj = None
+            data_obj: Optional[Union[LiteLLM_Config, LiteLLM_UserTable, LiteLLM_VerificationToken]] = None
             if table_name == DBTableNames.user.name:
                 table = client.table(DBTableNames.user.value)
                 key_name = "user_id"
@@ -119,22 +122,28 @@ class DynamoDBWrapper(CustomDB):
                 key_name = "param_name"
                 data_obj = LiteLLM_Config(param_name=key, **value)
 
+            if data_obj is None: 
+                raise Exception(f"invalid table name passed in - {table_name}. Unable to load valid data object - {data_obj}.")
             # Initialize an empty UpdateExpression
-            update_expression = UpdateExpression()
+            
 
-            # Add updates for each field that has been modified
+            actions: List = []
             for field in data_obj.model_fields_set:
-                # If a Pydantic model has a __fields_set__ attribute, it's a set of fields that were set when the model was instantiated
                 field_value = getattr(data_obj, field)
+
+                # Convert datetime object to ISO8601 string
                 if isinstance(field_value, datetime):
                     field_value = field_value.isoformat()
-                update_expression = update_expression.set(F(field), field_value)
 
+                # Accumulate updates
+                actions.append((F(field), Value(value=field_value)))
+
+            update_expression = UpdateExpression(set_updates=actions)
             # Perform the update in DynamoDB
             result = await table.update_item(
                 key={key_name: key},
                 update_expression=update_expression,
-                return_values=ReturnValues.NONE
+                return_values=ReturnValues.none
             )
             return result
     

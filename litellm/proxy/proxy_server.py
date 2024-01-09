@@ -946,7 +946,8 @@ async def generate_key_helper_fn(
             "metadata": metadata_json,
         }
         if prisma_client is not None: 
-            verification_token_data = key_data.update(user_data)
+            verification_token_data = dict(key_data)  
+            verification_token_data.update(user_data)
             verbose_proxy_logger.debug("PrismaClient: Before Insert Data")
             await prisma_client.insert_data(
                 data=verification_token_data

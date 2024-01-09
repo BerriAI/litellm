@@ -14,7 +14,7 @@ repos:
     hooks:
     -   id: mypy
         name: mypy
-        entry: python3 -m mypy --ignore-missing-imports
+        entry: python3 -m mypy . --ignore-missing-imports
         language: system
         types: [python]
         files: ^litellm/
