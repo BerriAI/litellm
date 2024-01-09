@@ -304,7 +304,7 @@ async def user_api_key_auth(
 
 def prisma_setup(database_url: Optional[str]):
     global prisma_client, proxy_logging_obj, user_api_key_cache
-
+    verbose_proxy_logger.debug(f"prisma_setup: {database_url}")
     if database_url is not None:
         try:
             prisma_client = PrismaClient(
@@ -776,7 +776,7 @@ class ProxyConfig:
                 verbose_proxy_logger.debug(f"GOING INTO LITELLM.GET_SECRET!")
                 database_url = litellm.get_secret(database_url)
                 verbose_proxy_logger.debug(f"RETRIEVED DB URL: {database_url}")
-            prisma_setup(database_url=database_url)
+
             ## COST TRACKING ##
             cost_tracking()
             ### MASTER KEY ###
@@ -1150,15 +1150,6 @@ async def startup_event():
     global prisma_client, master_key, use_background_health_checks, llm_router, llm_model_list, general_settings
     import json
 
-    ### LOAD MASTER KEY ###
-    # check if master key set in environment - load from there
-    master_key = litellm.get_secret("LITELLM_MASTER_KEY", None)
-
-    ### CONNECT TO DB ###
-    # check if DATABASE_URL in environment - load from there
-    if prisma_client is None:
-        prisma_setup(database_url=os.getenv("DATABASE_URL"))
-
     ### LOAD CONFIG ###
     worker_config = litellm.get_secret("WORKER_CONFIG")
     verbose_proxy_logger.debug(f"worker_config: {worker_config}")
@@ -1178,6 +1169,15 @@ async def startup_event():
         # if not, assume it's a json string
         worker_config = json.loads(os.getenv("WORKER_CONFIG"))
         await initialize(**worker_config)
+    ### LOAD MASTER KEY ###
+    # check if master key set in environment - load from there
+    master_key = litellm.get_secret("LITELLM_MASTER_KEY", None)
+
+    ### CONNECT TO DB ###
+    # check if DATABASE_URL in environment - load from there
+    if prisma_client is None:
+        prisma_setup(database_url=os.getenv("DATABASE_URL"))
+
     proxy_logging_obj._init_litellm_callbacks()  # INITIALIZE LITELLM CALLBACKS ON SERVER STARTUP <- do this to catch any logging errors on startup, not when calls are being made
 
     if use_background_health_checks:
