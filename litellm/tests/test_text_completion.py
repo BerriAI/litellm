@@ -2756,7 +2756,7 @@ def test_completion_chatgpt_prompt():
 
 def test_text_completion_basic():
     try:
-        print("\n test 003 with echo and logprobs \n")
+        print("\n test 003 with logprobs \n")
         litellm.set_verbose = False
         response = text_completion(
             model="gpt-3.5-turbo-instruct",
