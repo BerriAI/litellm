@@ -130,24 +130,6 @@ const sidebars = {
     "completion/token_usage",
     "load_test",
     {
-      type: 'category',
-      label: 'Tutorials',
-      items: [
-        'tutorials/azure_openai',
-        'tutorials/oobabooga',
-        "tutorials/gradio_integration",
-        'tutorials/huggingface_codellama',
-        'tutorials/huggingface_tutorial', 
-        'tutorials/TogetherAI_liteLLM', 
-        'tutorials/finetuned_chat_gpt',
-        'tutorials/sagemaker_llms',
-        'tutorials/text_completion',
-        "tutorials/first_playground",
-        'tutorials/compare_llms',
-        "tutorials/model_fallbacks",
-      ],
-    },
-    {
       type: "category",
       label: "Logging & Observability",
       items: [
@@ -168,6 +150,23 @@ const sidebars = {
       ],
     },
     "caching/redis_cache",
+    {
+      type: 'category',
+      label: 'Tutorials',
+      items: [
+        'tutorials/azure_openai',
+        'tutorials/oobabooga',
+        "tutorials/gradio_integration",
+        'tutorials/huggingface_codellama',
+        'tutorials/huggingface_tutorial', 
+        'tutorials/TogetherAI_liteLLM', 
+        'tutorials/finetuned_chat_gpt',
+        'tutorials/sagemaker_llms',
+        'tutorials/text_completion',
+        "tutorials/first_playground",
+        "tutorials/model_fallbacks",
+      ],
+    },
     {
       type: "category",
       label: "LangChain, LlamaIndex Integration",
