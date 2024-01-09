@@ -52,4 +52,7 @@ RUN chmod +x entrypoint.sh
 EXPOSE 4000/tcp
 
 # Set your entrypoint and command
-CMD ["./entrypoint.sh"]
+CMD [ \
+    "sh", "-c", \
+    "if [ -n \"$DATABASE_URL\" ]; then ./entrypoint.sh; else litellm --port 4000 --num_workers 8; fi" \
+]
