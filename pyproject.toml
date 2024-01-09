@@ -36,10 +36,11 @@ asyncio = {version = "^3.4.3", optional = true}
 cohere = {version = "^4.40", optional = true}
 langfuse = {version = "^2.5.0", optional = true}
 prisma = {version = "^0.11.0", optional = true}
+tenacity = {version = "^8.2.3", optional = true}
+traceloop-sdk = {version = "0.7.0", optional = true}
 
 # Missing due to conflict:
-# - traceloop-sdk
-# - baseten
+# - baseten => depends on pytz (>=2022.7.1,<2023.0.0)
 
 [tool.poetry.extras]
 proxy = [
@@ -71,8 +72,8 @@ pytest = "^7.4.3"
 mypy = "^1.8.0"
 pytest-async = "^0.1.1"
 numpydoc = "^1.6.0"
-setuptools = "^69.0.3"
-types-setuptools = "^69.0.0.20240106"
+setuptools = "^65.6.0"
+types-setuptools = "^65.6.0"
 types-redis = "^4.6.0.20240106"
 types-pyyaml = "^6.0.12.12"
 types-tabulate = "^0.9.0.20240106"
