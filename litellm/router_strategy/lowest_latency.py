@@ -29,6 +29,20 @@ class LiteLLMBase(BaseModel):
 class RoutingArgs(LiteLLMBase):
     ttl: int = 1 * 60 * 60  # 1 hour
 
+class LiteLLMBase(BaseModel):
+    """
+    Implements default functions, all pydantic objects should have.
+    """
+
+    def json(self, **kwargs):
+        try:
+            return self.model_dump()  # noqa
+        except:
+            # if using pydantic v1
+            return self.dict()
+
+class RoutingArgs(LiteLLMBase):
+    ttl: int = 1 * 60 * 60  # 1 hour
 
 class LowestLatencyLoggingHandler(CustomLogger):
     test_flag: bool = False
@@ -198,7 +212,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 self.router_cache.set_cache(
                     key=latency_key, value=request_count_dict, ttl=self.routing_args.ttl
                 )  # reset map within window
-
+                
                 ### TESTING ###
                 if self.test_flag:
                     self.logged_success += 1
