@@ -43,7 +43,7 @@ class AsyncCustomHTTPTransport(httpx.AsyncHTTPTransport):
                         request=request,
                     )
 
-                time.sleep(int(response.headers.get("retry-after")) or 10)
+                await asyncio.sleep(int(response.headers.get("retry-after", 10)) or 10)
                 response = await super().handle_async_request(request)
                 await response.aread()
 
@@ -113,7 +113,7 @@ class CustomHTTPTransport(httpx.HTTPTransport):
                         request=request,
                     )
 
-                time.sleep(int(response.headers.get("retry-after")) or 10)
+                time.sleep(int(response.headers.get("retry-after", 10)) or 10)
                 response = super().handle_request(request)
                 response.read()
 
