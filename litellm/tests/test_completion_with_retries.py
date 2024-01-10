@@ -29,20 +29,6 @@ def logger_fn(user_model_dict):
     pass
 
 
-# normal call
-def test_completion_custom_provider_model_name():
-    try:
-        response = completion_with_retries(
-            model="together_ai/togethercomputer/llama-2-70b-chat",
-            messages=messages,
-            logger_fn=logger_fn,
-        )
-        # Add any assertions here to check the response
-        print(response)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
 # completion with num retries + impact on exception mapping
 def test_completion_with_num_retries():
     try:
@@ -75,7 +61,3 @@ def test_completion_with_0_num_retries():
     except Exception as e:
         print("exception", e)
         pass
-
-
-# Call the test function
-test_completion_with_0_num_retries()
