@@ -7,11 +7,17 @@
 #
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
-import litellm
-import time, logging
-import json, traceback, ast, hashlib
-from typing import Optional, Literal, List, Union, Any
+import ast
+import hashlib
+import json
+import logging
+import time
+import traceback
+from typing import Any, List, Literal, Optional, Union
+
 from openai._models import BaseModel as OpenAIObject
+
+import litellm
 
 
 def print_verbose(print_statement):
@@ -190,7 +196,8 @@ class S3Cache(BaseCache):
             print_verbose(f"S3 Caching: set_cache() - Got exception from S3: {e}")
 
     def get_cache(self, key, **kwargs):
-        import boto3, botocore
+        import boto3
+        import botocore
 
         try:
             print_verbose(f"Get S3 Cache: key: {key}")

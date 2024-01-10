@@ -7,84 +7,97 @@
 #
 #  Thank you ! We ❤️ you! - Krrish & Ishaan
 
-import os, openai, sys, json, inspect, uuid, datetime, threading
-from typing import Any, Literal, Union
-from functools import partial
-import dotenv, traceback, random, asyncio, time, contextvars
+import asyncio
+import contextvars
+import datetime
+import inspect
+import json
+import os
+import random
+import sys
+import threading
+import time
+import traceback
+import uuid
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
-import httpx
-import litellm
+from functools import partial
+from typing import Any, Callable, Dict, List, Literal, Mapping, Optional, Union
 
+import dotenv
+import httpx
+import openai
+import tiktoken
+
+import litellm
 from litellm import (  # type: ignore
+    Logging,
     client,
     exception_type,
-    get_optional_params,
     get_litellm_params,
-    Logging,
+    get_optional_params,
 )
 from litellm.utils import (
-    get_secret,
     CustomStreamWrapper,
-    read_config_args,
-    completion_with_fallbacks,
-    get_llm_provider,
-    get_api_key,
-    mock_completion_streaming_obj,
-    convert_to_model_response_object,
-    token_counter,
     Usage,
+    completion_with_fallbacks,
+    convert_to_model_response_object,
+    get_api_key,
+    get_llm_provider,
     get_optional_params_embeddings,
     get_optional_params_image_gen,
+    get_secret,
+    mock_completion_streaming_obj,
+    read_config_args,
+    token_counter,
 )
+
+from .caching import disable_cache, enable_cache, update_cache
 from .llms import (
-    anthropic,
-    together_ai,
     ai21,
-    sagemaker,
-    bedrock,
-    huggingface_restapi,
-    replicate,
     aleph_alpha,
-    nlp_cloud,
+    anthropic,
     baseten,
-    vllm,
-    ollama,
-    ollama_chat,
+    bedrock,
     cloudflare,
     cohere,
-    petals,
+    gemini,
+    huggingface_restapi,
+    maritalk,
+    nlp_cloud,
+    ollama,
+    ollama_chat,
     oobabooga,
     openrouter,
     palm,
-    gemini,
+    petals,
+    replicate,
+    sagemaker,
+    together_ai,
     vertex_ai,
-    maritalk,
+    vllm,
 )
-from .llms.openai import OpenAIChatCompletion, OpenAITextCompletion
 from .llms.azure import AzureChatCompletion
 from .llms.huggingface_restapi import Huggingface
+from .llms.openai import OpenAIChatCompletion, OpenAITextCompletion
 from .llms.prompt_templates.factory import (
-    prompt_factory,
     custom_prompt,
     function_call_prompt,
+    prompt_factory,
 )
-import tiktoken
-from concurrent.futures import ThreadPoolExecutor
-from typing import Callable, List, Optional, Dict, Union, Mapping
-from .caching import enable_cache, disable_cache, update_cache
 
 encoding = tiktoken.get_encoding("cl100k_base")
 from litellm.utils import (
-    get_secret,
-    CustomStreamWrapper,
-    TextCompletionStreamWrapper,
-    ModelResponse,
-    TextCompletionResponse,
-    TextChoices,
-    EmbeddingResponse,
-    read_config_args,
     Choices,
+    CustomStreamWrapper,
+    EmbeddingResponse,
     Message,
+    ModelResponse,
+    TextChoices,
+    TextCompletionResponse,
+    TextCompletionStreamWrapper,
+    get_secret,
+    read_config_args,
 )
 
 ####### ENVIRONMENT VARIABLES ###################

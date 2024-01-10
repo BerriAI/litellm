@@ -1,10 +1,13 @@
 ### INIT VARIABLES ###
-import threading, requests
-from typing import Callable, List, Optional, Dict, Union, Any
-from litellm.caching import Cache
-from litellm._logging import set_verbose
-from litellm.proxy._types import KeyManagementSystem
+import threading
+from typing import Any, Callable, Dict, List, Optional, Union
+
 import httpx
+import requests
+
+from litellm._logging import set_verbose
+from litellm.caching import Cache
+from litellm.proxy._types import KeyManagementSystem
 
 input_callback: List[Union[str, Callable]] = []
 success_callback: List[Union[str, Callable]] = []
@@ -481,76 +484,76 @@ all_embedding_models = (
 openai_image_generation_models = ["dall-e-2", "dall-e-3"]
 
 
-from .timeout import timeout
-from .utils import (
-    client,
-    exception_type,
-    get_optional_params,
-    modify_integration,
-    token_counter,
-    cost_per_token,
-    completion_cost,
-    get_litellm_params,
-    Logging,
-    acreate,
-    get_model_list,
-    get_max_tokens,
-    get_model_info,
-    register_prompt_template,
-    validate_environment,
-    check_valid_key,
-    get_llm_provider,
-    register_model,
-    encode,
-    decode,
-    _calculate_retry_after,
-    _should_retry,
-    get_secret,
+from .budget_manager import BudgetManager
+from .exceptions import (
+    APIConnectionError,
+    APIError,
+    APIResponseValidationError,
+    AuthenticationError,
+    BadRequestError,
+    BudgetExceededError,
+    ContentPolicyViolationError,
+    ContextWindowExceededError,
+    InvalidRequestError,
+    NotFoundError,
+    OpenAIError,
+    RateLimitError,
+    ServiceUnavailableError,
+    Timeout,
+    UnprocessableEntityError,
 )
-from .llms.huggingface_restapi import HuggingfaceConfig
-from .llms.anthropic import AnthropicConfig
-from .llms.replicate import ReplicateConfig
-from .llms.cohere import CohereConfig
+from .integrations import *
 from .llms.ai21 import AI21Config
-from .llms.together_ai import TogetherAIConfig
-from .llms.cloudflare import CloudflareConfig
-from .llms.palm import PalmConfig
-from .llms.gemini import GeminiConfig
-from .llms.nlp_cloud import NLPCloudConfig
 from .llms.aleph_alpha import AlephAlphaConfig
-from .llms.petals import PetalsConfig
-from .llms.vertex_ai import VertexAIConfig
-from .llms.sagemaker import SagemakerConfig
-from .llms.ollama import OllamaConfig
-from .llms.maritalk import MaritTalkConfig
+from .llms.anthropic import AnthropicConfig
+from .llms.azure import AzureOpenAIConfig
 from .llms.bedrock import (
-    AmazonTitanConfig,
     AmazonAI21Config,
     AmazonAnthropicConfig,
     AmazonCohereConfig,
     AmazonLlamaConfig,
+    AmazonTitanConfig,
 )
+from .llms.cloudflare import CloudflareConfig
+from .llms.cohere import CohereConfig
+from .llms.gemini import GeminiConfig
+from .llms.huggingface_restapi import HuggingfaceConfig
+from .llms.maritalk import MaritTalkConfig
+from .llms.nlp_cloud import NLPCloudConfig
+from .llms.ollama import OllamaConfig
 from .llms.openai import OpenAIConfig, OpenAITextCompletionConfig
-from .llms.azure import AzureOpenAIConfig
+from .llms.palm import PalmConfig
+from .llms.petals import PetalsConfig
+from .llms.replicate import ReplicateConfig
+from .llms.sagemaker import SagemakerConfig
+from .llms.together_ai import TogetherAIConfig
+from .llms.vertex_ai import VertexAIConfig
 from .main import *  # type: ignore
-from .integrations import *
-from .exceptions import (
-    AuthenticationError,
-    InvalidRequestError,
-    BadRequestError,
-    NotFoundError,
-    RateLimitError,
-    ServiceUnavailableError,
-    OpenAIError,
-    ContextWindowExceededError,
-    ContentPolicyViolationError,
-    BudgetExceededError,
-    APIError,
-    Timeout,
-    APIConnectionError,
-    APIResponseValidationError,
-    UnprocessableEntityError,
-)
-from .budget_manager import BudgetManager
 from .proxy.proxy_cli import run_server
 from .router import Router
+from .timeout import timeout
+from .utils import (
+    Logging,
+    _calculate_retry_after,
+    _should_retry,
+    acreate,
+    check_valid_key,
+    client,
+    completion_cost,
+    cost_per_token,
+    decode,
+    encode,
+    exception_type,
+    get_litellm_params,
+    get_llm_provider,
+    get_max_tokens,
+    get_model_info,
+    get_model_list,
+    get_optional_params,
+    get_secret,
+    modify_integration,
+    register_model,
+    register_prompt_template,
+    token_counter,
+    validate_environment,
+)

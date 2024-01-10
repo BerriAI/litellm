@@ -12,11 +12,11 @@ Module containing "timeout" decorator for sync and async callables.
 """
 
 import asyncio
-
 from concurrent import futures
-from inspect import iscoroutinefunction
 from functools import wraps
+from inspect import iscoroutinefunction
 from threading import Thread
+
 from litellm.exceptions import Timeout
 
 

@@ -7,27 +7,42 @@
 #
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
-import sys, re, binascii, struct
-import litellm
-import dotenv, json, traceback, threading, base64, ast
-import subprocess, os
-import litellm, openai
-import itertools
-import random, uuid, requests
-import datetime, time
-import tiktoken
-import uuid
-import aiohttp
-import logging
-import asyncio, httpx, inspect
-from inspect import iscoroutine
+import ast
+import asyncio
+import base64
+import binascii
 import copy
-from tokenizers import Tokenizer
-from dataclasses import (
+import datetime
+import inspect
+import itertools
+import json
+import logging
+import os
+import random
+import re
+import struct
+import subprocess
+import sys
+import threading
+import time
+import traceback
+import uuid
+from dataclasses import (  # for storing API inputs, outputs, and metadata
     dataclass,
     field,
-)  # for storing API inputs, outputs, and metadata
+)
+from inspect import iscoroutine
+
+import aiohttp
+import dotenv
+import httpx
+import openai
 import pkg_resources
+import requests
+import tiktoken
+from tokenizers import Tokenizer
+
+import litellm
 
 filename = pkg_resources.resource_filename(__name__, "llms/tokenizers")
 os.environ[
@@ -35,40 +50,42 @@ os.environ[
 ] = filename  # use local copy of tiktoken b/c of - https://github.com/BerriAI/litellm/issues/1071
 encoding = tiktoken.get_encoding("cl100k_base")
 import importlib.metadata
-from .integrations.traceloop import TraceloopLogger
-from .integrations.helicone import HeliconeLogger
-from .integrations.aispend import AISpendLogger
-from .integrations.berrispend import BerriSpendLogger
-from .integrations.supabase import Supabase
-from .integrations.llmonitor import LLMonitorLogger
-from .integrations.prompt_layer import PromptLayerLogger
-from .integrations.langsmith import LangsmithLogger
-from .integrations.weights_biases import WeightsBiasesLogger
-from .integrations.custom_logger import CustomLogger
-from .integrations.langfuse import LangFuseLogger
-from .integrations.dynamodb import DyanmoDBLogger
-from .integrations.litedebugger import LiteDebugger
-from .proxy._types import KeyManagementSystem
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Dict, List, Literal, Optional, Union, cast
+
 from openai import OpenAIError as OriginalError
 from openai._models import BaseModel as OpenAIObject
+
+from .caching import Cache
 from .exceptions import (
-    AuthenticationError,
-    BadRequestError,
-    NotFoundError,
-    RateLimitError,
-    ServiceUnavailableError,
-    OpenAIError,
-    ContextWindowExceededError,
-    ContentPolicyViolationError,
-    Timeout,
     APIConnectionError,
     APIError,
+    AuthenticationError,
+    BadRequestError,
     BudgetExceededError,
+    ContentPolicyViolationError,
+    ContextWindowExceededError,
+    NotFoundError,
+    OpenAIError,
+    RateLimitError,
+    ServiceUnavailableError,
+    Timeout,
     UnprocessableEntityError,
 )
-from typing import cast, List, Dict, Union, Optional, Literal, Any
-from .caching import Cache
-from concurrent.futures import ThreadPoolExecutor
+from .integrations.aispend import AISpendLogger
+from .integrations.berrispend import BerriSpendLogger
+from .integrations.custom_logger import CustomLogger
+from .integrations.dynamodb import DyanmoDBLogger
+from .integrations.helicone import HeliconeLogger
+from .integrations.langfuse import LangFuseLogger
+from .integrations.langsmith import LangsmithLogger
+from .integrations.litedebugger import LiteDebugger
+from .integrations.llmonitor import LLMonitorLogger
+from .integrations.prompt_layer import PromptLayerLogger
+from .integrations.supabase import Supabase
+from .integrations.traceloop import TraceloopLogger
+from .integrations.weights_biases import WeightsBiasesLogger
+from .proxy._types import KeyManagementSystem
 
 ####### ENVIRONMENT VARIABLES ####################
 # Adjust to your specific application needs / system capabilities.
@@ -4370,8 +4387,9 @@ def function_to_dict(input_function):  # noqa: C901
     # Get function name and docstring
     try:
         import inspect
-        from numpydoc.docscrape import NumpyDocString
         from ast import literal_eval
+
+        from numpydoc.docscrape import NumpyDocString
     except Exception as e:
         raise e
 
@@ -5215,7 +5233,7 @@ def prompt_token_calculator(model, messages):
             import anthropic
         except:
             Exception("Anthropic import failed please run `pip install anthropic`")
-        from anthropic import Anthropic, HUMAN_PROMPT, AI_PROMPT
+        from anthropic import AI_PROMPT, HUMAN_PROMPT, Anthropic
 
         anthropic = Anthropic()
         num_tokens = anthropic.count_tokens(text)

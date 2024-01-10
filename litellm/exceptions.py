@@ -9,20 +9,20 @@
 
 ## LiteLLM versions of the OpenAI Exception Types
 
+import httpx
 from openai import (
+    APIConnectionError,
+    APIError,
+    APIResponseValidationError,
+    APIStatusError,
+    APITimeoutError,
     AuthenticationError,
     BadRequestError,
     NotFoundError,
-    RateLimitError,
-    APIStatusError,
     OpenAIError,
-    APIError,
-    APITimeoutError,
-    APIConnectionError,
-    APIResponseValidationError,
+    RateLimitError,
     UnprocessableEntityError,
 )
-import httpx
 
 
 class AuthenticationError(AuthenticationError):  # type: ignore
