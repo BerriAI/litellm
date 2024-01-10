@@ -41,13 +41,6 @@ model_list:
       api_key: os.environ/OPENAI_API_KEY
     model_info:
       mode: embedding
-  - model_name: text-davinci-003
-    litellm_params:
-      model: text-davinci-003
-      api_key: os.environ/OPENAI_API_KEY
-    model_info:
-      mode: completion
-
 litellm_settings:
   fallbacks: [{"openai-gpt-3.5": ["azure-gpt-3.5"]}]
   # cache: True     
