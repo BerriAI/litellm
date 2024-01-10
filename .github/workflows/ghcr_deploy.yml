@@ -33,7 +33,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           push: true
-          tags: litellm/test-litellm:latest
+          tags: litellm/litellm:latest
   build-and-push-image:
     runs-on: ubuntu-latest
     # Sets the permissions granted to the `GITHUB_TOKEN` for the actions in this job.
