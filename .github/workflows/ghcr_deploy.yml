@@ -102,7 +102,7 @@ jobs:
           context: .
           file: Dockerfile.alpine
           push: true
-          tags: ${{ steps.meta.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta.outputs.tags }}-latest 
+          tags: ${{ steps.meta-alpine.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta-alpine.outputs.tags }}-latest
           labels: ${{ steps.meta-alpine.outputs.labels }}
   build-and-push-image-database:
     runs-on: ubuntu-latest
@@ -132,7 +132,7 @@ jobs:
           context: .
           file: Dockerfile.database
           push: true
-          tags: ${{ steps.meta.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta.outputs.tags }}-latest 
+          tags: ${{ steps.meta-database.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta-database.outputs.tags }}-latest 
           labels: ${{ steps.meta-database.outputs.labels }} 
   release:
     name: "New LiteLLM Release"
