@@ -1,0 +1,5 @@
+# List of commits to ignore in blame view
+# See https://docs.github.com/en/repositories/working-with-files/using-files/viewing-a-file#ignore-commits-in-the-blame-view
+
+# Initial isort migration
+51b4dacd40048ee5bf6c320166803bf54d4e901c
