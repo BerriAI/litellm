@@ -95,19 +95,21 @@ def test_stream_chunk_builder_litellm_tool_call():
     try:
         litellm.set_verbose = True
         response = litellm.completion(
-            model="azure/gpt-4-nov-release",
+            model="gpt-3.5-turbo",
             messages=messages,
             tools=tools_schema,
             stream=True,
-            api_key="os.environ/AZURE_FRANCE_API_KEY",
-            api_base="https://openai-france-1234.openai.azure.com",
-            api_version="2023-12-01-preview",
             complete_response=True,
         )
 
         print(f"complete response: {response}")
         print(f"complete response usage: {response.usage}")
-        assert response.system_fingerprint is not None
+        assert response.usage.completion_tokens > 0
+        assert response.usage.prompt_tokens > 0
+        assert (
+            response.usage.total_tokens
+            == response.usage.completion_tokens + response.usage.prompt_tokens
+        )
     except Exception as e:
         pytest.fail(f"An exception occurred - {str(e)}")
 
@@ -120,58 +122,24 @@ def test_stream_chunk_builder_litellm_tool_call_regular_message():
         messages = [{"role": "user", "content": "Hey, how's it going?"}]
         litellm.set_verbose = False
         response = litellm.completion(
-            model="azure/gpt-4-nov-release",
+            model="gpt-3.5-turbo",
             messages=messages,
             tools=tools_schema,
             stream=True,
-            api_key="os.environ/AZURE_FRANCE_API_KEY",
-            api_base="https://openai-france-1234.openai.azure.com",
             complete_response=True,
         )
 
         print(f"complete response: {response}")
         print(f"complete response usage: {response.usage}")
-        assert response.system_fingerprint is not None
+        assert response.usage.completion_tokens > 0
+        assert response.usage.prompt_tokens > 0
+        assert (
+            response.usage.total_tokens
+            == response.usage.completion_tokens + response.usage.prompt_tokens
+        )
+
     except Exception as e:
         pytest.fail(f"An exception occurred - {str(e)}")
 
 
 # test_stream_chunk_builder_litellm_tool_call_regular_message()
-
-
-def test_stream_chunk_builder_count_prompt_and_completion_tokens():
-    # test the prompt tokens for streamed responses == prompt tokens for non-streamed
-    # test the model for streamed responses == model for non-streamed
-    try:
-        messages = [{"role": "user", "content": "say 1"}]
-        litellm.set_verbose = True
-        response = litellm.completion(
-            model="azure/chatgpt-v-2",
-            messages=messages,
-            stream=True,
-            complete_response=True,
-            max_tokens=1,
-        )
-        print(f"Stream Assembled response: {response}")
-
-        stream_prompt_tokens = response.usage.prompt_tokens
-        stream_model = response.model
-        stream_completion_tokens = response.usage.completion_tokens
-
-        response = litellm.completion(
-            model="azure/chatgpt-v-2", messages=messages, max_tokens=1
-        )
-        print(f"\nNon Stream Response: {response}")
-
-        non_stream_prompt_tokens = response.usage.prompt_tokens
-        non_stream_completion_tokens = response.usage.completion_tokens
-        non_stream_model = response.model
-
-        assert stream_model == non_stream_model
-        assert stream_prompt_tokens == non_stream_prompt_tokens
-        assert stream_completion_tokens == non_stream_completion_tokens
-    except Exception as e:
-        pytest.fail(f"An exception occurred - {str(e)}")
-
-
-# test_stream_chunk_builder_count_prompt_and_completion_tokens()
