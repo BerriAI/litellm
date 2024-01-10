@@ -40,14 +40,14 @@ We maintain a [seperate Dockerfile](https://github.com/BerriAI/litellm/pkgs/cont
 <TabItem value="docker-deploy" label="Dockerfile">
 
 ```
-docker pull docker pull ghcr.io/berriai/litellm-database:main-v1.16.20
+docker pull docker pull ghcr.io/berriai/litellm-database:main-latest
 ```
 
 ```
 docker run --name litellm-proxy \
 -e DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/<dbname> \
 -p 4000:4000 \
-ghcr.io/berriai/litellm-database:main-v1.16.20
+ghcr.io/berriai/litellm-database:main-latest
 ```
 
 Your OpenAI proxy server is now running on `http://0.0.0.0:4000`.
@@ -74,7 +74,7 @@ Your OpenAI proxy server is now running on `http://0.0.0.0:4000`.
        spec:
          containers:
            - name: litellm-container
-             image: ghcr.io/berriai/litellm-database:main-v1.16.20
+             image: ghcr.io/berriai/litellm-database:main-latest
              env:
               - name: DATABASE_URL
                 value: postgresql://<user>:<password>@<host>:<port>/<dbname>
