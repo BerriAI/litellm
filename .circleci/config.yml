@@ -131,10 +131,26 @@ jobs:
       - run: 
           name: Wait for app to be ready
           command: dockerize -wait http://localhost:4000 -timeout 1m
-      - run:
+       - run:
           name: Test the application
-          command: curl -s "http://localhost:4000/health/readiness"
-
+          command: |
+            status_codes=()
+            for i in {1..10}; do
+              status=$(curl --location --request 'POST' 'http://0.0.0.0:4000/key/generate' \
+              --header 'Authorization: Bearer sk-1234' \
+              --header 'Content-Type: application/json' \
+              --data '{"models": ["azure-models"], "aliases": {"mistral-7b": "gpt-3.5-turbo"}, "duration": null}' \
+              --silent --output /dev/null --write-out '%{http_code}\n') &
+              status_codes+=($status)
+            done
+            wait
+            for status in "${status_codes[@]}"; do
+              if [[ "$status" -ne 200 ]]; then
+                echo "A request did not return a 200 status code: $status"
+                exit 1
+              fi
+            done
+            echo "All requests returned a 200 status code."
 
   publish_to_pypi:
     docker:
