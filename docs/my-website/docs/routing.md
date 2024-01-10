@@ -77,7 +77,65 @@ print(response)
 Router provides 4 strategies for routing your calls across multiple deployments: 
 
 <Tabs>
-<TabItem value="simple-shuffle" label="Weighted Pick">
+<TabItem value="latency-based" label="Latency-Based">
+
+
+Picks the deployment with the lowest response time.
+
+It caches, and updates the response times for deployments based on when a request was sent and received from a deployment.
+
+[**How to test**](https://github.com/BerriAI/litellm/blob/main/litellm/tests/test_lowest_latency_routing.py)
+
+```python
+from litellm import Router 
+import asyncio
+
+model_list = [{ ... }]
+
+# init router
+router = Router(model_list=model_list, routing_strategy="latency-based-routing") # 👈 set routing strategy
+
+## CALL 1+2
+tasks = []
+response = None
+final_response = None
+for _ in range(2):
+	tasks.append(router.acompletion(model=model, messages=messages))
+response = await asyncio.gather(*tasks)
+
+if response is not None:
+	## CALL 3 
+	await asyncio.sleep(1)  # let the cache update happen
+	picked_deployment = router.lowestlatency_logger.get_available_deployments(
+		model_group=model, healthy_deployments=router.healthy_deployments
+	)
+	final_response = await router.acompletion(model=model, messages=messages)
+	print(f"min deployment id: {picked_deployment}")
+	print(f"model id: {final_response._hidden_params['model_id']}")
+	assert (
+		final_response._hidden_params["model_id"]
+		== picked_deployment["model_info"]["id"]
+	)
+```
+
+### Set Time Window 
+
+Set time window for how far back to consider when averaging latency for a deployment. 
+
+**In Router**
+```python 
+router = Router(..., routing_strategy_args={"ttl": 10})
+```
+
+**In Proxy**
+
+```yaml
+router_settings:
+	routing_strategy_args: {"ttl": 10}
+```
+
+</TabItem>
+<TabItem value="simple-shuffle" label="(Default) Weighted Pick">
 
 **Default** Picks a deployment based on the provided **Requests per minute (rpm) or Tokens per minute (tpm)**
 
@@ -235,58 +293,7 @@ asyncio.run(router_acompletion())
 ```
 
 </TabItem>
-<TabItem value="latency-based" label="Latency-Based">
 
-
-Picks the deployment with the lowest response time.
-
-It caches, and updates the response times for deployments based on when a request was sent and received from a deployment.
-
-[**How to test**](https://github.com/BerriAI/litellm/blob/main/litellm/tests/test_lowest_latency_routing.py)
-
-```python
-from litellm import Router 
-import asyncio
-
-model_list = [{ # list of model deployments 
-	"model_name": "gpt-3.5-turbo", # model alias 
-	"litellm_params": { # params for litellm completion/embedding call 
-		"model": "azure/chatgpt-v-2", # actual model name
-		"api_key": os.getenv("AZURE_API_KEY"),
-		"api_version": os.getenv("AZURE_API_VERSION"),
-		"api_base": os.getenv("AZURE_API_BASE"),
-	}
-}, {
-    "model_name": "gpt-3.5-turbo", 
-	"litellm_params": { # params for litellm completion/embedding call 
-		"model": "azure/chatgpt-functioncalling", 
-		"api_key": os.getenv("AZURE_API_KEY"),
-		"api_version": os.getenv("AZURE_API_VERSION"),
-		"api_base": os.getenv("AZURE_API_BASE"),
-	}
-}, {
-    "model_name": "gpt-3.5-turbo", 
-	"litellm_params": { # params for litellm completion/embedding call 
-		"model": "gpt-3.5-turbo", 
-		"api_key": os.getenv("OPENAI_API_KEY"),
-	}
-}]
-
-# init router
-router = Router(model_list=model_list, routing_strategy="latency-based-routing")
-async def router_acompletion():
-	response = await router.acompletion(
-		model="gpt-3.5-turbo", 
-		messages=[{"role": "user", "content": "Hey, how's it going?"}]
-	)
-	print(response)
-	return response
-
-asyncio.run(router_acompletion())
-```
-
-
-</TabItem>
 </Tabs>
 
 ## Basic Reliability

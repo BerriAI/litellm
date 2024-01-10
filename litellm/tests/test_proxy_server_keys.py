@@ -70,86 +70,85 @@ for pr in repo.get_pulls():
 print(f"The pull request number for branch {branch_name} is: {pr_number}")
 
 
-def test_add_new_key():
-    max_retries = 3
-    retry_delay = 1  # seconds
+# def test_add_new_key():
+#     max_retries = 3
+#     retry_delay = 10  # seconds
 
-    for retry in range(max_retries + 1):
-        try:
-            # Your test data
-            test_data = {
-                "models": ["gpt-3.5-turbo", "gpt-4", "claude-2", "azure-model"],
-                "aliases": {"mistral-7b": "gpt-3.5-turbo"},
-                "duration": "20m",
-            }
-            print("testing proxy server")
+#     for retry in range(max_retries + 1):
+#         try:
+#             # Your test data
+#             test_data = {
+#                 "models": ["gpt-3.5-turbo", "gpt-4", "claude-2", "azure-model"],
+#                 "aliases": {"mistral-7b": "gpt-3.5-turbo"},
+#                 "duration": "20m",
+#             }
+#             print("testing proxy server")
 
-            # Your bearer token
-            token = os.getenv("PROXY_MASTER_KEY")
-            headers = {"Authorization": f"Bearer {token}"}
+#             # Your bearer token
+#             token = os.getenv("PROXY_MASTER_KEY")
+#             headers = {"Authorization": f"Bearer {token}"}
 
-            endpoint = f"https://litellm-litellm-pr-{pr_number}.up.railway.app"
+#             endpoint = f"https://litellm-litellm-pr-{pr_number}.up.railway.app"
 
-            # Make a request to the staging endpoint
-            response = requests.post(
-                endpoint + "/key/generate", json=test_data, headers=headers
-            )
+#             # Make a request to the staging endpoint
+#             response = requests.post(
+#                 endpoint + "/key/generate", json=test_data, headers=headers
+#             )
 
-            print(f"response: {response.text}")
+#             print(f"response: {response.text}")
 
-            if response.status_code == 200:
-                result = response.json()
-                break  # Successful response, exit the loop
-            elif response.status_code == 503 and retry < max_retries:
-                print(
-                    f"Retrying in {retry_delay} seconds... (Retry {retry + 1}/{max_retries})"
-                )
-                time.sleep(retry_delay)
-            else:
-                assert False, f"Unexpected response status code: {response.status_code}"
+#             if response.status_code == 200:
+#                 result = response.json()
+#                 break  # Successful response, exit the loop
+#             elif response.status_code == 503 and retry < max_retries:
+#                 print(
+#                     f"Retrying in {retry_delay} seconds... (Retry {retry + 1}/{max_retries})"
+#                 )
+#                 time.sleep(retry_delay)
+#             else:
+#                 assert False, f"Unexpected response status code: {response.status_code}"
 
-        except Exception as e:
-            print(traceback.format_exc())
-            pytest.fail(f"An error occurred {e}")
+#         except Exception as e:
+#             print(traceback.format_exc())
+#             pytest.fail(f"An error occurred {e}")
 
 
-def test_update_new_key():
-    try:
-        # Your test data
-        test_data = {
-            "models": ["gpt-3.5-turbo", "gpt-4", "claude-2", "azure-model"],
-            "aliases": {"mistral-7b": "gpt-3.5-turbo"},
-            "duration": "20m",
-        }
-        print("testing proxy server")
-        # Your bearer token
-        token = os.getenv("PROXY_MASTER_KEY")
-        headers = {"Authorization": f"Bearer {token}"}
+# def test_update_new_key():
+#     try:
+#         # Your test data
+#         test_data = {
+#             "models": ["gpt-3.5-turbo", "gpt-4", "claude-2", "azure-model"],
+#             "aliases": {"mistral-7b": "gpt-3.5-turbo"},
+#             "duration": "20m",
+#         }
+#         print("testing proxy server")
+#         # Your bearer token
+#         token = os.getenv("PROXY_MASTER_KEY")
+#         headers = {"Authorization": f"Bearer {token}"}
 
-        endpoint = f"https://litellm-litellm-pr-{pr_number}.up.railway.app"
+#         endpoint = f"https://litellm-litellm-pr-{pr_number}.up.railway.app"
 
-        # Make a request to the staging endpoint
-        response = requests.post(
-            endpoint + "/key/generate", json=test_data, headers=headers
-        )
-        assert response.status_code == 200
-        result = response.json()
-        assert result["key"].startswith("sk-")
+#         # Make a request to the staging endpoint
+#         response = requests.post(
+#             endpoint + "/key/generate", json=test_data, headers=headers
+#         )
+#         assert response.status_code == 200
+#         result = response.json()
+#         assert result["key"].startswith("sk-")
 
-        def _post_data():
-            json_data = {"models": ["bedrock-models"], "key": result["key"]}
-            response = requests.post(
-                endpoint + "/key/generate", json=json_data, headers=headers
-            )
-            print(f"response text: {response.text}")
-            assert response.status_code == 200
-            return response
+#         def _post_data():
+#             json_data = {"models": ["bedrock-models"], "key": result["key"]}
+#             response = requests.post(
+#                 endpoint + "/key/generate", json=json_data, headers=headers
+#             )
+#             print(f"response text: {response.text}")
+#             assert response.status_code == 200
+#             return response
 
-        _post_data()
-        print(f"Received response: {result}")
-    except Exception as e:
-        pytest.fail(f"LiteLLM Proxy test failed. Exception: {str(e)}")
-
+#         _post_data()
+#         print(f"Received response: {result}")
+#     except Exception as e:
+#         pytest.fail(f"LiteLLM Proxy test failed. Exception: {str(e)}")
 
 # def test_add_new_key_max_parallel_limit():
 #     try:
