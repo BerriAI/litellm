@@ -159,11 +159,14 @@ jobs:
             fail=false
             for i in {1..10}; do
               status=$(cat "/tmp/responses/status_${i}.txt")
-              response=$(cat "/tmp/responses/response_${i}.json")
-
+              
+              # Here, we need to set the correct response file path for each iteration
+              response_file="/tmp/responses/response_${i}.json" # This was missing in the provided script
+              
+              response=$(cat "${response_file}")
               echo "Response ${i} (Status code: ${status}):"
-              cat "${response_file}"
-              echo # Newline for readability
+              echo "${response}" # Use echo here to print the contents
+              echo # Additional newline for readability
 
               if [ "$status" -ne 200 ]; then
                 echo "A request did not return a 200 status code: $status"
