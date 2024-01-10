@@ -365,6 +365,36 @@ def run_server(
                 os.chdir(original_dir)
         if port == 8000 and is_port_in_use(port):
             port = random.randint(1024, 49152)
+        _endpoint_str = f"curl --location 'http://0.0.0.0:{port}/chat/completions' \\"
+        curl_command = (
+            _endpoint_str
+            + """
+        --header 'Content-Type: application/json' \\
+        --data ' {
+        "model": "gpt-3.5-turbo",
+        "messages": [
+            {
+            "role": "user",
+            "content": "what llm are you"
+            }
+        ]
+        }'
+        \n
+        """
+        )
+        print()  # noqa
+        print(  # noqa
+            f'\033[1;34mLiteLLM: Test your local proxy with: "litellm --test" This runs an openai.ChatCompletion request to your proxy [In a new terminal tab]\033[0m\n'
+        )
+        print(  # noqa
+            f"\033[1;34mLiteLLM: Curl Command Test for your local proxy\n {curl_command} \033[0m\n"
+        )
+        print(
+            "\033[1;34mDocs: https://docs.litellm.ai/docs/simple_proxy\033[0m\n"
+        )  # noqa
+        print(  # noqa
+            f"\033[1;34mSee all Router/Swagger docs on http://0.0.0.0:{port} \033[0m\n"
+        )  # noqa
 
         # Gunicorn Application Class
         class StandaloneApplication(gunicorn.app.base.BaseApplication):
