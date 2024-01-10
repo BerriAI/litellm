@@ -117,6 +117,9 @@ jobs:
           name: Wait for app to be ready
           command: dockerize -wait http://localhost:4000 -timeout 1m
       - run:
+          name: Display container logs
+          command: docker logs my-app
+      - run:
           name: Test the application
           command: curl -s "http://localhost:4000/health/readiness"
 
