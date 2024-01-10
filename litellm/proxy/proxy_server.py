@@ -14,7 +14,6 @@ sys.path.insert(
 )  # Adds the parent directory to the system path - for litellm local dev
 
 try:
-    import uvicorn
     import fastapi
     import backoff
     import yaml
