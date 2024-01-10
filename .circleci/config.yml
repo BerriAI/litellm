@@ -132,7 +132,7 @@ jobs:
       - run: 
           name: Wait for app to be ready
           command: dockerize -wait http://localhost:4000 -timeout 1m
-       - run:
+      - run:
           name: Test the application
           command: |
             status_codes=()
