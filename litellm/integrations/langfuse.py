@@ -25,13 +25,19 @@ class LangFuseLogger:
         self.langfuse_host = os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
         self.langfuse_release = os.getenv("LANGFUSE_RELEASE")
         self.langfuse_debug = os.getenv("LANGFUSE_DEBUG")
-        self.Langfuse = Langfuse(
-            public_key=self.public_key,
-            secret_key=self.secret_key,
-            host=self.langfuse_host,
-            release=self.langfuse_release,
-            debug=self.langfuse_debug,
-        )
+
+        parameters = {
+            "public_key": self.public_key,
+            "secret_key": self.secret_key,
+            "host": self.langfuse_host,
+            "release": self.langfuse_release,
+            "debug": self.langfuse_debug,
+        }
+
+        if Version(langfuse.version.__version__) >= Version("2.6.0"):
+            parameters["sdk_integration"] = "litellm"
+        
+        self.Langfuse = Langfuse(**parameters)
 
     def log_event(
         self, kwargs, response_obj, start_time, end_time, user_id, print_verbose
