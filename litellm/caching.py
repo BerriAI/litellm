@@ -154,7 +154,7 @@ class S3Cache(BaseCache):
             print_verbose(f"LiteLLM SET Cache - S3. Key={key}. Value={value}")
             ttl = kwargs.get("ttl", None)
             # Convert value to JSON before storing in S3
-            serialized_value = str(value)
+            serialized_value = json.dumps(value)
             if ttl is not None:
                 cache_control = f"immutable, max-age={ttl}, s-maxage={ttl}"
                 import datetime
