@@ -1,6 +1,6 @@
 ## This is a template base class to be used for adding new LLM providers via API calls
 import litellm
-import httpx, certifi, ssl
+import httpx
 from typing import Optional
 
 
