@@ -6,6 +6,7 @@ pydantic>=2.5 # openai req.
 backoff==2.2.1 # server dep
 pyyaml==6.0 # server dep
 uvicorn==0.22.0 # server dep
+gunicorn==21.2.0 # server dep
 boto3==1.28.58 # aws bedrock/sagemaker calls
 redis==4.6.0 # caching
 prisma==0.11.0 # for db
