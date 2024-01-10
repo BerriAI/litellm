@@ -46,6 +46,13 @@ jobs:
             - ./venv
           key: v1-dependencies-{{ checksum ".circleci/requirements.txt" }}
       - run:
+          name: Run prisma ./entrypoint.sh
+          command: |
+            set +e
+            chmod +x entrypoint.sh
+            ./entrypoint.sh
+            set -e
+      - run:
           name: Black Formatting
           command: |
             cd litellm
