@@ -105,6 +105,7 @@ class Router:
             "usage-based-routing",
             "latency-based-routing",
         ] = "simple-shuffle",
+        routing_strategy_args: dict = {}, # just for latency-based routing
     ) -> None:
         self.set_verbose = set_verbose
         self.deployment_names: List = (
@@ -217,7 +218,7 @@ class Router:
                 litellm.callbacks.append(self.lowesttpm_logger)  # type: ignore
         elif routing_strategy == "latency-based-routing":
             self.lowestlatency_logger = LowestLatencyLoggingHandler(
-                router_cache=self.cache, model_list=self.model_list
+                router_cache=self.cache, model_list=self.model_list, routing_args=routing_strategy_args
             )
             if isinstance(litellm.callbacks, list):
                 litellm.callbacks.append(self.lowestlatency_logger)  # type: ignore

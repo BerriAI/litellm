@@ -1,6 +1,6 @@
 #### What this does ####
 #   picks based on response time (for streaming, this is time to first token)
-
+from pydantic import BaseModel, Extra, Field, root_validator
 import dotenv, os, requests, random
 from typing import Optional
 from datetime import datetime, timedelta
@@ -10,16 +10,30 @@ import traceback
 from litellm.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 
+class LiteLLMBase(BaseModel):
+    """
+    Implements default functions, all pydantic objects should have.
+    """
+
+    def json(self, **kwargs):
+        try:
+            return self.model_dump()  # noqa
+        except:
+            # if using pydantic v1
+            return self.dict()
+
+class RoutingArgs(LiteLLMBase):
+    ttl: int = 1 * 60 * 60  # 1 hour
 
 class LowestLatencyLoggingHandler(CustomLogger):
     test_flag: bool = False
     logged_success: int = 0
     logged_failure: int = 0
-    default_cache_time_seconds: int = 1 * 60 * 60  # 1 hour
 
-    def __init__(self, router_cache: DualCache, model_list: list):
+    def __init__(self, router_cache: DualCache, model_list: list, routing_args: dict={}):
         self.router_cache = router_cache
         self.model_list = model_list
+        self.routing_args = RoutingArgs(**routing_args)
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
@@ -55,7 +69,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 else:
                     request_count_dict[id] = [response_ms]
 
-                self.router_cache.set_cache(key=latency_key, value=request_count_dict, ttl=self.default_cache_time_seconds) # reset map within window 
+                self.router_cache.set_cache(key=latency_key, value=request_count_dict, ttl=self.routing_args.ttl) # reset map within window 
 
                 ### TESTING ###
                 if self.test_flag:
@@ -98,7 +112,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 else:
                     request_count_dict[id] = [response_ms]
 
-                self.router_cache.set_cache(key=latency_key, value=request_count_dict, ttl=self.default_cache_time_seconds) # reset map within window 
+                self.router_cache.set_cache(key=latency_key, value=request_count_dict, ttl=self.routing_args.ttl) # reset map within window 
 
                 ### TESTING ###
                 if self.test_flag:
