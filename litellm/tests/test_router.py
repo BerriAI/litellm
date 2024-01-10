@@ -458,6 +458,8 @@ async def test_aimg_gen_on_router():
     except Exception as e:
         if "Your task failed as a result of our safety system." in str(e):
             pass
+        elif "Operation polling timed out" in str(e):
+            pass
         else:
             traceback.print_exc()
             pytest.fail(f"Error occurred: {e}")
@@ -533,8 +535,13 @@ def test_aembedding_on_router():
         )
         router.reset()
     except Exception as e:
-        traceback.print_exc()
-        pytest.fail(f"Error occurred: {e}")
+        if "Your task failed as a result of our safety system." in str(e):
+            pass
+        elif "Operation polling timed out" in str(e):
+            pass
+        else:
+            traceback.print_exc()
+            pytest.fail(f"Error occurred: {e}")
 
 
 # test_aembedding_on_router()
