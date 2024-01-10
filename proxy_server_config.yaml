@@ -4,18 +4,18 @@ model_list:
       model: azure/chatgpt-v-2
       api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
       api_version: "2023-05-15"
-      api_key: os.environ/AZURE_API_KEY1 # The `os.environ/` prefix tells litellm to read this from the env. See https://docs.litellm.ai/docs/simple_proxy#load-api-keys-from-vault
+      api_key: os.environ/AZURE_API_KEY # The `os.environ/` prefix tells litellm to read this from the env. See https://docs.litellm.ai/docs/simple_proxy#load-api-keys-from-vault
   - model_name: gpt-4
     litellm_params:
-      model: azure/gpt-4
-      api_key: os.environ/AZURE_API_KEY2
-      api_base: https://openai-gpt-4-test-v-2.openai.azure.com/
+      model: azure/gpt-turbo
+      api_key: os.environ/AZURE_FRANCE_API_KEY
+      api_base: https://openai-france-1234.openai.azure.com/
       rpm: 100
   - model_name: gpt-4
     litellm_params:
-      model: azure/gpt-4
-      api_key: 
-      api_base: https://openai-gpt-4-test-v-2.openai.azure.com/
+      model: azure/gpt-35-turbo
+      api_key: os.environ/AZURE_EUROPE_API_KEY
+      api_base: https://my-endpoint-europe-berri-992.openai.azure.com
       rpm: 10
 
 litellm_settings:
@@ -23,7 +23,7 @@ litellm_settings:
   set_verbose: True
 
 general_settings: 
-  # master_key: sk-1234 # [OPTIONAL] Only use this if you to require all calls to contain this key (Authorization: Bearer sk-1234)
+  master_key: sk-1234 # [OPTIONAL] Only use this if you to require all calls to contain this key (Authorization: Bearer sk-1234)
   # database_url: "postgresql://<user>:<password>@<host>:<port>/<dbname>" # [OPTIONAL] use for token-based auth to proxy
 
 environment_variables:
