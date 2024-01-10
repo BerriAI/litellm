@@ -1190,8 +1190,15 @@ async def startup_event():
 
     if prisma_client is not None and master_key is not None:
         # add master key to db
-        await generate_key_helper_fn(
-            duration=None, models=[], aliases={}, config={}, spend=0, token=master_key
+        asyncio.create_task(
+            generate_key_helper_fn(
+                duration=None,
+                models=[],
+                aliases={},
+                config={},
+                spend=0,
+                token=master_key,
+            )
         )
 
 
