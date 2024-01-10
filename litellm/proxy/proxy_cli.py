@@ -5,7 +5,7 @@ import random
 from datetime import datetime
 import importlib
 from dotenv import load_dotenv
-import operator
+
 
 sys.path.append(os.getcwd())
 
@@ -30,29 +30,6 @@ def run_ollama_serve():
             LiteLLM Warning: proxy started with `ollama` model\n`ollama serve` failed with Exception{e}. \nEnsure you run `ollama serve`
         """
         )  # noqa
-
-
-def clone_subfolder(repo_url, subfolder, destination):
-    # Clone the full repo
-    repo_name = repo_url.split("/")[-1]
-    repo_master = os.path.join(destination, "repo_master")
-    subprocess.run(["git", "clone", repo_url, repo_master])
-
-    # Move into the subfolder
-    subfolder_path = os.path.join(repo_master, subfolder)
-
-    # Copy subfolder to destination
-    for file_name in os.listdir(subfolder_path):
-        source = os.path.join(subfolder_path, file_name)
-        if os.path.isfile(source):
-            shutil.copy(source, destination)
-        else:
-            dest_path = os.path.join(destination, file_name)
-            shutil.copytree(source, dest_path)
-
-    # Remove cloned repo folder
-    subprocess.run(["rm", "-rf", os.path.join(destination, "repo_master")])
-    feature_telemetry(feature="create-proxy")
 
 
 def is_port_in_use(port):
@@ -371,6 +348,20 @@ def run_server(
             raise ImportError(
                 "Uvicorn needs to be imported. Run - `pip install uvicorn`"
             )
+        if os.getenv("DATABASE_URL", None) is not None:
+            # run prisma db push, before starting server
+            # Save the current working directory
+            original_dir = os.getcwd()
+            # set the working directory to where this script is
+            abspath = os.path.abspath(__file__)
+            dname = os.path.dirname(abspath)
+            os.chdir(dname)
+            try:
+                subprocess.run(
+                    ["prisma", "db", "push", "--accept-data-loss"]
+                )  # this looks like a weird edge case when prisma just wont start on render. we need to have the --accept-data-loss
+            finally:
+                os.chdir(original_dir)
         if port == 8000 and is_port_in_use(port):
             port = random.randint(1024, 49152)
         uvicorn.run(

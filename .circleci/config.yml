@@ -40,6 +40,7 @@ jobs:
             pip install "httpx==0.24.1"
             pip install "anyio==3.7.1"
             pip install "asyncio==3.4.3"
+            pip install "PyGithub==1.59.1"
       - save_cache:
           paths:
             - ./venv
@@ -82,6 +83,103 @@ jobs:
       # Store test results
       - store_test_results:
           path: test-results
+
+  build_and_test:
+    machine:
+      image: ubuntu-2204:2023.10.1
+    working_directory: ~/project
+    steps:
+      - checkout
+      - run:
+          name: Install Docker CLI (In case it's not already installed)
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y docker-ce docker-ce-cli containerd.io
+      - run:
+          name: Build Docker image
+          command: docker build -t my-app:latest -f Dockerfile.database .
+      - run:
+          name: Run Docker container
+          command: |
+            docker run -d \
+              -p 4000:4000 \
+              -e DATABASE_URL=$PROXY_DOCKER_DB_URL \
+              -e AZURE_API_KEY=$AZURE_FRANCE_API_KEY \
+              -e AZURE_FRANCE_API_KEY=$AZURE_FRANCE_API_KEY \
+              -e AZURE_EUROPE_API_KEY=$AZURE_EUROPE_API_KEY \
+              --name my-app \
+              -v $(pwd)/proxy_server_config.yaml:/app/config.yaml \
+              my-app:latest \
+              --config /app/config.yaml \
+              --port 4000 \
+              --num_workers 8
+      - run:
+          name: Install curl and dockerize
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y curl
+            sudo wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo rm dockerize-linux-amd64-v0.6.1.tar.gz
+      - run:
+          name: Start outputting logs
+          command: |
+            while true; do
+              docker logs my-app
+              sleep 10
+            done
+          background: true
+      - run: 
+          name: Wait for app to be ready
+          command: dockerize -wait http://localhost:4000 -timeout 1m
+      - run:
+          name: Test the application
+          command: |
+            mkdir -p /tmp/responses
+            for i in {1..10}; do
+              status_file="/tmp/responses/status_${i}.txt"
+              response_file="/tmp/responses/response_${i}.json"
+
+              (curl --location --request POST 'http://0.0.0.0:4000/key/generate' \
+                --header 'Authorization: Bearer sk-1234' \
+                --header 'Content-Type: application/json' \
+                --data '{"models": ["azure-models"], "aliases": {"mistral-7b": "gpt-3.5-turbo"}, "duration": null}' \
+                --silent --output "${response_file}" --write-out '%{http_code}' > "${status_file}") &
+
+              # Capture PIDs of background processes
+              pids[${i}]=$!
+            done
+
+            # Wait for all background processes to finish
+            for pid in ${pids[*]}; do
+              wait $pid
+            done
+
+            # Check all responses and status codes
+            fail=false
+            for i in {1..10}; do
+              status=$(cat "/tmp/responses/status_${i}.txt")
+              
+              # Here, we need to set the correct response file path for each iteration
+              response_file="/tmp/responses/response_${i}.json" # This was missing in the provided script
+              
+              response=$(cat "${response_file}")
+              echo "Response ${i} (Status code: ${status}):"
+              echo "${response}" # Use echo here to print the contents
+              echo # Additional newline for readability
+
+              if [ "$status" -ne 200 ]; then
+                echo "A request did not return a 200 status code: $status"
+                fail=true
+              fi
+            done
+
+            # If any request did not return status code 200, fail the job
+            if [ "$fail" = true ]; then
+              exit 1
+            fi
+
+            echo "All requests returned a 200 status code."
 
   publish_to_pypi:
     docker:
@@ -164,9 +262,16 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - build_and_test:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - publish_to_pypi:
           requires:
             - local_testing
+            - build_and_test
           filters:
             branches:
               only:
