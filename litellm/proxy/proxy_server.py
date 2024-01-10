@@ -1051,31 +1051,6 @@ async def initialize(
         pass
     user_telemetry = telemetry
     usage_telemetry(feature="local_proxy_server")
-    curl_command = """
-    curl --location 'http://0.0.0.0:8000/chat/completions' \\
-    --header 'Content-Type: application/json' \\
-    --data ' {
-    "model": "gpt-3.5-turbo",
-    "messages": [
-        {
-        "role": "user",
-        "content": "what llm are you"
-        }
-    ]
-    }'
-    \n
-    """
-    print()  # noqa
-    print(  # noqa
-        f'\033[1;34mLiteLLM: Test your local proxy with: "litellm --test" This runs an openai.ChatCompletion request to your proxy [In a new terminal tab]\033[0m\n'
-    )
-    print(  # noqa
-        f"\033[1;34mLiteLLM: Curl Command Test for your local proxy\n {curl_command} \033[0m\n"
-    )
-    print("\033[1;34mDocs: https://docs.litellm.ai/docs/simple_proxy\033[0m\n")  # noqa
-    print(  # noqa
-        f"\033[1;34mSee all Router/Swagger docs on http://0.0.0.0:8000 \033[0m\n"
-    )  # noqa
 
 
 # for streaming
