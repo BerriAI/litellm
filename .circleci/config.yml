@@ -104,9 +104,7 @@ jobs:
             docker run -d \
               -p 4000:4000 \
               --name my-app \
-              -v $(pwd)/proxy_server_config.yaml:/app/config.yaml \
-              my-app:latest \
-              --config /app/config.yaml
+              my-app:latest 
       - run:
           name: Install curl and dockerize
           command: |
