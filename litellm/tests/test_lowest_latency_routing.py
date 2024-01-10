@@ -91,7 +91,8 @@ def test_latency_updated_custom_ttl():
         start_time=start_time,
         end_time=end_time,
     )
-    latency_key = f"{model_group}_latency_map"
+    latency_key = f"{model_group}_map"
+    print(f"cache: {test_cache.get_cache(key=latency_key)}")
     assert isinstance(test_cache.get_cache(key=latency_key), dict)
     time.sleep(cache_time)
     assert test_cache.get_cache(key=latency_key) is None
