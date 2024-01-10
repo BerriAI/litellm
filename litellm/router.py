@@ -105,7 +105,7 @@ class Router:
             "usage-based-routing",
             "latency-based-routing",
         ] = "simple-shuffle",
-        routing_strategy_args: dict = {}, # just for latency-based routing
+        routing_strategy_args: dict = {},  # just for latency-based routing
     ) -> None:
         self.set_verbose = set_verbose
         self.deployment_names: List = (
@@ -218,7 +218,9 @@ class Router:
                 litellm.callbacks.append(self.lowesttpm_logger)  # type: ignore
         elif routing_strategy == "latency-based-routing":
             self.lowestlatency_logger = LowestLatencyLoggingHandler(
-                router_cache=self.cache, model_list=self.model_list, routing_args=routing_strategy_args
+                router_cache=self.cache,
+                model_list=self.model_list,
+                routing_args=routing_strategy_args,
             )
             if isinstance(litellm.callbacks, list):
                 litellm.callbacks.append(self.lowestlatency_logger)  # type: ignore
@@ -1428,9 +1430,8 @@ class Router:
                         http_client=httpx.AsyncClient(
                             transport=AsyncCustomHTTPTransport(),
                             limits=httpx.Limits(
-                                max_connections=1000,
-                                max_keepalive_connections=100
-                            )
+                                max_connections=1000, max_keepalive_connections=100
+                            ),
                         ),  # type: ignore
                     )
                     self.cache.set_cache(
@@ -1450,9 +1451,8 @@ class Router:
                         http_client=httpx.Client(
                             transport=CustomHTTPTransport(),
                             limits=httpx.Limits(
-                                max_connections=1000,
-                                max_keepalive_connections=100
-                            )
+                                max_connections=1000, max_keepalive_connections=100
+                            ),
                         ),  # type: ignore
                     )
                     self.cache.set_cache(
@@ -1472,10 +1472,9 @@ class Router:
                         max_retries=max_retries,
                         http_client=httpx.AsyncClient(
                             limits=httpx.Limits(
-                            max_connections=1000,
-                            max_keepalive_connections=100
+                                max_connections=1000, max_keepalive_connections=100
                             )
-                        )
+                        ),
                     )
                     self.cache.set_cache(
                         key=cache_key,
@@ -1493,10 +1492,9 @@ class Router:
                         max_retries=max_retries,
                         http_client=httpx.Client(
                             limits=httpx.Limits(
-                            max_connections=1000,
-                            max_keepalive_connections=100
+                                max_connections=1000, max_keepalive_connections=100
                             )
-                        )
+                        ),
                     )
                     self.cache.set_cache(
                         key=cache_key,

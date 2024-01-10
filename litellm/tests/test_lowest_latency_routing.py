@@ -48,8 +48,11 @@ def test_latency_updated():
         start_time=start_time,
         end_time=end_time,
     )
-    latency_key = f"{model_group}_latency_map"
-    assert end_time - start_time == test_cache.get_cache(key=latency_key)[deployment_id][0]
+    latency_key = f"{model_group}_map"
+    assert (
+        end_time - start_time
+        == test_cache.get_cache(key=latency_key)[deployment_id]["latency"][0]
+    )
 
 # test_tpm_rpm_updated()
 
@@ -87,6 +90,45 @@ def test_latency_updated_custom_ttl():
         end_time=end_time,
     )
     latency_key = f"{model_group}_latency_map"
+    assert isinstance(test_cache.get_cache(key=latency_key), dict)
+    time.sleep(cache_time)
+    assert test_cache.get_cache(key=latency_key) is None
+
+
+def test_latency_updated_custom_ttl():
+    """
+    Invalidate the cached request.
+
+    Test that the cache is empty
+    """
+    test_cache = DualCache()
+    model_list = []
+    cache_time = 3
+    lowest_latency_logger = LowestLatencyLoggingHandler(
+        router_cache=test_cache, model_list=model_list, routing_args={"ttl": cache_time}
+    )
+    model_group = "gpt-3.5-turbo"
+    deployment_id = "1234"
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "model_group": "gpt-3.5-turbo",
+                "deployment": "azure/chatgpt-v-2",
+            },
+            "model_info": {"id": deployment_id},
+        }
+    }
+    start_time = time.time()
+    response_obj = {"usage": {"total_tokens": 50}}
+    time.sleep(5)
+    end_time = time.time()
+    lowest_latency_logger.log_success_event(
+        response_obj=response_obj,
+        kwargs=kwargs,
+        start_time=start_time,
+        end_time=end_time,
+    )
+    latency_key = f"{model_group}_map"
     assert isinstance(test_cache.get_cache(key=latency_key), dict)
     time.sleep(cache_time)
     assert test_cache.get_cache(key=latency_key) is None
@@ -170,6 +212,90 @@ def test_get_available_deployments():
 # test_get_available_deployments()
 
 
+def test_get_available_endpoints_tpm_rpm_check():
+    """
+    Pass in list of 2 valid models
+
+    Update cache with 1 model clearly being at tpm/rpm limit
+
+    assert that only the valid model is returned
+    """
+    test_cache = DualCache()
+    model_list = [
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {"model": "azure/chatgpt-v-2"},
+            "model_info": {"id": "1234", "rpm": 10},
+        },
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {"model": "azure/chatgpt-v-2"},
+            "model_info": {"id": "5678", "rpm": 3},
+        },
+    ]
+    lowest_latency_logger = LowestLatencyLoggingHandler(
+        router_cache=test_cache, model_list=model_list
+    )
+    model_group = "gpt-3.5-turbo"
+    ## DEPLOYMENT 1 ##
+    deployment_id = "1234"
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "model_group": "gpt-3.5-turbo",
+                "deployment": "azure/chatgpt-v-2",
+            },
+            "model_info": {"id": deployment_id},
+        }
+    }
+    for _ in range(3):
+        start_time = time.time()
+        response_obj = {"usage": {"total_tokens": 50}}
+        time.sleep(0.05)
+        end_time = time.time()
+        lowest_latency_logger.log_success_event(
+            response_obj=response_obj,
+            kwargs=kwargs,
+            start_time=start_time,
+            end_time=end_time,
+        )
+    ## DEPLOYMENT 2 ##
+    deployment_id = "5678"
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "model_group": "gpt-3.5-turbo",
+                "deployment": "azure/chatgpt-v-2",
+            },
+            "model_info": {"id": deployment_id},
+        }
+    }
+    for _ in range(3):
+        start_time = time.time()
+        response_obj = {"usage": {"total_tokens": 20}}
+        time.sleep(2)
+        end_time = time.time()
+        lowest_latency_logger.log_success_event(
+            response_obj=response_obj,
+            kwargs=kwargs,
+            start_time=start_time,
+            end_time=end_time,
+        )
+
+    ## CHECK WHAT'S SELECTED ##
+    print(
+        lowest_latency_logger.get_available_deployments(
+            model_group=model_group, healthy_deployments=model_list
+        )
+    )
+    assert (
+        lowest_latency_logger.get_available_deployments(
+            model_group=model_group, healthy_deployments=model_list
+        )["model_info"]["id"]
+        == "1234"
+    )
+
+
 def test_router_get_available_deployments():
     """
     Test if routers 'get_available_deployments' returns the fastest deployment
@@ -248,9 +374,6 @@ def test_router_get_available_deployments():
     # print(router.lowesttpm_logger.get_available_deployments(model_group="azure-model"))
     print(router.get_available_deployment(model="azure-model"))
     assert router.get_available_deployment(model="azure-model")["model_info"]["id"] == 2
-
-
-# test_get_available_deployments()
 
 
 # test_router_get_available_deployments()
