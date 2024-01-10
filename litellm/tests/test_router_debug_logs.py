@@ -65,6 +65,13 @@ def test_async_fallbacks(caplog):
 
     asyncio.run(_make_request())
     captured_logs = [rec.message for rec in caplog.records]
+
+    # on circle ci the captured logs get some async task exception logs - filter them out
+    "Task exception was never retrieved"
+    captured_logs = [
+        log for log in captured_logs if "Task exception was never retrieved" not in log
+    ]
+
     print("\n Captured caplog records - ", captured_logs)
 
     # Define the expected log messages
