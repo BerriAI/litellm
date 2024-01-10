@@ -115,8 +115,13 @@ jobs:
             sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
             sudo rm dockerize-linux-amd64-v0.6.1.tar.gz
       - run:
-          name: Display container logs
-          command: docker logs my-app
+          name: Start outputting logs
+          command: |
+            while true; do
+              docker logs my-app
+              sleep 10
+            done
+          background: true
       - run: 
           name: Wait for app to be ready
           command: dockerize -wait http://localhost:4000 -timeout 1m
