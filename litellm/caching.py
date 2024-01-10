@@ -171,7 +171,7 @@ class S3Cache(BaseCache):
                     CacheControl=cache_control,
                     ContentType="application/json",
                     ContentLanguage="en",
-                    ContentDisposition=f"inline; filename=\"{key}.json\""
+                    ContentDisposition=f'inline; filename="{key}.json"',
                 )
             else:
                 cache_control = "immutable, max-age=31536000, s-maxage=31536000"
@@ -183,7 +183,7 @@ class S3Cache(BaseCache):
                     CacheControl=cache_control,
                     ContentType="application/json",
                     ContentLanguage="en",
-                    ContentDisposition=f"inline; filename=\"{key}.json\""
+                    ContentDisposition=f'inline; filename="{key}.json"',
                 )
         except Exception as e:
             # NON blocking - notify users S3 is throwing an exception

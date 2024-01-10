@@ -261,13 +261,13 @@ def embedding(
         original_response=response,
     )
     """
-        response 
+        response
         {
             'object': "list",
             'data': [
-            
+
             ]
-            'model', 
+            'model',
             'usage'
         }
     """

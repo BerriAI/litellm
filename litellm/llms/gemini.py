@@ -177,16 +177,20 @@ def completion(
 
     try:
         completion_response = model_response["choices"][0]["message"].get("content")
-        if completion_response is None: 
+        if completion_response is None:
             raise Exception
     except:
         original_response = f"response: {response}"
-        if hasattr(response, "candidates"): 
+        if hasattr(response, "candidates"):
             original_response = f"response: {response.candidates}"
-            if "SAFETY" in original_response: 
-                original_response += "\nThe candidate content was flagged for safety reasons."
+            if "SAFETY" in original_response:
+                original_response += (
+                    "\nThe candidate content was flagged for safety reasons."
+                )
             elif "RECITATION" in original_response:
-                original_response += "\nThe candidate content was flagged for recitation reasons."
+                original_response += (
+                    "\nThe candidate content was flagged for recitation reasons."
+                )
         raise GeminiError(
             status_code=400,
             message=f"No response received. Original response - {original_response}",

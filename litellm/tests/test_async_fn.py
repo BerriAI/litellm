@@ -197,6 +197,7 @@ def test_get_cloudflare_response_streaming():
 
     asyncio.run(test_async_call())
 
+
 @pytest.mark.asyncio
 async def test_hf_completion_tgi():
     # litellm.set_verbose=True
@@ -211,6 +212,7 @@ async def test_hf_completion_tgi():
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
 
 # test_get_cloudflare_response_streaming()
 
