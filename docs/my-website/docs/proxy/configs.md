@@ -188,7 +188,7 @@ print(response)
 </Tabs>
 
 
-## Save Model-specific params (API Base, API Keys, Temperature, Headers etc.)
+## Save Model-specific params (API Base, API Keys, Temperature, Max Tokens, Seed, Headers etc.)
 You can use the config to save model-specific information like api_base, api_key, temperature, max_tokens, etc. 
 
 [**All input params**](https://docs.litellm.ai/docs/completion/input#input-params-1)
@@ -202,11 +202,14 @@ model_list:
       api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
       api_version: "2023-05-15"
       azure_ad_token: eyJ0eXAiOiJ
+      seed: 12
+      max_tokens: 20
   - model_name: gpt-4-team2
     litellm_params:
       model: azure/gpt-4
       api_key: sk-123
       api_base: https://openai-gpt-4-test-v-2.openai.azure.com/
+      temperature: 0.2
   - model_name: mistral-7b
     litellm_params:
       model: ollama/mistral
