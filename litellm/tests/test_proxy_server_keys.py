@@ -1,73 +1,73 @@
-import sys, os, time
-import traceback
-from dotenv import load_dotenv
+# import sys, os, time
+# import traceback
+# from dotenv import load_dotenv
 
-load_dotenv()
-import os, io
+# load_dotenv()
+# import os, io
 
-# this file is to test litellm/proxy
+# # this file is to test litellm/proxy
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
-import pytest, logging
-import litellm
-from litellm import embedding, completion, completion_cost, Timeout
-from litellm import RateLimitError
-
-
-import sys, os, time
-import traceback
-from dotenv import load_dotenv
-
-load_dotenv()
-import os, io
-
-# this file is to test litellm/proxy
-from concurrent.futures import ThreadPoolExecutor
-
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
-
-import pytest, logging, requests
-import litellm
-from litellm import embedding, completion, completion_cost, Timeout
-from litellm import RateLimitError
-from github import Github
-import subprocess
+# sys.path.insert(
+#     0, os.path.abspath("../..")
+# )  # Adds the parent directory to the system path
+# import pytest, logging
+# import litellm
+# from litellm import embedding, completion, completion_cost, Timeout
+# from litellm import RateLimitError
 
 
-# Function to execute a command and return the output
-def run_command(command):
-    process = subprocess.Popen(command, stdout=subprocess.PIPE, shell=True)
-    output, _ = process.communicate()
-    return output.decode().strip()
+# import sys, os, time
+# import traceback
+# from dotenv import load_dotenv
+
+# load_dotenv()
+# import os, io
+
+# # this file is to test litellm/proxy
+# from concurrent.futures import ThreadPoolExecutor
+
+# sys.path.insert(
+#     0, os.path.abspath("../..")
+# )  # Adds the parent directory to the system path
+
+# import pytest, logging, requests
+# import litellm
+# from litellm import embedding, completion, completion_cost, Timeout
+# from litellm import RateLimitError
+# from github import Github
+# import subprocess
 
 
-# Retrieve the current branch name
-branch_name = run_command("git rev-parse --abbrev-ref HEAD")
+# # Function to execute a command and return the output
+# def run_command(command):
+#     process = subprocess.Popen(command, stdout=subprocess.PIPE, shell=True)
+#     output, _ = process.communicate()
+#     return output.decode().strip()
 
-# GitHub personal access token (with repo scope) or use username and password
-access_token = os.getenv("GITHUB_ACCESS_TOKEN")
-# Instantiate the PyGithub library's Github object
-g = Github(access_token)
 
-# Provide the owner and name of the repository where the pull request is located
-repository_owner = "BerriAI"
-repository_name = "litellm"
+# # Retrieve the current branch name
+# branch_name = run_command("git rev-parse --abbrev-ref HEAD")
 
-# Get the repository object
-repo = g.get_repo(f"{repository_owner}/{repository_name}")
+# # GitHub personal access token (with repo scope) or use username and password
+# access_token = os.getenv("GITHUB_ACCESS_TOKEN")
+# # Instantiate the PyGithub library's Github object
+# g = Github(access_token)
 
-# Iterate through the pull requests to find the one related to your branch
-for pr in repo.get_pulls():
-    print(f"in here! {pr.head.ref}")
-    if pr.head.ref == branch_name:
-        pr_number = pr.number
-        break
+# # Provide the owner and name of the repository where the pull request is located
+# repository_owner = "BerriAI"
+# repository_name = "litellm"
 
-print(f"The pull request number for branch {branch_name} is: {pr_number}")
+# # Get the repository object
+# repo = g.get_repo(f"{repository_owner}/{repository_name}")
+
+# # Iterate through the pull requests to find the one related to your branch
+# for pr in repo.get_pulls():
+#     print(f"in here! {pr.head.ref}")
+#     if pr.head.ref == branch_name:
+#         pr_number = pr.number
+#         break
+
+# print(f"The pull request number for branch {branch_name} is: {pr_number}")
 
 
 # def test_add_new_key():
