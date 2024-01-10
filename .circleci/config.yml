@@ -256,9 +256,23 @@ workflows:
   version: 2
   build_and_test:
     jobs:
+      - local_testing:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - build_and_test:
           filters:
             branches:
               only:
                 - main
                 - /litellm_.*/
+      - publish_to_pypi:
+          requires:
+            - local_testing
+            - build_and_test
+          filters:
+            branches:
+              only:
+                - main
