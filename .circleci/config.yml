@@ -111,7 +111,8 @@ jobs:
               -v $(pwd)/proxy_server_config.yaml:/app/config.yaml \
               my-app:latest \
               --config /app/config.yaml \
-              --port 4000
+              --port 4000 \
+              --num_workers 8
       - run:
           name: Install curl and dockerize
           command: |
