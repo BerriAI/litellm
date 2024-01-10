@@ -52,7 +52,6 @@ def proxy_setup():
         submitted = st.form_submit_button("Save")
 
         if submitted:
-            update_config(
             update_config_values(
                 proxy_url=proxy_url,
                 allowed_email_subdomain=allowed_email_subdomain,
