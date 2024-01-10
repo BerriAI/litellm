@@ -367,14 +367,13 @@ def run_server(
         )
         try:
             import uvicorn
+            import gunicorn.app.base
         except:
             raise ImportError(
-                "Uvicorn needs to be imported. Run - `pip install uvicorn`"
+                "Uvicorn, gunicorn needs to be imported. Run - `pip 'litellm[proxy]'`"
             )
         if port == 8000 and is_port_in_use(port):
             port = random.randint(1024, 49152)
-
-        import gunicorn.app.base
 
         class StandaloneApplication(gunicorn.app.base.BaseApplication):
             def __init__(self, app, options=None):
