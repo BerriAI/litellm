@@ -52,6 +52,7 @@ litellm = 'litellm:run_server'
 flake8 = "^6.1.0"
 black = "^23.12.0"
 pytest = "^7.4.3"
+isort = "^5.13.2"
 
 [build-system]
 requires = ["poetry-core", "wheel"]
@@ -63,3 +64,5 @@ version_files = [
     "pyproject.toml:^version"
 ]
 
+[tool.isort]
+profile = "black"

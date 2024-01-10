@@ -239,6 +239,7 @@ Step 3: Test your change:
 cd litellm/tests # pwd: Documents/litellm/litellm/tests
 poetry run flake8
 poetry run pytest .
+poetry run isort litellm/*.py
 ```
 
 Step 4: Submit a PR with your changes! 🚀

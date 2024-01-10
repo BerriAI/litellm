@@ -33,3 +33,5 @@ jobs:
       - run: poetry install
       - name: Run flake8 (https://flake8.pycqa.org/en/latest/)
         run: poetry run flake8
+      - name: Run isort (https://pycqa.github.io/isort/)
+        run: poetry run isort --check litellm/*.py
