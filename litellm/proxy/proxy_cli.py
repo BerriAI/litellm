@@ -42,7 +42,7 @@ def is_port_in_use(port):
 @click.command()
 @click.option("--host", default="0.0.0.0", help="Host for the server to listen on.")
 @click.option("--port", default=8000, help="Port to bind the server to.")
-@click.option("--num_workers", default=1, help="Number of uvicorn workers to spin up")
+@click.option("--num_workers", default=1, help="Number of gunicorn workers to spin up")
 @click.option("--api_base", default=None, help="API base URL.")
 @click.option(
     "--api_version",
@@ -344,9 +344,10 @@ def run_server(
         )
         try:
             import uvicorn
+            import gunicorn.app.base
         except:
             raise ImportError(
-                "Uvicorn needs to be imported. Run - `pip install uvicorn`"
+                "Uvicorn, gunicorn needs to be imported. Run - `pip 'litellm[proxy]'`"
             )
         if os.getenv("DATABASE_URL", None) is not None:
             # run prisma db push, before starting server
@@ -364,9 +365,37 @@ def run_server(
                 os.chdir(original_dir)
         if port == 8000 and is_port_in_use(port):
             port = random.randint(1024, 49152)
-        uvicorn.run(
-            "litellm.proxy.proxy_server:app", host=host, port=port, workers=num_workers
-        )
+
+        # Gunicorn Application Class
+        class StandaloneApplication(gunicorn.app.base.BaseApplication):
+            def __init__(self, app, options=None):
+                self.options = options or {}  # gunicorn options
+                self.application = app  # FastAPI app
+                super().__init__()
+
+            def load_config(self):
+                # note: This Loads the gunicorn config - has nothing to do with LiteLLM Proxy config
+                config = {
+                    key: value
+                    for key, value in self.options.items()
+                    if key in self.cfg.settings and value is not None
+                }
+                for key, value in config.items():
+                    self.cfg.set(key.lower(), value)
+
+            def load(self):
+                # gunicorn app function
+                return self.application
+
+        gunicorn_options = {
+            "bind": f"{host}:{port}",
+            "workers": num_workers,  # default is 1
+            "worker_class": "uvicorn.workers.UvicornWorker",
+            "preload": True,  # Add the preload flag
+        }
+        from litellm.proxy.proxy_server import app
+
+        StandaloneApplication(app=app, options=gunicorn_options).run()  # Run gunicorn
 
 
 if __name__ == "__main__":
