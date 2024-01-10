@@ -132,7 +132,7 @@ jobs:
           context: .
           file: Dockerfile.database
           push: true
-          tags: ${{ steps.meta-database.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, latest
+          tags: ${{ steps.meta-database.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}
           labels: ${{ steps.meta-database.outputs.labels }} 
   release:
     name: "New LiteLLM Release"
