@@ -46,5 +46,3 @@ fi
 
 echo "Database push successful!"
 
-# Start server
-litellm --port 4000 --num_workers 8
