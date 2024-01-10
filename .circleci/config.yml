@@ -113,12 +113,12 @@ jobs:
             sudo wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
             sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
             sudo rm dockerize-linux-amd64-v0.6.1.tar.gz
-      - run: 
-          name: Wait for app to be ready
-          command: dockerize -wait http://localhost:4000 -timeout 1m
       - run:
           name: Display container logs
           command: docker logs my-app
+      - run: 
+          name: Wait for app to be ready
+          command: dockerize -wait http://localhost:4000 -timeout 1m
       - run:
           name: Test the application
           command: curl -s "http://localhost:4000/health/readiness"
