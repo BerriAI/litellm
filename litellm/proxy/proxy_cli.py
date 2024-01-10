@@ -65,7 +65,7 @@ def is_port_in_use(port):
 @click.command()
 @click.option("--host", default="0.0.0.0", help="Host for the server to listen on.")
 @click.option("--port", default=8000, help="Port to bind the server to.")
-@click.option("--num_workers", default=1, help="Number of uvicorn workers to spin up")
+@click.option("--num_workers", default=1, help="Number of gunicorn workers to spin up")
 @click.option("--api_base", default=None, help="API base URL.")
 @click.option(
     "--api_version",
@@ -373,9 +373,6 @@ def run_server(
             )
         if port == 8000 and is_port_in_use(port):
             port = random.randint(1024, 49152)
-        # uvicorn.run(
-        #     "litellm.proxy.proxy_server:app", host=host, port=port, workers=num_workers
-        # )
 
         import gunicorn.app.base
 
