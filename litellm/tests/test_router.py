@@ -495,6 +495,8 @@ def test_img_gen_on_router():
         print(response)
         assert len(response.data) > 0
         router.reset()
+    except litellm.RateLimitError as e:
+        pass
     except Exception as e:
         traceback.print_exc()
         pytest.fail(f"Error occurred: {e}")
