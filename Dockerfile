@@ -56,3 +56,6 @@ CMD [ \
     "sh", "-c", \
     "if [ -n \"$DATABASE_URL\" ]; then ./entrypoint.sh; else litellm --port 4000 --num_workers 8; fi" \
 ]
+
+# this allows accepting litellm args
+ENTRYPOINT ["litellm", "--port", "4000"]
