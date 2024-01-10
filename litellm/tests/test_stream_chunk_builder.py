@@ -93,7 +93,7 @@ def test_stream_chunk_builder_litellm_function_call():
 
 def test_stream_chunk_builder_litellm_tool_call():
     try:
-        litellm.set_verbose = False
+        litellm.set_verbose = True
         response = litellm.completion(
             model="azure/gpt-4-nov-release",
             messages=messages,
@@ -101,6 +101,7 @@ def test_stream_chunk_builder_litellm_tool_call():
             stream=True,
             api_key="os.environ/AZURE_FRANCE_API_KEY",
             api_base="https://openai-france-1234.openai.azure.com",
+            api_version="2023-12-01-preview",
             complete_response=True,
         )
 
