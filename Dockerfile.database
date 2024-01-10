@@ -54,6 +54,6 @@ RUN chmod +x entrypoint.sh
 EXPOSE 4000/tcp
 
 # # Set your entrypoint and command
-# ENTRYPOINT ["./entrypoint.sh"]
+
 ENTRYPOINT ["litellm"]
 CMD ["--port", "4000"]
