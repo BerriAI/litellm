@@ -85,10 +85,8 @@ jobs:
           path: test-results
 
   build_and_test:
-    executors:
-      docker-machine:
-        docker:
-          - image: ubuntu-2204:2023.02.1
+    docker:
+      - image: ubuntu-2204:2023.02.1
     working_directory: ~/project
     steps:
       - checkout
