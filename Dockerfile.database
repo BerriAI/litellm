@@ -9,9 +9,15 @@ FROM $LITELLM_BUILD_IMAGE as builder
 # Set the working directory to /app
 WORKDIR /app
 
-# Install build dependencies
+# Temporarily disable APT's post-invoke clean-up actions
+RUN mv /etc/apt/apt.conf.d/docker-clean /tmp
+
+# Perform APT operations
 RUN apt-get clean && apt-get update && \
     apt-get install -y gcc python3-dev
+
+# If needed, re-enable APT's post-invoke actions by moving docker-clean back
+# RUN mv /tmp/docker-clean /etc/apt/apt.conf.d/docker-clean
 
 RUN pip install --upgrade pip && \
     pip install build
