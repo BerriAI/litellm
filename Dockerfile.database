@@ -55,3 +55,6 @@ EXPOSE 4000/tcp
 
 # Set your entrypoint and command
 CMD ["./entrypoint.sh"]
+
+# this allows accepting litellm args
+ENTRYPOINT ["litellm", "--port", "4000"]
