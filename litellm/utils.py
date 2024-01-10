@@ -7147,6 +7147,16 @@ class CustomStreamWrapper:
                 else:
                     logprobs = None
 
+                if (
+                    hasattr(str_line.choices[0], "content_filter_result")
+                    and str_line.choices[0].content_filter_result is not None
+                ):
+                    error_message = json.dumps(
+                        str_line.choices[0].content_filter_result
+                    )
+                    raise litellm.AzureOpenAIError(
+                        status_code=400, message=error_message
+                    )
             return {
                 "text": text,
                 "is_finished": is_finished,
@@ -7695,7 +7705,6 @@ class CustomStreamWrapper:
                     chunk = self.completion_stream
                 else:
                     chunk = next(self.completion_stream)
-                print_verbose(f"value of chunk: {chunk} ")
                 if chunk is not None and chunk != b"":
                     print_verbose(f"PROCESSED CHUNK PRE CHUNK CREATOR: {chunk}")
                     response = self.chunk_creator(chunk=chunk)

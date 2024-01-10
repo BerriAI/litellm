@@ -531,7 +531,7 @@ from .llms.bedrock import (
     AmazonLlamaConfig,
 )
 from .llms.openai import OpenAIConfig, OpenAITextCompletionConfig
-from .llms.azure import AzureOpenAIConfig
+from .llms.azure import AzureOpenAIConfig, AzureOpenAIError
 from .main import *  # type: ignore
 from .integrations import *
 from .exceptions import (
