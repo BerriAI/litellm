@@ -366,37 +366,46 @@ def run_server(
             use_queue=use_queue,
         )
         try:
-            import gunicorn
+            import uvicorn
         except:
             raise ImportError(
                 "Uvicorn needs to be imported. Run - `pip install uvicorn`"
             )
         if port == 8000 and is_port_in_use(port):
             port = random.randint(1024, 49152)
+        # uvicorn.run(
+        #     "litellm.proxy.proxy_server:app", host=host, port=port, workers=num_workers
+        # )
 
-        from gunicorn.app.base import BaseApplication
+        import gunicorn.app.base
 
-        class StandaloneApplication(BaseApplication):
+        class StandaloneApplication(gunicorn.app.base.BaseApplication):
             def __init__(self, app, options=None):
                 self.options = options or {}
                 self.application = app
                 super().__init__()
 
             def load_config(self):
-                for key, value in self.options.items():
-                    self.cfg.set(key, value)
+                config = {
+                    key: value
+                    for key, value in self.options.items()
+                    if key in self.cfg.settings and value is not None
+                }
+                for key, value in config.items():
+                    self.cfg.set(key.lower(), value)
 
             def load(self):
                 return self.application
 
-        num_workers = 4  # Set the desired number of Gunicorn workers
-        host = "0.0.0.0"
         gunicorn_options = {
             "bind": f"{host}:{port}",
             "workers": num_workers,
+            "worker_class": "uvicorn.workers.UvicornWorker",
+            "preload": True,  # Add the preload flag
         }
+        from litellm.proxy.proxy_server import app
 
-        StandaloneApplication(app, gunicorn_options).run()
+        StandaloneApplication(app=app, options=gunicorn_options).run()
 
 
 if __name__ == "__main__":
