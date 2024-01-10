@@ -85,8 +85,8 @@ jobs:
           path: test-results
 
   build_and_test:
-    docker:
-      - image: cimg/python:3.9
+    machine:
+      image: ubuntu-2204:2023.02.1
     working_directory: ~/project
     steps:
       - checkout
