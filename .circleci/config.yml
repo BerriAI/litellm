@@ -86,13 +86,18 @@ jobs:
 
   build_and_test:
     docker:
-      - image: circleci/python
+      - image: cimg/python:3.9
     working_directory: ~/project
     steps:
       - checkout
       - setup_remote_docker:
           version: 20.10.6
           docker_layer_caching: true
+      - run:
+          name: Install Docker CLI (In case it's not already installed)
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y docker-ce docker-ce-cli containerd.io
       - run:
           name: Build Docker image
           command: docker build -t my-app:latest -f Dockerfile.database .
