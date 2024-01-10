@@ -135,22 +135,47 @@ jobs:
       - run:
           name: Test the application
           command: |
-            status_codes=()
+            mkdir -p /tmp/responses
             for i in {1..10}; do
-              status=$(curl --location --request 'POST' 'http://0.0.0.0:4000/key/generate' \
-              --header 'Authorization: Bearer sk-1234' \
-              --header 'Content-Type: application/json' \
-              --data '{"models": ["azure-models"], "aliases": {"mistral-7b": "gpt-3.5-turbo"}, "duration": null}' \
-              --silent --output /dev/null --write-out '%{http_code}\n') &
-              status_codes+=($status)
+              status_file="/tmp/responses/status_${i}.txt"
+              response_file="/tmp/responses/response_${i}.json"
+
+              (curl --location --request 'POST' 'http://0.0.0.0:4000/key/generate' \
+                --header 'Authorization: Bearer sk-1234' \
+                --header 'Content-Type: application/json' \
+                --data '{"models": ["azure-models"], "aliases": {"mistral-7b": "gpt-3.5-turbo"}, "duration": null}' \
+                --silent --output "${response_file}" --write-out '%{http_code}' > "${status_file}") &
+
+              # Capture PIDs of background processes
+              pids[${i}]=$!
             done
-            wait
-            for status in "${status_codes[@]}"; do
-              if [[ "$status" -ne 200 ]]; then
+
+            # Wait for all background processes to finish
+            for pid in ${pids[*]}; do
+              wait $pid
+            done
+
+            # Check all responses and status codes
+            fail=false
+            for i in {1..10}; do
+              status=$(cat "/tmp/responses/status_${i}.txt")
+              response=$(cat "/tmp/responses/response_${i}.json")
+
+              echo "Response ${i} (Status code: ${status}):"
+              cat "${response}"
+              echo # Newline for readability
+
+              if [ "$status" -ne 200 ]; then
                 echo "A request did not return a 200 status code: $status"
-                exit 1
+                fail=true
               fi
             done
+
+            # If any request did not return status code 200, fail the job
+            if [ "$fail" = true ]; then
+              exit 1
+            fi
+
             echo "All requests returned a 200 status code."
 
   publish_to_pypi:
