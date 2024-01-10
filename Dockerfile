@@ -51,8 +51,5 @@ RUN chmod +x entrypoint.sh
 
 EXPOSE 4000/tcp
 
-# Set your entrypoint and command - if user wants to use Prisma Database
-ENTRYPOINT ["sh", "-c", "[ -n \"$DATABASE_URL\" ] && ./entrypoint.sh"]
-
-# this allows accepting litellm args
-CMD ["litellm", "--port", "4000"]
+ENTRYPOINT ["litellm"]
+CMD ["--port", "4000"]
