@@ -86,6 +86,10 @@ def test_add_new_key(client):
             "duration": "20m",
         }
         print("testing proxy server")
+        response = client.get("/health/readiness")
+        _response_json = response.json()
+        print(f"is proxy ready?: {_response_json}")
+
         # Your bearer token
         token = os.getenv("PROXY_MASTER_KEY")
 
