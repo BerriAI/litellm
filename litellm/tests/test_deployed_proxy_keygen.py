@@ -17,38 +17,47 @@ from litellm import RateLimitError
 
 
 def test_add_new_key():
-    try:
-        # Your test data
-        test_data = {
-            "models": ["gpt-3.5-turbo", "gpt-4", "claude-2", "azure-model"],
-            "aliases": {"mistral-7b": "gpt-3.5-turbo"},
-            "duration": "20m",
-        }
-        print("testing proxy server")
-        # Your bearer token
-        token = os.getenv("PROXY_MASTER_KEY")
+    max_retries = 3
+    retry_delay = 1  # seconds
 
-        headers = {"Authorization": f"Bearer {token}"}
+    for retry in range(max_retries + 1):
+        try:
+            # Your test data
+            test_data = {
+                "models": ["gpt-3.5-turbo", "gpt-4", "claude-2", "azure-model"],
+                "aliases": {"mistral-7b": "gpt-3.5-turbo"},
+                "duration": "20m",
+            }
+            print("testing proxy server")
 
-        staging_endpoint = "https://litellm-litellm-pr-1376.up.railway.app"
-        main_endpoint = "https://litellm-staging.up.railway.app"
+            # Your bearer token
+            token = os.getenv("PROXY_MASTER_KEY")
+            headers = {"Authorization": f"Bearer {token}"}
 
-        # Your bearer token
-        token = os.getenv("PROXY_MASTER_KEY")
+            staging_endpoint = "https://litellm-litellm-pr-1376.up.railway.app"
+            main_endpoint = "https://litellm-staging.up.railway.app"
 
-        headers = {"Authorization": f"Bearer {token}"}
+            # Make a request to the staging endpoint
+            response = requests.post(
+                main_endpoint + "/key/generate", json=test_data, headers=headers
+            )
 
-        # Make a request to the staging endpoint
-        response = requests.post(
-            main_endpoint + "/key/generate", json=test_data, headers=headers
-        )
+            print(f"response: {response.text}")
 
-        print(f"response: {response.text}")
-        assert response.status_code == 200
-        result = response.json()
-    except Exception as e:
-        print(traceback.format_exc())
-        pytest.fail(f"An error occurred {e}")
+            if response.status_code == 200:
+                result = response.json()
+                break  # Successful response, exit the loop
+            elif response.status_code == 503 and retry < max_retries:
+                print(
+                    f"Retrying in {retry_delay} seconds... (Retry {retry + 1}/{max_retries})"
+                )
+                time.sleep(retry_delay)
+            else:
+                assert False, f"Unexpected response status code: {response.status_code}"
+
+        except Exception as e:
+            print(traceback.format_exc())
+            pytest.fail(f"An error occurred {e}")
 
 
-# test_add_new_key()
+test_add_new_key()
