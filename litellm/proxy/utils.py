@@ -253,10 +253,11 @@ class PrismaClient:
         print_verbose(
             "LiteLLM: DATABASE_URL Set in config, trying to 'pip install prisma'"
         )
-         ## init logging object
+        ## init logging object
         self.proxy_logging_obj = proxy_logging_obj
-
-        if os.getenv("DATABASE_URL", None) is None: # setup hasn't taken place
+        try:
+            from prisma import Prisma  # type: ignore
+        except:
             os.environ["DATABASE_URL"] = database_url
             # Save the current working directory
             original_dir = os.getcwd()
@@ -272,8 +273,8 @@ class PrismaClient:
                 )  # this looks like a weird edge case when prisma just wont start on render. we need to have the --accept-data-loss
             finally:
                 os.chdir(original_dir)
-        # Now you can import the Prisma Client
-        from prisma import Prisma  # type: ignore
+            # Now you can import the Prisma Client
+            from prisma import Prisma  # type: ignore
 
         self.db = Prisma(
             http={
