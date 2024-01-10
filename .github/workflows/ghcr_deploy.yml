@@ -72,7 +72,7 @@ jobs:
         uses: docker/build-push-action@f2a1d5e99d037542a71f64918e516c093c6f3fc4
         with:
           context: .
-          dockerfile: Dockerfile.alpine
+          file: Dockerfile.alpine
           push: true
           tags: ${{ steps.meta-alpine.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}
           labels: ${{ steps.meta-alpine.outputs.labels }}
