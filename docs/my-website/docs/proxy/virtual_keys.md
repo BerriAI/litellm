@@ -6,7 +6,9 @@ Grant other's temporary access to your proxy, with keys that expire after a set 
 
 :::info
 
-Complete API documentation in the Swagger docs on your proxy base url (e.g. `http://0.0.0.0:8000)`
+- [Deploy LiteLLM Proxy with Key Management](https://docs.litellm.ai/docs/proxy/deploy#deploy-with-database)
+- Dockerfile.database for LiteLLM Proxy + Key Management [here](https://github.com/BerriAI/litellm/blob/main/Dockerfile.database)
+
 
 :::
 
