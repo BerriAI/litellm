@@ -140,7 +140,7 @@ jobs:
               status_file="/tmp/responses/status_${i}.txt"
               response_file="/tmp/responses/response_${i}.json"
 
-              (curl --location --request 'POST' 'http://0.0.0.0:4000/key/generate' \
+              (curl --location --request POST 'http://0.0.0.0:4000/key/generate' \
                 --header 'Authorization: Bearer sk-1234' \
                 --header 'Content-Type: application/json' \
                 --data '{"models": ["azure-models"], "aliases": {"mistral-7b": "gpt-3.5-turbo"}, "duration": null}' \
@@ -162,7 +162,7 @@ jobs:
               response=$(cat "/tmp/responses/response_${i}.json")
 
               echo "Response ${i} (Status code: ${status}):"
-              cat "${response}"
+              cat "${response_file}"
               echo # Newline for readability
 
               if [ "$status" -ne 200 ]; then
