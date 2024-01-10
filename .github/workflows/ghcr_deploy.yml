@@ -72,7 +72,7 @@ jobs:
         with:
           context: .
           push: true
-          tags: ${{ steps.meta.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }} # if a tag is provided, use that, otherwise use the release tag, and if neither is available, use 'latest'
+          tags: ${{ steps.meta.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta.outputs.tags }}-latest # if a tag is provided, use that, otherwise use the release tag, and if neither is available, use 'latest'
           labels: ${{ steps.meta.outputs.labels }}
   build-and-push-image-alpine:
     runs-on: ubuntu-latest
