@@ -15,7 +15,6 @@ importlib-metadata = ">=6.8.0"
 tokenizers = "*"
 click = "*"
 jinja2 = "^3.1.2"
-certifi = "^2023.7.22"
 aiohttp = "*"
 
 uvicorn = {version = "^0.22.0", optional = true}
