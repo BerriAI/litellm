@@ -3123,7 +3123,10 @@ async def ahealth_check(
                 prompt=prompt,
                 input=input,
             )
-        elif custom_llm_provider == "openai":
+        elif (
+            custom_llm_provider == "openai"
+            or custom_llm_provider == "text-completion-openai"
+        ):
             api_key = model_params.get("api_key") or get_secret("OPENAI_API_KEY")
 
             timeout = (
