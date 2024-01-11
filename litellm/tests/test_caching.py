@@ -290,6 +290,7 @@ async def test_embedding_caching_azure_individual_items():
     embedding_val_2 = await aembedding(
         model="azure/azure-embedding-model", input=embedding_2, caching=True
     )
+    print(f"embedding_val_2: {embedding_val_2}")
     if (
         embedding_val_2["data"][0]["embedding"]
         != embedding_val_1["data"][0]["embedding"]

@@ -2341,7 +2341,7 @@ def client(original_function):
                             for val in non_null_list:
                                 idx, cr = val  # (idx, cr) tuple
                                 if cr is not None:
-                                    final_embedding_cached_response.data[idx] = val
+                                    final_embedding_cached_response.data[idx] = cr
 
                         if len(remaining_list) == 0:
                             # LOG SUCCESS
@@ -2485,9 +2485,9 @@ def client(original_function):
                 for item in final_embedding_cached_response.data:
                     if item is None:
                         final_data_list.append(result.data[idx])
+                        idx += 1
                     else:
                         final_data_list.append(item)
-                    idx += 1
 
                 final_embedding_cached_response.data = final_data_list
                 return final_embedding_cached_response
