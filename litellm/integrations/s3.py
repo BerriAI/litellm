@@ -118,7 +118,10 @@ class S3Logger:
                 except:
                     # non blocking if it can't cast to a str
                     pass
-            s3_object_key = payload["id"]
+
+            s3_object_key = (
+                payload["id"] + "-time=" + str(start_time)
+            )  # we need the s3 key to include the time, so we log cache hits too
 
             import json
 
