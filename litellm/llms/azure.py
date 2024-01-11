@@ -753,6 +753,11 @@ class AzureChatCompletion(BaseLLM):
         completion = None
 
         if mode == "completion":
+            completion = await client.completions.with_raw_response.create(
+                model=model,  # type: ignore
+                prompt=prompt,  # type: ignore
+            )
+        elif mode == "chat":
             if messages is None:
                 raise Exception("messages is not set")
             completion = await client.chat.completions.with_raw_response.create(
