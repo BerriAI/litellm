@@ -189,10 +189,7 @@ def test_bedrock_embedding_titan():
         litellm.set_verbose = True
         response = embedding(
             model="amazon.titan-embed-text-v1",
-            input=[
-                "good morning from litellm, attempting to embed data",
-                "lets test a second string for good measure",
-            ],
+            input="good morning from litellm, attempting to embed data",
         )
         print(f"response:", response)
         assert isinstance(
@@ -206,7 +203,7 @@ def test_bedrock_embedding_titan():
         pytest.fail(f"Error occurred: {e}")
 
 
-# test_bedrock_embedding_titan()
+test_bedrock_embedding_titan()
 
 
 def test_bedrock_embedding_cohere():

@@ -2,7 +2,7 @@ import json, copy, types
 import os
 from enum import Enum
 import time
-from typing import Callable, Optional, Any
+from typing import Callable, Optional, Any, Union
 import litellm
 from litellm.utils import ModelResponse, get_secret, Usage
 from .prompt_templates.factory import prompt_factory, custom_prompt
@@ -714,7 +714,7 @@ def _embedding_func_single(
 
 def embedding(
     model: str,
-    input: list,
+    input: Union[list, str],
     api_key: Optional[str] = None,
     logging_obj=None,
     model_response=None,
