@@ -232,6 +232,9 @@ async def acompletion(
         "model_list": model_list,
         "acompletion": True,  # assuming this is a required parameter
     }
+    _, custom_llm_provider, _, _ = get_llm_provider(
+        model=model, api_base=completion_kwargs.get("base_url", None)
+    )
     try:
         # Use a partial function to pass your keyword arguments
         func = partial(completion, **completion_kwargs, **kwargs)
@@ -239,10 +242,6 @@ async def acompletion(
         # Add the context to the function
         ctx = contextvars.copy_context()
         func_with_context = partial(ctx.run, func)
-
-        _, custom_llm_provider, _, _ = get_llm_provider(
-            model=model, api_base=completion_kwargs.get("base_url", None)
-        )
 
         if (
             custom_llm_provider == "openai"
