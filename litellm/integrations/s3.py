@@ -15,7 +15,7 @@ class S3Logger:
     # Class variables or attributes
     def __init__(
         self,
-        s3_bucket_name="litellm-logs",
+        s3_bucket_name=None,
         s3_region_name=None,
         s3_api_version=None,
         s3_use_ssl=True,
@@ -29,21 +29,51 @@ class S3Logger:
     ):
         import boto3
 
-        self.bucket_name = s3_bucket_name
-        # Create an S3 client with custom endpoint URL
-        self.s3_client = boto3.client(
-            "s3",
-            region_name=s3_region_name,
-            endpoint_url=s3_endpoint_url,
-            api_version=s3_api_version,
-            use_ssl=s3_use_ssl,
-            verify=s3_verify,
-            aws_access_key_id=s3_aws_access_key_id,
-            aws_secret_access_key=s3_aws_secret_access_key,
-            aws_session_token=s3_aws_session_token,
-            config=s3_config,
-            **kwargs,
-        )
+        try:
+            print_verbose("in init s3 logger")
+
+            if litellm.s3_callback_params is not None:
+                # read in .env variables - example os.environ/AWS_BUCKET_NAME
+                for key, value in litellm.s3_callback_params.items():
+                    if type(value) is str and value.startswith("os.environ/"):
+                        litellm.s3_callback_params[key] = litellm.get_secret(value)
+                # now set s3 params from litellm.s3_logger_params
+                s3_bucket_name = litellm.s3_callback_params.get("s3_bucket_name")
+                s3_region_name = litellm.s3_callback_params.get("s3_region_name")
+                s3_api_version = litellm.s3_callback_params.get("s3_api_version")
+                s3_use_ssl = litellm.s3_callback_params.get("s3_use_ssl")
+                s3_verify = litellm.s3_callback_params.get("s3_verify")
+                s3_endpoint_url = litellm.s3_callback_params.get("s3_endpoint_url")
+                s3_aws_access_key_id = litellm.s3_callback_params.get(
+                    "s3_aws_access_key_id"
+                )
+                s3_aws_secret_access_key = litellm.s3_callback_params.get(
+                    "s3_aws_secret_access_key"
+                )
+                s3_aws_session_token = litellm.s3_callback_params.get(
+                    "s3_aws_session_token"
+                )
+                s3_config = litellm.s3_callback_params.get("s3_config")
+                # done reading litellm.s3_callback_params
+
+            self.bucket_name = s3_bucket_name
+            # Create an S3 client with custom endpoint URL
+            self.s3_client = boto3.client(
+                "s3",
+                region_name=s3_region_name,
+                endpoint_url=s3_endpoint_url,
+                api_version=s3_api_version,
+                use_ssl=s3_use_ssl,
+                verify=s3_verify,
+                aws_access_key_id=s3_aws_access_key_id,
+                aws_secret_access_key=s3_aws_secret_access_key,
+                aws_session_token=s3_aws_session_token,
+                config=s3_config,
+                **kwargs,
+            )
+        except Exception as e:
+            print_verbose(f"Got exception on init s3 client {str(e)}")
+            raise e
 
     async def _async_log_event(
         self, kwargs, response_obj, start_time, end_time, print_verbose
@@ -109,7 +139,7 @@ class S3Logger:
 
             print_verbose(f"s3 Layer Logging - final response object: {response_obj}")
             return response
-        except:
+        except Exception as e:
             traceback.print_exc()
-            print_verbose(f"s3 Layer Error - {traceback.format_exc()}")
+            print_verbose(f"s3 Layer Error - {str(e)}\n{traceback.format_exc()}")
             pass
