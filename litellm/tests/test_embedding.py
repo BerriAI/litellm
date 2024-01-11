@@ -186,13 +186,16 @@ def test_cohere_embedding3():
 
 def test_bedrock_embedding_titan():
     try:
+        # this tests if we support str input for bedrock embedding
         litellm.set_verbose = True
+        litellm.enable_cache()
+        import time
+
+        current_time = str(time.time())
+        # DO NOT MAKE THE INPUT A LIST in this test
         response = embedding(
-            model="amazon.titan-embed-text-v1",
-            input=[
-                "good morning from litellm, attempting to embed data",
-                "lets test a second string for good measure",
-            ],
+            model="bedrock/amazon.titan-embed-text-v1",
+            input=f"good morning from litellm, attempting to embed data {current_time}",  # input should always be a string in this test
         )
         print(f"response:", response)
         assert isinstance(
@@ -202,11 +205,28 @@ def test_bedrock_embedding_titan():
         assert all(
             isinstance(x, float) for x in response["data"][0]["embedding"]
         ), "Expected response to be a list of floats"
+
+        # this also tests if we can return a cache response for this scenario
+        import time
+
+        start_time = time.time()
+
+        response = embedding(
+            model="bedrock/amazon.titan-embed-text-v1",
+            input=f"good morning from litellm, attempting to embed data {current_time}",  # input should always be a string in this test
+        )
+        print(response)
+
+        end_time = time.time()
+        print(f"Embedding 2 response time: {end_time - start_time} seconds")
+
+        assert end_time - start_time < 0.1
+        litellm.disable_cache()
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
 
-# test_bedrock_embedding_titan()
+test_bedrock_embedding_titan()
 
 
 def test_bedrock_embedding_cohere():
@@ -280,7 +300,7 @@ def test_aembedding():
         pytest.fail(f"Error occurred: {e}")
 
 
-test_aembedding()
+# test_aembedding()
 
 
 def test_aembedding_azure():
