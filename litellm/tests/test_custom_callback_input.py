@@ -673,7 +673,7 @@ async def test_async_embedding_bedrock():
         response = await litellm.aembedding(
             model="bedrock/cohere.embed-multilingual-v3",
             input=["good morning from litellm"],
-            aws_region_name="os.environ/AWS_REGION_NAME_2",
+            aws_region_name="us-east-1",
         )
         await asyncio.sleep(1)
         print(f"customHandler_success.errors: {customHandler_success.errors}")
