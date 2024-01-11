@@ -104,20 +104,22 @@ class DynamoDBWrapper(CustomDB):
 
             await table.put_item(item=value)
 
-    async def get_data(
-        self, key: str, value: str, table_name: Literal["user", "key", "config"]
-    ):
+    async def get_data(self, key: str, table_name: Literal["user", "key", "config"]):
         async with ClientSession() as session:
             client = Client(AIOHTTP(session), Credentials.auto(), self.region_name)
             table = None
+            key_name = None
             if table_name == DBTableNames.user.name:
                 table = client.table(DBTableNames.user.value)
+                key_name = "user_id"
             elif table_name == DBTableNames.key.name:
                 table = client.table(DBTableNames.key.value)
+                key_name = "token"
             elif table_name == DBTableNames.config.name:
                 table = client.table(DBTableNames.config.value)
+                key_name = "param_name"
 
-            response = await table.get_item({key: value})
+            response = await table.get_item({key_name: key})
 
             new_response: Any = None
             if table_name == DBTableNames.user.name:
@@ -139,46 +141,41 @@ class DynamoDBWrapper(CustomDB):
             return new_response
 
     async def update_data(
-        self, key: str, value: Any, table_name: Literal["user", "key", "config"]
+        self, key: str, value: dict, table_name: Literal["user", "key", "config"]
     ):
         async with ClientSession() as session:
             client = Client(AIOHTTP(session), Credentials.auto(), self.region_name)
             table = None
             key_name = None
-            data_obj: Optional[
-                Union[LiteLLM_Config, LiteLLM_UserTable, LiteLLM_VerificationToken]
-            ] = None
-            if table_name == DBTableNames.user.name:
-                table = client.table(DBTableNames.user.value)
-                key_name = "user_id"
-                data_obj = LiteLLM_UserTable(user_id=key, **value)
+            try:
+                if table_name == DBTableNames.user.name:
+                    table = client.table(DBTableNames.user.value)
+                    key_name = "user_id"
 
-            elif table_name == DBTableNames.key.name:
-                table = client.table(DBTableNames.key.value)
-                key_name = "token"
-                data_obj = LiteLLM_VerificationToken(token=key, **value)
+                elif table_name == DBTableNames.key.name:
+                    table = client.table(DBTableNames.key.value)
+                    key_name = "token"
 
-            elif table_name == DBTableNames.config.name:
-                table = client.table(DBTableNames.config.value)
-                key_name = "param_name"
-                data_obj = LiteLLM_Config(param_name=key, **value)
+                elif table_name == DBTableNames.config.name:
+                    table = client.table(DBTableNames.config.value)
+                    key_name = "param_name"
+                else:
+                    raise Exception(
+                        f"Invalid table name. Needs to be one of - {DBTableNames.user.name}, {DBTableNames.key.name}, {DBTableNames.config.name}"
+                    )
+            except Exception as e:
+                raise Exception(f"Error connecting to table - {str(e)}")
 
-            if data_obj is None:
-                raise Exception(
-                    f"invalid table name passed in - {table_name}. Unable to load valid data object - {data_obj}."
-                )
             # Initialize an empty UpdateExpression
 
             actions: List = []
-            for field in data_obj.fields_set():
-                field_value = getattr(data_obj, field)
-
+            for k, v in value.items():
                 # Convert datetime object to ISO8601 string
-                if isinstance(field_value, datetime):
-                    field_value = field_value.isoformat()
+                if isinstance(v, datetime):
+                    v = v.isoformat()
 
                 # Accumulate updates
-                actions.append((F(field), Value(value=field_value)))
+                actions.append((F(k), Value(value=v)))
 
             update_expression = UpdateExpression(set_updates=actions)
             # Perform the update in DynamoDB
