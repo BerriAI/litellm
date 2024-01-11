@@ -3,7 +3,7 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
 
-# Logging - Custom Callbacks, Langfuse, OpenTelemetry, s3 Bucket, Sentry
+# 🔎 Logging - Custom Callbacks, Langfuse, s3 Bucket, Sentry, OpenTelemetry
 
 Log Proxy Input, Output, Exceptions using Custom Callbacks, Langfuse, OpenTelemetry, LangFuse, DynamoDB, s3 Bucket
 
