@@ -737,18 +737,28 @@ def embedding(
         aws_region_name=aws_region_name,
         aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
     )
-
-    ## Embedding Call
-    embeddings = [
-        _embedding_func_single(
-            model,
-            i,
-            optional_params=optional_params,
-            client=client,
-            logging_obj=logging_obj,
-        )
-        for i in input
-    ]  # [TODO]: make these parallel calls
+    if type(input) == str:
+        embeddings = [
+            _embedding_func_single(
+                model,
+                input,
+                optional_params=optional_params,
+                client=client,
+                logging_obj=logging_obj,
+            )
+        ]
+    else:
+        ## Embedding Call
+        embeddings = [
+            _embedding_func_single(
+                model,
+                i,
+                optional_params=optional_params,
+                client=client,
+                logging_obj=logging_obj,
+            )
+            for i in input
+        ]  # [TODO]: make these parallel calls
 
     ## Populate OpenAI compliant dictionary
     embedding_response = []
