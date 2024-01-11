@@ -186,10 +186,12 @@ def test_cohere_embedding3():
 
 def test_bedrock_embedding_titan():
     try:
-        litellm.set_verbose = True
+        # this tests if we support str input for bedrock embedding
+        litellm.set_verbose = False
+        # DO NOT MAKE THE INPUT A LIST in this test
         response = embedding(
             model="amazon.titan-embed-text-v1",
-            input="good morning from litellm, attempting to embed data",
+            input="good morning from litellm, attempting to embed data",  # input should always be a string in this test
         )
         print(f"response:", response)
         assert isinstance(
@@ -199,6 +201,8 @@ def test_bedrock_embedding_titan():
         assert all(
             isinstance(x, float) for x in response["data"][0]["embedding"]
         ), "Expected response to be a list of floats"
+        print("Response Usage", response.usage)
+        assert response.usage.prompt_tokens == 11
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -277,7 +281,7 @@ def test_aembedding():
         pytest.fail(f"Error occurred: {e}")
 
 
-test_aembedding()
+# test_aembedding()
 
 
 def test_aembedding_azure():
