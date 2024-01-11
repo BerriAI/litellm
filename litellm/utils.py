@@ -8282,6 +8282,26 @@ def transform_logprobs(hf_response):
 
 def print_args_passed_to_litellm(original_function, args, kwargs):
     try:
+        # we've already printed this for acompletion, don't print for completion
+        if (
+            "acompletion" in kwargs
+            and kwargs["acompletion"] == True
+            and original_function.__name__ == "completion"
+        ):
+            return
+        elif (
+            "aembedding" in kwargs
+            and kwargs["aembedding"] == True
+            and original_function.__name__ == "embedding"
+        ):
+            return
+        elif (
+            "aimg_generation" in kwargs
+            and kwargs["aimg_generation"] == True
+            and original_function.__name__ == "img_generation"
+        ):
+            return
+
         args_str = ", ".join(map(repr, args))
         kwargs_str = ", ".join(f"{key}={repr(value)}" for key, value in kwargs.items())
         print_verbose("\n")  # new line before
