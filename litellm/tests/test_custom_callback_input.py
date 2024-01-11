@@ -545,8 +545,9 @@ async def test_async_chat_bedrock_stream():
 
 # asyncio.run(test_async_chat_bedrock_stream())
 
-# Text Completion 
-        
+# Text Completion
+
+
 ## Test OpenAI text completion + Async
 @pytest.mark.asyncio
 async def test_async_text_completion_openai_stream():
@@ -584,6 +585,7 @@ async def test_async_text_completion_openai_stream():
         litellm.callbacks = []
     except Exception as e:
         pytest.fail(f"An exception occurred: {str(e)}")
+
 
 # EMBEDDING
 ## Test OpenAI + Async
@@ -758,6 +760,7 @@ async def test_async_embedding_azure_caching():
     )
     await asyncio.sleep(1)  # success callbacks are done in parallel
     print(customHandler_caching.states)
+    print(customHandler_caching.errors)
     assert len(customHandler_caching.errors) == 0
     assert len(customHandler_caching.states) == 4  # pre, post, success, success
 
