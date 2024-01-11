@@ -6,7 +6,6 @@ from datetime import datetime
 import importlib
 from dotenv import load_dotenv
 
-
 sys.path.append(os.getcwd())
 
 config_filename = "litellm.secrets"
@@ -349,6 +348,38 @@ def run_server(
             raise ImportError(
                 "Uvicorn, gunicorn needs to be imported. Run - `pip 'litellm[proxy]'`"
             )
+
+        if config is not None:
+            """
+            Allow user to pass in db url via config
+
+            read from there and save it to os.env['DATABASE_URL']
+            """
+            try:
+                import yaml
+            except:
+                raise ImportError(
+                    "yaml needs to be imported. Run - `pip install 'litellm[proxy]'`"
+                )
+
+            if os.path.exists(config):
+                with open(config, "r") as config_file:
+                    config = yaml.safe_load(config_file)
+            general_settings = config.get("general_settings", {})
+            database_url = general_settings.get("database_url", None)
+            if database_url and database_url.startswith("os.environ/"):
+                original_dir = os.getcwd()
+                # set the working directory to where this script is
+                sys.path.insert(
+                    0, os.path.abspath("../..")
+                )  # Adds the parent directory to the system path - for litellm local dev
+                import litellm
+
+                database_url = litellm.get_secret(database_url)
+                os.chdir(original_dir)
+            if database_url is not None and isinstance(database_url, str):
+                os.environ["DATABASE_URL"] = database_url
+
         if os.getenv("DATABASE_URL", None) is not None:
             # run prisma db push, before starting server
             # Save the current working directory
