@@ -693,7 +693,7 @@ class ProxyConfig:
                     litellm.callbacks = [
                         get_instance_fn(value=value, config_file_path=config_file_path)
                     ]
-                    verbose_proxy_logger.debug(
+                    verbose_proxy_logger.info(
                         f"{blue_color_code} Initialized Callbacks - {litellm.callbacks} {reset_color_code}"
                     )
                 elif key == "post_call_rules":
@@ -716,7 +716,7 @@ class ProxyConfig:
                         # these are litellm callbacks - "langfuse", "sentry", "wandb"
                         else:
                             litellm.success_callback.append(callback)
-                    verbose_proxy_logger.debug(
+                    verbose_proxy_logger.info(
                         f"{blue_color_code} Initialized Success Callbacks - {litellm.success_callback} {reset_color_code}"
                     )
                 elif key == "failure_callback":
@@ -732,8 +732,8 @@ class ProxyConfig:
                         # these are litellm callbacks - "langfuse", "sentry", "wandb"
                         else:
                             litellm.failure_callback.append(callback)
-                    verbose_proxy_logger.debug(
-                        f"{blue_color_code} Initialized Success Callbacks - {litellm.failure_callback} {reset_color_code}"
+                    verbose_proxy_logger.info(
+                        f"{blue_color_code} Initialized Failure Callbacks - {litellm.failure_callback} {reset_color_code}"
                     )
                 elif key == "cache_params":
                     # this is set in the cache branch
