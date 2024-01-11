@@ -2241,6 +2241,10 @@ def client(original_function):
                             )
                         cached_result = await asyncio.gather(*tasks)
                     else:
+                        preset_cache_key = litellm.cache.get_cache_key(*args, **kwargs)
+                        kwargs[
+                            "preset_cache_key"
+                        ] = preset_cache_key  # for streaming calls, we need to pass the preset_cache_key
                         cached_result = litellm.cache.get_cache(*args, **kwargs)
                     if cached_result is not None and not isinstance(
                         cached_result, list
