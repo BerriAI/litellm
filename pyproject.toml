@@ -16,6 +16,7 @@ tokenizers = "*"
 click = "*"
 jinja2 = "^3.1.2"
 aiohttp = "*"
+requests = "^2.31.0"
 
 uvicorn = {version = "^0.22.0", optional = true}
 gunicorn = {version = "^21.2.0", optional = true}
