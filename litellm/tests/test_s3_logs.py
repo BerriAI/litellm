@@ -24,6 +24,11 @@ def test_s3_logging():
         # redirect stdout to log_file
 
         litellm.success_callback = ["s3"]
+        litellm.s3_callback_params = {
+            "s3_bucket_name": "litellm-logs",
+            "s3_aws_secret_access_key": "os.environ/AWS_SECRET_ACCESS_KEY",
+            "s3_aws_access_key_id": "os.environ/AWS_ACCESS_KEY_ID",
+        }
         litellm.set_verbose = True
 
         print("Testing async s3 logging")
