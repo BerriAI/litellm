@@ -47,6 +47,7 @@ from .integrations.weights_biases import WeightsBiasesLogger
 from .integrations.custom_logger import CustomLogger
 from .integrations.langfuse import LangFuseLogger
 from .integrations.dynamodb import DyanmoDBLogger
+from .integrations.s3 import S3Logger
 from .integrations.litedebugger import LiteDebugger
 from .proxy._types import KeyManagementSystem
 from openai import OpenAIError as OriginalError
@@ -90,6 +91,7 @@ weightsBiasesLogger = None
 customLogger = None
 langFuseLogger = None
 dynamoLogger = None
+s3Logger = None
 llmonitorLogger = None
 aispendLogger = None
 berrispendLogger = None
@@ -1459,6 +1461,36 @@ class Logging:
                             end_time=end_time,
                             print_verbose=print_verbose,
                         )
+                if callback == "s3":
+                    global s3Logger
+                    if s3Logger is None:
+                        s3Logger = S3Logger()
+                    if self.stream:
+                        if "complete_streaming_response" in self.model_call_details:
+                            print_verbose(
+                                "S3Logger Logger: Got Stream Event - Completed Stream Response"
+                            )
+                            await s3Logger._async_log_event(
+                                kwargs=self.model_call_details,
+                                response_obj=self.model_call_details[
+                                    "complete_streaming_response"
+                                ],
+                                start_time=start_time,
+                                end_time=end_time,
+                                print_verbose=print_verbose,
+                            )
+                        else:
+                            print_verbose(
+                                "S3Logger Logger: Got Stream Event - No complete stream response as yet"
+                            )
+                    else:
+                        await s3Logger._async_log_event(
+                            kwargs=self.model_call_details,
+                            response_obj=result,
+                            start_time=start_time,
+                            end_time=end_time,
+                            print_verbose=print_verbose,
+                        )
                 if callback == "langfuse":
                     global langFuseLogger
                     print_verbose("reaches Async langfuse for logging!")
@@ -1804,6 +1836,11 @@ def client(original_function):
                     elif callback == "dynamodb":
                         # dynamo is an async callback, it's used for the proxy and needs to be async
                         # we only support async dynamo db logging for acompletion/aembedding since that's used on proxy
+                        litellm._async_success_callback.append(callback)
+                        removed_async_items.append(index)
+                    elif callback == "s3":
+                        # s3 is an async callback, it's used for the proxy and needs to be async
+                        # we only support async s3 logging for acompletion/aembedding since that's used on proxy
                         litellm._async_success_callback.append(callback)
                         removed_async_items.append(index)
                     elif callback == "langfuse" and inspect.iscoroutinefunction(
@@ -4678,7 +4715,7 @@ def validate_environment(model: Optional[str] = None) -> dict:
 
 
 def set_callbacks(callback_list, function_id=None):
-    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, llmonitorLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, langsmithLogger, dynamoLogger
+    global sentry_sdk_instance, capture_exception, add_breadcrumb, posthog, slack_app, alerts_channel, traceloopLogger, heliconeLogger, aispendLogger, berrispendLogger, supabaseClient, liteDebuggerClient, llmonitorLogger, promptLayerLogger, langFuseLogger, customLogger, weightsBiasesLogger, langsmithLogger, dynamoLogger, s3Logger
     try:
         for callback in callback_list:
             print_verbose(f"callback: {callback}")
@@ -4743,6 +4780,8 @@ def set_callbacks(callback_list, function_id=None):
                 langFuseLogger = LangFuseLogger()
             elif callback == "dynamodb":
                 dynamoLogger = DyanmoDBLogger()
+            elif callback == "s3":
+                s3Logger = S3Logger()
             elif callback == "wandb":
                 weightsBiasesLogger = WeightsBiasesLogger()
             elif callback == "langsmith":
