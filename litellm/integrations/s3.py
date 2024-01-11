@@ -11,19 +11,39 @@ import litellm, uuid
 from litellm._logging import print_verbose
 
 
-class s3Logger:
+class S3Logger:
     # Class variables or attributes
-
-    def __init__(self):
-        # Instance variables
+    def __init__(
+        self,
+        s3_bucket_name="litellm-logs",
+        s3_region_name=None,
+        s3_api_version=None,
+        s3_use_ssl=True,
+        s3_verify=None,
+        s3_endpoint_url=None,
+        s3_aws_access_key_id=None,
+        s3_aws_secret_access_key=None,
+        s3_aws_session_token=None,
+        s3_config=None,
+        **kwargs,
+    ):
         import boto3
 
-        self.s3 = boto3.resource("s3", region_name=os.environ["AWS_REGION_NAME"])
-        if litellm.s3_table_name is None:
-            raise ValueError(
-                "LiteLLM Error, trying to use s3 but not table name passed. Create a table and set `litellm.s3_table_name=<your-table>`"
-            )
-        self.table_name = litellm.s3_table_name
+        self.bucket_name = s3_bucket_name
+        # Create an S3 client with custom endpoint URL
+        self.s3_client = boto3.client(
+            "s3",
+            region_name=s3_region_name,
+            endpoint_url=s3_endpoint_url,
+            api_version=s3_api_version,
+            use_ssl=s3_use_ssl,
+            verify=s3_verify,
+            aws_access_key_id=s3_aws_access_key_id,
+            aws_secret_access_key=s3_aws_secret_access_key,
+            aws_session_token=s3_aws_session_token,
+            config=s3_config,
+            **kwargs,
+        )
 
     async def _async_log_event(
         self, kwargs, response_obj, start_time, end_time, print_verbose
@@ -68,13 +88,22 @@ class s3Logger:
                 except:
                     # non blocking if it can't cast to a str
                     pass
+            s3_object_key = payload["id"]
+
+            import json
+
+            payload = json.dumps(payload)
 
             print_verbose(f"\ns3 Logger - Logging payload = {payload}")
 
-            # put data in dyanmo DB
-            table = self.s3.Table(self.table_name)
-            # Assuming log_data is a dictionary with log information
-            response = table.put_item(Item=payload)
+            response = self.s3_client.put_object(
+                Bucket=self.bucket_name,
+                Key=s3_object_key,
+                Body=payload,
+                ContentType="application/json",
+                ContentLanguage="en",
+                ContentDisposition=f'inline; filename="{key}.json"',
+            )
 
             print_verbose(f"Response from s3:{str(response)}")
 
