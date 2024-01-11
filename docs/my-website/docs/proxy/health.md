@@ -77,3 +77,18 @@ model_list:
       mode: embedding # 👈 ADD THIS
 ```
 
+## Text Completion Models 
+
+We need some way to know if the model is a text completion model when running checks, if you have this in your config, specifying mode it makes an embedding health check
+
+```yaml
+model_list:
+  - model_name: azure-text-completion
+    litellm_params:
+      model: azure/text-davinci-003
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
+      api_version: "2023-07-01-preview"
+    model_info:
+      mode: completion # 👈 ADD THIS
+```
