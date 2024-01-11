@@ -67,31 +67,6 @@ def test_s3_logging():
         expected_keys.append(response.id)
         print(f"response: {response}")
 
-        # # streaming + async
-        # async def _test2():
-        #     response = await litellm.acompletion(
-        #         model="gpt-3.5-turbo",
-        #         messages=[{"role": "user", "content": "what llm are u"}],
-        #         max_tokens=10,
-        #         temperature=0.7,
-        #         user="ishaan-2",
-        #         stream=True,
-        #     )
-        #     async for chunk in response:
-        #         pass
-
-        # asyncio.run(_test2())
-
-        # aembedding()
-        # async def _test3():
-        #     return await litellm.aembedding(
-        #         model="text-embedding-ada-002", input=["hi"], user="ishaan-2"
-        #     )
-
-        # response = asyncio.run(_test3())
-        # expected_keys.append(response.id)
-        # time.sleep(1)
-
         import boto3
 
         s3 = boto3.client("s3")
@@ -114,8 +89,24 @@ def test_s3_logging():
         print("\n most recent keys", most_recent_keys)
         print("\n cleaned keys", cleaned_keys)
         print("\n Expected keys: ", expected_keys)
+        matches = 0
         for key in expected_keys:
             assert key in cleaned_keys
+
+            if key in cleaned_keys:
+                matches += 1
+                # remove the match key
+                cleaned_keys.remove(key)
+        # this asserts we log, the first request + the 2nd cached request
+        print("we had two matches ! passed ", matches)
+        assert matches == 2
+        try:
+            # cleanup s3 bucket in test
+            for key in most_recent_keys:
+                s3.delete_object(Bucket=bucket_name, Key=key)
+        except:
+            # don't let cleanup fail a test
+            pass
     except Exception as e:
         pytest.fail(f"An exception occurred - {e}")
     finally:
