@@ -131,37 +131,37 @@ class Completions:
 
 @client
 async def acompletion(
-        model: str,
-        # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
-        messages: List = [],
-        functions: Optional[List] = None,
-        function_call: Optional[str] = None,
-        timeout: Optional[Union[float, int]] = None,
-        temperature: Optional[float] = None,
-        top_p: Optional[float] = None,
-        n: Optional[int] = None,
-        stream: Optional[bool] = None,
-        stop=None,
-        max_tokens: Optional[float] = None,
-        presence_penalty: Optional[float] = None,
-        frequency_penalty: Optional[float] = None,
-        logit_bias: Optional[dict] = None,
-        user: Optional[str] = None,
-        # openai v1.0+ new params
-        response_format: Optional[dict] = None,
-        seed: Optional[int] = None,
-        tools: Optional[List] = None,
-        tool_choice: Optional[str] = None,
-        logprobs: Optional[bool] = None,
-        top_logprobs: Optional[int] = None,
-        deployment_id=None,
-        # set api_base, api_version, api_key
-        base_url: Optional[str] = None,
-        api_version: Optional[str] = None,
-        api_key: Optional[str] = None,
-        model_list: Optional[list] = None,  # pass in a list of api_base,keys, etc.
-        # Optional liteLLM function params
-        **kwargs,
+    model: str,
+    # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
+    messages: List = [],
+    functions: Optional[List] = None,
+    function_call: Optional[str] = None,
+    timeout: Optional[Union[float, int]] = None,
+    temperature: Optional[float] = None,
+    top_p: Optional[float] = None,
+    n: Optional[int] = None,
+    stream: Optional[bool] = None,
+    stop=None,
+    max_tokens: Optional[float] = None,
+    presence_penalty: Optional[float] = None,
+    frequency_penalty: Optional[float] = None,
+    logit_bias: Optional[dict] = None,
+    user: Optional[str] = None,
+    # openai v1.0+ new params
+    response_format: Optional[dict] = None,
+    seed: Optional[int] = None,
+    tools: Optional[List] = None,
+    tool_choice: Optional[str] = None,
+    logprobs: Optional[bool] = None,
+    top_logprobs: Optional[int] = None,
+    deployment_id=None,
+    # set api_base, api_version, api_key
+    base_url: Optional[str] = None,
+    api_version: Optional[str] = None,
+    api_key: Optional[str] = None,
+    model_list: Optional[list] = None,  # pass in a list of api_base,keys, etc.
+    # Optional liteLLM function params
+    **kwargs,
 ):
     """
     Asynchronously executes a litellm.completion() call for any of litellm supported llms (example gpt-4, gpt-3.5-turbo, claude-2, command-nightly)
@@ -213,7 +213,7 @@ async def acompletion(
         "top_p": top_p,
         "n": n,
         "stream": stream,
-        "stop":  stop,
+        "stop": stop,
         "max_tokens": max_tokens,
         "presence_penalty": presence_penalty,
         "frequency_penalty": frequency_penalty,
@@ -230,17 +230,19 @@ async def acompletion(
         "api_version": api_version,
         "api_key": api_key,
         "model_list": model_list,
-        "acompletion": True  # assuming this is a required parameter
+        "acompletion": True,  # assuming this is a required parameter
     }
     try:
         # Use a partial function to pass your keyword arguments
-        func = partial(completion, *args, **kwargs)
+        func = partial(completion, **completion_kwargs)
 
         # Add the context to the function
         ctx = contextvars.copy_context()
         func_with_context = partial(ctx.run, func)
 
-        _, custom_llm_provider, _, _ = get_llm_provider(model=model, api_base=completion_kwargs.get("base_url", None))
+        _, custom_llm_provider, _, _ = get_llm_provider(
+            model=model, api_base=completion_kwargs.get("base_url", None)
+        )
 
         if (
             custom_llm_provider == "openai"
@@ -284,7 +286,7 @@ async def acompletion(
             model=model,
             custom_llm_provider=custom_llm_provider,
             original_exception=e,
-            completion_kwargs=args,
+            completion_kwargs=completion_kwargs,
         )
 
 
@@ -3260,7 +3262,6 @@ def stream_chunk_builder(chunks: list, messages: Optional[list] = None):
     if isinstance(
         chunks[0]["choices"][0], litellm.utils.TextChoices
     ):  # route to the text completion logic
-
         return stream_chunk_builder_text_completion(chunks=chunks, messages=messages)
     role = chunks[0]["choices"][0]["delta"]["role"]
     finish_reason = chunks[-1]["choices"][0]["finish_reason"]
