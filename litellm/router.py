@@ -1363,6 +1363,12 @@ class Router:
                         api_version=api_version,
                         timeout=timeout,
                         max_retries=max_retries,
+                        http_client=httpx.AsyncClient(
+                            transport=AsyncCustomHTTPTransport(),
+                            limits=httpx.Limits(
+                                max_connections=1000, max_keepalive_connections=100
+                            ),
+                        ),  # type: ignore
                     )
                     self.cache.set_cache(
                         key=cache_key,
@@ -1378,6 +1384,12 @@ class Router:
                         api_version=api_version,
                         timeout=timeout,
                         max_retries=max_retries,
+                        http_client=httpx.Client(
+                            transport=CustomHTTPTransport(),
+                            limits=httpx.Limits(
+                                max_connections=1000, max_keepalive_connections=100
+                            ),
+                        ),  # type: ignore
                     )
                     self.cache.set_cache(
                         key=cache_key,
@@ -1393,6 +1405,12 @@ class Router:
                         api_version=api_version,
                         timeout=stream_timeout,
                         max_retries=max_retries,
+                        http_client=httpx.AsyncClient(
+                            transport=AsyncCustomHTTPTransport(),
+                            limits=httpx.Limits(
+                                max_connections=1000, max_keepalive_connections=100
+                            ),
+                        ),  # type: ignore
                     )
                     self.cache.set_cache(
                         key=cache_key,
@@ -1408,6 +1426,12 @@ class Router:
                         api_version=api_version,
                         timeout=stream_timeout,
                         max_retries=max_retries,
+                        http_client=httpx.Client(
+                            transport=CustomHTTPTransport(),
+                            limits=httpx.Limits(
+                                max_connections=1000, max_keepalive_connections=100
+                            ),
+                        ),  # type: ignore
                     )
                     self.cache.set_cache(
                         key=cache_key,
@@ -1471,9 +1495,10 @@ class Router:
                         timeout=stream_timeout,
                         max_retries=max_retries,
                         http_client=httpx.AsyncClient(
+                            transport=AsyncCustomHTTPTransport(),
                             limits=httpx.Limits(
                                 max_connections=1000, max_keepalive_connections=100
-                            )
+                            ),
                         ),
                     )
                     self.cache.set_cache(
@@ -1491,9 +1516,10 @@ class Router:
                         timeout=stream_timeout,
                         max_retries=max_retries,
                         http_client=httpx.Client(
+                            transport=CustomHTTPTransport(),
                             limits=httpx.Limits(
                                 max_connections=1000, max_keepalive_connections=100
-                            )
+                            ),
                         ),
                     )
                     self.cache.set_cache(
@@ -1513,6 +1539,12 @@ class Router:
                     base_url=api_base,
                     timeout=timeout,
                     max_retries=max_retries,
+                    http_client=httpx.AsyncClient(
+                        transport=AsyncCustomHTTPTransport(),
+                        limits=httpx.Limits(
+                            max_connections=1000, max_keepalive_connections=100
+                        ),
+                    ),  # type: ignore
                 )
                 self.cache.set_cache(
                     key=cache_key,
@@ -1527,6 +1559,12 @@ class Router:
                     base_url=api_base,
                     timeout=timeout,
                     max_retries=max_retries,
+                    http_client=httpx.Client(
+                        transport=CustomHTTPTransport(),
+                        limits=httpx.Limits(
+                            max_connections=1000, max_keepalive_connections=100
+                        ),
+                    ),  # type: ignore
                 )
                 self.cache.set_cache(
                     key=cache_key,
@@ -1542,6 +1580,12 @@ class Router:
                     base_url=api_base,
                     timeout=stream_timeout,
                     max_retries=max_retries,
+                    http_client=httpx.AsyncClient(
+                        transport=AsyncCustomHTTPTransport(),
+                        limits=httpx.Limits(
+                            max_connections=1000, max_keepalive_connections=100
+                        ),
+                    ),  # type: ignore
                 )
                 self.cache.set_cache(
                     key=cache_key,
@@ -1557,6 +1601,12 @@ class Router:
                     base_url=api_base,
                     timeout=stream_timeout,
                     max_retries=max_retries,
+                    http_client=httpx.Client(
+                        transport=CustomHTTPTransport(),
+                        limits=httpx.Limits(
+                            max_connections=1000, max_keepalive_connections=100
+                        ),
+                    ),  # type: ignore
                 )
                 self.cache.set_cache(
                     key=cache_key,
