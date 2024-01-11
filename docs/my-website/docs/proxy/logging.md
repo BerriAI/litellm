@@ -3,9 +3,9 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
 
-# Logging - Custom Callbacks, Langfuse, OpenTelemetry, Sentry
+# 🔎 Logging - Custom Callbacks, Langfuse, s3 Bucket, Sentry, OpenTelemetry
 
-Log Proxy Input, Output, Exceptions using Custom Callbacks, Langfuse, OpenTelemetry, LangFuse, DynamoDB
+Log Proxy Input, Output, Exceptions using Custom Callbacks, Langfuse, OpenTelemetry, LangFuse, DynamoDB, s3 Bucket
 
 ## Custom Callback Class [Async]
 Use this when you want to run custom callbacks in `python`
@@ -596,6 +596,62 @@ Events:
 Here's the log view on Elastic Search. You can see the request `input`, `output` and `headers`
 
 <Image img={require('../../img/elastic_otel.png')} /> -->
+
+
+## Logging Proxy Input/Output - s3 Buckets
+
+We will use the `--config` to set 
+- `litellm.success_callback = ["s3"]` 
+
+This will log all successfull LLM calls to s3 Bucket
+
+**Step 1** Set AWS Credentials in .env
+
+```shell
+AWS_ACCESS_KEY_ID = ""
+AWS_SECRET_ACCESS_KEY = ""
+AWS_REGION_NAME = ""
+```
+
+**Step 2**: Create a `config.yaml` file and set `litellm_settings`: `success_callback`
+```yaml
+model_list:
+ - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+litellm_settings:
+  success_callback: ["s3"]
+  s3_callback_params:
+    s3_bucket_name: logs-bucket-litellm   # AWS Bucket Name for S3
+    s3_region_name: us-west-2              # AWS Region Name for S3
+    s3_aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID  # us os.environ/<variable name> to pass environment variables. This is AWS Access Key ID for S3
+    s3_aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY  # AWS Secret Access Key for S3
+    s3_endpoint_url: https://s3.amazonaws.com  # [OPTIONAL] S3 endpoint URL, if you want to use Backblaze/cloudflare s3 buckets
+```
+
+**Step 3**: Start the proxy, make a test request
+
+Start proxy
+```shell
+litellm --config config.yaml --debug
+```
+
+Test Request
+```shell
+curl --location 'http://0.0.0.0:8000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --data ' {
+    "model": "Azure OpenAI GPT-4 East",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ]
+    }'
+```
+
+Your logs should be available on the specified s3 Bucket
 
 ## Logging Proxy Input/Output - DynamoDB
 
