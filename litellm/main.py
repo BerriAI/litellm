@@ -268,10 +268,10 @@ async def acompletion(
             elif asyncio.iscoroutine(init_response):
                 response = await init_response
             else:
-                response = init_response
+                response = init_response  # type: ignore
         else:
             # Call the synchronous function using run_in_executor
-            response = await loop.run_in_executor(None, func_with_context)
+            response = await loop.run_in_executor(None, func_with_context)  # type: ignore
         # if kwargs.get("stream", False):  # return an async generator
         #     return _async_streaming(
         #         response=response,
