@@ -136,7 +136,7 @@ jobs:
           labels: ${{ steps.meta-database.outputs.labels }} 
   release:
     name: "New LiteLLM Release"
-    needs: [docker-hub-deploy, build-and-push-image, build-and-push-image-database, build-and-push-image-alpine]
+    needs: [docker-hub-deploy, build-and-push-image, build-and-push-image-database]
 
     runs-on: "ubuntu-latest"
    
