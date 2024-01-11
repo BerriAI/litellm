@@ -20,8 +20,10 @@ def test_s3_logging():
     # since we are modifying stdout, and pytests runs tests in parallel
     # on circle ci - we only test litellm.acompletion()
     try:
-        # pre
         # redirect stdout to log_file
+        litellm.cache = litellm.Cache(
+            type="s3", s3_bucket_name="cache-bucket-litellm", s3_region_name="us-west-2"
+        )
 
         litellm.success_callback = ["s3"]
         litellm.s3_callback_params = {
@@ -35,10 +37,14 @@ def test_s3_logging():
 
         expected_keys = []
 
+        import time
+
+        curr_time = str(time.time())
+
         async def _test():
             return await litellm.acompletion(
                 model="gpt-3.5-turbo",
-                messages=[{"role": "user", "content": "This is a test"}],
+                messages=[{"role": "user", "content": f"This is a test {curr_time}"}],
                 max_tokens=10,
                 temperature=0.7,
                 user="ishaan-2",
@@ -47,6 +53,19 @@ def test_s3_logging():
         response = asyncio.run(_test())
         print(f"response: {response}")
         expected_keys.append(response.id)
+
+        async def _test():
+            return await litellm.acompletion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": f"This is a test {curr_time}"}],
+                max_tokens=10,
+                temperature=0.7,
+                user="ishaan-2",
+            )
+
+        response = asyncio.run(_test())
+        expected_keys.append(response.id)
+        print(f"response: {response}")
 
         # # streaming + async
         # async def _test2():
@@ -86,10 +105,17 @@ def test_s3_logging():
         )
         # Get the keys of the most recent objects
         most_recent_keys = [obj["Key"] for obj in objects]
+        print(most_recent_keys)
+        # for each key, get the part before "-" as the key. Do it safely
+        cleaned_keys = []
+        for key in most_recent_keys:
+            split_key = key.split("-time=")
+            cleaned_keys.append(split_key[0])
         print("\n most recent keys", most_recent_keys)
+        print("\n cleaned keys", cleaned_keys)
         print("\n Expected keys: ", expected_keys)
         for key in expected_keys:
-            assert key in most_recent_keys
+            assert key in cleaned_keys
     except Exception as e:
         pytest.fail(f"An exception occurred - {e}")
     finally:
