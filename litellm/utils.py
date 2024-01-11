@@ -14,6 +14,7 @@ import subprocess, os
 import litellm, openai
 import itertools
 import random, uuid, requests
+from functools import wraps
 import datetime, time
 import tiktoken
 import uuid
@@ -1972,6 +1973,7 @@ def client(original_function):
                 # [Non-Blocking Error]
                 pass
 
+    @wraps(original_function)
     def wrapper(*args, **kwargs):
         start_time = datetime.datetime.now()
         result = None
@@ -2166,6 +2168,7 @@ def client(original_function):
                         e.message += f"\n Check the log in your dashboard - {liteDebuggerClient.dashboard_url}"
             raise e
 
+    @wraps(original_function)
     async def wrapper_async(*args, **kwargs):
         start_time = datetime.datetime.now()
         result = None
