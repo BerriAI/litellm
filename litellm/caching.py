@@ -81,7 +81,7 @@ class RedisCache(BaseCache):
 
     def set_cache(self, key, value, **kwargs):
         ttl = kwargs.get("ttl", None)
-        print_verbose(f"Set Redis Cache: key: {key}\nValue {value}")
+        print_verbose(f"Set Redis Cache: key: {key}\nValue {value}\nttl={ttl}")
         try:
             self.redis_client.set(name=key, value=str(value), ex=ttl)
         except Exception as e:
@@ -171,7 +171,7 @@ class S3Cache(BaseCache):
                     CacheControl=cache_control,
                     ContentType="application/json",
                     ContentLanguage="en",
-                    ContentDisposition=f"inline; filename=\"{key}.json\""
+                    ContentDisposition=f'inline; filename="{key}.json"',
                 )
             else:
                 cache_control = "immutable, max-age=31536000, s-maxage=31536000"
@@ -183,7 +183,7 @@ class S3Cache(BaseCache):
                     CacheControl=cache_control,
                     ContentType="application/json",
                     ContentLanguage="en",
-                    ContentDisposition=f"inline; filename=\"{key}.json\""
+                    ContentDisposition=f'inline; filename="{key}.json"',
                 )
         except Exception as e:
             # NON blocking - notify users S3 is throwing an exception
@@ -495,7 +495,6 @@ class Cache:
                     cached_result is not None
                     and isinstance(cached_result, dict)
                     and "timestamp" in cached_result
-                    and max_age is not None
                 ):
                     timestamp = cached_result["timestamp"]
                     current_time = time.time()
@@ -504,7 +503,7 @@ class Cache:
                     response_age = current_time - timestamp
 
                     # Check if the cached response is older than the max-age
-                    if response_age > max_age:
+                    if max_age is not None and response_age > max_age:
                         print_verbose(
                             f"Cached response for key {cache_key} is too old. Max-age: {max_age}s, Age: {response_age}s"
                         )
@@ -564,6 +563,9 @@ class Cache:
 
     async def _async_add_cache(self, result, *args, **kwargs):
         self.add_cache(result, *args, **kwargs)
+
+    async def _async_get_cache(self, *args, **kwargs):
+        return self.get_cache(*args, **kwargs)
 
 
 def enable_cache(
