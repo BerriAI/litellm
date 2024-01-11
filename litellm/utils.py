@@ -2847,7 +2847,7 @@ def cost_per_token(model="", prompt_tokens=0, completion_tokens=0):
             response=httpx.Response(
                 status_code=404,
                 content=error_str,
-                request=httpx.request(method="cost_per_token", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                request=httpx.Request(method="cost_per_token", url="https://github.com/BerriAI/litellm"),  # type: ignore
             ),
             llm_provider="",
         )
@@ -4174,7 +4174,7 @@ def get_llm_provider(
                 response=httpx.Response(
                     status_code=400,
                     content=error_str,
-                    request=httpx.request(method="completion", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                    request=httpx.Request(method="completion", url="https://github.com/BerriAI/litellm"),  # type: ignore
                 ),
                 llm_provider="",
             )
@@ -4189,7 +4189,7 @@ def get_llm_provider(
                 response=httpx.Response(
                     status_code=400,
                     content=error_str,
-                    request=httpx.request(method="completion", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                    request=httpx.Request(method="completion", url="https://github.com/BerriAI/litellm"),  # type: ignore
                 ),
                 llm_provider="",
             )
