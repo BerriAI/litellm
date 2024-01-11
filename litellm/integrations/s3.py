@@ -93,6 +93,7 @@ class S3Logger:
             messages = kwargs.get("messages")
             optional_params = kwargs.get("optional_params", {})
             call_type = kwargs.get("call_type", "litellm.completion")
+            cache_hit = kwargs.get("cache_hit", False)
             usage = response_obj["usage"]
             id = response_obj.get("id", str(uuid.uuid4()))
 
@@ -100,6 +101,7 @@ class S3Logger:
             payload = {
                 "id": id,
                 "call_type": call_type,
+                "cache_hit": cache_hit,
                 "startTime": start_time,
                 "endTime": end_time,
                 "model": kwargs.get("model", ""),
@@ -118,7 +120,10 @@ class S3Logger:
                 except:
                     # non blocking if it can't cast to a str
                     pass
-            s3_object_key = payload["id"]
+
+            s3_object_key = (
+                payload["id"] + "-time=" + str(start_time)
+            )  # we need the s3 key to include the time, so we log cache hits too
 
             import json
 
