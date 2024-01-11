@@ -21,7 +21,7 @@ async def test_azure_health_check():
             "api_base": os.getenv("AZURE_API_BASE"),
             "api_version": os.getenv("AZURE_API_VERSION"),
         },
-        mode="completion",
+        mode="chat",
     )
     print(f"response: {response}")
 
