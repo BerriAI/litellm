@@ -234,7 +234,7 @@ async def acompletion(
     }
     try:
         # Use a partial function to pass your keyword arguments
-        func = partial(completion, **completion_kwargs)
+        func = partial(completion, **completion_kwargs, **kwargs)
 
         # Add the context to the function
         ctx = contextvars.copy_context()
