@@ -11,6 +11,7 @@
 import os
 import inspect
 import redis, litellm
+import redis.asyncio as async_redis
 from typing import List, Optional
 
 
@@ -67,7 +68,10 @@ def get_redis_url_from_environment():
     )
 
 
-def get_redis_client(**env_overrides):
+def _get_redis_client_logic(**env_overrides):
+    """
+    Common functionality across sync + async redis client implementations
+    """
     ### check if "os.environ/<key-name>" passed in
     for k, v in env_overrides.items():
         if isinstance(v, str) and v.startswith("os.environ/"):
@@ -85,9 +89,21 @@ def get_redis_client(**env_overrides):
         redis_kwargs.pop("port", None)
         redis_kwargs.pop("db", None)
         redis_kwargs.pop("password", None)
-
-        return redis.Redis.from_url(**redis_kwargs)
     elif "host" not in redis_kwargs or redis_kwargs["host"] is None:
         raise ValueError("Either 'host' or 'url' must be specified for redis.")
     litellm.print_verbose(f"redis_kwargs: {redis_kwargs}")
+    return redis_kwargs
+
+
+def get_redis_client(**env_overrides):
+    redis_kwargs = _get_redis_client_logic(**env_overrides)
+    if "url" in redis_kwargs and redis_kwargs["url"] is not None:
+        return redis.Redis.from_url(**redis_kwargs)
     return redis.Redis(**redis_kwargs)
+
+
+def get_redis_async_client(**env_overrides):
+    redis_kwargs = _get_redis_client_logic(**env_overrides)
+    if "url" in redis_kwargs and redis_kwargs["url"] is not None:
+        return async_redis.Redis.from_url(**redis_kwargs)
+    return async_redis.Redis(socket_timeout=5, **redis_kwargs)

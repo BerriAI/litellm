@@ -7,6 +7,20 @@ import secrets, subprocess
 import hashlib, uuid
 import warnings
 import importlib
+import warnings
+
+
+def showwarning(message, category, filename, lineno, file=None, line=None):
+    traceback_info = f"{filename}:{lineno}: {category.__name__}: {message}\n"
+    if file is not None:
+        file.write(traceback_info)
+
+
+warnings.showwarning = showwarning
+warnings.filterwarnings("default", category=UserWarning)
+
+# Your client code here
+
 
 messages: list = []
 sys.path.insert(
@@ -2510,10 +2524,12 @@ async def get_routes():
 @router.on_event("shutdown")
 async def shutdown_event():
     global prisma_client, master_key, user_custom_auth
-    if prisma_client:
+    if prisma_client is not None:
         verbose_proxy_logger.debug("Disconnecting from Prisma")
         await prisma_client.disconnect()
 
+    if litellm.cache is not None:
+        await litellm.cache.disconnect()
     ## RESET CUSTOM VARIABLES ##
     cleanup_router_config_variables()
 
