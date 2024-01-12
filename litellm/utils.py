@@ -5912,6 +5912,22 @@ def exception_type(
                             model=model,
                             response=original_exception.response,
                         )
+                    elif original_exception.status_code == 400:
+                        exception_mapping_worked = True
+                        raise BadRequestError(
+                            message=f"BedrockException - {original_exception.message}",
+                            llm_provider="bedrock",
+                            model=model,
+                            response=original_exception.response,
+                        )
+                    elif original_exception.status_code == 404:
+                        exception_mapping_worked = True
+                        raise NotFoundError(
+                            message=f"BedrockException - {original_exception.message}",
+                            llm_provider="bedrock",
+                            model=model,
+                            response=original_exception.response,
+                        )
             elif custom_llm_provider == "sagemaker":
                 if "Unable to locate credentials" in error_str:
                     exception_mapping_worked = True
