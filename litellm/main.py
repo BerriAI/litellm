@@ -3066,7 +3066,9 @@ def image_generation(
 
 async def ahealth_check(
     model_params: dict,
-    mode: Optional[Literal["completion", "embedding", "image_generation"]] = None,
+    mode: Optional[
+        Literal["completion", "embedding", "image_generation", "chat"]
+    ] = None,
     prompt: Optional[str] = None,
     input: Optional[List] = None,
     default_timeout: float = 6000,
@@ -3084,7 +3086,7 @@ async def ahealth_check(
             raise Exception("model not set")
 
         model, custom_llm_provider, _, _ = get_llm_provider(model=model)
-        mode = mode or "completion"  # default to completion calls
+        mode = mode or "chat"  # default to chat completion calls
 
         if custom_llm_provider == "azure":
             api_key = (
