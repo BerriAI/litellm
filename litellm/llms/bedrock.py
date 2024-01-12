@@ -498,6 +498,8 @@ def completion(
                     "textGenerationConfig": inference_params,
                 }
             )
+        else:
+            data = json.dumps({})
 
         ## COMPLETION CALL
         accept = "application/json"
