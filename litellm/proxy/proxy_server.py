@@ -853,7 +853,9 @@ class ProxyConfig:
                 )
             ## dynamodb
             database_type = general_settings.get("database_type", None)
-            if database_type is not None and database_type == "dynamo_db":
+            if database_type is not None and (
+                database_type == "dynamo_db" or database_type == "dynamodb"
+            ):
                 database_args = general_settings.get("database_args", None)
                 custom_db_client = DBClient(
                     custom_db_args=database_args, custom_db_type=database_type
