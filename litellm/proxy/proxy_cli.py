@@ -343,7 +343,10 @@ def run_server(
         )
         try:
             import uvicorn
-            import gunicorn.app.base
+            if os.name == "nt":
+                pass
+            else:
+                import gunicorn.app.base
         except:
             raise ImportError(
                 "Uvicorn, gunicorn needs to be imported. Run - `pip 'litellm[proxy]'`"
@@ -427,36 +430,39 @@ def run_server(
             f"\033[1;34mSee all Router/Swagger docs on http://0.0.0.0:{port} \033[0m\n"
         )  # noqa
 
-        # Gunicorn Application Class
-        class StandaloneApplication(gunicorn.app.base.BaseApplication):
-            def __init__(self, app, options=None):
-                self.options = options or {}  # gunicorn options
-                self.application = app  # FastAPI app
-                super().__init__()
-
-            def load_config(self):
-                # note: This Loads the gunicorn config - has nothing to do with LiteLLM Proxy config
-                config = {
-                    key: value
-                    for key, value in self.options.items()
-                    if key in self.cfg.settings and value is not None
-                }
-                for key, value in config.items():
-                    self.cfg.set(key.lower(), value)
-
-            def load(self):
-                # gunicorn app function
-                return self.application
-
-        gunicorn_options = {
-            "bind": f"{host}:{port}",
-            "workers": num_workers,  # default is 1
-            "worker_class": "uvicorn.workers.UvicornWorker",
-            "preload": True,  # Add the preload flag
-        }
         from litellm.proxy.proxy_server import app
+        if os.name == "nt":
+            uvicorn.run(app, host=host, port=port)  # run uvicorn
+        else:
+            import gunicorn.app.base
+            # Gunicorn Application Class
+            class StandaloneApplication(gunicorn.app.base.BaseApplication):
+                def __init__(self, app, options=None):
+                    self.options = options or {}  # gunicorn options
+                    self.application = app  # FastAPI app
+                    super().__init__()
 
-        StandaloneApplication(app=app, options=gunicorn_options).run()  # Run gunicorn
+                def load_config(self):
+                    # note: This Loads the gunicorn config - has nothing to do with LiteLLM Proxy config
+                    config = {
+                        key: value
+                        for key, value in self.options.items()
+                        if key in self.cfg.settings and value is not None
+                    }
+                    for key, value in config.items():
+                        self.cfg.set(key.lower(), value)
+
+                def load(self):
+                    # gunicorn app function
+                    return self.application
+
+            gunicorn_options = {
+                "bind": f"{host}:{port}",
+                "workers": num_workers,  # default is 1
+                "worker_class": "uvicorn.workers.UvicornWorker",
+                "preload": True,  # Add the preload flag
+            }
+            StandaloneApplication(app=app, options=gunicorn_options).run()  # Run gunicorn
 
 
 if __name__ == "__main__":
