@@ -573,6 +573,10 @@ def completion(
             response = client.invoke_model(
                 body=data, modelId=model, accept=accept, contentType=contentType
             )
+        except client.exceptions.ValidationException as e:
+            if "The provided model identifier is invalid" in str(e):
+                raise BedrockError(status_code=404, message=str(e))
+            raise BedrockError(status_code=400, message=str(e))
         except Exception as e:
             raise BedrockError(status_code=500, message=str(e))
 
