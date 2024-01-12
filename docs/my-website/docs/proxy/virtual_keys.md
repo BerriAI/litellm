@@ -56,7 +56,7 @@ litellm --config /path/to/config.yaml
 
 ```shell 
 curl 'http://0.0.0.0:8000/key/generate' \
---header 'Authorization: Bearer sk-1234' \
+--header 'Authorization: Bearer <your-master-key>' \
 --header 'Content-Type: application/json' \
 --data-raw '{"models": ["gpt-3.5-turbo", "gpt-4", "claude-2"], "duration": "20m","metadata": {"user": "ishaan@berri.ai", "team": "core-infra"}}'
 ```
@@ -82,7 +82,7 @@ Just set duration to None.
 
 ```bash
 curl --location 'http://0.0.0.0:8000/key/generate' \
---header 'Authorization: Bearer sk-1234' \
+--header 'Authorization: Bearer <your-master-key>' \
 --header 'Content-Type: application/json' \
 --data '{"models": ["azure-models"], "aliases": {"mistral-7b": "gpt-3.5-turbo"}, "duration": null}'
 ```
@@ -124,7 +124,7 @@ model_list:
 
 ```bash
 curl -X POST "https://0.0.0.0:8000/key/generate" \
--H "Authorization: Bearer sk-1234" \
+-H "Authorization: Bearer <your-master-key>" \
 -H "Content-Type: application/json" \
 -d '{
 	"models": ["my-free-tier"], 
