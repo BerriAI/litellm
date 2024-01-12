@@ -51,39 +51,41 @@ class DynamoDBWrapper(CustomDB):
             ## User
             table = client.table(DBTableNames.user.value)
             if not await table.exists():
-                try:
-                    await table.create(
-                        self.throughput_type,
-                        KeySchema(hash_key=KeySpec("user_id", KeyType.string)),
-                    )
-                except:
-                    raise Exception(
-                        f"Failed to create table - {DBTableNames.user.value}.\nPlease create a new table called {DBTableNames.user.value}\nAND set `hash_key` as 'user_id'"
-                    )
+                sample_code_snippet = f"""
+                table = client.table({DBTableNames.user.value})
+                await table.create(
+                    self.throughput_type,
+                    KeySchema(hash_key=KeySpec("user_id", KeyType.string)),
+                )
+                """
+                raise Exception(
+                    f"Failed to create table - {DBTableNames.user.value}.\nPlease create a new table called {DBTableNames.user.value}\nAND set `hash_key` as 'user_id'\n\nEg.: {sample_code_snippet}"
+                )
             ## Token
-            table = client.table(DBTableNames.key.value)
             if not await table.exists():
-                try:
-                    await table.create(
-                        self.throughput_type,
-                        KeySchema(hash_key=KeySpec("token", KeyType.string)),
-                    )
-                except:
-                    raise Exception(
-                        f"Failed to create table - {DBTableNames.key.value}.\nPlease create a new table called {DBTableNames.key.value}\nAND set `hash_key` as 'token'"
-                    )
+                sample_code_snippet = f""" 
+                table = client.table({DBTableNames.key.value})
+                await table.create(
+                    self.throughput_type,
+                    KeySchema(hash_key=KeySpec("token", KeyType.string)),
+                )
+                """
+                raise Exception(
+                    f"Failed to create table - {DBTableNames.key.value}.\nPlease create a new table called {DBTableNames.key.value}\nAND set `hash_key` as 'token'\n\nE.g.: {sample_code_snippet}"
+                )
             ## Config
             table = client.table(DBTableNames.config.value)
             if not await table.exists():
-                try:
-                    await table.create(
-                        self.throughput_type,
-                        KeySchema(hash_key=KeySpec("param_name", KeyType.string)),
-                    )
-                except:
-                    raise Exception(
-                        f"Failed to create table - {DBTableNames.config.value}.\nPlease create a new table called {DBTableNames.config.value}\nAND set `hash_key` as 'token'"
-                    )
+                sample_code_snippet = f"""
+                table = client.table({DBTableNames.config.value})
+                await table.create(
+                    self.throughput_type,
+                    KeySchema(hash_key=KeySpec("param_name", KeyType.string)),
+                )
+                """
+                raise Exception(
+                    f"Failed to create table - {DBTableNames.config.value}.\nPlease create a new table called {DBTableNames.config.value}\nAND set `hash_key` as 'param_name'\n\nE.g.: {sample_code_snippet}"
+                )
 
     async def insert_data(
         self, value: Any, table_name: Literal["user", "key", "config"]
