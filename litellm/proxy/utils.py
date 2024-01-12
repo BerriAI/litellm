@@ -344,35 +344,31 @@ class PrismaClient:
     async def get_data(
         self,
         token: Optional[str] = None,
-        expires: Optional[Any] = None,
         user_id: Optional[str] = None,
+        table_name: Optional[Literal["user", "key", "config"]] = None,
+        query_type: Literal["find_unique", "find_all"] = "find_unique",
     ):
         try:
             print_verbose("PrismaClient: get_data")
 
-            response = None
-            if token is not None:
+            response: Any = None
+            if token is not None or (table_name is not None and table_name == "key"):
                 # check if plain text or hash
-                hashed_token = token
-                if token.startswith("sk-"):
-                    hashed_token = self.hash_token(token=token)
+                if token is not None:
+                    hashed_token = token
+                    if token.startswith("sk-"):
+                        hashed_token = self.hash_token(token=token)
                 print_verbose("PrismaClient: find_unique")
-                response = await self.db.litellm_verificationtoken.find_unique(
-                    where={"token": hashed_token}
-                )
+                if query_type == "find_unique":
+                    response = await self.db.litellm_verificationtoken.find_unique(
+                        where={"token": hashed_token}
+                    )
+                elif query_type == "find_all" and user_id is not None:
+                    response = await self.db.litellm_verificationtoken.find_many(
+                        where={"user_id": user_id}
+                    )
                 print_verbose(f"PrismaClient: response={response}")
-                if response:
-                    # Token exists, now check expiration.
-                    if response.expires is not None and expires is not None:
-                        if response.expires >= expires:
-                            # Token exists and is not expired.
-                            return response
-                        else:
-                            # Token exists but is expired.
-                            raise HTTPException(
-                                status_code=status.HTTP_403_FORBIDDEN,
-                                detail="expired user key",
-                            )
+                if response is not None:
                     return response
                 else:
                     # Token does not exist.
