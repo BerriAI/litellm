@@ -177,11 +177,16 @@ def test_cohere_embedding3():
             input=["good morning from litellm", "this is another item"],
         )
         print(f"response:", response)
+
+        custom_llm_provider = response._hidden_params["custom_llm_provider"]
+
+        assert custom_llm_provider == "cohere"
+
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
 
-# test_cohere_embedding3()
+test_cohere_embedding3()
 
 
 def test_bedrock_embedding_titan():
@@ -226,7 +231,7 @@ def test_bedrock_embedding_titan():
         pytest.fail(f"Error occurred: {e}")
 
 
-test_bedrock_embedding_titan()
+# test_bedrock_embedding_titan()
 
 
 def test_bedrock_embedding_cohere():
