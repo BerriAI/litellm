@@ -29,6 +29,10 @@ def setup_and_teardown():
     # from litellm import Router, completion, aembedding, acompletion, embedding
     yield
 
+    # Teardown code (executes after the yield point)
+    loop.close()  # Close the loop created earlier
+    asyncio.set_event_loop(None)  # Remove the reference to the loop
+
 
 def pytest_collection_modifyitems(config, items):
     # Separate tests in 'test_amazing_proxy_custom_logger.py' and other tests
