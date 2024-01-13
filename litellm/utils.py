@@ -53,6 +53,7 @@ from .integrations.litedebugger import LiteDebugger
 from .proxy._types import KeyManagementSystem
 from openai import OpenAIError as OriginalError
 from openai._models import BaseModel as OpenAIObject
+from .caching import S3Cache
 from .exceptions import (
     AuthenticationError,
     BadRequestError,
@@ -2338,6 +2339,10 @@ def client(original_function):
                         call_type == CallTypes.aembedding.value
                         and cached_result is not None
                         and isinstance(cached_result, list)
+                        and litellm.cache is not None
+                        and not isinstance(
+                            litellm.cache.cache, S3Cache
+                        )  # s3 doesn't support bulk writing. Exclude.
                     ):
                         remaining_list = []
                         non_null_list = []
@@ -2458,8 +2463,13 @@ def client(original_function):
                 if isinstance(result, litellm.ModelResponse) or isinstance(
                     result, litellm.EmbeddingResponse
                 ):
-                    if isinstance(result, EmbeddingResponse) and isinstance(
-                        kwargs["input"], list
+                    if (
+                        isinstance(result, EmbeddingResponse)
+                        and isinstance(kwargs["input"], list)
+                        and litellm.cache is not None
+                        and not isinstance(
+                            litellm.cache.cache, S3Cache
+                        )  # s3 doesn't support bulk writing. Exclude.
                     ):
                         asyncio.create_task(
                             litellm.cache.async_add_cache_pipeline(
