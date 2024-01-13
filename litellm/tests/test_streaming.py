@@ -262,6 +262,9 @@ def test_completion_azure_stream():
         for idx, init_chunk in enumerate(response):
             chunk, finished = streaming_format_tests(idx, init_chunk)
             complete_response += chunk
+            custom_llm_provider = init_chunk._hidden_params["custom_llm_provider"]
+            print(f"custom_llm_provider: {custom_llm_provider}")
+            assert custom_llm_provider == "azure"
             if finished:
                 assert isinstance(init_chunk.choices[0], litellm.utils.StreamingChoices)
                 break
@@ -922,6 +925,7 @@ def ai21_completion_call_bad_key():
 
 
 # ai21_completion_call_bad_key()
+
 
 @pytest.mark.asyncio
 async def test_hf_completion_tgi_stream():
