@@ -341,9 +341,6 @@ def prisma_setup(database_url: Optional[str]):
             )
         except Exception as e:
             raise e
-            verbose_proxy_logger.debug(
-                f"Error when initializing prisma, Ensure you run pip install prisma {str(e)}"
-            )
 
 
 def load_from_azure_key_vault(use_azure_key_vault: bool = False):
@@ -1209,6 +1206,9 @@ async def startup_event():
     ### LOAD MASTER KEY ###
     # check if master key set in environment - load from there
     master_key = litellm.get_secret("LITELLM_MASTER_KEY", None)
+    # check if DATABASE_URL in environment - load from there
+    if prisma_client is None:
+        prisma_setup(database_url=os.getenv("DATABASE_URL"))
 
     ### LOAD CONFIG ###
     worker_config = litellm.get_secret("WORKER_CONFIG")
