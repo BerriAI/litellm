@@ -575,6 +575,7 @@ def completion(
             api_base=api_base,
             api_key=api_key,
         )
+        model_response._hidden_params["custom_llm_provider"] = custom_llm_provider
         ### REGISTER CUSTOM MODEL PRICING -- IF GIVEN ###
         if input_cost_per_token is not None and output_cost_per_token is not None:
             litellm.register_model(
