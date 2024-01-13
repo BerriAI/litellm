@@ -7,7 +7,6 @@ from litellm.proxy.hooks.parallel_request_limiter import MaxParallelRequestsHand
 from litellm.proxy.hooks.max_budget_limiter import MaxBudgetLimiter
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy.db.base_client import CustomDB
-from litellm.proxy.db.dynamo_db import DynamoDBWrapper
 from fastapi import HTTPException, status
 import smtplib
 from email.mime.text import MIMEText
@@ -595,6 +594,8 @@ class DBClient:
         self, custom_db_type: Literal["dynamo_db"], custom_db_args: dict
     ) -> None:
         if custom_db_type == "dynamo_db":
+            from litellm.proxy.db.dynamo_db import DynamoDBWrapper
+
             self.db = DynamoDBWrapper(database_arguments=DynamoDBArgs(**custom_db_args))
 
     async def get_data(self, key: str, table_name: Literal["user", "key", "config"]):
