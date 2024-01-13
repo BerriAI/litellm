@@ -63,7 +63,7 @@ def test_completion_bedrock_claude_completion_auth():
         pytest.fail(f"Error occurred: {e}")
 
 
-test_completion_bedrock_claude_completion_auth()
+# test_completion_bedrock_claude_completion_auth()
 
 
 def test_completion_bedrock_claude_2_1_completion_auth():
@@ -100,7 +100,7 @@ def test_completion_bedrock_claude_2_1_completion_auth():
         pytest.fail(f"Error occurred: {e}")
 
 
-test_completion_bedrock_claude_2_1_completion_auth()
+# test_completion_bedrock_claude_2_1_completion_auth()
 
 
 def test_completion_bedrock_claude_external_client_auth():
@@ -117,6 +117,8 @@ def test_completion_bedrock_claude_external_client_auth():
 
     try:
         import boto3
+
+        litellm.set_verbose = True
 
         bedrock = boto3.client(
             service_name="bedrock-runtime",
@@ -146,3 +148,33 @@ def test_completion_bedrock_claude_external_client_auth():
 
 
 test_completion_bedrock_claude_external_client_auth()
+
+# def test_provisioned_throughput():
+#     try:
+#         litellm.set_verbose=True
+#         import botocore
+#         import botocore.session
+#         from botocore.stub import Stubber
+
+
+#         bedrock_client = botocore.session.get_session().create_client('bedrock-runtime', region_name='us-east-1')
+#         request = {
+#                 "body": {"prompt": "\n\nHuman: Write a short poem about the sky\n\nAssistant: ", "max_tokens_to_sample": 10, "temperature": 0.1},
+#                 "modelId": "anthropic.claude-instant-v1",
+#                 "accept":"accept",
+#                 "contentType": "contentType"
+#         }
+#         response ={"completion": " Here is a short poem about the sky:", "stop_reason": "max_tokens", "stop": None}
+
+
+#         with Stubber(bedrock_client) as stubber:
+#             stubber.add_response('invoke_model', service_response=response, expected_params=request)
+#             response = litellm.completion(
+#                 model="bedrock/anthropic.claude-instant-v1",
+#                 model_id = 'provisioned-model-arn',
+#                 messages=[{ "content": "Hello, how are you?","role": "user"}],
+#                 aws_bedrock_client=bedrock_client,
+#             )
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
+# test_provisioned_throughput()
