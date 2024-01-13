@@ -116,6 +116,48 @@ response = completion(
 
 ```
 
+#### Usage - with Azure Vision enhancements
+
+```python
+import os 
+from litellm import completion
+
+os.environ["AZURE_API_KEY"] = "your-api-key"
+
+# azure call
+response = completion(
+    model = "azure/<your deployment name>", 
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                            {
+                                "type": "text",
+                                "text": "What’s in this image?"
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
+                                }
+                            }
+                        ]
+        }
+    ],
+    enhancements = {"ocr": {"enabled": True}, "grounding": {"enabled": True}},
+    dataSources = [
+            {
+                "type": "AzureComputerVision",
+                "parameters": {
+                    "endpoint": "<your_computer_vision_endpoint>",
+                    "key": "<your_computer_vision_key>",
+                },
+            }
+    ],
+)
+```
+
+
 ## Advanced
 ### Azure API Load-Balancing
 
