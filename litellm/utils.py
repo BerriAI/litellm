@@ -2798,7 +2798,10 @@ def cost_per_token(
     prompt_tokens_cost_usd_dollar = 0
     completion_tokens_cost_usd_dollar = 0
     model_cost_ref = litellm.model_cost
-    model_with_provider = custom_llm_provider + "/" + model
+    if custom_llm_provider is not None:
+        model_with_provider = custom_llm_provider + "/" + model
+    else:
+        model_with_provider = model
     # see this https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models
     print_verbose(f"Looking up model={model} in model_cost_map")
 
