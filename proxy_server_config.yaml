@@ -2,9 +2,9 @@ model_list:
   - model_name: gpt-4 # user-facing model alias
     litellm_params: # all params accepted by litellm.completion() - https://docs.litellm.ai/docs/completion/input
       model: azure/dp-gpt4
-      api_base: https://ftc-ap-3000-je.openai.azure.com/
-      api_version: "2023-08-01-preview"
-      api_key: "7c1a5ad989584fb9af36e0dc168289d6" # does os.getenv("AZURE_API_KEY_EU")
+      api_base: xxx
+      api_version: 2023-08-01-preview
+      api_key: xxx # does os.getenv("AZURE_API_KEY_EU")
       rpm: 6      # Rate limit for this deployment: in requests per minute (rpm)
 
 
