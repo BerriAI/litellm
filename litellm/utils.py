@@ -7452,6 +7452,7 @@ class CustomStreamWrapper:
 
     def chunk_creator(self, chunk):
         model_response = ModelResponse(stream=True, model=self.model)
+        model_response._hidden_params["custom_llm_provider"] = self.custom_llm_provider
         model_response.choices = [StreamingChoices()]
         model_response.choices[0].finish_reason = None
         response_obj = {}
