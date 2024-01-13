@@ -3266,6 +3266,10 @@ def stream_chunk_builder_text_completion(chunks: list, messages: Optional[List] 
 
 
 def stream_chunk_builder(chunks: list, messages: Optional[list] = None):
+    model_response = litellm.ModelResponse()
+    # set hidden params from chunk to model_response
+    if model_response is not None and hasattr(model_response, "_hidden_params"):
+        model_response._hidden_params = chunks[0].get("_hidden_params", {})
     id = chunks[0]["id"]
     object = chunks[0]["object"]
     created = chunks[0]["created"]
@@ -3436,5 +3440,5 @@ def stream_chunk_builder(chunks: list, messages: Optional[list] = None):
         response["usage"]["prompt_tokens"] + response["usage"]["completion_tokens"]
     )
     return convert_to_model_response_object(
-        response_object=response, model_response_object=litellm.ModelResponse()
+        response_object=response, model_response_object=model_response
     )
