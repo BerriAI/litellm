@@ -259,7 +259,7 @@ class PrismaClient:
         self.proxy_logging_obj = proxy_logging_obj
         try:
             from prisma import Prisma  # type: ignore
-        except:
+        except Exception as e:
             os.environ["DATABASE_URL"] = database_url
             # Save the current working directory
             original_dir = os.getcwd()
@@ -273,6 +273,10 @@ class PrismaClient:
                 subprocess.run(
                     ["prisma", "db", "push", "--accept-data-loss"]
                 )  # this looks like a weird edge case when prisma just wont start on render. we need to have the --accept-data-loss
+            except:
+                raise Exception(
+                    f"Unable to run prisma commands. Run `pip install prisma`"
+                )
             finally:
                 os.chdir(original_dir)
             # Now you can import the Prisma Client
