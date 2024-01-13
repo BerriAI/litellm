@@ -120,7 +120,7 @@ def test_stream_chunk_builder_litellm_tool_call():
 def test_stream_chunk_builder_litellm_tool_call_regular_message():
     try:
         messages = [{"role": "user", "content": "Hey, how's it going?"}]
-        litellm.set_verbose = False
+        # litellm.set_verbose = True
         response = litellm.completion(
             model="gpt-3.5-turbo",
             messages=messages,
@@ -137,6 +137,10 @@ def test_stream_chunk_builder_litellm_tool_call_regular_message():
             response.usage.total_tokens
             == response.usage.completion_tokens + response.usage.prompt_tokens
         )
+
+        # check provider is in hidden params
+        print("hidden params", response._hidden_params)
+        assert response._hidden_params["custom_llm_provider"] == "openai"
 
     except Exception as e:
         pytest.fail(f"An exception occurred - {str(e)}")
