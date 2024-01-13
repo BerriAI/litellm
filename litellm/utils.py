@@ -4046,10 +4046,18 @@ def get_optional_params(
             optional_params["logprobs"] = logprobs
         if top_logprobs is not None:
             optional_params["top_logprobs"] = top_logprobs
-    # if user passed in non-default kwargs for specific providers/models, pass them along
-    for k in passed_params.keys():
-        if k not in default_params.keys():
-            optional_params[k] = passed_params[k]
+    if custom_llm_provider in ["openai", "azure"] + litellm.openai_compatible_providers:
+        # for openai, azure we should pass the extra/passed params within `extra_body` https://github.com/openai/openai-python/blob/ac33853ba10d13ac149b1fa3ca6dba7d613065c9/src/openai/resources/models.py#L46
+        extra_body = passed_params.pop("extra_body", {})
+        for k in passed_params.keys():
+            if k not in default_params.keys():
+                extra_body[k] = passed_params[k]
+        optional_params["extra_body"] = extra_body
+    else:
+        # if user passed in non-default kwargs for specific providers/models, pass them along
+        for k in passed_params.keys():
+            if k not in default_params.keys():
+                optional_params[k] = passed_params[k]
     return optional_params
 
 
