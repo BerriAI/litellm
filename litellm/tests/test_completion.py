@@ -849,6 +849,9 @@ def test_completion_azure_key_completion_arg():
             max_tokens=10,
         )
         print(f"response: {response}")
+
+        print("Hidden Params", response._hidden_params)
+        assert response._hidden_params["custom_llm_provider"] == "azure"
         os.environ["AZURE_API_KEY"] = old_key
     except Exception as e:
         os.environ["AZURE_API_KEY"] = old_key
