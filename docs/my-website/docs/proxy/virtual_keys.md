@@ -246,3 +246,35 @@ general_settings:
 $ litellm --config /path/to/config.yaml 
 ```
 
+
+## [BETA] Dynamo DB 
+
+Only live in `v1.16.21.dev1`. 
+
+### Step 1. Save keys to env
+
+```env
+AWS_ACCESS_KEY_ID = "your-aws-access-key-id"
+AWS_SECRET_ACCESS_KEY = "your-aws-secret-access-key"
+```
+
+### Step 2. Add details to config 
+
+```yaml
+general_settings: 
+  master_key: sk-1234
+  database_type: "dynamo_db" 
+  database_args: { # 👈  all args - https://github.com/BerriAI/litellm/blob/befbcbb7ac8f59835ce47415c128decf37aac328/litellm/proxy/_types.py#L190
+    "billing_mode": "PAY_PER_REQUEST", 
+    "region_name": "us-west-2" 
+  }
+```
+
+### Step 3. Generate Key
+
+```bash
+curl --location 'http://0.0.0.0:8000/key/generate' \
+--header 'Authorization: Bearer sk-1234' \
+--header 'Content-Type: application/json' \
+--data '{"models": ["azure-models"], "aliases": {"mistral-7b": "gpt-3.5-turbo"}, "duration": null}'
+```
