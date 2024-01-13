@@ -444,9 +444,9 @@ class Cache:
         """
         if type == "redis":
             self.cache: BaseCache = RedisCache(host, port, password, **kwargs)
-        if type == "local":
+        elif type == "local":
             self.cache = InMemoryCache()
-        if type == "s3":
+        elif type == "s3":
             self.cache = S3Cache(
                 s3_bucket_name=s3_bucket_name,
                 s3_region_name=s3_region_name,
