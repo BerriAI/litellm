@@ -2512,6 +2512,8 @@ def embedding(
         else:
             args = locals()
             raise ValueError(f"No valid embedding model args passed in - {args}")
+        if response is not None:
+            response._hidden_params["custom_llm_provider"] = custom_llm_provider
         return response
     except Exception as e:
         ## LOGGING
