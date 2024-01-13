@@ -195,6 +195,19 @@ response = completion(
 )
 ```
 
+### SSO Login (AWS Profile)
+- Set `AWS_PROFILE` environment variable
+- Make bedrock completion call 
+```python
+import os
+from litellm import completion
+
+response = completion(
+            model="bedrock/anthropic.claude-instant-v1",
+            messages=[{ "content": "Hello, how are you?","role": "user"}]
+)
+```
+
 ## Supported AWS Bedrock Models
 Here's an example of using a bedrock model with LiteLLM
 
