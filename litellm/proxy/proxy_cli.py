@@ -343,6 +343,7 @@ def run_server(
         )
         try:
             import uvicorn
+
             if os.name == "nt":
                 pass
             else:
@@ -384,63 +385,78 @@ def run_server(
                 os.environ["DATABASE_URL"] = database_url
 
         if os.getenv("DATABASE_URL", None) is not None:
-            # run prisma db push, before starting server
-            # Save the current working directory
-            original_dir = os.getcwd()
-            # set the working directory to where this script is
-            abspath = os.path.abspath(__file__)
-            dname = os.path.dirname(abspath)
-            os.chdir(dname)
             try:
-                subprocess.run(
-                    ["prisma", "db", "push", "--accept-data-loss"]
-                )  # this looks like a weird edge case when prisma just wont start on render. we need to have the --accept-data-loss
-            finally:
-                os.chdir(original_dir)
+                subprocess.run(["prisma"], capture_output=True)
+                is_prisma_runnable = True
+            except FileNotFoundError:
+                is_prisma_runnable = False
+
+            if is_prisma_runnable:
+                # run prisma db push, before starting server
+                # Save the current working directory
+                original_dir = os.getcwd()
+                # set the working directory to where this script is
+                abspath = os.path.abspath(__file__)
+                dname = os.path.dirname(abspath)
+                os.chdir(dname)
+                try:
+                    subprocess.run(
+                        ["prisma", "db", "push", "--accept-data-loss"]
+                    )  # this looks like a weird edge case when prisma just wont start on render. we need to have the --accept-data-loss
+                finally:
+                    os.chdir(original_dir)
+            else:
+                print(
+                    f"Unable to connect to DB. DATABASE_URL found in environment, but prisma package not found."
+                )
         if port == 8000 and is_port_in_use(port):
             port = random.randint(1024, 49152)
-        _endpoint_str = f"curl --location 'http://0.0.0.0:{port}/chat/completions' \\"
-        curl_command = (
-            _endpoint_str
-            + """
-        --header 'Content-Type: application/json' \\
-        --data ' {
-        "model": "gpt-3.5-turbo",
-        "messages": [
-            {
-            "role": "user",
-            "content": "what llm are you"
-            }
-        ]
-        }'
-        \n
-        """
-        )
-        print()  # noqa
-        print(  # noqa
-            f'\033[1;34mLiteLLM: Test your local proxy with: "litellm --test" This runs an openai.ChatCompletion request to your proxy [In a new terminal tab]\033[0m\n'
-        )
-        print(  # noqa
-            f"\033[1;34mLiteLLM: Curl Command Test for your local proxy\n {curl_command} \033[0m\n"
-        )
-        print(
-            "\033[1;34mDocs: https://docs.litellm.ai/docs/simple_proxy\033[0m\n"
-        )  # noqa
-        print(  # noqa
-            f"\033[1;34mSee all Router/Swagger docs on http://0.0.0.0:{port} \033[0m\n"
-        )  # noqa
-
         from litellm.proxy.proxy_server import app
+
         if os.name == "nt":
             uvicorn.run(app, host=host, port=port)  # run uvicorn
         else:
             import gunicorn.app.base
+
             # Gunicorn Application Class
             class StandaloneApplication(gunicorn.app.base.BaseApplication):
                 def __init__(self, app, options=None):
                     self.options = options or {}  # gunicorn options
                     self.application = app  # FastAPI app
                     super().__init__()
+
+                    _endpoint_str = (
+                        f"curl --location 'http://0.0.0.0:{port}/chat/completions' \\"
+                    )
+                    curl_command = (
+                        _endpoint_str
+                        + """
+                    --header 'Content-Type: application/json' \\
+                    --data ' {
+                    "model": "gpt-3.5-turbo",
+                    "messages": [
+                        {
+                        "role": "user",
+                        "content": "what llm are you"
+                        }
+                    ]
+                    }'
+                    \n
+                    """
+                    )
+                    print()  # noqa
+                    print(  # noqa
+                        f'\033[1;34mLiteLLM: Test your local proxy with: "litellm --test" This runs an openai.ChatCompletion request to your proxy [In a new terminal tab]\033[0m\n'
+                    )
+                    print(  # noqa
+                        f"\033[1;34mLiteLLM: Curl Command Test for your local proxy\n {curl_command} \033[0m\n"
+                    )
+                    print(
+                        "\033[1;34mDocs: https://docs.litellm.ai/docs/simple_proxy\033[0m\n"
+                    )  # noqa
+                    print(  # noqa
+                        f"\033[1;34mSee all Router/Swagger docs on http://0.0.0.0:{port} \033[0m\n"
+                    )  # noqa
 
                 def load_config(self):
                     # note: This Loads the gunicorn config - has nothing to do with LiteLLM Proxy config
@@ -462,7 +478,9 @@ def run_server(
                 "worker_class": "uvicorn.workers.UvicornWorker",
                 "preload": True,  # Add the preload flag
             }
-            StandaloneApplication(app=app, options=gunicorn_options).run()  # Run gunicorn
+            StandaloneApplication(
+                app=app, options=gunicorn_options
+            ).run()  # Run gunicorn
 
 
 if __name__ == "__main__":
