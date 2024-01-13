@@ -678,7 +678,7 @@ class Cache:
                         if k == "ttl":
                             kwargs["ttl"] = v
                 cached_data = {"timestamp": time.time(), "response": result}
-                return cache_key, cached_data
+                return cache_key, cached_data, kwargs
             else:
                 raise Exception("cache key is None")
         except Exception as e:
@@ -696,7 +696,7 @@ class Cache:
             None
         """
         try:
-            cache_key, cached_data = self._add_cache_logic(
+            cache_key, cached_data, kwargs = self._add_cache_logic(
                 result=result, *args, **kwargs
             )
             self.cache.set_cache(cache_key, cached_data, **kwargs)
@@ -710,7 +710,7 @@ class Cache:
         Async implementation of add_cache
         """
         try:
-            cache_key, cached_data = self._add_cache_logic(
+            cache_key, cached_data, kwargs = self._add_cache_logic(
                 result=result, *args, **kwargs
             )
             await self.cache.async_set_cache(cache_key, cached_data, **kwargs)
