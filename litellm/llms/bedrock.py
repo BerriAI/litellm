@@ -436,6 +436,9 @@ def completion(
             )
 
         model = model
+        modelId = (
+            optional_params.pop("model_id", None) or model
+        )  # default to model if not passed
         provider = model.split(".")[0]
         prompt = convert_messages_to_prompt(
             model, messages, provider, custom_prompt_dict
@@ -510,7 +513,7 @@ def completion(
                 request_str = f"""
                 response = client.invoke_model(
                     body={data},
-                    modelId={model},
+                    modelId={modelId},
                     accept=accept,
                     contentType=contentType
                 )
@@ -525,7 +528,7 @@ def completion(
                 )
 
                 response = client.invoke_model(
-                    body=data, modelId=model, accept=accept, contentType=contentType
+                    body=data, modelId=modelId, accept=accept, contentType=contentType
                 )
 
                 response = response.get("body").read()
@@ -535,7 +538,7 @@ def completion(
                 request_str = f"""
                 response = client.invoke_model_with_response_stream(
                     body={data},
-                    modelId={model},
+                    modelId={modelId},
                     accept=accept,
                     contentType=contentType
                 )
@@ -550,7 +553,7 @@ def completion(
                 )
 
                 response = client.invoke_model_with_response_stream(
-                    body=data, modelId=model, accept=accept, contentType=contentType
+                    body=data, modelId=modelId, accept=accept, contentType=contentType
                 )
                 response = response.get("body")
                 return response
@@ -559,7 +562,7 @@ def completion(
             request_str = f"""
             response = client.invoke_model(
                 body={data},
-                modelId={model},
+                modelId={modelId},
                 accept=accept,
                 contentType=contentType
             )
@@ -573,7 +576,7 @@ def completion(
                 },
             )
             response = client.invoke_model(
-                body=data, modelId=model, accept=accept, contentType=contentType
+                body=data, modelId=modelId, accept=accept, contentType=contentType
             )
         except client.exceptions.ValidationException as e:
             if "The provided model identifier is invalid" in str(e):
