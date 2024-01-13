@@ -2346,6 +2346,9 @@ def client(original_function):
                         kwargs["input"] = remaining_list
 
                         if len(non_null_list) > 0:
+                            print_verbose(
+                                f"EMBEDDING CACHE HIT! - {len(non_null_list)}"
+                            )
                             final_embedding_cached_response = EmbeddingResponse(
                                 model=kwargs.get("model"),
                                 data=[None] * len(original_kwargs_input),
@@ -2451,19 +2454,11 @@ def client(original_function):
                     if isinstance(result, EmbeddingResponse) and isinstance(
                         kwargs["input"], list
                     ):
-                        for idx, i in enumerate(kwargs["input"]):
-                            preset_cache_key = litellm.cache.get_cache_key(
-                                *args, **{**kwargs, "input": i}
+                        asyncio.create_task(
+                            litellm.cache.async_add_cache_pipeline(
+                                result, *args, **kwargs
                             )
-                            embedding_response = result.data[idx]
-                            asyncio.create_task(
-                                litellm.cache.async_add_cache(
-                                    embedding_response,
-                                    *args,
-                                    cache_key=preset_cache_key,
-                                )
-                            )
-                        # pass
+                        )
                     else:
                         asyncio.create_task(
                             litellm.cache.async_add_cache(
