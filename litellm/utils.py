@@ -2357,6 +2357,9 @@ def client(original_function):
                                 model=kwargs.get("model"),
                                 data=[None] * len(original_kwargs_input),
                             )
+                            final_embedding_cached_response._hidden_params[
+                                "cache_hit"
+                            ] = True
 
                             for val in non_null_list:
                                 idx, cr = val  # (idx, cr) tuple
