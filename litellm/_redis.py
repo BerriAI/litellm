@@ -106,4 +106,16 @@ def get_redis_async_client(**env_overrides):
     redis_kwargs = _get_redis_client_logic(**env_overrides)
     if "url" in redis_kwargs and redis_kwargs["url"] is not None:
         return async_redis.Redis.from_url(**redis_kwargs)
-    return async_redis.Redis(socket_timeout=5, **redis_kwargs)
+    return async_redis.Redis(
+        socket_timeout=5,
+        **redis_kwargs,
+    )
+
+
+def get_redis_connection_pool(**env_overrides):
+    redis_kwargs = _get_redis_client_logic(**env_overrides)
+    if "url" in redis_kwargs and redis_kwargs["url"] is not None:
+        return async_redis.BlockingConnectionPool.from_url(
+            timeout=5, url=redis_kwargs["url"]
+        )
+    return async_redis.BlockingConnectionPool(timeout=5, **redis_kwargs)
