@@ -53,6 +53,13 @@ class InMemoryCache(BaseCache):
     async def async_set_cache(self, key, value, **kwargs):
         self.set_cache(key=key, value=value, **kwargs)
 
+    async def async_set_cache_pipeline(self, cache_list, ttl=None):
+        for cache_key, cache_value in cache_list:
+            if ttl is not None:
+                self.set_cache(key=cache_key, value=cache_value, ttl=ttl)
+            else:
+                self.set_cache(key=cache_key, value=cache_value)
+
     def get_cache(self, key, **kwargs):
         if key in self.cache_dict:
             if key in self.ttl_dict:
@@ -730,10 +737,10 @@ class Cache:
                 preset_cache_key = litellm.cache.get_cache_key(
                     *args, **{**kwargs, "input": i}
                 )
+                kwargs["cache_key"] = preset_cache_key
                 embedding_response = result.data[idx]
-                cache_key, cached_data = self._add_cache_logic(
+                cache_key, cached_data, kwargs = self._add_cache_logic(
                     result=embedding_response,
-                    cache_key=preset_cache_key,
                     *args,
                     **kwargs,
                 )
