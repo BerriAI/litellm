@@ -96,16 +96,10 @@ class RedisCache(BaseCache):
         self.redis_client = get_redis_client(**redis_kwargs)
         self.redis_kwargs = redis_kwargs
         self.async_redis_conn_pool = get_redis_connection_pool()
-        print_verbose(
-            f"Number of available connections init: {self.async_redis_conn_pool.pool.qsize()}"
-        )
 
     def init_async_client(self):
         from ._redis import get_redis_async_client
 
-        print_verbose(
-            f"Number of available connections client_init: {self.async_redis_conn_pool.pool.qsize()}"
-        )
         return get_redis_async_client(
             connection_pool=self.async_redis_conn_pool, **self.redis_kwargs
         )
@@ -131,9 +125,6 @@ class RedisCache(BaseCache):
             except Exception as e:
                 # NON blocking - notify users Redis is throwing an exception
                 logging.debug("LiteLLM Caching: set() - Got exception from REDIS : ", e)
-        print_verbose(
-            f"Number of available connections set_cache complete: {self.async_redis_conn_pool.pool.qsize()}"
-        )
 
     async def async_set_cache_pipeline(self, cache_list, ttl=None):
         """
@@ -155,9 +146,6 @@ class RedisCache(BaseCache):
                             pipe.set(cache_key, json.dumps(cache_value))
                     # Execute the pipeline and return the results.
                     results = await pipe.execute()
-            print_verbose(
-                f"Number of available connections set_cache complete: {self.async_redis_conn_pool.pool.qsize()}"
-            )
 
             print_verbose(f"pipeline results: {results}")
             # Optionally, you could process 'results' to make sure that all set operations were successful.
@@ -211,10 +199,6 @@ class RedisCache(BaseCache):
                 # NON blocking - notify users Redis is throwing an exception
                 traceback.print_exc()
                 logging.debug("LiteLLM Caching: get() - Got exception from REDIS: ", e)
-
-        print_verbose(
-            f"Number of available connections get_cache complete: {self.async_redis_conn_pool.pool.qsize()}"
-        )
 
     def flush_cache(self):
         self.redis_client.flushall()
