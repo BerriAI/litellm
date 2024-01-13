@@ -319,6 +319,12 @@ def test_aembedding_azure():
                     input=["good morning from litellm", "this is another item"],
                 )
                 print(response)
+
+                print(
+                    "hidden params - custom_llm_provider",
+                    response._hidden_params["custom_llm_provider"],
+                )
+                assert response._hidden_params["custom_llm_provider"] == "azure"
             except Exception as e:
                 pytest.fail(f"Error occurred: {e}")
 
