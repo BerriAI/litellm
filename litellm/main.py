@@ -575,6 +575,8 @@ def completion(
             api_base=api_base,
             api_key=api_key,
         )
+        if model_response is not None and hasattr(model_response, "_hidden_params"):
+            model_response._hidden_params["custom_llm_provider"] = custom_llm_provider
         ### REGISTER CUSTOM MODEL PRICING -- IF GIVEN ###
         if input_cost_per_token is not None and output_cost_per_token is not None:
             litellm.register_model(
@@ -2156,6 +2158,8 @@ async def aembedding(*args, **kwargs):
         else:
             # Call the synchronous function using run_in_executor
             response = await loop.run_in_executor(None, func_with_context)
+        if response is not None and hasattr(response, "_hidden_params"):
+            response._hidden_params["custom_llm_provider"] = custom_llm_provider
         return response
     except Exception as e:
         custom_llm_provider = custom_llm_provider or "openai"
@@ -2511,6 +2515,8 @@ def embedding(
         else:
             args = locals()
             raise ValueError(f"No valid embedding model args passed in - {args}")
+        if response is not None and hasattr(response, "_hidden_params"):
+            response._hidden_params["custom_llm_provider"] = custom_llm_provider
         return response
     except Exception as e:
         ## LOGGING
@@ -3260,6 +3266,10 @@ def stream_chunk_builder_text_completion(chunks: list, messages: Optional[List] 
 
 
 def stream_chunk_builder(chunks: list, messages: Optional[list] = None):
+    model_response = litellm.ModelResponse()
+    # set hidden params from chunk to model_response
+    if model_response is not None and hasattr(model_response, "_hidden_params"):
+        model_response._hidden_params = chunks[0].get("_hidden_params", {})
     id = chunks[0]["id"]
     object = chunks[0]["object"]
     created = chunks[0]["created"]
@@ -3430,5 +3440,5 @@ def stream_chunk_builder(chunks: list, messages: Optional[list] = None):
         response["usage"]["prompt_tokens"] + response["usage"]["completion_tokens"]
     )
     return convert_to_model_response_object(
-        response_object=response, model_response_object=litellm.ModelResponse()
+        response_object=response, model_response_object=model_response
     )
