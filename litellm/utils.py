@@ -2029,7 +2029,11 @@ def client(original_function):
             # if caching is false or cache["no-cache"]==True, don't run this
             if (
                 (
-                    (kwargs.get("caching", None) is None and litellm.cache is not None)
+                    (
+                        kwargs.get("caching", None) is None
+                        and kwargs.get("cache", None) is None
+                        and litellm.cache is not None
+                    )
                     or kwargs.get("caching", False) == True
                     or (
                         kwargs.get("cache", None) is not None
