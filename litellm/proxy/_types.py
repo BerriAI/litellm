@@ -17,6 +17,13 @@ class LiteLLMBase(BaseModel):
             # if using pydantic v1
             return self.dict()
 
+    def fields_set(self):
+        try:
+            return self.model_fields_set  # noqa
+        except:
+            # if using pydantic v1
+            return self.__fields_set__
+
 
 ######### Request Class Definition ######
 class ProxyChatCompletionRequest(LiteLLMBase):
@@ -182,6 +189,16 @@ class KeyManagementSystem(enum.Enum):
     LOCAL = "local"
 
 
+class DynamoDBArgs(LiteLLMBase):
+    billing_mode: Literal["PROVISIONED_THROUGHPUT", "PAY_PER_REQUEST"]
+    read_capacity_units: Optional[int] = None
+    write_capacity_units: Optional[int] = None
+    region_name: str
+    user_table_name: str = "LiteLLM_UserTable"
+    key_table_name: str = "LiteLLM_VerificationToken"
+    config_table_name: str = "LiteLLM_Config"
+
+
 class ConfigGeneralSettings(LiteLLMBase):
     """
     Documents all the fields supported by `general_settings` in config.yaml
@@ -205,6 +222,13 @@ class ConfigGeneralSettings(LiteLLMBase):
     database_url: Optional[str] = Field(
         None,
         description="connect to a postgres db - needed for generating temporary keys + tracking spend / key",
+    )
+    database_type: Optional[Literal["dynamo_db"]] = Field(
+        None, description="to use dynamodb instead of postgres db"
+    )
+    database_args: Optional[DynamoDBArgs] = Field(
+        None,
+        description="custom args for instantiating dynamodb client - e.g. billing provision",
     )
     otel: Optional[bool] = Field(
         None,
@@ -258,3 +282,33 @@ class ConfigYAML(LiteLLMBase):
 
     class Config:
         protected_namespaces = ()
+
+
+class LiteLLM_VerificationToken(LiteLLMBase):
+    token: str
+    spend: float = 0.0
+    expires: Union[str, None]
+    models: List[str]
+    aliases: Dict[str, str] = {}
+    config: Dict[str, str] = {}
+    user_id: Union[str, None]
+    max_parallel_requests: Union[int, None]
+    metadata: Dict[str, str] = {}
+
+
+class LiteLLM_Config(LiteLLMBase):
+    param_name: str
+    param_value: Dict
+
+
+class LiteLLM_UserTable(LiteLLMBase):
+    user_id: str
+    max_budget: Optional[float]
+    spend: float = 0.0
+    user_email: Optional[str]
+
+    @root_validator(pre=True)
+    def set_model_info(cls, values):
+        if values.get("spend") is None:
+            values.update({"spend": 0.0})
+        return values
