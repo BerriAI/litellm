@@ -575,7 +575,8 @@ def completion(
             api_base=api_base,
             api_key=api_key,
         )
-        model_response._hidden_params["custom_llm_provider"] = custom_llm_provider
+        if model_response is not None and hasattr(model_response, "_hidden_params"):
+            model_response._hidden_params["custom_llm_provider"] = custom_llm_provider
         ### REGISTER CUSTOM MODEL PRICING -- IF GIVEN ###
         if input_cost_per_token is not None and output_cost_per_token is not None:
             litellm.register_model(
@@ -2157,6 +2158,8 @@ async def aembedding(*args, **kwargs):
         else:
             # Call the synchronous function using run_in_executor
             response = await loop.run_in_executor(None, func_with_context)
+        if response is not None and hasattr(response, "_hidden_params"):
+            response._hidden_params["custom_llm_provider"] = custom_llm_provider
         return response
     except Exception as e:
         custom_llm_provider = custom_llm_provider or "openai"
@@ -2512,7 +2515,7 @@ def embedding(
         else:
             args = locals()
             raise ValueError(f"No valid embedding model args passed in - {args}")
-        if response is not None:
+        if response is not None and hasattr(response, "_hidden_params"):
             response._hidden_params["custom_llm_provider"] = custom_llm_provider
         return response
     except Exception as e:
