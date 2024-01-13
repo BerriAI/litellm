@@ -87,6 +87,7 @@ def test_completion_mistral_api():
         litellm.set_verbose = True
         response = completion(
             model="mistral/mistral-tiny",
+            max_tokens=5,
             messages=[
                 {
                     "role": "user",
@@ -96,11 +97,15 @@ def test_completion_mistral_api():
         )
         # Add any assertions here to check the response
         print(response)
+
+        cost = litellm.completion_cost(completion_response=response)
+        print("cost to make mistral completion=", cost)
+        assert cost > 0.0
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
 
-# test_completion_mistral_api()
+test_completion_mistral_api()
 
 
 def test_completion_claude2_1():
@@ -824,6 +829,10 @@ def test_completion_anyscale_with_functions():
         )
         # Add any assertions here to check the response
         print(response)
+
+        cost = litellm.completion_cost(completion_response=response)
+        print("cost to make anyscale completion=", cost)
+        assert cost > 0.0
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
