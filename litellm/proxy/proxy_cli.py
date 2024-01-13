@@ -476,7 +476,9 @@ def run_server(
                 "bind": f"{host}:{port}",
                 "workers": num_workers,  # default is 1
                 "worker_class": "uvicorn.workers.UvicornWorker",
-                "preload": True,  # Add the preload flag
+                "preload": True,  # Add the preload flag,
+                "accesslog": "-",  # Log to stdout
+                "access_log_format": '%(h)s %(l)s %(u)s %(t)s "%(r)s" %(s)s %(b)s',
             }
             StandaloneApplication(
                 app=app, options=gunicorn_options
