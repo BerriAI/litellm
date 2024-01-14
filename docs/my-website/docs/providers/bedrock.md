@@ -208,6 +208,32 @@ response = completion(
 )
 ```
 
+## Provisioned throughput models
+To use provisioned throughput Bedrock models pass 
+- `model=bedrock/<base-model>`, example `model=bedrock/anthropic.claude-v2`. Set `model` to any of the [Supported AWS models](#supported-aws-bedrock-models)
+- `model_id=provisioned-model-arn` 
+
+Completion
+```python
+import litellm
+response = litellm.completion(
+    model="bedrock/anthropic.claude-instant-v1",
+    model_id="provisioned-model-arn",
+    messages=[{"content": "Hello, how are you?", "role": "user"}]
+)
+```
+
+Embedding
+```python
+import litellm
+response = litellm.embedding(
+    model="bedrock/amazon.titan-embed-text-v1",
+    model_id="provisioned-model-arn",
+    input=["hi"],
+)
+```
+
+
 ## Supported AWS Bedrock Models
 Here's an example of using a bedrock model with LiteLLM
 
