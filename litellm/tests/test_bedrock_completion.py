@@ -63,7 +63,7 @@ def test_completion_bedrock_claude_completion_auth():
         pytest.fail(f"Error occurred: {e}")
 
 
-test_completion_bedrock_claude_completion_auth()
+# test_completion_bedrock_claude_completion_auth()
 
 
 def test_completion_bedrock_claude_2_1_completion_auth():
@@ -100,7 +100,7 @@ def test_completion_bedrock_claude_2_1_completion_auth():
         pytest.fail(f"Error occurred: {e}")
 
 
-test_completion_bedrock_claude_2_1_completion_auth()
+# test_completion_bedrock_claude_2_1_completion_auth()
 
 
 def test_completion_bedrock_claude_external_client_auth():
@@ -117,6 +117,8 @@ def test_completion_bedrock_claude_external_client_auth():
 
     try:
         import boto3
+
+        litellm.set_verbose = True
 
         bedrock = boto3.client(
             service_name="bedrock-runtime",
@@ -145,4 +147,56 @@ def test_completion_bedrock_claude_external_client_auth():
         pytest.fail(f"Error occurred: {e}")
 
 
-test_completion_bedrock_claude_external_client_auth()
+# test_completion_bedrock_claude_external_client_auth()
+
+
+def test_provisioned_throughput():
+    try:
+        litellm.set_verbose = True
+        import botocore, json, io
+        import botocore.session
+        from botocore.stub import Stubber
+
+        bedrock_client = botocore.session.get_session().create_client(
+            "bedrock-runtime", region_name="us-east-1"
+        )
+
+        expected_params = {
+            "accept": "application/json",
+            "body": '{"prompt": "\\n\\nHuman: Hello, how are you?\\n\\nAssistant: ", '
+            '"max_tokens_to_sample": 256}',
+            "contentType": "application/json",
+            "modelId": "provisioned-model-arn",
+        }
+        response_from_bedrock = {
+            "body": io.StringIO(
+                json.dumps(
+                    {
+                        "completion": " Here is a short poem about the sky:",
+                        "stop_reason": "max_tokens",
+                        "stop": None,
+                    }
+                )
+            ),
+            "contentType": "contentType",
+            "ResponseMetadata": {"HTTPStatusCode": 200},
+        }
+
+        with Stubber(bedrock_client) as stubber:
+            stubber.add_response(
+                "invoke_model",
+                service_response=response_from_bedrock,
+                expected_params=expected_params,
+            )
+            response = litellm.completion(
+                model="bedrock/anthropic.claude-instant-v1",
+                model_id="provisioned-model-arn",
+                messages=[{"content": "Hello, how are you?", "role": "user"}],
+                aws_bedrock_client=bedrock_client,
+            )
+            print("response stubbed", response)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+# test_provisioned_throughput()
