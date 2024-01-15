@@ -113,7 +113,9 @@ app = FastAPI(
 )
 
 
-class OpenAIException(Exception):
+class ProxyException(Exception):
+    # NOTE: DO NOT MODIFY THIS
+    # This is used to map exactly to OPENAI Exceptions
     def __init__(
         self,
         message: str,
@@ -127,8 +129,9 @@ class OpenAIException(Exception):
         self.code = code
 
 
-@app.exception_handler(OpenAIException)
-async def openai_exception_handler(request: Request, exc: OpenAIException):
+@app.exception_handler(ProxyException)
+async def openai_exception_handler(request: Request, exc: ProxyException):
+    # NOTE: DO NOT MODIFY THIS, its crucial to map to Openai exceptions
     return JSONResponse(
         status_code=int(exc.code)
         if exc.code
@@ -1461,11 +1464,12 @@ async def completion(
         traceback.print_exc()
         error_traceback = traceback.format_exc()
         error_msg = f"{str(e)}\n\n{error_traceback}"
-        try:
-            status = e.status_code  # type: ignore
-        except:
-            status = 500
-        raise HTTPException(status_code=status, detail=error_msg)
+        raise ProxyException(
+            message=getattr(e, "message", error_msg),
+            type=getattr(e, "type", "None"),
+            param=getattr(e, "param", "None"),
+            code=getattr(e, "status_code", 500),
+        )
 
 
 @router.post(
@@ -1650,7 +1654,7 @@ async def chat_completion(
             error_traceback = traceback.format_exc()
             error_msg = f"{str(e)}\n\n{error_traceback}"
 
-        raise OpenAIException(
+        raise ProxyException(
             message=getattr(e, "message", error_msg),
             type=getattr(e, "type", "None"),
             param=getattr(e, "param", "None"),
@@ -1791,11 +1795,12 @@ async def embeddings(
         else:
             error_traceback = traceback.format_exc()
             error_msg = f"{str(e)}\n\n{error_traceback}"
-            try:
-                status = e.status_code  # type: ignore
-            except:
-                status = 500
-            raise HTTPException(status_code=status, detail=error_msg)
+            raise ProxyException(
+                message=getattr(e, "message", error_msg),
+                type=getattr(e, "type", "None"),
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", 500),
+            )
 
 
 @router.post(
@@ -1905,11 +1910,12 @@ async def image_generation(
         else:
             error_traceback = traceback.format_exc()
             error_msg = f"{str(e)}\n\n{error_traceback}"
-            try:
-                status = e.status_code  # type: ignore
-            except:
-                status = 500
-            raise HTTPException(status_code=status, detail=error_msg)
+            raise ProxyException(
+                message=getattr(e, "message", error_msg),
+                type=getattr(e, "type", "None"),
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", 500),
+            )
 
 
 #### KEY MANAGEMENT ####
