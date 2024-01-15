@@ -5973,7 +5973,6 @@ def exception_type(
                 elif (
                     "Input validation error: `best_of` must be > 0 and <= 2"
                     in error_str
-                    or "instance type with more CPU capacity or memory" in error_str
                 ):
                     exception_mapping_worked = True
                     raise BadRequestError(
@@ -5982,7 +5981,10 @@ def exception_type(
                         llm_provider="sagemaker",
                         response=original_exception.response,
                     )
-                elif "`inputs` tokens + `max_new_tokens` must be <=" in error_str:
+                elif (
+                    "`inputs` tokens + `max_new_tokens` must be <=" in error_str
+                    or "instance type with more CPU capacity or memory" in error_str
+                ):
                     exception_mapping_worked = True
                     raise ContextWindowExceededError(
                         message=f"SagemakerException - {error_str}",
