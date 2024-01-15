@@ -1,3 +1,9 @@
+import json
+from aiodynamo.client import Client
+from aiodynamo.credentials import Credentials, StaticCredentials
+from aiodynamo.http.httpx import HTTPX
+from aiodynamo.models import Throughput, KeySchema, KeySpec, KeyType, PayPerRequest
+from yarl import URL
 from litellm.proxy.db.base_client import CustomDB
 from litellm.proxy._types import (
     DynamoDBArgs,
@@ -7,33 +13,18 @@ from litellm.proxy._types import (
 )
 from litellm import get_secret
 from typing import Any, List, Literal, Optional, Union
-import json
+from aiodynamo.expressions import UpdateExpression, F, Value
+from aiodynamo.models import ReturnValues
+from aiodynamo.http.aiohttp import AIOHTTP
+from aiohttp import ClientSession
 from datetime import datetime
 from litellm._logging import verbose_proxy_logger
 
 
 class DynamoDBWrapper(CustomDB):
-    from aiodynamo.credentials import Credentials, StaticCredentials
-
     credentials: Credentials
 
     def __init__(self, database_arguments: DynamoDBArgs):
-        from aiodynamo.client import Client
-        from aiodynamo.credentials import Credentials, StaticCredentials
-        from aiodynamo.http.httpx import HTTPX
-        from aiodynamo.models import (
-            Throughput,
-            KeySchema,
-            KeySpec,
-            KeyType,
-            PayPerRequest,
-        )
-        from yarl import URL
-        from aiodynamo.expressions import UpdateExpression, F, Value
-        from aiodynamo.models import ReturnValues
-        from aiodynamo.http.aiohttp import AIOHTTP
-        from aiohttp import ClientSession
-
         self.throughput_type = None
         if database_arguments.billing_mode == "PAY_PER_REQUEST":
             self.throughput_type = PayPerRequest()
@@ -56,22 +47,6 @@ class DynamoDBWrapper(CustomDB):
         """
         Connect to DB, and creating / updating any tables
         """
-        from aiodynamo.client import Client
-        from aiodynamo.credentials import Credentials, StaticCredentials
-        from aiodynamo.http.httpx import HTTPX
-        from aiodynamo.models import (
-            Throughput,
-            KeySchema,
-            KeySpec,
-            KeyType,
-            PayPerRequest,
-        )
-        from yarl import URL
-        from aiodynamo.expressions import UpdateExpression, F, Value
-        from aiodynamo.models import ReturnValues
-        from aiodynamo.http.aiohttp import AIOHTTP
-        from aiohttp import ClientSession
-
         verbose_proxy_logger.debug("DynamoDB Wrapper - Attempting to connect")
         async with ClientSession() as session:
             client = Client(AIOHTTP(session), Credentials.auto(), self.region_name)
@@ -130,22 +105,6 @@ class DynamoDBWrapper(CustomDB):
     async def insert_data(
         self, value: Any, table_name: Literal["user", "key", "config"]
     ):
-        from aiodynamo.client import Client
-        from aiodynamo.credentials import Credentials, StaticCredentials
-        from aiodynamo.http.httpx import HTTPX
-        from aiodynamo.models import (
-            Throughput,
-            KeySchema,
-            KeySpec,
-            KeyType,
-            PayPerRequest,
-        )
-        from yarl import URL
-        from aiodynamo.expressions import UpdateExpression, F, Value
-        from aiodynamo.models import ReturnValues
-        from aiodynamo.http.aiohttp import AIOHTTP
-        from aiohttp import ClientSession
-
         async with ClientSession() as session:
             client = Client(AIOHTTP(session), Credentials.auto(), self.region_name)
             table = None
@@ -163,22 +122,6 @@ class DynamoDBWrapper(CustomDB):
             await table.put_item(item=value)
 
     async def get_data(self, key: str, table_name: Literal["user", "key", "config"]):
-        from aiodynamo.client import Client
-        from aiodynamo.credentials import Credentials, StaticCredentials
-        from aiodynamo.http.httpx import HTTPX
-        from aiodynamo.models import (
-            Throughput,
-            KeySchema,
-            KeySpec,
-            KeyType,
-            PayPerRequest,
-        )
-        from yarl import URL
-        from aiodynamo.expressions import UpdateExpression, F, Value
-        from aiodynamo.models import ReturnValues
-        from aiodynamo.http.aiohttp import AIOHTTP
-        from aiohttp import ClientSession
-
         async with ClientSession() as session:
             client = Client(AIOHTTP(session), Credentials.auto(), self.region_name)
             table = None
@@ -217,22 +160,6 @@ class DynamoDBWrapper(CustomDB):
     async def update_data(
         self, key: str, value: dict, table_name: Literal["user", "key", "config"]
     ):
-        from aiodynamo.client import Client
-        from aiodynamo.credentials import Credentials, StaticCredentials
-        from aiodynamo.http.httpx import HTTPX
-        from aiodynamo.models import (
-            Throughput,
-            KeySchema,
-            KeySpec,
-            KeyType,
-            PayPerRequest,
-        )
-        from yarl import URL
-        from aiodynamo.expressions import UpdateExpression, F, Value
-        from aiodynamo.models import ReturnValues
-        from aiodynamo.http.aiohttp import AIOHTTP
-        from aiohttp import ClientSession
-
         async with ClientSession() as session:
             client = Client(AIOHTTP(session), Credentials.auto(), self.region_name)
             table = None
