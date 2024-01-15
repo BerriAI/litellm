@@ -267,6 +267,9 @@ general_settings:
   database_args: { # 👈  all args - https://github.com/BerriAI/litellm/blob/befbcbb7ac8f59835ce47415c128decf37aac328/litellm/proxy/_types.py#L190
     "billing_mode": "PAY_PER_REQUEST", 
     "region_name": "us-west-2" 
+    "user_table_name": "your-user-table",
+    "key_table_name": "your-token-table",
+    "config_table_name": "your-config-table"
   }
 ```
 
