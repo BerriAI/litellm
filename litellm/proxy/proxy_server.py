@@ -94,7 +94,12 @@ from fastapi import (
 from fastapi.routing import APIRouter
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import StreamingResponse, FileResponse, ORJSONResponse
+from fastapi.responses import (
+    StreamingResponse,
+    FileResponse,
+    ORJSONResponse,
+    JSONResponse,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security.api_key import APIKeyHeader
 import json
@@ -106,6 +111,42 @@ app = FastAPI(
     title="LiteLLM API",
     description="Proxy Server to call 100+ LLMs in the OpenAI format\n\nAdmin Panel on [https://dashboard.litellm.ai/admin](https://dashboard.litellm.ai/admin)",
 )
+
+
+class ProxyException(Exception):
+    # NOTE: DO NOT MODIFY THIS
+    # This is used to map exactly to OPENAI Exceptions
+    def __init__(
+        self,
+        message: str,
+        type: str,
+        param: Optional[str],
+        code: Optional[int],
+    ):
+        self.message = message
+        self.type = type
+        self.param = param
+        self.code = code
+
+
+@app.exception_handler(ProxyException)
+async def openai_exception_handler(request: Request, exc: ProxyException):
+    # NOTE: DO NOT MODIFY THIS, its crucial to map to Openai exceptions
+    return JSONResponse(
+        status_code=int(exc.code)
+        if exc.code
+        else status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={
+            "error": {
+                "message": exc.message,
+                "type": exc.type,
+                "param": exc.param,
+                "code": exc.code,
+            }
+        },
+    )
+
+
 router = APIRouter()
 origins = ["*"]
 
@@ -1423,11 +1464,12 @@ async def completion(
         traceback.print_exc()
         error_traceback = traceback.format_exc()
         error_msg = f"{str(e)}\n\n{error_traceback}"
-        try:
-            status = e.status_code  # type: ignore
-        except:
-            status = 500
-        raise HTTPException(status_code=status, detail=error_msg)
+        raise ProxyException(
+            message=getattr(e, "message", error_msg),
+            type=getattr(e, "type", "None"),
+            param=getattr(e, "param", "None"),
+            code=getattr(e, "status_code", 500),
+        )
 
 
 @router.post(
@@ -1611,11 +1653,13 @@ async def chat_completion(
         else:
             error_traceback = traceback.format_exc()
             error_msg = f"{str(e)}\n\n{error_traceback}"
-            try:
-                status = e.status_code  # type: ignore
-            except:
-                status = 500
-            raise HTTPException(status_code=status, detail=error_msg)
+
+        raise ProxyException(
+            message=getattr(e, "message", error_msg),
+            type=getattr(e, "type", "None"),
+            param=getattr(e, "param", "None"),
+            code=getattr(e, "status_code", 500),
+        )
 
 
 @router.post(
@@ -1751,11 +1795,12 @@ async def embeddings(
         else:
             error_traceback = traceback.format_exc()
             error_msg = f"{str(e)}\n\n{error_traceback}"
-            try:
-                status = e.status_code  # type: ignore
-            except:
-                status = 500
-            raise HTTPException(status_code=status, detail=error_msg)
+            raise ProxyException(
+                message=getattr(e, "message", error_msg),
+                type=getattr(e, "type", "None"),
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", 500),
+            )
 
 
 @router.post(
@@ -1865,11 +1910,12 @@ async def image_generation(
         else:
             error_traceback = traceback.format_exc()
             error_msg = f"{str(e)}\n\n{error_traceback}"
-            try:
-                status = e.status_code  # type: ignore
-            except:
-                status = 500
-            raise HTTPException(status_code=status, detail=error_msg)
+            raise ProxyException(
+                message=getattr(e, "message", error_msg),
+                type=getattr(e, "type", "None"),
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", 500),
+            )
 
 
 #### KEY MANAGEMENT ####
