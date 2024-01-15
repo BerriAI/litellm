@@ -9,6 +9,7 @@ from litellm import get_secret
 from typing import Any, List, Literal, Optional, Union
 import json
 from datetime import datetime
+from litellm._logging import verbose_proxy_logger
 
 
 class DynamoDBWrapper(CustomDB):
@@ -71,13 +72,19 @@ class DynamoDBWrapper(CustomDB):
         from aiodynamo.http.aiohttp import AIOHTTP
         from aiohttp import ClientSession
 
+        verbose_proxy_logger.debug("DynamoDB Wrapper - Attempting to connect")
         async with ClientSession() as session:
             client = Client(AIOHTTP(session), Credentials.auto(), self.region_name)
             ## User
             try:
                 error_occurred = False
+                verbose_proxy_logger.debug("DynamoDB Wrapper - Creating User Table")
                 table = client.table(self.database_arguments.user_table_name)
+                verbose_proxy_logger.debug(f"DynamoDB Wrapper - Created Table, {table}")
                 if not await table.exists():
+                    verbose_proxy_logger.debug(
+                        f"DynamoDB Wrapper - {table} does not exist"
+                    )
                     await table.create(
                         self.throughput_type,
                         KeySchema(hash_key=KeySpec("user_id", KeyType.string)),
@@ -118,6 +125,7 @@ class DynamoDBWrapper(CustomDB):
                 raise Exception(
                     f"Failed to create table - {self.database_arguments.config_table_name}.\nPlease create a new table called {self.database_arguments.config_table_name}\nAND set `hash_key` as 'param_name'"
                 )
+            verbose_proxy_logger.debug("DynamoDB Wrapper - Done connecting()")
 
     async def insert_data(
         self, value: Any, table_name: Literal["user", "key", "config"]

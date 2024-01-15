@@ -1281,7 +1281,9 @@ async def startup_event():
     if prisma_client is not None:
         await prisma_client.connect()
 
+    verbose_proxy_logger.debug(f"custom_db_client client - {custom_db_client}")
     if custom_db_client is not None:
+        verbose_proxy_logger.debug(f"custom_db_client connecting - {custom_db_client}")
         await custom_db_client.connect()
 
     if prisma_client is not None and master_key is not None:
@@ -1289,7 +1291,9 @@ async def startup_event():
         await generate_key_helper_fn(
             duration=None, models=[], aliases={}, config={}, spend=0, token=master_key
         )
-
+    verbose_proxy_logger.debug(
+        f"custom_db_client client - Inserting master key {custom_db_client}. Master_key: {master_key}"
+    )
     if custom_db_client is not None and master_key is not None:
         # add master key to db
         await generate_key_helper_fn(
