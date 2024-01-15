@@ -5980,6 +5980,14 @@ def exception_type(
                         llm_provider="sagemaker",
                         response=original_exception.response,
                     )
+                elif "`inputs` tokens + `max_new_tokens` must be <=" in error_str:
+                    exception_mapping_worked = True
+                    raise ContextWindowExceededError(
+                        message=f"SagemakerException - {error_str}",
+                        model=model,
+                        llm_provider="sagemaker",
+                        response=original_exception.response,
+                    )
             elif custom_llm_provider == "vertex_ai":
                 if (
                     "Vertex AI API has not been used in project" in error_str
