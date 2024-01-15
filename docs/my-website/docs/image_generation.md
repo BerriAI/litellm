@@ -57,7 +57,7 @@ print(f"response: {response}")
 
 - `api_type`: *string (optional)* - The type of API to use.
 
-### Output from `litellm.embedding()`
+### Output from `litellm.image_generation()`
 
 ```json
 
@@ -85,7 +85,7 @@ response = image_generation(model='dall-e-2', prompt="cute baby otter")
 | Model Name           | Function Call                               | Required OS Variables                |
 |----------------------|---------------------------------------------|--------------------------------------|
 | dall-e-2 | `image_generation(model='dall-e-2', prompt="cute baby otter")` | `os.environ['OPENAI_API_KEY']`       |
-| dall-e-3 | `image_generation(model='dall-e-2', prompt="cute baby otter")` | `os.environ['OPENAI_API_KEY']`       |
+| dall-e-3 | `image_generation(model='dall-e-3', prompt="cute baby otter")` | `os.environ['OPENAI_API_KEY']`       |
 
 ## Azure OpenAI Image Generation Models
 
