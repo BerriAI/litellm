@@ -355,8 +355,17 @@ async def user_api_key_auth(
 
             # Check 3. If token is expired
             if valid_token.expires is not None:
+                current_time = datetime.now(timezone.utc)
                 expiry_time = datetime.fromisoformat(valid_token.expires)
-                if expiry_time < datetime.utcnow():
+                if (
+                    expiry_time.tzinfo is None
+                    or expiry_time.tzinfo.utcoffset(expiry_time) is None
+                ):
+                    expiry_time = expiry_time.replace(tzinfo=timezone.utc)
+                verbose_proxy_logger.debug(
+                    f"Checking if token expired, expiry time {expiry_time} and current time {current_time}"
+                )
+                if expiry_time < current_time:
                     # Token exists but is expired.
                     raise HTTPException(
                         status_code=status.HTTP_403_FORBIDDEN,
