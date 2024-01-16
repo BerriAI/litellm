@@ -76,6 +76,7 @@ def test_post_call_rule():
         print("Got exception", e)
         print(type(e))
         print(vars(e))
+        assert e.message == "This violates LiteLLM Proxy Rules. Response too short"
         pass
     # print(f"MAKING ACOMPLETION CALL")
     # litellm.set_verbose = True
