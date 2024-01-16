@@ -184,7 +184,15 @@ def completion(
             CustomAttributes="accept_eula=true",
         )
     except Exception as e:
-        raise SagemakerError(status_code=500, message=f"{str(e)}")
+        status_code = (
+            getattr(e, "response", {})
+            .get("ResponseMetadata", {})
+            .get("HTTPStatusCode", 500)
+        )
+        error_message = (
+            getattr(e, "response", {}).get("Error", {}).get("Message", str(e))
+        )
+        raise SagemakerError(status_code=status_code, message=error_message)
 
     response = response["Body"].read().decode("utf8")
     ## LOGGING
@@ -358,7 +366,15 @@ def embedding(
             CustomAttributes="accept_eula=true",
         )
     except Exception as e:
-        raise SagemakerError(status_code=500, message=f"{str(e)}")
+        status_code = (
+            getattr(e, "response", {})
+            .get("ResponseMetadata", {})
+            .get("HTTPStatusCode", 500)
+        )
+        error_message = (
+            getattr(e, "response", {}).get("Error", {}).get("Message", str(e))
+        )
+        raise SagemakerError(status_code=status_code, message=error_message)
 
     response = json.loads(response["Body"].read().decode("utf8"))
     ## LOGGING
@@ -368,7 +384,7 @@ def embedding(
         original_response=response,
         additional_args={"complete_input_dict": data},
     )
-    
+
     print_verbose(f"raw model_response: {response}")
     if "embedding" not in response:
         raise SagemakerError(status_code=500, message="embedding not found in response")
