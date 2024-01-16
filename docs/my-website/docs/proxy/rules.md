@@ -43,3 +43,19 @@ curl --location 'http://0.0.0.0:8000/v1/chat/completions' \
 ---
 
 This will now check if a response is > len 5, and if it fails, it'll retry a call 3 times before failing.
+
+### Response that fail the rule
+
+This is the response from LiteLLM Proxy on failing a rule
+
+```json
+{
+  "error":
+    {
+      "message":"This violates LiteLLM Proxy Rules. Response too short",
+      "type":null,
+      "param":null,
+      "code":500
+    }
+}   
+```
