@@ -360,8 +360,11 @@ ollama_models = ["llama2"]
 
 maritalk_models = ["maritalk"]
 
+heurist_models = ["mistralai/mixtral-8x7b-instruct-v0.1"]
+
 model_list = (
-    open_ai_chat_completion_models
+    heurist_models
+    + open_ai_chat_completion_models
     + open_ai_text_completion_models
     + cohere_models
     + anthropic_models
@@ -383,6 +386,7 @@ model_list = (
 )
 
 provider_list: List = [
+    "heurist",
     "openai",
     "custom_openai",
     "text-completion-openai",
@@ -418,6 +422,7 @@ provider_list: List = [
 ]
 
 models_by_provider: dict = {
+    "heurist": heurist_models,
     "openai": open_ai_chat_completion_models + open_ai_text_completion_models,
     "cohere": cohere_models,
     "anthropic": anthropic_models,

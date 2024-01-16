@@ -293,6 +293,7 @@ def run_server(
                 }
             ],
             max_tokens=256,
+            custom_llm_provider="heurist"
         )
         click.echo(f"\nLiteLLM: response from proxy {response}")
 
@@ -309,12 +310,14 @@ def run_server(
                 }
             ],
             stream=True,
+            custom_llm_provider="heurist"
         )
         for chunk in response:
             click.echo(f"LiteLLM: streaming response from proxy {chunk}")
         print("\n making completion request to proxy")
         response = client.completions.create(
-            model=request_model, prompt="this is a test request, write a short poem"
+            model=request_model, prompt="this is a test request, write a short poem",
+            custom_llm_provider="heurist"
         )
         print(response)
 

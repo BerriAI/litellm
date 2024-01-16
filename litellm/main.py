@@ -38,6 +38,7 @@ from litellm.utils import (
     get_optional_params_image_gen,
 )
 from .llms import (
+    heurist,
     anthropic,
     together_ai,
     ai21,
@@ -674,7 +675,39 @@ def completion(
             optional_params=optional_params,
             litellm_params=litellm_params,
         )
-        if custom_llm_provider == "azure":
+        if (
+            "heurist" in model
+            or custom_llm_provider == "heurist"
+            or model in litellm.heurist_models
+        ):
+            model_response = heurist.completion(
+                model=model,
+                messages=messages,
+                api_base=api_base,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                encoding=encoding,
+                api_key=api_key,
+                logging_obj=logging,
+                custom_prompt_dict=custom_prompt_dict,
+            )
+            if "stream" in optional_params and optional_params["stream"] == True:
+                # don't try to access stream object,
+                model_response = CustomStreamWrapper(model_response, model, logging_obj=logging, custom_llm_provider="heurist") 
+
+            if optional_params.get("stream", False) or acompletion == True:
+                ## LOGGING
+                logging.post_call(
+                    input=messages,
+                    api_key=api_key,
+                    original_response=model_response,
+                )
+
+            response = model_response
+        elif custom_llm_provider == "azure":
             # azure configs
             api_type = get_secret("AZURE_API_TYPE") or "azure"
 

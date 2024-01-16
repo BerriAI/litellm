@@ -604,7 +604,9 @@ def prompt_factory(
         else:
             return gemini_text_image_pt(messages=messages)
     try:
-        if "meta-llama/llama-2" in model and "chat" in model:
+        if "mistral" in model and "instruct" in model:
+            return mistral_instruct_pt(messages=messages)
+        elif "meta-llama/llama-2" in model and "chat" in model:
             return llama_2_chat_pt(messages=messages)
         elif (
             "tiiuae/falcon" in model

@@ -4067,165 +4067,7 @@ def get_llm_provider(
     api_base: Optional[str] = None,
     api_key: Optional[str] = None,
 ):
-    try:
-        dynamic_api_key = None
-        # check if llm provider provided
-
-        if custom_llm_provider:
-            return model, custom_llm_provider, dynamic_api_key, api_base
-
-        if api_key and api_key.startswith("os.environ/"):
-            dynamic_api_key = get_secret(api_key)
-        # check if llm provider part of model name
-        if (
-            model.split("/", 1)[0] in litellm.provider_list
-            and model.split("/", 1)[0] not in litellm.model_list
-            and len(model.split("/"))
-            > 1  # handle edge case where user passes in `litellm --model mistral` https://github.com/BerriAI/litellm/issues/1351
-        ):
-            custom_llm_provider = model.split("/", 1)[0]
-            model = model.split("/", 1)[1]
-            if custom_llm_provider == "perplexity":
-                # perplexity is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.perplexity.ai
-                api_base = "https://api.perplexity.ai"
-                dynamic_api_key = get_secret("PERPLEXITYAI_API_KEY")
-            elif custom_llm_provider == "anyscale":
-                # anyscale is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
-                api_base = "https://api.endpoints.anyscale.com/v1"
-                dynamic_api_key = get_secret("ANYSCALE_API_KEY")
-            elif custom_llm_provider == "deepinfra":
-                # deepinfra is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
-                api_base = "https://api.deepinfra.com/v1/openai"
-                dynamic_api_key = get_secret("DEEPINFRA_API_KEY")
-            elif custom_llm_provider == "mistral":
-                # mistral is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.mistral.ai
-                api_base = "https://api.mistral.ai/v1"
-                dynamic_api_key = get_secret("MISTRAL_API_KEY")
-            elif custom_llm_provider == "voyage":
-                # voyage is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.voyageai.com/v1
-                api_base = "https://api.voyageai.com/v1"
-                dynamic_api_key = get_secret("VOYAGE_API_KEY")
-            return model, custom_llm_provider, dynamic_api_key, api_base
-        elif model.split("/", 1)[0] in litellm.provider_list:
-            custom_llm_provider = model.split("/", 1)[0]
-            model = model.split("/", 1)[1]
-            return model, custom_llm_provider, dynamic_api_key, api_base
-        # check if api base is a known openai compatible endpoint
-        if api_base:
-            for endpoint in litellm.openai_compatible_endpoints:
-                if endpoint in api_base:
-                    if endpoint == "api.perplexity.ai":
-                        custom_llm_provider = "perplexity"
-                        dynamic_api_key = get_secret("PERPLEXITYAI_API_KEY")
-                    elif endpoint == "api.endpoints.anyscale.com/v1":
-                        custom_llm_provider = "anyscale"
-                        dynamic_api_key = get_secret("ANYSCALE_API_KEY")
-                    elif endpoint == "api.deepinfra.com/v1/openai":
-                        custom_llm_provider = "deepinfra"
-                        dynamic_api_key = get_secret("DEEPINFRA_API_KEY")
-                    elif endpoint == "api.mistral.ai/v1":
-                        custom_llm_provider = "mistral"
-                        dynamic_api_key = get_secret("MISTRAL_API_KEY")
-                    return model, custom_llm_provider, dynamic_api_key, api_base
-
-        # check if model in known model provider list  -> for huggingface models, raise exception as they don't have a fixed provider (can be togetherai, anyscale, baseten, runpod, et.)
-        ## openai - chatcompletion + text completion
-        if (
-            model in litellm.open_ai_chat_completion_models
-            or "ft:gpt-3.5-turbo" in model
-            or model in litellm.openai_image_generation_models
-        ):
-            custom_llm_provider = "openai"
-        elif model in litellm.open_ai_text_completion_models:
-            custom_llm_provider = "text-completion-openai"
-        ## anthropic
-        elif model in litellm.anthropic_models:
-            custom_llm_provider = "anthropic"
-        ## cohere
-        elif model in litellm.cohere_models or model in litellm.cohere_embedding_models:
-            custom_llm_provider = "cohere"
-        ## replicate
-        elif model in litellm.replicate_models or (":" in model and len(model) > 64):
-            model_parts = model.split(":")
-            if (
-                len(model_parts) > 1 and len(model_parts[1]) == 64
-            ):  ## checks if model name has a 64 digit code - e.g. "meta/llama-2-70b-chat:02e509c789964a7ea8736978a43525956ef40397be9033abf9fd2badfe68c9e3"
-                custom_llm_provider = "replicate"
-            elif model in litellm.replicate_models:
-                custom_llm_provider = "replicate"
-        ## openrouter
-        elif model in litellm.openrouter_models:
-            custom_llm_provider = "openrouter"
-        ## openrouter
-        elif model in litellm.maritalk_models:
-            custom_llm_provider = "maritalk"
-        ## vertex - text + chat + language (gemini) models
-        elif (
-            model in litellm.vertex_chat_models
-            or model in litellm.vertex_code_chat_models
-            or model in litellm.vertex_text_models
-            or model in litellm.vertex_code_text_models
-            or model in litellm.vertex_language_models
-        ):
-            custom_llm_provider = "vertex_ai"
-        ## ai21
-        elif model in litellm.ai21_models:
-            custom_llm_provider = "ai21"
-        ## aleph_alpha
-        elif model in litellm.aleph_alpha_models:
-            custom_llm_provider = "aleph_alpha"
-        ## baseten
-        elif model in litellm.baseten_models:
-            custom_llm_provider = "baseten"
-        ## nlp_cloud
-        elif model in litellm.nlp_cloud_models:
-            custom_llm_provider = "nlp_cloud"
-        ## petals
-        elif model in litellm.petals_models:
-            custom_llm_provider = "petals"
-        ## bedrock
-        elif (
-            model in litellm.bedrock_models or model in litellm.bedrock_embedding_models
-        ):
-            custom_llm_provider = "bedrock"
-        # openai embeddings
-        elif model in litellm.open_ai_embedding_models:
-            custom_llm_provider = "openai"
-        if custom_llm_provider is None or custom_llm_provider == "":
-            if litellm.suppress_debug_info == False:
-                print()  # noqa
-                print(  # noqa
-                    "\033[1;31mProvider List: https://docs.litellm.ai/docs/providers\033[0m"  # noqa
-                )  # noqa
-                print()  # noqa
-            error_str = f"LLM Provider NOT provided. Pass in the LLM provider you are trying to call. You passed model={model}\n Pass model as E.g. For 'Huggingface' inference endpoints pass in `completion(model='huggingface/starcoder',..)` Learn more: https://docs.litellm.ai/docs/providers"
-            # maps to openai.NotFoundError, this is raised when openai does not recognize the llm
-            raise litellm.exceptions.BadRequestError(  # type: ignore
-                message=error_str,
-                model=model,
-                response=httpx.Response(
-                    status_code=400,
-                    content=error_str,
-                    request=httpx.Request(method="completion", url="https://github.com/BerriAI/litellm"),  # type: ignore
-                ),
-                llm_provider="",
-            )
-        return model, custom_llm_provider, dynamic_api_key, api_base
-    except Exception as e:
-        if isinstance(e, litellm.exceptions.BadRequestError):
-            raise e
-        else:
-            raise litellm.exceptions.BadRequestError(  # type: ignore
-                message=f"GetLLMProvider Exception - {str(e)}\n\noriginal model: {model}",
-                model=model,
-                response=httpx.Response(
-                    status_code=400,
-                    content=error_str,
-                    request=httpx.Request(method="completion", url="https://github.com/BerriAI/litellm"),  # type: ignore
-                ),
-                llm_provider="",
-            )
-
+    return model, custom_llm_provider, api_key, api_base
 
 def get_api_key(llm_provider: str, dynamic_api_key: Optional[str]):
     api_key = dynamic_api_key or litellm.api_key
@@ -6934,32 +6776,7 @@ class CustomStreamWrapper:
             raise e
 
     def check_special_tokens(self, chunk: str, finish_reason: Optional[str]):
-        hold = False
-        if finish_reason:
-            for token in self.special_tokens:
-                if token in chunk:
-                    chunk = chunk.replace(token, "")
-            return hold, chunk
-
-        if self.sent_first_chunk is True:
-            return hold, chunk
-
-        curr_chunk = self.holding_chunk + chunk
-        curr_chunk = curr_chunk.strip()
-
-        for token in self.special_tokens:
-            if len(curr_chunk) < len(token) and curr_chunk in token:
-                hold = True
-            elif len(curr_chunk) >= len(token):
-                if token in curr_chunk:
-                    self.holding_chunk = curr_chunk.replace(token, "")
-                    hold = True
-            else:
-                pass
-
-        if hold is False:  # reset
-            self.holding_chunk = ""
-        return hold, curr_chunk
+        return False, chunk
 
     def handle_anthropic_chunk(self, chunk):
         str_line = chunk.decode("utf-8")  # Convert bytes to string
@@ -7205,6 +7022,24 @@ class CustomStreamWrapper:
                     finish_reason = "stop"
             elif chunk.get("error", None):
                 raise Exception(chunk["error"])
+            return {
+                "text": text,
+                "is_finished": is_finished,
+                "finish_reason": finish_reason,
+            }
+        except:
+            raise ValueError(f"Unable to parse response. Original response: {chunk}")  
+    
+    def handle_heurist_chunk(self, chunk):
+        try:
+            text = chunk
+            is_finished = False
+            finish_reason = ""
+            if "[DONE]" in chunk:
+                text = chunk.replace("[DONE]", "")
+                is_finished = True
+                finish_reason = "stop"
+
             return {
                 "text": text,
                 "is_finished": is_finished,
@@ -7489,216 +7324,24 @@ class CustomStreamWrapper:
         model_response.choices[0].finish_reason = None
         response_obj = {}
         try:
-            # return this for all models
             completion_obj = {"content": ""}
-            if self.custom_llm_provider and self.custom_llm_provider == "anthropic":
-                response_obj = self.handle_anthropic_chunk(chunk)
+            if self.custom_llm_provider and self.custom_llm_provider == "heurist":
+                response_obj = self.handle_heurist_chunk(chunk)
                 completion_obj["content"] = response_obj["text"]
+                print_verbose(f"completion_obj content: [{completion_obj['content']}]")
                 if response_obj["is_finished"]:
                     model_response.choices[0].finish_reason = response_obj[
                         "finish_reason"
                     ]
-            elif self.model == "replicate" or self.custom_llm_provider == "replicate":
-                response_obj = self.handle_replicate_chunk(chunk)
-                completion_obj["content"] = response_obj["text"]
-                if response_obj["is_finished"]:
-                    model_response.choices[0].finish_reason = response_obj[
-                        "finish_reason"
-                    ]
-            elif self.custom_llm_provider and self.custom_llm_provider == "together_ai":
-                response_obj = self.handle_together_ai_chunk(chunk)
-                completion_obj["content"] = response_obj["text"]
-                if response_obj["is_finished"]:
-                    model_response.choices[0].finish_reason = response_obj[
-                        "finish_reason"
-                    ]
-            elif self.custom_llm_provider and self.custom_llm_provider == "huggingface":
-                response_obj = self.handle_huggingface_chunk(chunk)
-                completion_obj["content"] = response_obj["text"]
-                if response_obj["is_finished"]:
-                    model_response.choices[0].finish_reason = response_obj[
-                        "finish_reason"
-                    ]
-            elif (
-                self.custom_llm_provider and self.custom_llm_provider == "baseten"
-            ):  # baseten doesn't provide streaming
-                completion_obj["content"] = self.handle_baseten_chunk(chunk)
-            elif (
-                self.custom_llm_provider and self.custom_llm_provider == "ai21"
-            ):  # ai21 doesn't provide streaming
-                response_obj = self.handle_ai21_chunk(chunk)
-                completion_obj["content"] = response_obj["text"]
-                if response_obj["is_finished"]:
-                    model_response.choices[0].finish_reason = response_obj[
-                        "finish_reason"
-                    ]
-            elif self.custom_llm_provider and self.custom_llm_provider == "maritalk":
-                response_obj = self.handle_maritalk_chunk(chunk)
-                completion_obj["content"] = response_obj["text"]
-                if response_obj["is_finished"]:
-                    model_response.choices[0].finish_reason = response_obj[
-                        "finish_reason"
-                    ]
-            elif self.custom_llm_provider and self.custom_llm_provider == "vllm":
-                completion_obj["content"] = chunk[0].outputs[0].text
-            elif (
-                self.custom_llm_provider and self.custom_llm_provider == "aleph_alpha"
-            ):  # aleph alpha doesn't provide streaming
-                response_obj = self.handle_aleph_alpha_chunk(chunk)
-                completion_obj["content"] = response_obj["text"]
-                if response_obj["is_finished"]:
-                    model_response.choices[0].finish_reason = response_obj[
-                        "finish_reason"
-                    ]
-            elif self.custom_llm_provider == "nlp_cloud":
-                try:
-                    response_obj = self.handle_nlp_cloud_chunk(chunk)
-                    completion_obj["content"] = response_obj["text"]
-                    if response_obj["is_finished"]:
-                        model_response.choices[0].finish_reason = response_obj[
-                            "finish_reason"
-                        ]
-                except Exception as e:
-                    if self.sent_last_chunk:
-                        raise e
-                    else:
-                        if self.sent_first_chunk is False:
-                            raise Exception("An unknown error occurred with the stream")
-                        model_response.choices[0].finish_reason = "stop"
-                        self.sent_last_chunk = True
-            elif self.custom_llm_provider and self.custom_llm_provider == "vertex_ai":
-                try:
-                    # print(chunk)
-                    if hasattr(chunk, "text"):
-                        # vertexAI chunks return
-                        # MultiCandidateTextGenerationResponse(text=' ```python\n# This Python code says "Hi" 100 times.\n\n# Create', _prediction_response=Prediction(predictions=[{'candidates': [{'content': ' ```python\n# This Python code says "Hi" 100 times.\n\n# Create', 'author': '1'}], 'citationMetadata': [{'citations': None}], 'safetyAttributes': [{'blocked': False, 'scores': None, 'categories': None}]}], deployed_model_id='', model_version_id=None, model_resource_name=None, explanations=None), is_blocked=False, safety_attributes={}, candidates=[ ```python
-                        # This Python code says "Hi" 100 times.
-                        # Create])
-                        completion_obj["content"] = chunk.text
-                    else:
-                        completion_obj["content"] = str(chunk)
-                except StopIteration as e:
-                    if self.sent_last_chunk:
-                        raise e
-                    else:
-                        model_response.choices[0].finish_reason = "stop"
-                        self.sent_last_chunk = True
-            elif self.custom_llm_provider == "cohere":
-                response_obj = self.handle_cohere_chunk(chunk)
-                completion_obj["content"] = response_obj["text"]
-                if response_obj["is_finished"]:
-                    model_response.choices[0].finish_reason = response_obj[
-                        "finish_reason"
-                    ]
-            elif self.custom_llm_provider == "bedrock":
-                if self.sent_last_chunk:
-                    raise StopIteration
-                response_obj = self.handle_bedrock_stream(chunk)
-                completion_obj["content"] = response_obj["text"]
-                if response_obj["is_finished"]:
-                    model_response.choices[0].finish_reason = response_obj[
-                        "finish_reason"
-                    ]
-                    self.sent_last_chunk = True
-            elif self.custom_llm_provider == "sagemaker":
-                print_verbose(f"ENTERS SAGEMAKER STREAMING")
-                if len(self.completion_stream) == 0:
-                    if self.sent_last_chunk:
-                        raise StopIteration
-                    else:
-                        model_response.choices[0].finish_reason = "stop"
-                        self.sent_last_chunk = True
-                new_chunk = self.completion_stream
-                print_verbose(f"sagemaker chunk: {new_chunk}")
-                completion_obj["content"] = new_chunk
-                self.completion_stream = self.completion_stream[
-                    len(self.completion_stream) :
-                ]
-            elif self.custom_llm_provider == "petals":
-                if len(self.completion_stream) == 0:
-                    if self.sent_last_chunk:
-                        raise StopIteration
-                    else:
-                        model_response.choices[0].finish_reason = "stop"
-                        self.sent_last_chunk = True
-                chunk_size = 30
-                new_chunk = self.completion_stream[:chunk_size]
-                completion_obj["content"] = new_chunk
-                self.completion_stream = self.completion_stream[chunk_size:]
-                time.sleep(0.05)
-            elif self.custom_llm_provider == "palm":
-                # fake streaming
-                response_obj = {}
-                if len(self.completion_stream) == 0:
-                    if self.sent_last_chunk:
-                        raise StopIteration
-                    else:
-                        model_response.choices[0].finish_reason = "stop"
-                        self.sent_last_chunk = True
-                chunk_size = 30
-                new_chunk = self.completion_stream[:chunk_size]
-                completion_obj["content"] = new_chunk
-                self.completion_stream = self.completion_stream[chunk_size:]
-                time.sleep(0.05)
-            elif self.custom_llm_provider == "ollama":
-                response_obj = self.handle_ollama_stream(chunk)
-                completion_obj["content"] = response_obj["text"]
-                print_verbose(f"completion obj content: {completion_obj['content']}")
-                if response_obj["is_finished"]:
-                    model_response.choices[0].finish_reason = response_obj[
-                        "finish_reason"
-                    ]
-            elif self.custom_llm_provider == "ollama_chat":
-                response_obj = self.handle_ollama_chat_stream(chunk)
-                completion_obj["content"] = response_obj["text"]
-                print_verbose(f"completion obj content: {completion_obj['content']}")
-                if response_obj["is_finished"]:
-                    model_response.choices[0].finish_reason = response_obj[
-                        "finish_reason"
-                    ]
-            elif self.custom_llm_provider == "cloudflare":
-                response_obj = self.handle_cloudlfare_stream(chunk)
-                completion_obj["content"] = response_obj["text"]
-                print_verbose(f"completion obj content: {completion_obj['content']}")
-                if response_obj["is_finished"]:
-                    model_response.choices[0].finish_reason = response_obj[
-                        "finish_reason"
-                    ]
-            elif self.custom_llm_provider == "text-completion-openai":
-                response_obj = self.handle_openai_text_completion_chunk(chunk)
-                completion_obj["content"] = response_obj["text"]
-                print_verbose(f"completion obj content: {completion_obj['content']}")
-                if response_obj["is_finished"]:
-                    model_response.choices[0].finish_reason = response_obj[
-                        "finish_reason"
-                    ]
-            else:  # openai / azure chat model
-                if self.custom_llm_provider == "azure":
-                    if hasattr(chunk, "model"):
-                        # for azure, we need to pass the model from the orignal chunk
-                        self.model = chunk.model
-                response_obj = self.handle_openai_chat_completion_chunk(chunk)
-                if response_obj == None:
-                    return
-                completion_obj["content"] = response_obj["text"]
-                print_verbose(f"completion obj content: {completion_obj['content']}")
-                if response_obj["is_finished"]:
-                    model_response.choices[0].finish_reason = response_obj[
-                        "finish_reason"
-                    ]
-                if response_obj["logprobs"] is not None:
-                    model_response.choices[0].logprobs = response_obj["logprobs"]
 
             model_response.model = self.model
             print_verbose(
                 f"model_response: {model_response}; completion_obj: {completion_obj}"
             )
             print_verbose(
-                f"model_response finish reason 3: {model_response.choices[0].finish_reason}"
+                f"model_response finish reason: {model_response.choices[0].finish_reason}"
             )
-            if (
-                len(completion_obj["content"]) > 0
-            ):  # cannot set content of an OpenAI Object to be an empty string
+            if (len(completion_obj["content"]) > 0):  # cannot set content of an OpenAI Object to be an empty string
                 hold, model_response_str = self.check_special_tokens(
                     chunk=completion_obj["content"],
                     finish_reason=model_response.choices[0].finish_reason,
@@ -7732,7 +7375,7 @@ class CustomStreamWrapper:
                             completion_obj["role"] = "assistant"
                             self.sent_first_chunk = True
                         model_response.choices[0].delta = Delta(**completion_obj)
-                    print_verbose(f"model_response: {model_response}")
+                    print_verbose(f"returning model_response: {model_response}")
                     return model_response
                 else:
                     return
@@ -7832,19 +7475,20 @@ class CustomStreamWrapper:
                 or self.custom_llm_provider == "ollama"
                 or self.custom_llm_provider == "ollama_chat"
                 or self.custom_llm_provider == "vertex_ai"
+                or self.custom_llm_provider == "heurist"
             ):
                 print_verbose(f"INSIDE ASYNC STREAMING!!!")
                 print_verbose(
                     f"value of async completion stream: {self.completion_stream}"
                 )
                 async for chunk in self.completion_stream:
-                    print_verbose(f"value of async chunk: {chunk}")
+                    print_verbose(f"value of async chunk: [{chunk}]")
                     if chunk == "None" or chunk is None:
                         raise Exception
 
                     # chunk_creator() does logging/stream chunk building. We need to let it know its being called in_async_func, so we don't double add chunks.
                     # __anext__ also calls async_success_handler, which does logging
-                    print_verbose(f"PROCESSED ASYNC CHUNK PRE CHUNK CREATOR: {chunk}")
+                    print_verbose(f"PROCESSED ASYNC CHUNK PRE CHUNK CREATOR: [{chunk}]")
                     processed_chunk = self.chunk_creator(chunk=chunk)
                     print_verbose(
                         f"PROCESSED ASYNC CHUNK POST CHUNK CREATOR: {processed_chunk}"
