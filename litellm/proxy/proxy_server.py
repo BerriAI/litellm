@@ -289,11 +289,19 @@ async def user_api_key_auth(
                     token=api_key,
                 )
 
-                expires = datetime.utcnow().replace(tzinfo=timezone.utc)
             elif custom_db_client is not None:
                 valid_token = await custom_db_client.get_data(
                     key=api_key, table_name="key"
                 )
+
+                if valid_token.user_id is not None:
+                    verbose_proxy_logger.debug(
+                        f"valid_token.user_id: {valid_token.user_id}"
+                    )
+                    user_id_data = await custom_db_client.get_data(
+                        key=valid_token.user_id, table_name="user"
+                    )
+                    verbose_proxy_logger.debug(f"user_id_data: {user_id_data}")
             # Token exists, now check expiration.
             if valid_token.expires is not None:
                 expiry_time = datetime.fromisoformat(valid_token.expires)
@@ -303,7 +311,15 @@ async def user_api_key_auth(
                         status_code=status.HTTP_403_FORBIDDEN,
                         detail="expired user key",
                     )
-            verbose_proxy_logger.debug(f"valid token from prisma: {valid_token}")
+            # Token exists, not expired now check if its in budget for the user
+            if valid_token.spend is not None and valid_token.user_id is not None:
+                user_max_budget = user_id_data.max_budget
+                user_current_spend = user_id_data.spend
+                if user_current_spend > user_max_budget:
+                    raise Exception(
+                        f"ExceededBudget: User {valid_token.user_id} has exceeded their budget. Current spend: {user_current_spend}; Max Budget: {user_max_budget}"
+                    )
+            verbose_proxy_logger.debug(f"valid token from db: {valid_token}")
             user_api_key_cache.set_cache(key=api_key, value=valid_token, ttl=60)
         elif valid_token is not None:
             verbose_proxy_logger.debug(f"API Key Cache Hit!")
