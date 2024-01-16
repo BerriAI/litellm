@@ -474,6 +474,10 @@ def run_server(
 
             # before starting server, read num_workers as an env variable
             num_workers = os.getenv("NUM_WORKERS", num_workers)
+
+            print(
+                f"\033[1;32mLiteLLM Proxy: Starting server on {host}:{port} with {num_workers} workers\033[0m\n"
+            )
             gunicorn_options = {
                 "bind": f"{host}:{port}",
                 "workers": num_workers,  # default is 1
