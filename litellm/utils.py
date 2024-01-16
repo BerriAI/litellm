@@ -1761,9 +1761,14 @@ class Rules:
         for rule in litellm.post_call_rules:
             if callable(rule):
                 decision = rule(input)
-                if decision is False:
-                    raise litellm.APIResponseValidationError(message="LLM Response failed post-call-rule check", llm_provider="", model=model)  # type: ignore
-        return True
+                if type(decision) == bool:
+                    if decision is False:
+                        raise litellm.APIResponseValidationError(message="LLM Response failed post-call-rule check", llm_provider="", model=model)  # type: ignore
+                    return True
+                elif type(decision) == dict:
+                    decision, message = decision["decision"], decision["message"]
+                    if decision is False:
+                        raise litellm.APIResponseValidationError(message=message, llm_provider="", model=model)  # type: ignore
 
 
 ####### CLIENT ###################
