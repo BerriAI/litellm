@@ -35,7 +35,10 @@ litellm.num_retries = 0
 
 # Approach: Run each model through the test -> assert if the correct error (always the same one) is triggered
 
-models = ["command-nightly"]
+models = [
+    "sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4",
+    "bedrock/anthropic.claude-instant-v1",
+]
 
 
 # Test 1: Context Window Errors
@@ -45,7 +48,8 @@ def test_context_window(model):
     sample_text = "Say error 50 times" * 1000000
     messages = [{"content": sample_text, "role": "user"}]
     try:
-        litellm.set_verbose = True
+        litellm.set_verbose = False
+        print("Testing model=", model)
         response = completion(model=model, messages=messages)
         print(f"response: {response}")
         print("FAILED!")

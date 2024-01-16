@@ -5895,6 +5895,7 @@ def exception_type(
                     "too many tokens" in error_str
                     or "expected maxLength:" in error_str
                     or "Input is too long" in error_str
+                    or "prompt: length: 1.." in error_str
                     or "Too many input tokens" in error_str
                 ):
                     exception_mapping_worked = True
@@ -5984,6 +5985,17 @@ def exception_type(
                     exception_mapping_worked = True
                     raise BadRequestError(
                         message=f"SagemakerException - the value of 'n' must be > 0 and <= 2 for sagemaker endpoints",
+                        model=model,
+                        llm_provider="sagemaker",
+                        response=original_exception.response,
+                    )
+                elif (
+                    "`inputs` tokens + `max_new_tokens` must be <=" in error_str
+                    or "instance type with more CPU capacity or memory" in error_str
+                ):
+                    exception_mapping_worked = True
+                    raise ContextWindowExceededError(
+                        message=f"SagemakerException - {error_str}",
                         model=model,
                         llm_provider="sagemaker",
                         response=original_exception.response,
