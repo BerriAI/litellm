@@ -297,10 +297,7 @@ async def user_api_key_auth(
             # Token exists, now check expiration.
             if valid_token.expires is not None:
                 expiry_time = datetime.fromisoformat(valid_token.expires)
-                if expiry_time >= datetime.utcnow():
-                    # Token exists and is not expired.
-                    return response
-                else:
+                if expiry_time < datetime.utcnow():
                     # Token exists but is expired.
                     raise HTTPException(
                         status_code=status.HTTP_403_FORBIDDEN,
@@ -332,7 +329,9 @@ async def user_api_key_auth(
                 if model in litellm.model_alias_map:
                     model = litellm.model_alias_map[model]
                 if model and model not in valid_token.models:
-                    raise Exception(f"Token not allowed to access model")
+                    raise ValueError(
+                        f"API Key not allowed to access model. This token can only access models={valid_token.models}. Tried to access {model}"
+                    )
             api_key = valid_token.token
             valid_token_dict = _get_pydantic_json_dict(valid_token)
             valid_token_dict.pop("token", None)
@@ -368,7 +367,7 @@ async def user_api_key_auth(
         else:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="invalid user key",
+                detail=f"Invalid user key, {str(e)}",
             )
 
 
