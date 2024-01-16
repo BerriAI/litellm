@@ -39,9 +39,16 @@ def is_port_in_use(port):
 
 
 @click.command()
-@click.option("--host", default="0.0.0.0", help="Host for the server to listen on.")
-@click.option("--port", default=8000, help="Port to bind the server to.")
-@click.option("--num_workers", default=1, help="Number of gunicorn workers to spin up")
+@click.option(
+    "--host", default="0.0.0.0", help="Host for the server to listen on.", envvar="HOST"
+)
+@click.option("--port", default=8000, help="Port to bind the server to.", envvar="PORT")
+@click.option(
+    "--num_workers",
+    default=1,
+    help="Number of gunicorn workers to spin up",
+    envvar="NUM_WORKERS",
+)
 @click.option("--api_base", default=None, help="API base URL.")
 @click.option(
     "--api_version",
@@ -62,7 +69,12 @@ def is_port_in_use(port):
 @click.option("--headers", default=None, help="headers for the API call")
 @click.option("--save", is_flag=True, type=bool, help="Save the model-specific config")
 @click.option(
-    "--debug", default=False, is_flag=True, type=bool, help="To debug the input"
+    "--debug",
+    default=False,
+    is_flag=True,
+    type=bool,
+    help="To debug the input",
+    envvar="DEBUG",
 )
 @click.option(
     "--detailed_debug",
@@ -70,6 +82,7 @@ def is_port_in_use(port):
     is_flag=True,
     type=bool,
     help="To view detailed debug logs",
+    envvar="DETAILED_DEBUG",
 )
 @click.option(
     "--use_queue",
@@ -472,6 +485,9 @@ def run_server(
                     # gunicorn app function
                     return self.application
 
+            print(
+                f"\033[1;32mLiteLLM Proxy: Starting server on {host}:{port} with {num_workers} workers\033[0m\n"
+            )
             gunicorn_options = {
                 "bind": f"{host}:{port}",
                 "workers": num_workers,  # default is 1
