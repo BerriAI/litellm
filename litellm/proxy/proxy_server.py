@@ -908,7 +908,6 @@ class ProxyConfig:
             health_check_interval = general_settings.get("health_check_interval", 300)
 
         router_params: dict = {
-            "num_retries": 3,
             "cache_responses": litellm.cache
             != None,  # cache if user passed in cache values
         }
