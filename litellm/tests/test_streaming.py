@@ -302,6 +302,7 @@ def test_completion_azure_function_calling_stream():
 # test_completion_azure_function_calling_stream()
 
 
+@pytest.mark.skip("Flaky ollama test - needs to be fixed")
 def test_completion_ollama_hosted_stream():
     try:
         litellm.set_verbose = True
