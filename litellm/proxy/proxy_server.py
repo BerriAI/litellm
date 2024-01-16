@@ -1285,7 +1285,11 @@ async def startup_event():
         verbose_proxy_logger.debug(f"custom_db_client connecting - {custom_db_client}")
         await custom_db_client.connect()
 
-    if prisma_client is not None and master_key is not None:
+    if prisma_client is not None:
+        if master_key is None:
+            raise ValueError(
+                "Using Proxy Auth, but Master Key not set, please set `LITELLM_MASTER_KEY` in your environment or `master_key` in your config.yaml"
+            )
         # add master key to db
         await generate_key_helper_fn(
             duration=None, models=[], aliases={}, config={}, spend=0, token=master_key
@@ -1293,7 +1297,11 @@ async def startup_event():
     verbose_proxy_logger.debug(
         f"custom_db_client client - Inserting master key {custom_db_client}. Master_key: {master_key}"
     )
-    if custom_db_client is not None and master_key is not None:
+    if custom_db_client is not None:
+        if master_key is None:
+            raise ValueError(
+                "Using Proxy Auth, but Master Key not set, please set `LITELLM_MASTER_KEY` in your environment or `master_key` in your config.yaml"
+            )
         # add master key to db
         await generate_key_helper_fn(
             duration=None, models=[], aliases={}, config={}, spend=0, token=master_key
