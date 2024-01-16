@@ -105,7 +105,7 @@ def test_completion_mistral_api():
         pytest.fail(f"Error occurred: {e}")
 
 
-test_completion_mistral_api()
+# test_completion_mistral_api()
 
 
 def test_completion_claude2_1():
@@ -771,8 +771,9 @@ def test_completion_ollama_hosted():
 
 def test_completion_openrouter1():
     try:
+        litellm.set_verbose = True
         response = completion(
-            model="openrouter/google/palm-2-chat-bison",
+            model="openrouter/mistralai/mistral-tiny",
             messages=messages,
             max_tokens=5,
         )
@@ -1637,7 +1638,7 @@ def test_azure_cloudflare_api():
         pass
 
 
-test_azure_cloudflare_api()
+# test_azure_cloudflare_api()
 
 
 def test_completion_anyscale_2():
@@ -1932,7 +1933,7 @@ def test_completion_cloudflare():
         pytest.fail(f"Error occurred: {e}")
 
 
-test_completion_cloudflare()
+# test_completion_cloudflare()
 
 
 def test_moderation():
