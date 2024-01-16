@@ -10,6 +10,7 @@ from typing import Any, List, Literal, Optional, Union
 import json
 from datetime import datetime
 from litellm._logging import verbose_proxy_logger
+import aiohttp
 
 
 class DynamoDBWrapper(CustomDB):
@@ -71,9 +72,10 @@ class DynamoDBWrapper(CustomDB):
         from aiodynamo.models import ReturnValues
         from aiodynamo.http.aiohttp import AIOHTTP
         from aiohttp import ClientSession
+        import aiohttp
 
         verbose_proxy_logger.debug("DynamoDB Wrapper - Attempting to connect")
-        async with ClientSession() as session:
+        async with ClientSession(connector=aiohttp.TCPConnector(ssl=False)) as session:
             client = Client(AIOHTTP(session), Credentials.auto(), self.region_name)
             ## User
             try:
@@ -146,7 +148,7 @@ class DynamoDBWrapper(CustomDB):
         from aiodynamo.http.aiohttp import AIOHTTP
         from aiohttp import ClientSession
 
-        async with ClientSession() as session:
+        async with ClientSession(connector=aiohttp.TCPConnector(ssl=False)) as session:
             client = Client(AIOHTTP(session), Credentials.auto(), self.region_name)
             table = None
             if table_name == "user":
@@ -179,7 +181,7 @@ class DynamoDBWrapper(CustomDB):
         from aiodynamo.http.aiohttp import AIOHTTP
         from aiohttp import ClientSession
 
-        async with ClientSession() as session:
+        async with ClientSession(connector=aiohttp.TCPConnector(ssl=False)) as session:
             client = Client(AIOHTTP(session), Credentials.auto(), self.region_name)
             table = None
             key_name = None
@@ -233,7 +235,7 @@ class DynamoDBWrapper(CustomDB):
         from aiodynamo.http.aiohttp import AIOHTTP
         from aiohttp import ClientSession
 
-        async with ClientSession() as session:
+        async with ClientSession(connector=aiohttp.TCPConnector(ssl=False)) as session:
             client = Client(AIOHTTP(session), Credentials.auto(), self.region_name)
             table = None
             key_name = None
