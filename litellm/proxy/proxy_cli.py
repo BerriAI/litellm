@@ -472,6 +472,8 @@ def run_server(
                     # gunicorn app function
                     return self.application
 
+            # before starting server, read num_workers as an env variable
+            num_workers = os.getenv("NUM_WORKERS", num_workers)
             gunicorn_options = {
                 "bind": f"{host}:{port}",
                 "workers": num_workers,  # default is 1
