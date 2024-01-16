@@ -294,36 +294,17 @@ async def user_api_key_auth(
                     key=api_key, table_name="key"
                 )
 
-                if valid_token.user_id is not None:
-                    verbose_proxy_logger.debug(
-                        f"valid_token.user_id: {valid_token.user_id}"
-                    )
-                    user_id_data = await custom_db_client.get_data(
-                        key=valid_token.user_id, table_name="user"
-                    )
-                    verbose_proxy_logger.debug(f"user_id_data: {user_id_data}")
-            # Token exists, now check expiration.
-            if valid_token.expires is not None:
-                expiry_time = datetime.fromisoformat(valid_token.expires)
-                if expiry_time < datetime.utcnow():
-                    # Token exists but is expired.
-                    raise HTTPException(
-                        status_code=status.HTTP_403_FORBIDDEN,
-                        detail="expired user key",
-                    )
-            # Token exists, not expired now check if its in budget for the user
-            if valid_token.spend is not None and valid_token.user_id is not None:
-                user_max_budget = user_id_data.max_budget
-                user_current_spend = user_id_data.spend
-                if user_current_spend > user_max_budget:
-                    raise Exception(
-                        f"ExceededBudget: User {valid_token.user_id} has exceeded their budget. Current spend: {user_current_spend}; Max Budget: {user_max_budget}"
-                    )
-            verbose_proxy_logger.debug(f"valid token from db: {valid_token}")
-            user_api_key_cache.set_cache(key=api_key, value=valid_token, ttl=60)
+            verbose_proxy_logger.debug(f"Token from db: {valid_token}")
         elif valid_token is not None:
             verbose_proxy_logger.debug(f"API Key Cache Hit!")
         if valid_token:
+            # Got Valid Token from Cache, DB
+            # Run checks for
+            # 1. If token can call model
+            # 2. If user_id for this token is in budget
+            # 3. If token is expired
+
+            # Check 1. If token can call model
             litellm.model_alias_map = valid_token.aliases
             config = valid_token.config
             if config != {}:
@@ -348,6 +329,44 @@ async def user_api_key_auth(
                     raise ValueError(
                         f"API Key not allowed to access model. This token can only access models={valid_token.models}. Tried to access {model}"
                     )
+
+            # Check 2. If user_id for this token is in budget
+            if valid_token.user_id is not None:
+                if prisma_client is not None:
+                    user_id_information = await prisma_client.get_data(
+                        user_id=valid_token.user_id, table_name="user"
+                    )
+                if custom_db_client is not None:
+                    user_id_information = await custom_db_client.get_data(
+                        key=valid_token.user_id, table_name="user"
+                    )
+                verbose_proxy_logger.debug(
+                    f"user_id_information: {user_id_information}"
+                )
+
+                # Token exists, not expired now check if its in budget for the user
+                if valid_token.spend is not None and valid_token.user_id is not None:
+                    user_max_budget = user_id_information.max_budget
+                    user_current_spend = user_id_information.spend
+                    if user_current_spend > user_max_budget:
+                        raise Exception(
+                            f"ExceededBudget: User {valid_token.user_id} has exceeded their budget. Current spend: {user_current_spend}; Max Budget: {user_max_budget}"
+                        )
+
+            # Check 3. If token is expired
+            if valid_token.expires is not None:
+                expiry_time = datetime.fromisoformat(valid_token.expires)
+                if expiry_time < datetime.utcnow():
+                    # Token exists but is expired.
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="expired user key",
+                    )
+
+            # Token passed all checks
+            # Add token to cache
+            user_api_key_cache.set_cache(key=api_key, value=valid_token, ttl=60)
+
             api_key = valid_token.token
             valid_token_dict = _get_pydantic_json_dict(valid_token)
             valid_token_dict.pop("token", None)
@@ -1045,8 +1064,10 @@ async def generate_key_helper_fn(
             await prisma_client.insert_data(data=verification_token_data)
         elif custom_db_client is not None:
             ## CREATE USER (If necessary)
+            verbose_proxy_logger.debug(f"CustomDBClient: Creating User={user_data}")
             await custom_db_client.insert_data(value=user_data, table_name="user")
             ## CREATE KEY
+            verbose_proxy_logger.debug(f"CustomDBClient: Creating Key={key_data}")
             await custom_db_client.insert_data(value=key_data, table_name="key")
     except Exception as e:
         traceback.print_exc()
