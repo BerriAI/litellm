@@ -14,6 +14,9 @@ model_list:
   - model_name: BEDROCK_GROUP
     litellm_params:
       model: bedrock/cohere.command-text-v14
+  - model_name: sagemaker
+    litellm_params:
+      model: sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4
   - model_name: openai-gpt-3.5
     litellm_params:
       model: gpt-3.5-turbo
@@ -42,6 +45,7 @@ model_list:
     model_info:
       mode: embedding
 litellm_settings:
+  post_call_rules: post_call_rules.post_response_rule
   fallbacks: [{"openai-gpt-3.5": ["azure-gpt-3.5"]}]
   # cache: True     
   # setting callback class
