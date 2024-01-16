@@ -74,12 +74,12 @@ async def proxy_completion_non_streaming():
     return None
 
 async def loadtest_fn():
-    start = time.time()
+    start = time.perf_counter()
     n = 500  # Number of concurrent tasks
     tasks = [proxy_completion_non_streaming() for _ in range(n)]
     chat_completions = await asyncio.gather(*tasks)
     successful_completions = [c for c in chat_completions if c is not None]
-    print(n, time.time() - start, len(successful_completions))
+    print(n, time.perf_counter() - start, len(successful_completions))
 
 # Run the event loop to execute the async function
 asyncio.run(loadtest_fn())

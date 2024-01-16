@@ -777,7 +777,7 @@ def test_sagemaker_weird_response():
             litellm_call_id="1234",
             function_id="function_id",
             call_type="acompletion",
-            start_time=time.time(),
+            start_time=time.perf_counter(),
         )
         response = litellm.CustomStreamWrapper(
             completion_stream=chunk,
@@ -854,7 +854,7 @@ async def test_sagemaker_streaming_async():
 #     try:
 #         response = completion("maritalk", messages=messages, stream=True)
 #         complete_response = ""
-#         start_time = time.time()
+#         start_time = time.perf_counter()
 #         for idx, chunk in enumerate(response):
 #             chunk, finished = streaming_format_tests(idx, chunk)
 #             complete_response += chunk
@@ -884,7 +884,7 @@ def ai21_completion_call():
         print(f"response: {response}")
         has_finished = False
         complete_response = ""
-        start_time = time.time()
+        start_time = time.perf_counter()
         for idx, chunk in enumerate(response):
             chunk, finished = streaming_format_tests(idx, chunk)
             has_finished = finished
@@ -911,7 +911,7 @@ def ai21_completion_call_bad_key():
         )
         print(f"response: {response}")
         complete_response = ""
-        start_time = time.time()
+        start_time = time.perf_counter()
         for idx, chunk in enumerate(response):
             chunk, finished = streaming_format_tests(idx, chunk)
             if finished:
@@ -938,7 +938,7 @@ async def test_hf_completion_tgi_stream():
         # Add any assertions here to check the response
         print(f"response: {response}")
         complete_response = ""
-        start_time = time.time()
+        start_time = time.perf_counter()
         idx = 0
         async for chunk in response:
             chunk, finished = streaming_format_tests(idx, chunk)
@@ -963,7 +963,7 @@ async def test_hf_completion_tgi_stream():
 #         # Add any assertions here to check the response
 #         has_finished = False
 #         complete_response = ""
-#         start_time = time.time()
+#         start_time = time.perf_counter()
 #         for idx, chunk in enumerate(response):
 #             chunk, finished = streaming_format_tests(idx, chunk)
 #             has_finished = finished
@@ -988,7 +988,7 @@ async def test_hf_completion_tgi_stream():
 #         # Add any assertions here to check the response
 #         has_finished = False
 #         complete_response = ""
-#         start_time = time.time()
+#         start_time = time.perf_counter()
 #         for idx, chunk in enumerate(response):
 #             chunk, finished = streaming_format_tests(idx, chunk)
 #             has_finished = finished
@@ -1014,7 +1014,7 @@ def test_openai_chat_completion_call():
         print(f"making openai chat completion call")
         response = completion(model="gpt-3.5-turbo", messages=messages, stream=True)
         complete_response = ""
-        start_time = time.time()
+        start_time = time.perf_counter()
         for idx, chunk in enumerate(response):
             chunk, finished = streaming_format_tests(idx, chunk)
             print(f"outside chunk: {chunk}")
@@ -1057,7 +1057,7 @@ def test_openai_text_completion_call():
             model="gpt-3.5-turbo-instruct", messages=messages, stream=True
         )
         complete_response = ""
-        start_time = time.time()
+        start_time = time.perf_counter()
         for idx, chunk in enumerate(response):
             chunk, finished = streaming_format_tests(idx, chunk)
             print(f"chunk: {chunk}")
@@ -1080,7 +1080,7 @@ def test_openai_text_completion_call():
 def test_together_ai_completion_call_mistral():
     try:
         litellm.set_verbose = False
-        start_time = time.time()
+        start_time = time.perf_counter()
         response = completion(
             model="together_ai/mistralai/Mistral-7B-Instruct-v0.2",
             messages=messages,
@@ -1109,7 +1109,7 @@ def test_together_ai_completion_call_mistral():
 def test_together_ai_completion_call_starcoder_bad_key():
     try:
         api_key = "bad-key"
-        start_time = time.time()
+        start_time = time.perf_counter()
         response = completion(
             model="together_ai/bigcode/starcoder",
             messages=messages,
@@ -1190,7 +1190,7 @@ async def ai21_async_completion_call():
         )
         print(f"response: {response}")
         complete_response = ""
-        start_time = time.time()
+        start_time = time.perf_counter()
         # Change for loop to async for loop
         idx = 0
         async for chunk in response:
@@ -1221,7 +1221,7 @@ async def completion_call():
         )
         print(f"response: {response}")
         complete_response = ""
-        start_time = time.time()
+        start_time = time.perf_counter()
         # Change for loop to async for loop
         idx = 0
         async for chunk in response:

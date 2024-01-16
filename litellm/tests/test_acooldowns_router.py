@@ -76,7 +76,7 @@ def test_multiple_deployments_parallel():
     litellm.set_verbose = False  # Corrected the syntax for setting verbose to False
     results = []
     futures = {}
-    start_time = time.time()
+    start_time = time.perf_counter()
     router = Router(
         model_list=model_list,
         redis_host=os.getenv("REDIS_HOST"),
@@ -110,7 +110,7 @@ def test_multiple_deployments_parallel():
 
             print(f"Remaining futures: {len(futures)}")
     router.reset()
-    end_time = time.time()
+    end_time = time.perf_counter()
     print(results)
     print(f"ELAPSED TIME: {end_time - start_time}")
 

@@ -49,9 +49,9 @@ def test_acompletion_sync():
                 timeout=5,
             )
             complete_response = ""
-            start_time = time.time()
+            start_time = time.perf_counter()
             async for chunk in response:
-                chunk_time = time.time()
+                chunk_time = time.perf_counter()
                 # print(chunk)
                 complete_response += chunk["choices"][0]["delta"].get("content", "")
                 # print(complete_response)

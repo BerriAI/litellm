@@ -236,7 +236,7 @@ def run_server(
 
         # List to store the futures of concurrent calls
         futures = []
-        start_time = time.time()
+        start_time = time.perf_counter()
         # Make concurrent calls
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=concurrent_calls
@@ -257,7 +257,7 @@ def run_server(
                     successful_calls += 1
                 else:
                     failed_calls += 1
-        end_time = time.time()
+        end_time = time.perf_counter()
         print(f"Elapsed Time: {end_time-start_time}")
         print(f"Load test Summary:")
         print(f"Total Requests: {concurrent_calls}")

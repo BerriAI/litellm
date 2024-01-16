@@ -80,7 +80,7 @@ import time
 # Function to make concurrent calls to OpenAI API
 def make_openai_completion(question):
     try:
-        start_time = time.time()
+        start_time = time.perf_counter()
         import openai
 
         client = openai.OpenAI(
@@ -96,7 +96,7 @@ def make_openai_completion(question):
             ],
         )
         print(response)
-        end_time = time.time()
+        end_time = time.perf_counter()
 
         # Log the request details
         with open("request_log.txt", "a") as log_file:

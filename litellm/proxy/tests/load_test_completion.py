@@ -28,7 +28,7 @@ async def litellm_completion():
 
 async def main():
     for i in range(1000000):
-        start = time.time()
+        start = time.perf_counter()
         n = 1000  # Number of concurrent tasks
         tasks = [litellm_completion() for _ in range(n)]
 
@@ -42,7 +42,7 @@ async def main():
                 if isinstance(completion, str):
                     error_log.write(completion + "\n")
 
-        print(n, time.time() - start, len(successful_completions))
+        print(n, time.perf_counter() - start, len(successful_completions))
         time.sleep(10)
 
 

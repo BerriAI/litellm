@@ -4529,7 +4529,7 @@ def load_test_model(
     if num_calls:
         test_calls = num_calls
     messages = [[{"role": "user", "content": test_prompt}] for _ in range(test_calls)]
-    start_time = time.time()
+    start_time = time.perf_counter()
     try:
         litellm.batch_completion(
             model=model,
@@ -4538,7 +4538,7 @@ def load_test_model(
             api_base=api_base,
             force_timeout=force_timeout,
         )
-        end_time = time.time()
+        end_time = time.perf_counter()
         response_time = end_time - start_time
         return {
             "total_response_time": response_time,
@@ -4547,7 +4547,7 @@ def load_test_model(
             "exception": None,
         }
     except Exception as e:
-        end_time = time.time()
+        end_time = time.perf_counter()
         response_time = end_time - start_time
         return {
             "total_response_time": response_time,
@@ -7970,7 +7970,7 @@ def completion_with_fallbacks(**kwargs):
     response = None
     rate_limited_models = set()
     model_expiration_times = {}
-    start_time = time.time()
+    start_time = time.perf_counter()
     original_model = kwargs["model"]
     fallbacks = [kwargs["model"]] + nested_kwargs.get("fallbacks", [])
     if "fallbacks" in nested_kwargs:
@@ -7978,7 +7978,7 @@ def completion_with_fallbacks(**kwargs):
     litellm_call_id = str(uuid.uuid4())
 
     # max time to process a request with fallbacks: default 45s
-    while response == None and time.time() - start_time < 45:
+    while response == None and time.perf_counter() - start_time < 45:
         for model in fallbacks:
             # loop thru all models
             try:
