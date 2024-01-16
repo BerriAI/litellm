@@ -35,14 +35,14 @@ litellm.num_retries = 0
 
 # Approach: Run each model through the test -> assert if the correct error (always the same one) is triggered
 
-models = [
+exception_models = [
     "sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4",
     "bedrock/anthropic.claude-instant-v1",
 ]
 
 
 # Test 1: Context Window Errors
-@pytest.mark.parametrize("model", models)
+@pytest.mark.parametrize("model", exception_models)
 def test_context_window(model):
     print("Testing context window error")
     sample_text = "Say error 50 times" * 1000000
@@ -61,6 +61,9 @@ def test_context_window(model):
     except Exception as e:
         print(f"{e}")
         pytest.fail(f"An error occcurred - {e}")
+
+
+models = ["command-nightly"]
 
 
 @pytest.mark.parametrize("model", models)
