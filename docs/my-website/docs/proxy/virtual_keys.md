@@ -178,7 +178,7 @@ LiteLLM exposes a `/user/new` endpoint to create budgets for users, that persist
 
 This is documented in the swagger (live on your server root endpoint - e.g. `http://0.0.0.0:8000/`). Here's an example request. 
 
-```curl 
+```shell 
 curl --location 'http://localhost:8000/user/new' \
 --header 'Authorization: Bearer <your-master-key>' \
 --header 'Content-Type: application/json' \
@@ -188,7 +188,7 @@ The request is a normal `/key/generate` request body + a `max_budget` field.
 
 **Sample Response**
 
-```curl
+```shell
 {
     "key": "sk-YF2OxDbrgd1y2KgwxmEA2w",
     "expires": "2023-12-22T09:53:13.861000Z",
@@ -242,7 +242,7 @@ general_settings:
 [**Implementation Code**](https://github.com/BerriAI/litellm/blob/caf2a6b279ddbe89ebd1d8f4499f65715d684851/litellm/proxy/utils.py#L122)
 
 ### 3. Start the proxy
-```bash
+```shell
 $ litellm --config /path/to/config.yaml 
 ```
 
@@ -253,7 +253,7 @@ Only live in `v1.16.21.dev1`.
 
 ### Step 1. Save keys to env
 
-```env
+```shell
 AWS_ACCESS_KEY_ID = "your-aws-access-key-id"
 AWS_SECRET_ACCESS_KEY = "your-aws-secret-access-key"
 ```
