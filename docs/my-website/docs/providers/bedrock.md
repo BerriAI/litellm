@@ -208,6 +208,42 @@ response = completion(
 )
 ```
 
+### STS based Auth 
+
+- Set `aws_role_name` and `aws_session_name` in completion() / embedding() function
+
+Make the bedrock completion call 
+```python
+from litellm import completion
+
+response = completion(
+            model="bedrock/anthropic.claude-instant-v1",
+            messages=messages,
+            max_tokens=10,
+            temperature=0.1,
+            aws_role_name=aws_role_name,
+            aws_session_name="my-test-session",
+        )
+```
+
+If you also need to dynamically set the aws user accessing the role, add the additional args in the completion()/embedding() function
+
+```python
+from litellm import completion
+
+response = completion(
+            model="bedrock/anthropic.claude-instant-v1",
+            messages=messages,
+            max_tokens=10,
+            temperature=0.1,
+            aws_region_name=aws_region_name,
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            aws_role_name=aws_role_name,
+            aws_session_name="my-test-session",
+        )
+```
+
 ## Provisioned throughput models
 To use provisioned throughput Bedrock models pass 
 - `model=bedrock/<base-model>`, example `model=bedrock/anthropic.claude-v2`. Set `model` to any of the [Supported AWS models](#supported-aws-bedrock-models)
