@@ -27,6 +27,9 @@ import pytest, logging, asyncio
 import litellm, asyncio
 from litellm.proxy.proxy_server import new_user, user_api_key_auth, user_update
 from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm._logging import verbose_proxy_logger
+
+verbose_proxy_logger.setLevel(level=logging.DEBUG)
 
 from litellm.proxy._types import NewUserRequest, DynamoDBArgs
 from litellm.proxy.utils import DBClient
@@ -35,10 +38,6 @@ from litellm.caching import DualCache
 
 proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
 
-prisma_client = PrismaClient(
-    database_url=os.environ["PROXY_DATABASE_URL"], proxy_logging_obj=proxy_logging_obj
-)
-
 
 request_data = {
     "model": "azure-gpt-3.5",
@@ -46,16 +45,22 @@ request_data = {
         {"role": "user", "content": "this is my new test. respond in 50 lines"}
     ],
 }
+prisma_client = PrismaClient(
+    database_url=os.environ["DATABASE_URL"], proxy_logging_obj=proxy_logging_obj
+)
 
 
 def test_generate_and_call_with_valid_key():
     # 1. Generate a Key, and use it to make a call
-    prisma_client.connect()
+
+    print("prisma client=", prisma_client)
+
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
     try:
 
         async def test():
+            await litellm.litellm.proxy.proxy_server.prisma_client.connect()
             request = NewUserRequest()
             key = await new_user(request)
             print(key)
@@ -82,6 +87,7 @@ def test_call_with_invalid_key():
     try:
 
         async def test():
+            await litellm.litellm.proxy.proxy_server.prisma_client.connect()
             generated_key = "bad-key"
             bearer_token = "Bearer " + generated_key
 
@@ -90,6 +96,7 @@ def test_call_with_invalid_key():
 
             # use generated key to auth in
             result = await user_api_key_auth(request=request, api_key=bearer_token)
+            print("got result", result)
             pytest.fail(f"This should have failed!. IT's an invalid key")
 
         asyncio.run(test())
@@ -107,6 +114,7 @@ def test_call_with_invalid_model():
     try:
 
         async def test():
+            await litellm.litellm.proxy.proxy_server.prisma_client.connect()
             request = NewUserRequest(models=["mistral"])
             key = await new_user(request)
             print(key)
@@ -142,6 +150,7 @@ def test_call_with_valid_model():
     try:
 
         async def test():
+            await litellm.litellm.proxy.proxy_server.prisma_client.connect()
             request = NewUserRequest(models=["mistral"])
             key = await new_user(request)
             print(key)
@@ -173,6 +182,7 @@ def test_call_with_key_over_budget():
     try:
 
         async def test():
+            await litellm.litellm.proxy.proxy_server.prisma_client.connect()
             request = NewUserRequest(max_budget=0.00001)
             key = await new_user(request)
             print(key)
@@ -244,6 +254,7 @@ def test_call_with_key_over_budget_stream():
     try:
 
         async def test():
+            await litellm.litellm.proxy.proxy_server.prisma_client.connect()
             request = NewUserRequest(max_budget=0.00001)
             key = await new_user(request)
             print(key)
