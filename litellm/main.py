@@ -2527,9 +2527,7 @@ def embedding(
         )
         ## Map to OpenAI Exception
         raise exception_type(
-            model=model,
-            original_exception=e,
-            custom_llm_provider="azure" if azure == True else None,
+            model=model, original_exception=e, custom_llm_provider=custom_llm_provider
         )
 
 

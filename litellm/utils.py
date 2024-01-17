@@ -60,6 +60,7 @@ from .exceptions import (
     RateLimitError,
     ServiceUnavailableError,
     OpenAIError,
+    PermissionDeniedError,
     ContextWindowExceededError,
     ContentPolicyViolationError,
     Timeout,
@@ -5920,6 +5921,14 @@ def exception_type(
                     exception_mapping_worked = True
                     raise AuthenticationError(
                         message=f"BedrockException Invalid Authentication - {error_str}",
+                        model=model,
+                        llm_provider="bedrock",
+                        response=original_exception.response,
+                    )
+                if "AccessDeniedException" in error_str:
+                    exception_mapping_worked = True
+                    raise PermissionDeniedError(
+                        message=f"BedrockException PermissionDeniedError - {error_str}",
                         model=model,
                         llm_provider="bedrock",
                         response=original_exception.response,
