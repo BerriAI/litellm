@@ -190,8 +190,9 @@ def test_call_with_key_under_budget():
 
         asyncio.run(test())
     except Exception as e:
-        pass
-        print("Got Exception", e)
+        error_detail = e.detail
+        assert "Authentication Error, ExceededBudget:" in error_detail
+        print(vars(e))
 
 
 # def test_call_with_key_over_budget():
