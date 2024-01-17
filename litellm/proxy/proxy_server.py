@@ -302,6 +302,7 @@ async def user_api_key_auth(
             # Run checks for
             # 1. If token can call model
             # 2. If token is expired
+            ## NOTE: USER BUDGET CHECK IS IN max_budget_limiter.py and run as a pre-api-call hook on the cache
 
             # Check 1. If token can call model
             litellm.model_alias_map = valid_token.aliases
