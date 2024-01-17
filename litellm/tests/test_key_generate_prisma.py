@@ -5,6 +5,8 @@
 # 4. Make a call to a key with valid model - expect to pass
 # 5. Make a call with key over budget, expect to fail
 # 6. Make a streaming chat/completions call with key over budget, expect to fail
+# 7. Make a call with an key that never expires, expect to pass
+# 8. Make a call with an expired key, expect to fail
 
 
 # function to call to generate key - async def new_user(data: NewUserRequest):
@@ -323,3 +325,33 @@ def test_call_with_key_over_budget_stream(prisma_client):
         error_detail = e.detail
         assert "Authentication Error, ExceededBudget:" in error_detail
         print(vars(e))
+
+
+def test_generate_and_call_with_valid_key_never_expires(prisma_client):
+    # 7. Make a call with an key that never expires, expect to pass
+
+    print("prisma client=", prisma_client)
+
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    try:
+
+        async def test():
+            await litellm.proxy.proxy_server.prisma_client.connect()
+            request = NewUserRequest(duration=None)
+            key = await new_user(request)
+            print(key)
+
+            generated_key = key.key
+            bearer_token = "Bearer " + generated_key
+
+            request = Request(scope={"type": "http"})
+            request._url = URL(url="/chat/completions")
+
+            # use generated key to auth in
+            result = await user_api_key_auth(request=request, api_key=bearer_token)
+            print("result from user auth with new key", result)
+
+        asyncio.run(test())
+    except Exception as e:
+        pytest.fail(f"An exception occurred - {str(e)}")
