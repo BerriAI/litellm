@@ -185,6 +185,16 @@ def test_completion_bedrock_claude_sts_client_auth():
             aws_role_name=aws_role_name,
             aws_session_name="my-test-session",
         )
+
+        response = completion(
+            model="gpt-3.5-turbo",
+            messages=messages,
+            aws_region_name="us-east-1",
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            aws_role_name=aws_role_name,
+            aws_session_name="my-test-session",
+        )
         # Add any assertions here to check the response
         print(response)
     except RateLimitError:
