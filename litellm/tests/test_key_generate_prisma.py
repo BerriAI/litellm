@@ -355,3 +355,37 @@ def test_generate_and_call_with_valid_key_never_expires(prisma_client):
         asyncio.run(test())
     except Exception as e:
         pytest.fail(f"An exception occurred - {str(e)}")
+
+
+def test_generate_and_call_with_expired_key(prisma_client):
+    # 8. Make a call with an expired key, expect to fail
+
+    print("prisma client=", prisma_client)
+
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    try:
+
+        async def test():
+            await litellm.proxy.proxy_server.prisma_client.connect()
+            request = NewUserRequest(duration="0s")
+            key = await new_user(request)
+            print(key)
+
+            generated_key = key.key
+            bearer_token = "Bearer " + generated_key
+
+            request = Request(scope={"type": "http"})
+            request._url = URL(url="/chat/completions")
+
+            # use generated key to auth in
+            result = await user_api_key_auth(request=request, api_key=bearer_token)
+            print("result from user auth with new key", result)
+            pytest.fail(f"This should have failed!. IT's an expired key")
+
+        asyncio.run(test())
+    except Exception as e:
+        print("Got Exception", e)
+        print(e.detail)
+        assert "Authentication Error" in e.detail
+        pass
