@@ -150,6 +150,52 @@ def test_completion_bedrock_claude_external_client_auth():
 # test_completion_bedrock_claude_external_client_auth()
 
 
+def test_completion_bedrock_claude_sts_client_auth():
+    print("\ncalling bedrock claude external client auth")
+    import os
+
+    aws_access_key_id = os.environ["AWS_TEMP_ACCESS_KEY_ID"]
+    aws_secret_access_key = os.environ["AWS_TEMP_SECRET_ACCESS_KEY"]
+    aws_region_name = os.environ["AWS_REGION_NAME"]
+    aws_role_name = os.environ["AWS_TEMP_ROLE_NAME"]
+
+    try:
+        import boto3
+
+        litellm.set_verbose = True
+
+        response = completion(
+            model="bedrock/anthropic.claude-instant-v1",
+            messages=messages,
+            max_tokens=10,
+            temperature=0.1,
+            aws_region_name=aws_region_name,
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            aws_role_name=aws_role_name,
+            aws_session_name="my-test-session",
+        )
+
+        response = embedding(
+            model="cohere.embed-multilingual-v3",
+            input=["hello world"],
+            aws_region_name="us-east-1",
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            aws_role_name=aws_role_name,
+            aws_session_name="my-test-session",
+        )
+        # Add any assertions here to check the response
+        print(response)
+    except RateLimitError:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+test_completion_bedrock_claude_sts_client_auth()
+
+
 def test_provisioned_throughput():
     try:
         litellm.set_verbose = True
