@@ -45,12 +45,22 @@ request_data = {
         {"role": "user", "content": "this is my new test. respond in 50 lines"}
     ],
 }
-prisma_client = PrismaClient(
-    database_url=os.environ["DATABASE_URL"], proxy_logging_obj=proxy_logging_obj
-)
 
 
-def test_generate_and_call_with_valid_key():
+@pytest.fixture
+def prisma_client():
+    # Assuming DBClient is a class that needs to be instantiated
+    prisma_client = PrismaClient(
+        database_url=os.environ["DATABASE_URL"], proxy_logging_obj=proxy_logging_obj
+    )
+
+    # Reset litellm.proxy.proxy_server.prisma_client to None
+    litellm.proxy.proxy_server.custom_db_client = None
+
+    return prisma_client
+
+
+def test_generate_and_call_with_valid_key(prisma_client):
     # 1. Generate a Key, and use it to make a call
 
     print("prisma client=", prisma_client)
@@ -80,7 +90,7 @@ def test_generate_and_call_with_valid_key():
         pytest.fail(f"An exception occurred - {str(e)}")
 
 
-def test_call_with_invalid_key():
+def test_call_with_invalid_key(prisma_client):
     # 2. Make a call with invalid key, expect it to fail
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
@@ -107,7 +117,7 @@ def test_call_with_invalid_key():
         pass
 
 
-def test_call_with_invalid_model():
+def test_call_with_invalid_model(prisma_client):
     # 3. Make a call to a key with an invalid model - expect to fail
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
@@ -143,7 +153,7 @@ def test_call_with_invalid_model():
         pass
 
 
-def test_call_with_valid_model():
+def test_call_with_valid_model(prisma_client):
     # 4. Make a call to a key with a valid model - expect to pass
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
@@ -175,7 +185,7 @@ def test_call_with_valid_model():
         pytest.fail(f"An exception occurred - {str(e)}")
 
 
-def test_call_with_key_over_budget():
+def test_call_with_key_over_budget(prisma_client):
     # 5. Make a call with a key over budget, expect to fail
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
@@ -242,7 +252,7 @@ def test_call_with_key_over_budget():
         print(vars(e))
 
 
-def test_call_with_key_over_budget_stream():
+def test_call_with_key_over_budget_stream(prisma_client):
     # 6. Make a call with a key over budget, expect to fail
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
