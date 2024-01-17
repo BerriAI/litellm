@@ -288,6 +288,8 @@ def init_bedrock_client(
     aws_secret_access_key: Optional[str] = None,
     aws_region_name: Optional[str] = None,
     aws_bedrock_runtime_endpoint: Optional[str] = None,
+    aws_session_name: Optional[str] = None,
+    aws_role_name: Optional[str] = None,
 ):
     # check for custom AWS_REGION_NAME and use it if not passed to init_bedrock_client
     litellm_aws_region_name = get_secret("AWS_REGION_NAME", None)
@@ -300,6 +302,8 @@ def init_bedrock_client(
         aws_secret_access_key,
         aws_region_name,
         aws_bedrock_runtime_endpoint,
+        aws_session_name,
+        aws_role_name,
     ]
 
     # Iterate over parameters and update if needed
@@ -312,7 +316,11 @@ def init_bedrock_client(
         aws_secret_access_key,
         aws_region_name,
         aws_bedrock_runtime_endpoint,
+        aws_session_name,
+        aws_role_name,
     ) = params_to_check
+
+    ### SET REGION NAME
     if region_name:
         pass
     elif aws_region_name:
@@ -338,7 +346,28 @@ def init_bedrock_client(
 
     import boto3
 
-    if aws_access_key_id != None:
+    ### CHECK STS ###
+    if aws_role_name is not None and aws_session_name is not None:
+        # use sts if role name passed in
+        sts_client = boto3.client(
+            "sts",
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+        )
+
+        sts_response = sts_client.assume_role(
+            RoleArn=aws_role_name, RoleSessionName=aws_session_name
+        )
+
+        client = boto3.client(
+            service_name="bedrock-runtime",
+            aws_access_key_id=sts_response["Credentials"]["AccessKeyId"],
+            aws_secret_access_key=sts_response["Credentials"]["SecretAccessKey"],
+            aws_session_token=sts_response["Credentials"]["SessionToken"],
+            region_name=region_name,
+            endpoint_url=endpoint_url,
+        )
+    elif aws_access_key_id is not None:
         # uses auth params passed to completion
         # aws_access_key_id is not None, assume user is trying to auth using litellm.completion
 
@@ -419,6 +448,8 @@ def completion(
         aws_secret_access_key = optional_params.pop("aws_secret_access_key", None)
         aws_access_key_id = optional_params.pop("aws_access_key_id", None)
         aws_region_name = optional_params.pop("aws_region_name", None)
+        aws_role_name = optional_params.pop("aws_role_name", None)
+        aws_session_name = optional_params.pop("aws_session_name", None)
         aws_bedrock_runtime_endpoint = optional_params.pop(
             "aws_bedrock_runtime_endpoint", None
         )
@@ -433,6 +464,8 @@ def completion(
                 aws_secret_access_key=aws_secret_access_key,
                 aws_region_name=aws_region_name,
                 aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
+                aws_role_name=aws_role_name,
+                aws_session_name=aws_session_name,
             )
 
         model = model
@@ -738,6 +771,8 @@ def embedding(
     aws_secret_access_key = optional_params.pop("aws_secret_access_key", None)
     aws_access_key_id = optional_params.pop("aws_access_key_id", None)
     aws_region_name = optional_params.pop("aws_region_name", None)
+    aws_role_name = optional_params.pop("aws_role_name", None)
+    aws_session_name = optional_params.pop("aws_session_name", None)
     aws_bedrock_runtime_endpoint = optional_params.pop(
         "aws_bedrock_runtime_endpoint", None
     )
@@ -748,6 +783,8 @@ def embedding(
         aws_secret_access_key=aws_secret_access_key,
         aws_region_name=aws_region_name,
         aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
+        aws_role_name=aws_role_name,
+        aws_session_name=aws_session_name,
     )
     if type(input) == str:
         embeddings = [
