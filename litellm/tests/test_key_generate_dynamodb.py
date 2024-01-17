@@ -32,15 +32,14 @@ from litellm.proxy.proxy_server import new_user, user_api_key_auth
 from litellm.proxy._types import NewUserRequest, DynamoDBArgs
 from litellm.proxy.utils import DBClient
 
-db_args = DynamoDBArgs(
-    ssl_verify=False,
-    billing_mode="PAY_PER_REQUEST",
-    region_name="us-west-2",
-)
-db_args_dict = db_args.model_dump()
+db_args = {
+    "ssl_verify": False,
+    "billing_mode": "PAY_PER_REQUEST",
+    "region_name": "us-west-2",
+}
 custom_db_client = DBClient(
     custom_db_type="dynamo_db",
-    custom_db_args=db_args_dict,
+    custom_db_args=db_args,
 )
 
 request_data = {
@@ -54,6 +53,7 @@ request_data = {
 def test_generate_and_call_with_valid_key():
     # 1. Generate a Key, and use it to make a call
     setattr(litellm.proxy.proxy_server, "custom_db_client", custom_db_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
     try:
 
         async def test():
@@ -62,6 +62,31 @@ def test_generate_and_call_with_valid_key():
             print(key)
 
             generated_key = key.key
+            bearer_token = "Bearer " + generated_key
+            from starlette.datastructures import URL
+
+            request = Request(scope={"type": "http"})
+            request._url = URL(url="/chat/completions")
+
+            # use generated key to auth in
+            result = await user_api_key_auth(request=request, api_key=bearer_token)
+            print("result from user auth with new key", result)
+
+        asyncio.run(test())
+    # result = user_auth(ValidRequest(key))
+    # assert result is True
+    except Exception as e:
+        pytest.fail(f"An exception occurred - {str(e)}")
+
+
+def test_call_with_invalid_key():
+    # 2. Make a call with invalid key, expect it to fail
+    setattr(litellm.proxy.proxy_server, "custom_db_client", custom_db_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    try:
+
+        async def test():
+            generated_key = "bad-key"
             bearer_token = "Bearer " + generated_key
 
             request = Request(scope={"type": "http"})
@@ -75,12 +100,6 @@ def test_generate_and_call_with_valid_key():
     # assert result is True
     except Exception as e:
         pytest.fail(f"An exception occurred - {str(e)}")
-
-
-# def test_call_with_invalid_key():
-#     # 2. Make a call with invalid key, expect it to fail
-#     result = user_auth(InvalidKeyRequest())
-#     assert result is False
 
 
 # def test_call_with_invalid_model():
