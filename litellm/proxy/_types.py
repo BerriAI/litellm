@@ -307,9 +307,12 @@ class LiteLLM_UserTable(LiteLLMBase):
     max_budget: Optional[float]
     spend: float = 0.0
     user_email: Optional[str]
+    models: list = []
 
     @root_validator(pre=True)
     def set_model_info(cls, values):
         if values.get("spend") is None:
             values.update({"spend": 0.0})
+        if values.get("models") is None:
+            values.update({"models", []})
         return values
