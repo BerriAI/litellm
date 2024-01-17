@@ -370,7 +370,7 @@ async def user_api_key_auth(
                     # Token exists but is expired.
                     raise HTTPException(
                         status_code=status.HTTP_403_FORBIDDEN,
-                        detail="expired user key",
+                        detail=f"Authentication Error - Expired Key. Key Expiry time {expiry_time} and current time {current_time}",
                     )
 
             # Token passed all checks
