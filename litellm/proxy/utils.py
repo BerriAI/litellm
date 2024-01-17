@@ -374,6 +374,8 @@ class PrismaClient:
                     )
                 print_verbose(f"PrismaClient: response={response}")
                 if response is not None:
+                    # for prisma we need to cast the expires time to str
+                    response.expires = response.expires.isoformat()
                     return response
                 else:
                     # Token does not exist.
