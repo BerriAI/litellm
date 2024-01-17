@@ -12,6 +12,7 @@ from fastapi import HTTPException, status
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from datetime import datetime
 
 
 def print_verbose(print_statement):
@@ -376,7 +377,8 @@ class PrismaClient:
                 print_verbose(f"PrismaClient: response={response}")
                 if response is not None:
                     # for prisma we need to cast the expires time to str
-                    response.expires = response.expires.isoformat()
+                    if isinstance(response.expires, datetime):
+                        response.expires = response.expires.isoformat()
                     return response
                 else:
                     # Token does not exist.
