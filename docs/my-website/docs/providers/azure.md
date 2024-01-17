@@ -116,7 +116,7 @@ response = completion(
 
 ```
 
-#### Usage - with Azure Vision enhancements
+### Usage - with Azure Vision enhancements
 
 ```python
 import os 
@@ -126,34 +126,34 @@ os.environ["AZURE_API_KEY"] = "your-api-key"
 
 # azure call
 response = completion(
-    model = "azure/<your deployment name>", 
-    messages=[
-        {
-            "role": "user",
-            "content": [
-                            {
-                                "type": "text",
-                                "text": "What’s in this image?"
+            model="azure/gpt-4-vision",
+            timeout=5,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Whats in this image?"},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "https://avatars.githubusercontent.com/u/29436595?v=4"
                             },
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
-                                }
-                            }
-                        ]
-        }
-    ],
-    enhancements = {"ocr": {"enabled": True}, "grounding": {"enabled": True}},
-    dataSources = [
-            {
-                "type": "AzureComputerVision",
-                "parameters": {
-                    "endpoint": "<your_computer_vision_endpoint>",
-                    "key": "<your_computer_vision_key>",
-                },
-            }
-    ],
+                        },
+                    ],
+                }
+            ],
+            base_url="https://gpt-4-vision-resource.openai.azure.com/openai/deployments/gpt-4-vision/extensions",
+            api_key=os.getenv("AZURE_VISION_API_KEY"),
+            enhancements={"ocr": {"enabled": True}, "grounding": {"enabled": True}},
+            dataSources=[
+                {
+                    "type": "AzureComputerVision",
+                    "parameters": {
+                        "endpoint": "https://gpt-4-vision-enhancement.cognitiveservices.azure.com/",
+                        "key": os.environ["AZURE_VISION_ENHANCE_KEY"],
+                    },
+                }
+            ],
 )
 ```
 
