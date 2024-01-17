@@ -252,7 +252,7 @@ def test_completion_azure_gpt4_vision():
                     "type": "AzureComputerVision",
                     "parameters": {
                         "endpoint": "https://gpt-4-vision-enhancement.cognitiveservices.azure.com/",
-                        "key": "efcd55c055ca47e08f61a8c54ba1707b",
+                        "key": os.environ["AZURE_VISION_ENHANCE_KEY"],
                     },
                 }
             ],
