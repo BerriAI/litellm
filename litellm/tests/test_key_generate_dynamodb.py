@@ -73,8 +73,6 @@ def test_generate_and_call_with_valid_key():
             print("result from user auth with new key", result)
 
         asyncio.run(test())
-    # result = user_auth(ValidRequest(key))
-    # assert result is True
     except Exception as e:
         pytest.fail(f"An exception occurred - {str(e)}")
 
@@ -97,8 +95,6 @@ def test_call_with_invalid_key():
             pytest.fail(f"This should have failed!")
 
         asyncio.run(test())
-    # result = user_auth(ValidRequest(key))
-    # assert result is True
     except Exception as e:
         print("Got Exception", e)
         print(str(e))
