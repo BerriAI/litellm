@@ -3901,7 +3901,6 @@ def get_optional_params(
     elif custom_llm_provider == "mistral":
         supported_params = ["temperature", "top_p", "stream", "max_tokens"]
         _check_valid_arg(supported_params=supported_params)
-        optional_params = non_default_params
         if temperature is not None:
             optional_params["temperature"] = temperature
         if top_p is not None:
