@@ -118,6 +118,15 @@ response = completion(
 
 ### Usage - with Azure Vision enhancements
 
+Note: **Azure requires the `base_url` to be set with `/extensions`** 
+
+Example 
+```python
+base_url=https://gpt-4-vision-resource.openai.azure.com/openai/deployments/gpt-4-vision/extensions
+# base_url="{azure_endpoint}/openai/deployments/{azure_deployment}/extensions"
+```
+
+**Usage**
 ```python
 import os 
 from litellm import completion
