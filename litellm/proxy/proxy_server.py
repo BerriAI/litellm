@@ -301,8 +301,7 @@ async def user_api_key_auth(
             # Got Valid Token from Cache, DB
             # Run checks for
             # 1. If token can call model
-            # 2. If user_id for this token is in budget
-            # 3. If token is expired
+            # 2. If token is expired
 
             # Check 1. If token can call model
             litellm.model_alias_map = valid_token.aliases
@@ -330,31 +329,7 @@ async def user_api_key_auth(
                         f"API Key not allowed to access model. This token can only access models={valid_token.models}. Tried to access {model}"
                     )
 
-            # Check 2. If user_id for this token is in budget
-            if valid_token.user_id is not None:
-                if prisma_client is not None:
-                    user_id_information = await prisma_client.get_data(
-                        user_id=valid_token.user_id, table_name="user"
-                    )
-                if custom_db_client is not None:
-                    user_id_information = await custom_db_client.get_data(
-                        key=valid_token.user_id, table_name="user"
-                    )
-                verbose_proxy_logger.debug(
-                    f"user_id_information: {user_id_information}"
-                )
-
-                # Token exists, not expired now check if its in budget for the user
-                if valid_token.spend is not None and valid_token.user_id is not None:
-                    user_max_budget = user_id_information.max_budget
-                    user_current_spend = user_id_information.spend
-                    if user_max_budget is not None and user_current_spend is not None:
-                        if user_current_spend > user_max_budget:
-                            raise Exception(
-                                f"ExceededBudget: User {valid_token.user_id} has exceeded their budget. Current spend: {user_current_spend}; Max Budget: {user_max_budget}"
-                            )
-
-            # Check 3. If token is expired
+            # Check 2. If token is expired
             if valid_token.expires is not None:
                 current_time = datetime.now(timezone.utc)
                 expiry_time = datetime.fromisoformat(valid_token.expires)
