@@ -31,6 +31,7 @@ from litellm.proxy.proxy_server import new_user, user_api_key_auth
 
 from litellm.proxy._types import NewUserRequest, DynamoDBArgs
 from litellm.proxy.utils import DBClient
+from starlette.datastructures import URL
 
 db_args = {
     "ssl_verify": False,
@@ -63,7 +64,6 @@ def test_generate_and_call_with_valid_key():
 
             generated_key = key.key
             bearer_token = "Bearer " + generated_key
-            from starlette.datastructures import URL
 
             request = Request(scope={"type": "http"})
             request._url = URL(url="/chat/completions")
@@ -90,16 +90,19 @@ def test_call_with_invalid_key():
             bearer_token = "Bearer " + generated_key
 
             request = Request(scope={"type": "http"})
+            request._url = URL(url="/chat/completions")
 
             # use generated key to auth in
             result = await user_api_key_auth(request=request, api_key=bearer_token)
-            print("result from user auth with new key", result)
+            pytest.fail(f"This should have failed!")
 
         asyncio.run(test())
     # result = user_auth(ValidRequest(key))
     # assert result is True
     except Exception as e:
-        pytest.fail(f"An exception occurred - {str(e)}")
+        print("Got Exception", e)
+        print(str(e))
+        pass
 
 
 # def test_call_with_invalid_model():
