@@ -71,9 +71,15 @@ class DynamoDBWrapper(CustomDB):
         from aiodynamo.models import ReturnValues
         from aiodynamo.http.aiohttp import AIOHTTP
         from aiohttp import ClientSession
+        import aiohttp
 
         verbose_proxy_logger.debug("DynamoDB Wrapper - Attempting to connect")
-        async with ClientSession() as session:
+        # before making ClientSession check if ssl_verify=False
+        if self.database_arguments.ssl_verify == False:
+            client_session = ClientSession(connector=aiohttp.TCPConnector(ssl=False))
+        else:
+            client_session = ClientSession()
+        async with client_session as session:
             client = Client(AIOHTTP(session), Credentials.auto(), self.region_name)
             ## User
             try:
@@ -145,8 +151,13 @@ class DynamoDBWrapper(CustomDB):
         from aiodynamo.models import ReturnValues
         from aiodynamo.http.aiohttp import AIOHTTP
         from aiohttp import ClientSession
+        import aiohttp
 
-        async with ClientSession() as session:
+        if self.database_arguments.ssl_verify == False:
+            client_session = ClientSession(connector=aiohttp.TCPConnector(ssl=False))
+        else:
+            client_session = ClientSession()
+        async with client_session as session:
             client = Client(AIOHTTP(session), Credentials.auto(), self.region_name)
             table = None
             if table_name == "user":
@@ -178,8 +189,14 @@ class DynamoDBWrapper(CustomDB):
         from aiodynamo.models import ReturnValues
         from aiodynamo.http.aiohttp import AIOHTTP
         from aiohttp import ClientSession
+        import aiohttp
 
-        async with ClientSession() as session:
+        if self.database_arguments.ssl_verify == False:
+            client_session = ClientSession(connector=aiohttp.TCPConnector(ssl=False))
+        else:
+            client_session = ClientSession()
+
+        async with client_session as session:
             client = Client(AIOHTTP(session), Credentials.auto(), self.region_name)
             table = None
             key_name = None
@@ -232,8 +249,13 @@ class DynamoDBWrapper(CustomDB):
         from aiodynamo.models import ReturnValues
         from aiodynamo.http.aiohttp import AIOHTTP
         from aiohttp import ClientSession
+        import aiohttp
 
-        async with ClientSession() as session:
+        if self.database_arguments.ssl_verify == False:
+            client_session = ClientSession(connector=aiohttp.TCPConnector(ssl=False))
+        else:
+            client_session = ClientSession()
+        async with client_session as session:
             client = Client(AIOHTTP(session), Credentials.auto(), self.region_name)
             table = None
             key_name = None

@@ -348,10 +348,11 @@ async def user_api_key_auth(
                 if valid_token.spend is not None and valid_token.user_id is not None:
                     user_max_budget = user_id_information.max_budget
                     user_current_spend = user_id_information.spend
-                    if user_current_spend > user_max_budget:
-                        raise Exception(
-                            f"ExceededBudget: User {valid_token.user_id} has exceeded their budget. Current spend: {user_current_spend}; Max Budget: {user_max_budget}"
-                        )
+                    if user_max_budget is not None and user_current_spend is not None:
+                        if user_current_spend > user_max_budget:
+                            raise Exception(
+                                f"ExceededBudget: User {valid_token.user_id} has exceeded their budget. Current spend: {user_current_spend}; Max Budget: {user_max_budget}"
+                            )
 
             # Check 3. If token is expired
             if valid_token.expires is not None:
