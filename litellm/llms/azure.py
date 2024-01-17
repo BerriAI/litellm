@@ -325,6 +325,9 @@ class AzureChatCompletion(BaseLLM):
                 "max_retries": max_retries,
                 "timeout": timeout,
             }
+            azure_client_params = select_azure_base_url_or_endpoint(
+                azure_client_params=azure_client_params
+            )
             if api_key is not None:
                 azure_client_params["api_key"] = api_key
             elif azure_ad_token is not None:
@@ -386,6 +389,9 @@ class AzureChatCompletion(BaseLLM):
             "max_retries": max_retries,
             "timeout": timeout,
         }
+        azure_client_params = select_azure_base_url_or_endpoint(
+            azure_client_params=azure_client_params
+        )
         if api_key is not None:
             azure_client_params["api_key"] = api_key
         elif azure_ad_token is not None:
@@ -436,6 +442,9 @@ class AzureChatCompletion(BaseLLM):
                 "max_retries": data.pop("max_retries", 2),
                 "timeout": timeout,
             }
+            azure_client_params = select_azure_base_url_or_endpoint(
+                azure_client_params=azure_client_params
+            )
             if api_key is not None:
                 azure_client_params["api_key"] = api_key
             elif azure_ad_token is not None:
@@ -549,6 +558,9 @@ class AzureChatCompletion(BaseLLM):
                 "max_retries": max_retries,
                 "timeout": timeout,
             }
+            azure_client_params = select_azure_base_url_or_endpoint(
+                azure_client_params=azure_client_params
+            )
             if api_key is not None:
                 azure_client_params["api_key"] = api_key
             elif azure_ad_token is not None:
@@ -681,6 +693,9 @@ class AzureChatCompletion(BaseLLM):
                 "max_retries": max_retries,
                 "timeout": timeout,
             }
+            azure_client_params = select_azure_base_url_or_endpoint(
+                azure_client_params=azure_client_params
+            )
             if api_key is not None:
                 azure_client_params["api_key"] = api_key
             elif azure_ad_token is not None:
