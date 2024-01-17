@@ -40,6 +40,7 @@ jobs:
             pip install "httpx==0.24.1"
             pip install "gunicorn==21.2.0"
             pip install "anyio==3.7.1"
+            pip install "aiodynamo==23.10.1"
             pip install "asyncio==3.4.3"
             pip install "PyGithub==1.59.1"
       - save_cache:
