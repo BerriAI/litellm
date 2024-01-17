@@ -193,6 +193,7 @@ class DynamoDBArgs(LiteLLMBase):
     billing_mode: Literal["PROVISIONED_THROUGHPUT", "PAY_PER_REQUEST"]
     read_capacity_units: Optional[int] = None
     write_capacity_units: Optional[int] = None
+    ssl_verify: Optional[bool] = None
     region_name: str
     user_table_name: str = "LiteLLM_UserTable"
     key_table_name: str = "LiteLLM_VerificationToken"
