@@ -5,6 +5,8 @@
 # 4. Make a call to a key with valid model - expect to pass
 # 5. Make a call with key over budget, expect to fail
 # 6. Make a streaming chat/completions call with key over budget, expect to fail
+# 7. Make a call with an key that never expires, expect to pass
+# 8. Make a call with an expired key, expect to fail
 
 
 # function to call to generate key - async def new_user(data: NewUserRequest):
@@ -26,10 +28,17 @@ sys.path.insert(
 import pytest, logging, asyncio
 import litellm, asyncio
 from litellm.proxy.proxy_server import new_user, user_api_key_auth, user_update
+from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm._logging import verbose_proxy_logger
+
+verbose_proxy_logger.setLevel(level=logging.DEBUG)
 
 from litellm.proxy._types import NewUserRequest, DynamoDBArgs
 from litellm.proxy.utils import DBClient
 from starlette.datastructures import URL
+from litellm.caching import DualCache
+
+proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
 
 
 request_data = {
@@ -41,30 +50,29 @@ request_data = {
 
 
 @pytest.fixture
-def custom_db_client():
+def prisma_client():
     # Assuming DBClient is a class that needs to be instantiated
-    db_args = {
-        "ssl_verify": False,
-        "billing_mode": "PAY_PER_REQUEST",
-        "region_name": "us-west-2",
-    }
-    custom_db_client = DBClient(
-        custom_db_type="dynamo_db",
-        custom_db_args=db_args,
+    prisma_client = PrismaClient(
+        database_url=os.environ["DATABASE_URL"], proxy_logging_obj=proxy_logging_obj
     )
+
     # Reset litellm.proxy.proxy_server.prisma_client to None
-    litellm.proxy.proxy_server.prisma_client = None
+    litellm.proxy.proxy_server.custom_db_client = None
 
-    return custom_db_client
+    return prisma_client
 
 
-def test_generate_and_call_with_valid_key(custom_db_client):
+def test_generate_and_call_with_valid_key(prisma_client):
     # 1. Generate a Key, and use it to make a call
-    setattr(litellm.proxy.proxy_server, "custom_db_client", custom_db_client)
+
+    print("prisma client=", prisma_client)
+
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
     try:
 
         async def test():
+            await litellm.proxy.proxy_server.prisma_client.connect()
             request = NewUserRequest()
             key = await new_user(request)
             print(key)
@@ -84,13 +92,14 @@ def test_generate_and_call_with_valid_key(custom_db_client):
         pytest.fail(f"An exception occurred - {str(e)}")
 
 
-def test_call_with_invalid_key(custom_db_client):
+def test_call_with_invalid_key(prisma_client):
     # 2. Make a call with invalid key, expect it to fail
-    setattr(litellm.proxy.proxy_server, "custom_db_client", custom_db_client)
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
     try:
 
         async def test():
+            await litellm.proxy.proxy_server.prisma_client.connect()
             generated_key = "bad-key"
             bearer_token = "Bearer " + generated_key
 
@@ -99,6 +108,7 @@ def test_call_with_invalid_key(custom_db_client):
 
             # use generated key to auth in
             result = await user_api_key_auth(request=request, api_key=bearer_token)
+            print("got result", result)
             pytest.fail(f"This should have failed!. IT's an invalid key")
 
         asyncio.run(test())
@@ -109,13 +119,14 @@ def test_call_with_invalid_key(custom_db_client):
         pass
 
 
-def test_call_with_invalid_model(custom_db_client):
+def test_call_with_invalid_model(prisma_client):
     # 3. Make a call to a key with an invalid model - expect to fail
-    setattr(litellm.proxy.proxy_server, "custom_db_client", custom_db_client)
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
     try:
 
         async def test():
+            await litellm.proxy.proxy_server.prisma_client.connect()
             request = NewUserRequest(models=["mistral"])
             key = await new_user(request)
             print(key)
@@ -144,13 +155,14 @@ def test_call_with_invalid_model(custom_db_client):
         pass
 
 
-def test_call_with_valid_model(custom_db_client):
+def test_call_with_valid_model(prisma_client):
     # 4. Make a call to a key with a valid model - expect to pass
-    setattr(litellm.proxy.proxy_server, "custom_db_client", custom_db_client)
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
     try:
 
         async def test():
+            await litellm.proxy.proxy_server.prisma_client.connect()
             request = NewUserRequest(models=["mistral"])
             key = await new_user(request)
             print(key)
@@ -175,13 +187,14 @@ def test_call_with_valid_model(custom_db_client):
         pytest.fail(f"An exception occurred - {str(e)}")
 
 
-def test_call_with_key_over_budget(custom_db_client):
+def test_call_with_key_over_budget(prisma_client):
     # 5. Make a call with a key over budget, expect to fail
-    setattr(litellm.proxy.proxy_server, "custom_db_client", custom_db_client)
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
     try:
 
         async def test():
+            await litellm.proxy.proxy_server.prisma_client.connect()
             request = NewUserRequest(max_budget=0.00001)
             key = await new_user(request)
             print(key)
@@ -241,9 +254,9 @@ def test_call_with_key_over_budget(custom_db_client):
         print(vars(e))
 
 
-def test_call_with_key_over_budget_stream(custom_db_client):
+def test_call_with_key_over_budget_stream(prisma_client):
     # 6. Make a call with a key over budget, expect to fail
-    setattr(litellm.proxy.proxy_server, "custom_db_client", custom_db_client)
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
     from litellm._logging import verbose_proxy_logger
     import logging
@@ -253,6 +266,7 @@ def test_call_with_key_over_budget_stream(custom_db_client):
     try:
 
         async def test():
+            await litellm.proxy.proxy_server.prisma_client.connect()
             request = NewUserRequest(max_budget=0.00001)
             key = await new_user(request)
             print(key)
@@ -311,3 +325,67 @@ def test_call_with_key_over_budget_stream(custom_db_client):
         error_detail = e.detail
         assert "Authentication Error, ExceededBudget:" in error_detail
         print(vars(e))
+
+
+def test_generate_and_call_with_valid_key_never_expires(prisma_client):
+    # 7. Make a call with an key that never expires, expect to pass
+
+    print("prisma client=", prisma_client)
+
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    try:
+
+        async def test():
+            await litellm.proxy.proxy_server.prisma_client.connect()
+            request = NewUserRequest(duration=None)
+            key = await new_user(request)
+            print(key)
+
+            generated_key = key.key
+            bearer_token = "Bearer " + generated_key
+
+            request = Request(scope={"type": "http"})
+            request._url = URL(url="/chat/completions")
+
+            # use generated key to auth in
+            result = await user_api_key_auth(request=request, api_key=bearer_token)
+            print("result from user auth with new key", result)
+
+        asyncio.run(test())
+    except Exception as e:
+        pytest.fail(f"An exception occurred - {str(e)}")
+
+
+def test_generate_and_call_with_expired_key(prisma_client):
+    # 8. Make a call with an expired key, expect to fail
+
+    print("prisma client=", prisma_client)
+
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    try:
+
+        async def test():
+            await litellm.proxy.proxy_server.prisma_client.connect()
+            request = NewUserRequest(duration="0s")
+            key = await new_user(request)
+            print(key)
+
+            generated_key = key.key
+            bearer_token = "Bearer " + generated_key
+
+            request = Request(scope={"type": "http"})
+            request._url = URL(url="/chat/completions")
+
+            # use generated key to auth in
+            result = await user_api_key_auth(request=request, api_key=bearer_token)
+            print("result from user auth with new key", result)
+            pytest.fail(f"This should have failed!. IT's an expired key")
+
+        asyncio.run(test())
+    except Exception as e:
+        print("Got Exception", e)
+        print(e.detail)
+        assert "Authentication Error" in e.detail
+        pass
