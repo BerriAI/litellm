@@ -7,6 +7,7 @@ from litellm.proxy.hooks.parallel_request_limiter import MaxParallelRequestsHand
 from litellm.proxy.hooks.max_budget_limiter import MaxBudgetLimiter
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy.db.base_client import CustomDB
+from litellm._logging import verbose_proxy_logger
 from fastapi import HTTPException, status
 import smtplib
 from email.mime.text import MIMEText
@@ -381,7 +382,7 @@ class PrismaClient:
                     # Token does not exist.
                     raise HTTPException(
                         status_code=status.HTTP_401_UNAUTHORIZED,
-                        detail="invalid user key",
+                        detail="Authentication Error: invalid user key - token does not exist",
                     )
             elif user_id is not None:
                 response = await self.db.litellm_usertable.find_unique(  # type: ignore
@@ -559,7 +560,13 @@ class PrismaClient:
     )
     async def connect(self):
         try:
+            verbose_proxy_logger.debug(
+                "PrismaClient: connect() called Attempting to Connect to DB"
+            )
             if self.db.is_connected() == False:
+                verbose_proxy_logger.debug(
+                    "PrismaClient: DB not connected, Attempting to Connect to DB"
+                )
                 await self.db.connect()
         except Exception as e:
             asyncio.create_task(
