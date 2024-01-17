@@ -12,6 +12,7 @@ model LiteLLM_UserTable {
 		max_budget Float?
     spend      Float    @default(0.0)
     user_email    String?
+    models     String[] @default([])
 }
 
 // required for token gen
@@ -19,7 +20,7 @@ model LiteLLM_VerificationToken {
     token      String   @unique
     spend      Float    @default(0.0)
     expires    DateTime?
-    models     String[]
+    models     String[] @default([])
     aliases    Json  @default("{}")
     config     Json  @default("{}")
     user_id    String?

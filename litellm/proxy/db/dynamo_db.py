@@ -171,7 +171,7 @@ class DynamoDBWrapper(CustomDB):
                 if isinstance(v, datetime):
                     value[k] = v.isoformat()
 
-            await table.put_item(item=value)
+            return await table.put_item(item=value)
 
     async def get_data(self, key: str, table_name: Literal["user", "key", "config"]):
         from aiodynamo.client import Client
