@@ -289,28 +289,22 @@ async def user_api_key_auth(
                     token=api_key,
                 )
 
-                expires = datetime.utcnow().replace(tzinfo=timezone.utc)
             elif custom_db_client is not None:
                 valid_token = await custom_db_client.get_data(
                     key=api_key, table_name="key"
                 )
-            # Token exists, now check expiration.
-            if valid_token.expires is not None:
-                expiry_time = datetime.fromisoformat(valid_token.expires)
-                if expiry_time >= datetime.utcnow():
-                    # Token exists and is not expired.
-                    return response
-                else:
-                    # Token exists but is expired.
-                    raise HTTPException(
-                        status_code=status.HTTP_403_FORBIDDEN,
-                        detail="expired user key",
-                    )
-            verbose_proxy_logger.debug(f"valid token from prisma: {valid_token}")
-            user_api_key_cache.set_cache(key=api_key, value=valid_token, ttl=60)
+
+            verbose_proxy_logger.debug(f"Token from db: {valid_token}")
         elif valid_token is not None:
             verbose_proxy_logger.debug(f"API Key Cache Hit!")
         if valid_token:
+            # Got Valid Token from Cache, DB
+            # Run checks for
+            # 1. If token can call model
+            # 2. If user_id for this token is in budget
+            # 3. If token is expired
+
+            # Check 1. If token can call model
             litellm.model_alias_map = valid_token.aliases
             config = valid_token.config
             if config != {}:
@@ -332,7 +326,56 @@ async def user_api_key_auth(
                 if model in litellm.model_alias_map:
                     model = litellm.model_alias_map[model]
                 if model and model not in valid_token.models:
-                    raise Exception(f"Token not allowed to access model")
+                    raise ValueError(
+                        f"API Key not allowed to access model. This token can only access models={valid_token.models}. Tried to access {model}"
+                    )
+
+            # Check 2. If user_id for this token is in budget
+            if valid_token.user_id is not None:
+                if prisma_client is not None:
+                    user_id_information = await prisma_client.get_data(
+                        user_id=valid_token.user_id, table_name="user"
+                    )
+                if custom_db_client is not None:
+                    user_id_information = await custom_db_client.get_data(
+                        key=valid_token.user_id, table_name="user"
+                    )
+                verbose_proxy_logger.debug(
+                    f"user_id_information: {user_id_information}"
+                )
+
+                # Token exists, not expired now check if its in budget for the user
+                if valid_token.spend is not None and valid_token.user_id is not None:
+                    user_max_budget = user_id_information.max_budget
+                    user_current_spend = user_id_information.spend
+                    if user_current_spend > user_max_budget:
+                        raise Exception(
+                            f"ExceededBudget: User {valid_token.user_id} has exceeded their budget. Current spend: {user_current_spend}; Max Budget: {user_max_budget}"
+                        )
+
+            # Check 3. If token is expired
+            if valid_token.expires is not None:
+                current_time = datetime.now(timezone.utc)
+                expiry_time = datetime.fromisoformat(valid_token.expires)
+                if (
+                    expiry_time.tzinfo is None
+                    or expiry_time.tzinfo.utcoffset(expiry_time) is None
+                ):
+                    expiry_time = expiry_time.replace(tzinfo=timezone.utc)
+                verbose_proxy_logger.debug(
+                    f"Checking if token expired, expiry time {expiry_time} and current time {current_time}"
+                )
+                if expiry_time < current_time:
+                    # Token exists but is expired.
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="expired user key",
+                    )
+
+            # Token passed all checks
+            # Add token to cache
+            user_api_key_cache.set_cache(key=api_key, value=valid_token, ttl=60)
+
             api_key = valid_token.token
             valid_token_dict = _get_pydantic_json_dict(valid_token)
             valid_token_dict.pop("token", None)
@@ -359,7 +402,7 @@ async def user_api_key_auth(
                 )
             return UserAPIKeyAuth(api_key=api_key, **valid_token_dict)
         else:
-            raise Exception(f"Invalid token")
+            raise Exception(f"Invalid Key Passed to LiteLLM Proxy")
     except Exception as e:
         # verbose_proxy_logger.debug(f"An exception occurred - {traceback.format_exc()}")
         traceback.print_exc()
@@ -368,7 +411,7 @@ async def user_api_key_auth(
         else:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="invalid user key",
+                detail=f"Authentication Error, {str(e)}",
             )
 
 
@@ -1030,8 +1073,10 @@ async def generate_key_helper_fn(
             await prisma_client.insert_data(data=verification_token_data)
         elif custom_db_client is not None:
             ## CREATE USER (If necessary)
+            verbose_proxy_logger.debug(f"CustomDBClient: Creating User={user_data}")
             await custom_db_client.insert_data(value=user_data, table_name="user")
             ## CREATE KEY
+            verbose_proxy_logger.debug(f"CustomDBClient: Creating Key={key_data}")
             await custom_db_client.insert_data(value=key_data, table_name="key")
     except Exception as e:
         traceback.print_exc()
@@ -1285,7 +1330,11 @@ async def startup_event():
         verbose_proxy_logger.debug(f"custom_db_client connecting - {custom_db_client}")
         await custom_db_client.connect()
 
-    if prisma_client is not None and master_key is not None:
+    if prisma_client is not None:
+        if master_key is None:
+            raise ValueError(
+                "Using Proxy Auth, but Master Key not set, please set `LITELLM_MASTER_KEY` in your environment or `master_key` in your config.yaml"
+            )
         # add master key to db
         await generate_key_helper_fn(
             duration=None, models=[], aliases={}, config={}, spend=0, token=master_key
@@ -1293,7 +1342,11 @@ async def startup_event():
     verbose_proxy_logger.debug(
         f"custom_db_client client - Inserting master key {custom_db_client}. Master_key: {master_key}"
     )
-    if custom_db_client is not None and master_key is not None:
+    if custom_db_client is not None:
+        if master_key is None:
+            raise ValueError(
+                "Using Proxy Auth, but Master Key not set, please set `LITELLM_MASTER_KEY` in your environment or `master_key` in your config.yaml"
+            )
         # add master key to db
         await generate_key_helper_fn(
             duration=None, models=[], aliases={}, config={}, spend=0, token=master_key
@@ -2674,7 +2727,7 @@ async def shutdown_event():
 
 
 def cleanup_router_config_variables():
-    global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, use_background_health_checks, health_check_interval
+    global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, use_background_health_checks, health_check_interval, prisma_client, custom_db_client
 
     # Set all variables to None
     master_key = None
@@ -2684,6 +2737,8 @@ def cleanup_router_config_variables():
     user_custom_auth_path = None
     use_background_health_checks = None
     health_check_interval = None
+    prisma_client = None
+    custom_db_client = None
 
 
 app.include_router(router)
