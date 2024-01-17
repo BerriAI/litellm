@@ -95,6 +95,25 @@ class AzureOpenAIConfig(OpenAIConfig):
         )
 
 
+def select_azure_base_url_or_endpoint(azure_client_params: dict):
+    # azure_client_params = {
+    #     "api_version": api_version,
+    #     "azure_endpoint": api_base,
+    #     "azure_deployment": model,
+    #     "http_client": litellm.client_session,
+    #     "max_retries": max_retries,
+    #     "timeout": timeout,
+    # }
+    azure_endpoint = azure_client_params.get("azure_endpoint", None)
+    if azure_endpoint is not None:
+        if "/openai" in azure_endpoint:
+            # this is base_url, not an azure_endpoint
+            azure_client_params["base_url"] = azure_endpoint
+            azure_client_params.pop("azure_endpoint")
+
+    return azure_client_params
+
+
 class AzureChatCompletion(BaseLLM):
     def __init__(self) -> None:
         super().__init__()
@@ -239,6 +258,9 @@ class AzureChatCompletion(BaseLLM):
                     "max_retries": max_retries,
                     "timeout": timeout,
                 }
+                azure_client_params = select_azure_base_url_or_endpoint(
+                    azure_client_params=azure_client_params
+                )
                 if api_key is not None:
                     azure_client_params["api_key"] = api_key
                 elif azure_ad_token is not None:
