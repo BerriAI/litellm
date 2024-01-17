@@ -24,14 +24,7 @@ from litellm.proxy.proxy_server import (
 )
 
 
-@pytest.fixture
-def cleanup_router_config():
-    from litellm.proxy.proxy_server import cleanup_router_config_variables
-
-    cleanup_router_config_variables()
-
-
-def test_proxy_gunicorn_startup_direct_config(cleanup_router_config):
+def test_proxy_gunicorn_startup_direct_config():
     """
     gunicorn startup requires the config to be passed in via environment variables
 
@@ -53,7 +46,7 @@ def test_proxy_gunicorn_startup_direct_config(cleanup_router_config):
             pytest.fail(f"An exception occurred - {str(e)}")
 
 
-def test_proxy_gunicorn_startup_config_dict(cleanup_router_config):
+def test_proxy_gunicorn_startup_config_dict():
     try:
         filepath = os.path.dirname(os.path.abspath(__file__))
         # test with worker_config = config yaml
