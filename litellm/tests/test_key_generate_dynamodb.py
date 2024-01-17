@@ -97,7 +97,8 @@ def test_call_with_invalid_key():
         asyncio.run(test())
     except Exception as e:
         print("Got Exception", e)
-        print(str(e))
+        print(e.detail)
+        assert "Authentication Error" in e.detail
         pass
 
 
