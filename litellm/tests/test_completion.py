@@ -229,7 +229,7 @@ def test_completion_azure_gpt4_vision():
         litellm.set_verbose = True
         response = completion(
             model="azure/gpt-4-vision",
-            timeout=1,
+            timeout=5,
             messages=[
                 {
                     "role": "user",
@@ -244,21 +244,31 @@ def test_completion_azure_gpt4_vision():
                     ],
                 }
             ],
-            base_url="https://gpt-4-vision-resource.openai.azure.com/",
+            base_url="https://gpt-4-vision-resource.openai.azure.com/openai/deployments/gpt-4-vision/extensions",
             api_key=os.getenv("AZURE_VISION_API_KEY"),
+            enhancements={"ocr": {"enabled": True}, "grounding": {"enabled": True}},
+            dataSources=[
+                {
+                    "type": "AzureComputerVision",
+                    "parameters": {
+                        "endpoint": "https://gpt-4-vision-enhancement.cognitiveservices.azure.com/",
+                        "key": os.environ["AZURE_VISION_ENHANCE_KEY"],
+                    },
+                }
+            ],
         )
         print(response)
     except openai.APITimeoutError:
         print("got a timeout error")
         pass
-    except openai.RateLimitError:
-        print("got a rate liimt error")
+    except openai.RateLimitError as e:
+        print("got a rate liimt error", e)
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
 
-# test_completion_azure_gpt4_vision()
+test_completion_azure_gpt4_vision()
 
 
 @pytest.mark.skip(reason="this test is flaky")
