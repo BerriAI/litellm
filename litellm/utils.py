@@ -3197,6 +3197,10 @@ def get_optional_params(
     passed_params = locals()
     special_params = passed_params.pop("kwargs")
     for k, v in special_params.items():
+        if k.startswith("aws_") and (
+            custom_llm_provider != "bedrock" or custom_llm_provider != "sagemaker"
+        ):  # allow dynamically setting boto3 init logic
+            continue
         passed_params[k] = v
     default_params = {
         "functions": None,
