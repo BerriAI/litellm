@@ -7,6 +7,7 @@
 # 6. Make a streaming chat/completions call with key over budget, expect to fail
 # 7. Make a call with an key that never expires, expect to pass
 # 8. Make a call with an expired key, expect to fail
+# 9. Delete a Key
 
 
 # function to call to generate key - async def new_user(data: NewUserRequest):
@@ -27,13 +28,18 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import pytest, logging, asyncio
 import litellm, asyncio
-from litellm.proxy.proxy_server import new_user, user_api_key_auth, user_update
+from litellm.proxy.proxy_server import (
+    new_user,
+    user_api_key_auth,
+    user_update,
+    delete_key_fn,
+)
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm._logging import verbose_proxy_logger
 
 verbose_proxy_logger.setLevel(level=logging.DEBUG)
 
-from litellm.proxy._types import NewUserRequest, DynamoDBArgs
+from litellm.proxy._types import NewUserRequest, DynamoDBArgs, DeleteKeyRequest
 from litellm.proxy.utils import DBClient
 from starlette.datastructures import URL
 from litellm.caching import DualCache
@@ -382,6 +388,88 @@ def test_generate_and_call_with_expired_key(prisma_client):
             result = await user_api_key_auth(request=request, api_key=bearer_token)
             print("result from user auth with new key", result)
             pytest.fail(f"This should have failed!. IT's an expired key")
+
+        asyncio.run(test())
+    except Exception as e:
+        print("Got Exception", e)
+        print(e.detail)
+        assert "Authentication Error" in e.detail
+        pass
+
+
+def test_delete_key(prisma_client):
+    # 9. Generate a Key, delete it. Check if deletion works fine
+
+    print("prisma client=", prisma_client)
+
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    try:
+
+        async def test():
+            await litellm.proxy.proxy_server.prisma_client.connect()
+            request = NewUserRequest()
+            key = await new_user(request)
+            print(key)
+
+            generated_key = key.key
+            bearer_token = "Bearer " + generated_key
+
+            request = Request(scope={"type": "http"})
+            request._url = URL(url="/chat/completions")
+
+            delete_key_request = DeleteKeyRequest(keys=[generated_key])
+
+            # delete the key
+            result_delete_key = await delete_key_fn(
+                request=request, data=delete_key_request
+            )
+            print("result from delete key", result_delete_key)
+            assert result_delete_key == {"deleted_keys": [generated_key]}
+
+        asyncio.run(test())
+    except Exception as e:
+        pytest.fail(f"An exception occurred - {str(e)}")
+
+
+def test_delete_key_auth(prisma_client):
+    # 10. Generate a Key, delete it, use it to make a call -> expect fail
+
+    print("prisma client=", prisma_client)
+
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    try:
+
+        async def test():
+            await litellm.proxy.proxy_server.prisma_client.connect()
+            request = NewUserRequest()
+            key = await new_user(request)
+            print(key)
+
+            generated_key = key.key
+            bearer_token = "Bearer " + generated_key
+
+            request = Request(scope={"type": "http"})
+            request._url = URL(url="/chat/completions")
+
+            delete_key_request = DeleteKeyRequest(keys=[generated_key])
+
+            # delete the key
+            result_delete_key = await delete_key_fn(
+                request=request, data=delete_key_request
+            )
+
+            print("result from delete key", result_delete_key)
+            assert result_delete_key == {"deleted_keys": [generated_key]}
+
+            request = Request(scope={"type": "http"}, receive=None)
+            request._url = URL(url="/chat/completions")
+
+            # use generated key to auth in
+            result = await user_api_key_auth(request=request, api_key=bearer_token)
+            print("got result", result)
+            pytest.fail(f"This should have failed!. IT's an invalid key")
 
         asyncio.run(test())
     except Exception as e:
