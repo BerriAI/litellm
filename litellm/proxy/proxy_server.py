@@ -2727,7 +2727,7 @@ async def shutdown_event():
 
 
 def cleanup_router_config_variables():
-    global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, use_background_health_checks, health_check_interval
+    global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, use_background_health_checks, health_check_interval, prisma_client, custom_db_client
 
     # Set all variables to None
     master_key = None
@@ -2737,6 +2737,8 @@ def cleanup_router_config_variables():
     user_custom_auth_path = None
     use_background_health_checks = None
     health_check_interval = None
+    prisma_client = None
+    custom_db_client = None
 
 
 app.include_router(router)
