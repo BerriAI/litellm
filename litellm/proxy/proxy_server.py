@@ -2042,6 +2042,19 @@ async def update_key_fn(request: Request, data: UpdateKeyRequest):
     "/key/delete", tags=["key management"], dependencies=[Depends(user_api_key_auth)]
 )
 async def delete_key_fn(request: Request, data: DeleteKeyRequest):
+    """
+    Delete a key from the key management system.
+
+    Parameters::
+    - keys (List[str]): A list of keys to delete. Example {"keys": ["sk-QWrxEynunsNpV1zT48HIrw"]}
+
+    Returns:
+    - deleted_keys (List[str]): A list of deleted keys. Example {"deleted_keys": ["sk-QWrxEynunsNpV1zT48HIrw"]}
+
+
+    Raises:
+        HTTPException: If an error occurs during key deletion.
+    """
     try:
         keys = data.keys
 
