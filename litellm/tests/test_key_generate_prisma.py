@@ -60,7 +60,7 @@ def test_generate_and_call_with_valid_key():
     try:
 
         async def test():
-            await litellm.litellm.proxy.proxy_server.prisma_client.connect()
+            await litellm.proxy.proxy_server.prisma_client.connect()
             request = NewUserRequest()
             key = await new_user(request)
             print(key)
@@ -87,7 +87,7 @@ def test_call_with_invalid_key():
     try:
 
         async def test():
-            await litellm.litellm.proxy.proxy_server.prisma_client.connect()
+            await litellm.proxy.proxy_server.prisma_client.connect()
             generated_key = "bad-key"
             bearer_token = "Bearer " + generated_key
 
@@ -114,7 +114,7 @@ def test_call_with_invalid_model():
     try:
 
         async def test():
-            await litellm.litellm.proxy.proxy_server.prisma_client.connect()
+            await litellm.proxy.proxy_server.prisma_client.connect()
             request = NewUserRequest(models=["mistral"])
             key = await new_user(request)
             print(key)
@@ -150,7 +150,7 @@ def test_call_with_valid_model():
     try:
 
         async def test():
-            await litellm.litellm.proxy.proxy_server.prisma_client.connect()
+            await litellm.proxy.proxy_server.prisma_client.connect()
             request = NewUserRequest(models=["mistral"])
             key = await new_user(request)
             print(key)
@@ -182,7 +182,7 @@ def test_call_with_key_over_budget():
     try:
 
         async def test():
-            await litellm.litellm.proxy.proxy_server.prisma_client.connect()
+            await litellm.proxy.proxy_server.prisma_client.connect()
             request = NewUserRequest(max_budget=0.00001)
             key = await new_user(request)
             print(key)
@@ -254,7 +254,7 @@ def test_call_with_key_over_budget_stream():
     try:
 
         async def test():
-            await litellm.litellm.proxy.proxy_server.prisma_client.connect()
+            await litellm.proxy.proxy_server.prisma_client.connect()
             request = NewUserRequest(max_budget=0.00001)
             key = await new_user(request)
             print(key)
