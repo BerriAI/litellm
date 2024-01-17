@@ -1443,12 +1443,22 @@ class Router:
                     verbose_router_logger.debug(
                         f"Initializing Azure OpenAI Client for {model_name}, Api Base: {str(api_base)}, Api Key:{api_key}"
                     )
+                    azure_client_params = {
+                        "api_key": api_key,
+                        "azure_endpoint": api_base,
+                        "api_version": api_version,
+                    }
+                    from litellm.llms.azure import select_azure_base_url_or_endpoint
+
+                    # this decides if we should set azure_endpoint or base_url on Azure OpenAI Client
+                    # required to support GPT-4 vision enhancements, since base_url needs to be set on Azure OpenAI Client
+                    azure_client_params = select_azure_base_url_or_endpoint(
+                        azure_client_params
+                    )
 
                     cache_key = f"{model_id}_async_client"
                     _client = openai.AsyncAzureOpenAI(  # type: ignore
-                        api_key=api_key,
-                        azure_endpoint=api_base,
-                        api_version=api_version,
+                        **azure_client_params,
                         timeout=timeout,
                         max_retries=max_retries,
                         http_client=httpx.AsyncClient(
@@ -1467,9 +1477,7 @@ class Router:
 
                     cache_key = f"{model_id}_client"
                     _client = openai.AzureOpenAI(  # type: ignore
-                        api_key=api_key,
-                        azure_endpoint=api_base,
-                        api_version=api_version,
+                        **azure_client_params,
                         timeout=timeout,
                         max_retries=max_retries,
                         http_client=httpx.Client(
@@ -1489,9 +1497,7 @@ class Router:
                     # streaming clients should have diff timeouts
                     cache_key = f"{model_id}_stream_async_client"
                     _client = openai.AsyncAzureOpenAI(  # type: ignore
-                        api_key=api_key,
-                        azure_endpoint=api_base,
-                        api_version=api_version,
+                        **azure_client_params,
                         timeout=stream_timeout,
                         max_retries=max_retries,
                         http_client=httpx.AsyncClient(
@@ -1510,9 +1516,7 @@ class Router:
 
                     cache_key = f"{model_id}_stream_client"
                     _client = openai.AzureOpenAI(  # type: ignore
-                        api_key=api_key,
-                        azure_endpoint=api_base,
-                        api_version=api_version,
+                        **azure_client_params,
                         timeout=stream_timeout,
                         max_retries=max_retries,
                         http_client=httpx.Client(
