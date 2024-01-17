@@ -216,6 +216,14 @@ def completion(
             status_code=400,
             message="vertexai import failed please run `pip install google-cloud-aiplatform`",
         )
+
+    if not (
+        hasattr(vertexai, "preview") or hasattr(vertexai.preview, "language_models")
+    ):
+        raise VertexAIError(
+            status_code=400,
+            message="""Upgrade vertex ai. Run `pip install "google-cloud-aiplatform>=1.38"`""",
+        )
     try:
         from vertexai.preview.language_models import (
             ChatModel,
