@@ -2045,8 +2045,11 @@ async def delete_key_fn(request: Request, data: DeleteKeyRequest):
     try:
         keys = data.keys
 
-        deleted_keys = await delete_verification_token(tokens=keys)
-        assert len(keys) == deleted_keys
+        result = await delete_verification_token(tokens=keys)
+        verbose_proxy_logger.debug("/key/delete - deleted_keys=", result)
+
+        number_deleted_keys = len(result["deleted_keys"])
+        assert len(keys) == number_deleted_keys
         return {"deleted_keys": keys}
     except Exception as e:
         raise HTTPException(
