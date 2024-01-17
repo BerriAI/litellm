@@ -167,12 +167,8 @@ class GenerateKeyResponse(LiteLLMBase):
     user_id: str
 
 
-class _DeleteKeyObject(LiteLLMBase):
-    key: str
-
-
 class DeleteKeyRequest(LiteLLMBase):
-    keys: List[_DeleteKeyObject]
+    keys: List[str]
 
 
 class NewUserRequest(GenerateKeyRequest):
