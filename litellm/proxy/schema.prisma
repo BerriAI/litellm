@@ -32,3 +32,20 @@ model LiteLLM_Config {
   param_name String @id
   param_value Json?
 }
+
+model LiteLLM_SpendLogs {
+  request_id          String @unique
+  call_type           String
+  api_key             String  @default ("")
+  spend               Float    @default(0.0)
+  startTime           DateTime // Assuming start_time is a DateTime field
+  endTime             DateTime // Assuming end_time is a DateTime field
+  model               String   @default("")
+  user                String   @default("")
+  modelParameters     Json     @default("{}")// Assuming optional_params is a JSON field
+  messages            Json     @default("[]")
+  response            Json     @default("{}")
+  usage               Json     @default("{}")
+  metadata            Json     @default("{}")
+  cache_hit           String   @default("")
+}
