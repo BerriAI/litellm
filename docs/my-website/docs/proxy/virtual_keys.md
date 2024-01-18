@@ -136,6 +136,35 @@ curl -X POST "https://0.0.0.0:8000/key/generate" \
 - **How to upgrade / downgrade request?** Change the alias mapping
 - **How are routing between diff keys/api bases done?** litellm handles this by shuffling between different models in the model list with the same model_name. [**See Code**](https://github.com/BerriAI/litellm/blob/main/litellm/router.py)
 
+
+## Grant Access to new model 
+
+Use model access groups to give users access to select models, and add new ones to it over time (e.g. mistral, llama-2, etc.)
+
+**Step 1. Assign model, access group in config.yaml**
+
+```yaml
+model_list:
+  - model_name: text-embedding-ada-002
+    litellm_params:
+      model: azure/azure-embedding-model
+      api_base: "os.environ/AZURE_API_BASE"
+      api_key: "os.environ/AZURE_API_KEY"
+      api_version: "2023-07-01-preview"
+    model_info:
+      access_groups: ["beta-models"] # 👈 Model Access Group
+```
+
+**Step 2. Create key with access group**
+
+```bash
+curl --location 'http://localhost:8000/key/generate' \
+-H 'Authorization: Bearer <your-master-key>' \
+-H 'Content-Type: application/json' \
+-d '{"models": ["beta-models"], # 👈 Model Access Group
+			"max_budget": 0,}'
+```
+
 ## Tracking Spend 
 
 You can get spend for a key by using the `/key/info` endpoint. 
