@@ -1110,10 +1110,15 @@ async def generate_key_helper_fn(
             user_row = await custom_db_client.insert_data(
                 value=user_data, table_name="user"
             )
+            if user_row is None:
+                # GET USER ROW
+                user_row = await custom_db_client.get_data(
+                    key=user_id, table_name="user"
+                )
 
             ## use default user model list if no key-specific model list provided
-            if len(user_row["models"]) > 0 and len(key_data["models"]) == 0:  # type: ignore
-                key_data["models"] = user_row["models"]
+            if len(user_row.models) > 0 and len(key_data["models"]) == 0:  # type: ignore
+                key_data["models"] = user_row.models
             ## CREATE KEY
             verbose_proxy_logger.debug(f"CustomDBClient: Creating Key={key_data}")
             await custom_db_client.insert_data(value=key_data, table_name="key")
