@@ -1037,6 +1037,7 @@ async def generate_key_helper_fn(
     max_budget: Optional[float] = None,
     token: Optional[str] = None,
     user_id: Optional[str] = None,
+    team_id: Optional[str] = None,
     user_email: Optional[str] = None,
     max_parallel_requests: Optional[int] = None,
     metadata: Optional[dict] = {},
