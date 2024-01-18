@@ -186,6 +186,40 @@ curl --location 'http://localhost:8000/key/generate' \
 			"max_budget": 0,}'
 ```
 
+
+## /key/info
+
+### Request
+```shell
+curl -X GET "http://0.0.0.0:8000/key/info?key=sk-02Wr4IAlN3NvPXvL5JVvDA" \
+-H "Authorization: Bearer sk-1234"
+```
+
+Request Params:
+- key: str - The key you want the info for
+
+### Response
+
+```json
+{
+  "key": "sk-02Wr4IAlN3NvPXvL5JVvDA",
+  "info": {
+    "token": "80321a12d03412c527f2bd9db5fabd746abead2e1d50b435a534432fbaca9ef5",
+    "spend": 0.0,
+    "expires": "2024-01-18T23:52:09.125000+00:00",
+    "models": ["azure-gpt-3.5", "azure-embedding-model"],
+    "aliases": {},
+    "config": {},
+    "user_id": "ishaan2@berri.ai",
+    "team_id": "None",
+    "max_parallel_requests": null,
+    "metadata": {}
+  }
+}
+
+
+```
+
 ## /key/update
 
 ### Request
@@ -212,7 +246,7 @@ Request Params:
 
 ### Response
 
-```python
+```json
 {
   "key": "sk-kdEXbIqZRwEeEiHwdg7sFA",
   "models": ["gpt-3.5-turbo", "gpt-4", "claude-2"],
