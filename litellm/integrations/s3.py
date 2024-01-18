@@ -124,9 +124,11 @@ class S3Logger:
                     pass
 
             s3_object_key = (
-                (self.s3_path.rstrip('/') + '/' if self.s3_path else '') + 
-                payload["id"] + "-time=" + str(start_time)
-            )
+                (self.s3_path.rstrip("/") + "/" if self.s3_path else "")
+                + payload["id"]
+                + "-time="
+                + str(start_time)
+            )  # we need the s3 key to include the time, so we log cache hits too
 
             import json
 
