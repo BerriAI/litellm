@@ -77,7 +77,6 @@ def test_completion_bedrock_claude_2_1_completion_auth():
     os.environ.pop("AWS_ACCESS_KEY_ID", None)
     os.environ.pop("AWS_SECRET_ACCESS_KEY", None)
     os.environ.pop("AWS_REGION_NAME", None)
-
     try:
         response = completion(
             model="bedrock/anthropic.claude-v2:1",
