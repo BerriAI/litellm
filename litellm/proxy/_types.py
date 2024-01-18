@@ -1,8 +1,8 @@
-from pydantic import BaseModel, Extra, Field, root_validator
+from pydantic import BaseModel, Extra, Field, root_validator, Json
 import enum
-from typing import Optional, List, Union, Dict, Literal
+from typing import Optional, List, Union, Dict, Literal, Any
 from datetime import datetime
-import uuid, json
+import uuid, json, sys, os
 
 
 class LiteLLMBase(BaseModel):
@@ -318,13 +318,14 @@ class LiteLLM_UserTable(LiteLLMBase):
 class LiteLLM_SpendLogs(LiteLLMBase):
     request_id: str
     call_type: str
-    startTime: Union[str, None]
-    endTime: Union[str, None]
-    model: str = ""
-    user: str = ""
-    modelParameters: Dict = {}
-    messages: List[str] = []
-    call_cost: float = 0.0
-    response: Dict = {}
-    usage: Dict = {}
-    metadata: Dict = {}
+    startTime: Union[str, datetime, None]
+    endTime: Union[str, datetime, None]
+    model: Optional[str] = ""
+    user: Optional[str] = ""
+    modelParameters: Optional[Json] = {}
+    messages: Optional[Json] = []
+    spend: Optional[float] = 0.0
+    response: Optional[Json] = {}
+    usage: Optional[Json] = {}
+    metadata: Optional[Json] = {}
+    cache_hit: Optional[str] = "False"
