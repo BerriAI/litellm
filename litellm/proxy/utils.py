@@ -370,19 +370,21 @@ class PrismaClient:
                     response = await self.db.litellm_verificationtoken.find_unique(
                         where={"token": hashed_token}
                     )
+                    if response is not None:
+                        # for prisma we need to cast the expires time to str
+                        if isinstance(response.expires, datetime):
+                            response.expires = response.expires.isoformat()
                 elif query_type == "find_all" and user_id is not None:
                     response = await self.db.litellm_verificationtoken.find_many(
                         where={"user_id": user_id}
                     )
+                    if response is not None and len(response) > 0:
+                        for r in response:
+                            if isinstance(r.expires, datetime):
+                                r.expires = r.expires.isoformat()
                 print_verbose(f"PrismaClient: response={response}")
                 if response is not None:
-                    if isinstance(response, LiteLLM_VerificationToken):
-                        # for prisma we need to cast the expires time to str
-                        if isinstance(response.expires, datetime):
-                            response.expires = response.expires.isoformat()
-                        return response
-                    else:
-                        return response
+                    return response
                 else:
                     # Token does not exist.
                     raise HTTPException(

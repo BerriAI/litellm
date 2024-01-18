@@ -331,9 +331,10 @@ async def user_api_key_auth(
                     f"LLM Model List pre access group check: {llm_model_list}"
                 )
                 access_groups = []
-                for m in llm_model_list:
-                    for group in m.get("model_info", {}).get("access_groups", []):
-                        access_groups.append((m["model_name"], group))
+                if llm_model_list is not None:
+                    for m in llm_model_list:
+                        for group in m.get("model_info", {}).get("access_groups", []):
+                            access_groups.append((m["model_name"], group))
 
                 allowed_models = valid_token.models
                 if (
