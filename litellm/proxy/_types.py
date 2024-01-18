@@ -134,6 +134,8 @@ class GenerateKeyRequest(LiteLLMBase):
 
 
 class UpdateKeyRequest(LiteLLMBase):
+    # Note: the defaults of all Params here MUST BE NONE
+    # else they will get overwritten
     key: str
     duration: Optional[str] = None
     models: Optional[list] = None
@@ -142,7 +144,7 @@ class UpdateKeyRequest(LiteLLMBase):
     spend: Optional[float] = None
     user_id: Optional[str] = None
     max_parallel_requests: Optional[int] = None
-    metadata: Optional[dict] = {}
+    metadata: Optional[dict] = None
 
 
 class UserAPIKeyAuth(LiteLLMBase):  # the expected response object for user api key auth
