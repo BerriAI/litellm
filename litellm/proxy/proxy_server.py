@@ -1892,7 +1892,7 @@ async def image_generation(
             data["model"] = user_model
 
         if "metadata" not in data:
-            data["metadata"] = {"user_api_key": user_api_key_dict.api_key}
+            data["metadata"] = {}
         data["metadata"]["user_api_key"] = user_api_key_dict.api_key
         data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
         data["metadata"]["headers"] = dict(request.headers)
