@@ -317,14 +317,15 @@ class LiteLLM_UserTable(LiteLLMBase):
 
 class LiteLLM_SpendLogs(LiteLLMBase):
     request_id: str
+    api_key: str
+    model: Optional[str] = ""
     call_type: str
+    spend: Optional[float] = 0.0
     startTime: Union[str, datetime, None]
     endTime: Union[str, datetime, None]
-    model: Optional[str] = ""
     user: Optional[str] = ""
     modelParameters: Optional[Json] = {}
     messages: Optional[Json] = []
-    spend: Optional[float] = 0.0
     response: Optional[Json] = {}
     usage: Optional[Json] = {}
     metadata: Optional[Json] = {}
