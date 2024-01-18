@@ -1423,16 +1423,14 @@ async def completion(
         )
         if user_model:
             data["model"] = user_model
-        if "metadata" in data:
-            data["metadata"]["user_api_key"] = user_api_key_dict.api_key
-            data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
-            data["metadata"]["headers"] = dict(request.headers)
-        else:
-            data["metadata"] = {
-                "user_api_key": user_api_key_dict.api_key,
-                "user_api_key_user_id": user_api_key_dict.user_id,
-            }
-            data["metadata"]["headers"] = dict(request.headers)
+        if "metadata" not in data:
+            data["metadata"] = {}
+        data["metadata"]["user_api_key"] = user_api_key_dict.api_key
+        data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
+        data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
+        data["metadata"]["headers"] = dict(request.headers)
+        data["metadata"]["endpoint"] = str(request.url)
+
         # override with user settings, these are params passed via cli
         if user_temperature:
             data["temperature"] = user_temperature
@@ -1584,15 +1582,13 @@ async def chat_completion(
             # if users are using user_api_key_auth, set `user` in `data`
             data["user"] = user_api_key_dict.user_id
 
-        if "metadata" in data:
-            verbose_proxy_logger.debug(f'received metadata: {data["metadata"]}')
-            data["metadata"]["user_api_key"] = user_api_key_dict.api_key
-            data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
-            data["metadata"]["headers"] = dict(request.headers)
-        else:
-            data["metadata"] = {"user_api_key": user_api_key_dict.api_key}
-            data["metadata"]["headers"] = dict(request.headers)
-            data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
+        if "metadata" not in data:
+            data["metadata"] = {}
+        data["metadata"]["user_api_key"] = user_api_key_dict.api_key
+        data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
+        data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
+        data["metadata"]["headers"] = dict(request.headers)
+        data["metadata"]["endpoint"] = str(request.url)
 
         global user_temperature, user_request_timeout, user_max_tokens, user_api_base
         # override with user settings, these are params passed via cli
@@ -1754,14 +1750,13 @@ async def embeddings(
         )
         if user_model:
             data["model"] = user_model
-        if "metadata" in data:
-            data["metadata"]["user_api_key"] = user_api_key_dict.api_key
-            data["metadata"]["headers"] = dict(request.headers)
-            data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
-        else:
-            data["metadata"] = {"user_api_key": user_api_key_dict.api_key}
-            data["metadata"]["headers"] = dict(request.headers)
-            data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
+        if "metadata" not in data:
+            data["metadata"] = {}
+        data["metadata"]["user_api_key"] = user_api_key_dict.api_key
+        data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
+        data["metadata"]["headers"] = dict(request.headers)
+        data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
+        data["metadata"]["endpoint"] = str(request.url)
 
         router_model_names = (
             [m["model_name"] for m in llm_model_list]
@@ -1895,14 +1890,14 @@ async def image_generation(
         )
         if user_model:
             data["model"] = user_model
-        if "metadata" in data:
-            data["metadata"]["user_api_key"] = user_api_key_dict.api_key
-            data["metadata"]["headers"] = dict(request.headers)
-            data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
-        else:
-            data["metadata"] = {"user_api_key": user_api_key_dict.api_key}
-            data["metadata"]["headers"] = dict(request.headers)
-            data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
+
+        if "metadata" not in data:
+            data["metadata"] = {}
+        data["metadata"]["user_api_key"] = user_api_key_dict.api_key
+        data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
+        data["metadata"]["headers"] = dict(request.headers)
+        data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
+        data["metadata"]["endpoint"] = str(request.url)
 
         router_model_names = (
             [m["model_name"] for m in llm_model_list]
@@ -2471,15 +2466,13 @@ async def async_queue_request(
             # if users are using user_api_key_auth, set `user` in `data`
             data["user"] = user_api_key_dict.user_id
 
-        if "metadata" in data:
-            verbose_proxy_logger.debug(f'received metadata: {data["metadata"]}')
-            data["metadata"]["user_api_key"] = user_api_key_dict.api_key
-            data["metadata"]["headers"] = dict(request.headers)
-            data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
-        else:
-            data["metadata"] = {"user_api_key": user_api_key_dict.api_key}
-            data["metadata"]["headers"] = dict(request.headers)
-            data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
+        if "metadata" not in data:
+            data["metadata"] = {}
+        data["metadata"]["user_api_key"] = user_api_key_dict.api_key
+        data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
+        data["metadata"]["headers"] = dict(request.headers)
+        data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
+        data["metadata"]["endpoint"] = str(request.url)
 
         global user_temperature, user_request_timeout, user_max_tokens, user_api_base
         # override with user settings, these are params passed via cli
