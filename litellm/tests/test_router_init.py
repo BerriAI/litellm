@@ -337,6 +337,15 @@ def test_router_init_gpt_4_vision_enhancements():
                     "model": "azure/gpt-4-vision",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "base_url": "https://gpt-4-vision-resource.openai.azure.com/openai/deployments/gpt-4-vision/extensions/",
+                    "dataSources": [
+                        {
+                            "type": "AzureComputerVision",
+                            "parameters": {
+                                "endpoint": "os.environ/AZURE_VISION_ENHANCE_ENDPOINT",
+                                "key": "os.environ/AZURE_VISION_ENHANCE_KEY",
+                            },
+                        }
+                    ],
                 },
             }
         ]
@@ -350,6 +359,20 @@ def test_router_init_gpt_4_vision_enhancements():
             router.model_list[0]["litellm_params"]["base_url"]
             == "https://gpt-4-vision-resource.openai.azure.com/openai/deployments/gpt-4-vision/extensions/"
         )  # set in env
+
+        assert (
+            router.model_list[0]["litellm_params"]["dataSources"][0]["parameters"][
+                "endpoint"
+            ]
+            == os.environ["AZURE_VISION_ENHANCE_ENDPOINT"]
+        )
+
+        assert (
+            router.model_list[0]["litellm_params"]["dataSources"][0]["parameters"][
+                "key"
+            ]
+            == os.environ["AZURE_VISION_ENHANCE_KEY"]
+        )
 
         azure_client = router._get_client(
             deployment=router.model_list[0],
