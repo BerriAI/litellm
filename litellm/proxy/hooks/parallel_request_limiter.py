@@ -1,9 +1,10 @@
 from typing import Optional
-import litellm
+import litellm, traceback
 from litellm.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.integrations.custom_logger import CustomLogger
 from fastapi import HTTPException
+from litellm._logging import verbose_proxy_logger
 
 
 class MaxParallelRequestsHandler(CustomLogger):
@@ -14,8 +15,7 @@ class MaxParallelRequestsHandler(CustomLogger):
         pass
 
     def print_verbose(self, print_statement):
-        if litellm.set_verbose is True:
-            print(print_statement)  # noqa
+        verbose_proxy_logger.debug(print_statement)
 
     async def async_pre_call_hook(
         self,
@@ -52,7 +52,7 @@ class MaxParallelRequestsHandler(CustomLogger):
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
-            self.print_verbose(f"INSIDE ASYNC SUCCESS LOGGING")
+            self.print_verbose(f"INSIDE parallel request limiter ASYNC SUCCESS LOGGING")
             user_api_key = kwargs["litellm_params"]["metadata"]["user_api_key"]
             if user_api_key is None:
                 return
@@ -61,28 +61,19 @@ class MaxParallelRequestsHandler(CustomLogger):
                 return
 
             request_count_api_key = f"{user_api_key}_request_count"
-            # check if it has collected an entire stream response
-            self.print_verbose(
-                f"'complete_streaming_response' is in kwargs: {'complete_streaming_response' in kwargs}"
-            )
-            if "complete_streaming_response" in kwargs or kwargs["stream"] != True:
-                # Decrease count for this token
-                current = (
-                    self.user_api_key_cache.get_cache(key=request_count_api_key) or 1
-                )
-                new_val = current - 1
-                self.print_verbose(f"updated_value in success call: {new_val}")
-                self.user_api_key_cache.set_cache(request_count_api_key, new_val)
+            # Decrease count for this token
+            current = self.user_api_key_cache.get_cache(key=request_count_api_key) or 1
+            new_val = current - 1
+            self.print_verbose(f"updated_value in success call: {new_val}")
+            self.user_api_key_cache.set_cache(request_count_api_key, new_val)
         except Exception as e:
             self.print_verbose(e)  # noqa
 
-    async def async_log_failure_call(
-        self, user_api_key_dict: UserAPIKeyAuth, original_exception: Exception
-    ):
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         try:
             self.print_verbose(f"Inside Max Parallel Request Failure Hook")
-            api_key = user_api_key_dict.api_key
-            if api_key is None:
+            user_api_key = kwargs["litellm_params"]["metadata"]["user_api_key"]
+            if user_api_key is None:
                 return
 
             if self.user_api_key_cache is None:
@@ -90,13 +81,13 @@ class MaxParallelRequestsHandler(CustomLogger):
 
             ## decrement call count if call failed
             if (
-                hasattr(original_exception, "status_code")
-                and original_exception.status_code == 429
-                and "Max parallel request limit reached" in str(original_exception)
+                hasattr(kwargs["exception"], "status_code")
+                and kwargs["exception"].status_code == 429
+                and "Max parallel request limit reached" in str(kwargs["exception"])
             ):
                 pass  # ignore failed calls due to max limit being reached
             else:
-                request_count_api_key = f"{api_key}_request_count"
+                request_count_api_key = f"{user_api_key}_request_count"
                 # Decrease count for this token
                 current = (
                     self.user_api_key_cache.get_cache(key=request_count_api_key) or 1
