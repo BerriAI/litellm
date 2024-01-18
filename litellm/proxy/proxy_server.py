@@ -658,6 +658,9 @@ async def update_database(
             if prisma_client is not None:
                 await prisma_client.insert_data(data=payload, table_name="spend")
 
+            elif custom_db_client is not None:
+                await custom_db_client.insert_data(payload, table_name="spend")
+
         tasks = []
         tasks.append(_update_user_db())
         tasks.append(_update_key_db())
