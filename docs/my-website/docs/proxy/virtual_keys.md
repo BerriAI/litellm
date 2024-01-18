@@ -200,6 +200,7 @@ Request Params:
 
 ### Response
 
+`token` is the hashed key (The DB stores the hashed key for security)
 ```json
 {
   "key": "sk-02Wr4IAlN3NvPXvL5JVvDA",
@@ -255,6 +256,30 @@ Request Params:
   }
 }
 
+```
+
+
+## /key/delete
+
+### Request
+```shell
+curl 'http://0.0.0.0:8000/key/delete' \
+--header 'Authorization: Bearer <your-master-key>' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+  "keys": ["sk-kdEXbIqZRwEeEiHwdg7sFA"]
+}'
+```
+
+Request Params:
+- keys: List[str] - List of keys to delete
+
+### Response
+
+```json
+{
+  "deleted_keys": ["sk-kdEXbIqZRwEeEiHwdg7sFA"]
+}
 ```
 
 ## Tracking Spend 
