@@ -1344,6 +1344,31 @@ class Router:
                 max_retries = litellm.get_secret(max_retries_env_name)
                 litellm_params["max_retries"] = max_retries
 
+            # proxy support
+            import os
+            import httpx
+
+            # Check if the HTTP_PROXY and HTTPS_PROXY environment variables are set and use them accordingly.
+            http_proxy = os.getenv("HTTP_PROXY", None)
+            https_proxy = os.getenv("HTTPS_PROXY", None)
+
+            # Create the proxies dictionary only if the environment variables are set.
+            sync_proxy_mounts = None
+            async_proxy_mounts = None
+            if http_proxy is not None and https_proxy is not None:
+                sync_proxy_mounts = {
+                    "http://": httpx.HTTPTransport(proxy=httpx.Proxy(url=http_proxy)),
+                    "https://": httpx.HTTPTransport(proxy=httpx.Proxy(url=https_proxy)),
+                }
+                async_proxy_mounts = {
+                    "http://": httpx.AsyncHTTPTransport(
+                        proxy=httpx.Proxy(url=http_proxy)
+                    ),
+                    "https://": httpx.AsyncHTTPTransport(
+                        proxy=httpx.Proxy(url=https_proxy)
+                    ),
+                }
+
             if "azure" in model_name:
                 if api_base is None:
                     raise ValueError(
@@ -1368,6 +1393,7 @@ class Router:
                             limits=httpx.Limits(
                                 max_connections=1000, max_keepalive_connections=100
                             ),
+                            mounts=async_proxy_mounts,
                         ),  # type: ignore
                     )
                     self.cache.set_cache(
@@ -1389,6 +1415,7 @@ class Router:
                             limits=httpx.Limits(
                                 max_connections=1000, max_keepalive_connections=100
                             ),
+                            mounts=sync_proxy_mounts,
                         ),  # type: ignore
                     )
                     self.cache.set_cache(
@@ -1410,6 +1437,7 @@ class Router:
                             limits=httpx.Limits(
                                 max_connections=1000, max_keepalive_connections=100
                             ),
+                            mounts=async_proxy_mounts,
                         ),  # type: ignore
                     )
                     self.cache.set_cache(
@@ -1431,6 +1459,7 @@ class Router:
                             limits=httpx.Limits(
                                 max_connections=1000, max_keepalive_connections=100
                             ),
+                            mounts=sync_proxy_mounts,
                         ),  # type: ignore
                     )
                     self.cache.set_cache(
@@ -1466,6 +1495,7 @@ class Router:
                             limits=httpx.Limits(
                                 max_connections=1000, max_keepalive_connections=100
                             ),
+                            mounts=async_proxy_mounts,
                         ),  # type: ignore
                     )
                     self.cache.set_cache(
@@ -1485,6 +1515,7 @@ class Router:
                             limits=httpx.Limits(
                                 max_connections=1000, max_keepalive_connections=100
                             ),
+                            mounts=sync_proxy_mounts,
                         ),  # type: ignore
                     )
                     self.cache.set_cache(
@@ -1505,6 +1536,7 @@ class Router:
                             limits=httpx.Limits(
                                 max_connections=1000, max_keepalive_connections=100
                             ),
+                            mounts=async_proxy_mounts,
                         ),
                     )
                     self.cache.set_cache(
@@ -1524,6 +1556,7 @@ class Router:
                             limits=httpx.Limits(
                                 max_connections=1000, max_keepalive_connections=100
                             ),
+                            mounts=sync_proxy_mounts,
                         ),
                     )
                     self.cache.set_cache(
@@ -1548,6 +1581,7 @@ class Router:
                         limits=httpx.Limits(
                             max_connections=1000, max_keepalive_connections=100
                         ),
+                        mounts=async_proxy_mounts,
                     ),  # type: ignore
                 )
                 self.cache.set_cache(
@@ -1568,6 +1602,7 @@ class Router:
                         limits=httpx.Limits(
                             max_connections=1000, max_keepalive_connections=100
                         ),
+                        mounts=sync_proxy_mounts,
                     ),  # type: ignore
                 )
                 self.cache.set_cache(
@@ -1589,6 +1624,7 @@ class Router:
                         limits=httpx.Limits(
                             max_connections=1000, max_keepalive_connections=100
                         ),
+                        mounts=async_proxy_mounts,
                     ),  # type: ignore
                 )
                 self.cache.set_cache(
@@ -1610,6 +1646,7 @@ class Router:
                         limits=httpx.Limits(
                             max_connections=1000, max_keepalive_connections=100
                         ),
+                        mounts=sync_proxy_mounts,
                     ),  # type: ignore
                 )
                 self.cache.set_cache(
