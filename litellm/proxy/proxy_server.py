@@ -1102,7 +1102,7 @@ async def generate_key_helper_fn(
         }
         if prisma_client is not None:
             ## CREATE USER (If necessary)
-            verbose_proxy_logger.debug(f"CustomDBClient: Creating User={user_data}")
+            verbose_proxy_logger.debug(f"prisma_client: Creating User={user_data}")
             user_row = await prisma_client.insert_data(
                 data=user_data, table_name="user"
             )
@@ -1111,7 +1111,7 @@ async def generate_key_helper_fn(
             if len(user_row.models) > 0 and len(key_data["models"]) == 0:  # type: ignore
                 key_data["models"] = user_row.models
             ## CREATE KEY
-            verbose_proxy_logger.debug(f"CustomDBClient: Creating Key={key_data}")
+            verbose_proxy_logger.debug(f"prisma_client: Creating Key={key_data}")
             await prisma_client.insert_data(data=key_data, table_name="key")
         elif custom_db_client is not None:
             ## CREATE USER (If necessary)
