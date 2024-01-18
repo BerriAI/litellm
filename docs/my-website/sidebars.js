@@ -104,6 +104,11 @@ const sidebars = {
       items: [
         "proxy/quick_start", 
         "proxy/configs",
+        {
+          type: 'link',
+          label: 'All Endpoints',
+          href: 'https://litellm-api.up.railway.app/',
+        },
         "proxy/user_keys",
         "proxy/load_balancing", 
         "proxy/virtual_keys",
