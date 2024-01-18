@@ -8442,10 +8442,12 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time):
     cache_hit = kwargs.get("cache_hit", False)
     usage = response_obj["usage"]
     id = response_obj.get("id", str(uuid.uuid4()))
+    api_key = metadata.get("user_api_key", "")
 
     payload = {
         "request_id": id,
         "call_type": call_type,
+        "api_key": api_key,
         "cache_hit": cache_hit,
         "startTime": start_time,
         "endTime": end_time,
