@@ -16,6 +16,7 @@ class S3Logger:
     def __init__(
         self,
         s3_bucket_name=None,
+        s3_path=None,
         s3_region_name=None,
         s3_api_version=None,
         s3_use_ssl=True,
@@ -57,6 +58,7 @@ class S3Logger:
                 # done reading litellm.s3_callback_params
 
             self.bucket_name = s3_bucket_name
+            self.s3_path = s3_path
             # Create an S3 client with custom endpoint URL
             self.s3_client = boto3.client(
                 "s3",
@@ -122,7 +124,10 @@ class S3Logger:
                     pass
 
             s3_object_key = (
-                payload["id"] + "-time=" + str(start_time)
+                (self.s3_path.rstrip("/") + "/" if self.s3_path else "")
+                + payload["id"]
+                + "-time="
+                + str(start_time)
             )  # we need the s3 key to include the time, so we log cache hits too
 
             import json
