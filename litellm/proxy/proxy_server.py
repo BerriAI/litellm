@@ -72,6 +72,7 @@ from litellm.proxy.utils import (
     ProxyLogging,
     _cache_user_row,
     send_email,
+    get_logging_payload,
 )
 from litellm.proxy.secret_managers.google_kms import load_google_kms
 import pydantic
@@ -646,7 +647,7 @@ async def update_database(
         async def _insert_spend_log_to_db():
             # Helper to generate payload to log
             verbose_proxy_logger.debug("inserting spend log to db")
-            payload = litellm.utils.get_logging_payload(
+            payload = get_logging_payload(
                 kwargs=kwargs,
                 response_obj=completion_response,
                 start_time=start_time,
