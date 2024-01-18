@@ -129,6 +129,7 @@ class GenerateKeyRequest(LiteLLMBase):
     config: Optional[dict] = {}
     spend: Optional[float] = 0
     user_id: Optional[str] = None
+    team_id: Optional[str] = None
     max_parallel_requests: Optional[int] = None
     metadata: Optional[dict] = {}
 
