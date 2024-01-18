@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Extra, Field, root_validator
-import enum
+import enum, sys
 from typing import Optional, List, Union, Dict, Literal
 from datetime import datetime
 import uuid, json
@@ -161,6 +161,8 @@ class UserAPIKeyAuth(LiteLLMBase):  # the expected response object for user api 
     max_parallel_requests: Optional[int] = None
     duration: str = "1h"
     metadata: dict = {}
+    tpm_limit: int = sys.maxsize
+    rpm_limit: int = sys.maxsize
 
 
 class GenerateKeyResponse(LiteLLMBase):
