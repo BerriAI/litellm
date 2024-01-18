@@ -1,4 +1,4 @@
-# Key Management
+# Virtual Keys
 Track Spend, Set budgets and create virtual keys for the proxy
 
 Grant other's temporary access to your proxy, with keys that expire after a set duration.
@@ -12,7 +12,7 @@ Grant other's temporary access to your proxy, with keys that expire after a set 
 
 :::
 
-## Quick Start
+## Setup
 
 Requirements: 
 
@@ -58,8 +58,27 @@ litellm --config /path/to/config.yaml
 curl 'http://0.0.0.0:8000/key/generate' \
 --header 'Authorization: Bearer <your-master-key>' \
 --header 'Content-Type: application/json' \
---data-raw '{"models": ["gpt-3.5-turbo", "gpt-4", "claude-2"], "duration": "20m","metadata": {"user": "ishaan@berri.ai", "team": "core-infra"}}'
+--data-raw '{"models": ["gpt-3.5-turbo", "gpt-4", "claude-2"], "duration": "20m","metadata": {"user": "ishaan@berri.ai"}}'
 ```
+
+
+## /key/generate
+
+### Request
+```shell
+curl 'http://0.0.0.0:8000/key/generate' \
+--header 'Authorization: Bearer <your-master-key>' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+  "models": ["gpt-3.5-turbo", "gpt-4", "claude-2"],
+  "duration": "20m",
+  "metadata": {"user": "ishaan@berri.ai"},
+  "team_id": "core-infra"
+}'
+```
+
+
+Request Params:
 
 - `models`: *list or null (optional)* - Specify the models a token has access too. If null, then token has access to all models on server. 
 
@@ -67,7 +86,9 @@ curl 'http://0.0.0.0:8000/key/generate' \
 
 - `metadata`: *dict or null (optional)* Pass metadata for the created token. If null defaults to {}
 
-Expected response: 
+- `team_id`: *str or null (optional)* Specify team_id for the associated key
+
+### Response
 
 ```python
 {
@@ -76,7 +97,7 @@ Expected response:
 }
 ```
 
-## Keys that don't expire
+### Keys that don't expire
 
 Just set duration to None. 
 
@@ -87,7 +108,7 @@ curl --location 'http://0.0.0.0:8000/key/generate' \
 --data '{"models": ["azure-models"], "aliases": {"mistral-7b": "gpt-3.5-turbo"}, "duration": null}'
 ```
 
-## Upgrade/Downgrade Models 
+### Upgrade/Downgrade Models 
 
 If a user is expected to use a given model (i.e. gpt3-5), and you want to:
 
@@ -137,7 +158,7 @@ curl -X POST "https://0.0.0.0:8000/key/generate" \
 - **How are routing between diff keys/api bases done?** litellm handles this by shuffling between different models in the model list with the same model_name. [**See Code**](https://github.com/BerriAI/litellm/blob/main/litellm/router.py)
 
 
-## Grant Access to new model 
+### Grant Access to new model 
 
 Use model access groups to give users access to select models, and add new ones to it over time (e.g. mistral, llama-2, etc.)
 
