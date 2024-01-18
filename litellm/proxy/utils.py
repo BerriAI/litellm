@@ -1,7 +1,12 @@
 from typing import Optional, List, Any, Literal, Union
 import os, subprocess, hashlib, importlib, asyncio, copy, json, aiohttp, httpx
 import litellm, backoff
-from litellm.proxy._types import UserAPIKeyAuth, DynamoDBArgs, LiteLLM_VerificationToken
+from litellm.proxy._types import (
+    UserAPIKeyAuth,
+    DynamoDBArgs,
+    LiteLLM_VerificationToken,
+    LiteLLM_SpendLogs,
+)
 from litellm.caching import DualCache
 from litellm.proxy.hooks.parallel_request_limiter import MaxParallelRequestsHandler
 from litellm.proxy.hooks.max_budget_limiter import MaxBudgetLimiter
@@ -316,7 +321,7 @@ class PrismaClient:
         self,
         key: str,
         value: Any,
-        table_name: Literal["users", "keys", "config"],
+        table_name: Literal["users", "keys", "config", "spend"],
     ):
         """
         Generic implementation of get data
@@ -332,6 +337,10 @@ class PrismaClient:
                 )
             elif table_name == "config":
                 response = await self.db.litellm_config.find_first(  # type: ignore
+                    where={key: value}  # type: ignore
+                )
+            elif table_name == "spend":
+                response = await self.db.l.find_first(  # type: ignore
                     where={key: value}  # type: ignore
                 )
             return response
@@ -417,7 +426,7 @@ class PrismaClient:
         on_backoff=on_backoff,  # specifying the function to call on backoff
     )
     async def insert_data(
-        self, data: dict, table_name: Literal["user", "key", "config"]
+        self, data: dict, table_name: Literal["user", "key", "config", "spend"]
     ):
         """
         Add a key to the database. If it already exists, do nothing.
@@ -473,8 +482,18 @@ class PrismaClient:
                     )
 
                     tasks.append(updated_table_row)
-
                 await asyncio.gather(*tasks)
+            elif table_name == "spend":
+                db_data = self.jsonify_object(data=data)
+                new_spend_row = await self.db.litellm_spendlogs.upsert(
+                    where={"request_id": data["request_id"]},
+                    data={
+                        "create": {**db_data},  # type: ignore
+                        "update": {},  # don't do anything if it already exists
+                    },
+                )
+                return new_spend_row
+
         except Exception as e:
             print_verbose(f"LiteLLM Prisma Client Exception: {e}")
             asyncio.create_task(

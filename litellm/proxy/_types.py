@@ -316,7 +316,7 @@ class LiteLLM_UserTable(LiteLLMBase):
 
 
 class LiteLLM_SpendLogs(LiteLLMBase):
-    id: str
+    request_id: str
     call_type: str
     startTime: Union[str, None]
     endTime: Union[str, None]

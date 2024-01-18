@@ -34,7 +34,7 @@ model LiteLLM_Config {
 }
 
 model LiteLLM_SpendLogs {
-  id                  String @unique
+  request_id          String @unique
   call_type           String
   startTime           DateTime // Assuming start_time is a DateTime field
   endTime             DateTime // Assuming end_time is a DateTime field
@@ -42,7 +42,7 @@ model LiteLLM_SpendLogs {
   user                String   @default("")
   modelParameters     Json     @default("{}")// Assuming optional_params is a JSON field
   messages            Json     @default("[]")
-  call_cost           Float    @default(0.0)
+  spend               Float    @default(0.0)
   response            Json     @default("{}")
   usage               Json     @default("{}")
   metadata            Json     @default("{}")
