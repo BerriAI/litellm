@@ -8478,6 +8478,8 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time):
         if param in payload and type(payload[param]) != Json:
             if type(payload[param]) == ModelResponse:
                 payload[param] = payload[param].model_dump_json()
+            if type(payload[param]) == EmbeddingResponse:
+                payload[param] = payload[param].model_dump_json()
             elif type(payload[param]) == Usage:
                 payload[param] = payload[param].model_dump_json()
             else:
