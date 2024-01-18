@@ -8429,6 +8429,8 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time):
     from litellm.proxy._types import LiteLLM_SpendLogs
     from pydantic import Json
 
+    if kwargs == None:
+        kwargs = {}
     # standardize this function to be used across, s3, dynamoDB, langfuse logging
     litellm_params = kwargs.get("litellm_params", {})
     metadata = (
