@@ -1098,6 +1098,7 @@ async def generate_key_helper_fn(
             "config": config_json,
             "spend": spend,
             "user_id": user_id,
+            "team_id": team_id,
             "max_parallel_requests": max_parallel_requests,
             "metadata": metadata_json,
         }
