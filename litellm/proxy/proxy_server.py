@@ -510,6 +510,7 @@ async def track_cost_callback(
     global prisma_client, custom_db_client
     try:
         # check if it has collected an entire stream response
+        verbose_proxy_logger.debug(f"Proxy: In track_cost_callback for {kwargs}")
         verbose_proxy_logger.debug(
             f"kwargs stream: {kwargs.get('stream', None)} + complete streaming response: {kwargs.get('complete_streaming_response', None)}"
         )
@@ -546,13 +547,27 @@ async def track_cost_callback(
                 prisma_client is not None or custom_db_client is not None
             ):
                 await update_database(
-                    token=user_api_key, response_cost=response_cost, user_id=user_id
+                    token=user_api_key,
+                    response_cost=response_cost,
+                    user_id=user_id,
+                    kwargs=kwargs,
+                    completion_response=completion_response,
+                    start_time=start_time,
+                    end_time=end_time,
                 )
     except Exception as e:
         verbose_proxy_logger.debug(f"error in tracking cost callback - {str(e)}")
 
 
-async def update_database(token, response_cost, user_id=None):
+async def update_database(
+    token,
+    response_cost,
+    user_id=None,
+    kwargs=None,
+    completion_response=None,
+    start_time=None,
+    end_time=None,
+):
     try:
         verbose_proxy_logger.debug(
             f"Enters prisma db call, token: {token}; user_id: {user_id}"
@@ -622,9 +637,25 @@ async def update_database(token, response_cost, user_id=None):
                     key=token, value={"spend": new_spend}, table_name="key"
                 )
 
+        async def _insert_spend_log_to_db():
+            # Helper to generate payload to log
+            verbose_proxy_logger.debug("inserting spend log to db")
+            payload = litellm.utils.get_logging_payload(
+                kwargs=kwargs,
+                response_obj=completion_response,
+                start_time=start_time,
+                end_time=end_time,
+            )
+
+            payload["spend"] = response_cost
+
+            if prisma_client is not None:
+                await prisma_client.insert_data(data=payload, table_name="spend")
+
         tasks = []
         tasks.append(_update_user_db())
         tasks.append(_update_key_db())
+        tasks.append(_insert_spend_log_to_db())
         await asyncio.gather(*tasks)
     except Exception as e:
         verbose_proxy_logger.debug(
