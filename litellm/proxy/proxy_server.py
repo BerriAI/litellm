@@ -1425,6 +1425,7 @@ async def completion(
             data["model"] = user_model
         if "metadata" in data:
             data["metadata"]["user_api_key"] = user_api_key_dict.api_key
+            data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
             data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
             data["metadata"]["headers"] = dict(request.headers)
         else:
@@ -1432,6 +1433,7 @@ async def completion(
                 "user_api_key": user_api_key_dict.api_key,
                 "user_api_key_user_id": user_api_key_dict.user_id,
             }
+            data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
             data["metadata"]["headers"] = dict(request.headers)
         # override with user settings, these are params passed via cli
         if user_temperature:
@@ -1588,11 +1590,13 @@ async def chat_completion(
             verbose_proxy_logger.debug(f'received metadata: {data["metadata"]}')
             data["metadata"]["user_api_key"] = user_api_key_dict.api_key
             data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
+            data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
             data["metadata"]["headers"] = dict(request.headers)
         else:
             data["metadata"] = {"user_api_key": user_api_key_dict.api_key}
             data["metadata"]["headers"] = dict(request.headers)
             data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
+            data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
 
         global user_temperature, user_request_timeout, user_max_tokens, user_api_base
         # override with user settings, these are params passed via cli
@@ -1756,10 +1760,12 @@ async def embeddings(
             data["model"] = user_model
         if "metadata" in data:
             data["metadata"]["user_api_key"] = user_api_key_dict.api_key
+            data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
             data["metadata"]["headers"] = dict(request.headers)
             data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
         else:
             data["metadata"] = {"user_api_key": user_api_key_dict.api_key}
+            data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
             data["metadata"]["headers"] = dict(request.headers)
             data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
 
@@ -1897,10 +1903,12 @@ async def image_generation(
             data["model"] = user_model
         if "metadata" in data:
             data["metadata"]["user_api_key"] = user_api_key_dict.api_key
+            data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
             data["metadata"]["headers"] = dict(request.headers)
             data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
         else:
             data["metadata"] = {"user_api_key": user_api_key_dict.api_key}
+            data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
             data["metadata"]["headers"] = dict(request.headers)
             data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
 
@@ -2474,10 +2482,12 @@ async def async_queue_request(
         if "metadata" in data:
             verbose_proxy_logger.debug(f'received metadata: {data["metadata"]}')
             data["metadata"]["user_api_key"] = user_api_key_dict.api_key
+            data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
             data["metadata"]["headers"] = dict(request.headers)
             data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
         else:
             data["metadata"] = {"user_api_key": user_api_key_dict.api_key}
+            data["metadata"]["user_api_key_metadata"] = user_api_key_dict.metadata
             data["metadata"]["headers"] = dict(request.headers)
             data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
 
