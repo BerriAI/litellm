@@ -252,7 +252,13 @@ class Delta(OpenAIObject):
 
 class Choices(OpenAIObject):
     def __init__(
-        self, finish_reason=None, index=0, message=None, logprobs=None, **params
+        self,
+        finish_reason=None,
+        index=0,
+        message=None,
+        logprobs=None,
+        enhancements=None,
+        **params,
     ):
         super(Choices, self).__init__(**params)
         self.finish_reason = (
@@ -265,6 +271,8 @@ class Choices(OpenAIObject):
             self.message = message
         if logprobs is not None:
             self.logprobs = logprobs
+        if enhancements is not None:
+            self.enhancements = enhancements
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -319,6 +327,7 @@ class StreamingChoices(OpenAIObject):
         index=0,
         delta: Optional[Delta] = None,
         logprobs=None,
+        enhancements=None,
         **params,
     ):
         super(StreamingChoices, self).__init__(**params)
@@ -334,6 +343,8 @@ class StreamingChoices(OpenAIObject):
 
         if logprobs is not None:
             self.logprobs = logprobs
+        if enhancements is not None:
+            self.enhancements = enhancements
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
@@ -5092,8 +5103,13 @@ def convert_to_streaming_response(response_object: Optional[dict] = None):
             # gpt-4 vision can return 'finish_reason' or 'finish_details'
             finish_reason = choice.get("finish_details")
         logprobs = choice.get("logprobs", None)
+        enhancements = choice.get("enhancements", None)
         choice = StreamingChoices(
-            finish_reason=finish_reason, index=idx, delta=delta, logprobs=logprobs
+            finish_reason=finish_reason,
+            index=idx,
+            delta=delta,
+            logprobs=logprobs,
+            enhancements=enhancements,
         )
 
         choice_list.append(choice)
@@ -5151,11 +5167,13 @@ def convert_to_model_response_object(
                     # gpt-4 vision can return 'finish_reason' or 'finish_details'
                     finish_reason = choice.get("finish_details")
                 logprobs = choice.get("logprobs", None)
+                enhancements = choice.get("enhancements", None)
                 choice = Choices(
                     finish_reason=finish_reason,
                     index=idx,
                     message=message,
                     logprobs=logprobs,
+                    enhancements=enhancements,
                 )
                 choice_list.append(choice)
             model_response_object.choices = choice_list
