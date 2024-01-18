@@ -166,13 +166,24 @@ class LangFuseLogger:
         input,
         response_obj,
     ):
-        trace = self.Langfuse.trace(
-            name=metadata.get("generation_name", "litellm-completion"),
-            input=input,
-            output=output,
-            user_id=metadata.get("trace_user_id", user_id),
-            id=metadata.get("trace_id", None),
-        )
+        import langfuse
+
+        tags = []
+        supports_tags = Version(langfuse.version.__version__) >= Version("2.6.3")
+
+        trace_params = {
+            "name": metadata.get("generation_name", "litellm-completion"),
+            "input": input,
+            "output": output,
+            "user_id": metadata.get("trace_user_id", user_id),
+            "id": metadata.get("trace_id", None),
+        }
+        if supports_tags:
+            for key, value in metadata.items():
+                tags.append(f"{key}:{value}")
+            trace_params.update({"tags": tags})
+
+        trace = self.Langfuse.trace(**trace_params)
 
         trace.generation(
             name=metadata.get("generation_name", "litellm-completion"),
