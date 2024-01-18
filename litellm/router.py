@@ -1659,9 +1659,24 @@ class Router:
                 ),
             )
 
+            # Azure GPT-Vision Enhancements, users can pass os.environ/
+            data_sources = model.get("litellm_params", {}).get("dataSources", [])
+
+            for data_source in data_sources:
+                params = data_source.get("parameters", {})
+                for param_key in ["endpoint", "key"]:
+                    # if endpoint or key set for Azure GPT Vision Enhancements, check if it's an env var
+                    if param_key in params and params[param_key].startswith(
+                        "os.environ/"
+                    ):
+                        env_name = params[param_key].replace("os.environ/", "")
+                        params[param_key] = os.environ.get(env_name, "")
+
+            # done reading model["litellm_params"]
             if custom_llm_provider not in litellm.provider_list:
                 raise Exception(f"Unsupported provider - {custom_llm_provider}")
 
+            # init OpenAI, Azure clients
             self.set_client(model=model)
 
         verbose_router_logger.debug(f"\nInitialized Model List {self.model_list}")
