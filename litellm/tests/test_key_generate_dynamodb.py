@@ -179,6 +179,10 @@ def test_call_with_key_over_budget(custom_db_client):
     # 5. Make a call with a key over budget, expect to fail
     setattr(litellm.proxy.proxy_server, "custom_db_client", custom_db_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    from litellm._logging import verbose_proxy_logger
+    import logging
+
+    verbose_proxy_logger.setLevel(logging.DEBUG)
     try:
 
         async def test():
