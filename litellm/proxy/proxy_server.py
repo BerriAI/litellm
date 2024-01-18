@@ -1081,12 +1081,15 @@ async def generate_key_helper_fn(
     config_json = json.dumps(config)
     metadata_json = json.dumps(metadata)
     user_id = user_id or str(uuid.uuid4())
+    if type(team_id) is not str:
+        team_id = str(team_id)
     try:
         # Create a new verification token (you may want to enhance this logic based on your needs)
         user_data = {
             "max_budget": max_budget,
             "user_email": user_email,
             "user_id": user_id,
+            "team_id": team_id,
             "spend": spend,
             "models": models,
         }
