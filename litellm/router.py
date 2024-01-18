@@ -1344,6 +1344,13 @@ class Router:
                 max_retries = litellm.get_secret(max_retries_env_name)
                 litellm_params["max_retries"] = max_retries
 
+            # proxy support
+            import os
+            if os.getenv("HTTP_PROXY") is not None and os.getenv("HTTPS_PROXY") is not None:
+                proxies = {"http://": os.getenv("HTTP_PROXY"), "https://": os.getenv("HTTPS_PROXY")}
+            else:
+                proxies=None
+
             if "azure" in model_name:
                 if api_base is None:
                     raise ValueError(
@@ -1368,6 +1375,7 @@ class Router:
                             limits=httpx.Limits(
                                 max_connections=1000, max_keepalive_connections=100
                             ),
+                            proxies=proxies
                         ),  # type: ignore
                     )
                     self.cache.set_cache(
@@ -1389,6 +1397,7 @@ class Router:
                             limits=httpx.Limits(
                                 max_connections=1000, max_keepalive_connections=100
                             ),
+                            proxies=proxies
                         ),  # type: ignore
                     )
                     self.cache.set_cache(
@@ -1410,6 +1419,7 @@ class Router:
                             limits=httpx.Limits(
                                 max_connections=1000, max_keepalive_connections=100
                             ),
+                            proxies=proxies
                         ),  # type: ignore
                     )
                     self.cache.set_cache(
@@ -1431,6 +1441,7 @@ class Router:
                             limits=httpx.Limits(
                                 max_connections=1000, max_keepalive_connections=100
                             ),
+                            proxies=proxies
                         ),  # type: ignore
                     )
                     self.cache.set_cache(
@@ -1466,6 +1477,7 @@ class Router:
                             limits=httpx.Limits(
                                 max_connections=1000, max_keepalive_connections=100
                             ),
+                            proxies=proxies
                         ),  # type: ignore
                     )
                     self.cache.set_cache(
@@ -1485,6 +1497,7 @@ class Router:
                             limits=httpx.Limits(
                                 max_connections=1000, max_keepalive_connections=100
                             ),
+                            proxies=proxies
                         ),  # type: ignore
                     )
                     self.cache.set_cache(
@@ -1505,6 +1518,7 @@ class Router:
                             limits=httpx.Limits(
                                 max_connections=1000, max_keepalive_connections=100
                             ),
+                            proxies=proxies
                         ),
                     )
                     self.cache.set_cache(
@@ -1524,6 +1538,7 @@ class Router:
                             limits=httpx.Limits(
                                 max_connections=1000, max_keepalive_connections=100
                             ),
+                            proxies=proxies
                         ),
                     )
                     self.cache.set_cache(
@@ -1548,6 +1563,7 @@ class Router:
                         limits=httpx.Limits(
                             max_connections=1000, max_keepalive_connections=100
                         ),
+                        proxies=proxies
                     ),  # type: ignore
                 )
                 self.cache.set_cache(
@@ -1568,6 +1584,7 @@ class Router:
                         limits=httpx.Limits(
                             max_connections=1000, max_keepalive_connections=100
                         ),
+                        proxies=proxies
                     ),  # type: ignore
                 )
                 self.cache.set_cache(
@@ -1589,6 +1606,7 @@ class Router:
                         limits=httpx.Limits(
                             max_connections=1000, max_keepalive_connections=100
                         ),
+                        proxies=proxies
                     ),  # type: ignore
                 )
                 self.cache.set_cache(
@@ -1610,6 +1628,7 @@ class Router:
                         limits=httpx.Limits(
                             max_connections=1000, max_keepalive_connections=100
                         ),
+                        proxies=proxies
                     ),  # type: ignore
                 )
                 self.cache.set_cache(
