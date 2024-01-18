@@ -117,12 +117,18 @@ const sidebars = {
         "proxy/model_management",
         "proxy/reliability",
         "proxy/caching",
-        "proxy/logging", 
+        {
+          "type": "category",
+          "label": "Logging, Alerting",
+          "items": [
+            "proxy/logging", 
+            "proxy/alerting",
+            "proxy/streaming_logging",
+          ]
+        },
         "proxy/health",
         "proxy/call_hooks",
         "proxy/rules",
-        "proxy/alerting",
-        "proxy/streaming_logging",
         "proxy/deploy", 
         "proxy/cli", 
       ]
