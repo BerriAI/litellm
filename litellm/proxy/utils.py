@@ -412,19 +412,17 @@ class PrismaClient:
         on_backoff=on_backoff,  # specifying the function to call on backoff
     )
     async def insert_data(
-        self, data: dict, table_name: Literal["user+key", "config"] = "user+key"
+        self, data: dict, table_name: Literal["user", "key", "config"]
     ):
         """
         Add a key to the database. If it already exists, do nothing.
         """
         try:
-            if table_name == "user+key":
+            if table_name == "key":
                 token = data["token"]
                 hashed_token = self.hash_token(token=token)
                 db_data = self.jsonify_object(data=data)
                 db_data["token"] = hashed_token
-                max_budget = db_data.pop("max_budget", None)
-                user_email = db_data.pop("user_email", None)
                 print_verbose(
                     "PrismaClient: Before upsert into litellm_verificationtoken"
                 )
@@ -437,19 +435,17 @@ class PrismaClient:
                         "update": {},  # don't do anything if it already exists
                     },
                 )
-
+                return new_verification_token
+            elif table_name == "user":
+                db_data = self.jsonify_object(data=data)
                 new_user_row = await self.db.litellm_usertable.upsert(
                     where={"user_id": data["user_id"]},
                     data={
-                        "create": {
-                            "user_id": data["user_id"],
-                            "max_budget": max_budget,
-                            "user_email": user_email,
-                        },
+                        "create": {**db_data},  # type: ignore
                         "update": {},  # don't do anything if it already exists
                     },
                 )
-                return new_verification_token
+                return new_user_row
             elif table_name == "config":
                 """
                 For each param,
