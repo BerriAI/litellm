@@ -531,7 +531,13 @@ async def track_cost_callback(
                 prisma_client is not None or custom_db_client is not None
             ):
                 await update_database(
-                    token=user_api_key, response_cost=response_cost, user_id=user_id
+                    token=user_api_key,
+                    response_cost=response_cost,
+                    user_id=user_id,
+                    kwargs=kwargs,
+                    completion_response=completion_response,
+                    start_time=start_time,
+                    end_time=end_time,
                 )
         elif kwargs["stream"] == False:  # for non streaming responses
             response_cost = litellm.completion_cost(
