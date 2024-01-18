@@ -186,9 +186,9 @@ curl --location 'http://localhost:8000/key/generate' \
 			"max_budget": 0,}'
 ```
 
-<!-- ## /key/update -->
+## /key/update
 
-<!-- ### Request
+### Request
 ```shell
 curl 'http://0.0.0.0:8000/key/update' \
 --header 'Authorization: Bearer <your-master-key>' \
@@ -206,8 +206,6 @@ Request Params:
 
 - models: list or null (optional) - Specify the models a token has access to. If null, then the token has access to all models on the server.
 
-- duration: str or null (optional) - Specify the length of time the token is valid for. If null, the default is set to 1 hour. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
-
 - metadata: dict or null (optional) - Pass metadata for the updated token. If null, defaults to an empty dictionary.
 
 - team_id: str or null (optional) - Specify the team_id for the associated key.
@@ -215,8 +213,15 @@ Request Params:
 ### Response
 
 ```python
+{
+  "key": "sk-kdEXbIqZRwEeEiHwdg7sFA",
+  "models": ["gpt-3.5-turbo", "gpt-4", "claude-2"],
+  "metadata": {
+    "user": "ishaan@berri.ai"
+  }
+}
 
-``` -->
+```
 
 ## Tracking Spend 
 
