@@ -1,7 +1,7 @@
 from typing import Optional, List, Any, Literal, Union
 import os, subprocess, hashlib, importlib, asyncio, copy, json, aiohttp, httpx
 import litellm, backoff
-from litellm.proxy._types import UserAPIKeyAuth, DynamoDBArgs
+from litellm.proxy._types import UserAPIKeyAuth, DynamoDBArgs, LiteLLM_VerificationToken
 from litellm.caching import DualCache
 from litellm.proxy.hooks.parallel_request_limiter import MaxParallelRequestsHandler
 from litellm.proxy.hooks.max_budget_limiter import MaxBudgetLimiter
@@ -376,10 +376,13 @@ class PrismaClient:
                     )
                 print_verbose(f"PrismaClient: response={response}")
                 if response is not None:
-                    # for prisma we need to cast the expires time to str
-                    if isinstance(response.expires, datetime):
-                        response.expires = response.expires.isoformat()
-                    return response
+                    if isinstance(response, LiteLLM_VerificationToken):
+                        # for prisma we need to cast the expires time to str
+                        if isinstance(response.expires, datetime):
+                            response.expires = response.expires.isoformat()
+                        return response
+                    else:
+                        return response
                 else:
                     # Token does not exist.
                     raise HTTPException(
