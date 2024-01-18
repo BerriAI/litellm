@@ -11,7 +11,6 @@ litellm.success_callback = ["promptlayer"]
 litellm.set_verbose = True
 import time
 
-
 # def test_promptlayer_logging():
 #     try:
 #         # Redirect stdout
@@ -65,8 +64,33 @@ def test_promptlayer_logging_with_metadata():
         print(e)
 
 
-test_promptlayer_logging_with_metadata()
+def test_promptlayer_logging_with_metadata_tags():
+    try:
+        # Redirect stdout
+        old_stdout = sys.stdout
+        sys.stdout = new_stdout = io.StringIO()
 
+        response = completion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hi 👋 - i'm ai21"}],
+            temperature=0.2,
+            max_tokens=20,
+            metadata={"model": "ai21", "pl_tags": ["env:dev"]},
+        )
+
+        # Restore stdout
+        time.sleep(1)
+        sys.stdout = old_stdout
+        output = new_stdout.getvalue().strip()
+        print(output)
+        if "LiteLLM: Prompt Layer Logging: success" not in output:
+            raise Exception("Required log message not found!")
+
+    except Exception as e:
+        print(e)
+
+test_promptlayer_logging_with_metadata()
+test_promptlayer_logging_with_metadata_tags()
 
 # def test_chat_openai():
 #     try:
