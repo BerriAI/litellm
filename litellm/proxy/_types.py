@@ -194,6 +194,7 @@ class DynamoDBArgs(LiteLLMBase):
     user_table_name: str = "LiteLLM_UserTable"
     key_table_name: str = "LiteLLM_VerificationToken"
     config_table_name: str = "LiteLLM_Config"
+    spend_table_name: str = "LiteLLM_SpendLogs"
 
 
 class ConfigGeneralSettings(LiteLLMBase):
@@ -312,3 +313,18 @@ class LiteLLM_UserTable(LiteLLMBase):
         if values.get("models") is None:
             values.update({"models", []})
         return values
+
+
+class LiteLLM_SpendLogs(LiteLLMBase):
+    id: str
+    call_type: str
+    startTime: Union[str, None]
+    endTime: Union[str, None]
+    model: str = ""
+    user: str = ""
+    modelParameters: Dict = {}
+    messages: List[str] = []
+    call_cost: float = 0.0
+    response: Dict = {}
+    usage: Dict = {}
+    metadata: Dict = {}
