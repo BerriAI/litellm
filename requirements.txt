@@ -4,7 +4,7 @@ openai>=1.0.0 # openai req.
 fastapi # server dep
 pydantic>=2.5 # openai req. 
 backoff==2.2.1 # server dep
-pyyaml==6.0 # server dep
+pyyaml>=6.0.1 # server dep
 uvicorn==0.22.0 # server dep
 gunicorn==21.2.0 # server dep
 boto3==1.28.58 # aws bedrock/sagemaker calls
