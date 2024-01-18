@@ -405,19 +405,21 @@ def run_server(
                 is_prisma_runnable = False
 
             if is_prisma_runnable:
-                # run prisma db push, before starting server
-                # Save the current working directory
-                original_dir = os.getcwd()
-                # set the working directory to where this script is
-                abspath = os.path.abspath(__file__)
-                dname = os.path.dirname(abspath)
-                os.chdir(dname)
-                try:
-                    subprocess.run(
-                        ["prisma", "db", "push", "--accept-data-loss"]
-                    )  # this looks like a weird edge case when prisma just wont start on render. we need to have the --accept-data-loss
-                finally:
-                    os.chdir(original_dir)
+                for _ in range(4):
+                    # run prisma db push, before starting server
+                    # Save the current working directory
+                    original_dir = os.getcwd()
+                    # set the working directory to where this script is
+                    abspath = os.path.abspath(__file__)
+                    dname = os.path.dirname(abspath)
+                    os.chdir(dname)
+                    try:
+                        subprocess.run(["prisma", "db", "push", "--accept-data-loss"])
+                        break  # Exit the loop if the subprocess succeeds
+                    except subprocess.CalledProcessError as e:
+                        print(f"Error: {e}")
+                    finally:
+                        os.chdir(original_dir)
             else:
                 print(
                     f"Unable to connect to DB. DATABASE_URL found in environment, but prisma package not found."
