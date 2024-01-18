@@ -2273,6 +2273,50 @@ async def user_update(request: Request):
     pass
 
 
+@app.get(
+    "/user/export", tags=["user management"], dependencies=[Depends(user_api_key_auth)]
+)
+async def export_user_table():
+    """
+    Exports all user rows as a csv sheet
+    """
+    import csv
+    from io import StringIO
+
+    users = await prisma_client.get_data(table_name="user", query_type="find_all")
+
+    # Create an in-memory string buffer
+    buffer = StringIO()
+    fieldnames = ["user_id", "max_budget", "spend", "user_email", "models"]
+    writer = csv.DictWriter(buffer, fieldnames=fieldnames)
+
+    # Write the header
+    writer.writeheader()
+
+    # Write user data
+    for user in users:
+        writer.writerow(
+            {
+                "user_id": user.user_id,
+                "max_budget": user.max_budget,
+                "spend": user.spend,
+                "user_email": user.user_email,
+                "models": ",".join(
+                    user.models
+                ),  # convert list to comma-separated string
+            }
+        )
+
+    # Set the buffer's position to the start
+    buffer.seek(0)
+
+    # Create a CSV response
+    response = Response(content=buffer.getvalue(), media_type="text/csv")
+    response.headers["Content-Disposition"] = "attachment; filename=export_users.csv"
+
+    return response
+
+
 #### MODEL MANAGEMENT ####
 
 
