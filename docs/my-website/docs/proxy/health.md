@@ -125,7 +125,7 @@ Example Response:
 }
 ```
 
-`/health/liveliness`
+## `/health/liveliness`
 
 Unprotected endpoint for checking if proxy is alive
 
