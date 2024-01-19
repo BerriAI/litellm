@@ -530,7 +530,11 @@ class PrismaClient:
                     where={"token": token},  # type: ignore
                     data={**db_data},  # type: ignore
                 )
-                print_verbose("\033[91m" + f"DB write succeeded {response}" + "\033[0m")
+                print_verbose(
+                    "\033[91m"
+                    + f"DB Token Table update succeeded {response}"
+                    + "\033[0m"
+                )
                 return {"token": token, "data": db_data}
             elif user_id is not None:
                 """
@@ -539,6 +543,23 @@ class PrismaClient:
                 update_user_row = await self.db.litellm_usertable.update(
                     where={"user_id": user_id},  # type: ignore
                     data={**db_data},  # type: ignore
+                )
+                if update_user_row is None:
+                    # if the provided user does not exist, STILL Track this!
+                    # make a new user with {"user_id": user_id, "spend": data['spend']}
+
+                    db_data["user_id"] = user_id
+                    update_user_row = await self.db.litellm_usertable.upsert(
+                        where={"user_id": user_id},  # type: ignore
+                        data={
+                            "create": {**db_data},  # type: ignore
+                            "update": {},  # don't do anything if it already exists
+                        },
+                    )
+                print_verbose(
+                    "\033[91m"
+                    + f"DB User Table - update succeeded {update_user_row}"
+                    + "\033[0m"
                 )
                 return {"user_id": user_id, "data": db_data}
         except Exception as e:
