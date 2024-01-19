@@ -972,6 +972,7 @@ def completion(
                 encoding=encoding,  # for calculating input/output tokens
                 api_key=api_key,
                 logging_obj=logging,
+                headers=headers,
             )
             if "stream" in optional_params and optional_params["stream"] == True:
                 # don't try to access stream object,
