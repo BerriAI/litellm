@@ -9,6 +9,7 @@ generator client {
 
 model LiteLLM_UserTable {
 		user_id    String @unique
+    team_id    String?
 		max_budget Float?
     spend      Float    @default(0.0)
     user_email    String?
@@ -24,6 +25,7 @@ model LiteLLM_VerificationToken {
     aliases    Json  @default("{}")
     config     Json  @default("{}")
     user_id    String?
+    team_id    String?
     max_parallel_requests Int?
     metadata   Json  @default("{}")
 }

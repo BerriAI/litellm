@@ -1,4 +1,4 @@
-# Key Management
+# Virtual Keys
 Track Spend, Set budgets and create virtual keys for the proxy
 
 Grant other's temporary access to your proxy, with keys that expire after a set duration.
@@ -12,7 +12,7 @@ Grant other's temporary access to your proxy, with keys that expire after a set 
 
 :::
 
-## Quick Start
+## Setup
 
 Requirements: 
 
@@ -58,8 +58,27 @@ litellm --config /path/to/config.yaml
 curl 'http://0.0.0.0:8000/key/generate' \
 --header 'Authorization: Bearer <your-master-key>' \
 --header 'Content-Type: application/json' \
---data-raw '{"models": ["gpt-3.5-turbo", "gpt-4", "claude-2"], "duration": "20m","metadata": {"user": "ishaan@berri.ai", "team": "core-infra"}}'
+--data-raw '{"models": ["gpt-3.5-turbo", "gpt-4", "claude-2"], "duration": "20m","metadata": {"user": "ishaan@berri.ai"}}'
 ```
+
+
+## /key/generate
+
+### Request
+```shell
+curl 'http://0.0.0.0:8000/key/generate' \
+--header 'Authorization: Bearer <your-master-key>' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+  "models": ["gpt-3.5-turbo", "gpt-4", "claude-2"],
+  "duration": "20m",
+  "metadata": {"user": "ishaan@berri.ai"},
+  "team_id": "core-infra"
+}'
+```
+
+
+Request Params:
 
 - `models`: *list or null (optional)* - Specify the models a token has access too. If null, then token has access to all models on server. 
 
@@ -67,7 +86,9 @@ curl 'http://0.0.0.0:8000/key/generate' \
 
 - `metadata`: *dict or null (optional)* Pass metadata for the created token. If null defaults to {}
 
-Expected response: 
+- `team_id`: *str or null (optional)* Specify team_id for the associated key
+
+### Response
 
 ```python
 {
@@ -76,7 +97,7 @@ Expected response:
 }
 ```
 
-## Keys that don't expire
+### Keys that don't expire
 
 Just set duration to None. 
 
@@ -87,7 +108,7 @@ curl --location 'http://0.0.0.0:8000/key/generate' \
 --data '{"models": ["azure-models"], "aliases": {"mistral-7b": "gpt-3.5-turbo"}, "duration": null}'
 ```
 
-## Upgrade/Downgrade Models 
+### Upgrade/Downgrade Models 
 
 If a user is expected to use a given model (i.e. gpt3-5), and you want to:
 
@@ -137,7 +158,7 @@ curl -X POST "https://0.0.0.0:8000/key/generate" \
 - **How are routing between diff keys/api bases done?** litellm handles this by shuffling between different models in the model list with the same model_name. [**See Code**](https://github.com/BerriAI/litellm/blob/main/litellm/router.py)
 
 
-## Grant Access to new model 
+### Grant Access to new model 
 
 Use model access groups to give users access to select models, and add new ones to it over time (e.g. mistral, llama-2, etc.)
 
@@ -163,6 +184,102 @@ curl --location 'http://localhost:8000/key/generate' \
 -H 'Content-Type: application/json' \
 -d '{"models": ["beta-models"], # 👈 Model Access Group
 			"max_budget": 0,}'
+```
+
+
+## /key/info
+
+### Request
+```shell
+curl -X GET "http://0.0.0.0:8000/key/info?key=sk-02Wr4IAlN3NvPXvL5JVvDA" \
+-H "Authorization: Bearer sk-1234"
+```
+
+Request Params:
+- key: str - The key you want the info for
+
+### Response
+
+`token` is the hashed key (The DB stores the hashed key for security)
+```json
+{
+  "key": "sk-02Wr4IAlN3NvPXvL5JVvDA",
+  "info": {
+    "token": "80321a12d03412c527f2bd9db5fabd746abead2e1d50b435a534432fbaca9ef5",
+    "spend": 0.0,
+    "expires": "2024-01-18T23:52:09.125000+00:00",
+    "models": ["azure-gpt-3.5", "azure-embedding-model"],
+    "aliases": {},
+    "config": {},
+    "user_id": "ishaan2@berri.ai",
+    "team_id": "None",
+    "max_parallel_requests": null,
+    "metadata": {}
+  }
+}
+
+
+```
+
+## /key/update
+
+### Request
+```shell
+curl 'http://0.0.0.0:8000/key/update' \
+--header 'Authorization: Bearer <your-master-key>' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+  "key": "sk-kdEXbIqZRwEeEiHwdg7sFA",
+  "models": ["gpt-3.5-turbo", "gpt-4", "claude-2"],
+  "metadata": {"user": "ishaan@berri.ai"},
+  "team_id": "core-infra"
+}'
+```
+
+Request Params:
+- key: str - The key that needs to be updated.
+
+- models: list or null (optional) - Specify the models a token has access to. If null, then the token has access to all models on the server.
+
+- metadata: dict or null (optional) - Pass metadata for the updated token. If null, defaults to an empty dictionary.
+
+- team_id: str or null (optional) - Specify the team_id for the associated key.
+
+### Response
+
+```json
+{
+  "key": "sk-kdEXbIqZRwEeEiHwdg7sFA",
+  "models": ["gpt-3.5-turbo", "gpt-4", "claude-2"],
+  "metadata": {
+    "user": "ishaan@berri.ai"
+  }
+}
+
+```
+
+
+## /key/delete
+
+### Request
+```shell
+curl 'http://0.0.0.0:8000/key/delete' \
+--header 'Authorization: Bearer <your-master-key>' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+  "keys": ["sk-kdEXbIqZRwEeEiHwdg7sFA"]
+}'
+```
+
+Request Params:
+- keys: List[str] - List of keys to delete
+
+### Response
+
+```json
+{
+  "deleted_keys": ["sk-kdEXbIqZRwEeEiHwdg7sFA"]
+}
 ```
 
 ## Tracking Spend 
