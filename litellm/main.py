@@ -343,6 +343,11 @@ def mock_completion(
         model_response["choices"][0]["message"]["content"] = mock_response
         model_response["created"] = int(time.time())
         model_response["model"] = model
+
+        model_response.usage = Usage(
+            prompt_tokens=10, completion_tokens=20, total_tokens=30
+        )
+
         return model_response
 
     except:
@@ -534,10 +539,6 @@ def completion(
     non_default_params = {
         k: v for k, v in kwargs.items() if k not in default_params
     }  # model-specific params - pass them straight to the model/provider
-    if mock_response:
-        return mock_completion(
-            model, messages, stream=stream, mock_response=mock_response
-        )
     if timeout is None:
         timeout = (
             kwargs.get("request_timeout", None) or 600
@@ -674,6 +675,10 @@ def completion(
             optional_params=optional_params,
             litellm_params=litellm_params,
         )
+        if mock_response:
+            return mock_completion(
+                model, messages, stream=stream, mock_response=mock_response
+            )
         if custom_llm_provider == "azure":
             # azure configs
             api_type = get_secret("AZURE_API_TYPE") or "azure"
