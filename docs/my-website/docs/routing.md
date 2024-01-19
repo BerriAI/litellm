@@ -602,7 +602,6 @@ def __init__(
 	num_retries: int = 0,
 	timeout: Optional[float] = None,
 	default_litellm_params={},  # default params for Router.chat.completion.create
-	set_verbose: bool = False,
 	fallbacks: List = [],
 	allowed_fails: Optional[int] = None,
 	context_window_fallbacks: List = [],
@@ -614,5 +613,51 @@ def __init__(
 		"usage-based-routing",
 		"latency-based-routing",
 	] = "simple-shuffle",
+
+	## DEBUGGING ##
+	set_verbose: bool = False,	# set this to True for seeing logs
+    debug_level: Literal["DEBUG", "INFO"] = "INFO", # set this to "DEBUG" for detailed debugging
 ):
+```
+
+## Debugging Router
+### Basic Debugging
+Set `Router(set_verbose=True)`
+
+```python
+from litellm import Router
+
+router = Router(
+    model_list=model_list,
+    set_verbose=True
+)
+```
+
+### Detailed Debugging
+Set `Router(set_verbose=True,debug_level="DEBUG")`
+
+```python
+from litellm import Router
+
+router = Router(
+    model_list=model_list,
+    set_verbose=True,
+    debug_level="DEBUG"  # defaults to INFO
+)
+```
+
+### Very Detailed Debugging
+Set `litellm.set_verbose=True` and `Router(set_verbose=True,debug_level="DEBUG")`
+
+```python
+from litellm import Router
+import litellm
+
+litellm.set_verbose = True
+
+router = Router(
+    model_list=model_list,
+    set_verbose=True,
+    debug_level="DEBUG"  # defaults to INFO
+)
 ```
