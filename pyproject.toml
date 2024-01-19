@@ -3,7 +3,7 @@ name = "litellm"
 version = "1.18.4"
 description = "Library to easily interface with LLM API providers"
 authors = ["BerriAI"]
-license = "MIT License"
+license = "MIT"
 readme = "README.md"
 
 [tool.poetry.dependencies]
