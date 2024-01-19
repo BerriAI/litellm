@@ -13,7 +13,7 @@ class LiteLLMBase(BaseModel):
     def json(self, **kwargs):
         try:
             return self.model_dump()  # noqa
-        except:
+        except Exception as e:
             # if using pydantic v1
             return self.dict()
 
@@ -177,7 +177,7 @@ class GenerateKeyResponse(LiteLLMBase):
 
 
 class DeleteKeyRequest(LiteLLMBase):
-    keys: List[str]
+    keys: List
 
 
 class NewUserRequest(GenerateKeyRequest):
