@@ -3305,6 +3305,8 @@ def get_optional_params(
         unsupported_params = {}
         for k in non_default_params.keys():
             if k not in supported_params:
+                if k == "user":
+                    continue
                 if k == "n" and n == 1:  # langchain sends n=1 as a default value
                     continue  # skip this param
                 if (
