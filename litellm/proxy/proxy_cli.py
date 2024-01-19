@@ -418,6 +418,7 @@ def run_server(
                         break  # Exit the loop if the subprocess succeeds
                     except subprocess.CalledProcessError as e:
                         print(f"Error: {e}")
+                        time.sleep(random.randrange(start=1, stop=5))
                     finally:
                         os.chdir(original_dir)
             else:
