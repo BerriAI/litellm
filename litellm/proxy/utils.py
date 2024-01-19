@@ -1,7 +1,12 @@
 from typing import Optional, List, Any, Literal, Union
 import os, subprocess, hashlib, importlib, asyncio, copy, json, aiohttp, httpx
 import litellm, backoff
-from litellm.proxy._types import UserAPIKeyAuth, DynamoDBArgs, LiteLLM_VerificationToken
+from litellm.proxy._types import (
+    UserAPIKeyAuth,
+    DynamoDBArgs,
+    LiteLLM_VerificationToken,
+    LiteLLM_SpendLogs,
+)
 from litellm.caching import DualCache
 from litellm.proxy.hooks.parallel_request_limiter import MaxParallelRequestsHandler
 from litellm.proxy.hooks.max_budget_limiter import MaxBudgetLimiter
@@ -316,7 +321,7 @@ class PrismaClient:
         self,
         key: str,
         value: Any,
-        table_name: Literal["users", "keys", "config"],
+        table_name: Literal["users", "keys", "config", "spend"],
     ):
         """
         Generic implementation of get data
@@ -332,6 +337,10 @@ class PrismaClient:
                 )
             elif table_name == "config":
                 response = await self.db.litellm_config.find_first(  # type: ignore
+                    where={key: value}  # type: ignore
+                )
+            elif table_name == "spend":
+                response = await self.db.l.find_first(  # type: ignore
                     where={key: value}  # type: ignore
                 )
             return response
@@ -417,7 +426,7 @@ class PrismaClient:
         on_backoff=on_backoff,  # specifying the function to call on backoff
     )
     async def insert_data(
-        self, data: dict, table_name: Literal["user", "key", "config"]
+        self, data: dict, table_name: Literal["user", "key", "config", "spend"]
     ):
         """
         Add a key to the database. If it already exists, do nothing.
@@ -473,8 +482,18 @@ class PrismaClient:
                     )
 
                     tasks.append(updated_table_row)
-
                 await asyncio.gather(*tasks)
+            elif table_name == "spend":
+                db_data = self.jsonify_object(data=data)
+                new_spend_row = await self.db.litellm_spendlogs.upsert(
+                    where={"request_id": data["request_id"]},
+                    data={
+                        "create": {**db_data},  # type: ignore
+                        "update": {},  # don't do anything if it already exists
+                    },
+                )
+                return new_spend_row
+
         except Exception as e:
             print_verbose(f"LiteLLM Prisma Client Exception: {e}")
             asyncio.create_task(
@@ -760,3 +779,85 @@ async def send_email(sender_name, sender_email, receiver_email, subject, html):
 
     except Exception as e:
         print_verbose("An error occurred while sending the email:", str(e))
+
+
+def hash_token(token: str):
+    import hashlib
+
+    # Hash the string using SHA-256
+    hashed_token = hashlib.sha256(token.encode()).hexdigest()
+
+    return hashed_token
+
+
+def get_logging_payload(kwargs, response_obj, start_time, end_time):
+    from litellm.proxy._types import LiteLLM_SpendLogs
+    from pydantic import Json
+    import uuid
+
+    if kwargs == None:
+        kwargs = {}
+    # standardize this function to be used across, s3, dynamoDB, langfuse logging
+    litellm_params = kwargs.get("litellm_params", {})
+    metadata = (
+        litellm_params.get("metadata", {}) or {}
+    )  # if litellm_params['metadata'] == None
+    messages = kwargs.get("messages")
+    optional_params = kwargs.get("optional_params", {})
+    call_type = kwargs.get("call_type", "litellm.completion")
+    cache_hit = kwargs.get("cache_hit", False)
+    usage = response_obj["usage"]
+    id = response_obj.get("id", str(uuid.uuid4()))
+    api_key = metadata.get("user_api_key", "")
+    if api_key is not None and type(api_key) == str:
+        # hash the api_key
+        api_key = hash_token(api_key)
+
+    payload = {
+        "request_id": id,
+        "call_type": call_type,
+        "api_key": api_key,
+        "cache_hit": cache_hit,
+        "startTime": start_time,
+        "endTime": end_time,
+        "model": kwargs.get("model", ""),
+        "user": kwargs.get("user", ""),
+        "modelParameters": optional_params,
+        "messages": messages,
+        "response": response_obj,
+        "usage": usage,
+        "metadata": metadata,
+    }
+
+    json_fields = [
+        field
+        for field, field_type in LiteLLM_SpendLogs.__annotations__.items()
+        if field_type == Json or field_type == Optional[Json]
+    ]
+    str_fields = [
+        field
+        for field, field_type in LiteLLM_SpendLogs.__annotations__.items()
+        if field_type == str or field_type == Optional[str]
+    ]
+    datetime_fields = [
+        field
+        for field, field_type in LiteLLM_SpendLogs.__annotations__.items()
+        if field_type == datetime
+    ]
+
+    for param in json_fields:
+        if param in payload and type(payload[param]) != Json:
+            if type(payload[param]) == litellm.ModelResponse:
+                payload[param] = payload[param].model_dump_json()
+            if type(payload[param]) == litellm.EmbeddingResponse:
+                payload[param] = payload[param].model_dump_json()
+            elif type(payload[param]) == litellm.Usage:
+                payload[param] = payload[param].model_dump_json()
+            else:
+                payload[param] = json.dumps(payload[param])
+
+    for param in str_fields:
+        if param in payload and type(payload[param]) != str:
+            payload[param] = str(payload[param])
+
+    return payload

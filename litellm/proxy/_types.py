@@ -1,8 +1,8 @@
-from pydantic import BaseModel, Extra, Field, root_validator
-import enum, sys
-from typing import Optional, List, Union, Dict, Literal
+from pydantic import BaseModel, Extra, Field, root_validator, Json
+import enum
+from typing import Optional, List, Union, Dict, Literal, Any
 from datetime import datetime
-import uuid, json
+import uuid, json, sys, os
 
 
 class LiteLLMBase(BaseModel):
@@ -129,6 +129,7 @@ class GenerateKeyRequest(LiteLLMBase):
     config: Optional[dict] = {}
     spend: Optional[float] = 0
     user_id: Optional[str] = None
+    team_id: Optional[str] = None
     max_parallel_requests: Optional[int] = None
     metadata: Optional[dict] = {}
     tpm_limit: int = sys.maxsize
@@ -202,6 +203,7 @@ class DynamoDBArgs(LiteLLMBase):
     user_table_name: str = "LiteLLM_UserTable"
     key_table_name: str = "LiteLLM_VerificationToken"
     config_table_name: str = "LiteLLM_Config"
+    spend_table_name: str = "LiteLLM_SpendLogs"
 
 
 class ConfigGeneralSettings(LiteLLMBase):
@@ -320,3 +322,20 @@ class LiteLLM_UserTable(LiteLLMBase):
         if values.get("models") is None:
             values.update({"models", []})
         return values
+
+
+class LiteLLM_SpendLogs(LiteLLMBase):
+    request_id: str
+    api_key: str
+    model: Optional[str] = ""
+    call_type: str
+    spend: Optional[float] = 0.0
+    startTime: Union[str, datetime, None]
+    endTime: Union[str, datetime, None]
+    user: Optional[str] = ""
+    modelParameters: Optional[Json] = {}
+    messages: Optional[Json] = []
+    response: Optional[Json] = {}
+    usage: Optional[Json] = {}
+    metadata: Optional[Json] = {}
+    cache_hit: Optional[str] = "False"
