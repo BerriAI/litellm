@@ -710,7 +710,7 @@ def test_usage_based_routing_fallbacks():
 
     # Constants for TPM and RPM allocation
     AZURE_FAST_TPM = 3
-    AZURE_BASIC_TPM = 2
+    AZURE_BASIC_TPM = 4
     OPENAI_TPM = 2000
     ANTHROPIC_TPM = 100000
 
@@ -776,7 +776,7 @@ def test_usage_based_routing_fallbacks():
     )
 
     messages = [
-        {"content": "Tell me a joke.", "modality": "voice"},
+        {"content": "Tell me a joke.", "role": "user"},
     ]
 
     response = router.completion(
