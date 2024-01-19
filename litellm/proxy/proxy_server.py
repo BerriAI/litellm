@@ -1078,6 +1078,7 @@ async def generate_key_helper_fn(
     max_budget: Optional[float] = None,
     token: Optional[str] = None,
     user_id: Optional[str] = None,
+    team_id: Optional[str] = None,
     user_email: Optional[str] = None,
     max_parallel_requests: Optional[int] = None,
     metadata: Optional[dict] = {},
@@ -1121,12 +1122,15 @@ async def generate_key_helper_fn(
     config_json = json.dumps(config)
     metadata_json = json.dumps(metadata)
     user_id = user_id or str(uuid.uuid4())
+    if type(team_id) is not str:
+        team_id = str(team_id)
     try:
         # Create a new verification token (you may want to enhance this logic based on your needs)
         user_data = {
             "max_budget": max_budget,
             "user_email": user_email,
             "user_id": user_id,
+            "team_id": team_id,
             "spend": spend,
             "models": models,
         }
@@ -1138,6 +1142,7 @@ async def generate_key_helper_fn(
             "config": config_json,
             "spend": spend,
             "user_id": user_id,
+            "team_id": team_id,
             "max_parallel_requests": max_parallel_requests,
             "metadata": metadata_json,
         }
@@ -2084,6 +2089,7 @@ async def generate_key_fn(
 
     Parameters:
     - duration: Optional[str] - Specify the length of time the token is valid for. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d"). **(Default is set to 1 hour.)**
+    - team_id: Optional[str] - The team id of the user
     - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
     - aliases: Optional[dict] - Any alias mappings, on top of anything in the config.yaml model list. - https://docs.litellm.ai/docs/proxy/virtual_keys#managing-auth---upgradedowngrade-models
     - config: Optional[dict] - any key-specific configs, overrides config in config.yaml
