@@ -139,7 +139,7 @@ async def make_async_calls():
                 max_tokens=5,
                 temperature=0.7,
                 timeout=5,
-                user="test_user",
+                user="langfuse_latency_test_user",
                 mock_response="It's simple to use and easy to get started",
             )
         )
