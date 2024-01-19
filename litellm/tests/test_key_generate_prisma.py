@@ -543,7 +543,8 @@ def test_generate_and_update_key(prisma_client):
         async def test():
             await litellm.proxy.proxy_server.prisma_client.connect()
             request = NewUserRequest(
-                metadata={"team": "litellm-team3", "project": "litellm-project3"}
+                metadata={"team": "litellm-team3", "project": "litellm-project3"},
+                team_id="litellm-core-infra@gmail.com",
             )
             key = await new_user(request)
             print(key)
@@ -560,6 +561,7 @@ def test_generate_and_update_key(prisma_client):
                 "team": "litellm-team3",
                 "project": "litellm-project3",
             }
+            assert result["info"].team_id == "litellm-core-infra@gmail.com"
 
             request = Request(scope={"type": "http"})
             request._url = URL(url="/update/key")
