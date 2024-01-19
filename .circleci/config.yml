@@ -135,53 +135,22 @@ jobs:
           name: Wait for app to be ready
           command: dockerize -wait http://localhost:4000 -timeout 1m
       - run:
-          name: Test the application
+          name: Install Dependencies
           command: |
-            mkdir -p /tmp/responses
-            for i in {1..10}; do
-              status_file="/tmp/responses/status_${i}.txt"
-              response_file="/tmp/responses/response_${i}.json"
+            pip install "pytest==7.3.1"
+            pip install "pytest-asyncio==0.21.1"
+            # Run pytest and generate JUnit XML report
+      - run:
+          name: Run tests
+          command: |
+            pwd
+            ls
+            python -m pytest -vv tests/ -x --junitxml=test-results/junit.xml --durations=5 
+          no_output_timeout: 120m
 
-              (curl --location --request POST 'http://0.0.0.0:4000/key/generate' \
-                --header 'Authorization: Bearer sk-1234' \
-                --header 'Content-Type: application/json' \
-                --data '{"models": ["azure-models"], "aliases": {"mistral-7b": "gpt-3.5-turbo"}, "duration": null}' \
-                --silent --output "${response_file}" --write-out '%{http_code}' > "${status_file}") &
-
-              # Capture PIDs of background processes
-              pids[${i}]=$!
-            done
-
-            # Wait for all background processes to finish
-            for pid in ${pids[*]}; do
-              wait $pid
-            done
-
-            # Check all responses and status codes
-            fail=false
-            for i in {1..10}; do
-              status=$(cat "/tmp/responses/status_${i}.txt")
-              
-              # Here, we need to set the correct response file path for each iteration
-              response_file="/tmp/responses/response_${i}.json" # This was missing in the provided script
-              
-              response=$(cat "${response_file}")
-              echo "Response ${i} (Status code: ${status}):"
-              echo "${response}" # Use echo here to print the contents
-              echo # Additional newline for readability
-
-              if [ "$status" -ne 200 ]; then
-                echo "A request did not return a 200 status code: $status"
-                fail=true
-              fi
-            done
-
-            # If any request did not return status code 200, fail the job
-            if [ "$fail" = true ]; then
-              exit 1
-            fi
-
-            echo "All requests returned a 200 status code."
+      # Store test results
+      - store_test_results:
+          path: test-results
 
   publish_to_pypi:
     docker:
