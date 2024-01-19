@@ -131,10 +131,27 @@ class DynamoDBWrapper(CustomDB):
                 raise Exception(
                     f"Failed to create table - {self.database_arguments.config_table_name}.\nPlease create a new table called {self.database_arguments.config_table_name}\nAND set `hash_key` as 'param_name'"
                 )
+
+            ## Spend
+            try:
+                verbose_proxy_logger.debug("DynamoDB Wrapper - Creating Spend Table")
+                error_occurred = False
+                table = client.table(self.database_arguments.spend_table_name)
+                if not await table.exists():
+                    await table.create(
+                        self.throughput_type,
+                        KeySchema(hash_key=KeySpec("request_id", KeyType.string)),
+                    )
+            except Exception as e:
+                error_occurred = True
+            if error_occurred == True:
+                raise Exception(
+                    f"Failed to create table - {self.database_arguments.key_table_name}.\nPlease create a new table called {self.database_arguments.key_table_name}\nAND set `hash_key` as 'token'"
+                )
             verbose_proxy_logger.debug("DynamoDB Wrapper - Done connecting()")
 
     async def insert_data(
-        self, value: Any, table_name: Literal["user", "key", "config"]
+        self, value: Any, table_name: Literal["user", "key", "config", "spend"]
     ):
         from aiodynamo.client import Client
         from aiodynamo.credentials import Credentials, StaticCredentials
@@ -166,6 +183,8 @@ class DynamoDBWrapper(CustomDB):
                 table = client.table(self.database_arguments.key_table_name)
             elif table_name == "config":
                 table = client.table(self.database_arguments.config_table_name)
+            elif table_name == "spend":
+                table = client.table(self.database_arguments.spend_table_name)
 
             for k, v in value.items():
                 if isinstance(v, datetime):
