@@ -1,3 +1,6 @@
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # 💰 Budgets, Rate Limits per user 
 
 Requirements: 
@@ -8,7 +11,6 @@ Requirements:
 ## Set Budgets
 LiteLLM exposes a `/user/new` endpoint to create budgets for users, that persist across multiple keys. 
 
-This is documented in the swagger (live on your server root endpoint - e.g. `http://0.0.0.0:8000/`). Here's an example request. 
 
 ```shell 
 curl --location 'http://localhost:8000/user/new' \
@@ -17,6 +19,8 @@ curl --location 'http://localhost:8000/user/new' \
 --data-raw '{"models": ["azure-models"], "max_budget": 0, "user_id": "krrish3@berri.ai"}' 
 ```
 The request is a normal `/key/generate` request body + a `max_budget` field. 
+
+[**See Swagger**](https://litellm-api.up.railway.app/#/user%20management/new_user_user_new_post)
 
 **Sample Response**
 
@@ -32,14 +36,60 @@ The request is a normal `/key/generate` request body + a `max_budget` field.
 
 ## Set Rate Limits 
 
-Set max parallel requests a user can make, when you create user keys - `/key/generate`. 
+You can set: 
+- max parallel requests
+- tpm limits 
+- rpm limits 
+
+<Tabs>
+<TabItem value="per-user" label="Per User">
+
+Use `/user/new`, to persist rate limits across multiple keys.
+
+
+```shell
+curl --location 'http://0.0.0.0:8000/user/new' \
+--header 'Authorization: Bearer sk-1234' \
+--header 'Content-Type: application/json' \
+--data '{"user_id": "krrish@berri.ai", "max_parallel_requests": 10, "tpm_limit": 20, "rpm_limit": 4}' 
+```
+
+[**See Swagger**](https://litellm-api.up.railway.app/#/user%20management/new_user_user_new_post)
+
+**Expected Response**
+
+```json
+{
+    "key": "sk-sA7VDkyhlQ7m8Gt77Mbt3Q",
+    "expires": "2024-01-19T01:21:12.816168",
+    "user_id": "krrish@berri.ai",
+}
+```
+
+</TabItem>
+<TabItem value="per-key" label="Per Key">
+
+Use `/key/generate`, if you want them for just that key.
 
 ```shell
 curl --location 'http://0.0.0.0:8000/key/generate' \
 --header 'Authorization: Bearer sk-1234' \
 --header 'Content-Type: application/json' \
---data '{"duration": "20m", "max_parallel_requests": 1}' # 👈 max parallel requests = 1
+--data '{"max_parallel_requests": 10, "tpm_limit": 20, "rpm_limit": 4}' 
 ```
+
+**Expected Response**
+
+```json
+{
+    "key": "sk-ulGNRXWtv7M0lFnnsQk0wQ",
+    "expires": "2024-01-18T20:48:44.297973",
+    "user_id": "78c2c8fc-c233-43b9-b0c3-eb931da27b84"  // 👈 auto-generated
+}
+```
+
+</TabItem>
+</Tabs>
 
 ## Grant Access to new model 
 
