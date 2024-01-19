@@ -94,6 +94,7 @@ class Router:
         timeout: Optional[float] = None,
         default_litellm_params={},  # default params for Router.chat.completion.create
         set_verbose: bool = False,
+        debug_level: Literal["DEBUG", "INFO"] = "INFO",
         fallbacks: List = [],
         allowed_fails: Optional[int] = None,
         context_window_fallbacks: List = [],
@@ -108,6 +109,11 @@ class Router:
         routing_strategy_args: dict = {},  # just for latency-based routing
     ) -> None:
         self.set_verbose = set_verbose
+        if self.set_verbose:
+            if debug_level == "INFO":
+                verbose_router_logger.setLevel(logging.INFO)
+            elif debug_level == "DEBUG":
+                verbose_router_logger.setLevel(logging.DEBUG)
         self.deployment_names: List = (
             []
         )  # names of models under litellm_params. ex. azure/chatgpt-v-2
@@ -259,6 +265,7 @@ class Router:
             raise e
 
     def _completion(self, model: str, messages: List[Dict[str, str]], **kwargs):
+        model_name = None
         try:
             # pick the one that is available (lowest TPM/RPM)
             deployment = self.get_available_deployment(
@@ -271,6 +278,7 @@ class Router:
             )
             data = deployment["litellm_params"].copy()
             kwargs["model_info"] = deployment.get("model_info", {})
+            model_name = data["model"]
             for k, v in self.default_litellm_params.items():
                 if (
                     k not in kwargs
@@ -292,7 +300,7 @@ class Router:
             else:
                 model_client = potential_model_client
 
-            return litellm.completion(
+            response = litellm.completion(
                 **{
                     **data,
                     "messages": messages,
@@ -301,7 +309,14 @@ class Router:
                     **kwargs,
                 }
             )
+            verbose_router_logger.info(
+                f"litellm.completion(model={model_name})\033[32m 200 OK\033[0m"
+            )
+            return response
         except Exception as e:
+            verbose_router_logger.info(
+                f"litellm.completion(model={model_name})\033[31m Exception {str(e)}\033[0m"
+            )
             raise e
 
     async def acompletion(self, model: str, messages: List[Dict[str, str]], **kwargs):
@@ -1867,7 +1882,7 @@ class Router:
 
         if deployment is None:
             raise ValueError("No models available.")
-
+        verbose_router_logger.info(f"Selected deployment: {deployment}")
         return deployment
 
     def flush_cache(self):
