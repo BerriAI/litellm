@@ -2363,10 +2363,12 @@ def client(original_function):
             threading.Thread(
                 target=logging_obj.success_handler, args=(result, start_time, end_time)
             ).start()
-            threading.Thread(
-                target=logging_obj.async_success_handler,
-                args=(result, start_time, end_time),
-            ).start()
+
+            loop = asyncio.get_event_loop()
+            loop.run_in_executor(
+                executor=None,
+                func=logging_obj.async_success_handler(result, start_time, end_time),
+            )
             # RETURN RESULT
             if hasattr(result, "_hidden_params"):
                 result._hidden_params["model_id"] = kwargs.get("model_info", {}).get(
