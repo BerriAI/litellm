@@ -2734,6 +2734,8 @@ async def config_yaml_endpoint(config_info: ConfigYAML):
 @router.get("/test", tags=["health"])
 async def test_endpoint(request: Request):
     """
+    [DEPRECATED] use `/health/liveliness` instead.
+
     A test endpoint that pings the proxy server to check if it's healthy.
 
     Parameters:
