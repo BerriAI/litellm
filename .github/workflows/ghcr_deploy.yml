@@ -35,12 +35,20 @@ jobs:
           push: true
           tags: litellm/litellm:${{ github.event.inputs.tag || 'latest' }} 
       -
+        name: Build and push litellm-ui image
+        uses: docker/build-push-action@v5
+        with:
+          push: true
+          file: ui/Dockerfile
+          tags: litellm/litellm-ui:${{ github.event.inputs.tag || 'latest' }}
+      -
         name: Build and push litellm-database image
         uses: docker/build-push-action@v5
         with:
           push: true
           file: Dockerfile.database
           tags: litellm/litellm-database:${{ github.event.inputs.tag || 'latest' }}
+      
   build-and-push-image:
     runs-on: ubuntu-latest
     # Sets the permissions granted to the `GITHUB_TOKEN` for the actions in this job.
