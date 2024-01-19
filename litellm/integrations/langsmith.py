@@ -21,9 +21,7 @@ class LangsmithLogger:
     def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
         # Method definition
         # inspired by Langsmith http api here: https://github.com/langchain-ai/langsmith-cookbook/blob/main/tracing-examples/rest/rest.ipynb
-        metadata = kwargs.get('litellm_params', {}).get("metadata", {})
-        if metadata is None:
-            metadata = {}
+        metadata = kwargs.get('litellm_params', {}).get("metadata", {}) or {}  # if metadata is None
 
         # set project name and run_name for langsmith logging
         # users can pass project_name and run name to litellm.completion()
