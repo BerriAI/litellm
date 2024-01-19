@@ -181,6 +181,8 @@ class LangFuseLogger:
         if supports_tags:
             for key, value in metadata.items():
                 tags.append(f"{key}:{value}")
+            if "cache_hit" in kwargs:
+                tags.append(f"cache_hit:{kwargs['cache_hit']}")
             trace_params.update({"tags": tags})
 
         trace = self.Langfuse.trace(**trace_params)
