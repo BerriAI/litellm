@@ -1843,6 +1843,9 @@ class Router:
                 selected_index = random.choices(range(len(rpms)), weights=weights)[0]
                 verbose_router_logger.debug(f"\n selected index, {selected_index}")
                 deployment = healthy_deployments[selected_index]
+                verbose_router_logger.info(
+                    f"get_available_deployment for model: {model}, Selected deployment: {deployment or deployment[0]} for model: {model}"
+                )
                 return deployment or deployment[0]
             ############## Check if we can do a RPM/TPM based weighted pick #################
             tpm = healthy_deployments[0].get("litellm_params").get("tpm", None)
@@ -1857,6 +1860,9 @@ class Router:
                 selected_index = random.choices(range(len(tpms)), weights=weights)[0]
                 verbose_router_logger.debug(f"\n selected index, {selected_index}")
                 deployment = healthy_deployments[selected_index]
+                verbose_router_logger.info(
+                    f"get_available_deployment for model: {model}, Selected deployment: {deployment or deployment[0]} for model: {model}"
+                )
                 return deployment or deployment[0]
 
             ############## No RPM/TPM passed, we do a random pick #################
@@ -1881,8 +1887,13 @@ class Router:
             )
 
         if deployment is None:
+            verbose_router_logger.info(
+                f"get_available_deployment for model: {model}, No deployment available"
+            )
             raise ValueError("No models available.")
-        verbose_router_logger.info(f"Selected deployment: {deployment}")
+        verbose_router_logger.info(
+            f"get_available_deployment for model: {model}, Selected deployment: {deployment} for model: {model}"
+        )
         return deployment
 
     def flush_cache(self):
