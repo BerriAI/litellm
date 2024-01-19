@@ -536,7 +536,7 @@ async def test_acompletion_caching_on_router_caching_groups():
 		messages = [
 			{"role": "user", "content": f"write a one sentence poem {time.time()}?"}
 		]
-		start_time = time.time()
+		start_time = time.perf_counter()
 		router = Router(model_list=model_list, 
 				cache_responses=True, 
 				caching_groups=[("openai-gpt-3.5-turbo", "azure-gpt-3.5-turbo")])

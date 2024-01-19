@@ -157,7 +157,7 @@ data = []
 for question in questions: # group by question
   for model in models:
     print(f"running question: {question} for model: {model}")
-    start_time = time.time()
+    start_time = time.perf_counter()
     # show response, response time, cost for each question
     response = completion(
         model=model,
@@ -171,7 +171,7 @@ for question in questions: # group by question
             }
         ],
     )
-    end = time.time()
+    end = time.perf_counter()
     total_time = end-start_time # response time
     # print(response)
     cost = completion_cost(response) # cost for completion
@@ -282,7 +282,7 @@ data_2 = []
 for question in questions: # group by question
   for model in models:
     print(f"running question: {question} for model: {model}")
-    start_time = time.time()
+    start_time = time.perf_counter()
     # show response, response time, cost for each question
     response = completion(
         model=model,
@@ -296,7 +296,7 @@ for question in questions: # group by question
             }
         ],
     )
-    end = time.time()
+    end = time.perf_counter()
     total_time = end-start_time # response time
     # print(response)
     cost = completion_cost(response) # cost for completion

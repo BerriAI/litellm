@@ -15,7 +15,7 @@ import litellm, openai
 import itertools
 import random, uuid, requests
 from functools import wraps
-import datetime, time
+import time
 import tiktoken
 import uuid
 import aiohttp
@@ -858,7 +858,7 @@ class Logging:
                 end_time = (
                     self.start_time
                 )  # no time has passed as the call hasn't been made yet
-                time_diff = (end_time - start_time).total_seconds()
+                time_diff = end_time - start_time
                 float_diff = float(time_diff)
                 litellm._current_cost += litellm.completion_cost(
                     model=self.model,
@@ -1061,13 +1061,13 @@ class Logging:
             if start_time is None:
                 start_time = self.start_time
             if end_time is None:
-                end_time = datetime.datetime.now()
+                end_time = time.perf_counter()
             self.model_call_details["log_event_type"] = "successful_api_call"
             self.model_call_details["end_time"] = end_time
             self.model_call_details["cache_hit"] = cache_hit
 
             if litellm.max_budget and self.stream:
-                time_diff = (end_time - start_time).total_seconds()
+                time_diff = end_time - start_time
                 float_diff = float(time_diff)
                 litellm._current_cost += litellm.completion_cost(
                     model=self.model,
@@ -1544,7 +1544,7 @@ class Logging:
         if start_time is None:
             start_time = self.start_time
         if end_time is None:
-            end_time = datetime.datetime.now()
+            end_time = time.perf_counter()
 
         # on some exceptions, model_call_details is not always initialized, this ensures that we still log those exceptions
         if not hasattr(self, "model_call_details"):
@@ -1997,7 +1997,7 @@ def client(original_function):
     def wrapper(*args, **kwargs):
         # Prints Exactly what was passed to litellm function - don't execute any logic here - it should just print
         print_args_passed_to_litellm(original_function, args, kwargs)
-        start_time = datetime.datetime.now()
+        start_time = time.perf_counter()
         result = None
         logging_obj = kwargs.get("litellm_logging_obj", None)
 
@@ -2096,7 +2096,7 @@ def client(original_function):
                                 return cached_result
             # MODEL CALL
             result = original_function(*args, **kwargs)
-            end_time = datetime.datetime.now()
+            end_time = time.perf_counter()
             if "stream" in kwargs and kwargs["stream"] == True:
                 # TODO: Add to cache for streaming
                 if (
@@ -2139,9 +2139,7 @@ def client(original_function):
                 result._hidden_params["model_id"] = kwargs.get("model_info", {}).get(
                     "id", None
                 )
-            result._response_ms = (
-                end_time - start_time
-            ).total_seconds() * 1000  # return response latency in ms like openai
+            result._response_ms = (end_time - start_time) * 1000  # return response latency in ms like openai
             return result
         except Exception as e:
             call_type = original_function.__name__
@@ -2172,7 +2170,7 @@ def client(original_function):
                     return original_function(*args, **kwargs)
             traceback_exception = traceback.format_exc()
             crash_reporting(*args, **kwargs, exception=traceback_exception)
-            end_time = datetime.datetime.now()
+            end_time = time.perf_counter()
             # LOG FAILURE - handle streaming failure logging in the _next_ object, remove `handle_failure` once it's deprecated
             if logging_obj:
                 logging_obj.failure_handler(
@@ -2193,7 +2191,7 @@ def client(original_function):
     @wraps(original_function)
     async def wrapper_async(*args, **kwargs):
         print_args_passed_to_litellm(original_function, args, kwargs)
-        start_time = datetime.datetime.now()
+        start_time = time.perf_counter()
         result = None
         logging_obj = kwargs.get("litellm_logging_obj", None)
         # only set litellm_call_id if its not in kwargs
@@ -2269,7 +2267,7 @@ def client(original_function):
                             )
                         # LOG SUCCESS
                         cache_hit = True
-                        end_time = datetime.datetime.now()
+                        end_time = time.perf_counter()
                         (
                             model,
                             custom_llm_provider,
@@ -2319,7 +2317,7 @@ def client(original_function):
                         return cached_result
             # MODEL CALL
             result = await original_function(*args, **kwargs)
-            end_time = datetime.datetime.now()
+            end_time = time.perf_counter()
             if "stream" in kwargs and kwargs["stream"] == True:
                 if (
                     "complete_response" in kwargs
@@ -2369,14 +2367,12 @@ def client(original_function):
                     "id", None
                 )
             if isinstance(result, ModelResponse):
-                result._response_ms = (
-                    end_time - start_time
-                ).total_seconds() * 1000  # return response latency in ms like openai
+                result._response_ms = (end_time - start_time) * 1000  # return response latency in ms like openai
             return result
         except Exception as e:
             traceback_exception = traceback.format_exc()
             crash_reporting(*args, **kwargs, exception=traceback_exception)
-            end_time = datetime.datetime.now()
+            end_time = time.perf_counter()
             if logging_obj:
                 try:
                     logging_obj.failure_handler(
@@ -4558,7 +4554,7 @@ def load_test_model(
     if num_calls:
         test_calls = num_calls
     messages = [[{"role": "user", "content": test_prompt}] for _ in range(test_calls)]
-    start_time = time.time()
+    start_time = time.perf_counter()
     try:
         litellm.batch_completion(
             model=model,
@@ -4567,7 +4563,7 @@ def load_test_model(
             api_base=api_base,
             force_timeout=force_timeout,
         )
-        end_time = time.time()
+        end_time = time.perf_counter()
         response_time = end_time - start_time
         return {
             "total_response_time": response_time,
@@ -4576,7 +4572,7 @@ def load_test_model(
             "exception": None,
         }
     except Exception as e:
-        end_time = time.time()
+        end_time = time.perf_counter()
         response_time = end_time - start_time
         return {
             "total_response_time": response_time,
@@ -8026,7 +8022,7 @@ def completion_with_fallbacks(**kwargs):
     response = None
     rate_limited_models = set()
     model_expiration_times = {}
-    start_time = time.time()
+    start_time = time.perf_counter()
     original_model = kwargs["model"]
     fallbacks = [kwargs["model"]] + nested_kwargs.get("fallbacks", [])
     if "fallbacks" in nested_kwargs:
@@ -8034,7 +8030,7 @@ def completion_with_fallbacks(**kwargs):
     litellm_call_id = str(uuid.uuid4())
 
     # max time to process a request with fallbacks: default 45s
-    while response == None and time.time() - start_time < 45:
+    while response == None and time.perf_counter() - start_time < 45:
         for model in fallbacks:
             # loop thru all models
             try:

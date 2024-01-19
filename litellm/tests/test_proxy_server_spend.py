@@ -71,11 +71,11 @@
 
 # async def loadtest_fn(n = 1):
 #     global num_task_cancelled_errors, exception_counts, chat_completions
-#     start = time.time()
+#     start = time.perf_counter()
 #     tasks = [chat_completions() for _ in range(n)]
 #     chat_completions = await asyncio.gather(*tasks)
 #     successful_completions = [c for c in chat_completions if c is not None]
-#     print(n, time.time() - start, len(successful_completions))
+#     print(n, time.perf_counter() - start, len(successful_completions))
 
 # # print(json.dumps(super_fake_response.model_dump(), indent=4))
 

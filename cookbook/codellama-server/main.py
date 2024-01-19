@@ -51,7 +51,7 @@ def data_generator(response):
 @app.route("/chat/completions", methods=["POST"])
 def api_completion():
     data = request.json
-    start_time = time.time()
+    start_time = time.perf_counter()
     if data.get("stream") == "True":
         data["stream"] = True  # convert to boolean
     try:
@@ -70,7 +70,7 @@ def api_completion():
         print(f"data: {data}")
         response = completion(**data)
         ## LOG SUCCESS
-        end_time = time.time()
+        end_time = time.perf_counter()
         if (
             "stream" in data and data["stream"] == True
         ):  # use generate_responses to stream responses
@@ -79,7 +79,7 @@ def api_completion():
         # call handle_error function
         print_verbose(f"Got Error api_completion(): {traceback.format_exc()}")
         ## LOG FAILURE
-        end_time = time.time()
+        end_time = time.perf_counter()
         traceback_exception = traceback.format_exc()
         return handle_error(data=data)
     return response

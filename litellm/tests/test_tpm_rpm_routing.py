@@ -38,9 +38,9 @@ def test_tpm_rpm_updated():
             "model_info": {"id": deployment_id},
         }
     }
-    start_time = time.time()
+    start_time = time.perf_counter()
     response_obj = {"usage": {"total_tokens": 50}}
-    end_time = time.time()
+    end_time = time.perf_counter()
     lowest_tpm_logger.log_success_event(
         response_obj=response_obj,
         kwargs=kwargs,
@@ -89,9 +89,9 @@ def test_get_available_deployments():
             "model_info": {"id": deployment_id},
         }
     }
-    start_time = time.time()
+    start_time = time.perf_counter()
     response_obj = {"usage": {"total_tokens": 50}}
-    end_time = time.time()
+    end_time = time.perf_counter()
     lowest_tpm_logger.log_success_event(
         response_obj=response_obj,
         kwargs=kwargs,
@@ -109,9 +109,9 @@ def test_get_available_deployments():
             "model_info": {"id": deployment_id},
         }
     }
-    start_time = time.time()
+    start_time = time.perf_counter()
     response_obj = {"usage": {"total_tokens": 20}}
-    end_time = time.time()
+    end_time = time.perf_counter()
     lowest_tpm_logger.log_success_event(
         response_obj=response_obj,
         kwargs=kwargs,
@@ -183,9 +183,9 @@ def test_router_get_available_deployments():
             "model_info": {"id": 1},
         }
     }
-    start_time = time.time()
+    start_time = time.perf_counter()
     response_obj = {"usage": {"total_tokens": 50}}
-    end_time = time.time()
+    end_time = time.perf_counter()
     router.lowesttpm_logger.log_success_event(
         response_obj=response_obj,
         kwargs=kwargs,
@@ -202,9 +202,9 @@ def test_router_get_available_deployments():
             "model_info": {"id": 2},
         }
     }
-    start_time = time.time()
+    start_time = time.perf_counter()
     response_obj = {"usage": {"total_tokens": 20}}
-    end_time = time.time()
+    end_time = time.perf_counter()
     router.lowesttpm_logger.log_success_event(
         response_obj=response_obj,
         kwargs=kwargs,
@@ -254,9 +254,9 @@ def test_router_skip_rate_limited_deployments():
             "model_info": {"id": deployment_id},
         }
     }
-    start_time = time.time()
+    start_time = time.perf_counter()
     response_obj = {"usage": {"total_tokens": 1439}}
-    end_time = time.time()
+    end_time = time.perf_counter()
     router.lowesttpm_logger.log_success_event(
         response_obj=response_obj,
         kwargs=kwargs,

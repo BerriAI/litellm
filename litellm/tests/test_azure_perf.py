@@ -31,7 +31,7 @@ router = litellm.Router(model_list=model_list)
 
 async def _openai_completion():
     try:
-        start_time = time.time()
+        start_time = time.perf_counter()
         response = await client.chat.completions.create(
             model="chatgpt-v-2",
             messages=[{"role": "user", "content": f"This is a test: {uuid.uuid4()}"}],
@@ -46,10 +46,10 @@ async def _openai_completion():
                 and len(chunk.choices) > 0
                 and chunk.choices[0].delta.content is not None
             ):
-                first_token_ts = time.time()
+                first_token_ts = time.perf_counter()
                 time_to_first_token = first_token_ts - start_time
                 init_chunk = chunk
-        end_time = time.time()
+        end_time = time.perf_counter()
         print(
             "OpenAI Call: ",
             init_chunk,
@@ -66,7 +66,7 @@ async def _openai_completion():
 
 async def _router_completion():
     try:
-        start_time = time.time()
+        start_time = time.perf_counter()
         response = await router.acompletion(
             model="azure-test",
             messages=[{"role": "user", "content": f"This is a test: {uuid.uuid4()}"}],
@@ -81,10 +81,10 @@ async def _router_completion():
                 and len(chunk.choices) > 0
                 and chunk.choices[0].delta.content is not None
             ):
-                first_token_ts = time.time()
+                first_token_ts = time.perf_counter()
                 time_to_first_token = first_token_ts - start_time
                 init_chunk = chunk
-        end_time = time.time()
+        end_time = time.perf_counter()
         print(
             "Router Call: ",
             init_chunk,

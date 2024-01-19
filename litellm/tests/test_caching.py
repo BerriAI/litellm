@@ -171,19 +171,19 @@ def test_embedding_caching():
 
     litellm.cache = Cache()
     text_to_embed = [embedding_large_text]
-    start_time = time.time()
+    start_time = time.perf_counter()
     embedding1 = embedding(
         model="text-embedding-ada-002", input=text_to_embed, caching=True
     )
-    end_time = time.time()
+    end_time = time.perf_counter()
     print(f"Embedding 1 response time: {end_time - start_time} seconds")
 
     time.sleep(1)
-    start_time = time.time()
+    start_time = time.perf_counter()
     embedding2 = embedding(
         model="text-embedding-ada-002", input=text_to_embed, caching=True
     )
-    end_time = time.time()
+    end_time = time.perf_counter()
     # print(f"embedding2: {embedding2}")
     print(f"Embedding 2 response time: {end_time - start_time} seconds")
 
@@ -215,7 +215,7 @@ def test_embedding_caching_azure():
     os.environ["AZURE_API_BASE"] = ""
     os.environ["AZURE_API_KEY"] = ""
 
-    start_time = time.time()
+    start_time = time.perf_counter()
     print("AZURE CONFIGS")
     print(api_version)
     print(api_key)
@@ -228,11 +228,11 @@ def test_embedding_caching_azure():
         api_version=api_version,
         caching=True,
     )
-    end_time = time.time()
+    end_time = time.perf_counter()
     print(f"Embedding 1 response time: {end_time - start_time} seconds")
 
     time.sleep(1)
-    start_time = time.time()
+    start_time = time.perf_counter()
     embedding2 = embedding(
         model="azure/azure-embedding-model",
         input=["good morning from litellm", "this is another item"],
@@ -241,7 +241,7 @@ def test_embedding_caching_azure():
         api_version=api_version,
         caching=True,
     )
-    end_time = time.time()
+    end_time = time.perf_counter()
     print(f"Embedding 2 response time: {end_time - start_time} seconds")
 
     litellm.cache = None
@@ -713,13 +713,13 @@ def test_cache_override():
         model="text-embedding-ada-002", input=["hello who are you"], caching=False
     )
 
-    start_time = time.time()
+    start_time = time.perf_counter()
 
     response2 = embedding(
         model="text-embedding-ada-002", input=["hello who are you"], caching=False
     )
 
-    end_time = time.time()
+    end_time = time.perf_counter()
     print(f"Embedding 2 response time: {end_time - start_time} seconds")
 
     assert (

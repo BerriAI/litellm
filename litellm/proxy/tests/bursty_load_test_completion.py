@@ -26,7 +26,7 @@ async def litellm_completion():
 
 
 async def main():
-    start = time.time()
+    start = time.perf_counter()
     n = 60  # Send 60 concurrent requests, each with 4k tokens = 240k Tokens
     tasks = [litellm_completion() for _ in range(n)]
 
@@ -40,7 +40,7 @@ async def main():
             if isinstance(completion, str):
                 error_log.write(completion + "\n")
 
-    print(n, time.time() - start, len(successful_completions))
+    print(n, time.perf_counter() - start, len(successful_completions))
 
 
 if __name__ == "__main__":

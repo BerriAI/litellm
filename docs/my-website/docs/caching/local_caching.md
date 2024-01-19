@@ -80,13 +80,13 @@ from litellm import embedding
 from litellm.caching import Cache
 litellm.cache = Cache()
 
-start_time = time.time()
+start_time = time.perf_counter()
 embedding1 = embedding(model="text-embedding-ada-002", input=["hello from litellm"*5], caching=True)
-end_time = time.time()
+end_time = time.perf_counter()
 print(f"Embedding 1 response time: {end_time - start_time} seconds")
 
-start_time = time.time()
+start_time = time.perf_counter()
 embedding2 = embedding(model="text-embedding-ada-002", input=["hello from litellm"*5], caching=True)
-end_time = time.time()
+end_time = time.perf_counter()
 print(f"Embedding 2 response time: {end_time - start_time} seconds")
 ```

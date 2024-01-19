@@ -90,11 +90,11 @@
 
 # async def loadtest_fn(n = 1452):
 #     global num_task_cancelled_errors, exception_counts
-#     start = time.time()
+#     start = time.perf_counter()
 #     tasks = [router_completion() for _ in range(n)]
 #     chat_completions = await asyncio.gather(*tasks)
 #     successful_completions = [c for c in chat_completions if c is not None]
-#     print(n, time.time() - start, len(successful_completions))
+#     print(n, time.perf_counter() - start, len(successful_completions))
 
 #     # Print exception breakdown
 #     print("Exception Breakdown:")
@@ -126,11 +126,11 @@
 # #     return successful_completions
 
 # # async def main():
-# #   start_time = time.time()
+# #   start_time = time.perf_counter()
 # #   total_successful_requests = 0
 # #   request_limit = 1000
 # #   batches = 2  # batches of 1k requests
-# #   start = time.time()
+# #   start = time.perf_counter()
 # #   tasks = []  # list to hold all tasks
 
 # #   async def request_loop():
@@ -147,6 +147,6 @@
 # #   results = await asyncio.gather(*tasks)
 # #   total_successful_requests = sum(len(res) for res in results)
 
-# #   print(request_limit*batches, time.time() - start, total_successful_requests)
+# #   print(request_limit*batches, time.perf_counter() - start, total_successful_requests)
 
 # # asyncio.run(main())

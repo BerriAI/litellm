@@ -41,7 +41,7 @@ def main(system_prompt):
                     f"Running question: {question} for model: {model}", "green"
                 )
                 pbar.set_description(colored_description)
-                start_time = time.time()
+                start_time = time.perf_counter()
 
                 response = completion(
                     model=model,
@@ -52,7 +52,7 @@ def main(system_prompt):
                     ],
                 )
 
-                end = time.time()
+                end = time.perf_counter()
                 total_time = end - start_time
                 cost = completion_cost(completion_response=response)
                 raw_response = response["choices"][0]["message"]["content"]

@@ -1351,7 +1351,7 @@ def data_generator(response):
 async def async_data_generator(response, user_api_key_dict):
     verbose_proxy_logger.debug("inside generator")
     try:
-        start_time = time.time()
+        start_time = time.perf_counter()
         async for chunk in response:
             verbose_proxy_logger.debug(f"returned chunk: {chunk}")
             try:
@@ -1360,7 +1360,7 @@ async def async_data_generator(response, user_api_key_dict):
                 yield f"data: {str(e)}\n\n"
 
         ### ALERTING ###
-        end_time = time.time()
+        end_time = time.perf_counter()
         asyncio.create_task(
             proxy_logging_obj.response_taking_too_long(
                 start_time=start_time, end_time=end_time, type="slow_response"
@@ -1570,7 +1570,7 @@ async def completion(
             user_api_key_dict=user_api_key_dict, data=data, call_type="completion"
         )
 
-        start_time = time.time()
+        start_time = time.perf_counter()
 
         ### ROUTE THE REQUESTs ###
         router_model_names = (
@@ -1620,7 +1620,7 @@ async def completion(
             )
 
         ### ALERTING ###
-        end_time = time.time()
+        end_time = time.perf_counter()
         asyncio.create_task(
             proxy_logging_obj.response_taking_too_long(
                 start_time=start_time, end_time=end_time, type="slow_response"
@@ -1730,7 +1730,7 @@ async def chat_completion(
             user_api_key_dict=user_api_key_dict, data=data, call_type="completion"
         )
 
-        start_time = time.time()
+        start_time = time.perf_counter()
 
         ### ROUTE THE REQUEST ###
         router_model_names = (
@@ -1782,7 +1782,7 @@ async def chat_completion(
             )
 
         ### ALERTING ###
-        end_time = time.time()
+        end_time = time.perf_counter()
         asyncio.create_task(
             proxy_logging_obj.response_taking_too_long(
                 start_time=start_time, end_time=end_time, type="slow_response"
@@ -1916,7 +1916,7 @@ async def embeddings(
             user_api_key_dict=user_api_key_dict, data=data, call_type="embeddings"
         )
 
-        start_time = time.time()
+        start_time = time.perf_counter()
 
         ## ROUTE TO CORRECT ENDPOINT ##
         # skip router if user passed their key
@@ -1947,7 +1947,7 @@ async def embeddings(
             response = await litellm.aembedding(**data)
 
         ### ALERTING ###
-        end_time = time.time()
+        end_time = time.perf_counter()
         asyncio.create_task(
             proxy_logging_obj.response_taking_too_long(
                 start_time=start_time, end_time=end_time, type="slow_response"
@@ -2034,7 +2034,7 @@ async def image_generation(
             user_api_key_dict=user_api_key_dict, data=data, call_type="embeddings"
         )
 
-        start_time = time.time()
+        start_time = time.perf_counter()
 
         ## ROUTE TO CORRECT ENDPOINT ##
         # skip router if user passed their key
@@ -2062,7 +2062,7 @@ async def image_generation(
             response = await litellm.aimage_generation(**data)
 
         ### ALERTING ###
-        end_time = time.time()
+        end_time = time.perf_counter()
         asyncio.create_task(
             proxy_logging_obj.response_taking_too_long(
                 start_time=start_time, end_time=end_time, type="slow_response"

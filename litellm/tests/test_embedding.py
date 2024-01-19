@@ -214,7 +214,7 @@ def test_bedrock_embedding_titan():
         # this also tests if we can return a cache response for this scenario
         import time
 
-        start_time = time.time()
+        start_time = time.perf_counter()
 
         response = embedding(
             model="bedrock/amazon.titan-embed-text-v1",
@@ -222,7 +222,7 @@ def test_bedrock_embedding_titan():
         )
         print(response)
 
-        end_time = time.time()
+        end_time = time.perf_counter()
         print(f"Embedding 2 response time: {end_time - start_time} seconds")
 
         assert end_time - start_time < 0.1

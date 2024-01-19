@@ -27,9 +27,9 @@ class AsyncCustomHTTPTransport(httpx.AsyncHTTPTransport):
             await response.aread()
 
             timeout_secs: int = 120
-            start_time = time.time()
+            start_time = time.perf_counter()
             while response.json()["status"] not in ["succeeded", "failed"]:
-                if time.time() - start_time > timeout_secs:
+                if time.perf_counter() - start_time > timeout_secs:
                     timeout = {
                         "error": {
                             "code": "Timeout",
@@ -97,9 +97,9 @@ class CustomHTTPTransport(httpx.HTTPTransport):
             response.read()
 
             timeout_secs: int = 120
-            start_time = time.time()
+            start_time = time.perf_counter()
             while response.json()["status"] not in ["succeeded", "failed"]:
-                if time.time() - start_time > timeout_secs:
+                if time.perf_counter() - start_time > timeout_secs:
                     timeout = {
                         "error": {
                             "code": "Timeout",

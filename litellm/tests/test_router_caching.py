@@ -46,7 +46,7 @@ async def test_acompletion_caching_on_router():
         messages = [
             {"role": "user", "content": f"write a one sentence poem {time.time()}?"}
         ]
-        start_time = time.time()
+        start_time = time.perf_counter()
         router = Router(
             model_list=model_list,
             redis_host=os.environ["REDIS_HOST"],
@@ -72,7 +72,7 @@ async def test_acompletion_caching_on_router():
         )
         router.reset()
     except litellm.Timeout as e:
-        end_time = time.time()
+        end_time = time.perf_counter()
         print(f"timeout error occurred: {end_time - start_time}")
         pass
     except Exception as e:
@@ -111,7 +111,7 @@ async def test_acompletion_caching_with_ttl_on_router():
         messages = [
             {"role": "user", "content": f"write a one sentence poem {time.time()}?"}
         ]
-        start_time = time.time()
+        start_time = time.perf_counter()
         router = Router(
             model_list=model_list,
             redis_host=os.environ["REDIS_HOST"],
@@ -137,7 +137,7 @@ async def test_acompletion_caching_with_ttl_on_router():
         )
         router.reset()
     except litellm.Timeout as e:
-        end_time = time.time()
+        end_time = time.perf_counter()
         print(f"timeout error occurred: {end_time - start_time}")
         pass
     except Exception as e:
@@ -176,7 +176,7 @@ async def test_acompletion_caching_on_router_caching_groups():
         messages = [
             {"role": "user", "content": f"write a one sentence poem {time.time()}?"}
         ]
-        start_time = time.time()
+        start_time = time.perf_counter()
         router = Router(
             model_list=model_list,
             redis_host=os.environ["REDIS_HOST"],
@@ -203,7 +203,7 @@ async def test_acompletion_caching_on_router_caching_groups():
         )
         router.reset()
     except litellm.Timeout as e:
-        end_time = time.time()
+        end_time = time.perf_counter()
         print(f"timeout error occurred: {end_time - start_time}")
         pass
     except Exception as e:
