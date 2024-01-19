@@ -5,8 +5,10 @@ Use this to health check all LLMs defined in your config.yaml
 
 The proxy exposes: 
 * a /health endpoint which returns the health of the LLM APIs  
-* a /test endpoint which makes a ping to the litellm server
+* a /health/readiness endpoint for returning if the proxy is ready to accept requests 
+* a /health/liveliness endpoint for returning if the proxy is alive 
 
+## `/health`
 #### Request
 Make a GET Request to `/health` on the proxy
 ```shell
@@ -39,7 +41,7 @@ litellm --health
 }
 ```
 
-## Background Health Checks 
+### Background Health Checks 
 
 You can enable model health checks being run in the background, to prevent each model from being queried too frequently via `/health`.
 
@@ -61,7 +63,7 @@ $ litellm /path/to/config.yaml
 curl --location 'http://0.0.0.0:8000/health'
 ```
 
-## Embedding Models 
+### Embedding Models 
 
 We need some way to know if the model is an embedding model when running checks, if you have this in your config, specifying mode it makes an embedding health check
 
@@ -77,7 +79,7 @@ model_list:
       mode: embedding # 👈 ADD THIS
 ```
 
-## Text Completion Models 
+### Text Completion Models 
 
 We need some way to know if the model is a text completion model when running checks, if you have this in your config, specifying mode it makes an embedding health check
 
@@ -91,4 +93,53 @@ model_list:
       api_version: "2023-07-01-preview"
     model_info:
       mode: completion # 👈 ADD THIS
+```
+
+## `/health/readiness`
+
+Unprotected endpoint for checking if proxy is ready to accept requests
+
+Example Request: 
+
+```bash 
+curl --location 'http://0.0.0.0:8000/health/readiness'
+```
+
+Example Response:  
+
+*If proxy connected to a database*  
+
+```json
+{
+    "status": "healthy",
+    "db": "connected"
+}
+```
+
+*If proxy not connected to a database*  
+
+```json
+{
+    "status": "healthy",
+    "db": "Not connected"
+}
+```
+
+`/health/liveliness`
+
+Unprotected endpoint for checking if proxy is alive
+
+
+Example Request: 
+
+```
+curl -X 'GET' \
+  'http://0.0.0.0:8000/health/liveliness' \
+  -H 'accept: application/json'
+```
+
+Example Response: 
+
+```json
+"I'm alive!"
 ```
