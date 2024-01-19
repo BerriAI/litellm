@@ -129,11 +129,13 @@ class S3Cache(BaseCache):
         s3_aws_secret_access_key=None,
         s3_aws_session_token=None,
         s3_config=None,
+        s3_path=None,
         **kwargs,
     ):
         import boto3
 
         self.bucket_name = s3_bucket_name
+        self.key_prefix = s3_path.rstrip("/") + "/" if s3_path else ""
         # Create an S3 client with custom endpoint URL
         self.s3_client = boto3.client(
             "s3",
@@ -155,6 +157,8 @@ class S3Cache(BaseCache):
             ttl = kwargs.get("ttl", None)
             # Convert value to JSON before storing in S3
             serialized_value = json.dumps(value)
+            key = self.key_prefix + key
+
             if ttl is not None:
                 cache_control = f"immutable, max-age={ttl}, s-maxage={ttl}"
                 import datetime
@@ -193,6 +197,8 @@ class S3Cache(BaseCache):
         import boto3, botocore
 
         try:
+            key = self.key_prefix + key
+
             print_verbose(f"Get S3 Cache: key: {key}")
             # Download the data from S3
             cached_response = self.s3_client.get_object(
