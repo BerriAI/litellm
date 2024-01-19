@@ -69,7 +69,10 @@ def test_async_fallbacks(caplog):
     # on circle ci the captured logs get some async task exception logs - filter them out
     "Task exception was never retrieved"
     captured_logs = [
-        log for log in captured_logs if "Task exception was never retrieved" not in log
+        log
+        for log in captured_logs
+        if "Task exception was never retrieved" not in log
+        and "get_available_deployment" not in log
     ]
 
     print("\n Captured caplog records - ", captured_logs)
