@@ -11,12 +11,10 @@ async def litellm_completion():
     # Your existing code for litellm_completion goes here
     try:
         response = await litellm_client.chat.completions.create(
-            model="Azure OpenAI GPT-4 Canada-East (External)",
-            stream=True,
+            model="azure-gpt-3.5",
             messages=[{"role": "user", "content": f"This is a test: {uuid.uuid4()}"}],
         )
-        async for chunk in response:
-            print(chunk)
+        print(response)
         return response
 
     except Exception as e:
@@ -27,9 +25,9 @@ async def litellm_completion():
 
 
 async def main():
-    for i in range(1000000):
+    for i in range(150):
         start = time.time()
-        n = 1000  # Number of concurrent tasks
+        n = 150  # Number of concurrent tasks
         tasks = [litellm_completion() for _ in range(n)]
 
         chat_completions = await asyncio.gather(*tasks)
