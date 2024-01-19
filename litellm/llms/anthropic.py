@@ -105,8 +105,9 @@ def completion(
     optional_params=None,
     litellm_params=None,
     logger_fn=None,
+    headers={},
 ):
-    headers = validate_environment(api_key)
+    headers = { **validate_environment(api_key), **headers }
     if model in custom_prompt_dict:
         # check if the model has a registered custom prompt
         model_prompt_details = custom_prompt_dict[model]
