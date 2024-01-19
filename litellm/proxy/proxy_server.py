@@ -523,18 +523,26 @@ async def track_cost_callback(
         verbose_proxy_logger.debug(
             f"kwargs stream: {kwargs.get('stream', None)} + complete streaming response: {kwargs.get('complete_streaming_response', None)}"
         )
+        litellm_params = kwargs.get("litellm_params", {}) or {}
+        proxy_server_request = litellm_params.get("proxy_server_request") or {}
+        user_id = proxy_server_request.get("body", {}).get("user", None)
         if "complete_streaming_response" in kwargs:
             # for tracking streaming cost we pass the "messages" and the output_text to litellm.completion_cost
             completion_response = kwargs["complete_streaming_response"]
             response_cost = litellm.completion_cost(
                 completion_response=completion_response
             )
-            verbose_proxy_logger.debug(f"streaming response_cost {response_cost}")
+
             user_api_key = kwargs["litellm_params"]["metadata"].get(
                 "user_api_key", None
             )
-            user_id = kwargs["litellm_params"]["metadata"].get(
+
+            user_id = user_id or kwargs["litellm_params"]["metadata"].get(
                 "user_api_key_user_id", None
+            )
+
+            verbose_proxy_logger.debug(
+                f"streaming response_cost {response_cost}, for user_id {user_id}"
             )
             if user_api_key and (
                 prisma_client is not None or custom_db_client is not None
@@ -555,8 +563,11 @@ async def track_cost_callback(
             user_api_key = kwargs["litellm_params"]["metadata"].get(
                 "user_api_key", None
             )
-            user_id = kwargs["litellm_params"]["metadata"].get(
+            user_id = user_id or kwargs["litellm_params"]["metadata"].get(
                 "user_api_key_user_id", None
+            )
+            verbose_proxy_logger.debug(
+                f"response_cost {response_cost}, for user_id {user_id}"
             )
             if user_api_key and (
                 prisma_client is not None or custom_db_client is not None
