@@ -1864,12 +1864,6 @@ def client(original_function):
                         # we only support async s3 logging for acompletion/aembedding since that's used on proxy
                         litellm._async_success_callback.append(callback)
                         removed_async_items.append(index)
-                    elif callback == "langfuse" and inspect.iscoroutinefunction(
-                        original_function
-                    ):
-                        # use async success callback for langfuse if this is litellm.acompletion(). Streaming logging does not work otherwise
-                        litellm._async_success_callback.append(callback)
-                        removed_async_items.append(index)
 
                 # Pop the async items from success_callback in reverse order to avoid index issues
                 for index in reversed(removed_async_items):
@@ -2363,6 +2357,7 @@ def client(original_function):
             threading.Thread(
                 target=logging_obj.success_handler, args=(result, start_time, end_time)
             ).start()
+
             # RETURN RESULT
             if hasattr(result, "_hidden_params"):
                 result._hidden_params["model_id"] = kwargs.get("model_info", {}).get(
