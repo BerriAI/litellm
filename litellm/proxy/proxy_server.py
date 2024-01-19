@@ -523,8 +523,8 @@ async def track_cost_callback(
         verbose_proxy_logger.debug(
             f"kwargs stream: {kwargs.get('stream', None)} + complete streaming response: {kwargs.get('complete_streaming_response', None)}"
         )
-        litellm_params = kwargs.get("litellm_params", {})
-        proxy_server_request = litellm_params.get("proxy_server_request")
+        litellm_params = kwargs.get("litellm_params", {}) or {}
+        proxy_server_request = litellm_params.get("proxy_server_request") or {}
         user_id = proxy_server_request.get("body", {}).get("user", None)
         if "complete_streaming_response" in kwargs:
             # for tracking streaming cost we pass the "messages" and the output_text to litellm.completion_cost
