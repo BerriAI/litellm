@@ -12,7 +12,10 @@ model LiteLLM_UserTable {
 		max_budget Float?
     spend      Float    @default(0.0)
     user_email    String?
-    models     String[] @default([])
+    models     String[]
+    max_parallel_requests Int?
+    tpm_limit     BigInt?
+    rpm_limit     BigInt?
 }
 
 // required for token gen
@@ -20,12 +23,14 @@ model LiteLLM_VerificationToken {
     token      String   @unique
     spend      Float    @default(0.0)
     expires    DateTime?
-    models     String[] @default([])
+    models     String[]
     aliases    Json  @default("{}")
     config     Json  @default("{}")
     user_id    String?
     max_parallel_requests Int?
     metadata   Json  @default("{}")
+    tpm_limit     BigInt?
+    rpm_limit     BigInt?
 }
 
 model LiteLLM_Config {

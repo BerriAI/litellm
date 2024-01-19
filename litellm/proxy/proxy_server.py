@@ -1040,6 +1040,8 @@ async def generate_key_helper_fn(
     user_email: Optional[str] = None,
     max_parallel_requests: Optional[int] = None,
     metadata: Optional[dict] = {},
+    tpm_limit: Optional[int] = None,
+    rpm_limit: Optional[int] = None,
 ):
     global prisma_client, custom_db_client
 
@@ -1080,6 +1082,8 @@ async def generate_key_helper_fn(
     config_json = json.dumps(config)
     metadata_json = json.dumps(metadata)
     user_id = user_id or str(uuid.uuid4())
+    tpm_limit = tpm_limit or sys.maxsize
+    rpm_limit = rpm_limit or sys.maxsize
     try:
         # Create a new verification token (you may want to enhance this logic based on your needs)
         user_data = {
@@ -1088,6 +1092,9 @@ async def generate_key_helper_fn(
             "user_id": user_id,
             "spend": spend,
             "models": models,
+            "max_parallel_requests": max_parallel_requests,
+            "tpm_limit": tpm_limit,
+            "rpm_limit": rpm_limit,
         }
         key_data = {
             "token": token,
@@ -1099,6 +1106,8 @@ async def generate_key_helper_fn(
             "user_id": user_id,
             "max_parallel_requests": max_parallel_requests,
             "metadata": metadata_json,
+            "tpm_limit": tpm_limit,
+            "rpm_limit": rpm_limit,
         }
         if prisma_client is not None:
             ## CREATE USER (If necessary)
@@ -2032,7 +2041,6 @@ async def image_generation(
     response_model=GenerateKeyResponse,
 )
 async def generate_key_fn(
-    request: Request,
     data: GenerateKeyRequest,
     Authorization: Optional[str] = Header(None),
 ):
