@@ -7622,7 +7622,9 @@ class CustomStreamWrapper:
                             raise Exception("An unknown error occurred with the stream")
                         model_response.choices[0].finish_reason = "stop"
                         self.sent_last_chunk = True
-            elif self.custom_llm_provider and self.custom_llm_provider == "vertex_ai":
+            elif self.custom_llm_provider == "gemini":
+                completion_obj["content"] = chunk.text
+            elif self.custom_llm_provider and (self.custom_llm_provider == "vertex_ai"):
                 try:
                     # print(chunk)
                     if hasattr(chunk, "text"):
