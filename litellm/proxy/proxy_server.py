@@ -2227,7 +2227,11 @@ async def info_key_fn(
             )
         key_info = await prisma_client.get_data(token=key)
         ## REMOVE HASHED TOKEN INFO BEFORE RETURNING ##
-        key_info = key_info.model_dump()
+        try:
+            key_info = key_info.model_dump()  # noqa
+        except:
+            # if using pydantic v1
+            key_info = key_info.dict()
         key_info.pop("token")
         return {"key": key, "info": key_info}
     except Exception as e:
@@ -2366,7 +2370,11 @@ async def user_info(
         )
         ## REMOVE HASHED TOKEN INFO before returning ##
         for key in keys:
-            key = key.model_dump()
+            try:
+                key = key.model_dump()  # noqa
+            except:
+                # if using pydantic v1
+                key = key.dict()
             key.pop("token", None)
         return {"user_id": user_id, "user_info": user_info, "keys": keys}
     except Exception as e:

@@ -186,4 +186,4 @@ class MaxParallelRequestsHandler(CustomLogger):
                     request_count_api_key, new_val, ttl=60
                 )  # save in cache for up to 1 min.
         except Exception as e:
-            self.print_verbose(f"An exception occurred - {str(e)}")  # noqa
+            print(f"An exception occurred - {str(e)}")  # noqa
