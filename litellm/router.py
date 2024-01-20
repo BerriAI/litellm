@@ -96,10 +96,13 @@ class Router:
         set_verbose: bool = False,
         debug_level: Literal["DEBUG", "INFO"] = "INFO",
         fallbacks: List = [],
-        allowed_fails: Optional[int] = None,
         context_window_fallbacks: List = [],
         model_group_alias: Optional[dict] = {},
         retry_after: int = 0,  # min time to wait before retrying a failed request
+        allowed_fails: Optional[
+            int
+        ] = None,  # Number of times a deployment can failbefore being added to cooldown
+        cooldown_time: float = 1,  # (seconds) time to cooldown a deployment after failure
         routing_strategy: Literal[
             "simple-shuffle",
             "least-busy",
@@ -108,6 +111,36 @@ class Router:
         ] = "simple-shuffle",
         routing_strategy_args: dict = {},  # just for latency-based routing
     ) -> None:
+        """
+        Initialize the Router class with the given parameters for caching, reliability, and routing strategy.
+
+        Args:
+            model_list (Optional[list]): List of models to be used. Defaults to None.
+            redis_url (Optional[str]): URL of the Redis server. Defaults to None.
+            redis_host (Optional[str]): Hostname of the Redis server. Defaults to None.
+            redis_port (Optional[int]): Port of the Redis server. Defaults to None.
+            redis_password (Optional[str]): Password of the Redis server. Defaults to None.
+            cache_responses (Optional[bool]): Flag to enable caching of responses. Defaults to False.
+            cache_kwargs (dict): Additional kwargs to pass to RedisCache. Defaults to {}.
+            caching_groups (Optional[List[tuple]]): List of model groups for caching across model groups. Defaults to None.
+            client_ttl (int): Time-to-live for cached clients in seconds. Defaults to 3600.
+            num_retries (int): Number of retries for failed requests. Defaults to 0.
+            timeout (Optional[float]): Timeout for requests. Defaults to None.
+            default_litellm_params (dict): Default parameters for Router.chat.completion.create. Defaults to {}.
+            set_verbose (bool): Flag to set verbose mode. Defaults to False.
+            debug_level (Literal["DEBUG", "INFO"]): Debug level for logging. Defaults to "INFO".
+            fallbacks (List): List of fallback options. Defaults to [].
+            context_window_fallbacks (List): List of context window fallback options. Defaults to [].
+            model_group_alias (Optional[dict]): Alias for model groups. Defaults to {}.
+            retry_after (int): Minimum time to wait before retrying a failed request. Defaults to 0.
+            allowed_fails (Optional[int]): Number of allowed fails before adding to cooldown. Defaults to None.
+            cooldown_time (float): Time to cooldown a deployment after failure in seconds. Defaults to 1.
+            routing_strategy (Literal["simple-shuffle", "least-busy", "usage-based-routing", "latency-based-routing"]): Routing strategy. Defaults to "simple-shuffle".
+            routing_strategy_args (dict): Additional args for latency-based routing. Defaults to {}.
+
+        Returns:
+            Router: An instance of the litellm.Router class.
+        """
         self.set_verbose = set_verbose
         if self.set_verbose:
             if debug_level == "INFO":
@@ -163,6 +196,7 @@ class Router:
                 self.deployment_latency_map[m["litellm_params"]["model"]] = 0
 
         self.allowed_fails = allowed_fails or litellm.allowed_fails
+        self.cooldown_time = cooldown_time or 1
         self.failed_calls = (
             InMemoryCache()
         )  # cache to track failed call per deployment, if num failed calls within 1 minute > allowed fails, then add it to cooldown
@@ -1258,6 +1292,7 @@ class Router:
         verbose_router_logger.debug(
             f"Attempting to add {deployment} to cooldown list. updated_fails: {updated_fails}; self.allowed_fails: {self.allowed_fails}"
         )
+        cooldown_time = self.cooldown_time or 1
         if updated_fails > self.allowed_fails:
             # get the current cooldown list for that minute
             cooldown_key = f"{current_minute}:cooldown_models"  # group cooldown models by minute to reduce number of redis calls
@@ -1271,13 +1306,19 @@ class Router:
                 else:
                     cached_value = cached_value + [deployment]
                     # save updated value
-                    self.cache.set_cache(value=cached_value, key=cooldown_key, ttl=1)
+                    self.cache.set_cache(
+                        value=cached_value, key=cooldown_key, ttl=cooldown_time
+                    )
             except:
                 cached_value = [deployment]
                 # save updated value
-                self.cache.set_cache(value=cached_value, key=cooldown_key, ttl=1)
+                self.cache.set_cache(
+                    value=cached_value, key=cooldown_key, ttl=cooldown_time
+                )
         else:
-            self.failed_calls.set_cache(key=deployment, value=updated_fails, ttl=1)
+            self.failed_calls.set_cache(
+                key=deployment, value=updated_fails, ttl=cooldown_time
+            )
 
     def _get_cooldown_deployments(self):
         """
