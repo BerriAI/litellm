@@ -32,4 +32,5 @@ jobs:
           python-version: '3.12'
       - run: poetry install
       - name: Run mypy
-        run: poetry run mypy .
+        # for some strange reason, the config specified in pyproject.toml is not respected
+        run: poetry run mypy . --ignore-missing-imports
