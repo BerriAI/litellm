@@ -1,9 +1,8 @@
 # What this tests ?
 ## Tests /models and /model/* endpoints
 
-import pytest
-import asyncio
 import aiohttp
+import pytest
 
 
 async def generate_key(session, models=[]):
@@ -55,7 +54,7 @@ async def test_get_models():
 async def add_models(session, model_id="123"):
     url = "http://0.0.0.0:4000/model/new"
     headers = {
-        "Authorization": f"Bearer sk-1234",
+        "Authorization": "Bearer sk-1234",
         "Content-Type": "application/json",
     }
 
@@ -141,7 +140,7 @@ async def test_add_models():
 
 
 @pytest.mark.asyncio
-async def test_get_models():
+async def test_get_models_2():
     """
     Get models user has access to
     """
@@ -160,7 +159,7 @@ async def delete_model(session, model_id="123"):
     """
     url = "http://0.0.0.0:4000/model/delete"
     headers = {
-        "Authorization": f"Bearer sk-1234",
+        "Authorization": "Bearer sk-1234",
         "Content-Type": "application/json",
     }
     data = {"id": model_id}

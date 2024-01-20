@@ -1,14 +1,15 @@
 import openai
+from litellm import completion
 
-api_base = f"http://0.0.0.0:8000"
+api_base = "http://0.0.0.0:8000"
 
-openai.api_base = api_base
+openai.base_url = api_base
 openai.api_key = "temp-key"
-print(openai.api_base)
+print(openai.base_url)
 
 
-print(f"LiteLLM: response from proxy with streaming")
-response = openai.ChatCompletion.create(
+print("LiteLLM: response from proxy with streaming")
+response = completion(
     model="ollama/llama2",
     messages=[
         {
@@ -22,7 +23,7 @@ response = openai.ChatCompletion.create(
 for chunk in response:
     print(f"LiteLLM: streaming response from proxy {chunk}")
 
-response = openai.ChatCompletion.create(
+response = completion(
     model="ollama/llama2",
     messages=[
         {

@@ -22,7 +22,7 @@ print(response)
 # use the auto eval Factuality() evaluator
 
 print("calling evaluator")
-evaluator = Factuality()
+evaluator = Factuality()  # type: ignore
 result = evaluator(
     output=response.choices[0]["message"][
         "content"
