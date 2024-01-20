@@ -599,16 +599,21 @@ def test_generate_and_update_key(prisma_client):
 
 def test_key_generate_with_custom_auth(prisma_client):
     # custom - generate key function
-    async def custom_generate_key_fn(data: GenerateKeyRequest):
+    async def custom_generate_key_fn(data: GenerateKeyRequest) -> dict:
         """
-        Asynchronously decides if a key should be generated or not based on the provided data.
+        Asynchronous function for generating a key based on the input data.
 
         Args:
-            data (GenerateKeyRequest): The data to be used for decision making.
+            data (GenerateKeyRequest): The input data for key generation.
 
         Returns:
-            bool: True if a key should be generated, False otherwise.
+            dict: A dictionary containing the decision and an optional message.
+            {
+                "decision": False,
+                "message": "This violates LiteLLM Proxy Rules. No team id provided.",
+            }
         """
+
         # decide if a key should be generated or not
         print("using custom auth function!")
         data_json = data.json()  # type: ignore
