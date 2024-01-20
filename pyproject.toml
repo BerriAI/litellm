@@ -5,6 +5,9 @@ description = "Library to easily interface with LLM API providers"
 authors = ["BerriAI"]
 license = "MIT"
 readme = "README.md"
+packages = [
+    { include = "litellm" }
+]
 
 [tool.poetry.urls]
 homepage = "https://litellm.ai"
