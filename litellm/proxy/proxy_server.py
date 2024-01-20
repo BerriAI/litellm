@@ -252,6 +252,18 @@ async def user_api_key_auth(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="'allow_user_auth' not set or set to False",
                 )
+        elif (
+            route == "/routes"
+            or route == "/"
+            or route == "/health/liveliness"
+            or route == "/health/readiness"
+            or route == "/test"
+            or route == "/config/yaml"
+        ):
+            """
+            Unprotected endpoints
+            """
+            return UserAPIKeyAuth()
 
         if api_key is None:  # only require api key if master key is set
             raise Exception(f"No api key passed in.")
@@ -2754,7 +2766,11 @@ async def update_config(config_info: ConfigYAML):
         raise HTTPException(status_code=500, detail=f"An error occurred - {str(e)}")
 
 
-@router.get("/config/yaml", tags=["config.yaml"])
+@router.get(
+    "/config/yaml",
+    tags=["config.yaml"],
+    dependencies=[Depends(user_api_key_auth)],
+)
 async def config_yaml_endpoint(config_info: ConfigYAML):
     """
     This is a mock endpoint, to show what you can set in config.yaml details in the Swagger UI.
@@ -2775,7 +2791,11 @@ async def config_yaml_endpoint(config_info: ConfigYAML):
     return {"hello": "world"}
 
 
-@router.get("/test", tags=["health"])
+@router.get(
+    "/test",
+    tags=["health"],
+    dependencies=[Depends(user_api_key_auth)],
+)
 async def test_endpoint(request: Request):
     """
     [DEPRECATED] use `/health/liveliness` instead.
@@ -2849,7 +2869,11 @@ async def health_endpoint(
         }
 
 
-@router.get("/health/readiness", tags=["health"])
+@router.get(
+    "/health/readiness",
+    tags=["health"],
+    dependencies=[Depends(user_api_key_auth)],
+)
 async def health_readiness():
     """
     Unprotected endpoint for checking if worker can receive requests
@@ -2863,7 +2887,11 @@ async def health_readiness():
     raise HTTPException(status_code=503, detail="Service Unhealthy")
 
 
-@router.get("/health/liveliness", tags=["health"])
+@router.get(
+    "/health/liveliness",
+    tags=["health"],
+    dependencies=[Depends(user_api_key_auth)],
+)
 async def health_liveliness():
     """
     Unprotected endpoint for checking if worker is alive
@@ -2871,12 +2899,12 @@ async def health_liveliness():
     return "I'm alive!"
 
 
-@router.get("/")
+@router.get("/", dependencies=[Depends(user_api_key_auth)])
 async def home(request: Request):
     return "LiteLLM: RUNNING"
 
 
-@router.get("/routes")
+@router.get("/routes", dependencies=[Depends(user_api_key_auth)])
 async def get_routes():
     """
     Get a list of available routes in the FastAPI application.
