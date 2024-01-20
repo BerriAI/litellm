@@ -603,10 +603,11 @@ def __init__(
 	timeout: Optional[float] = None,
 	default_litellm_params={},  # default params for Router.chat.completion.create
 	fallbacks: List = [],
-	allowed_fails: Optional[int] = None,
+	allowed_fails: Optional[int] = None, # Number of times a deployment can failbefore being added to cooldown
+	cooldown_time: float = 1,  # (seconds) time to cooldown a deployment after failure
 	context_window_fallbacks: List = [],
 	model_group_alias: Optional[dict] = {},
-	retry_after: int = 0,  # min time to wait before retrying a failed request
+	retry_after: int = 0,  # (min) time to wait before retrying a failed request
 	routing_strategy: Literal[
 		"simple-shuffle",
 		"least-busy",
