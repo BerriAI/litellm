@@ -6,6 +6,11 @@ authors = ["BerriAI"]
 license = "MIT"
 readme = "README.md"
 
+[tool.poetry.urls]
+homepage = "https://litellm.ai"
+repository = "https://github.com/BerriAI/litellm"
+documentation = "https://docs.litellm.ai"
+
 [tool.poetry.dependencies]
 python = ">=3.8.1,<4.0, !=3.9.7"
 openai = ">=1.0.0"
