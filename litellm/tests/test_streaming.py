@@ -398,6 +398,36 @@ def test_completion_palm_stream():
 # test_completion_palm_stream()
 
 
+def test_completion_gemini_stream():
+    try:
+        litellm.set_verbose = False
+        print("Streaming gemini response")
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {
+                "role": "user",
+                "content": "how does a court case get to the Supreme Court?",
+            },
+        ]
+        print("testing gemini streaming")
+        response = completion(model="gemini/gemini-pro", messages=messages, stream=True)
+        print(f"type of response at the top: {response}")
+        complete_response = ""
+        # Add any assertions here to check the response
+        for idx, chunk in enumerate(response):
+            print(chunk)
+            # print(chunk.choices[0].delta)
+            chunk, finished = streaming_format_tests(idx, chunk)
+            if finished:
+                break
+            complete_response += chunk
+        if complete_response.strip() == "":
+            raise Exception("Empty response received")
+        print(f"completion_response: {complete_response}")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 def test_completion_mistral_api_stream():
     try:
         litellm.set_verbose = True
