@@ -285,7 +285,7 @@ class Router:
                 "messages": messages,
                 "functions": functions,
                 "function_call": function_call,
-                "timeout": timeout,
+                "timeout": timeout or self.timeout,
                 "temperature": temperature,
                 "top_p": top_p,
                 "n": n,
@@ -316,7 +316,7 @@ class Router:
                 future = executor.submit(
                     self.function_with_fallbacks, **kwargs, **completion_kwargs
                 )
-                response = future.result(timeout=timeout)  # type: ignore
+                response = future.result()  # type: ignore
 
             return response
         except Exception as e:
@@ -417,7 +417,7 @@ class Router:
                 "messages": messages,
                 "functions": functions,
                 "function_call": function_call,
-                "timeout": timeout,
+                "timeout": timeout or self.timeout,
                 "temperature": temperature,
                 "top_p": top_p,
                 "n": n,
@@ -442,7 +442,6 @@ class Router:
                 "original_function": self._acompletion,
             }
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
-            timeout = kwargs.get("request_timeout", self.timeout)
             kwargs.setdefault("metadata", {}).update({"model_group": model})
 
             response = await self.async_function_with_fallbacks(
