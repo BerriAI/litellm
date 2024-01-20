@@ -19,6 +19,7 @@ import sys, os
 import traceback
 from dotenv import load_dotenv
 from fastapi import Request
+from datetime import datetime
 
 load_dotenv()
 import os, io
@@ -255,6 +256,8 @@ def test_call_with_key_over_budget(prisma_client):
                     },
                 },
                 completion_response=resp,
+                start_time=datetime.now(),
+                end_time=datetime.now(),
             )
 
             # use generated key to auth in
@@ -328,6 +331,8 @@ def test_call_with_key_over_budget_stream(prisma_client):
                     },
                 },
                 completion_response=ModelResponse(),
+                start_time=datetime.now(),
+                end_time=datetime.now(),
             )
 
             # use generated key to auth in
@@ -424,15 +429,10 @@ def test_delete_key(prisma_client):
             generated_key = key.key
             bearer_token = "Bearer " + generated_key
 
-            request = Request(scope={"type": "http"})
-            request._url = URL(url="/chat/completions")
-
             delete_key_request = DeleteKeyRequest(keys=[generated_key])
 
             # delete the key
-            result_delete_key = await delete_key_fn(
-                request=request, data=delete_key_request
-            )
+            result_delete_key = await delete_key_fn(data=delete_key_request)
             print("result from delete key", result_delete_key)
             assert result_delete_key == {"deleted_keys": [generated_key]}
 
@@ -459,15 +459,10 @@ def test_delete_key_auth(prisma_client):
             generated_key = key.key
             bearer_token = "Bearer " + generated_key
 
-            request = Request(scope={"type": "http"})
-            request._url = URL(url="/chat/completions")
-
             delete_key_request = DeleteKeyRequest(keys=[generated_key])
 
             # delete the key
-            result_delete_key = await delete_key_fn(
-                request=request, data=delete_key_request
-            )
+            result_delete_key = await delete_key_fn(data=delete_key_request)
 
             print("result from delete key", result_delete_key)
             assert result_delete_key == {"deleted_keys": [generated_key]}
@@ -512,8 +507,8 @@ def test_generate_and_call_key_info(prisma_client):
             print("result from info_key_fn", result)
             assert result["key"] == generated_key
             print("\n info for key=", result["info"])
-            assert result["info"].max_parallel_requests == None
-            assert result["info"].metadata == {
+            assert result["info"]["max_parallel_requests"] == None
+            assert result["info"]["metadata"] == {
                 "team": "litellm-team3",
                 "project": "litellm-project3",
             }
@@ -522,7 +517,7 @@ def test_generate_and_call_key_info(prisma_client):
             delete_key_request = DeleteKeyRequest(keys=[generated_key])
 
             # delete the key
-            await delete_key_fn(request=request, data=delete_key_request)
+            await delete_key_fn(data=delete_key_request)
 
         asyncio.run(test())
     except Exception as e:
@@ -556,12 +551,12 @@ def test_generate_and_update_key(prisma_client):
             print("result from info_key_fn", result)
             assert result["key"] == generated_key
             print("\n info for key=", result["info"])
-            assert result["info"].max_parallel_requests == None
-            assert result["info"].metadata == {
+            assert result["info"]["max_parallel_requests"] == None
+            assert result["info"]["metadata"] == {
                 "team": "litellm-team3",
                 "project": "litellm-project3",
             }
-            assert result["info"].team_id == "litellm-core-infra@gmail.com"
+            assert result["info"]["team_id"] == "litellm-core-infra@gmail.com"
 
             request = Request(scope={"type": "http"})
             request._url = URL(url="/update/key")
@@ -580,21 +575,18 @@ def test_generate_and_update_key(prisma_client):
             print("result from info_key_fn", result)
             assert result["key"] == generated_key
             print("\n info for key=", result["info"])
-            assert result["info"].max_parallel_requests == None
-            assert result["info"].metadata == {
+            assert result["info"]["max_parallel_requests"] == None
+            assert result["info"]["metadata"] == {
                 "team": "litellm-team3",
                 "project": "litellm-project3",
             }
-            assert result["info"].models == ["ada", "babbage", "curie", "davinci"]
+            assert result["info"]["models"] == ["ada", "babbage", "curie", "davinci"]
 
             # cleanup - delete key
             delete_key_request = DeleteKeyRequest(keys=[generated_key])
 
-            request = Request(scope={"type": "http"}, receive=None)
-            request._url = URL(url="/chat/completions")
-
             # delete the key
-            await delete_key_fn(request=request, data=delete_key_request)
+            await delete_key_fn(data=delete_key_request)
 
         asyncio.run(test())
     except Exception as e:
