@@ -796,3 +796,93 @@ def test_usage_based_routing_fallbacks():
 
     except Exception as e:
         pytest.fail(f"An exception occurred {e}")
+
+
+def test_custom_cooldown_times():
+    try:
+        # set, custom_cooldown. Failed model in cooldown_models, after custom_cooldown, the failed model is no longer in cooldown_models
+
+        model_list = [
+            {  # list of model deployments
+                "model_name": "gpt-3.5-turbo",  # openai model name
+                "litellm_params": {  # params for litellm completion/embedding call
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": "bad-key",
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                },
+                "tpm": 24000000,
+            },
+            {  # list of model deployments
+                "model_name": "gpt-3.5-turbo",  # openai model name
+                "litellm_params": {  # params for litellm completion/embedding call
+                    "model": "azure/chatgpt-v-2",
+                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_version": os.getenv("AZURE_API_VERSION"),
+                    "api_base": os.getenv("AZURE_API_BASE"),
+                },
+                "tpm": 1,
+            },
+        ]
+
+        litellm.set_verbose = False
+
+        router = Router(
+            model_list=model_list,
+            set_verbose=True,
+            debug_level="INFO",
+            cooldown_time=0.1,
+            redis_host=os.getenv("REDIS_HOST"),
+            redis_password=os.getenv("REDIS_PASSWORD"),
+            redis_port=int(os.getenv("REDIS_PORT")),
+        )
+
+        # make a request - expect it to fail
+        try:
+            response = router.completion(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {
+                        "content": "Tell me a joke.",
+                        "role": "user",
+                    }
+                ],
+            )
+        except:
+            pass
+
+        # expect 1 model to be in cooldown models
+        cooldown_deployments = router._get_cooldown_deployments()
+        print("cooldown_deployments after failed call: ", cooldown_deployments)
+        assert (
+            len(cooldown_deployments) == 1
+        ), "Expected 1 model to be in cooldown models"
+
+        selected_cooldown_model = cooldown_deployments[0]
+
+        # wait for 1/2 of cooldown time
+        time.sleep(router.cooldown_time / 2)
+
+        # expect cooldown model to still be in cooldown models
+        cooldown_deployments = router._get_cooldown_deployments()
+        print(
+            "cooldown_deployments after waiting 1/2 of cooldown: ", cooldown_deployments
+        )
+        assert (
+            len(cooldown_deployments) == 1
+        ), "Expected 1 model to be in cooldown models"
+
+        # wait for 1/2 of cooldown time again, now we've waited for full cooldown
+        time.sleep(router.cooldown_time / 2)
+
+        # expect cooldown model to be removed from cooldown models
+        cooldown_deployments = router._get_cooldown_deployments()
+        print(
+            "cooldown_deployments after waiting cooldown time: ", cooldown_deployments
+        )
+        assert (
+            len(cooldown_deployments) == 0
+        ), "Expected 0 models to be in cooldown models"
+
+    except Exception as e:
+        print(e)
