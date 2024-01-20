@@ -5740,6 +5740,15 @@ def exception_type(
                             model=model,
                             llm_provider="openai",
                         )
+                    else:
+                        exception_mapping_worked = True
+                        raise APIError(
+                            status_code=original_exception.status_code,
+                            message=f"OpenAIException - {original_exception.message}",
+                            llm_provider="openai",
+                            model=model,
+                            request=original_exception.request,
+                        )
                 else:
                     # if no status code then it is an APIConnectionError: https://github.com/openai/openai-python#handling-errors
                     raise APIConnectionError(
