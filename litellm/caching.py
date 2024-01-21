@@ -12,10 +12,12 @@ import time, logging
 import json, traceback, ast, hashlib
 from typing import Optional, Literal, List, Union, Any
 from openai._models import BaseModel as OpenAIObject
+from litellm._logging import verbose_logger
 
 
 def print_verbose(print_statement):
     try:
+        verbose_logger.debug(print_statement)
         if litellm.set_verbose:
             print(print_statement)  # noqa
     except:
@@ -175,7 +177,7 @@ class S3Cache(BaseCache):
                     CacheControl=cache_control,
                     ContentType="application/json",
                     ContentLanguage="en",
-                    ContentDisposition=f"inline; filename=\"{key}.json\""
+                    ContentDisposition=f'inline; filename="{key}.json"',
                 )
             else:
                 cache_control = "immutable, max-age=31536000, s-maxage=31536000"
@@ -187,7 +189,7 @@ class S3Cache(BaseCache):
                     CacheControl=cache_control,
                     ContentType="application/json",
                     ContentLanguage="en",
-                    ContentDisposition=f"inline; filename=\"{key}.json\""
+                    ContentDisposition=f'inline; filename="{key}.json"',
                 )
         except Exception as e:
             # NON blocking - notify users S3 is throwing an exception

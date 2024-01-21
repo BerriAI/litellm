@@ -2879,11 +2879,27 @@ async def health_readiness():
     Unprotected endpoint for checking if worker can receive requests
     """
     global prisma_client
+
+    cache_type = None
+    if litellm.cache is not None:
+        cache_type = litellm.cache.type
     if prisma_client is not None:  # if db passed in, check if it's connected
         if prisma_client.db.is_connected() == True:
-            return {"status": "healthy", "db": "connected"}
+            response_object = {"db": "connected"}
+
+            return {
+                "status": "healthy",
+                "db": "connected",
+                "cache": cache_type,
+                "success_callbacks": litellm.success_callback,
+            }
     else:
-        return {"status": "healthy", "db": "Not connected"}
+        return {
+            "status": "healthy",
+            "db": "Not connected",
+            "cache": cache_type,
+            "success_callbacks": litellm.success_callback,
+        }
     raise HTTPException(status_code=503, detail="Service Unhealthy")
 
 
