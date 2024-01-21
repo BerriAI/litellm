@@ -1090,13 +1090,7 @@ class Logging:
             verbose_logger.debug(f"success callbacks: {litellm.success_callback}")
             ## BUILD COMPLETE STREAMED RESPONSE
             complete_streaming_response = None
-            if (
-                self.stream
-                and self.model_call_details.get("litellm_params", {}).get(
-                    "acompletion", False
-                )
-                == False
-            ):  # only call stream chunk builder if it's not acompletion()
+            if self.stream:
                 if (
                     result.choices[0].finish_reason is not None
                 ):  # if it's the last chunk
@@ -1113,6 +1107,9 @@ class Logging:
                     self.streaming_chunks.append(result)
 
             if complete_streaming_response:
+                verbose_logger.info(
+                    f"Logging Details LiteLLM-Success Call streaming complete"
+                )
                 self.model_call_details[
                     "complete_streaming_response"
                 ] = complete_streaming_response
@@ -1255,7 +1252,7 @@ class Logging:
                             verbose_logger.debug(
                                 f"is complete_streaming_response in kwargs: {kwargs.get('complete_streaming_response', None)}"
                             )
-                            if "complete_streaming_response" not in kwargs:
+                            if complete_streaming_response is None:
                                 break
                             else:
                                 print_verbose("reaches langfuse for streaming logging!")
