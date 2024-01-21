@@ -1084,7 +1084,7 @@ class Logging:
     def success_handler(
         self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs
     ):
-        verbose_logger.info(f"Logging Details LiteLLM-Success Call")
+        verbose_logger.debug(f"Logging Details LiteLLM-Success Call")
         # print(f"original response in success handler: {self.model_call_details['original_response']}")
         try:
             verbose_logger.debug(f"success callbacks: {litellm.success_callback}")
@@ -1252,6 +1252,9 @@ class Logging:
                                 kwargs[k] = v
                         # this only logs streaming once, complete_streaming_response exists i.e when stream ends
                         if self.stream:
+                            verbose_logger.debug(
+                                f"is complete_streaming_response in kwargs: {kwargs.get('complete_streaming_response', None)}"
+                            )
                             if "complete_streaming_response" not in kwargs:
                                 break
                             else:
