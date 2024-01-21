@@ -2,6 +2,7 @@
 #    On success, logs events to Promptlayer
 import dotenv, os
 import requests
+from pydantic import BaseModel
 
 dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
@@ -37,6 +38,10 @@ class PromptLayerLogger:
                 f"Prompt Layer Logging - Enters logging function for model kwargs: {new_kwargs}\n, response: {response_obj}"
             )
 
+            # python-openai >= 1.0.0 returns Pydantic objects instead of jsons
+            if isinstance(response_obj, BaseModel):
+                response_obj = response_obj.model_dump()
+
             request_response = requests.post(
                 "https://api.promptlayer.com/rest/track-request",
                 json={
@@ -53,12 +58,14 @@ class PromptLayerLogger:
                     # "prompt_version":1,
                 },
             )
+
+            response_json = request_response.json()
+            if not request_response.json().get("success", False):
+                raise Exception("Promptlayer did not successfully log the response!")
+
             print_verbose(
                 f"Prompt Layer Logging: success - final response object: {request_response.text}"
             )
-            response_json = request_response.json()
-            if "success" not in request_response.json():
-                raise Exception("Promptlayer did not successfully log the response!")
 
             if "request_id" in response_json:
                 if metadata:
