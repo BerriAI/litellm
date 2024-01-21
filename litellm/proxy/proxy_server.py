@@ -1287,18 +1287,27 @@ async def initialize(
     user_model = model
     user_debug = debug
     if debug == True:  # this needs to be first, so users can see Router init debugg
-        from litellm._logging import verbose_router_logger, verbose_proxy_logger
+        from litellm._logging import (
+            verbose_router_logger,
+            verbose_proxy_logger,
+            verbose_logger,
+        )
         import logging
 
         # this must ALWAYS remain logging.INFO, DO NOT MODIFY THIS
-
+        verbose_logger.setLevel(level=logging.INFO)  # sets package logs to info
         verbose_router_logger.setLevel(level=logging.INFO)  # set router logs to info
         verbose_proxy_logger.setLevel(level=logging.INFO)  # set proxy logs to info
     if detailed_debug == True:
-        from litellm._logging import verbose_router_logger, verbose_proxy_logger
+        from litellm._logging import (
+            verbose_router_logger,
+            verbose_proxy_logger,
+            verbose_logger,
+        )
         import logging
 
-        verbose_router_logger.setLevel(level=logging.DEBUG)  # set router logs to info
+        verbose_logger.setLevel(level=logging.DEBUG)  # set package log to debug
+        verbose_router_logger.setLevel(level=logging.DEBUG)  # set router logs to debug
         verbose_proxy_logger.setLevel(level=logging.DEBUG)  # set proxy logs to debug
         litellm.set_verbose = True
     elif debug == False and detailed_debug == False:
