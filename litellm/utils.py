@@ -36,6 +36,7 @@ os.environ[
 ] = filename  # use local copy of tiktoken b/c of - https://github.com/BerriAI/litellm/issues/1071
 encoding = tiktoken.get_encoding("cl100k_base")
 import importlib.metadata
+from ._logging import verbose_logger
 from .integrations.traceloop import TraceloopLogger
 from .integrations.helicone import HeliconeLogger
 from .integrations.aispend import AISpendLogger
@@ -1083,10 +1084,10 @@ class Logging:
     def success_handler(
         self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs
     ):
-        print_verbose(f"Logging Details LiteLLM-Success Call")
+        verbose_logger.info(f"Logging Details LiteLLM-Success Call")
         # print(f"original response in success handler: {self.model_call_details['original_response']}")
         try:
-            print_verbose(f"success callbacks: {litellm.success_callback}")
+            verbose_logger.debug(f"success callbacks: {litellm.success_callback}")
             ## BUILD COMPLETE STREAMED RESPONSE
             complete_streaming_response = None
             if (
@@ -1242,7 +1243,7 @@ class Logging:
                         )
                     if callback == "langfuse":
                         global langFuseLogger
-                        print_verbose("reaches langfuse for logging!")
+                        verbose_logger.debug("reaches langfuse for logging!")
                         kwargs = {}
                         for k, v in self.model_call_details.items():
                             if (
