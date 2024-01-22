@@ -2371,7 +2371,9 @@ def client(original_function):
                 result._hidden_params["model_id"] = kwargs.get("model_info", {}).get(
                     "id", None
                 )
-            if isinstance(result, ModelResponse):
+            if isinstance(result, ModelResponse) or isinstance(
+                result, EmbeddingResponse
+            ):
                 result._response_ms = (
                     end_time - start_time
                 ).total_seconds() * 1000  # return response latency in ms like openai
