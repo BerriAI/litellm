@@ -829,7 +829,7 @@ class Logging:
                 [f"-H '{k}: {v}'" for k, v in masked_headers.items()]
             )
 
-            print_verbose(f"PRE-API-CALL ADDITIONAL ARGS: {additional_args}")
+            verbose_logger.debug(f"PRE-API-CALL ADDITIONAL ARGS: {additional_args}")
 
             curl_command = "\n\nPOST Request Sent from LiteLLM:\n"
             curl_command += "curl -X POST \\\n"
@@ -995,13 +995,10 @@ class Logging:
             self.model_call_details["log_event_type"] = "post_api_call"
 
             # User Logging -> if you pass in a custom logging function
-            print_verbose(
+            verbose_logger.info(
                 f"RAW RESPONSE:\n{self.model_call_details.get('original_response', self.model_call_details)}\n\n"
             )
-            print_verbose(
-                f"Logging Details Post-API Call: logger_fn - {self.logger_fn} | callable(logger_fn) - {callable(self.logger_fn)}"
-            )
-            print_verbose(
+            verbose_logger.debug(
                 f"Logging Details Post-API Call: LiteLLM Params: {self.model_call_details}"
             )
             if self.logger_fn and callable(self.logger_fn):
@@ -2135,7 +2132,7 @@ def client(original_function):
                 litellm.cache.add_cache(result, *args, **kwargs)
 
             # LOG SUCCESS - handle streaming success logging in the _next_ object, remove `handle_success` once it's deprecated
-            print_verbose(f"Wrapper: Completed Call, calling success_handler")
+            verbose_logger.info(f"Wrapper: Completed Call, calling success_handler")
             threading.Thread(
                 target=logging_obj.success_handler, args=(result, start_time, end_time)
             ).start()
@@ -2807,7 +2804,11 @@ def token_counter(
 
 
 def cost_per_token(
-    model="", prompt_tokens=0, completion_tokens=0, custom_llm_provider=None
+    model="",
+    prompt_tokens=0,
+    completion_tokens=0,
+    response_time_ms=None,
+    custom_llm_provider=None,
 ):
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
@@ -2829,15 +2830,29 @@ def cost_per_token(
     else:
         model_with_provider = model
     # see this https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models
-    print_verbose(f"Looking up model={model} in model_cost_map")
+    verbose_logger.debug(f"Looking up model={model} in model_cost_map")
 
     if model in model_cost_ref:
-        prompt_tokens_cost_usd_dollar = (
-            model_cost_ref[model]["input_cost_per_token"] * prompt_tokens
-        )
-        completion_tokens_cost_usd_dollar = (
-            model_cost_ref[model]["output_cost_per_token"] * completion_tokens
-        )
+        if (
+            model_cost_ref[model].get("input_cost_per_token", None) is not None
+            and model_cost_ref[model].get("output_cost_per_token", None) is not None
+        ):
+            ## COST PER TOKEN ##
+            prompt_tokens_cost_usd_dollar = (
+                model_cost_ref[model]["input_cost_per_token"] * prompt_tokens
+            )
+            completion_tokens_cost_usd_dollar = (
+                model_cost_ref[model]["output_cost_per_token"] * completion_tokens
+            )
+        elif (
+            model_cost_ref[model].get("input_cost_per_second", None) is not None
+            and response_time_ms is not None
+        ):
+            ## COST PER SECOND ##
+            prompt_tokens_cost_usd_dollar = (
+                model_cost_ref[model]["input_cost_per_second"] * response_time_ms / 1000
+            )
+            completion_tokens_cost_usd_dollar = 0.0
         return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
     elif model_with_provider in model_cost_ref:
         print_verbose(f"Looking up model={model_with_provider} in model_cost_map")
@@ -2939,6 +2954,7 @@ def completion_cost(
             completion_tokens = completion_response.get("usage", {}).get(
                 "completion_tokens", 0
             )
+            total_time = completion_response.get("_response_ms", 0)
             model = (
                 model or completion_response["model"]
             )  # check if user passed an override for model, if it's none check completion_response['model']
@@ -2976,6 +2992,7 @@ def completion_cost(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             custom_llm_provider=custom_llm_provider,
+            response_time_ms=total_time,
         )
         return prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar
     except Exception as e:
@@ -3006,9 +3023,7 @@ def register_model(model_cost: Union[str, dict]):
 
     for key, value in loaded_model_cost.items():
         ## override / add new keys to the existing model cost dictionary
-        if key in litellm.model_cost:
-            for k, v in loaded_model_cost[key].items():
-                litellm.model_cost[key][k] = v
+        litellm.model_cost.setdefault(key, {}).update(value)
         # add new model names to provider lists
         if value.get("litellm_provider") == "openai":
             if key not in litellm.open_ai_chat_completion_models:
@@ -3301,11 +3316,13 @@ def get_optional_params(
                 )
 
     def _check_valid_arg(supported_params):
-        print_verbose(
+        verbose_logger.debug(
             f"\nLiteLLM completion() model= {model}; provider = {custom_llm_provider}"
         )
-        print_verbose(f"\nLiteLLM: Params passed to completion() {passed_params}")
-        print_verbose(
+        verbose_logger.debug(
+            f"\nLiteLLM: Params passed to completion() {passed_params}"
+        )
+        verbose_logger.debug(
             f"\nLiteLLM: Non-Default params passed to completion() {non_default_params}"
         )
         unsupported_params = {}
