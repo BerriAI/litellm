@@ -5252,9 +5252,9 @@ def convert_to_model_response_object(
                 model_response_object.model = response_object["model"]
 
             if start_time is not None and end_time is not None:
-                model_response_object._response_ms = (
+                model_response_object._response_ms = (  # type: ignore
                     end_time - start_time
-                ).total_seconds() * 1000  # return response latency in ms like openai
+                ).total_seconds() * 1000
 
             return model_response_object
         elif response_type == "embedding" and (
@@ -5281,7 +5281,7 @@ def convert_to_model_response_object(
                 model_response_object.usage.total_tokens = response_object["usage"].get("total_tokens", 0)  # type: ignore
 
             if start_time is not None and end_time is not None:
-                model_response_object._response_ms = (
+                model_response_object._response_ms = (  # type: ignore
                     end_time - start_time
                 ).total_seconds() * 1000  # return response latency in ms like openai
 
