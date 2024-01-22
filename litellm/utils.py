@@ -765,6 +765,7 @@ class Logging:
         self.litellm_call_id = litellm_call_id
         self.function_id = function_id
         self.streaming_chunks = []  # for generating complete stream response
+        self.sync_streaming_chunks = []  # for generating complete stream response
         self.model_call_details = {}
 
     def update_environment_variables(
@@ -1094,17 +1095,17 @@ class Logging:
                 if (
                     result.choices[0].finish_reason is not None
                 ):  # if it's the last chunk
-                    self.streaming_chunks.append(result)
-                    # print_verbose(f"final set of received chunks: {self.streaming_chunks}")
+                    self.sync_streaming_chunks.append(result)
+                    # print_verbose(f"final set of received chunks: {self.sync_streaming_chunks}")
                     try:
                         complete_streaming_response = litellm.stream_chunk_builder(
-                            self.streaming_chunks,
+                            self.sync_streaming_chunks,
                             messages=self.model_call_details.get("messages", None),
                         )
                     except:
                         complete_streaming_response = None
                 else:
-                    self.streaming_chunks.append(result)
+                    self.sync_streaming_chunks.append(result)
 
             if complete_streaming_response:
                 verbose_logger.info(
