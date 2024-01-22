@@ -691,8 +691,9 @@ async def update_database(
                 await prisma_client.update_data(token=token, data={"spend": new_spend})
 
                 valid_token = user_api_key_cache.get_cache(key=token)
-                valid_token.spend = new_spend
-                user_api_key_cache.set_cache(key=token, value=valid_token)
+                if valid_token is not None:
+                    valid_token.spend = new_spend
+                    user_api_key_cache.set_cache(key=token, value=valid_token)
             elif custom_db_client is not None:
                 # Fetch the existing cost for the given token
                 existing_spend_obj = await custom_db_client.get_data(
@@ -715,8 +716,9 @@ async def update_database(
                 )
 
                 valid_token = user_api_key_cache.get_cache(key=token)
-                valid_token.spend = new_spend
-                user_api_key_cache.set_cache(key=token, value=valid_token)
+                if valid_token is not None:
+                    valid_token.spend = new_spend
+                    user_api_key_cache.set_cache(key=token, value=valid_token)
 
         async def _insert_spend_log_to_db():
             # Helper to generate payload to log
