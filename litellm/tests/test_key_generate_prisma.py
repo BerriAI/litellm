@@ -822,7 +822,6 @@ def test_call_with_key_over_budget_stream(prisma_client):
             print("result from user auth with new key", result)
             pytest.fail(f"This should have failed!. They key crossed it's budget")
 
-        asyncio.run(test())
     except Exception as e:
         error_detail = e.detail
         assert "Authentication Error, ExceededTokenBudget:" in error_detail
