@@ -1064,6 +1064,13 @@ class Logging:
             self.model_call_details["log_event_type"] = "successful_api_call"
             self.model_call_details["end_time"] = end_time
             self.model_call_details["cache_hit"] = cache_hit
+            if result is not None and (
+                isinstance(result, ModelResponse)
+                or isinstance(result, EmbeddingResponse)
+            ):
+                self.model_call_details["response_cost"] = litellm.completion_cost(
+                    completion_response=result,
+                )
 
             if litellm.max_budget and self.stream:
                 time_diff = (end_time - start_time).total_seconds()
