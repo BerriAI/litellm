@@ -997,6 +997,9 @@ class Router:
                         """
                         try:
                             kwargs["model"] = mg
+                            kwargs.setdefault("metadata", {}).update(
+                                {"model_group": mg}
+                            )  # update model_group used, if fallbacks are done
                             response = await self.async_function_with_retries(
                                 *args, **kwargs
                             )
@@ -1025,8 +1028,10 @@ class Router:
                                 f"Falling back to model_group = {mg}"
                             )
                             kwargs["model"] = mg
-                            kwargs["metadata"]["model_group"] = mg
-                            response = await self.async_function_with_retries(
+                            kwargs.setdefault("metadata", {}).update(
+                                {"model_group": mg}
+                            )  # update model_group used, if fallbacks are done
+                            response = await self.async_function_with_fallbacks(
                                 *args, **kwargs
                             )
                             return response
@@ -1191,6 +1196,9 @@ class Router:
                             ## LOGGING
                             kwargs = self.log_retry(kwargs=kwargs, e=original_exception)
                             kwargs["model"] = mg
+                            kwargs.setdefault("metadata", {}).update(
+                                {"model_group": mg}
+                            )  # update model_group used, if fallbacks are done
                             response = self.function_with_fallbacks(*args, **kwargs)
                             return response
                         except Exception as e:
@@ -1214,6 +1222,9 @@ class Router:
                             ## LOGGING
                             kwargs = self.log_retry(kwargs=kwargs, e=original_exception)
                             kwargs["model"] = mg
+                            kwargs.setdefault("metadata", {}).update(
+                                {"model_group": mg}
+                            )  # update model_group used, if fallbacks are done
                             response = self.function_with_fallbacks(*args, **kwargs)
                             return response
                         except Exception as e:
