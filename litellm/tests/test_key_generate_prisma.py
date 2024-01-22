@@ -681,8 +681,8 @@ def test_call_with_key_over_budget_stream(prisma_client):
 
         async def test():
             await litellm.proxy.proxy_server.prisma_client.connect()
-            request = NewUserRequest(max_budget=0.00001)
-            key = await new_user(request)
+            request = GenerateKeyRequest(max_budget=0.00001)
+            key = await generate_key_fn(request)
             print(key)
 
             generated_key = key.key
@@ -739,5 +739,5 @@ def test_call_with_key_over_budget_stream(prisma_client):
         asyncio.run(test())
     except Exception as e:
         error_detail = e.detail
-        assert "Authentication Error, ExceededBudget:" in error_detail
+        assert "Authentication Error, ExceededTokenBudget:" in error_detail
         print(vars(e))
