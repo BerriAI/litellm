@@ -33,6 +33,7 @@ model LiteLLM_VerificationToken {
     metadata   Json  @default("{}")
     tpm_limit     BigInt?
     rpm_limit     BigInt?
+    max_budget Float    @default(0.0)
 }
 
 model LiteLLM_Config {
