@@ -1372,16 +1372,21 @@ def test_customprompt_together_ai():
 
 def test_completion_sagemaker():
     try:
-        print("testing sagemaker")
         litellm.set_verbose = True
+        print("testing sagemaker")
         response = completion(
             model="sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4",
             messages=messages,
             temperature=0.2,
             max_tokens=80,
+            input_cost_per_second=0.000420,
         )
         # Add any assertions here to check the response
         print(response)
+        cost = completion_cost(completion_response=response)
+        assert (
+            cost > 0.0 and cost < 1.0
+        )  # should never be > $1 for a single completion call
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 

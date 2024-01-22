@@ -457,6 +457,8 @@ def completion(
     ### CUSTOM MODEL COST ###
     input_cost_per_token = kwargs.get("input_cost_per_token", None)
     output_cost_per_token = kwargs.get("output_cost_per_token", None)
+    input_cost_per_second = kwargs.get("input_cost_per_second", None)
+    output_cost_per_second = kwargs.get("output_cost_per_second", None)
     ### CUSTOM PROMPT TEMPLATE ###
     initial_prompt_value = kwargs.get("initial_prompt_value", None)
     roles = kwargs.get("roles", None)
@@ -592,6 +594,19 @@ def completion(
                     model: {
                         "input_cost_per_token": input_cost_per_token,
                         "output_cost_per_token": output_cost_per_token,
+                        "litellm_provider": custom_llm_provider,
+                    }
+                }
+            )
+        if (
+            input_cost_per_second is not None
+        ):  # time based pricing just needs cost in place
+            output_cost_per_second = output_cost_per_second or 0.0
+            litellm.register_model(
+                {
+                    model: {
+                        "input_cost_per_second": input_cost_per_second,
+                        "output_cost_per_second": output_cost_per_second,
                         "litellm_provider": custom_llm_provider,
                     }
                 }
