@@ -10,7 +10,7 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 import litellm
-from litellm import embedding, completion
+from litellm import embedding, completion, completion_cost
 
 litellm.set_verbose = False
 
@@ -341,8 +341,30 @@ def test_sagemaker_embeddings():
         response = litellm.embedding(
             model="sagemaker/berri-benchmarking-gpt-j-6b-fp16",
             input=["good morning from litellm", "this is another item"],
+            input_cost_per_second=0.000420,
         )
         print(f"response: {response}")
+        cost = completion_cost(completion_response=response)
+        assert (
+            cost > 0.0 and cost < 1.0
+        )  # should never be > $1 for a single embedding call
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.asyncio
+async def test_sagemaker_aembeddings():
+    try:
+        response = await litellm.aembedding(
+            model="sagemaker/berri-benchmarking-gpt-j-6b-fp16",
+            input=["good morning from litellm", "this is another item"],
+            input_cost_per_second=0.000420,
+        )
+        print(f"response: {response}")
+        cost = completion_cost(completion_response=response)
+        assert (
+            cost > 0.0 and cost < 1.0
+        )  # should never be > $1 for a single embedding call
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 

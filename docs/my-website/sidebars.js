@@ -139,6 +139,7 @@ const sidebars = {
           "items": [
             "proxy/call_hooks",
             "proxy/rules",
+            "proxy/custom_pricing"
           ]
         },
         "proxy/deploy", 

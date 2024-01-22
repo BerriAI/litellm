@@ -765,6 +765,7 @@ class Logging:
         self.litellm_call_id = litellm_call_id
         self.function_id = function_id
         self.streaming_chunks = []  # for generating complete stream response
+        self.sync_streaming_chunks = []  # for generating complete stream response
         self.model_call_details = {}
 
     def update_environment_variables(
@@ -828,7 +829,7 @@ class Logging:
                 [f"-H '{k}: {v}'" for k, v in masked_headers.items()]
             )
 
-            print_verbose(f"PRE-API-CALL ADDITIONAL ARGS: {additional_args}")
+            verbose_logger.debug(f"PRE-API-CALL ADDITIONAL ARGS: {additional_args}")
 
             curl_command = "\n\nPOST Request Sent from LiteLLM:\n"
             curl_command += "curl -X POST \\\n"
@@ -994,13 +995,10 @@ class Logging:
             self.model_call_details["log_event_type"] = "post_api_call"
 
             # User Logging -> if you pass in a custom logging function
-            print_verbose(
+            verbose_logger.debug(
                 f"RAW RESPONSE:\n{self.model_call_details.get('original_response', self.model_call_details)}\n\n"
             )
-            print_verbose(
-                f"Logging Details Post-API Call: logger_fn - {self.logger_fn} | callable(logger_fn) - {callable(self.logger_fn)}"
-            )
-            print_verbose(
+            verbose_logger.debug(
                 f"Logging Details Post-API Call: LiteLLM Params: {self.model_call_details}"
             )
             if self.logger_fn and callable(self.logger_fn):
@@ -1094,20 +1092,20 @@ class Logging:
                 if (
                     result.choices[0].finish_reason is not None
                 ):  # if it's the last chunk
-                    self.streaming_chunks.append(result)
-                    # print_verbose(f"final set of received chunks: {self.streaming_chunks}")
+                    self.sync_streaming_chunks.append(result)
+                    # print_verbose(f"final set of received chunks: {self.sync_streaming_chunks}")
                     try:
                         complete_streaming_response = litellm.stream_chunk_builder(
-                            self.streaming_chunks,
+                            self.sync_streaming_chunks,
                             messages=self.model_call_details.get("messages", None),
                         )
                     except:
                         complete_streaming_response = None
                 else:
-                    self.streaming_chunks.append(result)
+                    self.sync_streaming_chunks.append(result)
 
             if complete_streaming_response:
-                verbose_logger.info(
+                verbose_logger.debug(
                     f"Logging Details LiteLLM-Success Call streaming complete"
                 )
                 self.model_call_details[
@@ -1307,7 +1305,9 @@ class Logging:
                         )
                         == False
                     ):  # custom logger class
-                        print_verbose(f"success callbacks: Running Custom Logger Class")
+                        verbose_logger.info(
+                            f"success callbacks: Running SYNC Custom Logger Class"
+                        )
                         if self.stream and complete_streaming_response is None:
                             callback.log_stream_event(
                                 kwargs=self.model_call_details,
@@ -1329,7 +1329,17 @@ class Logging:
                                 start_time=start_time,
                                 end_time=end_time,
                             )
-                    if callable(callback):  # custom logger functions
+                    elif (
+                        callable(callback) == True
+                        and self.model_call_details.get("litellm_params", {}).get(
+                            "acompletion", False
+                        )
+                        == False
+                        and self.model_call_details.get("litellm_params", {}).get(
+                            "aembedding", False
+                        )
+                        == False
+                    ):  # custom logger functions
                         print_verbose(
                             f"success callbacks: Running Custom Callback Function"
                         )
@@ -1364,6 +1374,9 @@ class Logging:
         Implementing async callbacks, to handle asyncio event loop issues when custom integrations need to use async functions.
         """
         print_verbose(f"Async success callbacks: {litellm._async_success_callback}")
+        start_time, end_time, result = self._success_handler_helper_fn(
+            start_time=start_time, end_time=end_time, result=result, cache_hit=cache_hit
+        )
         ## BUILD COMPLETE STREAMED RESPONSE
         complete_streaming_response = None
         if self.stream:
@@ -1374,6 +1387,8 @@ class Logging:
                     complete_streaming_response = litellm.stream_chunk_builder(
                         self.streaming_chunks,
                         messages=self.model_call_details.get("messages", None),
+                        start_time=start_time,
+                        end_time=end_time,
                     )
                 except Exception as e:
                     print_verbose(
@@ -1387,9 +1402,7 @@ class Logging:
             self.model_call_details[
                 "complete_streaming_response"
             ] = complete_streaming_response
-        start_time, end_time, result = self._success_handler_helper_fn(
-            start_time=start_time, end_time=end_time, result=result, cache_hit=cache_hit
-        )
+
         for callback in litellm._async_success_callback:
             try:
                 if callback == "cache" and litellm.cache is not None:
@@ -1436,7 +1449,6 @@ class Logging:
                             end_time=end_time,
                         )
                 if callable(callback):  # custom logger functions
-                    print_verbose(f"Async success callbacks: async_log_event")
                     await customLogger.async_log_event(
                         kwargs=self.model_call_details,
                         response_obj=result,
@@ -2134,7 +2146,7 @@ def client(original_function):
                 litellm.cache.add_cache(result, *args, **kwargs)
 
             # LOG SUCCESS - handle streaming success logging in the _next_ object, remove `handle_success` once it's deprecated
-            print_verbose(f"Wrapper: Completed Call, calling success_handler")
+            verbose_logger.info(f"Wrapper: Completed Call, calling success_handler")
             threading.Thread(
                 target=logging_obj.success_handler, args=(result, start_time, end_time)
             ).start()
@@ -2373,7 +2385,9 @@ def client(original_function):
                 result._hidden_params["model_id"] = kwargs.get("model_info", {}).get(
                     "id", None
                 )
-            if isinstance(result, ModelResponse):
+            if isinstance(result, ModelResponse) or isinstance(
+                result, EmbeddingResponse
+            ):
                 result._response_ms = (
                     end_time - start_time
                 ).total_seconds() * 1000  # return response latency in ms like openai
@@ -2806,7 +2820,11 @@ def token_counter(
 
 
 def cost_per_token(
-    model="", prompt_tokens=0, completion_tokens=0, custom_llm_provider=None
+    model="",
+    prompt_tokens=0,
+    completion_tokens=0,
+    response_time_ms=None,
+    custom_llm_provider=None,
 ):
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
@@ -2828,14 +2846,35 @@ def cost_per_token(
     else:
         model_with_provider = model
     # see this https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models
-    print_verbose(f"Looking up model={model} in model_cost_map")
+    verbose_logger.debug(f"Looking up model={model} in model_cost_map")
 
     if model in model_cost_ref:
-        prompt_tokens_cost_usd_dollar = (
-            model_cost_ref[model]["input_cost_per_token"] * prompt_tokens
-        )
-        completion_tokens_cost_usd_dollar = (
-            model_cost_ref[model]["output_cost_per_token"] * completion_tokens
+        verbose_logger.debug(f"Success: model={model} in model_cost_map")
+        if (
+            model_cost_ref[model].get("input_cost_per_token", None) is not None
+            and model_cost_ref[model].get("output_cost_per_token", None) is not None
+        ):
+            ## COST PER TOKEN ##
+            prompt_tokens_cost_usd_dollar = (
+                model_cost_ref[model]["input_cost_per_token"] * prompt_tokens
+            )
+            completion_tokens_cost_usd_dollar = (
+                model_cost_ref[model]["output_cost_per_token"] * completion_tokens
+            )
+        elif (
+            model_cost_ref[model].get("input_cost_per_second", None) is not None
+            and response_time_ms is not None
+        ):
+            verbose_logger.debug(
+                f"For model={model} - input_cost_per_second: {model_cost_ref[model].get('input_cost_per_second')}; response time: {response_time_ms}"
+            )
+            ## COST PER SECOND ##
+            prompt_tokens_cost_usd_dollar = (
+                model_cost_ref[model]["input_cost_per_second"] * response_time_ms / 1000
+            )
+            completion_tokens_cost_usd_dollar = 0.0
+        verbose_logger.debug(
+            f"Returned custom cost for model={model} - prompt_tokens_cost_usd_dollar: {prompt_tokens_cost_usd_dollar}, completion_tokens_cost_usd_dollar: {completion_tokens_cost_usd_dollar}"
         )
         return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
     elif model_with_provider in model_cost_ref:
@@ -2938,6 +2977,10 @@ def completion_cost(
             completion_tokens = completion_response.get("usage", {}).get(
                 "completion_tokens", 0
             )
+            total_time = completion_response.get("_response_ms", 0)
+            verbose_logger.debug(
+                f"completion_response response ms: {completion_response.get('_response_ms')} "
+            )
             model = (
                 model or completion_response["model"]
             )  # check if user passed an override for model, if it's none check completion_response['model']
@@ -2975,6 +3018,7 @@ def completion_cost(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             custom_llm_provider=custom_llm_provider,
+            response_time_ms=total_time,
         )
         return prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar
     except Exception as e:
@@ -3005,9 +3049,8 @@ def register_model(model_cost: Union[str, dict]):
 
     for key, value in loaded_model_cost.items():
         ## override / add new keys to the existing model cost dictionary
-        if key in litellm.model_cost:
-            for k, v in loaded_model_cost[key].items():
-                litellm.model_cost[key][k] = v
+        litellm.model_cost.setdefault(key, {}).update(value)
+        verbose_logger.debug(f"{key} added to model cost map")
         # add new model names to provider lists
         if value.get("litellm_provider") == "openai":
             if key not in litellm.open_ai_chat_completion_models:
@@ -3300,11 +3343,13 @@ def get_optional_params(
                 )
 
     def _check_valid_arg(supported_params):
-        print_verbose(
+        verbose_logger.debug(
             f"\nLiteLLM completion() model= {model}; provider = {custom_llm_provider}"
         )
-        print_verbose(f"\nLiteLLM: Params passed to completion() {passed_params}")
-        print_verbose(
+        verbose_logger.debug(
+            f"\nLiteLLM: Params passed to completion() {passed_params}"
+        )
+        verbose_logger.debug(
             f"\nLiteLLM: Non-Default params passed to completion() {non_default_params}"
         )
         unsupported_params = {}
@@ -5150,6 +5195,8 @@ def convert_to_model_response_object(
         "completion", "embedding", "image_generation"
     ] = "completion",
     stream=False,
+    start_time=None,
+    end_time=None,
 ):
     try:
         if response_type == "completion" and (
@@ -5203,6 +5250,12 @@ def convert_to_model_response_object(
 
             if "model" in response_object:
                 model_response_object.model = response_object["model"]
+
+            if start_time is not None and end_time is not None:
+                model_response_object._response_ms = (  # type: ignore
+                    end_time - start_time
+                ).total_seconds() * 1000
+
             return model_response_object
         elif response_type == "embedding" and (
             model_response_object is None
@@ -5226,6 +5279,11 @@ def convert_to_model_response_object(
                 model_response_object.usage.completion_tokens = response_object["usage"].get("completion_tokens", 0)  # type: ignore
                 model_response_object.usage.prompt_tokens = response_object["usage"].get("prompt_tokens", 0)  # type: ignore
                 model_response_object.usage.total_tokens = response_object["usage"].get("total_tokens", 0)  # type: ignore
+
+            if start_time is not None and end_time is not None:
+                model_response_object._response_ms = (  # type: ignore
+                    end_time - start_time
+                ).total_seconds() * 1000  # return response latency in ms like openai
 
             return model_response_object
         elif response_type == "image_generation" and (
