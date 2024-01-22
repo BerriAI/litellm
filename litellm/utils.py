@@ -2492,24 +2492,20 @@ def get_replicate_completion_pricing(completion_response=None, total_time=0.0):
 
 
 def _select_tokenizer(model: str):
-    # cohere
-    import pkg_resources
+    from importlib import resources
 
     if model in litellm.cohere_models:
+        # cohere
         tokenizer = Tokenizer.from_pretrained("Cohere/command-nightly")
         return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
     # anthropic
     elif model in litellm.anthropic_models:
-        # Read the JSON file
-        filename = pkg_resources.resource_filename(
-            __name__, "llms/tokenizers/anthropic_tokenizer.json"
-        )
-        with open(filename, "r") as f:
+        with resources.open_text(
+            "litellm.llms.tokenizers", "anthropic_tokenizer.json"
+        ) as f:
             json_data = json.load(f)
-        # Decode the JSON data from utf-8
-        json_data_decoded = json.dumps(json_data, ensure_ascii=False)
-        # Convert to str
-        json_str = str(json_data_decoded)
+        # Convert to str (if necessary)
+        json_str = json.dumps(json_data)
         # load tokenizer
         tokenizer = Tokenizer.from_str(json_str)
         return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
