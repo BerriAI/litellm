@@ -297,6 +297,7 @@ class ConfigYAML(LiteLLMBase):
 class LiteLLM_VerificationToken(LiteLLMBase):
     token: str
     spend: float = 0.0
+    max_budget: Optional[float] = None
     expires: Union[str, None]
     models: List[str]
     aliases: Dict[str, str] = {}
