@@ -599,7 +599,8 @@ def test_generate_and_update_key(prisma_client):
         print("Got Exception", e)
         print(e.detail)
         pytest.fail(f"An exception occurred - {str(e)}")
- 
+
+
 def test_key_generate_with_custom_auth(prisma_client):
     # custom - generate key function
     async def custom_generate_key_fn(data: GenerateKeyRequest) -> dict:
@@ -651,7 +652,10 @@ def test_key_generate_with_custom_auth(prisma_client):
     setattr(
         litellm.proxy.proxy_server, "user_custom_key_generate", custom_generate_key_fn
     )
-                try:
+    try:
+
+        async def test():
+            try:
                 request = GenerateKeyRequest()
                 key = await generate_key_fn(request)
                 pytest.fail(f"Expected an exception. Got {key}")
@@ -817,7 +821,6 @@ def test_call_with_key_over_budget_stream(prisma_client):
             print("result from user auth with new key", result)
             pytest.fail(f"This should have failed!. They key crossed it's budget")
 
-        asyncio.run(test())
     except Exception as e:
         error_detail = e.detail
         assert "Authentication Error, ExceededTokenBudget:" in error_detail
