@@ -348,6 +348,13 @@ def mock_completion(
             prompt_tokens=10, completion_tokens=20, total_tokens=30
         )
 
+        try:
+            _, custom_llm_provider, _, _ = litellm.utils.get_llm_provider(model=model)
+            model_response._hidden_params["custom_llm_provider"] = custom_llm_provider
+        except:
+            # dont let setting a hidden param block a mock_respose
+            pass
+
         return model_response
 
     except:
