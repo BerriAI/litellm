@@ -716,7 +716,7 @@ def test_usage_based_routing_fallbacks():
         # Constants for TPM and RPM allocation
         AZURE_FAST_TPM = 3
         AZURE_BASIC_TPM = 4
-        OPENAI_TPM = 2000
+        OPENAI_TPM = 400
         ANTHROPIC_TPM = 100000
 
         def get_azure_params(deployment_name: str):
@@ -775,6 +775,7 @@ def test_usage_based_routing_fallbacks():
             model_list=model_list,
             fallbacks=fallbacks_list,
             set_verbose=True,
+            debug_level="DEBUG",
             routing_strategy="usage-based-routing",
             redis_host=os.environ["REDIS_HOST"],
             redis_port=os.environ["REDIS_PORT"],
@@ -783,16 +784,31 @@ def test_usage_based_routing_fallbacks():
         messages = [
             {"content": "Tell me a joke.", "role": "user"},
         ]
-
         response = router.completion(
-            model="azure/gpt-4-fast", messages=messages, timeout=5
+            model="azure/gpt-4-fast",
+            messages=messages,
+            timeout=5,
+            mock_response="very nice to meet you",
         )
         print("response: ", response)
         print("response._hidden_params: ", response._hidden_params)
-
         # in this test, we expect azure/gpt-4 fast to fail, then azure-gpt-4 basic to fail and then openai-gpt-4 to pass
         # the token count of this message is > AZURE_FAST_TPM, > AZURE_BASIC_TPM
         assert response._hidden_params["custom_llm_provider"] == "openai"
+
+        # now make 100 mock requests to OpenAI - expect it to fallback to anthropic-claude-instant-1.2
+        for i in range(20):
+            response = router.completion(
+                model="azure/gpt-4-fast",
+                messages=messages,
+                timeout=5,
+                mock_response="very nice to meet you",
+            )
+            print("response: ", response)
+            print("response._hidden_params: ", response._hidden_params)
+            if i == 19:
+                # by the 19th call we should have hit TPM LIMIT for OpenAI, it should fallback to anthropic-claude-instant-1.2
+                assert response._hidden_params["custom_llm_provider"] == "anthropic"
 
     except Exception as e:
         pytest.fail(f"An exception occurred {e}")
