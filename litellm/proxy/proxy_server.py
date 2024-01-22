@@ -1121,7 +1121,8 @@ async def generate_key_helper_fn(
     aliases: dict,
     config: dict,
     spend: float,
-    max_budget: Optional[float] = None,
+    key_max_budget: Optional[float] = None,  # key_max_budget is used to Budget Per key
+    max_budget: Optional[float] = None,  # max_budget is used to Budget Per user
     token: Optional[str] = None,
     user_id: Optional[str] = None,
     team_id: Optional[str] = None,
@@ -1194,6 +1195,7 @@ async def generate_key_helper_fn(
             "aliases": aliases_json,
             "config": config_json,
             "spend": spend,
+            "max_budget": key_max_budget,
             "user_id": user_id,
             "team_id": team_id,
             "max_parallel_requests": max_parallel_requests,
@@ -2156,6 +2158,7 @@ async def generate_key_fn(
     - aliases: Optional[dict] - Any alias mappings, on top of anything in the config.yaml model list. - https://docs.litellm.ai/docs/proxy/virtual_keys#managing-auth---upgradedowngrade-models
     - config: Optional[dict] - any key-specific configs, overrides config in config.yaml
     - spend: Optional[int] - Amount spent by key. Default is 0. Will be updated by proxy whenever key is used. https://docs.litellm.ai/docs/proxy/virtual_keys#managing-auth---tracking-spend
+    - max_budget: Optional[float] - Specify max budget for a given key.
     - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
     - metadata: Optional[dict] - Metadata for key, store information for key. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
 
@@ -2166,6 +2169,11 @@ async def generate_key_fn(
     """
     verbose_proxy_logger.debug("entered /key/generate")
     data_json = data.json()  # type: ignore
+
+    # if we get max_budget passed to /key/generate, then use it as key_max_budget. Since generate_key_helper_fn is used to make new users
+    if "max_budget" in data_json:
+        data_json["key_max_budget"] = data_json.pop("max_budget", None)
+
     response = await generate_key_helper_fn(**data_json)
     return GenerateKeyResponse(
         key=response["token"], expires=response["expires"], user_id=response["user_id"]
