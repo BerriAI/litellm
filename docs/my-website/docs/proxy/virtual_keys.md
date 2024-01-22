@@ -73,7 +73,8 @@ curl 'http://0.0.0.0:8000/key/generate' \
   "models": ["gpt-3.5-turbo", "gpt-4", "claude-2"],
   "duration": "20m",
   "metadata": {"user": "ishaan@berri.ai"},
-  "team_id": "core-infra"
+  "team_id": "core-infra",
+  "max_budget": 10,
 }'
 ```
 
@@ -87,6 +88,8 @@ Request Params:
 - `metadata`: *dict or null (optional)* Pass metadata for the created token. If null defaults to {}
 
 - `team_id`: *str or null (optional)* Specify team_id for the associated key
+
+- `max_budget`: *float or null (optional)* Specify max budget (in Dollars $) for a given key. If no value is set, the key has no budget
 
 ### Response
 
@@ -282,6 +285,77 @@ Request Params:
 }
 ```
 
+## Set Budgets - Per Key
+
+Set `max_budget` in (USD $) param in the `key/generate` request. By default the `max_budget` is set to `null` and is not checked for keys
+
+```shell
+curl 'http://0.0.0.0:8000/key/generate' \
+--header 'Authorization: Bearer <your-master-key>' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+  "metadata": {"user": "ishaan@berri.ai"},
+  "team_id": "core-infra",
+  "max_budget": 10,
+}'
+```
+
+#### Expected Behaviour
+- Costs Per key get auto-populated in `LiteLLM_VerificationToken` Table
+- After the key crosses it's `max_budget`, requests fail
+
+Example Request to `/chat/completions` when key has crossed budget
+
+```shell
+curl --location 'http://0.0.0.0:8000/chat/completions' \
+  --header 'Content-Type: application/json' \
+  --header 'Authorization: Bearer sk-ULl_IKCVFy2EZRzQB16RUA' \
+  --data ' {
+  "model": "azure-gpt-3.5",
+  "user": "e09b4da8-ed80-4b05-ac93-e16d9eb56fca",
+  "messages": [
+      {
+      "role": "user",
+      "content": "respond in 50 lines"
+      }
+  ],
+}'
+```
+
+
+Expected Response from `/chat/completions` when key has crossed budget
+```shell
+{
+  "detail":"Authentication Error, ExceededTokenBudget: Current spend for token: 7.2e-05; Max Budget for Token: 2e-07"
+}   
+```
+
+
+## Set Budgets - Per User
+
+LiteLLM exposes a `/user/new` endpoint to create budgets for users, that persist across multiple keys. 
+
+This is documented in the swagger (live on your server root endpoint - e.g. `http://0.0.0.0:8000/`). Here's an example request. 
+
+```shell 
+curl --location 'http://localhost:8000/user/new' \
+--header 'Authorization: Bearer <your-master-key>' \
+--header 'Content-Type: application/json' \
+--data-raw '{"models": ["azure-models"], "max_budget": 0, "user_id": "krrish3@berri.ai"}' 
+```
+The request is a normal `/key/generate` request body + a `max_budget` field. 
+
+**Sample Response**
+
+```shell
+{
+    "key": "sk-YF2OxDbrgd1y2KgwxmEA2w",
+    "expires": "2023-12-22T09:53:13.861000Z",
+    "user_id": "krrish3@berri.ai",
+    "max_budget": 0.0
+}
+```
+
 ## Tracking Spend 
 
 You can get spend for a key by using the `/key/info` endpoint. 
@@ -316,32 +390,6 @@ This is automatically updated (in USD) when calls are made to /completions, /cha
 }
 ```
 
-
-
-## Set Budgets 
-
-LiteLLM exposes a `/user/new` endpoint to create budgets for users, that persist across multiple keys. 
-
-This is documented in the swagger (live on your server root endpoint - e.g. `http://0.0.0.0:8000/`). Here's an example request. 
-
-```shell 
-curl --location 'http://localhost:8000/user/new' \
---header 'Authorization: Bearer <your-master-key>' \
---header 'Content-Type: application/json' \
---data-raw '{"models": ["azure-models"], "max_budget": 0, "user_id": "krrish3@berri.ai"}' 
-```
-The request is a normal `/key/generate` request body + a `max_budget` field. 
-
-**Sample Response**
-
-```shell
-{
-    "key": "sk-YF2OxDbrgd1y2KgwxmEA2w",
-    "expires": "2023-12-22T09:53:13.861000Z",
-    "user_id": "krrish3@berri.ai",
-    "max_budget": 0.0
-}
-```
 
 ## Custom Auth 
 
