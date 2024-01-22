@@ -449,6 +449,7 @@ class PrismaClient:
                         "update": {},  # don't do anything if it already exists
                     },
                 )
+                verbose_proxy_logger.info(f"Data Inserted into Keys Table")
                 return new_verification_token
             elif table_name == "user":
                 db_data = self.jsonify_object(data=data)
@@ -459,6 +460,7 @@ class PrismaClient:
                         "update": {},  # don't do anything if it already exists
                     },
                 )
+                verbose_proxy_logger.info(f"Data Inserted into User Table")
                 return new_user_row
             elif table_name == "config":
                 """
@@ -483,6 +485,7 @@ class PrismaClient:
 
                     tasks.append(updated_table_row)
                 await asyncio.gather(*tasks)
+                verbose_proxy_logger.info(f"Data Inserted into Config Table")
             elif table_name == "spend":
                 db_data = self.jsonify_object(data=data)
                 new_spend_row = await self.db.litellm_spendlogs.upsert(
@@ -492,6 +495,7 @@ class PrismaClient:
                         "update": {},  # don't do anything if it already exists
                     },
                 )
+                verbose_proxy_logger.info(f"Data Inserted into Spend Table")
                 return new_spend_row
 
         except Exception as e:

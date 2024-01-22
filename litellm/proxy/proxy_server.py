@@ -577,7 +577,7 @@ async def track_cost_callback(
                 "user_api_key_user_id", None
             )
 
-            verbose_proxy_logger.debug(
+            verbose_proxy_logger.info(
                 f"streaming response_cost {response_cost}, for user_id {user_id}"
             )
             if user_api_key and (
@@ -602,7 +602,7 @@ async def track_cost_callback(
             user_id = user_id or kwargs["litellm_params"]["metadata"].get(
                 "user_api_key_user_id", None
             )
-            verbose_proxy_logger.debug(
+            verbose_proxy_logger.info(
                 f"response_cost {response_cost}, for user_id {user_id}"
             )
             if user_api_key and (
