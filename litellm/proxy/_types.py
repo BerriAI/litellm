@@ -128,6 +128,7 @@ class GenerateKeyRequest(LiteLLMBase):
     aliases: Optional[dict] = {}
     config: Optional[dict] = {}
     spend: Optional[float] = 0
+    max_budget: Optional[float] = None
     user_id: Optional[str] = None
     team_id: Optional[str] = None
     max_parallel_requests: Optional[int] = None
@@ -145,6 +146,7 @@ class UpdateKeyRequest(LiteLLMBase):
     aliases: Optional[dict] = None
     config: Optional[dict] = None
     spend: Optional[float] = None
+    max_budget: Optional[float] = None
     user_id: Optional[str] = None
     max_parallel_requests: Optional[int] = None
     metadata: Optional[dict] = None
@@ -162,6 +164,7 @@ class UserAPIKeyAuth(LiteLLMBase):  # the expected response object for user api 
     aliases: dict = {}
     config: dict = {}
     spend: Optional[float] = 0
+    max_budget: Optional[float] = None
     user_id: Optional[str] = None
     max_parallel_requests: Optional[int] = None
     duration: str = "1h"
