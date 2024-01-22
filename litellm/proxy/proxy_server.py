@@ -307,6 +307,7 @@ async def user_api_key_auth(
             # 1. If token can call model
             # 2. If user_id for this token is in budget
             # 3. If token is expired
+            # 4. If token spend is under Budget for the token
 
             # Check 1. If token can call model
             litellm.model_alias_map = valid_token.aliases
@@ -405,6 +406,13 @@ async def user_api_key_auth(
                     raise HTTPException(
                         status_code=status.HTTP_403_FORBIDDEN,
                         detail=f"Authentication Error - Expired Key. Key Expiry time {expiry_time} and current time {current_time}",
+                    )
+
+            # Check 4. Token Spend is under budget
+            if valid_token.spend is not None and valid_token.max_budget is not None:
+                if valid_token.spend > valid_token.max_budget:
+                    raise Exception(
+                        f"ExceededTokenBudget: Current spend for token: {valid_token.spend}; Max Budget for Token: {valid_token.max_budget}"
                     )
 
             # Token passed all checks
@@ -669,7 +677,9 @@ async def update_database(
             if prisma_client is not None:
                 # Fetch the existing cost for the given token
                 existing_spend_obj = await prisma_client.get_data(token=token)
-                verbose_proxy_logger.debug(f"existing spend: {existing_spend_obj}")
+                verbose_proxy_logger.debug(
+                    f"_update_key_db: existing spend: {existing_spend_obj}"
+                )
                 if existing_spend_obj is None:
                     existing_spend = 0
                 else:
@@ -680,12 +690,19 @@ async def update_database(
                 verbose_proxy_logger.debug(f"new cost: {new_spend}")
                 # Update the cost column for the given token
                 await prisma_client.update_data(token=token, data={"spend": new_spend})
+
+                valid_token = user_api_key_cache.get_cache(key=token)
+                if valid_token is not None:
+                    valid_token.spend = new_spend
+                    user_api_key_cache.set_cache(key=token, value=valid_token)
             elif custom_db_client is not None:
                 # Fetch the existing cost for the given token
                 existing_spend_obj = await custom_db_client.get_data(
                     key=token, table_name="key"
                 )
-                verbose_proxy_logger.debug(f"existing spend: {existing_spend_obj}")
+                verbose_proxy_logger.debug(
+                    f"_update_key_db existing spend: {existing_spend_obj}"
+                )
                 if existing_spend_obj is None:
                     existing_spend = 0
                 else:
@@ -698,6 +715,11 @@ async def update_database(
                 await custom_db_client.update_data(
                     key=token, value={"spend": new_spend}, table_name="key"
                 )
+
+                valid_token = user_api_key_cache.get_cache(key=token)
+                if valid_token is not None:
+                    valid_token.spend = new_spend
+                    user_api_key_cache.set_cache(key=token, value=valid_token)
 
         async def _insert_spend_log_to_db():
             # Helper to generate payload to log
@@ -1128,7 +1150,8 @@ async def generate_key_helper_fn(
     aliases: dict,
     config: dict,
     spend: float,
-    max_budget: Optional[float] = None,
+    key_max_budget: Optional[float] = None,  # key_max_budget is used to Budget Per key
+    max_budget: Optional[float] = None,  # max_budget is used to Budget Per user
     token: Optional[str] = None,
     user_id: Optional[str] = None,
     team_id: Optional[str] = None,
@@ -1201,6 +1224,7 @@ async def generate_key_helper_fn(
             "aliases": aliases_json,
             "config": config_json,
             "spend": spend,
+            "max_budget": key_max_budget,
             "user_id": user_id,
             "team_id": team_id,
             "max_parallel_requests": max_parallel_requests,
@@ -2163,6 +2187,7 @@ async def generate_key_fn(
     - aliases: Optional[dict] - Any alias mappings, on top of anything in the config.yaml model list. - https://docs.litellm.ai/docs/proxy/virtual_keys#managing-auth---upgradedowngrade-models
     - config: Optional[dict] - any key-specific configs, overrides config in config.yaml
     - spend: Optional[int] - Amount spent by key. Default is 0. Will be updated by proxy whenever key is used. https://docs.litellm.ai/docs/proxy/virtual_keys#managing-auth---tracking-spend
+    - max_budget: Optional[float] - Specify max budget for a given key.
     - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
     - metadata: Optional[dict] - Metadata for key, store information for key. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
 
@@ -2182,6 +2207,11 @@ async def generate_key_fn(
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=message)
 
     data_json = data.json()  # type: ignore
+
+    # if we get max_budget passed to /key/generate, then use it as key_max_budget. Since generate_key_helper_fn is used to make new users
+    if "max_budget" in data_json:
+        data_json["key_max_budget"] = data_json.pop("max_budget", None)
+
     response = await generate_key_helper_fn(**data_json)
     return GenerateKeyResponse(
         key=response["token"], expires=response["expires"], user_id=response["user_id"]
