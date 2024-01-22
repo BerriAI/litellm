@@ -392,6 +392,97 @@ general_settings:
 $ litellm --config /path/to/config.yaml 
 ```
 
+## Custom /key/generate
+
+If you need to add custom logic before generating a Proxy API Key (Example Validating `team_id`)
+
+### 1. Write a custom `custom_generate_key_fn`
+
+
+The input to the custom_generate_key_fn function is a single parameter: `data` [(Type: GenerateKeyRequest)](https://github.com/BerriAI/litellm/blob/main/litellm/proxy/_types.py#L125)
+
+The output of your `custom_generate_key_fn` should be a dictionary with the following structure
+```python
+{
+    "decision": False,
+    "message": "This violates LiteLLM Proxy Rules. No team id provided.",
+}
+
+```
+
+- decision (Type: bool): A boolean value indicating whether the key generation is allowed (True) or not (False).
+
+- message (Type: str, Optional): An optional message providing additional information about the decision. This field is included when the decision is False.
+
+
+```python
+async def custom_generate_key_fn(data: GenerateKeyRequest)-> dict:
+        """
+        Asynchronous function for generating a key based on the input data.
+
+        Args:
+            data (GenerateKeyRequest): The input data for key generation.
+
+        Returns:
+            dict: A dictionary containing the decision and an optional message.
+            {
+                "decision": False,
+                "message": "This violates LiteLLM Proxy Rules. No team id provided.",
+            }
+        """
+        
+        # decide if a key should be generated or not
+        print("using custom auth function!")
+        data_json = data.json()  # type: ignore
+
+        # Unpacking variables
+        team_id = data_json.get("team_id")
+        duration = data_json.get("duration")
+        models = data_json.get("models")
+        aliases = data_json.get("aliases")
+        config = data_json.get("config")
+        spend = data_json.get("spend")
+        user_id = data_json.get("user_id")
+        max_parallel_requests = data_json.get("max_parallel_requests")
+        metadata = data_json.get("metadata")
+        tpm_limit = data_json.get("tpm_limit")
+        rpm_limit = data_json.get("rpm_limit")
+
+        if team_id is not None and team_id == "litellm-core-infra@gmail.com":
+            # only team_id="litellm-core-infra@gmail.com" can make keys
+            return {
+                "decision": True,
+            }
+        else:
+            print("Failed custom auth")
+            return {
+                "decision": False,
+                "message": "This violates LiteLLM Proxy Rules. No team id provided.",
+            }
+```
+
+
+### 2. Pass the filepath (relative to the config.yaml)
+
+Pass the filepath to the config.yaml 
+
+e.g. if they're both in the same dir - `./config.yaml` and `./custom_auth.py`, this is what it looks like:
+```yaml 
+model_list: 
+  - model_name: "openai-model"
+    litellm_params: 
+      model: "gpt-3.5-turbo"
+
+litellm_settings:
+  drop_params: True
+  set_verbose: True
+
+general_settings:
+  custom_key_generate: custom_auth.custom_generate_key_fn
+```
+
+
+
 
 ## [BETA] Dynamo DB 
 
