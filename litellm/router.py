@@ -1521,13 +1521,13 @@ class Router:
             ):
                 stream_timeout_env_name = stream_timeout.replace("os.environ/", "")
                 stream_timeout = litellm.get_secret(stream_timeout_env_name)
-                litellm_params["stream_timeout"] = stream_timeout
 
             max_retries = litellm_params.pop("max_retries", 2)
-            if isinstance(max_retries, str) and max_retries.startswith("os.environ/"):
-                max_retries_env_name = max_retries.replace("os.environ/", "")
-                max_retries = litellm.get_secret(max_retries_env_name)
-                litellm_params["max_retries"] = max_retries
+            if isinstance(max_retries, str):
+                if max_retries.startswith("os.environ/"):
+                    max_retries_env_name = max_retries.replace("os.environ/", "")
+                    max_retries = litellm.get_secret(max_retries_env_name)
+                max_retries = int(max_retries)
 
             if "azure" in model_name:
                 if api_base is None:
