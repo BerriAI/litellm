@@ -394,11 +394,11 @@ class Router:
 
             response = litellm.completion(
                 **{
-                    **kwargs,
-                    **data,
                     "messages": messages,
                     "caching": self.cache_responses,
                     "client": model_client,
+                    **kwargs,
+                    **data,
                 }
             )
             verbose_router_logger.info(
@@ -527,12 +527,12 @@ class Router:
                 model_client = potential_model_client
             self.total_calls[model_name] += 1
             final_data = {
-                **kwargs,
-                **data,
                 "messages": messages,
                 "caching": self.cache_responses,
                 "client": model_client,
                 "timeout": self.timeout,
+                **kwargs,
+                **data,
             }
             response = await litellm.acompletion(**final_data)
             self.success_calls[model_name] += 1
