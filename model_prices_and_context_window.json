@@ -906,6 +906,14 @@
         "litellm_provider": "bedrock",
         "mode": "chat"
     },
+    "amazon.titan-embed-text-v1": {
+        "max_tokens": 8192, 
+        "output_vector_size": 1536,
+        "input_cost_per_token": 0.0000001,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "bedrock", 
+        "mode": "embedding"
+    },
     "anthropic.claude-v1": {
         "max_tokens": 100000, 
         "max_output_tokens": 8191,
