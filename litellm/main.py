@@ -83,6 +83,7 @@ from litellm.utils import (
     TextCompletionResponse,
     TextChoices,
     EmbeddingResponse,
+    ImageResponse,
     read_config_args,
     Choices,
     Message,
@@ -2987,6 +2988,7 @@ def image_generation(
         else:
             model = "dall-e-2"
             custom_llm_provider = "openai"  # default to dall-e-2 on openai
+        model_response._hidden_params["model"] = model
         openai_params = [
             "user",
             "request_timeout",
