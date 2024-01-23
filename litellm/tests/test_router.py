@@ -960,3 +960,29 @@ def test_router_anthropic_key_dynamic():
     messages = [{"role": "user", "content": "Hey, how's it going?"}]
     router.completion(model="anthropic-claude", messages=messages)
     os.environ["ANTHROPIC_API_KEY"] = anthropic_api_key
+
+
+def test_router_timeout():
+    model_list = [
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {
+                "model": "gpt-3.5-turbo",
+                "api_key": "os.environ/OPENAI_API_KEY",
+            },
+        }
+    ]
+    router = Router(model_list=model_list)
+    messages = [{"role": "user", "content": "Hey, how's it going?"}]
+    start_time = time.time()
+    try:
+        res = router.completion(
+            model="gpt-3.5-turbo", messages=messages, timeout=0.0001
+        )
+        print(res)
+        pytest.fail("this should have timed out")
+    except litellm.exceptions.Timeout as e:
+        print("got timeout exception")
+        print(e)
+        print(vars(e))
+        pass
