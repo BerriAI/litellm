@@ -95,6 +95,19 @@ def test_ollama_usage():
     assert usage.completion_tokens == 290
     assert usage.total_tokens == 316
 
+    # stubbed final stream response, with missing metrics keys
+    response_json = {
+        "response": "",
+        "done": True,
+    }
+
+    usage = OllamaUsage(prompt, response_json, encoding).get_usage()
+
+    assert isinstance(usage, litellm.Usage)
+    assert usage.prompt_tokens == 6
+    assert 'completion_tokens' not in usage.__dict__
+    assert usage.total_tokens == 6
+
     # stubbed non-streamed response
     # see: https://github.com/jmorganca/ollama/blob/main/docs/api.md#response-1
     response_json = {

@@ -126,8 +126,8 @@ class OllamaUsage:
     def __init__(self, prompt, response_json, encoding):
         self.prompt = prompt
         self.done = response_json["done"]
-        self.prompt_tokens = response_json.get("prompt_eval_count", len(encoding.encode(prompt)))  # type: ignore
-        self.completion_tokens = response_json.get("eval_count", len(encoding.encode(response_json["response"])))  # type: ignore
+        self.prompt_tokens = response_json.get("prompt_eval_count", self._prompt_tokens_fallback(prompt, encoding))  # type: ignore
+        self.completion_tokens = response_json.get("eval_count", self._completion_tokens_fallback(response_json, encoding))  # type: ignore
 
     def get_usage(self):
         if self.done == False:
@@ -142,6 +142,13 @@ class OllamaUsage:
             completion_tokens=self.completion_tokens,
             total_tokens=self.prompt_tokens + self.completion_tokens,
         )
+
+    def _prompt_tokens_fallback(self, prompt, encoding):
+        return len(encoding.encode(prompt))
+
+    def _completion_tokens_fallback(self, response_json, encoding):
+        response = response_json.get("response", "")
+        return len(encoding.encode(response))
 
 # ollama implementation
 def get_ollama_response(
