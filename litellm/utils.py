@@ -7041,6 +7041,7 @@ class CustomStreamWrapper:
         self._hidden_params = {
             "model_id": (_model_info.get("id", None))
         }  # returned as x-litellm-model-id response header in proxy
+        self.response_id = None
 
     def __iter__(self):
         return self
@@ -7613,6 +7614,10 @@ class CustomStreamWrapper:
 
     def chunk_creator(self, chunk):
         model_response = ModelResponse(stream=True, model=self.model)
+        if self.response_id is not None:
+            model_response.id = self.response_id
+        else:
+            self.response_id = model_response.id
         model_response._hidden_params["custom_llm_provider"] = self.custom_llm_provider
         model_response.choices = [StreamingChoices()]
         model_response.choices[0].finish_reason = None
