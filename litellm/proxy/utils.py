@@ -961,9 +961,9 @@ def _duration_in_seconds(duration: str):
 
 async def reset_budget(prisma_client: PrismaClient):
     """
-    Gets all the non-expired keys for a db, which need budget to be reset
+    Gets all the non-expired keys for a db, which need spend to be reset
 
-    Resets their budget
+    Resets their spend
 
     Updates db
     """
