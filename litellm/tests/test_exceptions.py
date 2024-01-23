@@ -378,7 +378,7 @@ def test_content_policy_exceptionimage_generation_openai():
 # test_content_policy_exceptionimage_generation_openai()
 
 
-def tesy_async_acompletion():
+def test_content_policy_violation_error_streaming():
     """
     Production Test.
     """
