@@ -1,5 +1,5 @@
 from typing import Optional, Union, Any
-import types, time, json
+import types, time, json, traceback
 import httpx
 from .base import BaseLLM
 from litellm.utils import (
@@ -349,7 +349,7 @@ class OpenAIChatCompletion(BaseLLM):
             if hasattr(e, "status_code"):
                 raise OpenAIError(status_code=e.status_code, message=str(e))
             else:
-                raise OpenAIError(status_code=500, message=str(e))
+                raise OpenAIError(status_code=500, message=traceback.format_exc())
 
     async def acompletion(
         self,
