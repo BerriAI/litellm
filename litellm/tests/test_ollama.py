@@ -14,6 +14,8 @@ import litellm
 from litellm.llms.ollama import OllamaUsage
 from litellm.llms.ollama_chat import OllamaChatUsage
 
+import tiktoken
+encoding = tiktoken.get_encoding("cl100k_base")
 
 ## for ollama we can't test making the completion call
 from litellm.utils import get_optional_params, get_llm_provider
@@ -69,8 +71,9 @@ def test_ollama_usage():
         "response": "The",
         "done": False
     }
+    prompt = "Why is the sky blue?"
 
-    usage = OllamaUsage(response_json).get_usage()
+    usage = OllamaUsage(prompt, response_json, encoding).get_usage()
 
     assert isinstance(usage, litellm.Usage)
     assert 'prompt_tokens' not in usage.__dict__
@@ -79,18 +82,18 @@ def test_ollama_usage():
 
     # stubbed final stream response
     response_json = {
+        "response": "",
         "done": True,
         "prompt_eval_count": 26,
         "eval_count": 290
     }
 
-    usage = OllamaUsage(response_json).get_usage()
+    usage = OllamaUsage(prompt, response_json, encoding).get_usage()
 
     assert isinstance(usage, litellm.Usage)
     assert usage.prompt_tokens == 26
     assert usage.completion_tokens == 290
     assert usage.total_tokens == 316
-
 
     # stubbed non-streamed response
     # see: https://github.com/jmorganca/ollama/blob/main/docs/api.md#response-1
@@ -101,12 +104,25 @@ def test_ollama_usage():
         "eval_count": 290
     }
 
-    usage = OllamaUsage(response_json).get_usage()
+    usage = OllamaUsage(prompt, response_json, encoding).get_usage()
 
     assert isinstance(usage, litellm.Usage)
     assert usage.prompt_tokens == 26
     assert usage.completion_tokens == 290
     assert usage.total_tokens == 316
+
+    # stubbed non-streamed response, with missing metrics keys
+    response_json = {
+        "response": "The sky is blue because it is the color of the sky.",
+        "done": True,
+    }
+
+    usage = OllamaUsage(prompt, response_json, encoding).get_usage()
+
+    assert isinstance(usage, litellm.Usage)
+    assert usage.prompt_tokens == 6
+    assert usage.completion_tokens == 13
+    assert usage.total_tokens == 19
 # test_ollama_usage()
 
 

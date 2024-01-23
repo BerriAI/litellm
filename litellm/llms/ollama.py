@@ -123,23 +123,24 @@ class OllamaConfig:
 # Usage metrics are only populated when the ollama response indicates `"done": true`
 # https://github.com/jmorganca/ollama/blob/main/docs/api.md#generate-a-completion
 class OllamaUsage:
-    def __init__(self, response_json):
-        self.response_json = response_json
+    def __init__(self, prompt, response_json, encoding):
+        self.prompt = prompt
+        self.done = response_json["done"]
+        self.prompt_tokens = response_json.get("prompt_eval_count", len(encoding.encode(prompt)))  # type: ignore
+        self.completion_tokens = response_json.get("eval_count", len(encoding.encode(response_json["response"])))  # type: ignore
 
     def get_usage(self):
-        if self.response_json["done"] == False:
+        if self.done == False:
             return litellm.Usage(
                 prompt_tokens=None,
                 completion_tokens=None,
                 total_tokens=None,
             )
 
-        prompt_tokens = self.response_json["prompt_eval_count"]
-        completion_tokens = self.response_json["eval_count"]
         return litellm.Usage(
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            total_tokens=prompt_tokens + completion_tokens,
+            prompt_tokens=self.prompt_tokens,
+            completion_tokens=self.completion_tokens,
+            total_tokens=self.prompt_tokens + self.completion_tokens,
         )
 
 # ollama implementation
@@ -235,7 +236,7 @@ def get_ollama_response(
         model_response["choices"][0]["message"]["content"] = response_json["response"]
     model_response["created"] = int(time.time())
     model_response["model"] = "ollama/" + model
-    model_response["usage"] = OllamaUsage(response_json, prompt, encoding).get_usage()
+    model_response["usage"] = OllamaUsage(data["prompt"], response_json, encoding).get_usage()
     return model_response
 
 
@@ -330,7 +331,7 @@ async def ollama_acompletion(url, data, model_response, encoding, logging_obj):
                 ]
             model_response["created"] = int(time.time())
             model_response["model"] = "ollama/" + data["model"]
-            model_response["usage"] = OllamaUsage(response_json, data["prompt"], encoding).get_usage()
+            model_response["usage"] = OllamaUsage(data["prompt"], response_json, encoding).get_usage()
             return model_response
     except Exception as e:
         traceback.print_exc()
