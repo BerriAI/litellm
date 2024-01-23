@@ -942,3 +942,29 @@ def test_reading_openai_keys_os_environ():
 
 
 # test_reading_openai_keys_os_environ()
+
+
+def test_router_timeout():
+    model_list = [
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {
+                "model": "gpt-3.5-turbo",
+                "api_key": "os.environ/OPENAI_API_KEY",
+                "timeout": "os.environ/AZURE_TIMEOUT",
+                "stream_timeout": "os.environ/AZURE_STREAM_TIMEOUT",
+                "max_retries": "os.environ/AZURE_MAX_RETRIES",
+            },
+        }
+    ]
+    router = Router(model_list=model_list)
+    messages = [{"role": "user", "content": "Hey, how's it going?"}]
+    start_time = time.time()
+    try:
+        router.completion(
+            model="gpt-3.5-turbo", messages=messages, max_tokens=500, timeout=1
+        )
+    except litellm.exceptions.Timeout as e:
+        pass
+    end_time = time.time()
+    assert end_time - start_time < 1.1
