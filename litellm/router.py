@@ -394,11 +394,11 @@ class Router:
 
             response = litellm.completion(
                 **{
+                    **kwargs,
                     **data,
                     "messages": messages,
                     "caching": self.cache_responses,
                     "client": model_client,
-                    **kwargs,
                 }
             )
             verbose_router_logger.info(
@@ -479,7 +479,8 @@ class Router:
             kwargs.setdefault("metadata", {}).update({"model_group": model})
 
             response = await self.async_function_with_fallbacks(
-                **kwargs, **completion_kwargs
+                **completion_kwargs,
+                **kwargs,
             )
 
             return response
@@ -525,16 +526,15 @@ class Router:
             else:
                 model_client = potential_model_client
             self.total_calls[model_name] += 1
-            response = await litellm.acompletion(
-                **{
-                    **data,
-                    "messages": messages,
-                    "caching": self.cache_responses,
-                    "client": model_client,
-                    "timeout": self.timeout,
-                    **kwargs,
-                }
-            )
+            final_data = {
+                **kwargs,
+                **data,
+                "messages": messages,
+                "caching": self.cache_responses,
+                "client": model_client,
+                "timeout": self.timeout,
+            }
+            response = await litellm.acompletion(**final_data)
             self.success_calls[model_name] += 1
             verbose_router_logger.info(
                 f"litellm.acompletion(model={model_name})\033[32m 200 OK\033[0m"
