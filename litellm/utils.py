@@ -1064,6 +1064,27 @@ class Logging:
             self.model_call_details["log_event_type"] = "successful_api_call"
             self.model_call_details["end_time"] = end_time
             self.model_call_details["cache_hit"] = cache_hit
+            ## if model in model cost map - log the response cost
+            ## else set cost to None
+            verbose_logger.debug(f"Model={self.model}; result={result}")
+            if result is not None and (
+                isinstance(result, ModelResponse)
+                or isinstance(result, EmbeddingResponse)
+            ):
+                try:
+                    self.model_call_details["response_cost"] = litellm.completion_cost(
+                        completion_response=result,
+                    )
+                    verbose_logger.debug(
+                        f"Model={self.model}; cost={self.model_call_details['response_cost']}"
+                    )
+                except litellm.NotFoundError as e:
+                    verbose_logger.debug(
+                        f"Model={self.model} not found in completion cost map."
+                    )
+                    self.model_call_details["response_cost"] = None
+            else:  # streaming chunks + image gen.
+                self.model_call_details["response_cost"] = None
 
             if litellm.max_budget and self.stream:
                 time_diff = (end_time - start_time).total_seconds()
@@ -1077,7 +1098,7 @@ class Logging:
 
             return start_time, end_time, result
         except Exception as e:
-            print_verbose(f"[Non-Blocking] LiteLLM.Success_Call Error: {str(e)}")
+            raise Exception(f"[Non-Blocking] LiteLLM.Success_Call Error: {str(e)}")
 
     def success_handler(
         self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs
