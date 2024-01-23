@@ -7362,6 +7362,13 @@ class CustomStreamWrapper:
                 if str_line.choices[0].finish_reason:
                     is_finished = True
                     finish_reason = str_line.choices[0].finish_reason
+                    if finish_reason == "content_filter":
+                        error_message = json.dumps(
+                            str_line.choices[0].content_filter_result
+                        )
+                        raise litellm.AzureOpenAIError(
+                            status_code=400, message=error_message
+                        )
 
                 # checking for logprobs
                 if (
@@ -7372,16 +7379,6 @@ class CustomStreamWrapper:
                 else:
                     logprobs = None
 
-                if (
-                    hasattr(str_line.choices[0], "content_filter_result")
-                    and str_line.choices[0].content_filter_result is not None
-                ):
-                    error_message = json.dumps(
-                        str_line.choices[0].content_filter_result
-                    )
-                    raise litellm.AzureOpenAIError(
-                        status_code=400, message=error_message
-                    )
             return {
                 "text": text,
                 "is_finished": is_finished,
