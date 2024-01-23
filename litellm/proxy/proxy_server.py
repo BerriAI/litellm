@@ -1658,11 +1658,16 @@ async def completion(
             "stream" in data and data["stream"] == True
         ):  # use generate_responses to stream responses
             custom_headers = {"x-litellm-model-id": model_id}
-            return StreamingResponse(
-                async_data_generator(
-                    user_api_key_dict=user_api_key_dict,
+            stream_content = async_data_generator(
+                user_api_key_dict=user_api_key_dict,
+                response=response,
+            )
+            if response.custom_llm_provider == "sagemaker":
+                stream_content = data_generator(
                     response=response,
-                ),
+                )
+            return StreamingResponse(
+                stream_content,
                 media_type="text/event-stream",
                 headers=custom_headers,
             )
@@ -1820,11 +1825,16 @@ async def chat_completion(
             "stream" in data and data["stream"] == True
         ):  # use generate_responses to stream responses
             custom_headers = {"x-litellm-model-id": model_id}
-            return StreamingResponse(
-                async_data_generator(
-                    user_api_key_dict=user_api_key_dict,
+            stream_content = async_data_generator(
+                user_api_key_dict=user_api_key_dict,
+                response=response,
+            )
+            if response.custom_llm_provider == "sagemaker":
+                stream_content = data_generator(
                     response=response,
-                ),
+                )
+            return StreamingResponse(
+                stream_content,
                 media_type="text/event-stream",
                 headers=custom_headers,
             )
