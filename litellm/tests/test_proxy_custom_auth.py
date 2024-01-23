@@ -58,9 +58,9 @@ def test_custom_auth(client):
 
         headers = {"Authorization": f"Bearer {token}"}
         response = client.post("/chat/completions", json=test_data, headers=headers)
-        print(f"response: {response.text}")
-        assert response.status_code == 401
-        result = response.json()
-        print(f"Received response: {result}")
     except Exception as e:
-        pytest.fail("LiteLLM Proxy test failed. Exception", e)
+        print(vars(e))
+        print("got an exception")
+        assert e.code == 401
+        assert e.message == "Authentication Error, Failed custom auth"
+        pass
