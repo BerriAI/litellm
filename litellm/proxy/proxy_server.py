@@ -1422,6 +1422,28 @@ async def async_data_generator(response, user_api_key_dict):
         yield f"data: {str(e)}\n\n"
 
 
+def select_data_generator(response, user_api_key_dict):
+    try:
+        # since boto3 - sagemaker does not support async calls, we should use a sync data_generator
+        if (
+            hasattr(response, "custom_llm_provider")
+            and response.custom_llm_provider == "sagemaker"
+        ):
+            return data_generator(
+                response=response,
+            )
+        else:
+            # default to async_data_generator
+            return async_data_generator(
+                response=response, user_api_key_dict=user_api_key_dict
+            )
+    except:
+        # worst case - use async_data_generator
+        return async_data_generator(
+            response=response, user_api_key_dict=user_api_key_dict
+        )
+
+
 def get_litellm_model_info(model: dict = {}):
     model_info = model.get("model_info", {})
     model_to_lookup = model.get("litellm_params", {}).get("model", None)
@@ -1658,11 +1680,12 @@ async def completion(
             "stream" in data and data["stream"] == True
         ):  # use generate_responses to stream responses
             custom_headers = {"x-litellm-model-id": model_id}
+            selected_data_generator = select_data_generator(
+                response=response, user_api_key_dict=user_api_key_dict
+            )
+
             return StreamingResponse(
-                async_data_generator(
-                    user_api_key_dict=user_api_key_dict,
-                    response=response,
-                ),
+                selected_data_generator,
                 media_type="text/event-stream",
                 headers=custom_headers,
             )
@@ -1820,11 +1843,12 @@ async def chat_completion(
             "stream" in data and data["stream"] == True
         ):  # use generate_responses to stream responses
             custom_headers = {"x-litellm-model-id": model_id}
+            selected_data_generator = select_data_generator(
+                response=response, user_api_key_dict=user_api_key_dict
+            )
+
             return StreamingResponse(
-                async_data_generator(
-                    user_api_key_dict=user_api_key_dict,
-                    response=response,
-                ),
+                selected_data_generator,
                 media_type="text/event-stream",
                 headers=custom_headers,
             )
