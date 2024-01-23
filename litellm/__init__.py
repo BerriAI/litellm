@@ -2,10 +2,14 @@
 import threading, requests
 from typing import Callable, List, Optional, Dict, Union, Any
 from litellm.caching import Cache
-from litellm._logging import set_verbose
+from litellm._logging import set_verbose, _turn_on_debug
 from litellm.proxy._types import KeyManagementSystem
 import httpx
 
+#############################################
+if set_verbose == True:
+    _turn_on_debug()
+#############################################
 input_callback: List[Union[str, Callable]] = []
 success_callback: List[Union[str, Callable]] = []
 failure_callback: List[Union[str, Callable]] = []

@@ -22,16 +22,15 @@ verbose_proxy_logger.addHandler(handler)
 verbose_logger.addHandler(handler)
 
 
+def _turn_on_debug():
+    verbose_logger.setLevel(level=logging.DEBUG)  # set package log to debug
+    verbose_router_logger.setLevel(level=logging.DEBUG)  # set router logs to debug
+    verbose_proxy_logger.setLevel(level=logging.DEBUG)  # set proxy logs to debug
+
+
 def print_verbose(print_statement):
     try:
         if set_verbose:
             print(print_statement)  # noqa
-            verbose_logger.setLevel(level=logging.DEBUG)  # set package log to debug
-            verbose_router_logger.setLevel(
-                level=logging.DEBUG
-            )  # set router logs to debug
-            verbose_proxy_logger.setLevel(
-                level=logging.DEBUG
-            )  # set proxy logs to debug
     except:
         pass
