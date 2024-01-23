@@ -1,5 +1,4 @@
-
-# Load Balancing - Multiple Instances of 1 model
+# Multiple Instances of 1 model
 Load balance multiple instances of the same model
 
 The proxy will handle routing requests (using LiteLLM's Router). **Set `rpm` in the config if you want maximize throughput**

@@ -83,6 +83,7 @@ from litellm.utils import (
     TextCompletionResponse,
     TextChoices,
     EmbeddingResponse,
+    ImageResponse,
     read_config_args,
     Choices,
     Message,
@@ -343,6 +344,18 @@ def mock_completion(
         model_response["choices"][0]["message"]["content"] = mock_response
         model_response["created"] = int(time.time())
         model_response["model"] = model
+
+        model_response.usage = Usage(
+            prompt_tokens=10, completion_tokens=20, total_tokens=30
+        )
+
+        try:
+            _, custom_llm_provider, _, _ = litellm.utils.get_llm_provider(model=model)
+            model_response._hidden_params["custom_llm_provider"] = custom_llm_provider
+        except:
+            # dont let setting a hidden param block a mock_respose
+            pass
+
         return model_response
 
     except:
@@ -445,6 +458,8 @@ def completion(
     ### CUSTOM MODEL COST ###
     input_cost_per_token = kwargs.get("input_cost_per_token", None)
     output_cost_per_token = kwargs.get("output_cost_per_token", None)
+    input_cost_per_second = kwargs.get("input_cost_per_second", None)
+    output_cost_per_second = kwargs.get("output_cost_per_second", None)
     ### CUSTOM PROMPT TEMPLATE ###
     initial_prompt_value = kwargs.get("initial_prompt_value", None)
     roles = kwargs.get("roles", None)
@@ -522,6 +537,8 @@ def completion(
         "tpm",
         "input_cost_per_token",
         "output_cost_per_token",
+        "input_cost_per_second",
+        "output_cost_per_second",
         "hf_model_name",
         "model_info",
         "proxy_server_request",
@@ -534,10 +551,6 @@ def completion(
     non_default_params = {
         k: v for k, v in kwargs.items() if k not in default_params
     }  # model-specific params - pass them straight to the model/provider
-    if mock_response:
-        return mock_completion(
-            model, messages, stream=stream, mock_response=mock_response
-        )
     if timeout is None:
         timeout = (
             kwargs.get("request_timeout", None) or 600
@@ -584,6 +597,19 @@ def completion(
                     model: {
                         "input_cost_per_token": input_cost_per_token,
                         "output_cost_per_token": output_cost_per_token,
+                        "litellm_provider": custom_llm_provider,
+                    }
+                }
+            )
+        if (
+            input_cost_per_second is not None
+        ):  # time based pricing just needs cost in place
+            output_cost_per_second = output_cost_per_second or 0.0
+            litellm.register_model(
+                {
+                    model: {
+                        "input_cost_per_second": input_cost_per_second,
+                        "output_cost_per_second": output_cost_per_second,
                         "litellm_provider": custom_llm_provider,
                     }
                 }
@@ -674,6 +700,10 @@ def completion(
             optional_params=optional_params,
             litellm_params=litellm_params,
         )
+        if mock_response:
+            return mock_completion(
+                model, messages, stream=stream, mock_response=mock_response
+            )
         if custom_llm_provider == "azure":
             # azure configs
             api_type = get_secret("AZURE_API_TYPE") or "azure"
@@ -692,9 +722,9 @@ def completion(
                 or get_secret("AZURE_API_KEY")
             )
 
-            azure_ad_token = optional_params.pop("azure_ad_token", None) or get_secret(
-                "AZURE_AD_TOKEN"
-            )
+            azure_ad_token = optional_params.get("extra_body", {}).pop(
+                "azure_ad_token", None
+            ) or get_secret("AZURE_AD_TOKEN")
 
             headers = headers or litellm.headers
 
@@ -967,6 +997,7 @@ def completion(
                 encoding=encoding,  # for calculating input/output tokens
                 api_key=api_key,
                 logging_obj=logging,
+                headers=headers,
             )
             if "stream" in optional_params and optional_params["stream"] == True:
                 # don't try to access stream object,
@@ -1376,6 +1407,18 @@ def completion(
                 acompletion=acompletion,
                 custom_prompt_dict=custom_prompt_dict,
             )
+            if (
+                "stream" in optional_params
+                and optional_params["stream"] == True
+                and acompletion == False
+            ):
+                response = CustomStreamWrapper(
+                    iter(model_response),
+                    model,
+                    custom_llm_provider="gemini",
+                    logging_obj=logging,
+                )
+                return response
             response = model_response
         elif custom_llm_provider == "vertex_ai":
             vertex_ai_project = litellm.vertex_project or get_secret("VERTEXAI_PROJECT")
@@ -1477,10 +1520,12 @@ def completion(
 
                 # fake streaming for sagemaker
                 print_verbose(f"ENTERS SAGEMAKER CUSTOMSTREAMWRAPPER")
-                resp_string = model_response["choices"][0]["message"]["content"]
+                from .llms.sagemaker import TokenIterator
+
+                tokenIterator = TokenIterator(model_response)
                 response = CustomStreamWrapper(
-                    resp_string,
-                    model,
+                    completion_stream=tokenIterator,
+                    model=model,
                     custom_llm_provider="sagemaker",
                     logging_obj=logging,
                 )
@@ -2222,6 +2267,11 @@ def embedding(
     encoding_format = kwargs.get("encoding_format", None)
     proxy_server_request = kwargs.get("proxy_server_request", None)
     aembedding = kwargs.get("aembedding", None)
+    ### CUSTOM MODEL COST ###
+    input_cost_per_token = kwargs.get("input_cost_per_token", None)
+    output_cost_per_token = kwargs.get("output_cost_per_token", None)
+    input_cost_per_second = kwargs.get("input_cost_per_second", None)
+    output_cost_per_second = kwargs.get("output_cost_per_second", None)
     openai_params = [
         "user",
         "request_timeout",
@@ -2270,6 +2320,8 @@ def embedding(
         "tpm",
         "input_cost_per_token",
         "output_cost_per_token",
+        "input_cost_per_second",
+        "output_cost_per_second",
         "hf_model_name",
         "proxy_server_request",
         "model_info",
@@ -2295,6 +2347,28 @@ def embedding(
         custom_llm_provider=custom_llm_provider,
         **non_default_params,
     )
+    ### REGISTER CUSTOM MODEL PRICING -- IF GIVEN ###
+    if input_cost_per_token is not None and output_cost_per_token is not None:
+        litellm.register_model(
+            {
+                model: {
+                    "input_cost_per_token": input_cost_per_token,
+                    "output_cost_per_token": output_cost_per_token,
+                    "litellm_provider": custom_llm_provider,
+                }
+            }
+        )
+    if input_cost_per_second is not None:  # time based pricing just needs cost in place
+        output_cost_per_second = output_cost_per_second or 0.0
+        litellm.register_model(
+            {
+                model: {
+                    "input_cost_per_second": input_cost_per_second,
+                    "output_cost_per_second": output_cost_per_second,
+                    "litellm_provider": custom_llm_provider,
+                }
+            }
+        )
     try:
         response = None
         logging = litellm_logging_obj
@@ -2916,6 +2990,7 @@ def image_generation(
         else:
             model = "dall-e-2"
             custom_llm_provider = "openai"  # default to dall-e-2 on openai
+        model_response._hidden_params["model"] = model
         openai_params = [
             "user",
             "request_timeout",
@@ -3263,7 +3338,9 @@ def stream_chunk_builder_text_completion(chunks: list, messages: Optional[List] 
     return response
 
 
-def stream_chunk_builder(chunks: list, messages: Optional[list] = None):
+def stream_chunk_builder(
+    chunks: list, messages: Optional[list] = None, start_time=None, end_time=None
+):
     model_response = litellm.ModelResponse()
     # set hidden params from chunk to model_response
     if model_response is not None and hasattr(model_response, "_hidden_params"):
@@ -3438,5 +3515,8 @@ def stream_chunk_builder(chunks: list, messages: Optional[list] = None):
         response["usage"]["prompt_tokens"] + response["usage"]["completion_tokens"]
     )
     return convert_to_model_response_object(
-        response_object=response, model_response_object=model_response
+        response_object=response,
+        model_response_object=model_response,
+        start_time=start_time,
+        end_time=end_time,
     )

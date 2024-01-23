@@ -401,7 +401,7 @@ def test_redis_cache_completion_stream():
     """
 
 
-test_redis_cache_completion_stream()
+# test_redis_cache_completion_stream()
 
 
 def test_redis_cache_acompletion_stream():

@@ -187,6 +187,7 @@ prisma_client: Optional[PrismaClient] = None
 custom_db_client: Optional[DBClient] = None
 user_api_key_cache = DualCache()
 user_custom_auth = None
+user_custom_key_generate = None
 use_background_health_checks = None
 use_queue = False
 health_check_interval = None
@@ -252,6 +253,18 @@ async def user_api_key_auth(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="'allow_user_auth' not set or set to False",
                 )
+        elif (
+            route == "/routes"
+            or route == "/"
+            or route == "/health/liveliness"
+            or route == "/health/readiness"
+            or route == "/test"
+            or route == "/config/yaml"
+        ):
+            """
+            Unprotected endpoints
+            """
+            return UserAPIKeyAuth()
 
         if api_key is None:  # only require api key if master key is set
             raise Exception(f"No api key passed in.")
@@ -263,16 +276,6 @@ async def user_api_key_auth(
 
         if route.startswith("/config/") and not is_master_key_valid:
             raise Exception(f"Only admin can modify config")
-
-        if (
-            (route.startswith("/key/") or route.startswith("/user/"))
-            or route.startswith("/model/")
-            and not is_master_key_valid
-            and general_settings.get("allow_user_auth", False) != True
-        ):
-            raise Exception(
-                f"If master key is set, only master key can be used to generate, delete, update or get info for new keys/users"
-            )
 
         if (
             prisma_client is None and custom_db_client is None
@@ -304,6 +307,7 @@ async def user_api_key_auth(
             # 1. If token can call model
             # 2. If user_id for this token is in budget
             # 3. If token is expired
+            # 4. If token spend is under Budget for the token
 
             # Check 1. If token can call model
             litellm.model_alias_map = valid_token.aliases
@@ -404,6 +408,13 @@ async def user_api_key_auth(
                         detail=f"Authentication Error - Expired Key. Key Expiry time {expiry_time} and current time {current_time}",
                     )
 
+            # Check 4. Token Spend is under budget
+            if valid_token.spend is not None and valid_token.max_budget is not None:
+                if valid_token.spend > valid_token.max_budget:
+                    raise Exception(
+                        f"ExceededTokenBudget: Current spend for token: {valid_token.spend}; Max Budget for Token: {valid_token.max_budget}"
+                    )
+
             # Token passed all checks
             # Add token to cache
             user_api_key_cache.set_cache(key=api_key, value=valid_token, ttl=60)
@@ -432,6 +443,39 @@ async def user_api_key_auth(
                         db=custom_db_client,
                     )
                 )
+
+            if (
+                (route.startswith("/key/") or route.startswith("/user/"))
+                or route.startswith("/model/")
+                and not is_master_key_valid
+                and general_settings.get("allow_user_auth", False) != True
+            ):
+                if route == "/key/info":
+                    # check if user can access this route
+                    query_params = request.query_params
+                    key = query_params.get("key")
+                    if prisma_client.hash_token(token=key) != api_key:
+                        raise HTTPException(
+                            status_code=status.HTTP_403_FORBIDDEN,
+                            detail="user not allowed to access this key's info",
+                        )
+                elif route == "/user/info":
+                    # check if user can access this route
+                    query_params = request.query_params
+                    user_id = query_params.get("user_id")
+                    if user_id != valid_token.user_id:
+                        raise HTTPException(
+                            status_code=status.HTTP_403_FORBIDDEN,
+                            detail="user not allowed to access this key's info",
+                        )
+                elif route == "/model/info":
+                    # /model/info just shows models user has access to
+                    pass
+                else:
+                    raise Exception(
+                        f"If master key is set, only master key can be used to generate, delete, update or get info for new keys/users"
+                    )
+
             return UserAPIKeyAuth(api_key=api_key, **valid_token_dict)
         else:
             raise Exception(f"Invalid Key Passed to LiteLLM Proxy")
@@ -523,18 +567,21 @@ async def track_cost_callback(
         verbose_proxy_logger.debug(
             f"kwargs stream: {kwargs.get('stream', None)} + complete streaming response: {kwargs.get('complete_streaming_response', None)}"
         )
-        if "complete_streaming_response" in kwargs:
-            # for tracking streaming cost we pass the "messages" and the output_text to litellm.completion_cost
-            completion_response = kwargs["complete_streaming_response"]
-            response_cost = litellm.completion_cost(
-                completion_response=completion_response
-            )
-            verbose_proxy_logger.debug(f"streaming response_cost {response_cost}")
+        litellm_params = kwargs.get("litellm_params", {}) or {}
+        proxy_server_request = litellm_params.get("proxy_server_request") or {}
+        user_id = proxy_server_request.get("body", {}).get("user", None)
+        if "response_cost" in kwargs:
+            response_cost = kwargs["response_cost"]
             user_api_key = kwargs["litellm_params"]["metadata"].get(
                 "user_api_key", None
             )
-            user_id = kwargs["litellm_params"]["metadata"].get(
+
+            user_id = user_id or kwargs["litellm_params"]["metadata"].get(
                 "user_api_key_user_id", None
+            )
+
+            verbose_proxy_logger.info(
+                f"response_cost {response_cost}, for user_id {user_id}"
             )
             if user_api_key and (
                 prisma_client is not None or custom_db_client is not None
@@ -548,28 +595,10 @@ async def track_cost_callback(
                     start_time=start_time,
                     end_time=end_time,
                 )
-        elif kwargs["stream"] == False:  # for non streaming responses
-            response_cost = litellm.completion_cost(
-                completion_response=completion_response
+        else:
+            raise Exception(
+                f"Model not in litellm model cost map. Add custom pricing - https://docs.litellm.ai/docs/proxy/custom_pricing"
             )
-            user_api_key = kwargs["litellm_params"]["metadata"].get(
-                "user_api_key", None
-            )
-            user_id = kwargs["litellm_params"]["metadata"].get(
-                "user_api_key_user_id", None
-            )
-            if user_api_key and (
-                prisma_client is not None or custom_db_client is not None
-            ):
-                await update_database(
-                    token=user_api_key,
-                    response_cost=response_cost,
-                    user_id=user_id,
-                    kwargs=kwargs,
-                    completion_response=completion_response,
-                    start_time=start_time,
-                    end_time=end_time,
-                )
     except Exception as e:
         verbose_proxy_logger.debug(f"error in tracking cost callback - {str(e)}")
 
@@ -622,7 +651,9 @@ async def update_database(
             if prisma_client is not None:
                 # Fetch the existing cost for the given token
                 existing_spend_obj = await prisma_client.get_data(token=token)
-                verbose_proxy_logger.debug(f"existing spend: {existing_spend_obj}")
+                verbose_proxy_logger.debug(
+                    f"_update_key_db: existing spend: {existing_spend_obj}"
+                )
                 if existing_spend_obj is None:
                     existing_spend = 0
                 else:
@@ -633,12 +664,19 @@ async def update_database(
                 verbose_proxy_logger.debug(f"new cost: {new_spend}")
                 # Update the cost column for the given token
                 await prisma_client.update_data(token=token, data={"spend": new_spend})
+
+                valid_token = user_api_key_cache.get_cache(key=token)
+                if valid_token is not None:
+                    valid_token.spend = new_spend
+                    user_api_key_cache.set_cache(key=token, value=valid_token)
             elif custom_db_client is not None:
                 # Fetch the existing cost for the given token
                 existing_spend_obj = await custom_db_client.get_data(
                     key=token, table_name="key"
                 )
-                verbose_proxy_logger.debug(f"existing spend: {existing_spend_obj}")
+                verbose_proxy_logger.debug(
+                    f"_update_key_db existing spend: {existing_spend_obj}"
+                )
                 if existing_spend_obj is None:
                     existing_spend = 0
                 else:
@@ -651,6 +689,11 @@ async def update_database(
                 await custom_db_client.update_data(
                     key=token, value={"spend": new_spend}, table_name="key"
                 )
+
+                valid_token = user_api_key_cache.get_cache(key=token)
+                if valid_token is not None:
+                    valid_token.spend = new_spend
+                    user_api_key_cache.set_cache(key=token, value=valid_token)
 
         async def _insert_spend_log_to_db():
             # Helper to generate payload to log
@@ -828,7 +871,7 @@ class ProxyConfig:
         """
         Load config values into proxy global state
         """
-        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, use_background_health_checks, health_check_interval, use_queue, custom_db_client
+        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, use_background_health_checks, health_check_interval, use_queue, custom_db_client
 
         # Load existing config
         config = await self.get_config(config_file_path=config_file_path)
@@ -1006,6 +1049,12 @@ class ProxyConfig:
                 user_custom_auth = get_instance_fn(
                     value=custom_auth, config_file_path=config_file_path
                 )
+
+            custom_key_generate = general_settings.get("custom_key_generate", None)
+            if custom_key_generate is not None:
+                user_custom_key_generate = get_instance_fn(
+                    value=custom_key_generate, config_file_path=config_file_path
+                )
             ## dynamodb
             database_type = general_settings.get("database_type", None)
             if database_type is not None and (
@@ -1075,12 +1124,16 @@ async def generate_key_helper_fn(
     aliases: dict,
     config: dict,
     spend: float,
-    max_budget: Optional[float] = None,
+    key_max_budget: Optional[float] = None,  # key_max_budget is used to Budget Per key
+    max_budget: Optional[float] = None,  # max_budget is used to Budget Per user
     token: Optional[str] = None,
     user_id: Optional[str] = None,
+    team_id: Optional[str] = None,
     user_email: Optional[str] = None,
     max_parallel_requests: Optional[int] = None,
     metadata: Optional[dict] = {},
+    tpm_limit: Optional[int] = None,
+    rpm_limit: Optional[int] = None,
 ):
     global prisma_client, custom_db_client
 
@@ -1121,14 +1174,22 @@ async def generate_key_helper_fn(
     config_json = json.dumps(config)
     metadata_json = json.dumps(metadata)
     user_id = user_id or str(uuid.uuid4())
+    tpm_limit = tpm_limit or sys.maxsize
+    rpm_limit = rpm_limit or sys.maxsize
+    if type(team_id) is not str:
+        team_id = str(team_id)
     try:
         # Create a new verification token (you may want to enhance this logic based on your needs)
         user_data = {
             "max_budget": max_budget,
             "user_email": user_email,
             "user_id": user_id,
+            "team_id": team_id,
             "spend": spend,
             "models": models,
+            "max_parallel_requests": max_parallel_requests,
+            "tpm_limit": tpm_limit,
+            "rpm_limit": rpm_limit,
         }
         key_data = {
             "token": token,
@@ -1137,9 +1198,13 @@ async def generate_key_helper_fn(
             "aliases": aliases_json,
             "config": config_json,
             "spend": spend,
+            "max_budget": key_max_budget,
             "user_id": user_id,
+            "team_id": team_id,
             "max_parallel_requests": max_parallel_requests,
             "metadata": metadata_json,
+            "tpm_limit": tpm_limit,
+            "rpm_limit": rpm_limit,
         }
         if prisma_client is not None:
             ## CREATE USER (If necessary)
@@ -1227,20 +1292,28 @@ async def initialize(
     user_model = model
     user_debug = debug
     if debug == True:  # this needs to be first, so users can see Router init debugg
-        from litellm._logging import verbose_router_logger, verbose_proxy_logger
+        from litellm._logging import (
+            verbose_router_logger,
+            verbose_proxy_logger,
+            verbose_logger,
+        )
         import logging
 
         # this must ALWAYS remain logging.INFO, DO NOT MODIFY THIS
-
+        verbose_logger.setLevel(level=logging.INFO)  # sets package logs to info
         verbose_router_logger.setLevel(level=logging.INFO)  # set router logs to info
         verbose_proxy_logger.setLevel(level=logging.INFO)  # set proxy logs to info
     if detailed_debug == True:
-        from litellm._logging import verbose_router_logger, verbose_proxy_logger
+        from litellm._logging import (
+            verbose_router_logger,
+            verbose_proxy_logger,
+            verbose_logger,
+        )
         import logging
 
-        verbose_router_logger.setLevel(level=logging.DEBUG)  # set router logs to info
+        verbose_logger.setLevel(level=logging.DEBUG)  # set package log to debug
+        verbose_router_logger.setLevel(level=logging.DEBUG)  # set router logs to debug
         verbose_proxy_logger.setLevel(level=logging.DEBUG)  # set proxy logs to debug
-        litellm.set_verbose = True
     elif debug == False and detailed_debug == False:
         # users can control proxy debugging using env variable = 'LITELLM_LOG'
         litellm_log_setting = os.environ.get("LITELLM_LOG", "")
@@ -2073,7 +2146,6 @@ async def image_generation(
     response_model=GenerateKeyResponse,
 )
 async def generate_key_fn(
-    request: Request,
     data: GenerateKeyRequest,
     Authorization: Optional[str] = Header(None),
 ):
@@ -2084,10 +2156,12 @@ async def generate_key_fn(
 
     Parameters:
     - duration: Optional[str] - Specify the length of time the token is valid for. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d"). **(Default is set to 1 hour.)**
+    - team_id: Optional[str] - The team id of the user
     - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
     - aliases: Optional[dict] - Any alias mappings, on top of anything in the config.yaml model list. - https://docs.litellm.ai/docs/proxy/virtual_keys#managing-auth---upgradedowngrade-models
     - config: Optional[dict] - any key-specific configs, overrides config in config.yaml
     - spend: Optional[int] - Amount spent by key. Default is 0. Will be updated by proxy whenever key is used. https://docs.litellm.ai/docs/proxy/virtual_keys#managing-auth---tracking-spend
+    - max_budget: Optional[float] - Specify max budget for a given key.
     - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
     - metadata: Optional[dict] - Metadata for key, store information for key. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
 
@@ -2096,8 +2170,22 @@ async def generate_key_fn(
     - expires: (datetime) Datetime object for when key expires.
     - user_id: (str) Unique user id - used for tracking spend across multiple keys for same user id.
     """
+    global user_custom_key_generate
     verbose_proxy_logger.debug("entered /key/generate")
+
+    if user_custom_key_generate is not None:
+        result = await user_custom_key_generate(data)
+        decision = result.get("decision", True)
+        message = result.get("message", "Authentication Failed - Custom Auth Rule")
+        if not decision:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=message)
+
     data_json = data.json()  # type: ignore
+
+    # if we get max_budget passed to /key/generate, then use it as key_max_budget. Since generate_key_helper_fn is used to make new users
+    if "max_budget" in data_json:
+        data_json["key_max_budget"] = data_json.pop("max_budget", None)
+
     response = await generate_key_helper_fn(**data_json)
     return GenerateKeyResponse(
         key=response["token"], expires=response["expires"], user_id=response["user_id"]
@@ -2135,7 +2223,7 @@ async def update_key_fn(request: Request, data: UpdateKeyRequest):
 @router.post(
     "/key/delete", tags=["key management"], dependencies=[Depends(user_api_key_auth)]
 )
-async def delete_key_fn(request: Request, data: DeleteKeyRequest):
+async def delete_key_fn(data: DeleteKeyRequest):
     """
     Delete a key from the key management system.
 
@@ -2178,6 +2266,13 @@ async def info_key_fn(
                 f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
         key_info = await prisma_client.get_data(token=key)
+        ## REMOVE HASHED TOKEN INFO BEFORE RETURNING ##
+        try:
+            key_info = key_info.model_dump()  # noqa
+        except:
+            # if using pydantic v1
+            key_info = key_info.dict()
+        key_info.pop("token")
         return {"key": key, "info": key_info}
     except Exception as e:
         raise HTTPException(
@@ -2313,6 +2408,14 @@ async def user_info(
         keys = await prisma_client.get_data(
             user_id=user_id, table_name="key", query_type="find_all"
         )
+        ## REMOVE HASHED TOKEN INFO before returning ##
+        for key in keys:
+            try:
+                key = key.model_dump()  # noqa
+            except:
+                # if using pydantic v1
+                key = key.dict()
+            key.pop("token", None)
         return {"user_id": user_id, "user_info": user_info, "keys": keys}
     except Exception as e:
         raise HTTPException(
@@ -2390,13 +2493,19 @@ async def add_new_model(model_params: ModelParams):
     tags=["model management"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def model_info_v1(request: Request):
+async def model_info_v1(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     global llm_model_list, general_settings, user_config_file_path, proxy_config
 
     # Load existing config
     config = await proxy_config.get_config()
 
-    all_models = config["model_list"]
+    if len(user_api_key_dict.models) > 0:
+        model_names = user_api_key_dict.models
+        all_models = [m for m in config["model_list"] if m in model_names]
+    else:
+        all_models = config["model_list"]
     for model in all_models:
         # provided model_info in config.yaml
         model_info = model.get("model_info", {})
@@ -2685,7 +2794,11 @@ async def update_config(config_info: ConfigYAML):
         raise HTTPException(status_code=500, detail=f"An error occurred - {str(e)}")
 
 
-@router.get("/config/yaml", tags=["config.yaml"])
+@router.get(
+    "/config/yaml",
+    tags=["config.yaml"],
+    dependencies=[Depends(user_api_key_auth)],
+)
 async def config_yaml_endpoint(config_info: ConfigYAML):
     """
     This is a mock endpoint, to show what you can set in config.yaml details in the Swagger UI.
@@ -2706,9 +2819,15 @@ async def config_yaml_endpoint(config_info: ConfigYAML):
     return {"hello": "world"}
 
 
-@router.get("/test", tags=["health"])
+@router.get(
+    "/test",
+    tags=["health"],
+    dependencies=[Depends(user_api_key_auth)],
+)
 async def test_endpoint(request: Request):
     """
+    [DEPRECATED] use `/health/liveliness` instead.
+
     A test endpoint that pings the proxy server to check if it's healthy.
 
     Parameters:
@@ -2723,7 +2842,7 @@ async def test_endpoint(request: Request):
 
 @router.get("/health", tags=["health"], dependencies=[Depends(user_api_key_auth)])
 async def health_endpoint(
-    request: Request,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     model: Optional[str] = fastapi.Query(
         None, description="Specify the model name (optional)"
     ),
@@ -2758,6 +2877,11 @@ async def health_endpoint(
             detail={"error": "Model list not initialized"},
         )
 
+    ### FILTER MODELS FOR ONLY THOSE USER HAS ACCESS TO ###
+    if len(user_api_key_dict.models) > 0:
+        allowed_model_names = user_api_key_dict.models
+    else:
+        allowed_model_names = []  #
     if use_background_health_checks:
         return health_check_results
     else:
@@ -2773,21 +2897,45 @@ async def health_endpoint(
         }
 
 
-@router.get("/health/readiness", tags=["health"])
+@router.get(
+    "/health/readiness",
+    tags=["health"],
+    dependencies=[Depends(user_api_key_auth)],
+)
 async def health_readiness():
     """
     Unprotected endpoint for checking if worker can receive requests
     """
     global prisma_client
+
+    cache_type = None
+    if litellm.cache is not None:
+        cache_type = litellm.cache.type
     if prisma_client is not None:  # if db passed in, check if it's connected
         if prisma_client.db.is_connected() == True:
-            return {"status": "healthy", "db": "connected"}
+            response_object = {"db": "connected"}
+
+            return {
+                "status": "healthy",
+                "db": "connected",
+                "cache": cache_type,
+                "success_callbacks": litellm.success_callback,
+            }
     else:
-        return {"status": "healthy", "db": "Not connected"}
+        return {
+            "status": "healthy",
+            "db": "Not connected",
+            "cache": cache_type,
+            "success_callbacks": litellm.success_callback,
+        }
     raise HTTPException(status_code=503, detail="Service Unhealthy")
 
 
-@router.get("/health/liveliness", tags=["health"])
+@router.get(
+    "/health/liveliness",
+    tags=["health"],
+    dependencies=[Depends(user_api_key_auth)],
+)
 async def health_liveliness():
     """
     Unprotected endpoint for checking if worker is alive
@@ -2795,12 +2943,12 @@ async def health_liveliness():
     return "I'm alive!"
 
 
-@router.get("/")
+@router.get("/", dependencies=[Depends(user_api_key_auth)])
 async def home(request: Request):
     return "LiteLLM: RUNNING"
 
 
-@router.get("/routes")
+@router.get("/routes", dependencies=[Depends(user_api_key_auth)])
 async def get_routes():
     """
     Get a list of available routes in the FastAPI application.
@@ -2820,7 +2968,7 @@ async def get_routes():
 
 @router.on_event("shutdown")
 async def shutdown_event():
-    global prisma_client, master_key, user_custom_auth
+    global prisma_client, master_key, user_custom_auth, user_custom_key_generate
     if prisma_client:
         verbose_proxy_logger.debug("Disconnecting from Prisma")
         await prisma_client.disconnect()
@@ -2830,7 +2978,7 @@ async def shutdown_event():
 
 
 def cleanup_router_config_variables():
-    global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, use_background_health_checks, health_check_interval, prisma_client, custom_db_client
+    global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, use_background_health_checks, health_check_interval, prisma_client, custom_db_client
 
     # Set all variables to None
     master_key = None
@@ -2838,6 +2986,7 @@ def cleanup_router_config_variables():
     otel_logging = None
     user_custom_auth = None
     user_custom_auth_path = None
+    user_custom_key_generate = None
     use_background_health_checks = None
     health_check_interval = None
     prisma_client = None

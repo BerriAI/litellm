@@ -13,7 +13,7 @@ class LiteLLMBase(BaseModel):
     def json(self, **kwargs):
         try:
             return self.model_dump()  # noqa
-        except:
+        except Exception as e:
             # if using pydantic v1
             return self.dict()
 
@@ -128,9 +128,13 @@ class GenerateKeyRequest(LiteLLMBase):
     aliases: Optional[dict] = {}
     config: Optional[dict] = {}
     spend: Optional[float] = 0
+    max_budget: Optional[float] = None
     user_id: Optional[str] = None
+    team_id: Optional[str] = None
     max_parallel_requests: Optional[int] = None
     metadata: Optional[dict] = {}
+    tpm_limit: Optional[int] = None
+    rpm_limit: Optional[int] = None
 
 
 class UpdateKeyRequest(LiteLLMBase):
@@ -142,9 +146,12 @@ class UpdateKeyRequest(LiteLLMBase):
     aliases: Optional[dict] = None
     config: Optional[dict] = None
     spend: Optional[float] = None
+    max_budget: Optional[float] = None
     user_id: Optional[str] = None
     max_parallel_requests: Optional[int] = None
     metadata: Optional[dict] = None
+    tpm_limit: Optional[int] = None
+    rpm_limit: Optional[int] = None
 
 
 class UserAPIKeyAuth(LiteLLMBase):  # the expected response object for user api key auth
@@ -157,10 +164,13 @@ class UserAPIKeyAuth(LiteLLMBase):  # the expected response object for user api 
     aliases: dict = {}
     config: dict = {}
     spend: Optional[float] = 0
+    max_budget: Optional[float] = None
     user_id: Optional[str] = None
     max_parallel_requests: Optional[int] = None
     duration: str = "1h"
     metadata: dict = {}
+    tpm_limit: Optional[int] = None
+    rpm_limit: Optional[int] = None
 
 
 class GenerateKeyResponse(LiteLLMBase):
@@ -170,7 +180,7 @@ class GenerateKeyResponse(LiteLLMBase):
 
 
 class DeleteKeyRequest(LiteLLMBase):
-    keys: List[str]
+    keys: List
 
 
 class NewUserRequest(GenerateKeyRequest):
@@ -287,6 +297,7 @@ class ConfigYAML(LiteLLMBase):
 class LiteLLM_VerificationToken(LiteLLMBase):
     token: str
     spend: float = 0.0
+    max_budget: Optional[float] = None
     expires: Union[str, None]
     models: List[str]
     aliases: Dict[str, str] = {}

@@ -449,6 +449,7 @@ class PrismaClient:
                         "update": {},  # don't do anything if it already exists
                     },
                 )
+                verbose_proxy_logger.info(f"Data Inserted into Keys Table")
                 return new_verification_token
             elif table_name == "user":
                 db_data = self.jsonify_object(data=data)
@@ -459,6 +460,7 @@ class PrismaClient:
                         "update": {},  # don't do anything if it already exists
                     },
                 )
+                verbose_proxy_logger.info(f"Data Inserted into User Table")
                 return new_user_row
             elif table_name == "config":
                 """
@@ -483,6 +485,7 @@ class PrismaClient:
 
                     tasks.append(updated_table_row)
                 await asyncio.gather(*tasks)
+                verbose_proxy_logger.info(f"Data Inserted into Config Table")
             elif table_name == "spend":
                 db_data = self.jsonify_object(data=data)
                 new_spend_row = await self.db.litellm_spendlogs.upsert(
@@ -492,6 +495,7 @@ class PrismaClient:
                         "update": {},  # don't do anything if it already exists
                     },
                 )
+                verbose_proxy_logger.info(f"Data Inserted into Spend Table")
                 return new_spend_row
 
         except Exception as e:
@@ -530,7 +534,11 @@ class PrismaClient:
                     where={"token": token},  # type: ignore
                     data={**db_data},  # type: ignore
                 )
-                print_verbose("\033[91m" + f"DB write succeeded {response}" + "\033[0m")
+                print_verbose(
+                    "\033[91m"
+                    + f"DB Token Table update succeeded {response}"
+                    + "\033[0m"
+                )
                 return {"token": token, "data": db_data}
             elif user_id is not None:
                 """
@@ -539,6 +547,23 @@ class PrismaClient:
                 update_user_row = await self.db.litellm_usertable.update(
                     where={"user_id": user_id},  # type: ignore
                     data={**db_data},  # type: ignore
+                )
+                if update_user_row is None:
+                    # if the provided user does not exist, STILL Track this!
+                    # make a new user with {"user_id": user_id, "spend": data['spend']}
+
+                    db_data["user_id"] = user_id
+                    update_user_row = await self.db.litellm_usertable.upsert(
+                        where={"user_id": user_id},  # type: ignore
+                        data={
+                            "create": {**db_data},  # type: ignore
+                            "update": {},  # don't do anything if it already exists
+                        },
+                    )
+                print_verbose(
+                    "\033[91m"
+                    + f"DB User Table - update succeeded {update_user_row}"
+                    + "\033[0m"
                 )
                 return {"user_id": user_id, "data": db_data}
         except Exception as e:

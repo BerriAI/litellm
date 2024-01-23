@@ -302,10 +302,7 @@ def test_gemini_pro_vision():
         assert prompt_tokens == 263  # the gemini api returns 263 to us
 
     except Exception as e:
-        import traceback
-
-        traceback.print_exc()
-        raise e
+        pytest.fail(f"An exception occurred - {str(e)}")
 
 
 # test_gemini_pro_vision()

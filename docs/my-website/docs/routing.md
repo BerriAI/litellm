@@ -302,6 +302,7 @@ asyncio.run(router_acompletion())
 
 The timeout set in router is for the entire length of the call, and is passed down to the completion() call level as well. 
 
+**Global Timeouts**
 ```python
 from litellm import Router 
 
@@ -313,6 +314,36 @@ router = Router(model_list=model_list,
 print(response)
 ```
 
+**Timeouts per model**
+
+```python
+from litellm import Router 
+import asyncio
+
+model_list = [{
+	"model_name": "gpt-3.5-turbo",
+	"litellm_params": {
+		"model": "azure/chatgpt-v-2",
+		"api_key": os.getenv("AZURE_API_KEY"),
+		"api_version": os.getenv("AZURE_API_VERSION"),
+		"api_base": os.getenv("AZURE_API_BASE"),
+		"timeout": 300 # sets a 5 minute timeout
+		"stream_timeout": 30 # sets a 30s timeout for streaming calls
+	}
+}]
+
+# init router
+router = Router(model_list=model_list, routing_strategy="least-busy")
+async def router_acompletion():
+	response = await router.acompletion(
+		model="gpt-3.5-turbo", 
+		messages=[{"role": "user", "content": "Hey, how's it going?"}]
+	)
+	print(response)
+	return response
+
+asyncio.run(router_acompletion())
+```
 ### Cooldowns
 
 Set the limit for how many calls a model is allowed to fail in a minute, before being cooled down for a minute. 
@@ -602,17 +633,63 @@ def __init__(
 	num_retries: int = 0,
 	timeout: Optional[float] = None,
 	default_litellm_params={},  # default params for Router.chat.completion.create
-	set_verbose: bool = False,
 	fallbacks: List = [],
-	allowed_fails: Optional[int] = None,
+	allowed_fails: Optional[int] = None, # Number of times a deployment can failbefore being added to cooldown
+	cooldown_time: float = 1,  # (seconds) time to cooldown a deployment after failure
 	context_window_fallbacks: List = [],
 	model_group_alias: Optional[dict] = {},
-	retry_after: int = 0,  # min time to wait before retrying a failed request
+	retry_after: int = 0,  # (min) time to wait before retrying a failed request
 	routing_strategy: Literal[
 		"simple-shuffle",
 		"least-busy",
 		"usage-based-routing",
 		"latency-based-routing",
 	] = "simple-shuffle",
+
+	## DEBUGGING ##
+	set_verbose: bool = False,	# set this to True for seeing logs
+    debug_level: Literal["DEBUG", "INFO"] = "INFO", # set this to "DEBUG" for detailed debugging
 ):
+```
+
+## Debugging Router
+### Basic Debugging
+Set `Router(set_verbose=True)`
+
+```python
+from litellm import Router
+
+router = Router(
+    model_list=model_list,
+    set_verbose=True
+)
+```
+
+### Detailed Debugging
+Set `Router(set_verbose=True,debug_level="DEBUG")`
+
+```python
+from litellm import Router
+
+router = Router(
+    model_list=model_list,
+    set_verbose=True,
+    debug_level="DEBUG"  # defaults to INFO
+)
+```
+
+### Very Detailed Debugging
+Set `litellm.set_verbose=True` and `Router(set_verbose=True,debug_level="DEBUG")`
+
+```python
+from litellm import Router
+import litellm
+
+litellm.set_verbose = True
+
+router = Router(
+    model_list=model_list,
+    set_verbose=True,
+    debug_level="DEBUG"  # defaults to INFO
+)
 ```

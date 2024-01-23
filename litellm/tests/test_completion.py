@@ -224,7 +224,7 @@ def test_completion_gpt4_vision():
 
 
 def test_completion_azure_gpt4_vision():
-    # azure gpt-4 vision takes 5s to respond
+    # azure/gpt-4 vision takes 5seconds to respond
     try:
         litellm.set_verbose = True
         response = completion(
@@ -268,7 +268,7 @@ def test_completion_azure_gpt4_vision():
         pytest.fail(f"Error occurred: {e}")
 
 
-test_completion_azure_gpt4_vision()
+# test_completion_azure_gpt4_vision()
 
 
 @pytest.mark.skip(reason="this test is flaky")
@@ -990,9 +990,9 @@ def test_azure_openai_ad_token():
         print("azure ad token respoonse\n")
         print(response)
         litellm.input_callback = []
-    except:
+    except Exception as e:
         litellm.input_callback = []
-        pass
+        pytest.fail(f"An exception occurs - {str(e)}")
 
 
 # test_azure_openai_ad_token()
@@ -1269,6 +1269,8 @@ def test_completion_together_ai():
             "Cost for completion call together-computer/llama-2-70b: ",
             f"${float(cost):.10f}",
         )
+    except litellm.Timeout as e:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -1370,21 +1372,51 @@ def test_customprompt_together_ai():
 
 def test_completion_sagemaker():
     try:
-        print("testing sagemaker")
         litellm.set_verbose = True
+        print("testing sagemaker")
         response = completion(
             model="sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4",
             messages=messages,
             temperature=0.2,
             max_tokens=80,
+            input_cost_per_second=0.000420,
         )
         # Add any assertions here to check the response
         print(response)
+        cost = completion_cost(completion_response=response)
+        print("calculated cost", cost)
+        assert (
+            cost > 0.0 and cost < 1.0
+        )  # should never be > $1 for a single completion call
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
 
 # test_completion_sagemaker()
+
+
+def test_completion_sagemaker_stream():
+    try:
+        litellm.set_verbose = False
+        print("testing sagemaker")
+        response = completion(
+            model="sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4",
+            messages=messages,
+            temperature=0.2,
+            max_tokens=80,
+            stream=True,
+        )
+
+        complete_streaming_response = ""
+
+        for chunk in response:
+            print(chunk)
+            complete_streaming_response += chunk.choices[0].delta.content or ""
+        # Add any assertions here to check the response
+        # print(response)
+        assert len(complete_streaming_response) > 0
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 
 def test_completion_chat_sagemaker():
