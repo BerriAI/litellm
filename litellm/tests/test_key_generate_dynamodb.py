@@ -392,7 +392,7 @@ def test_call_with_user_key_budget(custom_db_client):
 
         asyncio.run(test())
     except Exception as e:
-        error_detail = e.detail
+        error_detail = e.message
         assert "Authentication Error, ExceededTokenBudget:" in error_detail
         print(vars(e))
 
@@ -465,6 +465,6 @@ def test_call_with_key_over_budget_stream(custom_db_client):
 
         asyncio.run(test())
     except Exception as e:
-        error_detail = e.detail
+        error_detail = e.message
         assert "Authentication Error, ExceededTokenBudget:" in error_detail
         print(vars(e))

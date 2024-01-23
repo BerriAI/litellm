@@ -753,7 +753,7 @@ def test_call_with_key_over_budget(prisma_client):
 
         asyncio.run(test())
     except Exception as e:
-        error_detail = e.detail
+        error_detail = e.message
         assert "Authentication Error, ExceededTokenBudget:" in error_detail
         print(vars(e))
 
@@ -828,6 +828,6 @@ def test_call_with_key_over_budget_stream(prisma_client):
             pytest.fail(f"This should have failed!. They key crossed it's budget")
 
     except Exception as e:
-        error_detail = e.detail
+        error_detail = e.message
         assert "Authentication Error, ExceededTokenBudget:" in error_detail
         print(vars(e))
