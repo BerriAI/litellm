@@ -7715,18 +7715,9 @@ class CustomStreamWrapper:
                     self.sent_last_chunk = True
             elif self.custom_llm_provider == "sagemaker":
                 print_verbose(f"ENTERS SAGEMAKER STREAMING")
-                if len(self.completion_stream) == 0:
-                    if self.sent_last_chunk:
-                        raise StopIteration
-                    else:
-                        model_response.choices[0].finish_reason = "stop"
-                        self.sent_last_chunk = True
-                new_chunk = self.completion_stream
-                print_verbose(f"sagemaker chunk: {new_chunk}")
+                new_chunk = next(self.completion_stream)
+
                 completion_obj["content"] = new_chunk
-                self.completion_stream = self.completion_stream[
-                    len(self.completion_stream) :
-                ]
             elif self.custom_llm_provider == "petals":
                 if len(self.completion_stream) == 0:
                     if self.sent_last_chunk:
