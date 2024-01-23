@@ -132,8 +132,8 @@ def test_call_with_invalid_key(prisma_client):
         asyncio.run(test())
     except Exception as e:
         print("Got Exception", e)
-        print(e.detail)
-        assert "Authentication Error" in e.detail
+        print(e.message)
+        assert "Authentication Error" in e.message
         pass
 
 
@@ -167,7 +167,7 @@ def test_call_with_invalid_model(prisma_client):
         asyncio.run(test())
     except Exception as e:
         assert (
-            e.detail
+            e.message
             == "Authentication Error, API Key not allowed to access model. This token can only access models=['mistral']. Tried to access gemini-pro-vision"
         )
         pass
@@ -269,7 +269,7 @@ def test_call_with_key_over_budget(prisma_client):
 
         asyncio.run(test())
     except Exception as e:
-        error_detail = e.detail
+        error_detail = e.message
         assert "Authentication Error, ExceededBudget:" in error_detail
         print(vars(e))
 
@@ -344,7 +344,7 @@ def test_call_with_key_over_budget_stream(prisma_client):
 
         asyncio.run(test())
     except Exception as e:
-        error_detail = e.detail
+        error_detail = e.message
         assert "Authentication Error, ExceededBudget:" in error_detail
         print(vars(e))
 
@@ -408,8 +408,8 @@ def test_generate_and_call_with_expired_key(prisma_client):
         asyncio.run(test())
     except Exception as e:
         print("Got Exception", e)
-        print(e.detail)
-        assert "Authentication Error" in e.detail
+        print(e.message)
+        assert "Authentication Error" in e.message
         pass
 
 
@@ -480,8 +480,8 @@ def test_delete_key_auth(prisma_client):
         asyncio.run(test())
     except Exception as e:
         print("Got Exception", e)
-        print(e.detail)
-        assert "Authentication Error" in e.detail
+        print(e.message)
+        assert "Authentication Error" in e.message
         pass
 
 
@@ -593,7 +593,7 @@ def test_generate_and_update_key(prisma_client):
         asyncio.run(test())
     except Exception as e:
         print("Got Exception", e)
-        print(e.detail)
+        print(e.message)
         pytest.fail(f"An exception occurred - {str(e)}")
 
 
@@ -659,11 +659,11 @@ def test_key_generate_with_custom_auth(prisma_client):
             except Exception as e:
                 # this should fail
                 print("Got Exception", e)
-                print(e.detail)
+                print(e.message)
                 print("First request failed!. This is expected")
                 assert (
                     "This violates LiteLLM Proxy Rules. No team id provided."
-                    in e.detail
+                    in e.message
                 )
 
             request_2 = GenerateKeyRequest(
@@ -677,5 +677,5 @@ def test_key_generate_with_custom_auth(prisma_client):
         asyncio.run(test())
     except Exception as e:
         print("Got Exception", e)
-        print(e.detail)
+        print(e.message)
         pytest.fail(f"An exception occurred - {str(e)}")

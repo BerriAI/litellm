@@ -104,8 +104,8 @@ def test_call_with_invalid_key(custom_db_client):
         asyncio.run(test())
     except Exception as e:
         print("Got Exception", e)
-        print(e.detail)
-        assert "Authentication Error" in e.detail
+        print(e.message)
+        assert "Authentication Error" in e.message
         pass
 
 
@@ -138,7 +138,7 @@ def test_call_with_invalid_model(custom_db_client):
         asyncio.run(test())
     except Exception as e:
         assert (
-            e.detail
+            e.message
             == "Authentication Error, API Key not allowed to access model. This token can only access models=['mistral']. Tried to access gemini-pro-vision"
         )
         pass
@@ -240,7 +240,7 @@ def test_call_with_key_over_budget(custom_db_client):
 
         asyncio.run(test())
     except Exception as e:
-        error_detail = e.detail
+        error_detail = e.message
         assert "Authentication Error, ExceededBudget:" in error_detail
         print(vars(e))
 
@@ -312,6 +312,6 @@ def test_call_with_key_over_budget_stream(custom_db_client):
 
         asyncio.run(test())
     except Exception as e:
-        error_detail = e.detail
+        error_detail = e.message
         assert "Authentication Error, ExceededBudget:" in error_detail
         print(vars(e))
