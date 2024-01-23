@@ -1408,9 +1408,15 @@ def test_completion_sagemaker_stream():
         )
 
         complete_streaming_response = ""
-
-        for chunk in response:
+        first_chunk_id, chunk_id = None, None
+        for i, chunk in enumerate(response):
             print(chunk)
+            chunk_id = chunk.id
+            print(chunk_id)
+            if i == 0:
+                first_chunk_id = chunk_id
+            else:
+                assert chunk_id == first_chunk_id
             complete_streaming_response += chunk.choices[0].delta.content or ""
         # Add any assertions here to check the response
         # print(response)
