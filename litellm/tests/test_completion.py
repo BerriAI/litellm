@@ -1394,6 +1394,30 @@ def test_completion_sagemaker():
 # test_completion_sagemaker()
 
 
+def test_completion_sagemaker_stream():
+    try:
+        litellm.set_verbose = False
+        print("testing sagemaker")
+        response = completion(
+            model="sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4",
+            messages=messages,
+            temperature=0.2,
+            max_tokens=80,
+            stream=True,
+        )
+
+        complete_streaming_response = ""
+
+        for chunk in response:
+            print(chunk)
+            complete_streaming_response += chunk.choices[0].delta.content or ""
+        # Add any assertions here to check the response
+        # print(response)
+        assert len(complete_streaming_response) > 0
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 def test_completion_chat_sagemaker():
     try:
         messages = [{"role": "user", "content": "Hey, how's it going?"}]
