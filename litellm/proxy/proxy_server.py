@@ -2305,6 +2305,30 @@ async def info_key_fn(
         )
 
 
+@router.get(
+    "/spend/keys",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def spend_key_fn():
+    global prisma_client
+    try:
+        if prisma_client is None:
+            raise Exception(
+                f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+            )
+
+        key_info = await prisma_client.get_data(table_name="key", query_type="find_all")
+
+        return key_info
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": str(e)},
+        )
+
+
 #### USER MANAGEMENT ####
 @router.post(
     "/user/new",

@@ -391,6 +391,10 @@ class PrismaClient:
                         for r in response:
                             if isinstance(r.expires, datetime):
                                 r.expires = r.expires.isoformat()
+                elif query_type == "find_all":
+                    response = await self.db.litellm_verificationtoken.find_many(
+                        order={"spend": "desc"},
+                    )
                 print_verbose(f"PrismaClient: response={response}")
                 if response is not None:
                     return response
