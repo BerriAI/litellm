@@ -4,19 +4,19 @@ const openai = require('openai');
 process.env.DEBUG=false;
 async function runOpenAI() {
   const client = new openai.OpenAI({
-    apiKey: 'sk-yPX56TDqBpr23W7ruFG3Yg',
+    apiKey: 'sk-AbUQUhmKsghPMbOkTIntfQ',
     baseURL: 'http://0.0.0.0:8000'
   });
 
   try {
     const response = await client.chat.completions.create({
-      model: 'sagemaker',
+      model: 'azure-gpt-3.5',
       stream: true,
       max_tokens: 1000,
       messages: [
         {
           role: 'user',
-          content: 'write a 20 pg essay about YC ',
+          content: 'hi who are u ',
         },
       ],
     });
