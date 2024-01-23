@@ -178,6 +178,42 @@ def list_models():
         )
 
 
+def usage_stats():
+    import streamlit as st
+    import requests
+
+    # Check if the necessary configuration is available
+    if (
+        st.session_state.get("api_url", None) is not None
+        and st.session_state.get("proxy_key", None) is not None
+    ):
+        # Make the GET request
+        try:
+            complete_url = ""
+            if isinstance(st.session_state["api_url"], str) and st.session_state[
+                "api_url"
+            ].endswith("/"):
+                complete_url = f"{st.session_state['api_url']}models"
+            else:
+                complete_url = f"{st.session_state['api_url']}/models"
+            response = requests.get(
+                complete_url,
+                headers={"Authorization": f"Bearer {st.session_state['proxy_key']}"},
+            )
+            # Check if the request was successful
+            if response.status_code == 200:
+                models = response.json()
+                st.write(models)  # or st.json(models) to pretty print the JSON
+            else:
+                st.error(f"Failed to get models. Status code: {response.status_code}")
+        except Exception as e:
+            st.error(f"An error occurred while requesting models: {e}")
+    else:
+        st.warning(
+            "Please configure the Proxy Endpoint and Proxy Key on the Proxy Setup page."
+        )
+
+
 def create_key():
     import streamlit as st
     import json, requests, uuid
@@ -338,6 +374,7 @@ def admin_page(is_admin="NOT_GIVEN"):
             "Add Models",
             "List Models",
             "Create Key",
+            "Usage Stats",
             "End-User Auth",
         ),
     )
@@ -369,6 +406,8 @@ def admin_page(is_admin="NOT_GIVEN"):
         list_models()
     elif page == "Create Key":
         create_key()
+    elif page == "Usage Stats":
+        usage_stats()
 
 
 admin_page()
