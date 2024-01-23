@@ -411,7 +411,7 @@ async def user_api_key_auth(request: Request, api_key: str) -> UserAPIKeyAuth:
             return UserAPIKeyAuth(api_key=api_key)
         raise Exception
     except: 
-        raise Exception
+        raise Exception("Failed Custom Authentication")
 ```
 
 ### 2. Pass the filepath (relative to the config.yaml)
