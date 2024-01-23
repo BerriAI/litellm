@@ -6,6 +6,9 @@ from dotenv import load_dotenv
 load_dotenv()
 import streamlit as st
 import base64, os, json, uuid, requests
+import pandas as pd
+import plotly.express as px
+import click
 
 # Replace your_base_url with the actual URL where the proxy auth app is hosted
 your_base_url = os.getenv("BASE_URL")  # Example base URL
@@ -75,7 +78,7 @@ def add_new_model():
         and st.session_state.get("proxy_key", None) is None
     ):
         st.warning(
-            "Please configure the Proxy Endpoint and Proxy Key on the Proxy Setup page."
+            f"Please configure the Proxy Endpoint and Proxy Key on the Proxy Setup page. Currently set Proxy Endpoint: {st.session_state.get('api_url', None)} and Proxy Key: {st.session_state.get('proxy_key', None)}"
         )
 
     model_name = st.text_input(
@@ -174,11 +177,11 @@ def list_models():
             st.error(f"An error occurred while requesting models: {e}")
     else:
         st.warning(
-            "Please configure the Proxy Endpoint and Proxy Key on the Proxy Setup page."
+            f"Please configure the Proxy Endpoint and Proxy Key on the Proxy Setup page. Currently set Proxy Endpoint: {st.session_state.get('api_url', None)} and Proxy Key: {st.session_state.get('proxy_key', None)}"
         )
 
 
-def usage_stats():
+def spend_per_key():
     import streamlit as st
     import requests
 
@@ -193,25 +196,48 @@ def usage_stats():
             if isinstance(st.session_state["api_url"], str) and st.session_state[
                 "api_url"
             ].endswith("/"):
-                complete_url = f"{st.session_state['api_url']}models"
+                complete_url = f"{st.session_state['api_url']}/spend/keys"
             else:
-                complete_url = f"{st.session_state['api_url']}/models"
+                complete_url = f"{st.session_state['api_url']}/spend/keys"
             response = requests.get(
                 complete_url,
                 headers={"Authorization": f"Bearer {st.session_state['proxy_key']}"},
             )
             # Check if the request was successful
             if response.status_code == 200:
-                models = response.json()
-                st.write(models)  # or st.json(models) to pretty print the JSON
+                spend_per_key = response.json()
+                # Create DataFrame
+                spend_df = pd.DataFrame(spend_per_key)
+
+                # Display the spend per key as a graph
+                st.write("Spend per Key - Top 10:")
+                top_10_df = spend_df.nlargest(10, "spend")
+                fig = px.bar(
+                    top_10_df,
+                    x="token",
+                    y="spend",
+                    title="Top 10 Spend per Key",
+                    height=500,  # Adjust the height
+                    width=800,  # Adjust the width)
+                )
+                st.plotly_chart(fig)
+
+                # Display the spend per key as a table
+                st.write("Spend per Key - Full Table:")
+                st.table(spend_df)
+
             else:
                 st.error(f"Failed to get models. Status code: {response.status_code}")
         except Exception as e:
             st.error(f"An error occurred while requesting models: {e}")
     else:
         st.warning(
-            "Please configure the Proxy Endpoint and Proxy Key on the Proxy Setup page."
+            f"Please configure the Proxy Endpoint and Proxy Key on the Proxy Setup page. Currently set Proxy Endpoint: {st.session_state.get('api_url', None)} and Proxy Key: {st.session_state.get('proxy_key', None)}"
         )
+
+
+def spend_per_user():
+    pass
 
 
 def create_key():
@@ -223,7 +249,7 @@ def create_key():
         and st.session_state.get("proxy_key", None) is None
     ):
         st.warning(
-            "Please configure the Proxy Endpoint and Proxy Key on the Proxy Setup page."
+            f"Please configure the Proxy Endpoint and Proxy Key on the Proxy Setup page. Currently set Proxy Endpoint: {st.session_state.get('api_url', None)} and Proxy Key: {st.session_state.get('proxy_key', None)}"
         )
 
     duration = st.text_input("Duration - Can be in (h,m,s)", placeholder="1h")
@@ -271,7 +297,7 @@ def update_config():
         and st.session_state.get("proxy_key", None) is None
     ):
         st.warning(
-            "Please configure the Proxy Endpoint and Proxy Key on the Proxy Setup page."
+            f"Please configure the Proxy Endpoint and Proxy Key on the Proxy Setup page. Currently set Proxy Endpoint: {st.session_state.get('api_url', None)} and Proxy Key: {st.session_state.get('proxy_key', None)}"
         )
 
     st.markdown("#### Alerting")
@@ -360,12 +386,16 @@ def update_config():
             raise e
 
 
-def admin_page(is_admin="NOT_GIVEN"):
+def admin_page(is_admin="NOT_GIVEN", input_api_url=None, input_proxy_key=None):
     # Display the form for the admin to set the proxy URL and allowed email subdomain
+    st.set_page_config(
+        layout="wide",  # Use "wide" layout for more space
+    )
     st.header("Admin Configuration")
     st.session_state.setdefault("is_admin", is_admin)
     # Add a navigation sidebar
     st.sidebar.title("Navigation")
+
     page = st.sidebar.radio(
         "Go to",
         (
@@ -374,23 +404,31 @@ def admin_page(is_admin="NOT_GIVEN"):
             "Add Models",
             "List Models",
             "Create Key",
-            "Usage Stats",
+            "View Spend Per Key",
+            "View Spend Per User",
             "End-User Auth",
         ),
     )
     # Display different pages based on navigation selection
     if page == "Connect to Proxy":
         # Use text inputs with intermediary variables
-        input_api_url = st.text_input(
-            "Proxy Endpoint",
-            value=st.session_state.get("api_url", ""),
-            placeholder="http://0.0.0.0:8000",
-        )
-        input_proxy_key = st.text_input(
-            "Proxy Key",
-            value=st.session_state.get("proxy_key", ""),
-            placeholder="sk-...",
-        )
+        if input_api_url is None:
+            input_api_url = st.text_input(
+                "Proxy Endpoint",
+                value=st.session_state.get("api_url", ""),
+                placeholder="http://0.0.0.0:8000",
+            )
+        else:
+            st.session_state["api_url"] = input_api_url
+
+        if input_proxy_key is None:
+            input_proxy_key = st.text_input(
+                "Proxy Key",
+                value=st.session_state.get("proxy_key", ""),
+                placeholder="sk-...",
+            )
+        else:
+            st.session_state["proxy_key"] = input_proxy_key
         # When the "Save" button is clicked, update the session state
         if st.button("Save"):
             st.session_state["api_url"] = input_api_url
@@ -406,8 +444,21 @@ def admin_page(is_admin="NOT_GIVEN"):
         list_models()
     elif page == "Create Key":
         create_key()
-    elif page == "Usage Stats":
-        usage_stats()
+    elif page == "View Spend Per Key":
+        spend_per_key()
+    elif page == "View Spend Per User":
+        spend_per_user()
 
 
-admin_page()
+# admin_page()
+
+
+@click.command()
+@click.option("--proxy_endpoint", type=str, help="Proxy Endpoint")
+@click.option("--proxy_master_key", type=str, help="Proxy Master Key")
+def main(proxy_endpoint, proxy_master_key):
+    admin_page(input_api_url=proxy_endpoint, input_proxy_key=proxy_master_key)
+
+
+if __name__ == "__main__":
+    main()
