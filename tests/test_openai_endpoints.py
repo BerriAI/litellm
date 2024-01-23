@@ -68,6 +68,7 @@ async def chat_completion(session, key):
 
         if status != 200:
             raise Exception(f"Request did not return a 200 status code: {status}")
+        return await response.json()
 
 
 @pytest.mark.asyncio
