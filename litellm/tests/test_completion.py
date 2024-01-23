@@ -1387,6 +1387,7 @@ def test_completion_sagemaker():
         assert (
             cost > 0.0 and cost < 1.0
         )  # should never be > $1 for a single completion call
+        raise Exception("it worked!")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
