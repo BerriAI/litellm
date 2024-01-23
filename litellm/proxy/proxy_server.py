@@ -497,6 +497,8 @@ async def user_api_key_auth(
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_401_UNAUTHORIZED),
             )
+        elif isinstance(e, ProxyException):
+            raise e
         raise ProxyException(
             message="Authentication Error, " + str(e),
             type="auth_error",
