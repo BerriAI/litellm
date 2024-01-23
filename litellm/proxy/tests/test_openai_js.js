@@ -4,22 +4,28 @@ const openai = require('openai');
 process.env.DEBUG=false;
 async function runOpenAI() {
   const client = new openai.OpenAI({
-    apiKey: 'your_api_key_here',
+    apiKey: 'sk-yPX56TDqBpr23W7ruFG3Yg',
     baseURL: 'http://0.0.0.0:8000'
   });
 
   try {
     const response = await client.chat.completions.create({
-      model: 'azure-gpt-3.5',
+      model: 'sagemaker',
+      stream: true,
+      max_tokens: 1000,
       messages: [
         {
           role: 'user',
-          content: 'this is a test request, write a short poem'.repeat(2000),
+          content: 'write a 20 pg essay about YC ',
         },
       ],
     });
 
     console.log(response);
+    for await (const chunk of response) {
+      console.log(chunk);
+      console.log(chunk.choices[0].delta.content);
+    }
   } catch (error) {
     console.log("got this exception from server");
     console.error(error);
