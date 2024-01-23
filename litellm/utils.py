@@ -1066,17 +1066,23 @@ class Logging:
             self.model_call_details["cache_hit"] = cache_hit
             ## if model in model cost map - log the response cost
             ## else set cost to None
-            if (
-                result is not None
-                and (
-                    isinstance(result, ModelResponse)
-                    or isinstance(result, EmbeddingResponse)
-                )
-                and result.model in litellm.model_cost
+            verbose_logger.debug(f"Model={self.model}; result={result}")
+            if result is not None and (
+                isinstance(result, ModelResponse)
+                or isinstance(result, EmbeddingResponse)
             ):
-                self.model_call_details["response_cost"] = litellm.completion_cost(
-                    completion_response=result,
-                )
+                try:
+                    self.model_call_details["response_cost"] = litellm.completion_cost(
+                        completion_response=result,
+                    )
+                    verbose_logger.debug(
+                        f"Model={self.model}; cost={self.model_call_details['response_cost']}"
+                    )
+                except litellm.NotFoundError as e:
+                    verbose_logger.debug(
+                        f"Model={self.model} not found in completion cost map."
+                    )
+                    self.model_call_details["response_cost"] = None
             else:  # streaming chunks + image gen.
                 self.model_call_details["response_cost"] = None
 
