@@ -1067,9 +1067,13 @@ class Logging:
             ## if model in model cost map - log the response cost
             ## else set cost to None
             verbose_logger.debug(f"Model={self.model}; result={result}")
-            if result is not None and (
-                isinstance(result, ModelResponse)
-                or isinstance(result, EmbeddingResponse)
+            if (
+                result is not None
+                and (
+                    isinstance(result, ModelResponse)
+                    or isinstance(result, EmbeddingResponse)
+                )
+                and self.stream != True
             ):
                 try:
                     self.model_call_details["response_cost"] = litellm.completion_cost(
@@ -1104,6 +1108,12 @@ class Logging:
         self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs
     ):
         verbose_logger.debug(f"Logging Details LiteLLM-Success Call")
+        start_time, end_time, result = self._success_handler_helper_fn(
+            start_time=start_time,
+            end_time=end_time,
+            result=result,
+            cache_hit=cache_hit,
+        )
         # print(f"original response in success handler: {self.model_call_details['original_response']}")
         try:
             verbose_logger.debug(f"success callbacks: {litellm.success_callback}")
@@ -1119,6 +1129,8 @@ class Logging:
                         complete_streaming_response = litellm.stream_chunk_builder(
                             self.sync_streaming_chunks,
                             messages=self.model_call_details.get("messages", None),
+                            start_time=start_time,
+                            end_time=end_time,
                         )
                     except:
                         complete_streaming_response = None
@@ -1132,13 +1144,19 @@ class Logging:
                 self.model_call_details[
                     "complete_streaming_response"
                 ] = complete_streaming_response
+                try:
+                    self.model_call_details["response_cost"] = litellm.completion_cost(
+                        completion_response=complete_streaming_response,
+                    )
+                    verbose_logger.debug(
+                        f"Model={self.model}; cost={self.model_call_details['response_cost']}"
+                    )
+                except litellm.NotFoundError as e:
+                    verbose_logger.debug(
+                        f"Model={self.model} not found in completion cost map."
+                    )
+                    self.model_call_details["response_cost"] = None
 
-            start_time, end_time, result = self._success_handler_helper_fn(
-                start_time=start_time,
-                end_time=end_time,
-                result=result,
-                cache_hit=cache_hit,
-            )
             for callback in litellm.success_callback:
                 try:
                     if callback == "lite_debugger":
@@ -1423,6 +1441,18 @@ class Logging:
             self.model_call_details[
                 "complete_streaming_response"
             ] = complete_streaming_response
+            try:
+                self.model_call_details["response_cost"] = litellm.completion_cost(
+                    completion_response=complete_streaming_response,
+                )
+                verbose_logger.debug(
+                    f"Model={self.model}; cost={self.model_call_details['response_cost']}"
+                )
+            except litellm.NotFoundError as e:
+                verbose_logger.debug(
+                    f"Model={self.model} not found in completion cost map."
+                )
+                self.model_call_details["response_cost"] = None
 
         for callback in litellm._async_success_callback:
             try:
