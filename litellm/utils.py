@@ -7732,10 +7732,8 @@ class CustomStreamWrapper:
                     ]
                     self.sent_last_chunk = True
             elif self.custom_llm_provider == "sagemaker":
-                print_verbose(f"ENTERS SAGEMAKER STREAMING")
-                new_chunk = next(self.completion_stream)
-
-                completion_obj["content"] = new_chunk
+                print_verbose(f"ENTERS SAGEMAKER STREAMING for chunk {chunk}")
+                completion_obj["content"] = chunk
             elif self.custom_llm_provider == "petals":
                 if len(self.completion_stream) == 0:
                     if self.sent_last_chunk:
@@ -7854,7 +7852,7 @@ class CustomStreamWrapper:
                             completion_obj["role"] = "assistant"
                             self.sent_first_chunk = True
                         model_response.choices[0].delta = Delta(**completion_obj)
-                    print_verbose(f"model_response: {model_response}")
+                    print_verbose(f"returning model_response: {model_response}")
                     return model_response
                 else:
                     return
