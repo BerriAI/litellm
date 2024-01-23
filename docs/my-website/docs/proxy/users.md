@@ -9,6 +9,13 @@ Requirements:
 
 
 ## Set Budgets
+
+
+Set `max_budget` in (USD $) param in the `/user/new` or `/key/generate` request. By default the `max_budget` is set to `null` and is not checked for keys
+
+<Tabs>
+<TabItem value="per-user" label="Per User">
+
 LiteLLM exposes a `/user/new` endpoint to create budgets for users, that persist across multiple keys. 
 
 
@@ -33,6 +40,54 @@ The request is a normal `/key/generate` request body + a `max_budget` field.
 }
 ```
 
+
+</TabItem>
+<TabItem value="per-key" label="Per Key">
+
+
+```bash
+curl 'http://0.0.0.0:8000/key/generate' \
+--header 'Authorization: Bearer <your-master-key>' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+  "team_id": "core-infra", # [OPTIONAL]
+  "max_budget": 10,
+}'
+```
+
+#### Expected Behaviour
+- Costs Per key get auto-populated in `LiteLLM_VerificationToken` Table
+- After the key crosses it's `max_budget`, requests fail
+
+Example Request to `/chat/completions` when key has crossed budget
+
+```shell
+curl --location 'http://0.0.0.0:8000/chat/completions' \
+  --header 'Content-Type: application/json' \
+  --header 'Authorization: Bearer sk-ULl_IKCVFy2EZRzQB16RUA' \
+  --data ' {
+  "model": "azure-gpt-3.5",
+  "user": "e09b4da8-ed80-4b05-ac93-e16d9eb56fca",
+  "messages": [
+      {
+      "role": "user",
+      "content": "respond in 50 lines"
+      }
+  ],
+}'
+```
+
+
+Expected Response from `/chat/completions` when key has crossed budget
+```shell
+{
+  "detail":"Authentication Error, ExceededTokenBudget: Current spend for token: 7.2e-05; Max Budget for Token: 2e-07"
+}   
+```
+
+
+</TabItem>
+</Tabs>
 
 ## Set Rate Limits 
 
