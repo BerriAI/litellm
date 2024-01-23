@@ -1528,6 +1528,9 @@ class Router:
                     max_retries_env_name = max_retries.replace("os.environ/", "")
                     max_retries = litellm.get_secret(max_retries_env_name)
                 max_retries = int(max_retries)
+                litellm_params[
+                    "max_retries"
+                ] = max_retries  # do this for testing purposes
 
             if "azure" in model_name:
                 if api_base is None:
