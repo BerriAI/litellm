@@ -152,11 +152,11 @@ class CompletionCustomHandler(
             ## RESPONSE OBJECT
             assert isinstance(
                 response_obj,
-                Union[
+                (
                     litellm.ModelResponse,
                     litellm.EmbeddingResponse,
                     litellm.ImageResponse,
-                ],
+                ),
             )
             ## KWARGS
             assert isinstance(kwargs["model"], str)
