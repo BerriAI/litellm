@@ -249,9 +249,11 @@ async def user_api_key_auth(
             if general_settings.get("allow_user_auth", False) == True:
                 return UserAPIKeyAuth()
             else:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="'allow_user_auth' not set or set to False",
+                raise ProxyException(
+                    message="'allow_user_auth' not set or set to False",
+                    type="auth_error",
+                    param=None,
+                    code=status.HTTP_403_FORBIDDEN,
                 )
         elif (
             route == "/routes"
@@ -402,9 +404,11 @@ async def user_api_key_auth(
                 )
                 if expiry_time < current_time:
                     # Token exists but is expired.
-                    raise HTTPException(
-                        status_code=status.HTTP_403_FORBIDDEN,
-                        detail=f"Authentication Error - Expired Key. Key Expiry time {expiry_time} and current time {current_time}",
+                    raise ProxyException(
+                        message=f"Authentication Error - Expired Key. Key Expiry time {expiry_time} and current time {current_time}",
+                        type="auth_error",
+                        param=None,
+                        code=status.HTTP_403_FORBIDDEN,
                     )
 
             # Token passed all checks
@@ -447,18 +451,22 @@ async def user_api_key_auth(
                     query_params = request.query_params
                     key = query_params.get("key")
                     if prisma_client.hash_token(token=key) != api_key:
-                        raise HTTPException(
-                            status_code=status.HTTP_403_FORBIDDEN,
-                            detail="user not allowed to access this key's info",
+                        raise ProxyException(
+                            message="user not allowed to access this key's info",
+                            type="auth_error",
+                            param=None,
+                            code=status.HTTP_403_FORBIDDEN,
                         )
                 elif route == "/user/info":
                     # check if user can access this route
                     query_params = request.query_params
                     user_id = query_params.get("user_id")
                     if user_id != valid_token.user_id:
-                        raise HTTPException(
-                            status_code=status.HTTP_403_FORBIDDEN,
-                            detail="user not allowed to access this key's info",
+                        raise ProxyException(
+                            message="user not allowed to access this key's info",
+                            type="auth_error",
+                            param=None,
+                            code=status.HTTP_403_FORBIDDEN,
                         )
                 elif route == "/model/info":
                     # /model/info just shows models user has access to
@@ -475,12 +483,18 @@ async def user_api_key_auth(
         # verbose_proxy_logger.debug(f"An exception occurred - {traceback.format_exc()}")
         traceback.print_exc()
         if isinstance(e, HTTPException):
-            raise e
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=f"Authentication Error, {str(e)}",
+            raise ProxyException(
+                message=getattr(e, "detail", f"Authentication Error({str(e)})"),
+                type="auth_error",
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_401_UNAUTHORIZED),
             )
+        raise ProxyException(
+            message="Authentication Error, " + str(e),
+            type="auth_error",
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_401_UNAUTHORIZED,
+        )
 
 
 def prisma_setup(database_url: Optional[str]):
@@ -2179,7 +2193,12 @@ async def generate_key_fn(
         decision = result.get("decision", True)
         message = result.get("message", "Authentication Failed - Custom Auth Rule")
         if not decision:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=message)
+            raise ProxyException(
+                message=message,
+                type="key_generate",
+                param="custom_auth_rule",
+                code=status.HTTP_403_FORBIDDEN,
+            )
 
     data_json = data.json()  # type: ignore
     response = await generate_key_helper_fn(**data_json)
