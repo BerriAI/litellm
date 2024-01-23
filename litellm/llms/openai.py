@@ -706,15 +706,16 @@ class OpenAIChatCompletion(BaseLLM):
 
             ## COMPLETION CALL
             response = openai_client.images.generate(**data, timeout=timeout)  # type: ignore
+            response = response.model_dump()  # type: ignore
             ## LOGGING
             logging_obj.post_call(
-                input=input,
+                input=prompt,
                 api_key=api_key,
                 additional_args={"complete_input_dict": data},
                 original_response=response,
             )
             # return response
-            return convert_to_model_response_object(response_object=response.model_dump(), model_response_object=model_response, response_type="image_generation")  # type: ignore
+            return convert_to_model_response_object(response_object=response, model_response_object=model_response, response_type="image_generation")  # type: ignore
         except OpenAIError as e:
             exception_mapping_worked = True
             raise e
