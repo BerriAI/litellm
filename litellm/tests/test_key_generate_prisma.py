@@ -659,6 +659,7 @@ def test_key_generate_with_custom_auth(prisma_client):
         async def test():
             await litellm.proxy.proxy_server.prisma_client.connect()
             try:
+                await litellm.proxy.proxy_server.prisma_client.connect()
                 request = GenerateKeyRequest()
                 key = await generate_key_fn(request)
                 pytest.fail(f"Expected an exception. Got {key}")
