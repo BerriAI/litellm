@@ -737,6 +737,7 @@ def test_call_with_key_over_budget(prisma_client):
                             "user_api_key_user_id": user_id,
                         }
                     },
+                    "response_cost": 0.00002,
                 },
                 completion_response=resp,
                 start_time=datetime.now(),
@@ -812,6 +813,7 @@ def test_call_with_key_over_budget_stream(prisma_client):
                             "user_api_key_user_id": user_id,
                         }
                     },
+                    "response_cost": 0.00002,
                 },
                 completion_response=ModelResponse(),
                 start_time=datetime.now(),
