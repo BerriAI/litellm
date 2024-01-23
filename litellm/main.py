@@ -1520,10 +1520,12 @@ def completion(
 
                 # fake streaming for sagemaker
                 print_verbose(f"ENTERS SAGEMAKER CUSTOMSTREAMWRAPPER")
-                resp_string = model_response["choices"][0]["message"]["content"]
+                from .llms.sagemaker import TokenIterator
+
+                tokenIterator = TokenIterator(model_response)
                 response = CustomStreamWrapper(
-                    resp_string,
-                    model,
+                    completion_stream=tokenIterator,
+                    model=model,
                     custom_llm_provider="sagemaker",
                     logging_obj=logging,
                 )
