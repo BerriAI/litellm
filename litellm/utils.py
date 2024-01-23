@@ -844,7 +844,7 @@ class Logging:
                 curl_command += additional_args.get("request_str", None)
             elif api_base == "":
                 curl_command = self.model_call_details
-            print_verbose(f"\033[92m{curl_command}\033[0m\n")
+            verbose_logger.info(f"\033[92m{curl_command}\033[0m\n")
             if self.logger_fn and callable(self.logger_fn):
                 try:
                     self.logger_fn(
