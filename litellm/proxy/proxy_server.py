@@ -570,13 +570,8 @@ async def track_cost_callback(
         litellm_params = kwargs.get("litellm_params", {}) or {}
         proxy_server_request = litellm_params.get("proxy_server_request") or {}
         user_id = proxy_server_request.get("body", {}).get("user", None)
-        if "complete_streaming_response" in kwargs:
-            # for tracking streaming cost we pass the "messages" and the output_text to litellm.completion_cost
-            completion_response = kwargs["complete_streaming_response"]
-            response_cost = litellm.completion_cost(
-                completion_response=completion_response
-            )
-
+        if "response_cost" in kwargs:
+            response_cost = kwargs["response_cost"]
             user_api_key = kwargs["litellm_params"]["metadata"].get(
                 "user_api_key", None
             )
@@ -585,31 +580,6 @@ async def track_cost_callback(
                 "user_api_key_user_id", None
             )
 
-            verbose_proxy_logger.info(
-                f"streaming response_cost {response_cost}, for user_id {user_id}"
-            )
-            if user_api_key and (
-                prisma_client is not None or custom_db_client is not None
-            ):
-                await update_database(
-                    token=user_api_key,
-                    response_cost=response_cost,
-                    user_id=user_id,
-                    kwargs=kwargs,
-                    completion_response=completion_response,
-                    start_time=start_time,
-                    end_time=end_time,
-                )
-        elif kwargs["stream"] == False:  # for non streaming responses
-            response_cost = litellm.completion_cost(
-                completion_response=completion_response
-            )
-            user_api_key = kwargs["litellm_params"]["metadata"].get(
-                "user_api_key", None
-            )
-            user_id = user_id or kwargs["litellm_params"]["metadata"].get(
-                "user_api_key_user_id", None
-            )
             verbose_proxy_logger.info(
                 f"response_cost {response_cost}, for user_id {user_id}"
             )
@@ -625,6 +595,10 @@ async def track_cost_callback(
                     start_time=start_time,
                     end_time=end_time,
                 )
+        else:
+            raise Exception(
+                f"Model not in litellm model cost map. Add custom pricing - https://docs.litellm.ai/docs/proxy/custom_pricing"
+            )
     except Exception as e:
         verbose_proxy_logger.debug(f"error in tracking cost callback - {str(e)}")
 
