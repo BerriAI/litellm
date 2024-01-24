@@ -97,7 +97,7 @@ class ProxyLogging:
         3. /image/generation
         """
         ### ALERTING ###
-        asyncio.create_task(self.response_taking_too_long())
+        asyncio.create_task(self.response_taking_too_long(request_data=data))
 
         try:
             for callback in litellm.callbacks:
@@ -137,6 +137,8 @@ class ProxyLogging:
         start_time: Optional[float] = None,
         end_time: Optional[float] = None,
         type: Literal["hanging_request", "slow_response"] = "hanging_request",
+        request_data: Optional[dict] = None,
+        response_obj: Optional[litellm.ModelResponse] = None,
     ):
         if type == "hanging_request":
             # Simulate a long-running operation that could take more than 5 minutes
@@ -144,8 +146,12 @@ class ProxyLogging:
                 self.alerting_threshold
             )  # Set it to 5 minutes - i'd imagine this might be different for streaming, non-streaming, non-completion (embedding + img) requests
 
+            alerting_message = (
+                f"Requests are hanging - {self.alerting_threshold}s+ request time"
+            )
             await self.alerting_handler(
-                message=f"Requests are hanging - {self.alerting_threshold}s+ request time",
+                message=alerting_message
+                + f"\nRequest: {request_data}\nResponse: {response_obj}",
                 level="Medium",
             )
 
@@ -184,7 +190,9 @@ class ProxyLogging:
                     raise Exception("Missing SLACK_WEBHOOK_URL from environment")
                 payload = {"text": formatted_message}
                 headers = {"Content-type": "application/json"}
-                async with aiohttp.ClientSession() as session:
+                async with aiohttp.ClientSession(
+                    connector=aiohttp.TCPConnector(ssl=False)
+                ) as session:
                     async with session.post(
                         slack_webhook_url, json=payload, headers=headers
                     ) as response:
