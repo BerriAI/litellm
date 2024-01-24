@@ -25,6 +25,7 @@ from litellm.llms.custom_httpx.azure_dall_e_2 import (
     CustomHTTPTransport,
     AsyncCustomHTTPTransport,
 )
+from litellm.timeout import timeout as timeout_decorator
 from litellm.utils import ModelResponse, CustomStreamWrapper
 import copy
 from litellm._logging import verbose_router_logger
@@ -296,6 +297,7 @@ class Router:
         except Exception as e:
             raise e
 
+    @timeout_decorator()
     def _completion(self, model: str, messages: List[Dict[str, str]], **kwargs):
         model_name = None
         try:
@@ -336,38 +338,15 @@ class Router:
                 timeout = kwargs.get("timeout")
             else:
                 timeout = self.timeout
-            # print("PASSING TIMEOUT to thread pool", timeout)
-            import concurrent.futures
-
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                # Submit the function to the executor with a timeout
-                try:
-                    future = executor.submit(
-                        litellm.completion,
-                        **{
-                            **data,
-                            "messages": messages,
-                            "caching": self.cache_responses,
-                            "client": model_client,
-                            **kwargs,
-                        },
-                        return_when=concurrent.futures.FIRST_COMPLETED,
-                    )
-                    # print("timeout passed to function with fallbacks", timeout)
-                    response = future.result(timeout=timeout)  # type: ignore
-                except concurrent.futures.TimeoutError:
-                    # print("Operation timed out.")
-                    raise Exception
-
-            # response = litellm.completion(
-            #     **{
-            #         **data,
-            #         "messages": messages,
-            #         "caching": self.cache_responses,
-            #         "client": model_client,
-            #         **kwargs,
-            #     }
-            # )
+            response = litellm.completion(
+                **{
+                    **data,
+                    "messages": messages,
+                    "caching": self.cache_responses,
+                    "client": model_client,
+                    **kwargs,
+                }
+            )
             verbose_router_logger.info(
                 f"litellm.completion(model={model_name})\033[32m 200 OK\033[0m"
             )
