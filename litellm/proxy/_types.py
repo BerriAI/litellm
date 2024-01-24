@@ -306,6 +306,10 @@ class LiteLLM_VerificationToken(LiteLLMBase):
     user_id: Union[str, None]
     max_parallel_requests: Union[int, None]
     metadata: Dict[str, str] = {}
+    tpm_limit: Optional[int] = None
+    rpm_limit: Optional[int] = None
+    budget_duration: Optional[str] = None
+    budget_reset_at: Optional[datetime] = None
 
 
 class LiteLLM_Config(LiteLLMBase):

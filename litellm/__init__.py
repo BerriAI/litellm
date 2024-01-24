@@ -62,6 +62,9 @@ cache: Optional[
 model_alias_map: Dict[str, str] = {}
 model_group_alias_map: Dict[str, str] = {}
 max_budget: float = 0.0  # set the max budget across all providers
+budget_duration: Optional[
+    str
+] = None  # proxy only - resets budget after fixed duration. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
 _openai_completion_params = [
     "functions",
     "function_call",
