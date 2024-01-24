@@ -1,9 +1,12 @@
 import requests, types, time
 import json, uuid
 import traceback
-from typing import Optional
+from typing import Optional, Any, Union, List
+from typing_extensions import TypedDict
 import litellm
 import httpx, aiohttp, asyncio
+
+from litellm.utils import print_verbose
 from .prompt_templates.factory import prompt_factory, custom_prompt
 
 
@@ -120,35 +123,61 @@ class OllamaConfig:
             and v is not None
         }
 
-# Usage metrics are only populated when the ollama response indicates `"done": true`
+
+class ResponseJSON(TypedDict, total=False):
+    model: str
+    created_at: str
+    response: str
+    done: bool
+    context: List[int]
+    total_duration: int
+    load_duration: int
+    prompt_eval_count: Union[int, None]
+    prompt_eval_duration: int
+    eval_count: Union[int, None]
+    eval_duration: int
+
+
+# Usage metrics should only be populated when the ollama response indicates `"done": true`.
 # https://github.com/jmorganca/ollama/blob/main/docs/api.md#generate-a-completion
 class OllamaUsage:
-    def __init__(self, prompt, response_json, encoding):
+    def __init__(self, prompt: str, response_json: ResponseJSON, encoding: Any):
         self.prompt = prompt
-        self.done = response_json["done"]
-        self.prompt_tokens = response_json.get("prompt_eval_count", self._prompt_tokens_fallback(prompt, encoding))  # type: ignore
-        self.completion_tokens = response_json.get("eval_count", self._completion_tokens_fallback(response_json, encoding))  # type: ignore
+        self.response_json = response_json
+        self.encoding = encoding
 
     def get_usage(self):
-        if self.done == False:
+        if not self._done():
             return litellm.Usage(
                 prompt_tokens=None,
                 completion_tokens=None,
                 total_tokens=None,
             )
 
+        # metrics are sometimes missing from the response, so also use a fallback mechanism
+        prompt_tokens = self.response_json.get("prompt_eval_count", self._prompt_tokens_fallback())
+        completion_tokens = self.response_json.get("eval_count", self._completion_tokens_fallback())
+
         return litellm.Usage(
-            prompt_tokens=self.prompt_tokens,
-            completion_tokens=self.completion_tokens,
-            total_tokens=self.prompt_tokens + self.completion_tokens,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
         )
 
-    def _prompt_tokens_fallback(self, prompt, encoding):
-        return len(encoding.encode(prompt))
+    def _done(self):
+       return self.response_json["done"] == True
 
-    def _completion_tokens_fallback(self, response_json, encoding):
-        response = response_json.get("response", "")
+    def _prompt_tokens_fallback(self):
+        encoding = self.encoding
+        print_verbose(f"Warning: `prompt_eval_count` missing from response, estimating using {encoding.name} encoding.")
+        return len(encoding.encode(self.prompt))
+
+    def _completion_tokens_fallback(self):
+        encoding = self.encoding
+        print_verbose(f"Warning: `eval_count` missing from response, estimating using {encoding.name} encoding.")
+        response = self.response_json.get("response", "")
         return len(encoding.encode(response))
+
 
 # ollama implementation
 def get_ollama_response(

@@ -1,5 +1,6 @@
 import sys, os
 import traceback
+from typing import List
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -11,8 +12,8 @@ sys.path.insert(
 import pytest
 
 import litellm
-from litellm.llms.ollama import OllamaUsage
-from litellm.llms.ollama_chat import OllamaChatUsage
+from litellm.llms.ollama import OllamaUsage, ResponseJSON
+from litellm.llms.ollama_chat import ChatResponseJSON, MessageJSON, OllamaChatUsage
 
 import tiktoken
 encoding = tiktoken.get_encoding("cl100k_base")
@@ -67,13 +68,13 @@ def test_ollama_json_mode():
 
 def test_ollama_usage():
     # stubbed mid-streaming response
-    response_json = {
+    response: ResponseJSON = {
         "response": "The",
         "done": False
     }
     prompt = "Why is the sky blue?"
 
-    usage = OllamaUsage(prompt, response_json, encoding).get_usage()
+    usage = OllamaUsage(prompt, response, encoding).get_usage()
 
     assert isinstance(usage, litellm.Usage)
     assert 'prompt_tokens' not in usage.__dict__
@@ -81,14 +82,14 @@ def test_ollama_usage():
     assert 'total_tokens' not in usage.__dict__
 
     # stubbed final stream response
-    response_json = {
+    response: ResponseJSON = {
         "response": "",
         "done": True,
         "prompt_eval_count": 26,
         "eval_count": 290
     }
 
-    usage = OllamaUsage(prompt, response_json, encoding).get_usage()
+    usage = OllamaUsage(prompt, response, encoding).get_usage()
 
     assert isinstance(usage, litellm.Usage)
     assert usage.prompt_tokens == 26
@@ -96,12 +97,12 @@ def test_ollama_usage():
     assert usage.total_tokens == 316
 
     # stubbed final stream response, with missing metrics keys
-    response_json = {
+    response: ResponseJSON = {
         "response": "",
         "done": True,
     }
 
-    usage = OllamaUsage(prompt, response_json, encoding).get_usage()
+    usage = OllamaUsage(prompt, response, encoding).get_usage()
 
     assert isinstance(usage, litellm.Usage)
     assert usage.prompt_tokens == 6
@@ -110,14 +111,14 @@ def test_ollama_usage():
 
     # stubbed non-streamed response
     # see: https://github.com/jmorganca/ollama/blob/main/docs/api.md#response-1
-    response_json = {
+    response: ResponseJSON = {
         "response": "The sky is blue because it is the color of the sky.",
         "done": True,
         "prompt_eval_count": 26,
         "eval_count": 290
     }
 
-    usage = OllamaUsage(prompt, response_json, encoding).get_usage()
+    usage = OllamaUsage(prompt, response, encoding).get_usage()
 
     assert isinstance(usage, litellm.Usage)
     assert usage.prompt_tokens == 26
@@ -125,12 +126,12 @@ def test_ollama_usage():
     assert usage.total_tokens == 316
 
     # stubbed non-streamed response, with missing metrics keys
-    response_json = {
+    response: ResponseJSON = {
         "response": "The sky is blue because it is the color of the sky.",
         "done": True,
     }
 
-    usage = OllamaUsage(prompt, response_json, encoding).get_usage()
+    usage = OllamaUsage(prompt, response, encoding).get_usage()
 
     assert isinstance(usage, litellm.Usage)
     assert usage.prompt_tokens == 6
@@ -140,17 +141,37 @@ def test_ollama_usage():
 
 
 def test_ollama_chat_usage():
-    # stubbed mid-streaming response
-    incomplete_stream_message = {
-        "role": "assistant",
-        "content": "The"
+    chat_request: Dict[str, List[MessageJSON]] = {
+        "messages": [
+            {
+                "role": "system",
+                "content": "You are a helpful AI",
+            },
+            {
+                "role": "user",
+                "content": "Why is the sky blue?"
+            },
+            {
+                "role": "assistant",
+                "content": "The sky is blue because it is the color of the sky.",
+            },
+            {
+                "role": "user",
+                "content": "What about the ocean?"
+            }
+        ]
     }
-    response_json = {
-        "message": incomplete_stream_message,
+
+    # stubbed mid-streaming response
+    response: ChatResponseJSON = {
+        "message": {
+            "role": "assistant",
+            "content": "The",
+        },
         "done": False
     }
 
-    usage = OllamaChatUsage(response_json).get_usage()
+    usage = OllamaChatUsage(chat_request["messages"], response).get_usage()
 
     assert isinstance(usage, litellm.Usage)
     assert 'prompt_tokens' not in usage.__dict__
@@ -158,37 +179,64 @@ def test_ollama_chat_usage():
     assert 'total_tokens' not in usage.__dict__
 
     # stubbed final stream response
-    response_json = {
+    response: ChatResponseJSON = {
         "done": True,
         "prompt_eval_count": 26,
         "eval_count": 290
     }
 
-    usage = OllamaChatUsage(response_json).get_usage()
+    usage = OllamaChatUsage(chat_request["messages"], response).get_usage()
 
     assert isinstance(usage, litellm.Usage)
     assert usage.prompt_tokens == 26
     assert usage.completion_tokens == 290
     assert usage.total_tokens == 316
+
+    # stubbed final stream response, missing metrics keys
+    response: ChatResponseJSON = {
+        "done": True,
+    }
+
+    usage = OllamaChatUsage(chat_request["messages"], response).get_usage()
+
+    assert isinstance(usage, litellm.Usage)
+    assert usage.prompt_tokens == 48
+    assert usage.completion_tokens == 7
+    assert usage.total_tokens == 55
 
 
     # stubbed non-streamed response
     # see: https://github.com/jmorganca/ollama/blob/main/docs/api.md#response-8
-    complete_response = {
-        "role": "assistant",
-        "content": "The sky is blue because it is the color of the sky."
-    }
-    response_json = {
-        "message": complete_response,
+    response: ChatResponseJSON = {
+        "message": {
+            "role": "assistant",
+            "content": "The sky is blue because it is the color of the sky.",
+        },
         "done": True,
         "prompt_eval_count": 26,
-        "eval_count": 290
+        "eval_count": 290,
     }
 
-    usage = OllamaChatUsage(response_json).get_usage()
+    usage = OllamaChatUsage(chat_request["messages"], response).get_usage()
 
     assert isinstance(usage, litellm.Usage)
     assert usage.prompt_tokens == 26
     assert usage.completion_tokens == 290
     assert usage.total_tokens == 316
+
+    # stubbed non-streamed response, missing metrics keys
+    response: ChatResponseJSON = {
+        "message": {
+            "role": "assistant",
+            "content": "The sky is blue because it is the color of the sky.",
+        },
+        "done": True,
+    }
+
+    usage = OllamaChatUsage(chat_request["messages"], response).get_usage()
+
+    assert isinstance(usage, litellm.Usage)
+    assert usage.prompt_tokens == 48
+    assert usage.completion_tokens == 20
+    assert usage.total_tokens == 68
 # test_ollama_chat_usage()
