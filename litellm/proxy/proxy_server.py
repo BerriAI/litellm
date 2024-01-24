@@ -570,7 +570,7 @@ async def track_cost_callback(
         litellm_params = kwargs.get("litellm_params", {}) or {}
         proxy_server_request = litellm_params.get("proxy_server_request") or {}
         user_id = proxy_server_request.get("body", {}).get("user", None)
-        if "response_cost" in kwargs:
+        if kwargs.get("response_cost", None) is not None:
             response_cost = kwargs["response_cost"]
             user_api_key = kwargs["litellm_params"]["metadata"].get(
                 "user_api_key", None
@@ -596,9 +596,13 @@ async def track_cost_callback(
                     end_time=end_time,
                 )
         else:
-            raise Exception(
-                f"Model not in litellm model cost map. Add custom pricing - https://docs.litellm.ai/docs/proxy/custom_pricing"
-            )
+            if kwargs["stream"] != True or (
+                kwargs["stream"] == True
+                and kwargs.get("complete_streaming_response") in kwargs
+            ):
+                raise Exception(
+                    f"Model not in litellm model cost map. Add custom pricing - https://docs.litellm.ai/docs/proxy/custom_pricing"
+                )
     except Exception as e:
         verbose_proxy_logger.debug(f"error in tracking cost callback - {str(e)}")
 
@@ -695,6 +699,7 @@ async def update_database(
                     valid_token.spend = new_spend
                     user_api_key_cache.set_cache(key=token, value=valid_token)
 
+        ### UPDATE SPEND LOGS ###
         async def _insert_spend_log_to_db():
             # Helper to generate payload to log
             verbose_proxy_logger.debug("inserting spend log to db")

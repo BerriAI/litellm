@@ -856,9 +856,14 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time):
     usage = response_obj["usage"]
     id = response_obj.get("id", str(uuid.uuid4()))
     api_key = metadata.get("user_api_key", "")
-    if api_key is not None and type(api_key) == str:
+    if api_key is not None and isinstance(api_key, str) and api_key.startswith("sk-"):
         # hash the api_key
         api_key = hash_token(api_key)
+
+    if "headers" in metadata and "authorization" in metadata["headers"]:
+        metadata["headers"].pop(
+            "authorization"
+        )  # do not store the original `sk-..` api key in the db
 
     payload = {
         "request_id": id,
