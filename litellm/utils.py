@@ -2938,9 +2938,17 @@ def cost_per_token(
         )
         return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
     elif model_with_provider in model_cost_ref:
-        print_verbose(f"Looking up model={model_with_provider} in model_cost_map")
+        verbose_logger.debug(
+            f"Looking up model={model_with_provider} in model_cost_map"
+        )
+        verbose_logger.debug(
+            f"applying cost={model_cost_ref[model_with_provider]['input_cost_per_token']} for prompt_tokens={prompt_tokens}"
+        )
         prompt_tokens_cost_usd_dollar = (
             model_cost_ref[model_with_provider]["input_cost_per_token"] * prompt_tokens
+        )
+        verbose_logger.debug(
+            f"applying cost={model_cost_ref[model_with_provider]['output_cost_per_token']} for completion_tokens={completion_tokens}"
         )
         completion_tokens_cost_usd_dollar = (
             model_cost_ref[model_with_provider]["output_cost_per_token"]
@@ -2948,7 +2956,7 @@ def cost_per_token(
         )
         return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
     elif "ft:gpt-3.5-turbo" in model:
-        print_verbose(f"Cost Tracking: {model} is an OpenAI FinteTuned LLM")
+        verbose_logger.debug(f"Cost Tracking: {model} is an OpenAI FinteTuned LLM")
         # fuzzy match ft:gpt-3.5-turbo:abcd-id-cool-litellm
         prompt_tokens_cost_usd_dollar = (
             model_cost_ref["ft:gpt-3.5-turbo"]["input_cost_per_token"] * prompt_tokens
@@ -2959,17 +2967,23 @@ def cost_per_token(
         )
         return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
     elif model in litellm.azure_llms:
-        print_verbose(f"Cost Tracking: {model} is an Azure LLM")
+        verbose_logger.debug(f"Cost Tracking: {model} is an Azure LLM")
         model = litellm.azure_llms[model]
+        verbose_logger.debug(
+            f"applying cost={model_cost_ref[model]['input_cost_per_token']} for prompt_tokens={prompt_tokens}"
+        )
         prompt_tokens_cost_usd_dollar = (
             model_cost_ref[model]["input_cost_per_token"] * prompt_tokens
+        )
+        verbose_logger.debug(
+            f"applying cost={model_cost_ref[model]['output_cost_per_token']} for completion_tokens={completion_tokens}"
         )
         completion_tokens_cost_usd_dollar = (
             model_cost_ref[model]["output_cost_per_token"] * completion_tokens
         )
         return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
     elif model in litellm.azure_embedding_models:
-        print_verbose(f"Cost Tracking: {model} is an Azure Embedding Model")
+        verbose_logger.debug(f"Cost Tracking: {model} is an Azure Embedding Model")
         model = litellm.azure_embedding_models[model]
         prompt_tokens_cost_usd_dollar = (
             model_cost_ref[model]["input_cost_per_token"] * prompt_tokens
