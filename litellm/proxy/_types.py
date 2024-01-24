@@ -208,6 +208,8 @@ class DynamoDBArgs(LiteLLMBase):
     key_table_name: str = "LiteLLM_VerificationToken"
     config_table_name: str = "LiteLLM_Config"
     spend_table_name: str = "LiteLLM_SpendLogs"
+    aws_role_name: Optional[str] = None
+    aws_session_name: Optional[str] = None
 
 
 class ConfigGeneralSettings(LiteLLMBase):
