@@ -1067,10 +1067,14 @@ class Logging:
             ## if model in model cost map - log the response cost
             ## else set cost to None
             verbose_logger.debug(f"Model={self.model}; result={result}")
-            if result is not None and (
-                isinstance(result, ModelResponse)
-                or isinstance(result, EmbeddingResponse)
-            ):
+            if (
+                result is not None
+                and (
+                    isinstance(result, ModelResponse)
+                    or isinstance(result, EmbeddingResponse)
+                )
+                and self.stream != True
+            ):  # handle streaming separately
                 try:
                     self.model_call_details["response_cost"] = litellm.completion_cost(
                         completion_response=result,
@@ -1104,6 +1108,12 @@ class Logging:
         self, result=None, start_time=None, end_time=None, cache_hit=None, **kwargs
     ):
         verbose_logger.debug(f"Logging Details LiteLLM-Success Call")
+        start_time, end_time, result = self._success_handler_helper_fn(
+            start_time=start_time,
+            end_time=end_time,
+            result=result,
+            cache_hit=cache_hit,
+        )
         # print(f"original response in success handler: {self.model_call_details['original_response']}")
         try:
             verbose_logger.debug(f"success callbacks: {litellm.success_callback}")
@@ -1119,26 +1129,34 @@ class Logging:
                         complete_streaming_response = litellm.stream_chunk_builder(
                             self.sync_streaming_chunks,
                             messages=self.model_call_details.get("messages", None),
+                            start_time=start_time,
+                            end_time=end_time,
                         )
                     except:
                         complete_streaming_response = None
                 else:
                     self.sync_streaming_chunks.append(result)
 
-            if complete_streaming_response:
+            if complete_streaming_response is not None:
                 verbose_logger.debug(
                     f"Logging Details LiteLLM-Success Call streaming complete"
                 )
                 self.model_call_details[
                     "complete_streaming_response"
                 ] = complete_streaming_response
+                try:
+                    self.model_call_details["response_cost"] = litellm.completion_cost(
+                        completion_response=complete_streaming_response,
+                    )
+                    verbose_logger.debug(
+                        f"Model={self.model}; cost={self.model_call_details['response_cost']}"
+                    )
+                except litellm.NotFoundError as e:
+                    verbose_logger.debug(
+                        f"Model={self.model} not found in completion cost map."
+                    )
+                    self.model_call_details["response_cost"] = None
 
-            start_time, end_time, result = self._success_handler_helper_fn(
-                start_time=start_time,
-                end_time=end_time,
-                result=result,
-                cache_hit=cache_hit,
-            )
             for callback in litellm.success_callback:
                 try:
                     if callback == "lite_debugger":
@@ -1418,11 +1436,23 @@ class Logging:
                     complete_streaming_response = None
             else:
                 self.streaming_chunks.append(result)
-        if complete_streaming_response:
+        if complete_streaming_response is not None:
             print_verbose("Async success callbacks: Got a complete streaming response")
             self.model_call_details[
                 "complete_streaming_response"
             ] = complete_streaming_response
+            try:
+                self.model_call_details["response_cost"] = litellm.completion_cost(
+                    completion_response=complete_streaming_response,
+                )
+                verbose_logger.debug(
+                    f"Model={self.model}; cost={self.model_call_details['response_cost']}"
+                )
+            except litellm.NotFoundError as e:
+                verbose_logger.debug(
+                    f"Model={self.model} not found in completion cost map."
+                )
+                self.model_call_details["response_cost"] = None
 
         for callback in litellm._async_success_callback:
             try:
@@ -1470,14 +1500,27 @@ class Logging:
                             end_time=end_time,
                         )
                 if callable(callback):  # custom logger functions
-                    await customLogger.async_log_event(
-                        kwargs=self.model_call_details,
-                        response_obj=result,
-                        start_time=start_time,
-                        end_time=end_time,
-                        print_verbose=print_verbose,
-                        callback_func=callback,
-                    )
+                    if self.stream:
+                        if "complete_streaming_response" in self.model_call_details:
+                            await customLogger.async_log_event(
+                                kwargs=self.model_call_details,
+                                response_obj=self.model_call_details[
+                                    "complete_streaming_response"
+                                ],
+                                start_time=start_time,
+                                end_time=end_time,
+                                print_verbose=print_verbose,
+                                callback_func=callback,
+                            )
+                    else:
+                        await customLogger.async_log_event(
+                            kwargs=self.model_call_details,
+                            response_obj=result,
+                            start_time=start_time,
+                            end_time=end_time,
+                            print_verbose=print_verbose,
+                            callback_func=callback,
+                        )
                 if callback == "dynamodb":
                     global dynamoLogger
                     if dynamoLogger is None:
@@ -2867,6 +2910,9 @@ def cost_per_token(
 
     if model in model_cost_ref:
         verbose_logger.debug(f"Success: model={model} in model_cost_map")
+        verbose_logger.debug(
+            f"prompt_tokens={prompt_tokens}; completion_tokens={completion_tokens}"
+        )
         if (
             model_cost_ref[model].get("input_cost_per_token", None) is not None
             and model_cost_ref[model].get("output_cost_per_token", None) is not None
@@ -2895,9 +2941,17 @@ def cost_per_token(
         )
         return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
     elif model_with_provider in model_cost_ref:
-        print_verbose(f"Looking up model={model_with_provider} in model_cost_map")
+        verbose_logger.debug(
+            f"Looking up model={model_with_provider} in model_cost_map"
+        )
+        verbose_logger.debug(
+            f"applying cost={model_cost_ref[model_with_provider]['input_cost_per_token']} for prompt_tokens={prompt_tokens}"
+        )
         prompt_tokens_cost_usd_dollar = (
             model_cost_ref[model_with_provider]["input_cost_per_token"] * prompt_tokens
+        )
+        verbose_logger.debug(
+            f"applying cost={model_cost_ref[model_with_provider]['output_cost_per_token']} for completion_tokens={completion_tokens}"
         )
         completion_tokens_cost_usd_dollar = (
             model_cost_ref[model_with_provider]["output_cost_per_token"]
@@ -2905,7 +2959,7 @@ def cost_per_token(
         )
         return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
     elif "ft:gpt-3.5-turbo" in model:
-        print_verbose(f"Cost Tracking: {model} is an OpenAI FinteTuned LLM")
+        verbose_logger.debug(f"Cost Tracking: {model} is an OpenAI FinteTuned LLM")
         # fuzzy match ft:gpt-3.5-turbo:abcd-id-cool-litellm
         prompt_tokens_cost_usd_dollar = (
             model_cost_ref["ft:gpt-3.5-turbo"]["input_cost_per_token"] * prompt_tokens
@@ -2916,17 +2970,23 @@ def cost_per_token(
         )
         return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
     elif model in litellm.azure_llms:
-        print_verbose(f"Cost Tracking: {model} is an Azure LLM")
+        verbose_logger.debug(f"Cost Tracking: {model} is an Azure LLM")
         model = litellm.azure_llms[model]
+        verbose_logger.debug(
+            f"applying cost={model_cost_ref[model]['input_cost_per_token']} for prompt_tokens={prompt_tokens}"
+        )
         prompt_tokens_cost_usd_dollar = (
             model_cost_ref[model]["input_cost_per_token"] * prompt_tokens
+        )
+        verbose_logger.debug(
+            f"applying cost={model_cost_ref[model]['output_cost_per_token']} for completion_tokens={completion_tokens}"
         )
         completion_tokens_cost_usd_dollar = (
             model_cost_ref[model]["output_cost_per_token"] * completion_tokens
         )
         return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
     elif model in litellm.azure_embedding_models:
-        print_verbose(f"Cost Tracking: {model} is an Azure Embedding Model")
+        verbose_logger.debug(f"Cost Tracking: {model} is an Azure Embedding Model")
         model = litellm.azure_embedding_models[model]
         prompt_tokens_cost_usd_dollar = (
             model_cost_ref[model]["input_cost_per_token"] * prompt_tokens
