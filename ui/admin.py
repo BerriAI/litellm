@@ -210,7 +210,7 @@ def spend_per_key():
                 spend_df = pd.DataFrame(spend_per_key)
 
                 # Display the spend per key as a graph
-                st.write("Spend ($) per Key:")
+                st.header("Spend ($) per API Key:")
                 top_10_df = spend_df.nlargest(10, "spend")
                 fig = px.bar(
                     top_10_df,
