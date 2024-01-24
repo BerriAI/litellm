@@ -19,6 +19,7 @@ try:
     import yaml
     import orjson
     import logging
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
 except ImportError as e:
     raise ImportError(f"Missing dependency {e}. Run `pip install 'litellm[proxy]'`")
 
@@ -73,6 +74,7 @@ from litellm.proxy.utils import (
     _cache_user_row,
     send_email,
     get_logging_payload,
+    reset_budget,
 )
 from litellm.proxy.secret_managers.google_kms import load_google_kms
 import pydantic
@@ -1130,7 +1132,9 @@ async def generate_key_helper_fn(
     config: dict,
     spend: float,
     key_max_budget: Optional[float] = None,  # key_max_budget is used to Budget Per key
+    key_budget_duration: Optional[str] = None,
     max_budget: Optional[float] = None,  # max_budget is used to Budget Per user
+    budget_duration: Optional[str] = None,  # max_budget is used to Budget Per user
     token: Optional[str] = None,
     user_id: Optional[str] = None,
     team_id: Optional[str] = None,
@@ -1175,6 +1179,12 @@ async def generate_key_helper_fn(
         duration_s = _duration_in_seconds(duration=duration)
         expires = datetime.utcnow() + timedelta(seconds=duration_s)
 
+    if key_budget_duration is None:  # one-time budget
+        key_reset_at = None
+    else:
+        duration_s = _duration_in_seconds(duration=key_budget_duration)
+        key_reset_at = datetime.utcnow() + timedelta(seconds=duration_s)
+
     aliases_json = json.dumps(aliases)
     config_json = json.dumps(config)
     metadata_json = json.dumps(metadata)
@@ -1210,6 +1220,8 @@ async def generate_key_helper_fn(
             "metadata": metadata_json,
             "tpm_limit": tpm_limit,
             "rpm_limit": rpm_limit,
+            "budget_duration": key_budget_duration,
+            "budget_reset_at": key_reset_at,
         }
         if prisma_client is not None:
             ## CREATE USER (If necessary)
@@ -1530,13 +1542,18 @@ async def startup_event():
             duration=None, models=[], aliases={}, config={}, spend=0, token=master_key
         )
     verbose_proxy_logger.debug(
-        f"custom_db_client client - Inserting master key {custom_db_client}. Master_key: {master_key}"
+        f"custom_db_client client {custom_db_client}. Master_key: {master_key}"
     )
     if custom_db_client is not None and master_key is not None:
         # add master key to db
         await generate_key_helper_fn(
             duration=None, models=[], aliases={}, config={}, spend=0, token=master_key
         )
+
+    ### START BUDGET SCHEDULER ###
+    scheduler = AsyncIOScheduler()
+    scheduler.add_job(reset_budget, "interval", seconds=10, args=[prisma_client])
+    scheduler.start()
 
 
 #### API ENDPOINTS ####
@@ -2214,6 +2231,9 @@ async def generate_key_fn(
     # if we get max_budget passed to /key/generate, then use it as key_max_budget. Since generate_key_helper_fn is used to make new users
     if "max_budget" in data_json:
         data_json["key_max_budget"] = data_json.pop("max_budget", None)
+
+    if "budget_duration" in data_json:
+        data_json["key_budget_duration"] = data_json.pop("budget_duration", None)
 
     response = await generate_key_helper_fn(**data_json)
     return GenerateKeyResponse(
