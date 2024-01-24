@@ -1074,7 +1074,7 @@ class Logging:
                     or isinstance(result, EmbeddingResponse)
                 )
                 and self.stream != True
-            ):
+            ):  # handle streaming separately
                 try:
                     self.model_call_details["response_cost"] = litellm.completion_cost(
                         completion_response=result,
@@ -1137,7 +1137,7 @@ class Logging:
                 else:
                     self.sync_streaming_chunks.append(result)
 
-            if complete_streaming_response:
+            if complete_streaming_response is not None:
                 verbose_logger.debug(
                     f"Logging Details LiteLLM-Success Call streaming complete"
                 )
@@ -1436,7 +1436,7 @@ class Logging:
                     complete_streaming_response = None
             else:
                 self.streaming_chunks.append(result)
-        if complete_streaming_response:
+        if complete_streaming_response is not None:
             print_verbose("Async success callbacks: Got a complete streaming response")
             self.model_call_details[
                 "complete_streaming_response"
@@ -2910,6 +2910,9 @@ def cost_per_token(
 
     if model in model_cost_ref:
         verbose_logger.debug(f"Success: model={model} in model_cost_map")
+        verbose_logger.debug(
+            f"prompt_tokens={prompt_tokens}; completion_tokens={completion_tokens}"
+        )
         if (
             model_cost_ref[model].get("input_cost_per_token", None) is not None
             and model_cost_ref[model].get("output_cost_per_token", None) is not None
