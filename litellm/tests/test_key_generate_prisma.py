@@ -42,6 +42,8 @@ from litellm.proxy.proxy_server import (
     info_key_fn,
     update_key_fn,
     generate_key_fn,
+    spend_user_fn,
+    spend_key_fn,
     view_spend_logs,
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging
@@ -851,3 +853,39 @@ async def test_call_with_key_over_budget_stream(prisma_client):
         error_detail = e.message
         assert "Authentication Error, ExceededTokenBudget:" in error_detail
         print(vars(e))
+
+
+@pytest.mark.asyncio()
+async def test_view_spend_per_user(prisma_client):
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+    try:
+        user_by_spend = await spend_user_fn()
+        assert type(user_by_spend) == list
+        assert len(user_by_spend) > 0
+        first_user = user_by_spend[0]
+
+        print("\nfirst_user=", first_user)
+        assert first_user.spend > 0
+    except Exception as e:
+        print("Got Exception", e)
+        pytest.fail(f"Got exception {e}")
+
+
+@pytest.mark.asyncio()
+async def test_view_spend_per_key(prisma_client):
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+    try:
+        key_by_spend = await spend_key_fn()
+        assert type(key_by_spend) == list
+        assert len(key_by_spend) > 0
+        first_key = key_by_spend[0]
+
+        print("\nfirst_key=", first_key)
+        assert first_key.spend > 0
+    except Exception as e:
+        print("Got Exception", e)
+        pytest.fail(f"Got exception {e}")
