@@ -1410,13 +1410,7 @@ class Router:
                 max_retries_env_name = max_retries.replace("os.environ/", "")
                 max_retries = litellm.get_secret(max_retries_env_name)
                 litellm_params["max_retries"] = max_retries
-            
-            extra_headers = litellm_params.get("extra_headers")
-            client_certs = None
-            if "client_certificate" in litellm_params:
-                client_certs = litellm_params.get("client_certificate")
-                client_certs = tuple(client_certs)
-            
+
             if "azure" in model_name:
                 if api_base is None:
                     raise ValueError(
@@ -1436,9 +1430,7 @@ class Router:
                         api_version=api_version,
                         timeout=timeout,
                         max_retries=max_retries,
-                        default_header=extra_headers,
                         http_client=httpx.AsyncClient(
-                            cert= client_certs,
                             transport=AsyncCustomHTTPTransport(),
                             limits=httpx.Limits(
                                 max_connections=1000, max_keepalive_connections=100
@@ -1459,9 +1451,7 @@ class Router:
                         api_version=api_version,
                         timeout=timeout,
                         max_retries=max_retries,
-                        default_header=extra_headers,
                         http_client=httpx.Client(
-                            cert= client_certs,
                             transport=CustomHTTPTransport(),
                             limits=httpx.Limits(
                                 max_connections=1000, max_keepalive_connections=100
@@ -1482,9 +1472,7 @@ class Router:
                         api_version=api_version,
                         timeout=stream_timeout,
                         max_retries=max_retries,
-                        default_header=extra_headers,
                         http_client=httpx.AsyncClient(
-                            cert= client_certs,
                             transport=AsyncCustomHTTPTransport(),
                             limits=httpx.Limits(
                                 max_connections=1000, max_keepalive_connections=100
@@ -1505,9 +1493,7 @@ class Router:
                         api_version=api_version,
                         timeout=stream_timeout,
                         max_retries=max_retries,
-                        default_header=extra_headers,
                         http_client=httpx.Client(
-                            cert= client_certs,
                             transport=CustomHTTPTransport(),
                             limits=httpx.Limits(
                                 max_connections=1000, max_keepalive_connections=100
@@ -1544,9 +1530,7 @@ class Router:
                         **azure_client_params,
                         timeout=timeout,
                         max_retries=max_retries,
-                        default_headers=extra_headers,
                         http_client=httpx.AsyncClient(
-                            cert= client_certs,
                             transport=AsyncCustomHTTPTransport(),
                             limits=httpx.Limits(
                                 max_connections=1000, max_keepalive_connections=100
@@ -1565,9 +1549,7 @@ class Router:
                         **azure_client_params,
                         timeout=timeout,
                         max_retries=max_retries,
-                        default_headers=extra_headers,
                         http_client=httpx.Client(
-                            cert= client_certs,
                             transport=CustomHTTPTransport(),
                             limits=httpx.Limits(
                                 max_connections=1000, max_keepalive_connections=100
@@ -1587,9 +1569,7 @@ class Router:
                         **azure_client_params,
                         timeout=stream_timeout,
                         max_retries=max_retries,
-                        default_headers=extra_headers,                        
                         http_client=httpx.AsyncClient(
-                            cert= client_certs,
                             transport=AsyncCustomHTTPTransport(),
                             limits=httpx.Limits(
                                 max_connections=1000, max_keepalive_connections=100
@@ -1608,9 +1588,7 @@ class Router:
                         **azure_client_params,
                         timeout=stream_timeout,
                         max_retries=max_retries,
-                        default_headers=extra_headers,
                         http_client=httpx.Client(
-                            cert= client_certs,
                             transport=CustomHTTPTransport(),
                             limits=httpx.Limits(
                                 max_connections=1000, max_keepalive_connections=100
