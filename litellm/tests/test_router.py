@@ -963,6 +963,11 @@ def test_router_anthropic_key_dynamic():
 
 
 def test_router_timeout():
+    litellm.set_verbose = True
+    from litellm._logging import verbose_logger
+    import logging
+
+    verbose_logger.setLevel(logging.DEBUG)
     model_list = [
         {
             "model_name": "gpt-3.5-turbo",
