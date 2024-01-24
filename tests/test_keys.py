@@ -13,13 +13,15 @@ sys.path.insert(
 import litellm
 
 
-async def generate_key(session, i):
+async def generate_key(session, i, budget=None, budget_duration=None):
     url = "http://0.0.0.0:4000/key/generate"
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
     data = {
         "models": ["azure-models", "gpt-4"],
         "aliases": {"mistral-7b": "gpt-3.5-turbo"},
         "duration": None,
+        "budget": budget,
+        "budget_duration": budget_duration,
     }
 
     async with session.post(url, headers=headers, json=data) as response:
@@ -291,3 +293,24 @@ async def test_key_info_spend_values():
         rounded_response_cost = round(response_cost, 8)
         rounded_key_info_spend = round(key_info["info"]["spend"], 8)
         assert rounded_response_cost == rounded_key_info_spend
+
+
+@pytest.mark.asyncio
+async def test_key_with_budgets():
+    """
+    - Create key with budget and 5s duration
+    - Get 'reset_at' value
+    - wait 5s
+    - Check if value updated
+    """
+    async with aiohttp.ClientSession() as session:
+        key_gen = await generate_key(
+            session=session, i=0, budget=10, budget_duration="5s"
+        )
+        key = key_gen["key"]
+        key_info = await get_key_info(session=session, get_key=key, call_key=key)
+        reset_at_init_value = key_info["info"]["budget_reset_at"]
+        await asyncio.sleep(5)
+        key_info = await get_key_info(session=session, get_key=key, call_key=key)
+        reset_at_new_value = key_info["info"]["budget_reset_at"]
+        assert reset_at_init_value != reset_at_new_value
