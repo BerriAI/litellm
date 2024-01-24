@@ -556,7 +556,7 @@ class PrismaClient:
                     where={"token": token},  # type: ignore
                     data={**db_data},  # type: ignore
                 )
-                print_verbose(
+                verbose_proxy_logger.debug(
                     "\033[91m"
                     + f"DB Token Table update succeeded {response}"
                     + "\033[0m"
