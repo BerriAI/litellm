@@ -1151,6 +1151,7 @@ async def generate_key_helper_fn(
     metadata: Optional[dict] = {},
     tpm_limit: Optional[int] = None,
     rpm_limit: Optional[int] = None,
+    query_type: Literal["insert_data", "update_data"] = "insert_data",
 ):
     global prisma_client, custom_db_client
 
@@ -1193,6 +1194,12 @@ async def generate_key_helper_fn(
         duration_s = _duration_in_seconds(duration=key_budget_duration)
         key_reset_at = datetime.utcnow() + timedelta(seconds=duration_s)
 
+    if budget_duration is None:  # one-time budget
+        reset_at = None
+    else:
+        duration_s = _duration_in_seconds(duration=budget_duration)
+        reset_at = datetime.utcnow() + timedelta(seconds=duration_s)
+
     aliases_json = json.dumps(aliases)
     config_json = json.dumps(config)
     metadata_json = json.dumps(metadata)
@@ -1213,6 +1220,8 @@ async def generate_key_helper_fn(
             "max_parallel_requests": max_parallel_requests,
             "tpm_limit": tpm_limit,
             "rpm_limit": rpm_limit,
+            "budget_duration": budget_duration,
+            "budget_reset_at": reset_at,
         }
         key_data = {
             "token": token,
@@ -1234,13 +1243,18 @@ async def generate_key_helper_fn(
         if prisma_client is not None:
             ## CREATE USER (If necessary)
             verbose_proxy_logger.debug(f"prisma_client: Creating User={user_data}")
-            user_row = await prisma_client.insert_data(
-                data=user_data, table_name="user"
-            )
+            if query_type == "insert_data":
+                user_row = await prisma_client.insert_data(
+                    data=user_data, table_name="user"
+                )
+                ## use default user model list if no key-specific model list provided
+                if len(user_row.models) > 0 and len(key_data["models"]) == 0:  # type: ignore
+                    key_data["models"] = user_row.models
+            elif query_type == "update_data":
+                user_row = await prisma_client.update_data(
+                    data=user_data, table_name="user"
+                )
 
-            ## use default user model list if no key-specific model list provided
-            if len(user_row.models) > 0 and len(key_data["models"]) == 0:  # type: ignore
-                key_data["models"] = user_row.models
             ## CREATE KEY
             verbose_proxy_logger.debug(f"prisma_client: Creating Key={key_data}")
             await prisma_client.insert_data(data=key_data, table_name="key")
@@ -1548,6 +1562,25 @@ async def startup_event():
         await generate_key_helper_fn(
             duration=None, models=[], aliases={}, config={}, spend=0, token=master_key
         )
+
+    if (
+        prisma_client is not None
+        and litellm.max_budget > 0
+        and litellm.budget_duration is not None
+    ):
+        # add proxy budget to db in the user table
+        await generate_key_helper_fn(
+            user_id="litellm-proxy-budget",
+            duration=None,
+            models=[],
+            aliases={},
+            config={},
+            spend=0,
+            max_budget=litellm.max_budget,
+            budget_duration=litellm.budget_duration,
+            query_type="update_data",
+        )
+
     verbose_proxy_logger.debug(
         f"custom_db_client client {custom_db_client}. Master_key: {master_key}"
     )
