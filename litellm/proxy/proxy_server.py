@@ -2538,7 +2538,7 @@ async def view_spend_logs(
                 f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
         spend_logs = []
-        if api_key is not None:
+        if api_key is not None and isinstance(api_key, str):
             if api_key.startswith("sk-"):
                 hashed_token = prisma_client.hash_token(token=api_key)
             else:
