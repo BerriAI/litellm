@@ -152,6 +152,7 @@ class ProxyLogging:
             request_info = f"\nRequest Model: {model}\nMessages: {messages}"
         else:
             request_info = ""
+
         if type == "hanging_request":
             # Simulate a long-running operation that could take more than 5 minutes
             await asyncio.sleep(
@@ -193,7 +194,13 @@ class ProxyLogging:
             level: str - Low|Medium|High - if calls might fail (Medium) or are failing (High); Currently, no alerts would be 'Low'.
             message: str - what is the alert about
         """
-        formatted_message = f"Level: {level}\n\nMessage: {message}"
+        from datetime import datetime
+
+        # Get the current timestamp
+        current_time = datetime.now().strftime("%H:%M:%S")
+        formatted_message = (
+            f"Level: {level}\nTimestamp: {current_time}\n\nMessage: {message}"
+        )
         if self.alerting is None:
             return
 
