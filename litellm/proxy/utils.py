@@ -361,7 +361,8 @@ class PrismaClient:
         self,
         token: Optional[str] = None,
         user_id: Optional[str] = None,
-        table_name: Optional[Literal["user", "key", "config"]] = None,
+        request_id: Optional[str] = None,
+        table_name: Optional[Literal["user", "key", "config", "spend"]] = None,
         query_type: Literal["find_unique", "find_all"] = "find_unique",
         expires: Optional[datetime] = None,
         reset_at: Optional[datetime] = None,
@@ -411,6 +412,10 @@ class PrismaClient:
                         for r in response:
                             if isinstance(r.expires, datetime):
                                 r.expires = r.expires.isoformat()
+                elif query_type == "find_all":
+                    response = await self.db.litellm_verificationtoken.find_many(
+                        order={"spend": "desc"},
+                    )
                 print_verbose(f"PrismaClient: response={response}")
                 if response is not None:
                     return response
@@ -427,6 +432,23 @@ class PrismaClient:
                     }
                 )
                 return response
+            elif table_name == "spend":
+                verbose_proxy_logger.debug(
+                    f"PrismaClient: get_data: table_name == 'spend'"
+                )
+                if request_id is not None:
+                    response = await self.db.litellm_spendlogs.find_unique(  # type: ignore
+                        where={
+                            "request_id": request_id,
+                        }
+                    )
+                    return response
+                else:
+                    response = await self.db.litellm_spendlogs.find_many(  # type: ignore
+                        order={"startTime": "desc"},
+                    )
+                    return response
+
         except Exception as e:
             print_verbose(f"LiteLLM Prisma Client Exception: {e}")
             import traceback
@@ -549,21 +571,20 @@ class PrismaClient:
             db_data = self.jsonify_object(data=data)
             if token is not None:
                 print_verbose(f"token: {token}")
-                if query_type == "update":
-                    # check if plain text or hash
-                    if token.startswith("sk-"):
-                        token = self.hash_token(token=token)
-                    db_data["token"] = token
-                    response = await self.db.litellm_verificationtoken.update(
-                        where={"token": token},  # type: ignore
-                        data={**db_data},  # type: ignore
-                    )
-                    print_verbose(
-                        "\033[91m"
-                        + f"DB Token Table update succeeded {response}"
-                        + "\033[0m"
-                    )
-                    return {"token": token, "data": db_data}
+                # check if plain text or hash
+                if token.startswith("sk-"):
+                    token = self.hash_token(token=token)
+                db_data["token"] = token
+                response = await self.db.litellm_verificationtoken.update(
+                    where={"token": token},  # type: ignore
+                    data={**db_data},  # type: ignore
+                )
+                verbose_proxy_logger.debug(
+                    "\033[91m"
+                    + f"DB Token Table update succeeded {response}"
+                    + "\033[0m"
+                )
+                return {"token": token, "data": db_data}
             elif user_id is not None:
                 """
                 If data['spend'] + data['user'], update the user table with spend info as well
@@ -885,9 +906,14 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time):
     usage = response_obj["usage"]
     id = response_obj.get("id", str(uuid.uuid4()))
     api_key = metadata.get("user_api_key", "")
-    if api_key is not None and type(api_key) == str:
+    if api_key is not None and isinstance(api_key, str) and api_key.startswith("sk-"):
         # hash the api_key
         api_key = hash_token(api_key)
+
+    if "headers" in metadata and "authorization" in metadata["headers"]:
+        metadata["headers"].pop(
+            "authorization"
+        )  # do not store the original `sk-..` api key in the db
 
     payload = {
         "request_id": id,
