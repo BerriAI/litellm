@@ -699,6 +699,7 @@ async def update_database(
                     valid_token.spend = new_spend
                     user_api_key_cache.set_cache(key=token, value=valid_token)
 
+        ### UPDATE SPEND LOGS ###
         async def _insert_spend_log_to_db():
             # Helper to generate payload to log
             verbose_proxy_logger.debug("inserting spend log to db")
