@@ -210,15 +210,16 @@ def spend_per_key():
                 spend_df = pd.DataFrame(spend_per_key)
 
                 # Display the spend per key as a graph
-                st.write("Spend per Key - Top 10:")
+                st.write("Spend ($) per Key:")
                 top_10_df = spend_df.nlargest(10, "spend")
                 fig = px.bar(
                     top_10_df,
                     x="token",
                     y="spend",
                     title="Top 10 Spend per Key",
-                    height=500,  # Adjust the height
-                    width=800,  # Adjust the width)
+                    height=550,  # Adjust the height
+                    width=1200,  # Adjust the width)
+                    hover_data=["token", "spend", "user_id", "team_id"],
                 )
                 st.plotly_chart(fig)
 
@@ -400,12 +401,12 @@ def admin_page(is_admin="NOT_GIVEN", input_api_url=None, input_proxy_key=None):
         "Go to",
         (
             "Connect to Proxy",
-            "Update Config",
-            "Add Models",
-            "List Models",
-            "Create Key",
             "View Spend Per Key",
             "View Spend Per User",
+            "List Models",
+            "Update Config",
+            "Add Models",
+            "Create Key",
             "End-User Auth",
         ),
     )
