@@ -7,8 +7,11 @@ handler = logging.StreamHandler()
 handler.setLevel(logging.DEBUG)
 
 # Create a formatter and set it for the handler
+formatter = logging.Formatter(
+    "\033[92m%(asctime)s - %(name)s - %(levelname)s\033[0m: %(message)s",
+    datefmt="%H:%M:%S",
+)
 
-formatter = logging.Formatter("\033[92m%(name)s - %(levelname)s\033[0m: %(message)s")
 
 handler.setFormatter(formatter)
 
