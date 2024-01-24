@@ -164,7 +164,9 @@ app.add_middleware(
 
 from typing import Dict
 
-api_key_header = APIKeyHeader(name="Authorization", auto_error=False)
+api_key_header = APIKeyHeader(
+    name="Authorization", auto_error=False, description="Bearer token"
+)
 user_api_base = None
 user_model = None
 user_debug = False
@@ -2466,6 +2468,10 @@ async def spend_user_fn():
     dependencies=[Depends(user_api_key_auth)],
 )
 async def view_spend_logs(
+    api_key: Optional[str] = fastapi.Query(
+        default=None,
+        description="Get spend logs based on api key",
+    ),
     request_id: Optional[str] = fastapi.Query(
         default=None,
         description="request_id to get spend logs for specific request_id. If none passed then pass spend logs for all requests",
@@ -2485,6 +2491,12 @@ async def view_spend_logs(
     curl -X GET "http://0.0.0.0:8000/spend/logs?request_id=chatcmpl-6dcb2540-d3d7-4e49-bb27-291f863f112e" \
 -H "Authorization: Bearer sk-1234"
     ```
+
+    Example Request for specific api_key
+    ```
+    curl -X GET "http://0.0.0.0:8000/spend/logs?api_key=sk-Fn8Ej39NkBQmUagFEoUWPQ" \
+-H "Authorization: Bearer sk-1234"
+    ```
     """
     global prisma_client
     try:
@@ -2493,17 +2505,32 @@ async def view_spend_logs(
                 f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
         spend_logs = []
-        if request_id is not None:
+        if api_key is not None:
+            if api_key.startswith("sk-"):
+                hashed_token = prisma_client.hash_token(token=api_key)
+            else:
+                hashed_token = api_key
+            spend_log = await prisma_client.get_data(
+                table_name="spend",
+                query_type="find_all",
+                key_val={"key": "api_key", "value": hashed_token},
+            )
+            if isinstance(spend_log, list):
+                return spend_log
+            else:
+                return [spend_log]
+        elif request_id is not None:
             spend_log = await prisma_client.get_data(
                 table_name="spend",
                 query_type="find_unique",
-                request_id=request_id,
+                key_val={"key": "request_id", "value": request_id},
             )
             return [spend_log]
         else:
             spend_logs = await prisma_client.get_data(
                 table_name="spend", query_type="find_all"
             )
+
             return spend_logs
 
         return None
