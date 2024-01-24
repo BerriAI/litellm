@@ -69,3 +69,7 @@ Connect your proxy to your UI, by entering:
 
 <Image img={require('../../img/spend_per_api_key.png')} />  
 
+### Spend Per User
+
+<Image img={require('../../img/spend_per_user.png')} />  
+
