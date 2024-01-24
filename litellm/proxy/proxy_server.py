@@ -1863,6 +1863,8 @@ async def chat_completion(
         else:  # router is not set
             response = await litellm.acompletion(**data)
 
+        # Post Call Processing
+        data["litellm_status"] = "success"  # used for alerting
         if hasattr(response, "_hidden_params"):
             model_id = response._hidden_params.get("model_id", None) or ""
         else:
@@ -2048,6 +2050,7 @@ async def embeddings(
             response = await litellm.aembedding(**data)
 
         ### ALERTING ###
+        data["litellm_status"] = "success"  # used for alerting
         end_time = time.time()
         asyncio.create_task(
             proxy_logging_obj.response_taking_too_long(
@@ -2163,6 +2166,7 @@ async def image_generation(
             response = await litellm.aimage_generation(**data)
 
         ### ALERTING ###
+        data["litellm_status"] = "success"  # used for alerting
         end_time = time.time()
         asyncio.create_task(
             proxy_logging_obj.response_taking_too_long(

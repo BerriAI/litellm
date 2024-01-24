@@ -158,14 +158,17 @@ class ProxyLogging:
             await asyncio.sleep(
                 self.alerting_threshold
             )  # Set it to 5 minutes - i'd imagine this might be different for streaming, non-streaming, non-completion (embedding + img) requests
-
-            alerting_message = (
-                f"Requests are hanging - {self.alerting_threshold}s+ request time"
-            )
-            await self.alerting_handler(
-                message=alerting_message + request_info,
-                level="Medium",
-            )
+            if (
+                request_data is not None
+                and request_data.get("litellm_status", "") != "success"
+            ):
+                alerting_message = (
+                    f"Requests are hanging - {self.alerting_threshold}s+ request time"
+                )
+                await self.alerting_handler(
+                    message=alerting_message + request_info,
+                    level="Medium",
+                )
 
         elif (
             type == "slow_response" and start_time is not None and end_time is not None
