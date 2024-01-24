@@ -908,7 +908,6 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time):
     metadata = (
         litellm_params.get("metadata", {}) or {}
     )  # if litellm_params['metadata'] == None
-    messages = kwargs.get("messages")
     optional_params = kwargs.get("optional_params", {})
     call_type = kwargs.get("call_type", "litellm.completion")
     cache_hit = kwargs.get("cache_hit", False)
@@ -934,8 +933,6 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time):
         "model": kwargs.get("model", ""),
         "user": kwargs.get("user", ""),
         "modelParameters": optional_params,
-        "messages": messages,
-        "response": response_obj,
         "usage": usage,
         "metadata": metadata,
     }
