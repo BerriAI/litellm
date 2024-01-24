@@ -735,6 +735,7 @@ def test_call_with_key_over_budget(prisma_client):
             )
             await track_cost_callback(
                 kwargs={
+                    "call_type": "acompletion",
                     "model": "chatgpt-v-2",
                     "stream": False,
                     "litellm_params": {
@@ -825,6 +826,7 @@ def test_call_with_key_over_budget_stream(prisma_client):
             )
             await track_cost_callback(
                 kwargs={
+                    "call_type": "acompletion",
                     "model": "sagemaker-chatgpt-v-2",
                     "stream": True,
                     "complete_streaming_response": resp,
