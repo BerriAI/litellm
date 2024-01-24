@@ -399,7 +399,7 @@ class PrismaClient:
                     and reset_at is not None
                 ):
                     response = await self.db.litellm_verificationtoken.find_many(
-                        where={
+                        where={  # type:ignore
                             "OR": [
                                 {"expires": None},
                                 {"expires": {"gt": expires}},
