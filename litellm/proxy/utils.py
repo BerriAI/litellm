@@ -361,7 +361,7 @@ class PrismaClient:
         self,
         token: Optional[str] = None,
         user_id: Optional[str] = None,
-        request_id: Optional[str] = None,
+        key_val: Optional[dict] = None,
         table_name: Optional[Literal["user", "key", "config", "spend"]] = None,
         query_type: Literal["find_unique", "find_all"] = "find_unique",
         expires: Optional[datetime] = None,
@@ -441,12 +441,19 @@ class PrismaClient:
                 verbose_proxy_logger.debug(
                     f"PrismaClient: get_data: table_name == 'spend'"
                 )
-                if request_id is not None:
-                    response = await self.db.litellm_spendlogs.find_unique(  # type: ignore
-                        where={
-                            "request_id": request_id,
-                        }
-                    )
+                if key_val is not None:
+                    if query_type == "find_unique":
+                        response = await self.db.litellm_spendlogs.find_unique(  # type: ignore
+                            where={  # type: ignore
+                                key_val["key"]: key_val["value"],  # type: ignore
+                            }
+                        )
+                    elif query_type == "find_all":
+                        response = await self.db.litellm_spendlogs.find_many(  # type: ignore
+                            where={
+                                key_val["key"]: key_val["value"],  # type: ignore
+                            }
+                        )
                     return response
                 else:
                     response = await self.db.litellm_spendlogs.find_many(  # type: ignore
