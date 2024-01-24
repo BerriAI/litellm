@@ -19,6 +19,7 @@ try:
     import yaml
     import orjson
     import logging
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
 except ImportError as e:
     raise ImportError(f"Missing dependency {e}. Run `pip install 'litellm[proxy]'`")
 
@@ -73,6 +74,7 @@ from litellm.proxy.utils import (
     _cache_user_row,
     send_email,
     get_logging_payload,
+    reset_budget,
 )
 from litellm.proxy.secret_managers.google_kms import load_google_kms
 import pydantic
@@ -578,7 +580,7 @@ async def track_cost_callback(
         litellm_params = kwargs.get("litellm_params", {}) or {}
         proxy_server_request = litellm_params.get("proxy_server_request") or {}
         user_id = proxy_server_request.get("body", {}).get("user", None)
-        if "response_cost" in kwargs:
+        if kwargs.get("response_cost", None) is not None:
             response_cost = kwargs["response_cost"]
             user_api_key = kwargs["litellm_params"]["metadata"].get(
                 "user_api_key", None
@@ -604,9 +606,13 @@ async def track_cost_callback(
                     end_time=end_time,
                 )
         else:
-            raise Exception(
-                f"Model not in litellm model cost map. Add custom pricing - https://docs.litellm.ai/docs/proxy/custom_pricing"
-            )
+            if kwargs["stream"] != True or (
+                kwargs["stream"] == True
+                and kwargs.get("complete_streaming_response") in kwargs
+            ):
+                raise Exception(
+                    f"Model not in litellm model cost map. Add custom pricing - https://docs.litellm.ai/docs/proxy/custom_pricing"
+                )
     except Exception as e:
         verbose_proxy_logger.debug(f"error in tracking cost callback - {str(e)}")
 
@@ -703,6 +709,7 @@ async def update_database(
                     valid_token.spend = new_spend
                     user_api_key_cache.set_cache(key=token, value=valid_token)
 
+        ### UPDATE SPEND LOGS ###
         async def _insert_spend_log_to_db():
             # Helper to generate payload to log
             verbose_proxy_logger.debug("inserting spend log to db")
@@ -1133,7 +1140,9 @@ async def generate_key_helper_fn(
     config: dict,
     spend: float,
     key_max_budget: Optional[float] = None,  # key_max_budget is used to Budget Per key
+    key_budget_duration: Optional[str] = None,
     max_budget: Optional[float] = None,  # max_budget is used to Budget Per user
+    budget_duration: Optional[str] = None,  # max_budget is used to Budget Per user
     token: Optional[str] = None,
     user_id: Optional[str] = None,
     team_id: Optional[str] = None,
@@ -1178,6 +1187,12 @@ async def generate_key_helper_fn(
         duration_s = _duration_in_seconds(duration=duration)
         expires = datetime.utcnow() + timedelta(seconds=duration_s)
 
+    if key_budget_duration is None:  # one-time budget
+        key_reset_at = None
+    else:
+        duration_s = _duration_in_seconds(duration=key_budget_duration)
+        key_reset_at = datetime.utcnow() + timedelta(seconds=duration_s)
+
     aliases_json = json.dumps(aliases)
     config_json = json.dumps(config)
     metadata_json = json.dumps(metadata)
@@ -1213,6 +1228,8 @@ async def generate_key_helper_fn(
             "metadata": metadata_json,
             "tpm_limit": tpm_limit,
             "rpm_limit": rpm_limit,
+            "budget_duration": key_budget_duration,
+            "budget_reset_at": key_reset_at,
         }
         if prisma_client is not None:
             ## CREATE USER (If necessary)
@@ -1533,13 +1550,18 @@ async def startup_event():
             duration=None, models=[], aliases={}, config={}, spend=0, token=master_key
         )
     verbose_proxy_logger.debug(
-        f"custom_db_client client - Inserting master key {custom_db_client}. Master_key: {master_key}"
+        f"custom_db_client client {custom_db_client}. Master_key: {master_key}"
     )
     if custom_db_client is not None and master_key is not None:
         # add master key to db
         await generate_key_helper_fn(
             duration=None, models=[], aliases={}, config={}, spend=0, token=master_key
         )
+
+    ### START BUDGET SCHEDULER ###
+    scheduler = AsyncIOScheduler()
+    scheduler.add_job(reset_budget, "interval", seconds=10, args=[prisma_client])
+    scheduler.start()
 
 
 #### API ENDPOINTS ####
@@ -2221,11 +2243,13 @@ async def generate_key_fn(
         if "max_budget" in data_json:
             data_json["key_max_budget"] = data_json.pop("max_budget", None)
 
+
+        if "budget_duration" in data_json:
+          data_json["key_budget_duration"] = data_json.pop("budget_duration", None)
+
         response = await generate_key_helper_fn(**data_json)
         return GenerateKeyResponse(
-            key=response["token"],
-            expires=response["expires"],
-            user_id=response["user_id"],
+            key=response["token"], expires=response["expires"], user_id=response["user_id"]
         )
     except Exception as e:
         if isinstance(e, HTTPException):
@@ -2244,6 +2268,7 @@ async def generate_key_fn(
             code=status.HTTP_400_BAD_REQUEST,
         )
 
+  
 
 @router.post(
     "/key/update", tags=["key management"], dependencies=[Depends(user_api_key_auth)]
@@ -2364,6 +2389,94 @@ async def info_key_fn(
             type="auth_error",
             param=getattr(e, "param", "None"),
             code=status.HTTP_400_BAD_REQUEST,
+        )
+
+
+@router.get(
+    "/spend/keys",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def spend_key_fn():
+    """
+    View all keys created, ordered by spend
+
+    Example Request: 
+    ```
+    curl -X GET "http://0.0.0.0:8000/spend/keys" \
+-H "Authorization: Bearer sk-1234"
+    ```
+    """
+    global prisma_client
+    try:
+        if prisma_client is None:
+            raise Exception(
+                f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+            )
+
+        key_info = await prisma_client.get_data(table_name="key", query_type="find_all")
+
+        return key_info
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": str(e)},
+        )
+
+
+@router.get(
+    "/spend/logs",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def view_spend_logs(
+    request_id: Optional[str] = fastapi.Query(
+        default=None,
+        description="request_id to get spend logs for specific request_id. If none passed then pass spend logs for all requests",
+    ),
+):
+    """
+    View all spend logs, if request_id is provided, only logs for that request_id will be returned
+
+    Example Request for all logs
+    ```
+    curl -X GET "http://0.0.0.0:8000/spend/logs" \
+-H "Authorization: Bearer sk-1234"
+    ```
+
+    Example Request for specific request_id
+    ```
+    curl -X GET "http://0.0.0.0:8000/spend/logs?request_id=chatcmpl-6dcb2540-d3d7-4e49-bb27-291f863f112e" \
+-H "Authorization: Bearer sk-1234"
+    ```
+    """
+    global prisma_client
+    try:
+        if prisma_client is None:
+            raise Exception(
+                f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+            )
+        spend_logs = []
+        if request_id is not None:
+            spend_log = await prisma_client.get_data(
+                table_name="spend",
+                query_type="find_unique",
+                request_id=request_id,
+            )
+            return [spend_log]
+        else:
+            spend_logs = await prisma_client.get_data(
+                table_name="spend", query_type="find_all"
+            )
+            return spend_logs
+
+        return None
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": str(e)},
         )
 
 
