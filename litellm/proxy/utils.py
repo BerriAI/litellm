@@ -361,7 +361,8 @@ class PrismaClient:
         self,
         token: Optional[str] = None,
         user_id: Optional[str] = None,
-        table_name: Optional[Literal["user", "key", "config"]] = None,
+        request_id: Optional[str] = None,
+        table_name: Optional[Literal["user", "key", "config", "spend"]] = None,
         query_type: Literal["find_unique", "find_all"] = "find_unique",
     ):
         try:
@@ -411,6 +412,23 @@ class PrismaClient:
                     }
                 )
                 return response
+            elif table_name == "spend":
+                verbose_proxy_logger.debug(
+                    f"PrismaClient: get_data: table_name == 'spend'"
+                )
+                if request_id is not None:
+                    response = await self.db.litellm_spendlogs.find_unique(  # type: ignore
+                        where={
+                            "request_id": request_id,
+                        }
+                    )
+                    return response
+                else:
+                    response = await self.db.litellm_spendlogs.find_many(  # type: ignore
+                        order={"startTime": "desc"},
+                    )
+                    return response
+
         except Exception as e:
             print_verbose(f"LiteLLM Prisma Client Exception: {e}")
             import traceback

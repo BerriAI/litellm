@@ -2338,6 +2338,61 @@ async def spend_key_fn():
         )
 
 
+@router.get(
+    "/spend/logs",
+    tags=["Budget & Spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def view_spend_logs(
+    request_id: Optional[str] = fastapi.Query(
+        default=None,
+        description="request_id to get spend logs for specific request_id. If none passed then pass spend logs for all requests",
+    ),
+):
+    """
+    View all spend logs, if request_id is provided, only logs for that request_id will be returned
+
+    Example Request for all logs
+    ```
+    curl -X GET "http://0.0.0.0:8000/spend/logs" \
+-H "Authorization: Bearer sk-1234"
+    ```
+
+    Example Request for specific request_id
+    ```
+    curl -X GET "http://0.0.0.0:8000/spend/logs?request_id=chatcmpl-6dcb2540-d3d7-4e49-bb27-291f863f112e" \
+-H "Authorization: Bearer sk-1234"
+    ```
+    """
+    global prisma_client
+    try:
+        if prisma_client is None:
+            raise Exception(
+                f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+            )
+        spend_logs = []
+        if request_id is not None:
+            spend_log = await prisma_client.get_data(
+                table_name="spend",
+                query_type="find_unique",
+                request_id=request_id,
+            )
+            return [spend_log]
+        else:
+            spend_logs = await prisma_client.get_data(
+                table_name="spend", query_type="find_all"
+            )
+            return spend_logs
+
+        return None
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": str(e)},
+        )
+
+
 #### USER MANAGEMENT ####
 @router.post(
     "/user/new",
