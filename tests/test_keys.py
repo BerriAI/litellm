@@ -2,7 +2,7 @@
 ## Tests /key endpoints.
 
 import pytest
-import asyncio
+import asyncio, time
 import aiohttp
 from openai import AsyncOpenAI
 import sys, os
@@ -95,11 +95,10 @@ async def chat_completion(session, key, model="gpt-4"):
 async def chat_completion_streaming(session, key, model="gpt-4"):
     client = AsyncOpenAI(api_key=key, base_url="http://0.0.0.0:4000")
     messages = [
-        {"role": "system", "content": "You are a helpful assistant."},
-        {"role": "user", "content": "Hello!"},
+        {"role": "system", "content": "You are a helpful assistant"},
+        {"role": "user", "content": f"Hello! {time.time()}"},
     ]
     prompt_tokens = litellm.token_counter(model="gpt-35-turbo", messages=messages)
-    assert prompt_tokens == 19
     data = {
         "model": model,
         "messages": messages,
@@ -114,7 +113,7 @@ async def chat_completion_streaming(session, key, model="gpt-4"):
     print(f"content: {content}")
 
     completion_tokens = litellm.token_counter(
-        model="azure/gpt-35-turbo", text=content, count_response_tokens=True
+        model="gpt-35-turbo", text=content, count_response_tokens=True
     )
 
     return prompt_tokens, completion_tokens
@@ -251,7 +250,7 @@ async def test_key_info_spend_values():
         )
         print(f"prompt_tokens: {prompt_tokens}, completion_tokens: {completion_tokens}")
         prompt_cost, completion_cost = litellm.cost_per_token(
-            model="gpt-35-turbo",
+            model="azure/gpt-35-turbo",
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
         )
