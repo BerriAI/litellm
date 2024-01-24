@@ -115,6 +115,24 @@ jobs:
             pip install "pytest-asyncio==0.21.1"
             pip install aiohttp
             pip install openai
+            python -m pip install --upgrade pip
+            python -m pip install -r .circleci/requirements.txt
+            pip install "pytest==7.3.1"
+            pip install "pytest-asyncio==0.21.1"
+            pip install mypy
+            pip install "google-generativeai>=0.3.2"
+            pip install "google-cloud-aiplatform>=1.38.0"
+            pip install "boto3>=1.28.57"
+            pip install langchain
+            pip install "langfuse>=2.0.0"
+            pip install numpydoc
+            pip install prisma            
+            pip install "httpx==0.24.1"
+            pip install "gunicorn==21.2.0"
+            pip install "anyio==3.7.1"
+            pip install "aiodynamo==23.10.1"
+            pip install "asyncio==3.4.3"
+            pip install "PyGithub==1.59.1"
             # Run pytest and generate JUnit XML report
       - run:
           name: Build Docker image
