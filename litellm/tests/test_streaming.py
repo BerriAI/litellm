@@ -733,8 +733,15 @@ def test_completion_bedrock_claude_stream():
         complete_response = ""
         has_finish_reason = False
         # Add any assertions here to check the response
+        first_chunk_id = None
         for idx, chunk in enumerate(response):
             # print
+            if idx == 0:
+                first_chunk_id = chunk.id
+            else:
+                assert (
+                    chunk.id == first_chunk_id
+                ), f"chunk ids do not match: {chunk.id} != first chunk id{first_chunk_id}"
             chunk, finished = streaming_format_tests(idx, chunk)
             has_finish_reason = finished
             complete_response += chunk
