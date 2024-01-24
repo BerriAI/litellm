@@ -735,6 +735,7 @@ def test_call_with_key_over_budget(prisma_client):
             )
             await track_cost_callback(
                 kwargs={
+                    "model": "chatgpt-v-2",
                     "stream": False,
                     "litellm_params": {
                         "metadata": {
@@ -759,6 +760,7 @@ def test_call_with_key_over_budget(prisma_client):
 
             assert spend_log.request_id == request_id
             assert spend_log.spend == float("2e-05")
+            assert spend_log.model == "chatgpt-v-2"
 
             # use generated key to auth in
             result = await user_api_key_auth(request=request, api_key=bearer_token)
