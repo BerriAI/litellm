@@ -135,6 +135,7 @@ class GenerateKeyRequest(LiteLLMBase):
     metadata: Optional[dict] = {}
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
+    budget_duration: Optional[str] = None
 
 
 class UpdateKeyRequest(LiteLLMBase):

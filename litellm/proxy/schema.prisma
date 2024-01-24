@@ -34,6 +34,8 @@ model LiteLLM_VerificationToken {
     tpm_limit     BigInt?
     rpm_limit     BigInt?
     max_budget Float?    @default(0.0)
+    budget_duration String? 
+    budget_reset_at DateTime?
 }
 
 model LiteLLM_Config {
