@@ -53,8 +53,6 @@ model LiteLLM_SpendLogs {
   model               String   @default("")
   user                String   @default("")
   modelParameters     Json     @default("{}")// Assuming optional_params is a JSON field
-  messages            Json     @default("[]")
-  response            Json     @default("{}")
   usage               Json     @default("{}")
   metadata            Json     @default("{}")
   cache_hit           String   @default("")
