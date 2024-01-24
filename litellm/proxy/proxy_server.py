@@ -383,8 +383,9 @@ async def user_api_key_auth(
 
                 # Token exists, not expired now check if its in budget for the user
                 if valid_token.spend is not None and valid_token.user_id is not None:
-                    user_max_budget = user_id_information.max_budget
-                    user_current_spend = user_id_information.spend
+                    user_max_budget = getattr(user_id_information, "max_budget", None)
+                    user_current_spend = getattr(user_id_information, "spend", None)
+
                     if user_max_budget is not None and user_current_spend is not None:
                         if user_current_spend > user_max_budget:
                             raise Exception(
