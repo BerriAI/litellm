@@ -138,8 +138,20 @@ class ProxyLogging:
         end_time: Optional[float] = None,
         type: Literal["hanging_request", "slow_response"] = "hanging_request",
         request_data: Optional[dict] = None,
-        response_obj: Optional[litellm.ModelResponse] = None,
     ):
+        if request_data is not None:
+            model = request_data.get("model", "")
+            messages = request_data.get("messages", "")
+            # try casting messages to str and get the first 100 characters, else mark as None
+            try:
+                messages = str(messages)
+                messages = messages[:10000]
+            except:
+                messages = None
+
+            request_info = f"\nRequest Model: {model}\nMessages: {messages}"
+        else:
+            request_info = ""
         if type == "hanging_request":
             # Simulate a long-running operation that could take more than 5 minutes
             await asyncio.sleep(
@@ -150,17 +162,19 @@ class ProxyLogging:
                 f"Requests are hanging - {self.alerting_threshold}s+ request time"
             )
             await self.alerting_handler(
-                message=alerting_message
-                + f"\nRequest: {request_data}\nResponse: {response_obj}",
+                message=alerting_message + request_info,
                 level="Medium",
             )
 
         elif (
             type == "slow_response" and start_time is not None and end_time is not None
         ):
+            slow_message = (
+                f"Responses are slow - {round(end_time-start_time,2)}s response time"
+            )
             if end_time - start_time > self.alerting_threshold:
                 await self.alerting_handler(
-                    message=f"Responses are slow - {round(end_time-start_time,2)}s response time",
+                    message=slow_message + request_info,
                     level="Low",
                 )
 
