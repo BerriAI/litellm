@@ -384,7 +384,9 @@ class PrismaClient:
                     )
                     if response is not None:
                         # for prisma we need to cast the expires time to str
-                        if isinstance(response.expires, datetime):
+                        if response.expires is not None and isinstance(
+                            response.expires, datetime
+                        ):
                             response.expires = response.expires.isoformat()
                 elif query_type == "find_all" and user_id is not None:
                     response = await self.db.litellm_verificationtoken.find_many(
