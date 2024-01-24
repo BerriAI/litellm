@@ -42,6 +42,7 @@ from litellm.proxy.proxy_server import (
     info_key_fn,
     update_key_fn,
     generate_key_fn,
+    view_spend_logs,
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm._logging import verbose_proxy_logger
@@ -713,9 +714,12 @@ def test_call_with_key_over_budget(prisma_client):
             # update spend using track_cost callback, make 2nd request, it should fail
             from litellm.proxy.proxy_server import track_cost_callback
             from litellm import ModelResponse, Choices, Message, Usage
+            import time
+
+            request_id = f"chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac{time.time()}"
 
             resp = ModelResponse(
-                id="chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac",
+                id=request_id,
                 choices=[
                     Choices(
                         finish_reason=None,
@@ -744,6 +748,17 @@ def test_call_with_key_over_budget(prisma_client):
                 start_time=datetime.now(),
                 end_time=datetime.now(),
             )
+
+            # test spend_log was written and we can read it
+            spend_logs = await view_spend_logs(request_id=request_id)
+
+            print("read spend logs", spend_logs)
+            assert len(spend_logs) == 1
+
+            spend_log = spend_logs[0]
+
+            assert spend_log.request_id == request_id
+            assert spend_log.spend == float("2e-05")
 
             # use generated key to auth in
             result = await user_api_key_auth(request=request, api_key=bearer_token)
@@ -788,9 +803,11 @@ def test_call_with_key_over_budget_stream(prisma_client):
             # update spend using track_cost callback, make 2nd request, it should fail
             from litellm.proxy.proxy_server import track_cost_callback
             from litellm import ModelResponse, Choices, Message, Usage
+            import time
 
+            request_id = f"chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac{time.time()}"
             resp = ModelResponse(
-                id="chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac",
+                id=request_id,
                 choices=[
                     Choices(
                         finish_reason=None,
@@ -814,12 +831,23 @@ def test_call_with_key_over_budget_stream(prisma_client):
                             "user_api_key_user_id": user_id,
                         }
                     },
-                    "response_cost": 0.00002,
+                    "response_cost": 0.00005,
                 },
                 completion_response=ModelResponse(),
                 start_time=datetime.now(),
                 end_time=datetime.now(),
             )
+
+            # test spend_log was written and we can read it
+            spend_logs = await view_spend_logs(request_id=request_id)
+
+            print("read spend logs", spend_logs)
+            assert len(spend_logs) == 1
+
+            spend_log = spend_logs[0]
+
+            assert spend_log.request_id == request_id
+            assert spend_log.spend == float("5e-05")
 
             # use generated key to auth in
             result = await user_api_key_auth(request=request, api_key=bearer_token)
