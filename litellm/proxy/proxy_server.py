@@ -485,12 +485,20 @@ async def user_api_key_auth(
         # verbose_proxy_logger.debug(f"An exception occurred - {traceback.format_exc()}")
         traceback.print_exc()
         if isinstance(e, HTTPException):
-            raise e
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=f"Authentication Error, {str(e)}",
+            raise ProxyException(
+                message=getattr(e, "detail", f"Authentication Error({str(e)})"),
+                type="auth_error",
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_401_UNAUTHORIZED),
             )
+        elif isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message="Authentication Error, " + str(e),
+            type="auth_error",
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_401_UNAUTHORIZED,
+        )
 
 
 def prisma_setup(database_url: Optional[str]):
@@ -2216,30 +2224,51 @@ async def generate_key_fn(
     - expires: (datetime) Datetime object for when key expires.
     - user_id: (str) Unique user id - used for tracking spend across multiple keys for same user id.
     """
-    global user_custom_key_generate
-    verbose_proxy_logger.debug("entered /key/generate")
+    try:
+        global user_custom_key_generate
+        verbose_proxy_logger.debug("entered /key/generate")
 
-    if user_custom_key_generate is not None:
-        result = await user_custom_key_generate(data)
-        decision = result.get("decision", True)
-        message = result.get("message", "Authentication Failed - Custom Auth Rule")
-        if not decision:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=message)
+        if user_custom_key_generate is not None:
+            result = await user_custom_key_generate(data)
+            decision = result.get("decision", True)
+            message = result.get("message", "Authentication Failed - Custom Auth Rule")
+            if not decision:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN, detail=message
+                )
 
-    data_json = data.json()  # type: ignore
+        data_json = data.json()  # type: ignore
 
-    # if we get max_budget passed to /key/generate, then use it as key_max_budget. Since generate_key_helper_fn is used to make new users
-    if "max_budget" in data_json:
-        data_json["key_max_budget"] = data_json.pop("max_budget", None)
+        # if we get max_budget passed to /key/generate, then use it as key_max_budget. Since generate_key_helper_fn is used to make new users
+        if "max_budget" in data_json:
+            data_json["key_max_budget"] = data_json.pop("max_budget", None)
 
-    if "budget_duration" in data_json:
-        data_json["key_budget_duration"] = data_json.pop("budget_duration", None)
 
-    response = await generate_key_helper_fn(**data_json)
-    return GenerateKeyResponse(
-        key=response["token"], expires=response["expires"], user_id=response["user_id"]
-    )
+        if "budget_duration" in data_json:
+          data_json["key_budget_duration"] = data_json.pop("budget_duration", None)
 
+        response = await generate_key_helper_fn(**data_json)
+        return GenerateKeyResponse(
+            key=response["token"], expires=response["expires"], user_id=response["user_id"]
+        )
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"Authentication Error({str(e)})"),
+                type="auth_error",
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message="Authentication Error, " + str(e),
+            type="auth_error",
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+
+  
 
 @router.post(
     "/key/update", tags=["key management"], dependencies=[Depends(user_api_key_auth)]
@@ -2263,9 +2292,20 @@ async def update_key_fn(request: Request, data: UpdateKeyRequest):
         return {"key": key, **non_default_values}
         # update based on remaining passed in values
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"error": str(e)},
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"Authentication Error({str(e)})"),
+                type="auth_error",
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message="Authentication Error, " + str(e),
+            type="auth_error",
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_400_BAD_REQUEST,
         )
 
 
@@ -2296,9 +2336,20 @@ async def delete_key_fn(data: DeleteKeyRequest):
         assert len(keys) == number_deleted_keys
         return {"deleted_keys": keys}
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"error": str(e)},
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"Authentication Error({str(e)})"),
+                type="auth_error",
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message="Authentication Error, " + str(e),
+            type="auth_error",
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_400_BAD_REQUEST,
         )
 
 
@@ -2324,9 +2375,20 @@ async def info_key_fn(
         key_info.pop("token")
         return {"key": key, "info": key_info}
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"error": str(e)},
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"Authentication Error({str(e)})"),
+                type="auth_error",
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message="Authentication Error, " + str(e),
+            type="auth_error",
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_400_BAD_REQUEST,
         )
 
 
@@ -2555,9 +2617,20 @@ async def user_info(
             key.pop("token", None)
         return {"user_id": user_id, "user_info": user_info, "keys": keys}
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"error": str(e)},
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"Authentication Error({str(e)})"),
+                type="auth_error",
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message="Authentication Error, " + str(e),
+            type="auth_error",
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_400_BAD_REQUEST,
         )
 
 
@@ -2610,11 +2683,20 @@ async def add_new_model(model_params: ModelParams):
     except Exception as e:
         traceback.print_exc()
         if isinstance(e, HTTPException):
-            raise e
-        else:
-            raise HTTPException(
-                status_code=500, detail=f"Internal Server Error: {str(e)}"
+            raise ProxyException(
+                message=getattr(e, "detail", f"Authentication Error({str(e)})"),
+                type="auth_error",
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
+        elif isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message="Authentication Error, " + str(e),
+            type="auth_error",
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_400_BAD_REQUEST,
+        )
 
 
 #### [BETA] - This is a beta endpoint, format might change based on user feedback https://github.com/BerriAI/litellm/issues/933. If you need a stable endpoint use /model/info
@@ -2703,11 +2785,22 @@ async def delete_model(model_info: ModelInfoDelete):
         config = await proxy_config.save_config(new_config=config)
         return {"message": "Model deleted successfully"}
 
-    except HTTPException as e:
-        # Re-raise the HTTP exceptions to be handled by FastAPI
-        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"Authentication Error({str(e)})"),
+                type="auth_error",
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message="Authentication Error, " + str(e),
+            type="auth_error",
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_400_BAD_REQUEST,
+        )
 
 
 #### EXPERIMENTAL QUEUING ####
@@ -2852,9 +2945,20 @@ async def async_queue_request(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e
         )
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"error": str(e)},
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"Authentication Error({str(e)})"),
+                type="auth_error",
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message="Authentication Error, " + str(e),
+            type="auth_error",
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_400_BAD_REQUEST,
         )
 
 
@@ -2924,11 +3028,23 @@ async def update_config(config_info: ConfigYAML):
                 message="This is a test", level="Low"
             )
         return {"message": "Config updated successfully"}
-    except HTTPException as e:
-        raise e
     except Exception as e:
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"An error occurred - {str(e)}")
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"Authentication Error({str(e)})"),
+                type="auth_error",
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message="Authentication Error, " + str(e),
+            type="auth_error",
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_400_BAD_REQUEST,
+        )
 
 
 @router.get(
