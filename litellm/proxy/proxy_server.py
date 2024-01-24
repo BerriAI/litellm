@@ -2311,6 +2311,15 @@ async def info_key_fn(
     dependencies=[Depends(user_api_key_auth)],
 )
 async def spend_key_fn():
+    """
+    View all keys created, ordered by spend
+
+    Example Request: 
+    ```
+    curl -X GET "http://0.0.0.0:8000/spend/keys" \
+-H "Authorization: Bearer sk-1234"
+    ```
+    """
     global prisma_client
     try:
         if prisma_client is None:
