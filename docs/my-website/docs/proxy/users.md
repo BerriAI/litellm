@@ -44,6 +44,16 @@ The request is a normal `/key/generate` request body + a `max_budget` field.
 </TabItem>
 <TabItem value="per-key" label="Per Key">
 
+You can:
+- Add budgets to keys [**Jump**](#add-budgets-to-keys)
+- Add budget durations, to reset spend [**Jump**](#add-budget-duration-to-keys)
+
+**Expected Behaviour**
+- Costs Per key get auto-populated in `LiteLLM_VerificationToken` Table
+- After the key crosses it's `max_budget`, requests fail
+- If duration set, spend is reset at the end of the duration
+
+### **Add budgets to keys**
 
 ```bash
 curl 'http://0.0.0.0:8000/key/generate' \
@@ -55,16 +65,12 @@ curl 'http://0.0.0.0:8000/key/generate' \
 }'
 ```
 
-#### Expected Behaviour
-- Costs Per key get auto-populated in `LiteLLM_VerificationToken` Table
-- After the key crosses it's `max_budget`, requests fail
-
 Example Request to `/chat/completions` when key has crossed budget
 
 ```shell
 curl --location 'http://0.0.0.0:8000/chat/completions' \
   --header 'Content-Type: application/json' \
-  --header 'Authorization: Bearer sk-ULl_IKCVFy2EZRzQB16RUA' \
+  --header 'Authorization: Bearer <generated-key>' \
   --data ' {
   "model": "azure-gpt-3.5",
   "user": "e09b4da8-ed80-4b05-ac93-e16d9eb56fca",
@@ -85,6 +91,20 @@ Expected Response from `/chat/completions` when key has crossed budget
 }   
 ```
 
+### **Add budget duration to keys**
+
+`budget_duration`: Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
+
+```
+curl 'http://0.0.0.0:8000/key/generate' \
+--header 'Authorization: Bearer <your-master-key>' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+  "team_id": "core-infra", # [OPTIONAL]
+  "max_budget": 10,
+  "budget_duration": 10s,
+}'
+```
 
 </TabItem>
 </Tabs>
