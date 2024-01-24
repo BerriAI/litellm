@@ -1450,10 +1450,9 @@ async def async_data_generator(response, user_api_key_dict):
 def select_data_generator(response, user_api_key_dict):
     try:
         # since boto3 - sagemaker does not support async calls, we should use a sync data_generator
-        if (
-            hasattr(response, "custom_llm_provider")
-            and response.custom_llm_provider == "sagemaker"
-        ):
+        if hasattr(
+            response, "custom_llm_provider"
+        ) and response.custom_llm_provider in ["sagemaker", "together_ai"]:
             return data_generator(
                 response=response,
             )
@@ -2243,13 +2242,14 @@ async def generate_key_fn(
         if "max_budget" in data_json:
             data_json["key_max_budget"] = data_json.pop("max_budget", None)
 
-
         if "budget_duration" in data_json:
-          data_json["key_budget_duration"] = data_json.pop("budget_duration", None)
+            data_json["key_budget_duration"] = data_json.pop("budget_duration", None)
 
         response = await generate_key_helper_fn(**data_json)
         return GenerateKeyResponse(
-            key=response["token"], expires=response["expires"], user_id=response["user_id"]
+            key=response["token"],
+            expires=response["expires"],
+            user_id=response["user_id"],
         )
     except Exception as e:
         if isinstance(e, HTTPException):
@@ -2268,7 +2268,6 @@ async def generate_key_fn(
             code=status.HTTP_400_BAD_REQUEST,
         )
 
-  
 
 @router.post(
     "/key/update", tags=["key management"], dependencies=[Depends(user_api_key_auth)]

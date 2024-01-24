@@ -25,6 +25,9 @@ model_list:
   - model_name: BEDROCK_GROUP
     litellm_params:
       model: bedrock/cohere.command-text-v14
+  - model_name: tg-ai
+    litellm_params:
+      model: together_ai/mistralai/Mistral-7B-Instruct-v0.1
   - model_name: sagemaker
     litellm_params:
       model: sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4
