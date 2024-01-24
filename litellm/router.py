@@ -289,10 +289,8 @@ class Router:
             timeout = kwargs.get("request_timeout", self.timeout)
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
             kwargs.setdefault("metadata", {}).update({"model_group": model})
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                # Submit the function to the executor with a timeout
-                future = executor.submit(self.function_with_fallbacks, **kwargs)
-                response = future.result(timeout=timeout)  # type: ignore
+
+            response = self.function_with_fallbacks(**kwargs)
 
             return response
         except Exception as e:
@@ -334,20 +332,48 @@ class Router:
             else:
                 model_client = potential_model_client
 
-            response = litellm.completion(
-                **{
-                    **data,
-                    "messages": messages,
-                    "caching": self.cache_responses,
-                    "client": model_client,
-                    **kwargs,
-                }
-            )
+            if kwargs.get("timeout") is not None:
+                timeout = kwargs.get("timeout")
+            else:
+                timeout = self.timeout
+            # print("PASSING TIMEOUT to thread pool", timeout)
+            import concurrent.futures
+
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                # Submit the function to the executor with a timeout
+                try:
+                    future = executor.submit(
+                        litellm.completion,
+                        **{
+                            **data,
+                            "messages": messages,
+                            "caching": self.cache_responses,
+                            "client": model_client,
+                            **kwargs,
+                        },
+                        return_when=concurrent.futures.FIRST_COMPLETED,
+                    )
+                    # print("timeout passed to function with fallbacks", timeout)
+                    response = future.result(timeout=timeout)  # type: ignore
+                except concurrent.futures.TimeoutError:
+                    # print("Operation timed out.")
+                    raise Exception
+
+            # response = litellm.completion(
+            #     **{
+            #         **data,
+            #         "messages": messages,
+            #         "caching": self.cache_responses,
+            #         "client": model_client,
+            #         **kwargs,
+            #     }
+            # )
             verbose_router_logger.info(
                 f"litellm.completion(model={model_name})\033[32m 200 OK\033[0m"
             )
             return response
         except Exception as e:
+            # print("Exception caught")
             verbose_router_logger.info(
                 f"litellm.completion(model={model_name})\033[31m Exception {str(e)}\033[0m"
             )
