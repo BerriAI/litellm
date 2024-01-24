@@ -272,10 +272,10 @@ def spend_per_user():
                     top_10_df,
                     x="user_id",
                     y="spend",
-                    title="Top 10 Spend per Key",
+                    title="Top 10 Spend per User",
                     height=550,  # Adjust the height
                     width=1200,  # Adjust the width)
-                    # hover_data=["token", "spend", "user_id", "team_id"],
+                    hover_data=["user_id", "spend", "max_budget"],
                 )
                 st.plotly_chart(fig)
 
