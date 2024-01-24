@@ -2393,7 +2393,7 @@ async def info_key_fn(
 
 @router.get(
     "/spend/keys",
-    tags=["Budget & Spend Tracking"],
+    tags=["budget & spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
 )
 async def spend_key_fn():
@@ -2425,8 +2425,43 @@ async def spend_key_fn():
 
 
 @router.get(
+    "/spend/users",
+    tags=["budget & spend Tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def spend_user_fn():
+    """
+    View all users created, ordered by spend
+
+    Example Request: 
+    ```
+    curl -X GET "http://0.0.0.0:8000/spend/users" \
+-H "Authorization: Bearer sk-1234"
+    ```
+    """
+    global prisma_client
+    try:
+        if prisma_client is None:
+            raise Exception(
+                f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+            )
+
+        user_info = await prisma_client.get_data(
+            table_name="user", query_type="find_all"
+        )
+
+        return user_info
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": str(e)},
+        )
+
+
+@router.get(
     "/spend/logs",
-    tags=["Budget & Spend Tracking"],
+    tags=["budget & spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
 )
 async def view_spend_logs(
