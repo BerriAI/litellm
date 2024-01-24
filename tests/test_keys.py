@@ -219,9 +219,26 @@ async def test_key_info():
         assert status == 403
 
 
+async def get_spend_logs(session, request_id):
+    url = f"http://0.0.0.0:4000/spend/logs?request_id={request_id}"
+    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+
+    async with session.get(url, headers=headers) as response:
+        status = response.status
+        response_text = await response.text()
+
+        print(response_text)
+        print()
+
+        if status != 200:
+            raise Exception(f"Request did not return a 200 status code: {status}")
+        return await response.json()
+
+
 @pytest.mark.asyncio
 async def test_key_info_spend_values():
     """
+    Test to ensure spend is correctly calculated.
     - create key
     - make completion call
     - assert cost is expected value
@@ -229,19 +246,28 @@ async def test_key_info_spend_values():
     async with aiohttp.ClientSession() as session:
         ## Test Spend Update ##
         # completion
-        # response = await chat_completion(session=session, key=key)
-        # prompt_cost, completion_cost = litellm.cost_per_token(
-        #     model="azure/gpt-35-turbo",
-        #     prompt_tokens=response["usage"]["prompt_tokens"],
-        #     completion_tokens=response["usage"]["completion_tokens"],
-        # )
-        # response_cost = prompt_cost + completion_cost
-        # await asyncio.sleep(5)  # allow db log to be updated
-        # key_info = await get_key_info(session=session, get_key=key, call_key=key)
-        # print(
-        #     f"response_cost: {response_cost}; key_info spend: {key_info['info']['spend']}"
-        # )
-        # assert response_cost == key_info["info"]["spend"]
+        key_gen = await generate_key(session=session, i=0)
+        key = key_gen["key"]
+        response = await chat_completion(session=session, key=key)
+        await asyncio.sleep(5)
+        spend_logs = await get_spend_logs(session=session, request_id=response["id"])
+        print(f"spend_logs: {spend_logs}")
+        usage = spend_logs[0]["usage"]
+        prompt_cost, completion_cost = litellm.cost_per_token(
+            model="gpt-35-turbo",
+            prompt_tokens=usage["prompt_tokens"],
+            completion_tokens=usage["completion_tokens"],
+            custom_llm_provider="azure",
+        )
+        response_cost = prompt_cost + completion_cost
+        await asyncio.sleep(5)  # allow db log to be updated
+        key_info = await get_key_info(session=session, get_key=key, call_key=key)
+        print(
+            f"response_cost: {response_cost}; key_info spend: {key_info['info']['spend']}"
+        )
+        rounded_response_cost = round(response_cost, 8)
+        rounded_key_info_spend = round(key_info["info"]["spend"], 8)
+        assert rounded_response_cost == rounded_key_info_spend
         ## streaming
         key_gen = await generate_key(session=session, i=0)
         new_key = key_gen["key"]
@@ -262,4 +288,6 @@ async def test_key_info_spend_values():
         print(
             f"response_cost: {response_cost}; key_info spend: {key_info['info']['spend']}"
         )
-        assert response_cost == key_info["info"]["spend"]
+        rounded_response_cost = round(response_cost, 8)
+        rounded_key_info_spend = round(key_info["info"]["spend"], 8)
+        assert rounded_response_cost == rounded_key_info_spend
