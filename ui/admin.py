@@ -238,7 +238,59 @@ def spend_per_key():
 
 
 def spend_per_user():
-    pass
+    import streamlit as st
+    import requests
+
+    # Check if the necessary configuration is available
+    if (
+        st.session_state.get("api_url", None) is not None
+        and st.session_state.get("proxy_key", None) is not None
+    ):
+        # Make the GET request
+        try:
+            complete_url = ""
+            if isinstance(st.session_state["api_url"], str) and st.session_state[
+                "api_url"
+            ].endswith("/"):
+                complete_url = f"{st.session_state['api_url']}/spend/users"
+            else:
+                complete_url = f"{st.session_state['api_url']}/spend/users"
+            response = requests.get(
+                complete_url,
+                headers={"Authorization": f"Bearer {st.session_state['proxy_key']}"},
+            )
+            # Check if the request was successful
+            if response.status_code == 200:
+                spend_per_user = response.json()
+                # Create DataFrame
+                spend_df = pd.DataFrame(spend_per_user)
+
+                # Display the spend per key as a graph
+                st.header("Spend ($) per User:")
+                top_10_df = spend_df.nlargest(10, "spend")
+                fig = px.bar(
+                    top_10_df,
+                    x="user_id",
+                    y="spend",
+                    title="Top 10 Spend per Key",
+                    height=550,  # Adjust the height
+                    width=1200,  # Adjust the width)
+                    # hover_data=["token", "spend", "user_id", "team_id"],
+                )
+                st.plotly_chart(fig)
+
+                # Display the spend per key as a table
+                st.write("Spend per User - Full Table:")
+                st.table(spend_df)
+
+            else:
+                st.error(f"Failed to get models. Status code: {response.status_code}")
+        except Exception as e:
+            st.error(f"An error occurred while requesting models: {e}")
+    else:
+        st.warning(
+            f"Please configure the Proxy Endpoint and Proxy Key on the Proxy Setup page. Currently set Proxy Endpoint: {st.session_state.get('api_url', None)} and Proxy Key: {st.session_state.get('proxy_key', None)}"
+        )
 
 
 def create_key():
