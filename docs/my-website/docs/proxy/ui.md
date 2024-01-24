@@ -1,8 +1,9 @@
 import Image from '@theme/IdealImage';
 
-# [BETA] Self-serve UI 
+# [BETA] Admin UI
 
-Allow your users to create their own keys through a UI
+- Track Spend Per API Key, User
+- Allow your users to create their own keys through a UI
 
 :::info
 
@@ -63,3 +64,8 @@ Connect your proxy to your UI, by entering:
 ### Create Keys 
 
 <Image img={require('../../img/user_create_key_screen.png')} />  
+
+### Spend Per Key
+
+<Image img={require('../../img/spend_per_api_key.png')} />  
+
