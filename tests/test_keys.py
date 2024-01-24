@@ -20,7 +20,7 @@ async def generate_key(session, i, budget=None, budget_duration=None):
         "models": ["azure-models", "gpt-4"],
         "aliases": {"mistral-7b": "gpt-3.5-turbo"},
         "duration": None,
-        "budget": budget,
+        "max_budget": budget,
         "budget_duration": budget_duration,
     }
 
@@ -303,14 +303,18 @@ async def test_key_with_budgets():
     - wait 5s
     - Check if value updated
     """
+    from litellm.proxy.utils import hash_token
+
     async with aiohttp.ClientSession() as session:
         key_gen = await generate_key(
             session=session, i=0, budget=10, budget_duration="5s"
         )
         key = key_gen["key"]
+        hashed_token = hash_token(token=key)
+        print(f"hashed_token: {hashed_token}")
         key_info = await get_key_info(session=session, get_key=key, call_key=key)
         reset_at_init_value = key_info["info"]["budget_reset_at"]
-        await asyncio.sleep(5)
+        await asyncio.sleep(15)
         key_info = await get_key_info(session=session, get_key=key, call_key=key)
         reset_at_new_value = key_info["info"]["budget_reset_at"]
         assert reset_at_init_value != reset_at_new_value
