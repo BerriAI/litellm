@@ -1510,9 +1510,11 @@ class Router:
                     verbose_router_logger.debug(
                         f"Initializing Azure OpenAI Client for {model_name}, Api Base: {str(api_base)}, Api Key:{api_key}"
                     )
+                    azure_model = model_name.replace("azure/", "")
                     azure_client_params = {
                         "api_key": api_key,
                         "azure_endpoint": api_base,
+                        "azure_deployment": azure_model,
                         "api_version": api_version,
                     }
                     from litellm.llms.azure import select_azure_base_url_or_endpoint
