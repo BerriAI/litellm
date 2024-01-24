@@ -1133,6 +1133,7 @@ async def generate_key_helper_fn(
     key_max_budget: Optional[float] = None,  # key_max_budget is used to Budget Per key
     key_budget_duration: Optional[str] = None,
     max_budget: Optional[float] = None,  # max_budget is used to Budget Per user
+    budget_duration: Optional[str] = None,  # max_budget is used to Budget Per user
     token: Optional[str] = None,
     user_id: Optional[str] = None,
     team_id: Optional[str] = None,
