@@ -892,6 +892,10 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time):
     from pydantic import Json
     import uuid
 
+    verbose_proxy_logger.debug(
+        f"SpendTable: get_logging_payload - kwargs: {kwargs}\n\n"
+    )
+
     if kwargs == None:
         kwargs = {}
     # standardize this function to be used across, s3, dynamoDB, langfuse logging
