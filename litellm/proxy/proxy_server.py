@@ -2435,7 +2435,7 @@ async def spend_user_fn():
 
     Example Request: 
     ```
-    curl -X GET "http://0.0.0.0:8000/spend/keys" \
+    curl -X GET "http://0.0.0.0:8000/spend/users" \
 -H "Authorization: Bearer sk-1234"
     ```
     """
@@ -2446,9 +2446,11 @@ async def spend_user_fn():
                 f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
-        key_info = await prisma_client.get_data(table_name="key", query_type="find_all")
+        user_info = await prisma_client.get_data(
+            table_name="user", query_type="find_all"
+        )
 
-        return key_info
+        return user_info
 
     except Exception as e:
         raise HTTPException(
