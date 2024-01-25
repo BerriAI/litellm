@@ -692,7 +692,9 @@ async def update_database(
                     )
                 if existing_spend_obj is None:
                     existing_spend = 0
-                    existing_spend = LiteLLM_UserTable(user_id=id, spend=0)
+                    existing_spend_obj = LiteLLM_UserTable(
+                        user_id=id, spend=0, max_budget=None, user_email=None
+                    )
                 else:
                     existing_spend = existing_spend_obj.spend
 
