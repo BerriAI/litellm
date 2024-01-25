@@ -716,6 +716,9 @@ def test_call_with_key_over_budget(prisma_client):
             # update spend using track_cost callback, make 2nd request, it should fail
             from litellm.proxy.proxy_server import track_cost_callback
             from litellm import ModelResponse, Choices, Message, Usage
+            from litellm.caching import Cache
+
+            litellm.cache = Cache()
             import time
 
             request_id = f"chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac{time.time()}"
