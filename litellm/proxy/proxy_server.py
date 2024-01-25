@@ -593,6 +593,12 @@ async def track_cost_callback(
                 "user_api_key_user_id", None
             )
 
+            if kwargs.get("cache_hit", False) == True:
+                response_cost = 0.0
+                verbose_proxy_logger.info(
+                    f"Cache Hit: response_cost {response_cost}, for user_id {user_id}"
+                )
+
             verbose_proxy_logger.info(
                 f"response_cost {response_cost}, for user_id {user_id}"
             )
