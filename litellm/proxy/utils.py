@@ -722,9 +722,14 @@ class PrismaClient:
                         data_json = self.jsonify_object(data=user.model_dump())
                     except:
                         data_json = self.jsonify_object(data=user.dict())
-                    batcher.litellm_usertable.update(
+                    batcher.litellm_usertable.upsert(
                         where={"user_id": user.user_id},  # type: ignore
-                        data={**data_json},  # type: ignore
+                        data={
+                            "create": {**data_json},  # type: ignore
+                            "update": {
+                                **data_json  # type: ignore
+                            },  # just update user-specified values, if it already exists
+                        },
                     )
                 await batcher.commit()
                 verbose_proxy_logger.info(
