@@ -1003,6 +1003,10 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time):
         cache_key = litellm.cache.get_cache_key(**kwargs)
     else:
         cache_key = "Cache OFF"
+    if cache_hit == True:
+        import time
+
+        id = f"{id}_cache_hit{time.time()}"  # SpendLogs does not allow duplicate request_id
 
     payload = {
         "request_id": id,
