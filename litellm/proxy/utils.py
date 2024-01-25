@@ -186,7 +186,23 @@ class ProxyLogging:
         type: Literal["token_budget", "user_budget", "user_and_proxy_budget"],
         user_max_budget: float,
         user_current_spend: float,
+        user_info=None,
     ):
+        # percent of max_budget left to spend
+        percent_left = (user_max_budget - user_current_spend) / user_max_budget
+
+        # check if 15% of max budget is left
+        if percent_left <= 0.15:
+            pass
+
+        # check if 5% of max budget is left
+        if percent_left <= 0.05:
+            pass
+
+        # check if crossed budget
+        if user_current_spend >= user_max_budget:
+            pass
+
         pass
 
     async def alerting_handler(
