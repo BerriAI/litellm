@@ -274,14 +274,10 @@ async def acompletion(
         else:
             # Call the synchronous function using run_in_executor
             response = await loop.run_in_executor(None, func_with_context)  # type: ignore
-        # if kwargs.get("stream", False):  # return an async generator
-        #     return _async_streaming(
-        #         response=response,
-        #         model=model,
-        #         custom_llm_provider=custom_llm_provider,
-        #         args=args,
-        #     )
-        # else:
+        if isinstance(response, CustomStreamWrapper):
+            response.set_logging_event_loop(
+                loop=loop
+            )  # sets the logging event loop if the user does sync streaming (e.g. on proxy for sagemaker calls)
         return response
     except Exception as e:
         custom_llm_provider = custom_llm_provider or "openai"
