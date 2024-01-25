@@ -97,7 +97,7 @@ class ProxyLogging:
         3. /image/generation
         """
         ### ALERTING ###
-        asyncio.create_task(self.response_taking_too_long())
+        asyncio.create_task(self.response_taking_too_long(request_data=data))
 
         try:
             for callback in litellm.callbacks:
@@ -137,24 +137,47 @@ class ProxyLogging:
         start_time: Optional[float] = None,
         end_time: Optional[float] = None,
         type: Literal["hanging_request", "slow_response"] = "hanging_request",
+        request_data: Optional[dict] = None,
     ):
+        if request_data is not None:
+            model = request_data.get("model", "")
+            messages = request_data.get("messages", "")
+            # try casting messages to str and get the first 100 characters, else mark as None
+            try:
+                messages = str(messages)
+                messages = messages[:10000]
+            except:
+                messages = None
+
+            request_info = f"\nRequest Model: {model}\nMessages: {messages}"
+        else:
+            request_info = ""
+
         if type == "hanging_request":
             # Simulate a long-running operation that could take more than 5 minutes
             await asyncio.sleep(
                 self.alerting_threshold
             )  # Set it to 5 minutes - i'd imagine this might be different for streaming, non-streaming, non-completion (embedding + img) requests
-
-            await self.alerting_handler(
-                message=f"Requests are hanging - {self.alerting_threshold}s+ request time",
-                level="Medium",
-            )
+            if (
+                request_data is not None
+                and request_data.get("litellm_status", "") != "success"
+            ):
+                # only alert hanging responses if they have not been marked as success
+                alerting_message = (
+                    f"Requests are hanging - {self.alerting_threshold}s+ request time"
+                )
+                await self.alerting_handler(
+                    message=alerting_message + request_info,
+                    level="Medium",
+                )
 
         elif (
             type == "slow_response" and start_time is not None and end_time is not None
         ):
+            slow_message = f"Responses are slow - {round(end_time-start_time,2)}s response time > Alerting threshold: {self.alerting_threshold}s"
             if end_time - start_time > self.alerting_threshold:
                 await self.alerting_handler(
-                    message=f"Responses are slow - {round(end_time-start_time,2)}s response time",
+                    message=slow_message + request_info,
                     level="Low",
                 )
 
@@ -173,7 +196,13 @@ class ProxyLogging:
             level: str - Low|Medium|High - if calls might fail (Medium) or are failing (High); Currently, no alerts would be 'Low'.
             message: str - what is the alert about
         """
-        formatted_message = f"Level: {level}\n\nMessage: {message}"
+        from datetime import datetime
+
+        # Get the current timestamp
+        current_time = datetime.now().strftime("%H:%M:%S")
+        formatted_message = (
+            f"Level: {level}\nTimestamp: {current_time}\n\nMessage: {message}"
+        )
         if self.alerting is None:
             return
 
@@ -184,7 +213,9 @@ class ProxyLogging:
                     raise Exception("Missing SLACK_WEBHOOK_URL from environment")
                 payload = {"text": formatted_message}
                 headers = {"Content-type": "application/json"}
-                async with aiohttp.ClientSession() as session:
+                async with aiohttp.ClientSession(
+                    connector=aiohttp.TCPConnector(ssl=False)
+                ) as session:
                     async with session.post(
                         slack_webhook_url, json=payload, headers=headers
                     ) as response:
