@@ -214,7 +214,7 @@ class ProxyLogging:
 
         # check if 5% of max budget is left
         if percent_left <= 0.05:
-            message = "5 Percent budget left for" + user_info
+            message = "5% budget left for" + user_info
             await self.alerting_handler(
                 message=message,
                 level="Medium",
@@ -223,7 +223,7 @@ class ProxyLogging:
 
         # check if 15% of max budget is left
         if percent_left <= 0.15:
-            message = "15 Percent budget left for" + user_info
+            message = "15% budget left for" + user_info
             await self.alerting_handler(
                 message=message,
                 level="Low",
