@@ -7116,6 +7116,7 @@ class CustomStreamWrapper:
             "model_id": (_model_info.get("id", None))
         }  # returned as x-litellm-model-id response header in proxy
         self.response_id = None
+        self.logging_loop = None
 
     def __iter__(self):
         return self
@@ -8016,16 +8017,24 @@ class CustomStreamWrapper:
                 original_exception=e,
             )
 
+    def set_logging_event_loop(self, loop):
+        self.logging_loop = loop
+
+    async def your_async_function(self):
+        # Your asynchronous code here
+        return "Your asynchronous code is running"
+
     def run_success_logging_in_thread(self, processed_chunk):
         # Create an event loop for the new thread
         ## ASYNC LOGGING
-        # Run the asynchronous function in the new thread's event loop
-        asyncio.run(
-            self.logging_obj.async_success_handler(
-                processed_chunk,
+        if self.logging_loop is not None:
+            future = asyncio.run_coroutine_threadsafe(
+                self.logging_obj.async_success_handler(processed_chunk),
+                loop=self.logging_loop,
             )
-        )
-
+            result = future.result()
+        else:
+            asyncio.run(self.logging_obj.async_success_handler(processed_chunk))
         ## SYNC LOGGING
         self.logging_obj.success_handler(processed_chunk)
 
