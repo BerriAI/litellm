@@ -556,6 +556,47 @@ async def test_async_chat_bedrock_stream():
 
 # asyncio.run(test_async_chat_bedrock_stream())
 
+
+## Test Sagemaker + Async
+@pytest.mark.asyncio
+async def test_async_chat_sagemaker_stream():
+    try:
+        customHandler = CompletionCustomHandler()
+        litellm.callbacks = [customHandler]
+        response = await litellm.acompletion(
+            model="sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4",
+            messages=[{"role": "user", "content": "Hi 👋 - i'm async sagemaker"}],
+        )
+        # test streaming
+        response = await litellm.acompletion(
+            model="sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4",
+            messages=[{"role": "user", "content": "Hi 👋 - i'm async sagemaker"}],
+            stream=True,
+        )
+        print(f"response: {response}")
+        async for chunk in response:
+            print(f"chunk: {chunk}")
+            continue
+        ## test failure callback
+        try:
+            response = await litellm.acompletion(
+                model="sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4",
+                messages=[{"role": "user", "content": "Hi 👋 - i'm async sagemaker"}],
+                aws_region_name="my-bad-key",
+                stream=True,
+            )
+            async for chunk in response:
+                continue
+        except:
+            pass
+        time.sleep(1)
+        print(f"customHandler.errors: {customHandler.errors}")
+        assert len(customHandler.errors) == 0
+        litellm.callbacks = []
+    except Exception as e:
+        pytest.fail(f"An exception occurred: {str(e)}")
+
+
 # Text Completion
 
 

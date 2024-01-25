@@ -11,6 +11,10 @@ model_list:
       api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
       api_version: "2023-05-15"
       api_key: os.environ/AZURE_API_KEY # The `os.environ/` prefix tells litellm to read this from the env. See https://docs.litellm.ai/docs/simple_proxy#load-api-keys-from-vault
+  - model_name: sagemaker-completion-model
+    litellm_params:
+      model: sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4
+      input_cost_per_second: 0.000420  
   - model_name: gpt-4
     litellm_params:
       model: azure/gpt-turbo

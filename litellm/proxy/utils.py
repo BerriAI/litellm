@@ -409,7 +409,9 @@ class PrismaClient:
                     hashed_token = token
                     if token.startswith("sk-"):
                         hashed_token = self.hash_token(token=token)
-                print_verbose("PrismaClient: find_unique")
+                    verbose_proxy_logger.debug(
+                        f"PrismaClient: find_unique for token: {hashed_token}"
+                    )
                 if query_type == "find_unique":
                     response = await self.db.litellm_verificationtoken.find_unique(
                         where={"token": hashed_token}
@@ -716,7 +718,6 @@ class PrismaClient:
                 Batch write update queries
                 """
                 batcher = self.db.batch_()
-                verbose_proxy_logger.debug(f"data list for user table: {data_list}")
                 for idx, user in enumerate(data_list):
                     try:
                         data_json = self.jsonify_object(data=user.model_dump())

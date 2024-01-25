@@ -1514,11 +1514,6 @@ def completion(
             if (
                 "stream" in optional_params and optional_params["stream"] == True
             ):  ## [BETA]
-                # sagemaker does not support streaming as of now so we're faking streaming:
-                # https://discuss.huggingface.co/t/streaming-output-text-when-deploying-on-sagemaker/39611
-                # "SageMaker is currently not supporting streaming responses."
-
-                # fake streaming for sagemaker
                 print_verbose(f"ENTERS SAGEMAKER CUSTOMSTREAMWRAPPER")
                 from .llms.sagemaker import TokenIterator
 
@@ -1528,6 +1523,12 @@ def completion(
                     model=model,
                     custom_llm_provider="sagemaker",
                     logging_obj=logging,
+                )
+                ## LOGGING
+                logging.post_call(
+                    input=messages,
+                    api_key=None,
+                    original_response=response,
                 )
                 return response
 
