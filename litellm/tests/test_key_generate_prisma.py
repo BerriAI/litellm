@@ -83,7 +83,9 @@ def prisma_client():
 
     # Reset litellm.proxy.proxy_server.prisma_client to None
     litellm.proxy.proxy_server.custom_db_client = None
-    litellm.proxy.proxy_server.litellm_proxy_budget_name = "litellm-proxy-budget"
+    litellm.proxy.proxy_server.litellm_proxy_budget_name = (
+        f"litellm-proxy-budget-{time.time()}"
+    )
 
     return prisma_client
 
