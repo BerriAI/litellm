@@ -995,6 +995,10 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time):
     if api_key is not None and isinstance(api_key, str) and api_key.startswith("sk-"):
         # hash the api_key
         api_key = hash_token(api_key)
+    from litellm.caching import Cache
+
+    c = Cache()
+    cache_key = c.get_cache_key(**kwargs)
 
     if "headers" in metadata and "authorization" in metadata["headers"]:
         metadata["headers"].pop(
@@ -1013,6 +1017,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time):
         "modelParameters": optional_params,
         "usage": usage,
         "metadata": metadata,
+        "cache_key": cache_key,
     }
 
     json_fields = [
