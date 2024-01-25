@@ -784,6 +784,76 @@ def test_call_with_key_over_budget(prisma_client):
 
 
 @pytest.mark.asyncio()
+async def test_call_with_key_never_over_budget(prisma_client):
+    # Make a call with a key with budget=None, it should never fail
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    try:
+        await litellm.proxy.proxy_server.prisma_client.connect()
+        request = GenerateKeyRequest(max_budget=None)
+        key = await generate_key_fn(request)
+        print(key)
+
+        generated_key = key.key
+        user_id = key.user_id
+        bearer_token = "Bearer " + generated_key
+
+        request = Request(scope={"type": "http"})
+        request._url = URL(url="/chat/completions")
+
+        # use generated key to auth in
+        result = await user_api_key_auth(request=request, api_key=bearer_token)
+        print("result from user auth with new key", result)
+
+        # update spend using track_cost callback, make 2nd request, it should fail
+        from litellm.proxy.proxy_server import track_cost_callback
+        from litellm import ModelResponse, Choices, Message, Usage
+        import time
+
+        request_id = f"chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac{time.time()}"
+
+        resp = ModelResponse(
+            id=request_id,
+            choices=[
+                Choices(
+                    finish_reason=None,
+                    index=0,
+                    message=Message(
+                        content=" Sure! Here is a short poem about the sky:\n\nA canvas of blue, a",
+                        role="assistant",
+                    ),
+                )
+            ],
+            model="gpt-35-turbo",  # azure always has model written like this
+            usage=Usage(
+                prompt_tokens=210000, completion_tokens=200000, total_tokens=41000
+            ),
+        )
+        await track_cost_callback(
+            kwargs={
+                "model": "chatgpt-v-2",
+                "stream": False,
+                "litellm_params": {
+                    "metadata": {
+                        "user_api_key": generated_key,
+                        "user_api_key_user_id": user_id,
+                    }
+                },
+                "response_cost": 200000,
+            },
+            completion_response=resp,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+
+        # use generated key to auth in
+        result = await user_api_key_auth(request=request, api_key=bearer_token)
+        print("result from user auth with new key", result)
+    except Exception as e:
+        pytest.fail(f"This should have not failed!. They key uses max_budget=None. {e}")
+
+
+@pytest.mark.asyncio()
 async def test_call_with_key_over_budget_stream(prisma_client):
     # 14. Make a call with a key over budget, expect to fail
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
