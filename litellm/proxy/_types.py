@@ -122,11 +122,12 @@ class ModelParams(LiteLLMBase):
         return values
 
 
-class GenerateKeyRequest(LiteLLMBase):
-    duration: Optional[str] = "1h"
+class GenerateRequestBase(LiteLLMBase):
+    """
+    Overlapping schema between key and user generate/update requests
+    """
+
     models: Optional[list] = []
-    aliases: Optional[dict] = {}
-    config: Optional[dict] = {}
     spend: Optional[float] = 0
     max_budget: Optional[float] = None
     user_id: Optional[str] = None
@@ -138,21 +139,18 @@ class GenerateKeyRequest(LiteLLMBase):
     budget_duration: Optional[str] = None
 
 
-class UpdateKeyRequest(LiteLLMBase):
+class GenerateKeyRequest(GenerateRequestBase):
+    duration: Optional[str] = "1h"
+    aliases: Optional[dict] = {}
+
+
+class UpdateKeyRequest(GenerateKeyRequest):
     # Note: the defaults of all Params here MUST BE NONE
     # else they will get overwritten
     key: str
     duration: Optional[str] = None
-    models: Optional[list] = None
-    aliases: Optional[dict] = None
-    config: Optional[dict] = None
     spend: Optional[float] = None
-    max_budget: Optional[float] = None
-    user_id: Optional[str] = None
-    max_parallel_requests: Optional[int] = None
     metadata: Optional[dict] = None
-    tpm_limit: Optional[int] = None
-    rpm_limit: Optional[int] = None
 
 
 class UserAPIKeyAuth(LiteLLMBase):  # the expected response object for user api key auth
@@ -190,6 +188,14 @@ class NewUserRequest(GenerateKeyRequest):
 
 class NewUserResponse(GenerateKeyResponse):
     max_budget: Optional[float] = None
+
+
+class UpdateUserRequest(GenerateRequestBase):
+    # Note: the defaults of all Params here MUST BE NONE
+    # else they will get overwritten
+    user_id: str
+    spend: Optional[float] = None
+    metadata: Optional[dict] = None
 
 
 class KeyManagementSystem(enum.Enum):

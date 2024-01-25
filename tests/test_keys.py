@@ -67,6 +67,28 @@ async def update_key(session, get_key):
         return await response.json()
 
 
+async def update_proxy_budget(session):
+    """
+    Make sure only models user has access to are returned
+    """
+    url = "http://0.0.0.0:4000/user/update"
+    headers = {
+        "Authorization": f"Bearer sk-1234",
+        "Content-Type": "application/json",
+    }
+    data = {"user_id": "litellm-proxy-budget", "spend": 0}
+
+    async with session.post(url, headers=headers, json=data) as response:
+        status = response.status
+        response_text = await response.text()
+        print(response_text)
+        print()
+
+        if status != 200:
+            raise Exception(f"Request did not return a 200 status code: {status}")
+        return await response.json()
+
+
 async def chat_completion(session, key, model="gpt-4"):
     url = "http://0.0.0.0:4000/chat/completions"
     headers = {
@@ -135,6 +157,7 @@ async def test_key_update():
             session=session,
             get_key=key,
         )
+        await update_proxy_budget(session=session)  # resets proxy spend
         await chat_completion(session=session, key=key)
 
 
