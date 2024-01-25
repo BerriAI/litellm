@@ -1260,8 +1260,8 @@ async def generate_key_helper_fn(
     config_json = json.dumps(config)
     metadata_json = json.dumps(metadata)
     user_id = user_id or str(uuid.uuid4())
-    tpm_limit = tpm_limit or sys.maxsize
-    rpm_limit = rpm_limit or sys.maxsize
+    tpm_limit = tpm_limit
+    rpm_limit = rpm_limit
     if type(team_id) is not str:
         team_id = str(team_id)
     try:
