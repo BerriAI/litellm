@@ -415,9 +415,11 @@ async def user_api_key_auth(
                                         user_info=_user,
                                     )
                                 )
+
+                                _user_id = _user.get("user_id", None)
                                 if user_current_spend > user_max_budget:
                                     raise Exception(
-                                        f"ExceededBudget: User {valid_token.user_id} has exceeded their budget. Current spend: {user_current_spend}; Max Budget: {user_max_budget}"
+                                        f"ExceededBudget: User {_user_id} has exceeded their budget. Current spend: {user_current_spend}; Max Budget: {user_max_budget}"
                                     )
                     else:
                         # Token exists, not expired now check if its in budget for the user
