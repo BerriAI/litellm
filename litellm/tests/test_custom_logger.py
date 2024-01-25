@@ -211,7 +211,7 @@ def test_azure_completion_stream():
             {"role": "system", "content": "You are a helpful assistant."},
             {
                 "role": "user",
-                "content": "write 1 sentence about litellm being amazing",
+                "content": f"write 1 sentence about litellm being amazing {time.time()}",
             },
         ]
         complete_streaming_response = ""
