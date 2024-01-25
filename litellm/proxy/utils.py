@@ -995,11 +995,18 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time):
     if api_key is not None and isinstance(api_key, str) and api_key.startswith("sk-"):
         # hash the api_key
         api_key = hash_token(api_key)
-
     if "headers" in metadata and "authorization" in metadata["headers"]:
         metadata["headers"].pop(
             "authorization"
         )  # do not store the original `sk-..` api key in the db
+    if litellm.cache is not None:
+        cache_key = litellm.cache.get_cache_key(**kwargs)
+    else:
+        cache_key = "Cache OFF"
+    if cache_hit == True:
+        import time
+
+        id = f"{id}_cache_hit{time.time()}"  # SpendLogs does not allow duplicate request_id
 
     payload = {
         "request_id": id,
@@ -1013,6 +1020,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time):
         "modelParameters": optional_params,
         "usage": usage,
         "metadata": metadata,
+        "cache_key": cache_key,
     }
 
     json_fields = [
