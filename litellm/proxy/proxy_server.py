@@ -1382,8 +1382,6 @@ async def initialize(
                 verbose_proxy_logger.setLevel(
                     level=logging.DEBUG
                 )  # set proxy logs to debug
-                litellm.set_verbose = True
-
     dynamic_config = {"general": {}, user_model: {}}
     if config:
         (

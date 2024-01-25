@@ -995,15 +995,14 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time):
     if api_key is not None and isinstance(api_key, str) and api_key.startswith("sk-"):
         # hash the api_key
         api_key = hash_token(api_key)
-    from litellm.caching import Cache
-
-    c = Cache()
-    cache_key = c.get_cache_key(**kwargs)
-
     if "headers" in metadata and "authorization" in metadata["headers"]:
         metadata["headers"].pop(
             "authorization"
         )  # do not store the original `sk-..` api key in the db
+    if litellm.cache is not None:
+        cache_key = litellm.cache.get_cache_key(**kwargs)
+    else:
+        cache_key = "Cache OFF"
 
     payload = {
         "request_id": id,
