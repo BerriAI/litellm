@@ -35,3 +35,6 @@ hosted_config.yaml
 litellm/proxy/tests/node_modules
 litellm/proxy/tests/package.json
 litellm/proxy/tests/package-lock.json
+deploy/charts/litellm-helm/*.tgz
+deploy/charts/litellm-helm/charts/*
+deploy/charts/*.tgz
