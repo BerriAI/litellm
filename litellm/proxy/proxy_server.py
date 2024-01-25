@@ -750,6 +750,9 @@ async def update_database(
 
         ### UPDATE KEY SPEND ###
         async def _update_key_db():
+            verbose_proxy_logger.debug(
+                f"adding spend to key db. Response cost: {response_cost}. Token: {token}."
+            )
             if prisma_client is not None:
                 # Fetch the existing cost for the given token
                 existing_spend_obj = await prisma_client.get_data(token=token)
