@@ -225,7 +225,7 @@ def test_cohere_embedding3():
         pytest.fail(f"Error occurred: {e}")
 
 
-test_cohere_embedding3()
+# test_cohere_embedding3()
 
 
 def test_bedrock_embedding_titan():
