@@ -191,6 +191,21 @@ def test_completion_gpt4_turbo():
 # test_completion_gpt4_turbo()
 
 
+def test_completion_gpt4_turbo_0125():
+    try:
+        response = completion(
+            model="gpt-4-0125-preview",
+            messages=messages,
+            max_tokens=10,
+        )
+        print(response)
+    except openai.RateLimitError:
+        print("got a rate liimt error")
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 @pytest.mark.skip(reason="this test is flaky")
 def test_completion_gpt4_vision():
     try:
