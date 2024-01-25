@@ -7714,6 +7714,7 @@ class CustomStreamWrapper:
         else:
             self.response_id = model_response.id
         model_response._hidden_params["custom_llm_provider"] = self.custom_llm_provider
+        model_response._hidden_params["created_at"] = time.time()
         model_response.choices = [StreamingChoices()]
         model_response.choices[0].finish_reason = None
         response_obj = {}
