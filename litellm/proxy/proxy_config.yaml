@@ -61,7 +61,7 @@ model_list:
 litellm_settings:
   fallbacks: [{"openai-gpt-3.5": ["azure-gpt-3.5"]}]
   success_callback: ['langfuse']
-  max_budget: 0.025       # global budget for proxy 
+  max_budget: 10      # global budget for proxy 
   budget_duration: 30d    # global budget duration, will reset after 30d
   # cache: True     
   # setting callback class
