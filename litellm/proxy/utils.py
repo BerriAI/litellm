@@ -634,7 +634,7 @@ class PrismaClient:
                             "update": {},  # don't do anything if it already exists
                         },
                     )
-                print_verbose(
+                verbose_proxy_logger.info(
                     "\033[91m"
                     + f"DB User Table - update succeeded {update_user_row}"
                     + "\033[0m"
@@ -678,6 +678,7 @@ class PrismaClient:
                 Batch write update queries
                 """
                 batcher = self.db.batch_()
+                verbose_proxy_logger.debug(f"data list for user table: {data_list}")
                 for idx, user in enumerate(data_list):
                     try:
                         data_json = self.jsonify_object(data=user.model_dump())
@@ -688,8 +689,8 @@ class PrismaClient:
                         data={**data_json},  # type: ignore
                     )
                 await batcher.commit()
-                print_verbose(
-                    "\033[91m" + f"DB User Table update succeeded" + "\033[0m"
+                verbose_proxy_logger.info(
+                    "\033[91m" + f"DB User Table Batch update succeeded" + "\033[0m"
                 )
         except Exception as e:
             asyncio.create_task(

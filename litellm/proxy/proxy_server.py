@@ -636,29 +636,39 @@ async def update_database(
 
         ### UPDATE USER SPEND ###
         async def _update_user_db():
-            if user_id is None:
-                return
-            if prisma_client is not None:
-                existing_spend_obj = await prisma_client.get_data(user_id=user_id)
-            elif custom_db_client is not None:
-                existing_spend_obj = await custom_db_client.get_data(
-                    key=user_id, table_name="user"
-                )
-            if existing_spend_obj is None:
-                existing_spend = 0
-            else:
-                existing_spend = existing_spend_obj.spend
+            """
+            - Update that user's row
+            - Update litellm-proxy-budget row (global proxy spend)
+            """
+            user_ids = [user_id, "litellm-proxy-budget"]
+            data_list = []
+            for id in user_ids:
+                if id is None:
+                    continue
+                if prisma_client is not None:
+                    existing_spend_obj = await prisma_client.get_data(user_id=id)
+                elif custom_db_client is not None:
+                    existing_spend_obj = await custom_db_client.get_data(
+                        key=id, table_name="user"
+                    )
+                if existing_spend_obj is None:
+                    existing_spend = 0
+                else:
+                    existing_spend = existing_spend_obj.spend
 
-            # Calculate the new cost by adding the existing cost and response_cost
-            new_spend = existing_spend + response_cost
+                # Calculate the new cost by adding the existing cost and response_cost
+                existing_spend_obj.spend = existing_spend + response_cost
 
-            verbose_proxy_logger.debug(f"new cost: {new_spend}")
+                verbose_proxy_logger.debug(f"new cost: {existing_spend_obj.spend}")
+                data_list.append(existing_spend_obj)
+
             # Update the cost column for the given user id
             if prisma_client is not None:
                 await prisma_client.update_data(
-                    user_id=user_id, data={"spend": new_spend}
+                    data_list=data_list, query_type="update_many", table_name="user"
                 )
-            elif custom_db_client is not None:
+            elif custom_db_client is not None and user_id is not None:
+                new_spend = data_list[0].spend
                 await custom_db_client.update_data(
                     key=user_id, value={"spend": new_spend}, table_name="user"
                 )
@@ -1563,7 +1573,13 @@ async def startup_event():
     if prisma_client is not None and master_key is not None:
         # add master key to db
         await generate_key_helper_fn(
-            duration=None, models=[], aliases={}, config={}, spend=0, token=master_key
+            duration=None,
+            models=[],
+            aliases={},
+            config={},
+            spend=0,
+            token=master_key,
+            user_id="default_user_id",
         )
 
     if (
