@@ -58,4 +58,5 @@ model LiteLLM_SpendLogs {
   usage               Json     @default("{}")
   metadata            Json     @default("{}")
   cache_hit           String   @default("")
+  cache_key           String   @default("")
 }

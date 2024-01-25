@@ -2877,8 +2877,13 @@ def token_counter(
                 print_verbose(
                     f"Token Counter - using generic token counter, for model={model}"
                 )
-                enc = tokenizer_json["tokenizer"].encode(text)
-                num_tokens = len(enc)
+                num_tokens = openai_token_counter(
+                    text=text,  # type: ignore
+                    model="gpt-3.5-turbo",
+                    messages=messages,
+                    is_tool_call=is_tool_call,
+                    count_response_tokens=count_response_tokens,
+                )
     else:
         num_tokens = len(encoding.encode(text))  # type: ignore
     return num_tokens
