@@ -473,11 +473,10 @@ class PrismaClient:
                             "budget_reset_at": {"lt": reset_at},
                         }
                     )
-                return response
-            elif table_name == "user" and query_type == "find_all":
-                response = await self.db.litellm_usertable.find_many(  # type: ignore
-                    order={"spend": "desc"},
-                )
+                elif query_type == "find_all":
+                    response = await self.db.litellm_usertable.find_many(  # type: ignore
+                        order={"spend": "desc"},
+                    )
                 return response
             elif table_name == "spend":
                 verbose_proxy_logger.debug(
