@@ -1161,6 +1161,7 @@ async def generate_key_helper_fn(
     tpm_limit: Optional[int] = None,
     rpm_limit: Optional[int] = None,
     query_type: Literal["insert_data", "update_data"] = "insert_data",
+    create_user: Optional[bool] = False,
 ):
     global prisma_client, custom_db_client
 
@@ -1252,7 +1253,7 @@ async def generate_key_helper_fn(
         if prisma_client is not None:
             ## CREATE USER (If necessary)
             verbose_proxy_logger.debug(f"prisma_client: Creating User={user_data}")
-            if query_type == "insert_data":
+            if query_type == "insert_data" and create_user == True:
                 user_row = await prisma_client.insert_data(
                     data=user_data, table_name="user"
                 )
@@ -1269,19 +1270,20 @@ async def generate_key_helper_fn(
             await prisma_client.insert_data(data=key_data, table_name="key")
         elif custom_db_client is not None:
             ## CREATE USER (If necessary)
-            verbose_proxy_logger.debug(f"CustomDBClient: Creating User={user_data}")
-            user_row = await custom_db_client.insert_data(
-                value=user_data, table_name="user"
-            )
-            if user_row is None:
-                # GET USER ROW
-                user_row = await custom_db_client.get_data(
-                    key=user_id, table_name="user"
+            if create_user == True:
+                verbose_proxy_logger.debug(f"CustomDBClient: Creating User={user_data}")
+                user_row = await custom_db_client.insert_data(
+                    value=user_data, table_name="user"
                 )
+                if user_row is None:
+                    # GET USER ROW
+                    user_row = await custom_db_client.get_data(
+                        key=user_id, table_name="user"
+                    )
 
-            ## use default user model list if no key-specific model list provided
-            if len(user_row.models) > 0 and len(key_data["models"]) == 0:  # type: ignore
-                key_data["models"] = user_row.models
+                ## use default user model list if no key-specific model list provided
+                if len(user_row.models) > 0 and len(key_data["models"]) == 0:  # type: ignore
+                    key_data["models"] = user_row.models
             ## CREATE KEY
             verbose_proxy_logger.debug(f"CustomDBClient: Creating Key={key_data}")
             await custom_db_client.insert_data(value=key_data, table_name="key")
@@ -2614,7 +2616,7 @@ async def new_user(data: NewUserRequest):
     - max_budget: (float|None) Max budget for given user.
     """
     data_json = data.json()  # type: ignore
-    response = await generate_key_helper_fn(**data_json)
+    response = await generate_key_helper_fn(**data_json, create_user=True)
     return NewUserResponse(
         key=response["token"],
         expires=response["expires"],
