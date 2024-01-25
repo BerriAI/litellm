@@ -57,6 +57,45 @@ def test_openai_embedding():
 # test_openai_embedding()
 
 
+def test_openai_embedding_3():
+    try:
+        litellm.set_verbose = True
+        response = embedding(
+            model="text-embedding-3-small",
+            input=["good morning from litellm", "this is another item"],
+            metadata={"anything": "good day"},
+        )
+        litellm_response = dict(response)
+        litellm_response_keys = set(litellm_response.keys())
+        litellm_response_keys.discard("_response_ms")
+
+        print(litellm_response_keys)
+        print("LiteLLM Response\n")
+        # print(litellm_response)
+
+        # same request with OpenAI 1.0+
+        import openai
+
+        client = openai.OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+        response = client.embeddings.create(
+            model="text-embedding-3-small",
+            input=["good morning from litellm", "this is another item"],
+        )
+
+        response = dict(response)
+        openai_response_keys = set(response.keys())
+        print(openai_response_keys)
+        assert (
+            litellm_response_keys == openai_response_keys
+        )  # ENSURE the Keys in litellm response is exactly what the openai package returns
+        assert (
+            len(litellm_response["data"]) == 2
+        )  # expect two embedding responses from litellm_response since input had two
+        print(openai_response_keys)
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 def test_openai_azure_embedding_simple():
     try:
         litellm.set_verbose = True
