@@ -95,7 +95,8 @@ def test_vertex_ai():
         + litellm.vertex_code_text_models
     )
     litellm.set_verbose = False
-    litellm.vertex_project = "reliablekeys"
+    vertex_ai_project = "reliablekeys"
+    # litellm.vertex_project = "reliablekeys"
 
     test_models = random.sample(test_models, 1)
     # test_models += litellm.vertex_language_models  # always test gemini-pro
@@ -117,6 +118,7 @@ def test_vertex_ai():
                 model=model,
                 messages=[{"role": "user", "content": "hi"}],
                 temperature=0.7,
+                vertex_ai_project=vertex_ai_project,
             )
             print("\nModel Response", response)
             print(response)
