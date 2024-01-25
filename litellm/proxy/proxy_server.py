@@ -686,7 +686,7 @@ async def update_database(
                     continue
                 if prisma_client is not None:
                     existing_spend_obj = await prisma_client.get_data(user_id=id)
-                elif custom_db_client is not None:
+                elif custom_db_client is not None and id != litellm_proxy_budget_name:
                     existing_spend_obj = await custom_db_client.get_data(
                         key=id, table_name="user"
                     )

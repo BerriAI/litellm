@@ -243,6 +243,10 @@ class DynamoDBWrapper(CustomDB):
                         and isinstance(v, str)
                     ):
                         new_response[k] = json.loads(v)
+                    elif (k == "tpm_limit" or k == "rpm_limit") and isinstance(
+                        v, float
+                    ):
+                        new_response[k] = int(v)
                     else:
                         new_response[k] = v
                 new_response = LiteLLM_VerificationToken(**new_response)
