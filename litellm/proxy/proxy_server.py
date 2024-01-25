@@ -197,6 +197,7 @@ use_queue = False
 health_check_interval = None
 health_check_results = {}
 queue: List = []
+litellm_proxy_budget_name = "litellm-proxy-budget"
 ### INITIALIZE GLOBAL LOGGING OBJECT ###
 proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
 ### REDIS QUEUE ###
@@ -370,29 +371,61 @@ async def user_api_key_auth(
                 )
 
             # Check 2. If user_id for this token is in budget
+            ## Check 2.5 If global proxy is in budget
             if valid_token.user_id is not None:
                 if prisma_client is not None:
                     user_id_information = await prisma_client.get_data(
-                        user_id=valid_token.user_id, table_name="user"
+                        user_id_list=[valid_token.user_id, litellm_proxy_budget_name],
+                        table_name="user",
+                        query_type="find_all",
                     )
                 if custom_db_client is not None:
                     user_id_information = await custom_db_client.get_data(
                         key=valid_token.user_id, table_name="user"
                     )
+
                 verbose_proxy_logger.debug(
                     f"user_id_information: {user_id_information}"
                 )
 
-                # Token exists, not expired now check if its in budget for the user
-                if valid_token.spend is not None and valid_token.user_id is not None:
-                    user_max_budget = getattr(user_id_information, "max_budget", None)
-                    user_current_spend = getattr(user_id_information, "spend", None)
+                if user_id_information is not None:
+                    if isinstance(user_id_information, list):
+                        ## Check if user in budget
+                        for _user in user_id_information:
+                            if _user is None:
+                                continue
+                            assert isinstance(_user, dict)
+                            # Token exists, not expired now check if its in budget for the user
+                            user_max_budget = _user.get("max_budget", None)
+                            user_current_spend = _user.get("spend", None)
 
-                    if user_max_budget is not None and user_current_spend is not None:
-                        if user_current_spend > user_max_budget:
-                            raise Exception(
-                                f"ExceededBudget: User {valid_token.user_id} has exceeded their budget. Current spend: {user_current_spend}; Max Budget: {user_max_budget}"
+                            verbose_proxy_logger.debug(
+                                f"user_max_budget: {user_max_budget}; user_current_spend: {user_current_spend}"
                             )
+
+                            if (
+                                user_max_budget is not None
+                                and user_current_spend is not None
+                            ):
+                                if user_current_spend > user_max_budget:
+                                    raise Exception(
+                                        f"ExceededBudget: User {valid_token.user_id} has exceeded their budget. Current spend: {user_current_spend}; Max Budget: {user_max_budget}"
+                                    )
+                    else:
+                        # Token exists, not expired now check if its in budget for the user
+                        user_max_budget = getattr(
+                            user_id_information, "max_budget", None
+                        )
+                        user_current_spend = getattr(user_id_information, "spend", None)
+
+                        if (
+                            user_max_budget is not None
+                            and user_current_spend is not None
+                        ):
+                            if user_current_spend > user_max_budget:
+                                raise Exception(
+                                    f"ExceededBudget: User {valid_token.user_id} has exceeded their budget. Current spend: {user_current_spend}; Max Budget: {user_max_budget}"
+                                )
 
             # Check 3. If token is expired
             if valid_token.expires is not None:
@@ -642,29 +675,40 @@ async def update_database(
 
         ### UPDATE USER SPEND ###
         async def _update_user_db():
-            if user_id is None:
-                return
-            if prisma_client is not None:
-                existing_spend_obj = await prisma_client.get_data(user_id=user_id)
-            elif custom_db_client is not None:
-                existing_spend_obj = await custom_db_client.get_data(
-                    key=user_id, table_name="user"
-                )
-            if existing_spend_obj is None:
-                existing_spend = 0
-            else:
-                existing_spend = existing_spend_obj.spend
+            """
+            - Update that user's row
+            - Update litellm-proxy-budget row (global proxy spend)
+            """
+            user_ids = [user_id, litellm_proxy_budget_name]
+            data_list = []
+            for id in user_ids:
+                if id is None:
+                    continue
+                if prisma_client is not None:
+                    existing_spend_obj = await prisma_client.get_data(user_id=id)
+                elif custom_db_client is not None:
+                    existing_spend_obj = await custom_db_client.get_data(
+                        key=id, table_name="user"
+                    )
+                if existing_spend_obj is None:
+                    existing_spend = 0
+                    existing_spend = LiteLLM_UserTable(user_id=id, spend=0)
+                else:
+                    existing_spend = existing_spend_obj.spend
 
-            # Calculate the new cost by adding the existing cost and response_cost
-            new_spend = existing_spend + response_cost
+                # Calculate the new cost by adding the existing cost and response_cost
+                existing_spend_obj.spend = existing_spend + response_cost
 
-            verbose_proxy_logger.debug(f"new cost: {new_spend}")
+                verbose_proxy_logger.debug(f"new cost: {existing_spend_obj.spend}")
+                data_list.append(existing_spend_obj)
+
             # Update the cost column for the given user id
             if prisma_client is not None:
                 await prisma_client.update_data(
-                    user_id=user_id, data={"spend": new_spend}
+                    data_list=data_list, query_type="update_many", table_name="user"
                 )
-            elif custom_db_client is not None:
+            elif custom_db_client is not None and user_id is not None:
+                new_spend = data_list[0].spend
                 await custom_db_client.update_data(
                     key=user_id, value={"spend": new_spend}, table_name="user"
                 )
@@ -1161,6 +1205,7 @@ async def generate_key_helper_fn(
     tpm_limit: Optional[int] = None,
     rpm_limit: Optional[int] = None,
     query_type: Literal["insert_data", "update_data"] = "insert_data",
+    update_key_values: Optional[dict] = None,
 ):
     global prisma_client, custom_db_client
 
@@ -1261,7 +1306,9 @@ async def generate_key_helper_fn(
                     key_data["models"] = user_row.models
             elif query_type == "update_data":
                 user_row = await prisma_client.update_data(
-                    data=user_data, table_name="user"
+                    data=user_data,
+                    table_name="user",
+                    update_key_values=update_key_values,
                 )
 
             ## CREATE KEY
@@ -1567,7 +1614,13 @@ async def startup_event():
     if prisma_client is not None and master_key is not None:
         # add master key to db
         await generate_key_helper_fn(
-            duration=None, models=[], aliases={}, config={}, spend=0, token=master_key
+            duration=None,
+            models=[],
+            aliases={},
+            config={},
+            spend=0,
+            token=master_key,
+            user_id="default_user_id",
         )
 
     if (
@@ -1577,7 +1630,7 @@ async def startup_event():
     ):
         # add proxy budget to db in the user table
         await generate_key_helper_fn(
-            user_id="litellm-proxy-budget",
+            user_id=litellm_proxy_budget_name,
             duration=None,
             models=[],
             aliases={},
@@ -1586,6 +1639,10 @@ async def startup_event():
             max_budget=litellm.max_budget,
             budget_duration=litellm.budget_duration,
             query_type="update_data",
+            update_key_values={
+                "max_budget": litellm.max_budget,
+                "budget_duration": litellm.budget_duration,
+            },
         )
 
     verbose_proxy_logger.debug(
