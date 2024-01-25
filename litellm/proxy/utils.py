@@ -162,6 +162,7 @@ class ProxyLogging:
                 request_data is not None
                 and request_data.get("litellm_status", "") != "success"
             ):
+                # only alert hanging responses if they have not been marked as success
                 alerting_message = (
                     f"Requests are hanging - {self.alerting_threshold}s+ request time"
                 )
@@ -173,9 +174,7 @@ class ProxyLogging:
         elif (
             type == "slow_response" and start_time is not None and end_time is not None
         ):
-            slow_message = (
-                f"Responses are slow - {round(end_time-start_time,2)}s response time"
-            )
+            slow_message = f"Responses are slow - {round(end_time-start_time,2)}s response time > Alerting threshold: {self.alerting_threshold}s"
             if end_time - start_time > self.alerting_threshold:
                 await self.alerting_handler(
                     message=slow_message + request_info,
