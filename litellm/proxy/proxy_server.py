@@ -407,9 +407,19 @@ async def user_api_key_auth(
                                 user_max_budget is not None
                                 and user_current_spend is not None
                             ):
+                                asyncio.create_task(
+                                    proxy_logging_obj.budget_alerts(
+                                        user_max_budget=user_max_budget,
+                                        user_current_spend=user_current_spend,
+                                        type="user_and_proxy_budget",
+                                        user_info=_user,
+                                    )
+                                )
+
+                                _user_id = _user.get("user_id", None)
                                 if user_current_spend > user_max_budget:
                                     raise Exception(
-                                        f"ExceededBudget: User {valid_token.user_id} has exceeded their budget. Current spend: {user_current_spend}; Max Budget: {user_max_budget}"
+                                        f"ExceededBudget: User {_user_id} has exceeded their budget. Current spend: {user_current_spend}; Max Budget: {user_max_budget}"
                                     )
                     else:
                         # Token exists, not expired now check if its in budget for the user
@@ -422,6 +432,15 @@ async def user_api_key_auth(
                             user_max_budget is not None
                             and user_current_spend is not None
                         ):
+                            asyncio.create_task(
+                                proxy_logging_obj.budget_alerts(
+                                    user_max_budget=user_max_budget,
+                                    user_current_spend=user_current_spend,
+                                    type="user_budget",
+                                    user_info=user_id_information,
+                                )
+                            )
+
                             if user_current_spend > user_max_budget:
                                 raise Exception(
                                     f"ExceededBudget: User {valid_token.user_id} has exceeded their budget. Current spend: {user_current_spend}; Max Budget: {user_max_budget}"
@@ -448,6 +467,15 @@ async def user_api_key_auth(
 
             # Check 4. Token Spend is under budget
             if valid_token.spend is not None and valid_token.max_budget is not None:
+                asyncio.create_task(
+                    proxy_logging_obj.budget_alerts(
+                        user_max_budget=valid_token.max_budget,
+                        user_current_spend=valid_token.spend,
+                        type="token_budget",
+                        user_info=valid_token,
+                    )
+                )
+
                 if valid_token.spend > valid_token.max_budget:
                     raise Exception(
                         f"ExceededTokenBudget: Current spend for token: {valid_token.spend}; Max Budget for Token: {valid_token.max_budget}"
@@ -1625,11 +1653,12 @@ async def startup_event():
             user_id="default_user_id",
         )
 
-    if (
-        prisma_client is not None
-        and litellm.max_budget > 0
-        and litellm.budget_duration is not None
-    ):
+    if prisma_client is not None and litellm.max_budget > 0:
+        if litellm.budget_duration is None:
+            raise Exception(
+                "budget_duration not set on Proxy. budget_duration is required to use max_budget."
+            )
+
         # add proxy budget to db in the user table
         await generate_key_helper_fn(
             user_id=litellm_proxy_budget_name,

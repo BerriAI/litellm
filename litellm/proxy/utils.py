@@ -181,6 +181,62 @@ class ProxyLogging:
                     level="Low",
                 )
 
+    async def budget_alerts(
+        self,
+        type: Literal["token_budget", "user_budget", "user_and_proxy_budget"],
+        user_max_budget: float,
+        user_current_spend: float,
+        user_info=None,
+    ):
+        if self.alerting is None:
+            # do nothing if alerting is not switched on
+            return
+
+        if type == "user_and_proxy_budget":
+            user_info = dict(user_info)
+            user_id = user_info["user_id"]
+            max_budget = user_info["max_budget"]
+            spend = user_info["spend"]
+            user_email = user_info["user_email"]
+            user_info = f"""\nUser ID: {user_id}\nMax Budget: {max_budget}\nSpend: {spend}\nUser Email: {user_email}"""
+        else:
+            user_info = str(user_info)
+        # percent of max_budget left to spend
+        percent_left = (user_max_budget - user_current_spend) / user_max_budget
+        verbose_proxy_logger.debug(
+            f"Budget Alerts: Percent left: {percent_left} for {user_info}"
+        )
+
+        # check if crossed budget
+        if user_current_spend >= user_max_budget:
+            verbose_proxy_logger.debug(f"Budget Crossed for {user_info}")
+            message = "Budget Crossed for" + user_info
+            await self.alerting_handler(
+                message=message,
+                level="High",
+            )
+            return
+
+        # check if 5% of max budget is left
+        if percent_left <= 0.05:
+            message = "5% budget left for" + user_info
+            await self.alerting_handler(
+                message=message,
+                level="Medium",
+            )
+            return
+
+        # check if 15% of max budget is left
+        if percent_left <= 0.15:
+            message = "15% budget left for" + user_info
+            await self.alerting_handler(
+                message=message,
+                level="Low",
+            )
+            return
+
+        return
+
     async def alerting_handler(
         self, message: str, level: Literal["Low", "Medium", "High"]
     ):
@@ -191,6 +247,8 @@ class ProxyLogging:
         - Requests are hanging
         - Calls are failing
         - DB Read/Writes are failing
+        - Proxy Close to max budget
+        - Key Close to max budget
 
         Parameters:
             level: str - Low|Medium|High - if calls might fail (Medium) or are failing (High); Currently, no alerts would be 'Low'.
