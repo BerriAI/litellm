@@ -690,6 +690,9 @@ async def update_database(
                     existing_spend_obj = await custom_db_client.get_data(
                         key=id, table_name="user"
                     )
+                verbose_proxy_logger.debug(
+                    f"Updating existing_spend_obj: {existing_spend_obj}"
+                )
                 if existing_spend_obj is None:
                     existing_spend = 0
                     existing_spend_obj = LiteLLM_UserTable(
