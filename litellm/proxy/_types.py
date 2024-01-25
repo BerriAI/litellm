@@ -142,6 +142,7 @@ class GenerateRequestBase(LiteLLMBase):
 class GenerateKeyRequest(GenerateRequestBase):
     duration: Optional[str] = "1h"
     aliases: Optional[dict] = {}
+    config: Optional[dict] = {}
 
 
 class UpdateKeyRequest(GenerateKeyRequest):
