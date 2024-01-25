@@ -329,7 +329,7 @@ class LiteLLM_UserTable(LiteLLMBase):
         if values.get("spend") is None:
             values.update({"spend": 0.0})
         if values.get("models") is None:
-            values.update({"models", []})
+            values.update({"models": []})
         return values
 
 
