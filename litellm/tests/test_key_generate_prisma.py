@@ -46,7 +46,7 @@ from litellm.proxy.proxy_server import (
     spend_key_fn,
     view_spend_logs,
 )
-from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.proxy.utils import PrismaClient, ProxyLogging, hash_token
 from litellm._logging import verbose_proxy_logger
 
 verbose_proxy_logger.setLevel(level=logging.DEBUG)
@@ -918,7 +918,7 @@ def test_call_with_key_over_budget(prisma_client):
                     "stream": False,
                     "litellm_params": {
                         "metadata": {
-                            "user_api_key": generated_key,
+                            "user_api_key": hash_token(generated_key),
                             "user_api_key_user_id": user_id,
                         }
                     },
@@ -1009,7 +1009,7 @@ async def test_call_with_key_never_over_budget(prisma_client):
                 "stream": False,
                 "litellm_params": {
                     "metadata": {
-                        "user_api_key": generated_key,
+                        "user_api_key": hash_token(generated_key),
                         "user_api_key_user_id": user_id,
                     }
                 },
@@ -1025,6 +1025,72 @@ async def test_call_with_key_never_over_budget(prisma_client):
         print("result from user auth with new key", result)
     except Exception as e:
         pytest.fail(f"This should have not failed!. They key uses max_budget=None. {e}")
+
+
+# @pytest.mark.asyncio()
+# async def test_call_with_key_never_over_budget_new(prisma_client):
+#     # Make a call with a key with budget=None, it should never fail
+#     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+#     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+#     try:
+#         await litellm.proxy.proxy_server.prisma_client.connect()
+
+#         # Step 1 - generate a new key
+#         request = GenerateKeyRequest(max_budget=0.000001, team_id="test-ishaan-team")
+#         key = await generate_key_fn(request)
+#         print(key)
+
+#         generated_key = key.key
+#         user_id = key.user_id
+#         bearer_token = "Bearer " + generated_key
+
+#         request = Request(scope={"type": "http"})
+#         request._url = URL(url="/chat/completions")
+
+#         # Step 2 - Use generated key to auth in
+#         user_api_key_dict = await user_api_key_auth(request=request, api_key=bearer_token)
+#         print("result from user auth with new key", user_api_key_dict)
+
+#         # Step 3 make chat_completions call
+#         from litellm.proxy.proxy_server import track_cost_callback, chat_completion
+#         from fastapi import Response
+#         litellm.success_callback = [track_cost_callback]
+
+#         async def return_body():
+#             return b'{"model": "gpt-3.5-turbo", "messages": [{"role": "assistant", "content": "this is a test."}]}'
+#         from starlette.datastructures import Headers
+
+
+#         headers = Headers({
+#             "Authorization": "Bearer " + generated_key
+#         }).raw
+#         request = Request(scope={
+#             "type": "http",
+#             "method": "/chat/completions",
+#             "headers": headers
+#         })
+
+#         request._url = URL(url="/chat/completions")
+#         request.body = return_body
+
+#         llm_response = await chat_completion(
+#             request=request,
+#             fastapi_response=Response(),
+#             user_api_key_dict=user_api_key_dict
+#         )
+
+#         print("llm_response", llm_response)
+
+
+#         # Step 4 - Try to auth in, expect to fail since budget crossed
+#         result = await user_api_key_auth(request=request, api_key=bearer_token)
+#         print("result from user auth with new key", result)
+#         pytest.fail(f"This should have failed!. They key crossed it's budget")
+
+#     except Exception as e:
+#         error_detail = e.message
+#         assert "Authentication Error, ExceededTokenBudget:" in error_detail
+#         print(vars(e))
 
 
 @pytest.mark.asyncio()
@@ -1083,7 +1149,7 @@ async def test_call_with_key_over_budget_stream(prisma_client):
                 "complete_streaming_response": resp,
                 "litellm_params": {
                     "metadata": {
-                        "user_api_key": generated_key,
+                        "user_api_key": hash_token(generated_key),
                         "user_api_key_user_id": user_id,
                     }
                 },
