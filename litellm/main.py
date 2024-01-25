@@ -3343,6 +3343,12 @@ def stream_chunk_builder(
     chunks: list, messages: Optional[list] = None, start_time=None, end_time=None
 ):
     model_response = litellm.ModelResponse()
+    ### SORT CHUNKS BASED ON CREATED ORDER ##
+    if chunks[0]._hidden_params.get("created_at", None):
+        # Sort chunks based on created_at in ascending order
+        chunks = sorted(
+            chunks, key=lambda x: x._hidden_params.get("created_at", float("inf"))
+        )
     # set hidden params from chunk to model_response
     if model_response is not None and hasattr(model_response, "_hidden_params"):
         model_response._hidden_params = chunks[0].get("_hidden_params", {})
