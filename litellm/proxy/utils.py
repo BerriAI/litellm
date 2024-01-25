@@ -181,6 +181,14 @@ class ProxyLogging:
                     level="Low",
                 )
 
+    async def budget_alerts(
+        self,
+        type: Literal["token_budget", "user_budget", "user_and_proxy_budget"],
+        user_max_budget: float,
+        user_current_spend: float,
+    ):
+        pass
+
     async def alerting_handler(
         self, message: str, level: Literal["Low", "Medium", "High"]
     ):
@@ -191,6 +199,8 @@ class ProxyLogging:
         - Requests are hanging
         - Calls are failing
         - DB Read/Writes are failing
+        - Proxy Close to max budget
+        - Key Close to max budget
 
         Parameters:
             level: str - Low|Medium|High - if calls might fail (Medium) or are failing (High); Currently, no alerts would be 'Low'.

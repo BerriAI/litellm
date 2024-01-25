@@ -407,6 +407,14 @@ async def user_api_key_auth(
                                 user_max_budget is not None
                                 and user_current_spend is not None
                             ):
+                                asyncio.create_task(
+                                    proxy_logging_obj.budget_alerts(
+                                        user_max_budget=user_max_budget,
+                                        user_current_spend=user_current_spend,
+                                        type="user_and_proxy_budget",
+                                        user_info=_user,
+                                    )
+                                )
                                 if user_current_spend > user_max_budget:
                                     raise Exception(
                                         f"ExceededBudget: User {valid_token.user_id} has exceeded their budget. Current spend: {user_current_spend}; Max Budget: {user_max_budget}"
@@ -422,6 +430,15 @@ async def user_api_key_auth(
                             user_max_budget is not None
                             and user_current_spend is not None
                         ):
+                            asyncio.create_task(
+                                proxy_logging_obj.budget_alerts(
+                                    user_max_budget=user_max_budget,
+                                    user_current_spend=user_current_spend,
+                                    type="user_budget",
+                                    user_info=user_id_information,
+                                )
+                            )
+
                             if user_current_spend > user_max_budget:
                                 raise Exception(
                                     f"ExceededBudget: User {valid_token.user_id} has exceeded their budget. Current spend: {user_current_spend}; Max Budget: {user_max_budget}"
@@ -448,6 +465,15 @@ async def user_api_key_auth(
 
             # Check 4. Token Spend is under budget
             if valid_token.spend is not None and valid_token.max_budget is not None:
+                asyncio.create_task(
+                    proxy_logging_obj.budget_alerts(
+                        user_max_budget=valid_token.max_budget,
+                        user_current_spend=valid_token.spend,
+                        type="token_budget",
+                        user_info=valid_token,
+                    )
+                )
+
                 if valid_token.spend > valid_token.max_budget:
                     raise Exception(
                         f"ExceededTokenBudget: Current spend for token: {valid_token.spend}; Max Budget for Token: {valid_token.max_budget}"
