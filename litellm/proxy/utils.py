@@ -200,11 +200,12 @@ class ProxyLogging:
         # percent of max_budget left to spend
         percent_left = (user_max_budget - user_current_spend) / user_max_budget
         verbose_proxy_logger.debug(
-            f"Bduget Alerts: Percent left: {percent_left} for {user_info}"
+            f"Budget Alerts: Percent left: {percent_left} for {user_info}"
         )
 
         # check if crossed budget
         if user_current_spend >= user_max_budget:
+            verbose_proxy_logger.debug(f"Budget Crossed for {user_info}")
             message = "Budget Crossed for" + user_info
             await self.alerting_handler(
                 message=message,
@@ -230,7 +231,7 @@ class ProxyLogging:
             )
             return
 
-        pass
+        return
 
     async def alerting_handler(
         self, message: str, level: Literal["Low", "Medium", "High"]
