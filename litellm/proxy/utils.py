@@ -188,20 +188,47 @@ class ProxyLogging:
         user_current_spend: float,
         user_info=None,
     ):
+        if type == "user_and_proxy_budget":
+            user_info = dict(user_info)
+            user_id = user_info["user_id"]
+            max_budget = user_info["max_budget"]
+            spend = user_info["spend"]
+            user_email = user_info["user_email"]
+            user_info = f"""\nUser ID: {user_id}\nMax Budget: {max_budget}\nSpend: {spend}\nUser Email: {user_email}"""
+        else:
+            user_info = str(user_info)
         # percent of max_budget left to spend
         percent_left = (user_max_budget - user_current_spend) / user_max_budget
-
-        # check if 15% of max budget is left
-        if percent_left <= 0.15:
-            pass
-
-        # check if 5% of max budget is left
-        if percent_left <= 0.05:
-            pass
+        verbose_proxy_logger.debug(
+            f"Bduget Alerts: Percent left: {percent_left} for {user_info}"
+        )
 
         # check if crossed budget
         if user_current_spend >= user_max_budget:
-            pass
+            message = "Budget Crossed for" + user_info
+            await self.alerting_handler(
+                message=message,
+                level="High",
+            )
+            return
+
+        # check if 5% of max budget is left
+        if percent_left <= 0.05:
+            message = "5 Percent budget left for" + user_info
+            await self.alerting_handler(
+                message=message,
+                level="Medium",
+            )
+            return
+
+        # check if 15% of max budget is left
+        if percent_left <= 0.15:
+            message = "15 Percent budget left for" + user_info
+            await self.alerting_handler(
+                message=message,
+                level="Low",
+            )
+            return
 
         pass
 
