@@ -1090,7 +1090,12 @@ class Logging:
             else:  # streaming chunks + image gen.
                 self.model_call_details["response_cost"] = None
 
-            if litellm.max_budget and self.stream:
+            if (
+                litellm.max_budget
+                and self.stream
+                and result is not None
+                and "content" in result
+            ):
                 time_diff = (end_time - start_time).total_seconds()
                 float_diff = float(time_diff)
                 litellm._current_cost += litellm.completion_cost(

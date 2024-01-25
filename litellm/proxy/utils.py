@@ -392,6 +392,7 @@ class PrismaClient:
         self,
         token: Optional[str] = None,
         user_id: Optional[str] = None,
+        user_id_list: Optional[list] = None,
         key_val: Optional[dict] = None,
         table_name: Optional[Literal["user", "key", "config", "spend"]] = None,
         query_type: Literal["find_unique", "find_all"] = "find_unique",
@@ -473,6 +474,17 @@ class PrismaClient:
                             "budget_reset_at": {"lt": reset_at},
                         }
                     )
+                elif query_type == "find_all" and user_id_list is not None:
+                    user_id_values = str(tuple(user_id_list))
+                    sql_query = f"""
+                    SELECT *
+                    FROM "LiteLLM_UserTable"
+                    WHERE "user_id" IN {user_id_values}
+                    """
+
+                    # Execute the raw query
+                    # The asterisk before `user_id_list` unpacks the list into separate arguments
+                    response = await self.db.query_raw(sql_query)
                 elif query_type == "find_all":
                     response = await self.db.litellm_usertable.find_many(  # type: ignore
                         order={"spend": "desc"},
@@ -616,6 +628,7 @@ class PrismaClient:
         user_id: Optional[str] = None,
         query_type: Literal["update", "update_many"] = "update",
         table_name: Optional[Literal["user", "key", "config", "spend"]] = None,
+        update_key_values: Optional[dict] = None,
     ):
         """
         Update existing data
@@ -642,29 +655,23 @@ class PrismaClient:
                 user_id is not None
                 or (table_name is not None and table_name == "user")
                 and query_type == "update"
+                and update_key_values is not None
             ):
                 """
                 If data['spend'] + data['user'], update the user table with spend info as well
                 """
                 if user_id is None:
                     user_id = db_data["user_id"]
-                update_user_row = await self.db.litellm_usertable.update(
+                update_user_row = await self.db.litellm_usertable.upsert(
                     where={"user_id": user_id},  # type: ignore
-                    data={**db_data},  # type: ignore
+                    data={
+                        "create": {**db_data},  # type: ignore
+                        "update": {
+                            **update_key_values  # type: ignore
+                        },  # just update user-specified values, if it already exists
+                    },
                 )
-                if update_user_row is None:
-                    # if the provided user does not exist, STILL Track this!
-                    # make a new user with {"user_id": user_id, "spend": data['spend']}
-
-                    db_data["user_id"] = user_id
-                    update_user_row = await self.db.litellm_usertable.upsert(
-                        where={"user_id": user_id},  # type: ignore
-                        data={
-                            "create": {**db_data},  # type: ignore
-                            "update": {},  # don't do anything if it already exists
-                        },
-                    )
-                print_verbose(
+                verbose_proxy_logger.info(
                     "\033[91m"
                     + f"DB User Table - update succeeded {update_user_row}"
                     + "\033[0m"
@@ -708,6 +715,7 @@ class PrismaClient:
                 Batch write update queries
                 """
                 batcher = self.db.batch_()
+                verbose_proxy_logger.debug(f"data list for user table: {data_list}")
                 for idx, user in enumerate(data_list):
                     try:
                         data_json = self.jsonify_object(data=user.model_dump())
@@ -718,8 +726,8 @@ class PrismaClient:
                         data={**data_json},  # type: ignore
                     )
                 await batcher.commit()
-                print_verbose(
-                    "\033[91m" + f"DB User Table update succeeded" + "\033[0m"
+                verbose_proxy_logger.info(
+                    "\033[91m" + f"DB User Table Batch update succeeded" + "\033[0m"
                 )
         except Exception as e:
             asyncio.create_task(
