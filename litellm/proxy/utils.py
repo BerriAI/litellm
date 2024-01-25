@@ -454,11 +454,10 @@ class PrismaClient:
                     # Execute the raw query
                     # The asterisk before `user_id_list` unpacks the list into separate arguments
                     response = await self.db.query_raw(sql_query)
-                return response
-            elif table_name == "user" and query_type == "find_all":
-                response = await self.db.litellm_usertable.find_many(  # type: ignore
-                    order={"spend": "desc"},
-                )
+                elif query_type == "find_all":
+                    response = await self.db.litellm_usertable.find_many(  # type: ignore
+                        order={"spend": "desc"},
+                    )
                 return response
             elif table_name == "spend":
                 verbose_proxy_logger.debug(

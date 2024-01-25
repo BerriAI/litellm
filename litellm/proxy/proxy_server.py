@@ -197,6 +197,7 @@ use_queue = False
 health_check_interval = None
 health_check_results = {}
 queue: List = []
+litellm_proxy_budget_name = "litellm-proxy-budget"
 ### INITIALIZE GLOBAL LOGGING OBJECT ###
 proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
 ### REDIS QUEUE ###
@@ -374,7 +375,7 @@ async def user_api_key_auth(
             if valid_token.user_id is not None:
                 if prisma_client is not None:
                     user_id_information = await prisma_client.get_data(
-                        user_id_list=[valid_token.user_id, "litellm-proxy-budget"],
+                        user_id_list=[valid_token.user_id, litellm_proxy_budget_name],
                         table_name="user",
                         query_type="find_all",
                     )
@@ -672,7 +673,7 @@ async def update_database(
             - Update that user's row
             - Update litellm-proxy-budget row (global proxy spend)
             """
-            user_ids = [user_id, "litellm-proxy-budget"]
+            user_ids = [user_id, litellm_proxy_budget_name]
             data_list = []
             for id in user_ids:
                 if id is None:
@@ -685,6 +686,7 @@ async def update_database(
                     )
                 if existing_spend_obj is None:
                     existing_spend = 0
+                    existing_spend = LiteLLM_UserTable(user_id=id, spend=0)
                 else:
                     existing_spend = existing_spend_obj.spend
 
@@ -1624,7 +1626,7 @@ async def startup_event():
     ):
         # add proxy budget to db in the user table
         await generate_key_helper_fn(
-            user_id="litellm-proxy-budget",
+            user_id=litellm_proxy_budget_name,
             duration=None,
             models=[],
             aliases={},
