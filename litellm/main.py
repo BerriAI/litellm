@@ -1417,9 +1417,15 @@ def completion(
                 return response
             response = model_response
         elif custom_llm_provider == "vertex_ai":
-            vertex_ai_project = litellm.vertex_project or get_secret("VERTEXAI_PROJECT")
-            vertex_ai_location = litellm.vertex_location or get_secret(
-                "VERTEXAI_LOCATION"
+            vertex_ai_project = (
+                optional_params.pop("vertex_ai_project", None)
+                or litellm.vertex_project
+                or get_secret("VERTEXAI_PROJECT")
+            )
+            vertex_ai_location = (
+                optional_params.pop("vertex_ai_location", None)
+                or litellm.vertex_location
+                or get_secret("VERTEXAI_LOCATION")
             )
 
             model_response = vertex_ai.completion(
