@@ -655,13 +655,14 @@ class PrismaClient:
                 user_id is not None
                 or (table_name is not None and table_name == "user")
                 and query_type == "update"
-                and update_key_values is not None
             ):
                 """
                 If data['spend'] + data['user'], update the user table with spend info as well
                 """
                 if user_id is None:
                     user_id = db_data["user_id"]
+                if update_key_values is None:
+                    update_key_values = db_data
                 update_user_row = await self.db.litellm_usertable.upsert(
                     where={"user_id": user_id},  # type: ignore
                     data={
