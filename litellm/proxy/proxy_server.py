@@ -1654,11 +1654,12 @@ async def startup_event():
             user_id="default_user_id",
         )
 
-    if (
-        prisma_client is not None
-        and litellm.max_budget > 0
-        and litellm.budget_duration is not None
-    ):
+    if prisma_client is not None and litellm.max_budget > 0:
+        if litellm.budget_duration is None:
+            raise Exception(
+                "budget_duration not set on Proxy. budget_duration is required to use max_budget."
+            )
+
         # add proxy budget to db in the user table
         await generate_key_helper_fn(
             user_id=litellm_proxy_budget_name,
