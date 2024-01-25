@@ -763,6 +763,10 @@ def test_call_with_key_over_budget(prisma_client):
             assert spend_log.request_id == request_id
             assert spend_log.spend == float("2e-05")
             assert spend_log.model == "chatgpt-v-2"
+            assert (
+                spend_log.cache_key
+                == "a61ae14fe4a8b8014a61e6ae01a100c8bc6770ac37c293242afed954bc69207d"
+            )
 
             # use generated key to auth in
             result = await user_api_key_auth(request=request, api_key=bearer_token)
