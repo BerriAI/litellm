@@ -188,6 +188,10 @@ class ProxyLogging:
         user_current_spend: float,
         user_info=None,
     ):
+        if self.alerting is None:
+            # do nothing if alerting is not switched on
+            return
+
         if type == "user_and_proxy_budget":
             user_info = dict(user_info)
             user_id = user_info["user_id"]
