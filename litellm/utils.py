@@ -3347,6 +3347,10 @@ def get_optional_params(
             custom_llm_provider != "bedrock" and custom_llm_provider != "sagemaker"
         ):  # allow dynamically setting boto3 init logic
             continue
+        elif (
+            k.startswith("vertex_") and custom_llm_provider != "vertex_ai"
+        ):  # allow dynamically setting vertex ai init logic
+            continue
         passed_params[k] = v
     default_params = {
         "functions": None,
