@@ -206,7 +206,7 @@ def test_azure_completion_stream():
         # checks if the model response available in the async + stream callbacks is equal to the received response
         customHandler2 = MyCustomHandler()
         litellm.callbacks = [customHandler2]
-        litellm.set_verbose = False
+        litellm.set_verbose = True
         messages = [
             {"role": "system", "content": "You are a helpful assistant."},
             {
