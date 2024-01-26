@@ -3175,6 +3175,9 @@ async def ahealth_check(
         if model is None:
             raise Exception("model not set")
 
+        if model in litellm.model_cost and mode is None:
+            mode = litellm.model_cost[model]["mode"]
+
         model, custom_llm_provider, _, _ = get_llm_provider(model=model)
         mode = mode or "chat"  # default to chat completion calls
 
