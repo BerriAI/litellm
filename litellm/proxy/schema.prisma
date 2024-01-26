@@ -50,9 +50,9 @@ model LiteLLM_SpendLogs {
   call_type           String
   api_key             String  @default ("")
   spend               Float    @default(0.0)
-  total_tokens        Float    @default(0.0)
-  prompt_tokens       Float    @default(0.0)
-  completion_tokens   Float    @default(0.0)
+  total_tokens        Int     @default(0)
+  prompt_tokens       Int     @default(0)
+  completion_tokens   Int     @default(0)
   startTime           DateTime // Assuming start_time is a DateTime field
   endTime             DateTime // Assuming end_time is a DateTime field
   model               String   @default("")
