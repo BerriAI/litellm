@@ -33,7 +33,7 @@ from litellm.proxy.proxy_server import (
 )
 
 from litellm.proxy._types import NewUserRequest, DynamoDBArgs, GenerateKeyRequest
-from litellm.proxy.utils import DBClient
+from litellm.proxy.utils import DBClient, hash_token
 from starlette.datastructures import URL
 
 
@@ -232,7 +232,7 @@ def test_call_with_user_over_budget(custom_db_client):
                     "stream": False,
                     "litellm_params": {
                         "metadata": {
-                            "user_api_key": generated_key,
+                            "user_api_key": hash_token(generated_key),
                             "user_api_key_user_id": user_id,
                         }
                     },
@@ -305,7 +305,7 @@ def test_call_with_user_over_budget_stream(custom_db_client):
                     "complete_streaming_response": resp,
                     "litellm_params": {
                         "metadata": {
-                            "user_api_key": generated_key,
+                            "user_api_key": hash_token(generated_key),
                             "user_api_key_user_id": user_id,
                         }
                     },
@@ -376,7 +376,7 @@ def test_call_with_user_key_budget(custom_db_client):
                     "stream": False,
                     "litellm_params": {
                         "metadata": {
-                            "user_api_key": generated_key,
+                            "user_api_key": hash_token(generated_key),
                             "user_api_key_user_id": user_id,
                         }
                     },
@@ -449,7 +449,7 @@ def test_call_with_key_over_budget_stream(custom_db_client):
                     "complete_streaming_response": resp,
                     "litellm_params": {
                         "metadata": {
-                            "user_api_key": generated_key,
+                            "user_api_key": hash_token(generated_key),
                             "user_api_key_user_id": user_id,
                         }
                     },
