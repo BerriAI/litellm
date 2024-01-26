@@ -8,7 +8,7 @@ dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
 import datetime, subprocess, sys
 import litellm, uuid
-from litellm._logging import print_verbose
+from litellm._logging import print_verbose, verbose_logger
 
 
 class S3Logger:
@@ -31,7 +31,7 @@ class S3Logger:
         import boto3
 
         try:
-            print_verbose(
+            verbose_logger.debug(
                 f"in init s3 logger - s3_callback_params {litellm.s3_callback_params}"
             )
 
@@ -61,6 +61,7 @@ class S3Logger:
 
             self.bucket_name = s3_bucket_name
             self.s3_path = s3_path
+            verbose_logger.debug(f"s3 logger using endpoint url {s3_endpoint_url}")
             # Create an S3 client with custom endpoint URL
             self.s3_client = boto3.client(
                 "s3",
@@ -86,7 +87,9 @@ class S3Logger:
 
     def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
         try:
-            print_verbose(f"s3 Logging - Enters logging function for model {kwargs}")
+            verbose_logger.debug(
+                f"s3 Logging - Enters logging function for model {kwargs}"
+            )
 
             # construct payload to send to s3
             # follows the same params as langfuse.py
@@ -154,5 +157,5 @@ class S3Logger:
             return response
         except Exception as e:
             traceback.print_exc()
-            print_verbose(f"s3 Layer Error - {str(e)}\n{traceback.format_exc()}")
+            verbose_logger.debug(f"s3 Layer Error - {str(e)}\n{traceback.format_exc()}")
             pass
