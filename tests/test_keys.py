@@ -115,7 +115,9 @@ async def chat_completion(session, key, model="gpt-4"):
         print()
 
         if status != 200:
-            raise Exception(f"Request did not return a 200 status code: {status}")
+            raise Exception(
+                f"Request did not return a 200 status code: {status}. Response: {response_text}"
+            )
 
         return await response.json()
 
@@ -386,3 +388,31 @@ async def test_key_with_budgets():
         key_info = await get_key_info(session=session, get_key=key, call_key=key)
         reset_at_new_value = key_info["info"]["budget_reset_at"]
         assert reset_at_init_value != reset_at_new_value
+
+
+@pytest.mark.asyncio
+async def test_key_crossing_budget():
+    """
+    - Create key with budget with budget=0.00000001
+    - make a /chat/completions call
+    - wait 5s
+    - make a /chat/completions call - should fail with key crossed it's budget
+
+    - Check if value updated
+    """
+    from litellm.proxy.utils import hash_token
+
+    async with aiohttp.ClientSession() as session:
+        key_gen = await generate_key(session=session, i=0, budget=0.0000001)
+        key = key_gen["key"]
+        hashed_token = hash_token(token=key)
+        print(f"hashed_token: {hashed_token}")
+
+        response = await chat_completion(session=session, key=key)
+        print("response 1: ", response)
+        await asyncio.sleep(2)
+        try:
+            response = await chat_completion(session=session, key=key)
+            pytest.fail("Should have failed - Key crossed it's budget")
+        except Exception as e:
+            assert "ExceededTokenBudget: Current spend for token:" in str(e)
