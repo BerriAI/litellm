@@ -31,7 +31,9 @@ class S3Logger:
         import boto3
 
         try:
-            print_verbose("in init s3 logger")
+            print_verbose(
+                f"in init s3 logger - s3_callback_params {litellm.s3_callback_params}"
+            )
 
             if litellm.s3_callback_params is not None:
                 # read in .env variables - example os.environ/AWS_BUCKET_NAME
@@ -42,7 +44,7 @@ class S3Logger:
                 s3_bucket_name = litellm.s3_callback_params.get("s3_bucket_name")
                 s3_region_name = litellm.s3_callback_params.get("s3_region_name")
                 s3_api_version = litellm.s3_callback_params.get("s3_api_version")
-                s3_use_ssl = litellm.s3_callback_params.get("s3_use_ssl")
+                s3_use_ssl = litellm.s3_callback_params.get("s3_use_ssl", True)
                 s3_verify = litellm.s3_callback_params.get("s3_verify")
                 s3_endpoint_url = litellm.s3_callback_params.get("s3_endpoint_url")
                 s3_aws_access_key_id = litellm.s3_callback_params.get(
