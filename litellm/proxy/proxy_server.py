@@ -75,6 +75,7 @@ from litellm.proxy.utils import (
     send_email,
     get_logging_payload,
     reset_budget,
+    hash_token,
 )
 from litellm.proxy.secret_managers.google_kms import load_google_kms
 import pydantic
@@ -288,8 +289,9 @@ async def user_api_key_auth(
             raise Exception("No connected db.")
 
         ## check for cache hit (In-Memory Cache)
+        if api_key.startswith("sk-"):
+            api_key = hash_token(token=api_key)
         valid_token = user_api_key_cache.get_cache(key=api_key)
-        verbose_proxy_logger.debug(f"valid_token from cache: {valid_token}")
         if valid_token is None:
             ## check db
             verbose_proxy_logger.debug(f"api key: {api_key}")
@@ -482,10 +484,10 @@ async def user_api_key_auth(
                     )
 
             # Token passed all checks
-            # Add token to cache
-            user_api_key_cache.set_cache(key=api_key, value=valid_token, ttl=60)
-
             api_key = valid_token.token
+
+            # Add hashed token to cache
+            user_api_key_cache.set_cache(key=api_key, value=valid_token, ttl=60)
             valid_token_dict = _get_pydantic_json_dict(valid_token)
             valid_token_dict.pop("token", None)
             """
@@ -748,6 +750,9 @@ async def update_database(
 
         ### UPDATE KEY SPEND ###
         async def _update_key_db():
+            verbose_proxy_logger.debug(
+                f"adding spend to key db. Response cost: {response_cost}. Token: {token}."
+            )
             if prisma_client is not None:
                 # Fetch the existing cost for the given token
                 existing_spend_obj = await prisma_client.get_data(token=token)
