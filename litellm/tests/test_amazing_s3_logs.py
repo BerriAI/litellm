@@ -162,10 +162,10 @@ def test_s3_logging_r2():
 
         s3 = boto3.client(
             "s3",
-            endpoint_url="https://0399b10e77ac6668c80404a5ff49eb37.r2.cloudflarestorage.com",
-            region_name="us-east-1",
-            aws_access_key_id="c93b3b5e490a18391edd8c05ffe8eb9c",
-            aws_secret_access_key="c8b76230569cb6318e7c30959432b1e03f08a86cc1641e873816eb6eadd6e694",
+            endpoint_url=os.getenv("R2_S3_URL"),
+            region_name=os.getenv("R2_S3_REGION_NAME"),
+            aws_access_key_id=os.getenv("R2_S3_ACCESS_ID"),
+            aws_secret_access_key=os.getenv("R2_S3_ACCESS_KEY"),
         )
 
         bucket_name = "litellm-r2-bucket"
