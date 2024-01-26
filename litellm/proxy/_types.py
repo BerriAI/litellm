@@ -349,7 +349,6 @@ class LiteLLM_SpendLogs(LiteLLMBase):
     startTime: Union[str, datetime, None]
     endTime: Union[str, datetime, None]
     user: Optional[str] = ""
-    modelParameters: Optional[Json] = {}
     usage: Optional[Json] = {}
     metadata: Optional[Json] = {}
     cache_hit: Optional[str] = "False"

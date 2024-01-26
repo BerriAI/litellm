@@ -54,7 +54,6 @@ model LiteLLM_SpendLogs {
   endTime             DateTime // Assuming end_time is a DateTime field
   model               String   @default("")
   user                String   @default("")
-  modelParameters     Json     @default("{}")// Assuming optional_params is a JSON field
   usage               Json     @default("{}")
   metadata            Json     @default("{}")
   cache_hit           String   @default("")
