@@ -1059,10 +1059,11 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time):
     metadata = (
         litellm_params.get("metadata", {}) or {}
     )  # if litellm_params['metadata'] == None
-    optional_params = kwargs.get("optional_params", {})
     call_type = kwargs.get("call_type", "litellm.completion")
     cache_hit = kwargs.get("cache_hit", False)
     usage = response_obj["usage"]
+    if type(usage) == litellm.Usage:
+        usage = dict(usage)
     id = response_obj.get("id", str(uuid.uuid4()))
     api_key = metadata.get("user_api_key", "")
     if api_key is not None and isinstance(api_key, str) and api_key.startswith("sk-"):
@@ -1090,10 +1091,11 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time):
         "endTime": end_time,
         "model": kwargs.get("model", ""),
         "user": kwargs.get("user", ""),
-        "modelParameters": optional_params,
-        "usage": usage,
         "metadata": metadata,
         "cache_key": cache_key,
+        "total_tokens": usage.get("total_tokens", 0),
+        "prompt_tokens": usage.get("prompt_tokens", 0),
+        "completion_tokens": usage.get("completion_tokens", 0),
     }
 
     json_fields = [
@@ -1117,8 +1119,6 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time):
             if type(payload[param]) == litellm.ModelResponse:
                 payload[param] = payload[param].model_dump_json()
             if type(payload[param]) == litellm.EmbeddingResponse:
-                payload[param] = payload[param].model_dump_json()
-            elif type(payload[param]) == litellm.Usage:
                 payload[param] = payload[param].model_dump_json()
             else:
                 payload[param] = json.dumps(payload[param])
