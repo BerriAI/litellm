@@ -2561,13 +2561,24 @@ async def spend_key_fn():
     tags=["budget & spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def spend_user_fn():
+async def spend_user_fn(
+    user_id: Optional[str] = fastapi.Query(
+        default=None,
+        description="Get User Table row for user_id",
+    ),
+):
     """
     View all users created, ordered by spend
 
     Example Request: 
     ```
     curl -X GET "http://0.0.0.0:8000/spend/users" \
+-H "Authorization: Bearer sk-1234"
+    ```
+
+    View User Table row for user_id
+    ```
+    curl -X GET "http://0.0.0.0:8000/spend/users?user_id=1234" \
 -H "Authorization: Bearer sk-1234"
     ```
     """
@@ -2578,9 +2589,15 @@ async def spend_user_fn():
                 f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
-        user_info = await prisma_client.get_data(
-            table_name="user", query_type="find_all"
-        )
+        if user_id is not None:
+            user_info = await prisma_client.get_data(
+                table_name="user", query_type="find_unique", user_id=user_id
+            )
+            return [user_info]
+        else:
+            user_info = await prisma_client.get_data(
+                table_name="user", query_type="find_all"
+            )
 
         return user_info
 
@@ -2600,6 +2617,10 @@ async def view_spend_logs(
     api_key: Optional[str] = fastapi.Query(
         default=None,
         description="Get spend logs based on api key",
+    ),
+    user_id: Optional[str] = fastapi.Query(
+        default=None,
+        description="Get spend logs based on user_id",
     ),
     request_id: Optional[str] = fastapi.Query(
         default=None,
@@ -2624,6 +2645,12 @@ async def view_spend_logs(
     Example Request for specific api_key
     ```
     curl -X GET "http://0.0.0.0:8000/spend/logs?api_key=sk-Fn8Ej39NkBQmUagFEoUWPQ" \
+-H "Authorization: Bearer sk-1234"
+    ```
+
+    Example Request for specific user_id
+    ```
+    curl -X GET "http://0.0.0.0:8000/spend/logs?user_id=ishaan@berri.ai" \
 -H "Authorization: Bearer sk-1234"
     ```
     """
@@ -2655,6 +2682,16 @@ async def view_spend_logs(
                 key_val={"key": "request_id", "value": request_id},
             )
             return [spend_log]
+        elif user_id is not None:
+            spend_log = await prisma_client.get_data(
+                table_name="spend",
+                query_type="find_all",
+                key_val={"key": "user", "value": user_id},
+            )
+            if isinstance(spend_log, list):
+                return spend_log
+            else:
+                return [spend_log]
         else:
             spend_logs = await prisma_client.get_data(
                 table_name="spend", query_type="find_all"
