@@ -46,7 +46,7 @@ from litellm.proxy.proxy_server import (
     spend_key_fn,
     view_spend_logs,
 )
-from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.proxy.utils import PrismaClient, ProxyLogging, hash_token
 from litellm._logging import verbose_proxy_logger
 
 verbose_proxy_logger.setLevel(level=logging.DEBUG)
@@ -918,7 +918,7 @@ def test_call_with_key_over_budget(prisma_client):
                     "stream": False,
                     "litellm_params": {
                         "metadata": {
-                            "user_api_key": generated_key,
+                            "user_api_key": hash_token(generated_key),
                             "user_api_key_user_id": user_id,
                         }
                     },
@@ -1009,7 +1009,7 @@ async def test_call_with_key_never_over_budget(prisma_client):
                 "stream": False,
                 "litellm_params": {
                     "metadata": {
-                        "user_api_key": generated_key,
+                        "user_api_key": hash_token(generated_key),
                         "user_api_key_user_id": user_id,
                     }
                 },
@@ -1083,7 +1083,7 @@ async def test_call_with_key_over_budget_stream(prisma_client):
                 "complete_streaming_response": resp,
                 "litellm_params": {
                     "metadata": {
-                        "user_api_key": generated_key,
+                        "user_api_key": hash_token(generated_key),
                         "user_api_key_user_id": user_id,
                     }
                 },
