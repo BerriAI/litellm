@@ -24,6 +24,8 @@ model LiteLLM_UserTable {
 // required for token gen
 model LiteLLM_VerificationToken {
     token      String   @unique
+    key_name   String?
+    key_alias   String?
     spend      Float    @default(0.0)
     expires    DateTime?
     models     String[]

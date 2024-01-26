@@ -243,6 +243,7 @@ async def user_api_key_auth(
             response = await user_custom_auth(request=request, api_key=api_key)
             return UserAPIKeyAuth.model_validate(response)
         ### LITELLM-DEFINED AUTH FUNCTION ###
+        assert api_key.startswith("sk-")  # prevent token hashes from being used
         if master_key is None:
             if isinstance(api_key, str):
                 return UserAPIKeyAuth(api_key=api_key)
@@ -1239,6 +1240,7 @@ async def generate_key_helper_fn(
     rpm_limit: Optional[int] = None,
     query_type: Literal["insert_data", "update_data"] = "insert_data",
     update_key_values: Optional[dict] = None,
+    key_alias: Optional[str] = None,
 ):
     global prisma_client, custom_db_client
 
@@ -1312,6 +1314,7 @@ async def generate_key_helper_fn(
         }
         key_data = {
             "token": token,
+            "key_alias": key_alias,
             "expires": expires,
             "models": models,
             "aliases": aliases_json,
@@ -1327,6 +1330,8 @@ async def generate_key_helper_fn(
             "budget_duration": key_budget_duration,
             "budget_reset_at": key_reset_at,
         }
+        if general_settings.get("allow_user_auth", False) == True:
+            key_data["key_name"] = f"sk-...{token[-4:]}"
         if prisma_client is not None:
             ## CREATE USER (If necessary)
             verbose_proxy_logger.debug(f"prisma_client: Creating User={user_data}")
