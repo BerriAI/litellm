@@ -814,7 +814,13 @@ class PrismaClient:
         Allow user to delete a key(s)
         """
         try:
-            hashed_tokens = [self.hash_token(token=token) for token in tokens]
+            hashed_tokens = []
+            for token in tokens:
+                if isinstance(token, str) and token.startswith("sk-"):
+                    hashed_token = self.hash_token(token=token)
+                else:
+                    hashed_token = token
+                hashed_tokens.append(hashed_token)
             await self.db.litellm_verificationtoken.delete_many(
                 where={"token": {"in": hashed_tokens}}
             )
