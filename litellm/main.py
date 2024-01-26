@@ -15,7 +15,7 @@ import dotenv, traceback, random, asyncio, time, contextvars
 from copy import deepcopy
 import httpx
 import litellm
-
+from ._logging import verbose_logger
 from litellm import (  # type: ignore
     client,
     exception_type,
@@ -3346,11 +3346,15 @@ def stream_chunk_builder(
 ):
     model_response = litellm.ModelResponse()
     ### SORT CHUNKS BASED ON CREATED ORDER ##
+    print_verbose("Goes into checking if chunk has hiddden created at param")
     if chunks[0]._hidden_params.get("created_at", None):
+        print_verbose("Chunks have a created at hidden param")
         # Sort chunks based on created_at in ascending order
         chunks = sorted(
             chunks, key=lambda x: x._hidden_params.get("created_at", float("inf"))
         )
+        print_verbose("Chunks sorted")
+
     # set hidden params from chunk to model_response
     if model_response is not None and hasattr(model_response, "_hidden_params"):
         model_response._hidden_params = chunks[0].get("_hidden_params", {})
