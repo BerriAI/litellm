@@ -140,6 +140,7 @@ class GenerateRequestBase(LiteLLMBase):
 
 
 class GenerateKeyRequest(GenerateRequestBase):
+    key_alias: Optional[str] = None
     duration: Optional[str] = "1h"
     aliases: Optional[dict] = {}
     config: Optional[dict] = {}
@@ -304,6 +305,8 @@ class ConfigYAML(LiteLLMBase):
 
 class LiteLLM_VerificationToken(LiteLLMBase):
     token: str
+    key_name: Optional[str] = None
+    key_alias: Optional[str] = None
     spend: float = 0.0
     max_budget: Optional[float] = None
     expires: Union[str, None]
