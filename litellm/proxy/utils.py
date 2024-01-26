@@ -1031,7 +1031,7 @@ async def send_email(sender_name, sender_email, receiver_email, subject, html):
             server.send_message(email_message)
 
     except Exception as e:
-        print_verbose("An error occurred while sending the email:", str(e))
+        print_verbose("An error occurred while sending the email:" + str(e))
 
 
 def hash_token(token: str):
