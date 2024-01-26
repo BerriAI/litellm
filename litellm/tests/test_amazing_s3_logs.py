@@ -198,13 +198,13 @@ def test_s3_logging_r2():
         # this asserts we log, the first request + the 2nd cached request
         print("we had two matches ! passed ", matches)
         assert matches == 1
-        try:
-            # cleanup s3 bucket in test
-            for key in most_recent_keys:
-                s3.delete_object(Bucket=bucket_name, Key=key)
-        except:
-            # don't let cleanup fail a test
-            pass
+        # try:
+        #     # cleanup s3 bucket in test
+        #     for key in most_recent_keys:
+        #         s3.delete_object(Bucket=bucket_name, Key=key)
+        # except:
+        #     # don't let cleanup fail a test
+        #     pass
     except Exception as e:
         pytest.fail(f"An exception occurred - {e}")
     finally:
