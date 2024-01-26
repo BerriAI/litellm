@@ -653,21 +653,44 @@ class PrismaClient:
         max_time=10,  # maximum total time to retry for
         on_backoff=on_backoff,  # specifying the function to call on backoff
     )
+    async def delete_data(self, keys: List):
+        """
+        Allow user to delete a key(s)
+        """
+        try:
+            hashed_tokens = [self.hash_token(token=keys) for key in keys]
+            await self.db.litellm_verificationtoken.delete_many(
+                where={"token": {"in": hashed_tokens}}
+            )
+            return {"deleted_keys": keys}
+        except Exception as e:
+            asyncio.create_task(
+                self.proxy_logging_obj.failure_handler(original_exception=e)
+            )
+            raise e
+        
+    # Define a retrying strategy with exponential backoff
+    @backoff.on_exception(
+        backoff.expo,
+        Exception,  # base exception to catch for the backoff
+        max_tries=3,  # maximum number of retries
+        max_time=10,  # maximum total time to retry for
+        on_backoff=on_backoff,  # specifying the function to call on backoff
+    )
     async def delete_data(self, tokens: List):
         """
         Allow user to delete a key(s)
         """
         try:
-            hashed_tokens = [self.hash_token(token=token) for token in tokens]
             await self.db.litellm_verificationtoken.delete_many(
-                where={"token": {"in": hashed_tokens}}
+                where={"token": {"in": tokens}}
             )
             return {"deleted_keys": tokens}
         except Exception as e:
             asyncio.create_task(
                 self.proxy_logging_obj.failure_handler(original_exception=e)
             )
-            raise e
+            raise e        
 
     # Define a retrying strategy with exponential backoff
     @backoff.on_exception(

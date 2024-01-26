@@ -1273,12 +1273,16 @@ async def generate_key_helper_fn(
     }
 
 
-async def delete_verification_token(tokens: List):
+async def delete_verification_token(tokens: List, keys: List):
     global prisma_client
     try:
         if prisma_client:
             # Assuming 'db' is your Prisma Client instance
-            deleted_tokens = await prisma_client.delete_data(tokens=tokens)
+            deleted_tokens = []
+            if tokens is not None:
+                deleted_tokens = await prisma_client.delete_data(tokens=tokens)
+            elif keys is not None:
+                deleted_tokens = await prisma_client.delete_data(keys=keys)
         else:
             raise Exception
     except Exception as e:
@@ -2328,7 +2332,7 @@ async def delete_key_fn(data: DeleteKeyRequest):
     try:
         keys = data.keys
 
-        result = await delete_verification_token(tokens=keys)
+        result = await delete_verification_token(keys=keys)
         verbose_proxy_logger.debug("/key/delete - deleted_keys=", result)
 
         number_deleted_keys = len(result["deleted_keys"])
@@ -2350,6 +2354,50 @@ async def delete_key_fn(data: DeleteKeyRequest):
             param=getattr(e, "param", "None"),
             code=status.HTTP_400_BAD_REQUEST,
         )
+
+@router.post(
+    "/key/deleteByToken", tags=["key management"], dependencies=[Depends(user_api_key_auth)]
+)
+async def delete_key_by_token_fn(data: DeleteKeyRequest):
+    """
+    Delete a key using token from the key management system.
+
+    Parameters::
+    - tokens (List[str]): A list of tokens to delete. Example {"tokens": ["token1"]}
+
+    Returns:
+    - deleted_keys (List[str]): A list of deleted keys. Example {"deleted_keys": ["token1"]}
+
+
+    Raises:
+        HTTPException: If an error occurs during key deletion.
+    """
+    try:
+        tokens = data.tokens
+
+        result = await delete_verification_token(tokens=tokens)
+        verbose_proxy_logger.debug("/key/delete_key_by_token - deleted_keys=", result)
+
+        number_deleted_keys = len(result["deleted_keys"])
+        assert len(tokens) == number_deleted_keys
+        return {"deleted_keys": tokens}
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"Authentication Error({str(e)})"),
+                type="auth_error",
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message="Authentication Error, " + str(e),
+            type="auth_error",
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+
 
 
 @router.get(
