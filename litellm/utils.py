@@ -3028,6 +3028,10 @@ def completion_cost(
     messages: List = [],
     completion="",
     total_time=0.0,  # used for replicate
+    ### IMAGE GEN ###
+    size=None,
+    quality=None,
+    n=None,  # number of images
 ):
     """
     Calculate the cost of a given completion call fot GPT-3.5-turbo, llama2, any litellm supported llm.
@@ -3089,6 +3093,37 @@ def completion_cost(
                 f"Model is None and does not exist in passed completion_response. Passed completion_response={completion_response}, model={model}"
             )
 
+        if size is not None and n is not None:
+            ### IMAGE GENERATION COST CALCULATION ###
+            image_gen_model_name = f"{size}/{model}"
+            image_gen_model_name_with_quality = image_gen_model_name
+            if quality is not None:
+                image_gen_model_name_with_quality = f"{quality}/{image_gen_model_name}"
+            size = size.split("-x-")
+            height = int(size[0])
+            width = int(size[1])
+            verbose_logger.debug(f"image_gen_model_name: {image_gen_model_name}")
+            verbose_logger.debug(
+                f"image_gen_model_name_with_quality: {image_gen_model_name_with_quality}"
+            )
+            if image_gen_model_name in litellm.model_cost:
+                return (
+                    litellm.model_cost[image_gen_model_name]["input_cost_per_pixel"]
+                    * height
+                    * width
+                    * n
+                )
+            elif image_gen_model_name_with_quality in litellm.model_cost:
+                return (
+                    litellm.model_cost[image_gen_model_name_with_quality][
+                        "input_cost_per_pixel"
+                    ]
+                    * height
+                    * width
+                    * n
+                )
+            else:
+                raise Exception(f"Model={model} not found in completion cost model map")
         # Calculate cost based on prompt_tokens, completion_tokens
         if "togethercomputer" in model or "together_ai" in model:
             # together ai prices based on size of llm
