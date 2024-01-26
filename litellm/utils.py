@@ -3313,8 +3313,10 @@ def get_optional_params_image_gen(
 
 def get_optional_params_embeddings(
     # 2 optional params
+    model=None,
     user=None,
     encoding_format=None,
+    dimensions=None,
     custom_llm_provider="",
     **kwargs,
 ):
@@ -3325,7 +3327,7 @@ def get_optional_params_embeddings(
     for k, v in special_params.items():
         passed_params[k] = v
 
-    default_params = {"user": None, "encoding_format": None}
+    default_params = {"user": None, "encoding_format": None, "dimensions": None}
 
     non_default_params = {
         k: v
@@ -3333,6 +3335,19 @@ def get_optional_params_embeddings(
         if (k in default_params and v != default_params[k])
     }
     ## raise exception if non-default value passed for non-openai/azure embedding calls
+    if custom_llm_provider == "openai":
+        # 'dimensions` is only supported in `text-embedding-3` and later models
+
+        if (
+            model is not None
+            and "text-embedding-3" not in model
+            and "dimensions" in non_default_params.keys()
+        ):
+            raise UnsupportedParamsError(
+                status_code=500,
+                message=f"Setting dimensions is not supported for OpenAI `text-embedding-3` and later models. To drop it from the call, set `litellm.drop_params = True`.",
+            )
+
     if (
         custom_llm_provider != "openai"
         and custom_llm_provider != "azure"
