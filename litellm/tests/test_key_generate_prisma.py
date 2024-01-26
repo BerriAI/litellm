@@ -1112,7 +1112,7 @@ async def test_view_spend_per_user(prisma_client):
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
     await litellm.proxy.proxy_server.prisma_client.connect()
     try:
-        user_by_spend = await spend_user_fn()
+        user_by_spend = await spend_user_fn(user_id=None)
         assert type(user_by_spend) == list
         assert len(user_by_spend) > 0
         first_user = user_by_spend[0]
