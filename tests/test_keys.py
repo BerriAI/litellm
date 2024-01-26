@@ -281,20 +281,14 @@ async def test_key_info_spend_values():
         await asyncio.sleep(5)
         spend_logs = await get_spend_logs(session=session, request_id=response["id"])
         print(f"spend_logs: {spend_logs}")
-        completion_tokens = spend_logs[0]["completion_tokens"]
-        prompt_tokens = spend_logs[0]["prompt_tokens"]
-        print(f"prompt_tokens: {prompt_tokens}; completion_tokens: {completion_tokens}")
-
-        litellm.set_verbose = True
+        usage = spend_logs[0]["usage"]
         prompt_cost, completion_cost = litellm.cost_per_token(
             model="gpt-35-turbo",
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
+            prompt_tokens=usage["prompt_tokens"],
+            completion_tokens=usage["completion_tokens"],
             custom_llm_provider="azure",
         )
-        print("prompt_cost: ", prompt_cost, "completion_cost: ", completion_cost)
         response_cost = prompt_cost + completion_cost
-        print(f"response_cost: {response_cost}")
         await asyncio.sleep(5)  # allow db log to be updated
         key_info = await get_key_info(session=session, get_key=key, call_key=key)
         print(
