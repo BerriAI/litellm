@@ -131,6 +131,7 @@ class S3Logger:
                 + "-time="
                 + str(start_time)
             )  # we need the s3 key to include the time, so we log cache hits too
+            s3_object_key += ".json"
 
             import json
 
