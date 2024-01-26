@@ -847,9 +847,13 @@ def test_sagemaker_weird_response():
             logging_obj=logging_obj,
         )
         complete_response = ""
-        for chunk in response:
-            print(chunk)
-            complete_response += chunk["choices"][0]["delta"]["content"]
+        for idx, chunk in enumerate(response):
+            # print
+            chunk, finished = streaming_format_tests(idx, chunk)
+            has_finish_reason = finished
+            complete_response += chunk
+            if finished:
+                break
         assert len(complete_response) > 0
     except Exception as e:
         pytest.fail(f"An exception occurred - {str(e)}")
