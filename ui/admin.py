@@ -181,149 +181,6 @@ def list_models():
         )
 
 
-def view_app_spend():
-    st.title("Spend Analysis App")
-
-    # Check if the necessary configuration is available
-    if (
-        st.session_state.get("api_url", None) is not None
-        and st.session_state.get("proxy_key", None) is not None
-    ):
-        # Make the GET request
-        try:
-            # Input box for user_id inside a form
-            with st.form(key="spend_form"):
-                user_id = st.text_input("Enter User ID:")
-                submit_button = st.form_submit_button(label="Submit")
-
-            # Check if user_id is provided and the form is submitted
-            if user_id and submit_button:
-                complete_url = ""
-                if isinstance(st.session_state["api_url"], str) and st.session_state[
-                    "api_url"
-                ].endswith("/"):
-                    complete_url = f"{st.session_state['api_url']}spend/logs"
-                else:
-                    complete_url = f"{st.session_state['api_url']}/spend/logs"
-
-                # add user_id to the URL
-                complete_url += f"?user_id={user_id}"
-                response = requests.get(
-                    complete_url,
-                    headers={
-                        "Authorization": f"Bearer {st.session_state['proxy_key']}"
-                    },
-                )
-                # Check if the request was successful
-                if response.status_code == 200:
-                    response_data = response.json()
-                    print(response_data)
-                    spend_df = pd.DataFrame(response_data)
-
-                    # st.write(spend_df)
-                    # Adding a new column with the count of rows for each api_key
-                    count_df = (
-                        spend_df.groupby("api_key").size().reset_index(name="row_count")
-                    )
-                    # group by api_key
-                    spend_df = spend_df.groupby("api_key")["spend"].sum().reset_index()
-                    # Merging the two DataFrames on 'api_key'
-                    spend_df = pd.merge(spend_df, count_df, on="api_key")
-
-                    # Sort spend_df in descending order by 'spend'
-                    spend_df = spend_df.sort_values(by="spend", ascending=False)
-
-                    fig = px.bar(
-                        spend_df,
-                        x="api_key",
-                        y="spend",
-                        text="spend",
-                        title="Spend per API Key",
-                        labels={"spend": "Total Spend", "api_key": "API Key"},
-                    )
-
-                    # Adding data labels on top of the bars
-                    fig.update_traces(
-                        texttemplate="%{text:.2s}", textposition="outside"
-                    )
-
-                    # Displaying the graph using Streamlit
-                    st.plotly_chart(fig)
-
-                    st.write(spend_df)
-                else:
-                    st.error(
-                        f"Failed to get models. Status code: {response.status_code}"
-                    )
-        except Exception as e:
-            st.error(f"An error occurred while requesting app spend: {e}")
-    else:
-        st.warning(
-            f"Please configure the Proxy Endpoint and Proxy Key on the Proxy Setup page. Currently set Proxy Endpoint: {st.session_state.get('api_url', None)} and Proxy Key: {st.session_state.get('proxy_key', None)}"
-        )
-
-
-def view_proxy_costs():
-    st.title("Proxy Costs App")
-    if (
-        st.session_state.get("api_url", None) is not None
-        and st.session_state.get("proxy_key", None) is not None
-    ):
-        # Make the GET request
-        # show proxy max budget and show proxy current spend
-
-        # show daily chart of proxy spend for this current month
-
-        try:
-            complete_url = ""
-            if isinstance(st.session_state["api_url"], str) and st.session_state[
-                "api_url"
-            ].endswith("/"):
-                complete_url = f"{st.session_state['api_url']}/spend/users"
-            else:
-                complete_url = f"{st.session_state['api_url']}/spend/users"
-            response = requests.get(
-                complete_url,
-                headers={"Authorization": f"Bearer {st.session_state['proxy_key']}"},
-            )
-
-            # add user_id=litellm-proxy-budget
-            complete_url += f"?user_id=litellm-proxy-budget"
-
-            # Check if the request was successful
-            if response.status_code == 200:
-                spend_per_key = response.json()
-                # Create DataFrame
-                spend_df = pd.DataFrame(spend_per_key)
-
-                # Display the spend per key as a graph
-                st.header("Spend ($) per API Key:")
-                top_10_df = spend_df.nlargest(10, "spend")
-                fig = px.bar(
-                    top_10_df,
-                    x="token",
-                    y="spend",
-                    title="Top 10 Spend per Key",
-                    height=550,  # Adjust the height
-                    width=1200,  # Adjust the width)
-                    hover_data=["token", "spend", "user_id", "team_id"],
-                )
-                st.plotly_chart(fig)
-
-                # Display the spend per key as a table
-                st.write("Spend per Key - Full Table:")
-                st.table(spend_df)
-
-            else:
-                st.error(f"Failed to get models. Status code: {response.status_code}")
-        except Exception as e:
-            st.error(f"An error occurred while requesting models: {e}")
-    else:
-        st.warning(
-            f"Please configure the Proxy Endpoint and Proxy Key on the Proxy Setup page. Currently set Proxy Endpoint: {st.session_state.get('api_url', None)} and Proxy Key: {st.session_state.get('proxy_key', None)}"
-        )
-
-
 def spend_per_key():
     import streamlit as st
     import requests
@@ -598,7 +455,6 @@ def admin_page(is_admin="NOT_GIVEN", input_api_url=None, input_proxy_key=None):
             "Connect to Proxy",
             "View Spend Per Key",
             "View Spend Per User",
-            "View App Spend",
             "List Models",
             "Update Config",
             "Add Models",
@@ -641,10 +497,6 @@ def admin_page(is_admin="NOT_GIVEN", input_api_url=None, input_proxy_key=None):
         list_models()
     elif page == "Create Key":
         create_key()
-    elif page == "Proxy Costs":
-        view_proxy_costs()
-    elif page == "View App Spend":
-        view_app_spend()
     elif page == "View Spend Per Key":
         spend_per_key()
     elif page == "View Spend Per User":
