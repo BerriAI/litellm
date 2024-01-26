@@ -346,9 +346,9 @@ class LiteLLM_SpendLogs(LiteLLMBase):
     model: Optional[str] = ""
     call_type: str
     spend: Optional[float] = 0.0
-    total_tokens: Optional[int] = 0
-    prompt_tokens: Optional[int] = 0
-    completion_tokens: Optional[int] = 0
+    total_tokens: Optional[float] = 0.0
+    prompt_tokens: Optional[float] = 0.0
+    completion_tokens: Optional[float] = 0.0
     startTime: Union[str, datetime, None]
     endTime: Union[str, datetime, None]
     user: Optional[str] = ""
