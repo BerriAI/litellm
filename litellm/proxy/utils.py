@@ -1035,7 +1035,8 @@ async def send_email(sender_name, sender_email, receiver_email, subject, html):
         print_verbose(f"SMTP Connection Init")
         # Establish a secure connection with the SMTP server
         with smtplib.SMTP(smtp_host, smtp_port) as server:
-            server.starttls()
+            if os.getenv("SMTP_TLS", 'True') != "False":
+                server.starttls()
 
             # Login to your email account
             server.login(smtp_username, smtp_password)
