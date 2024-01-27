@@ -714,6 +714,7 @@ class ImageResponse(OpenAIObject):
 ############################################################
 def print_verbose(print_statement):
     try:
+        verbose_logger.debug(print_statement)
         if litellm.set_verbose:
             print(print_statement)  # noqa
     except:
@@ -2900,6 +2901,7 @@ def cost_per_token(
     completion_tokens=0,
     response_time_ms=None,
     custom_llm_provider=None,
+    region_name=None,
 ):
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
@@ -2916,16 +2918,46 @@ def cost_per_token(
     prompt_tokens_cost_usd_dollar = 0
     completion_tokens_cost_usd_dollar = 0
     model_cost_ref = litellm.model_cost
+    model_with_provider = model
     if custom_llm_provider is not None:
         model_with_provider = custom_llm_provider + "/" + model
-    else:
-        model_with_provider = model
+        if region_name is not None:
+            model_with_provider_and_region = (
+                f"{custom_llm_provider}/{region_name}/{model}"
+            )
+            if (
+                model_with_provider_and_region in model_cost_ref
+            ):  # use region based pricing, if it's available
+                model_with_provider = model_with_provider_and_region
     # see this https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models
-    verbose_logger.debug(f"Looking up model={model} in model_cost_map")
-
+    print_verbose(f"Looking up model={model} in model_cost_map")
+    if model_with_provider in model_cost_ref:
+        print_verbose(
+            f"Success: model={model_with_provider} in model_cost_map - {model_cost_ref[model_with_provider]}"
+        )
+        print_verbose(
+            f"applying cost={model_cost_ref[model_with_provider]['input_cost_per_token']} for prompt_tokens={prompt_tokens}"
+        )
+        prompt_tokens_cost_usd_dollar = (
+            model_cost_ref[model_with_provider]["input_cost_per_token"] * prompt_tokens
+        )
+        print_verbose(
+            f"calculated prompt_tokens_cost_usd_dollar: {prompt_tokens_cost_usd_dollar}"
+        )
+        print_verbose(
+            f"applying cost={model_cost_ref[model_with_provider]['output_cost_per_token']} for completion_tokens={completion_tokens}"
+        )
+        completion_tokens_cost_usd_dollar = (
+            model_cost_ref[model_with_provider]["output_cost_per_token"]
+            * completion_tokens
+        )
+        print_verbose(
+            f"calculated completion_tokens_cost_usd_dollar: {completion_tokens_cost_usd_dollar}"
+        )
+        return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
     if model in model_cost_ref:
-        verbose_logger.debug(f"Success: model={model} in model_cost_map")
-        verbose_logger.debug(
+        print_verbose(f"Success: model={model} in model_cost_map")
+        print_verbose(
             f"prompt_tokens={prompt_tokens}; completion_tokens={completion_tokens}"
         )
         if (
@@ -2943,7 +2975,7 @@ def cost_per_token(
             model_cost_ref[model].get("input_cost_per_second", None) is not None
             and response_time_ms is not None
         ):
-            verbose_logger.debug(
+            print_verbose(
                 f"For model={model} - input_cost_per_second: {model_cost_ref[model].get('input_cost_per_second')}; response time: {response_time_ms}"
             )
             ## COST PER SECOND ##
@@ -2951,30 +2983,12 @@ def cost_per_token(
                 model_cost_ref[model]["input_cost_per_second"] * response_time_ms / 1000
             )
             completion_tokens_cost_usd_dollar = 0.0
-        verbose_logger.debug(
+        print_verbose(
             f"Returned custom cost for model={model} - prompt_tokens_cost_usd_dollar: {prompt_tokens_cost_usd_dollar}, completion_tokens_cost_usd_dollar: {completion_tokens_cost_usd_dollar}"
         )
         return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
-    elif model_with_provider in model_cost_ref:
-        verbose_logger.debug(
-            f"Looking up model={model_with_provider} in model_cost_map"
-        )
-        verbose_logger.debug(
-            f"applying cost={model_cost_ref[model_with_provider]['input_cost_per_token']} for prompt_tokens={prompt_tokens}"
-        )
-        prompt_tokens_cost_usd_dollar = (
-            model_cost_ref[model_with_provider]["input_cost_per_token"] * prompt_tokens
-        )
-        verbose_logger.debug(
-            f"applying cost={model_cost_ref[model_with_provider]['output_cost_per_token']} for completion_tokens={completion_tokens}"
-        )
-        completion_tokens_cost_usd_dollar = (
-            model_cost_ref[model_with_provider]["output_cost_per_token"]
-            * completion_tokens
-        )
-        return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
     elif "ft:gpt-3.5-turbo" in model:
-        verbose_logger.debug(f"Cost Tracking: {model} is an OpenAI FinteTuned LLM")
+        print_verbose(f"Cost Tracking: {model} is an OpenAI FinteTuned LLM")
         # fuzzy match ft:gpt-3.5-turbo:abcd-id-cool-litellm
         prompt_tokens_cost_usd_dollar = (
             model_cost_ref["ft:gpt-3.5-turbo"]["input_cost_per_token"] * prompt_tokens
@@ -3031,7 +3045,10 @@ def completion_cost(
     prompt="",
     messages: List = [],
     completion="",
-    total_time=0.0,  # used for replicate
+    total_time=0.0,  # used for replicate, sagemaker
+    ### REGION ###
+    custom_llm_provider=None,
+    region_name=None,  # used for bedrock pricing
     ### IMAGE GEN ###
     size=None,
     quality=None,
@@ -3080,11 +3097,12 @@ def completion_cost(
             model = (
                 model or completion_response["model"]
             )  # check if user passed an override for model, if it's none check completion_response['model']
-            if completion_response is not None and hasattr(
-                completion_response, "_hidden_params"
-            ):
+            if hasattr(completion_response, "_hidden_params"):
                 custom_llm_provider = completion_response._hidden_params.get(
                     "custom_llm_provider", ""
+                )
+                region_name = completion_response._hidden_params.get(
+                    "region_name", region_name
                 )
         else:
             if len(messages) > 0:
@@ -3146,8 +3164,13 @@ def completion_cost(
             completion_tokens=completion_tokens,
             custom_llm_provider=custom_llm_provider,
             response_time_ms=total_time,
+            region_name=region_name,
         )
-        return prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar
+        _final_cost = prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar
+        print_verbose(
+            f"final cost: {_final_cost}; prompt_tokens_cost_usd_dollar: {prompt_tokens_cost_usd_dollar}; completion_tokens_cost_usd_dollar: {completion_tokens_cost_usd_dollar}"
+        )
+        return _final_cost
     except Exception as e:
         raise e
 
