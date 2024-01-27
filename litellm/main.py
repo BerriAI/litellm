@@ -3067,7 +3067,7 @@ def image_generation(
             custom_llm_provider=custom_llm_provider,
             **non_default_params,
         )
-        logging = litellm_logging_obj
+        logging: Logging = litellm_logging_obj
         logging.update_environment_variables(
             model=model,
             user=user,
