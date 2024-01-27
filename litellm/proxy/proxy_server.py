@@ -2912,10 +2912,10 @@ async def google_callback(code: str):
 
             key = response["token"]  # type: ignore
             user_id = response["user_id"]  # type: ignore
-            {
-                "key": key,
-                "user_id": user_id,
-            }
+            return JSONResponse(
+                content={"key": key, "user_id": user_id}, status_code=200
+            )
+
         else:
             # Handle user info retrieval error
             raise HTTPException(
