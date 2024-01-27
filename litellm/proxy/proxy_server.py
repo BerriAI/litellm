@@ -104,6 +104,7 @@ from fastapi.responses import (
     ORJSONResponse,
     JSONResponse,
 )
+from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security.api_key import APIKeyHeader
 import json
@@ -2854,6 +2855,70 @@ async def user_auth(request: Request):
 
     await send_email(**params)
     return "Email sent!"
+
+
+@app.get("/google-login", tags=["experimental"])
+async def google_login():
+    GOOGLE_REDIRECT_URI = "http://localhost:4000/google-callback"
+    GOOGLE_CLIENT_ID = (
+        "246483686424-clje5sggkjma26ilktj6qssakqhoon0m.apps.googleusercontent.com"
+    )
+    google_auth_url = f"https://accounts.google.com/o/oauth2/auth?client_id={GOOGLE_CLIENT_ID}&redirect_uri={GOOGLE_REDIRECT_URI}&response_type=code&scope=openid%20profile%20email"
+    return RedirectResponse(url=google_auth_url)
+
+
+@app.get("/google-callback", tags=["experimental"])
+async def google_callback(code: str):
+    import httpx
+
+    GOOGLE_REDIRECT_URI = "http://localhost:4000/google-callback"
+    GOOGLE_CLIENT_ID = (
+        "246483686424-clje5sggkjma26ilktj6qssakqhoon0m.apps.googleusercontent.com"
+    )
+    # Exchange code for access token
+    async with httpx.AsyncClient() as client:
+        token_url = f"https://oauth2.googleapis.com/token"
+        data = {
+            "code": code,
+            "client_id": GOOGLE_CLIENT_ID,
+            "client_secret": "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",
+            "redirect_uri": GOOGLE_REDIRECT_URI,
+            "grant_type": "authorization_code",
+        }
+        response = await client.post(token_url, data=data)
+
+    # Process the response, extract user info, etc.
+    if response.status_code == 200:
+        access_token = response.json()["access_token"]
+
+        # Fetch user info using the access token
+        async with httpx.AsyncClient() as client:
+            user_info_url = "https://www.googleapis.com/oauth2/v1/userinfo"
+            headers = {"Authorization": f"Bearer {access_token}"}
+            user_info_response = await client.get(user_info_url, headers=headers)
+
+        # Process user info response
+        if user_info_response.status_code == 200:
+            user_info = user_info_response.json()
+            user_email = user_info.get("email")
+            user_name = user_info.get("name")
+
+            # we can use user_email on litellm proxy now
+
+            # TODO: Handle user info as needed, for example, store it in a database, authenticate the user, etc.
+            return JSONResponse(
+                content={"user_email": user_email, "user_name": user_name},
+                status_code=200,
+            )
+        else:
+            # Handle user info retrieval error
+            raise HTTPException(
+                status_code=user_info_response.status_code,
+                detail=user_info_response.text,
+            )
+    else:
+        # Handle the error from the token exchange
+        raise HTTPException(status_code=response.status_code, detail=response.text)
 
 
 @router.get(
