@@ -522,7 +522,10 @@ async def user_api_key_auth(
                     # check if user can access this route
                     query_params = request.query_params
                     key = query_params.get("key")
-                    if prisma_client.hash_token(token=key) != api_key:
+                    if (
+                        key is not None
+                        and prisma_client.hash_token(token=key) != api_key
+                    ):
                         raise HTTPException(
                             status_code=status.HTTP_403_FORBIDDEN,
                             detail="user not allowed to access this key's info",
@@ -2496,7 +2499,10 @@ async def delete_key_fn(data: DeleteKeyRequest):
     "/key/info", tags=["key management"], dependencies=[Depends(user_api_key_auth)]
 )
 async def info_key_fn(
-    key: str = fastapi.Query(..., description="Key in the request parameters"),
+    key: Optional[str] = fastapi.Query(
+        default=None, description="Key in the request parameters"
+    ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     global prisma_client
     try:
@@ -2504,6 +2510,8 @@ async def info_key_fn(
             raise Exception(
                 f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
+        if key == None:
+            key = user_api_key_dict.api_key
         key_info = await prisma_client.get_data(token=key)
         ## REMOVE HASHED TOKEN INFO BEFORE RETURNING ##
         try:
