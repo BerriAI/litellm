@@ -2520,7 +2520,7 @@ async def info_key_fn(
 -H "Authorization: Bearer sk-1234"
     ```
 
-    Example - if no key is passed, it will use the Key Passed in Authorization Header
+    Example Curl - if no key is passed, it will use the Key Passed in Authorization Header
     ```
     curl -X GET "http://0.0.0.0:8000/key/info" \
 -H "Authorization: Bearer sk-02Wr4IAlN3NvPXvL5JVvDA"
