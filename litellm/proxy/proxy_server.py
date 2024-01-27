@@ -2858,8 +2858,11 @@ async def user_auth(request: Request):
 
 
 @app.get("/google-login", tags=["experimental"])
-async def google_login():
-    GOOGLE_REDIRECT_URI = "http://localhost:4000/google-callback"
+async def google_login(request: Request):
+    scheme = request.url.scheme
+    host = request.url.hostname
+    port = request.url.port or 4000
+    GOOGLE_REDIRECT_URI = f"{scheme}://{host}:{port}/google-callback"
     GOOGLE_CLIENT_ID = (
         "246483686424-clje5sggkjma26ilktj6qssakqhoon0m.apps.googleusercontent.com"
     )
@@ -2868,10 +2871,14 @@ async def google_login():
 
 
 @app.get("/google-callback", tags=["experimental"], response_model=GenerateKeyResponse)
-async def google_callback(code: str):
+async def google_callback(code: str, request: Request):
     import httpx
 
-    GOOGLE_REDIRECT_URI = "http://localhost:4000/google-callback"
+    scheme = request.url.scheme
+    host = request.url.hostname
+    port = request.url.port or 4000
+
+    GOOGLE_REDIRECT_URI = f"{scheme}://{host}:{port}/google-callback"
     GOOGLE_CLIENT_ID = (
         "246483686424-clje5sggkjma26ilktj6qssakqhoon0m.apps.googleusercontent.com"
     )
