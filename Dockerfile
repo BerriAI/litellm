@@ -59,5 +59,5 @@ RUN echo "app contents"
 # List contents of /app
 RUN ls -la /app
 
-ENTRYPOINT ["python3 litellm/litellm/proxy/proxy_cli.py"]
+ENTRYPOINT ["python3 litellm/proxy/proxy_cli.py"]
 CMD ["--port", "4000"]
