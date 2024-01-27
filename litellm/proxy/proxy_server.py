@@ -243,7 +243,8 @@ async def user_api_key_auth(
             response = await user_custom_auth(request=request, api_key=api_key)
             return UserAPIKeyAuth.model_validate(response)
         ### LITELLM-DEFINED AUTH FUNCTION ###
-        assert api_key.startswith("sk-")  # prevent token hashes from being used
+        if isinstance(api_key, str):
+            assert api_key.startswith("sk-")  # prevent token hashes from being used
         if master_key is None:
             if isinstance(api_key, str):
                 return UserAPIKeyAuth(api_key=api_key)
