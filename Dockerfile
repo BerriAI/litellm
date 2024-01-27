@@ -54,6 +54,10 @@ RUN chmod +x entrypoint.sh
 EXPOSE 4000/tcp
 
 # # Set your entrypoint and command
+RUN echo "app contents"
+
+# List contents of /app
+RUN ls -la /app
 
 ENTRYPOINT ["python3 litellm/litellm/proxy/proxy_cli.py"]
 CMD ["--port", "4000"]
