@@ -198,7 +198,14 @@ class ProxyLogging:
             max_budget = user_info["max_budget"]
             spend = user_info["spend"]
             user_email = user_info["user_email"]
-            user_info = f"""\nUser ID: {user_id}\nMax Budget: {max_budget}\nSpend: {spend}\nUser Email: {user_email}"""
+            user_info = f"""\nUser ID: {user_id}\nMax Budget: ${max_budget}\nSpend: ${spend}\nUser Email: {user_email}"""
+        elif type == "token_budget":
+            token_info = dict(user_info)
+            token = token_info["token"]
+            spend = token_info["spend"]
+            max_budget = token_info["max_budget"]
+            user_id = token_info["user_id"]
+            user_info = f"""\nToken: {token}\nSpend: ${spend}\nMax Budget: ${max_budget}\nUser ID: {user_id}"""
         else:
             user_info = str(user_info)
         # percent of max_budget left to spend
