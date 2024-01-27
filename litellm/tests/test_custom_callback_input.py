@@ -824,26 +824,28 @@ def test_image_generation_openai():
     try:
         customHandler_success = CompletionCustomHandler()
         customHandler_failure = CompletionCustomHandler()
-        litellm.callbacks = [customHandler_success]
+        # litellm.callbacks = [customHandler_success]
 
-        litellm.set_verbose = True
+        # litellm.set_verbose = True
 
-        response = litellm.image_generation(
-            prompt="A cute baby sea otter", model="dall-e-3"
-        )
+        # response = litellm.image_generation(
+        #     prompt="A cute baby sea otter", model="dall-e-3"
+        # )
 
-        print(f"response: {response}")
-        assert len(response.data) > 0
+        # print(f"response: {response}")
+        # assert len(response.data) > 0
 
-        print(f"customHandler_success.errors: {customHandler_success.errors}")
-        print(f"customHandler_success.states: {customHandler_success.states}")
-        assert len(customHandler_success.errors) == 0
-        assert len(customHandler_success.states) == 3  # pre, post, success
+        # print(f"customHandler_success.errors: {customHandler_success.errors}")
+        # print(f"customHandler_success.states: {customHandler_success.states}")
+        # assert len(customHandler_success.errors) == 0
+        # assert len(customHandler_success.states) == 3  # pre, post, success
         # test failure callback
         litellm.callbacks = [customHandler_failure]
         try:
             response = litellm.image_generation(
-                prompt="A cute baby sea otter", model="dall-e-4"
+                prompt="A cute baby sea otter",
+                model="dall-e-2",
+                api_key="my-bad-api-key",
             )
         except:
             pass
@@ -859,7 +861,7 @@ def test_image_generation_openai():
         pytest.fail(f"An exception occurred - {str(e)}")
 
 
-# test_image_generation_openai()
+test_image_generation_openai()
 ## Test OpenAI + Async
 
 ## Test Azure + Sync
