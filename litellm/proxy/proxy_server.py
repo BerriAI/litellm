@@ -2506,6 +2506,26 @@ async def info_key_fn(
     ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
+    """
+    Retrieve information about a key.
+    Parameters:
+        key: Optional[str] = Query parameter representing the key in the request
+        user_api_key_dict: UserAPIKeyAuth = Dependency representing the user's API key
+    Returns:
+        Dict containing the key and its associated information
+    
+    Example Curl:
+    ```
+    curl -X GET "http://0.0.0.0:8000/key/info?key=sk-02Wr4IAlN3NvPXvL5JVvDA" \
+-H "Authorization: Bearer sk-1234"
+    ```
+
+    Example - if no key is passed, it will use the Key Passed in Authorization Header
+    ```
+    curl -X GET "http://0.0.0.0:8000/key/info" \
+-H "Authorization: Bearer sk-02Wr4IAlN3NvPXvL5JVvDA"
+    ```
+    """
     global prisma_client
     try:
         if prisma_client is None:
