@@ -75,6 +75,7 @@ from litellm.proxy.utils import (
     send_email,
     get_logging_payload,
     reset_budget,
+    hash_token,
 )
 from litellm.proxy.secret_managers.google_kms import load_google_kms
 import pydantic
@@ -243,6 +244,8 @@ async def user_api_key_auth(
             response = await user_custom_auth(request=request, api_key=api_key)
             return UserAPIKeyAuth.model_validate(response)
         ### LITELLM-DEFINED AUTH FUNCTION ###
+        if isinstance(api_key, str):
+            assert api_key.startswith("sk-")  # prevent token hashes from being used
         if master_key is None:
             if isinstance(api_key, str):
                 return UserAPIKeyAuth(api_key=api_key)
@@ -288,8 +291,9 @@ async def user_api_key_auth(
             raise Exception("No connected db.")
 
         ## check for cache hit (In-Memory Cache)
+        if api_key.startswith("sk-"):
+            api_key = hash_token(token=api_key)
         valid_token = user_api_key_cache.get_cache(key=api_key)
-        verbose_proxy_logger.debug(f"valid_token from cache: {valid_token}")
         if valid_token is None:
             ## check db
             verbose_proxy_logger.debug(f"api key: {api_key}")
@@ -482,10 +486,10 @@ async def user_api_key_auth(
                     )
 
             # Token passed all checks
-            # Add token to cache
-            user_api_key_cache.set_cache(key=api_key, value=valid_token, ttl=60)
-
             api_key = valid_token.token
+
+            # Add hashed token to cache
+            user_api_key_cache.set_cache(key=api_key, value=valid_token, ttl=60)
             valid_token_dict = _get_pydantic_json_dict(valid_token)
             valid_token_dict.pop("token", None)
             """
@@ -520,7 +524,10 @@ async def user_api_key_auth(
                     # check if user can access this route
                     query_params = request.query_params
                     key = query_params.get("key")
-                    if prisma_client.hash_token(token=key) != api_key:
+                    if (
+                        key is not None
+                        and prisma_client.hash_token(token=key) != api_key
+                    ):
                         raise HTTPException(
                             status_code=status.HTTP_403_FORBIDDEN,
                             detail="user not allowed to access this key's info",
@@ -748,6 +755,9 @@ async def update_database(
 
         ### UPDATE KEY SPEND ###
         async def _update_key_db():
+            verbose_proxy_logger.debug(
+                f"adding spend to key db. Response cost: {response_cost}. Token: {token}."
+            )
             if prisma_client is not None:
                 # Fetch the existing cost for the given token
                 existing_spend_obj = await prisma_client.get_data(token=token)
@@ -1239,6 +1249,7 @@ async def generate_key_helper_fn(
     rpm_limit: Optional[int] = None,
     query_type: Literal["insert_data", "update_data"] = "insert_data",
     update_key_values: Optional[dict] = None,
+    key_alias: Optional[str] = None,
 ):
     global prisma_client, custom_db_client
 
@@ -1312,6 +1323,7 @@ async def generate_key_helper_fn(
         }
         key_data = {
             "token": token,
+            "key_alias": key_alias,
             "expires": expires,
             "models": models,
             "aliases": aliases_json,
@@ -1327,6 +1339,8 @@ async def generate_key_helper_fn(
             "budget_duration": key_budget_duration,
             "budget_reset_at": key_reset_at,
         }
+        if general_settings.get("allow_user_auth", False) == True:
+            key_data["key_name"] = f"sk-...{token[-4:]}"
         if prisma_client is not None:
             ## CREATE USER (If necessary)
             verbose_proxy_logger.debug(f"prisma_client: Creating User={user_data}")
@@ -2451,10 +2465,10 @@ async def delete_key_fn(data: DeleteKeyRequest):
     Delete a key from the key management system.
 
     Parameters::
-    - keys (List[str]): A list of keys to delete. Example {"keys": ["sk-QWrxEynunsNpV1zT48HIrw"]}
+    - keys (List[str]): A list of keys or hashed keys to delete. Example {"keys": ["sk-QWrxEynunsNpV1zT48HIrw", "837e17519f44683334df5291321d97b8bf1098cd490e49e215f6fea935aa28be"]}
 
     Returns:
-    - deleted_keys (List[str]): A list of deleted keys. Example {"deleted_keys": ["sk-QWrxEynunsNpV1zT48HIrw"]}
+    - deleted_keys (List[str]): A list of deleted keys. Example {"deleted_keys": ["sk-QWrxEynunsNpV1zT48HIrw", "837e17519f44683334df5291321d97b8bf1098cd490e49e215f6fea935aa28be"]}
 
 
     Raises:
@@ -2491,14 +2505,39 @@ async def delete_key_fn(data: DeleteKeyRequest):
     "/key/info", tags=["key management"], dependencies=[Depends(user_api_key_auth)]
 )
 async def info_key_fn(
-    key: str = fastapi.Query(..., description="Key in the request parameters"),
+    key: Optional[str] = fastapi.Query(
+        default=None, description="Key in the request parameters"
+    ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
+    """
+    Retrieve information about a key.
+    Parameters:
+        key: Optional[str] = Query parameter representing the key in the request
+        user_api_key_dict: UserAPIKeyAuth = Dependency representing the user's API key
+    Returns:
+        Dict containing the key and its associated information
+    
+    Example Curl:
+    ```
+    curl -X GET "http://0.0.0.0:8000/key/info?key=sk-02Wr4IAlN3NvPXvL5JVvDA" \
+-H "Authorization: Bearer sk-1234"
+    ```
+
+    Example Curl - if no key is passed, it will use the Key Passed in Authorization Header
+    ```
+    curl -X GET "http://0.0.0.0:8000/key/info" \
+-H "Authorization: Bearer sk-02Wr4IAlN3NvPXvL5JVvDA"
+    ```
+    """
     global prisma_client
     try:
         if prisma_client is None:
             raise Exception(
                 f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
+        if key == None:
+            key = user_api_key_dict.api_key
         key_info = await prisma_client.get_data(token=key)
         ## REMOVE HASHED TOKEN INFO BEFORE RETURNING ##
         try:

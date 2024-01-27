@@ -12,6 +12,8 @@
 # 11. Generate a Key, cal key/info, call key/update, call key/info
 # 12. Make a call with key over budget, expect to fail
 # 14. Make a streaming chat/completions call with key over budget, expect to fail
+# 15. Generate key, when `allow_user_auth`=False - check if `/key/info` returns key_name=null
+# 16. Generate key, when `allow_user_auth`=True - check if `/key/info` returns key_name=sk...<last-4-digits>
 
 
 # function to call to generate key - async def new_user(data: NewUserRequest):
@@ -46,7 +48,7 @@ from litellm.proxy.proxy_server import (
     spend_key_fn,
     view_spend_logs,
 )
-from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.proxy.utils import PrismaClient, ProxyLogging, hash_token
 from litellm._logging import verbose_proxy_logger
 
 verbose_proxy_logger.setLevel(level=logging.DEBUG)
@@ -86,6 +88,7 @@ def prisma_client():
     litellm.proxy.proxy_server.litellm_proxy_budget_name = (
         f"litellm-proxy-budget-{time.time()}"
     )
+    litellm.proxy.proxy_server.user_custom_key_generate = None
 
     return prisma_client
 
@@ -918,7 +921,7 @@ def test_call_with_key_over_budget(prisma_client):
                     "stream": False,
                     "litellm_params": {
                         "metadata": {
-                            "user_api_key": generated_key,
+                            "user_api_key": hash_token(generated_key),
                             "user_api_key_user_id": user_id,
                         }
                     },
@@ -1009,7 +1012,7 @@ async def test_call_with_key_never_over_budget(prisma_client):
                 "stream": False,
                 "litellm_params": {
                     "metadata": {
-                        "user_api_key": generated_key,
+                        "user_api_key": hash_token(generated_key),
                         "user_api_key_user_id": user_id,
                     }
                 },
@@ -1083,7 +1086,7 @@ async def test_call_with_key_over_budget_stream(prisma_client):
                 "complete_streaming_response": resp,
                 "litellm_params": {
                     "metadata": {
-                        "user_api_key": generated_key,
+                        "user_api_key": hash_token(generated_key),
                         "user_api_key_user_id": user_id,
                     }
                 },
@@ -1137,6 +1140,51 @@ async def test_view_spend_per_key(prisma_client):
 
         print("\nfirst_key=", first_key)
         assert first_key.spend > 0
+    except Exception as e:
+        print("Got Exception", e)
+        pytest.fail(f"Got exception {e}")
+
+
+@pytest.mark.asyncio()
+async def test_key_name_null(prisma_client):
+    """
+    - create key
+    - get key info
+    - assert key_name is null
+    """
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    await litellm.proxy.proxy_server.prisma_client.connect()
+    try:
+        request = GenerateKeyRequest()
+        key = await generate_key_fn(request)
+        generated_key = key.key
+        result = await info_key_fn(key=generated_key)
+        print("result from info_key_fn", result)
+        assert result["info"]["key_name"] is None
+    except Exception as e:
+        print("Got Exception", e)
+        pytest.fail(f"Got exception {e}")
+
+
+@pytest.mark.asyncio()
+async def test_key_name_set(prisma_client):
+    """
+    - create key
+    - get key info
+    - assert key_name is not null
+    """
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "general_settings", {"allow_user_auth": True})
+    await litellm.proxy.proxy_server.prisma_client.connect()
+    try:
+        request = GenerateKeyRequest()
+        key = await generate_key_fn(request)
+        generated_key = key.key
+        result = await info_key_fn(key=generated_key)
+        print("result from info_key_fn", result)
+        assert isinstance(result["info"]["key_name"], str)
     except Exception as e:
         print("Got Exception", e)
         pytest.fail(f"Got exception {e}")
