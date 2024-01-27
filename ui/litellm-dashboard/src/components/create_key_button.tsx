@@ -1,21 +1,40 @@
-'use client';
+"use client";
 
-import React from 'react';
-import { Button, TextInput } from '@tremor/react';
+import React, { use } from "react";
+import { Button, TextInput } from "@tremor/react";
 
 import { Card, Metric, Text } from "@tremor/react";
+import { createKeyCall } from "./networking";
+// Define the props type
+interface CreateKeyProps {
+  userID: string;
+  accessToken: string;
+  proxyBaseUrl: string;
+}
 
-export default function CreateKey() {
+const CreateKey: React.FC<CreateKeyProps> = ({
+  userID,
+  accessToken,
+  proxyBaseUrl,
+}) => {
   const handleClick = () => {
-    console.log('Hello World');
+    console.log("Hello World");
   };
 
   return (
-    // <Card className="max-w-xs mx-auto" decoration="top" decorationColor="indigo">
-    //     <Text className='mb-4'>Key Name</Text>
-    //     <TextInput className='mb-4' placeholder="My test key"></TextInput>
-        
-    // </Card>
-    <Button className="mx-auto" onClick={handleClick}>+ Create New Key</Button>
+    <Button
+      className="mx-auto"
+      onClick={() =>
+        createKeyCall(
+          (proxyBaseUrl = proxyBaseUrl),
+          (accessToken = accessToken),
+          (userID = userID)
+        )
+      }
+    >
+      + Create New Key
+    </Button>
   );
-}
+};
+
+export default CreateKey;
