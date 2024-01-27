@@ -2936,7 +2936,7 @@ def cost_per_token(
             f"Success: model={model_with_provider} in model_cost_map - {model_cost_ref[model_with_provider]}"
         )
         print_verbose(
-            f"applying cost={model_cost_ref[model_with_provider]['input_cost_per_token']} for prompt_tokens={prompt_tokens}"
+            f"applying cost={model_cost_ref[model_with_provider].get('input_cost_per_token', None)} for prompt_tokens={prompt_tokens}"
         )
         prompt_tokens_cost_usd_dollar = (
             model_cost_ref[model_with_provider]["input_cost_per_token"] * prompt_tokens
@@ -2945,7 +2945,7 @@ def cost_per_token(
             f"calculated prompt_tokens_cost_usd_dollar: {prompt_tokens_cost_usd_dollar}"
         )
         print_verbose(
-            f"applying cost={model_cost_ref[model_with_provider]['output_cost_per_token']} for completion_tokens={completion_tokens}"
+            f"applying cost={model_cost_ref[model_with_provider].get('output_cost_per_token', None)} for completion_tokens={completion_tokens}"
         )
         completion_tokens_cost_usd_dollar = (
             model_cost_ref[model_with_provider]["output_cost_per_token"]
