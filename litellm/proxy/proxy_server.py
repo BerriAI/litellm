@@ -2867,7 +2867,7 @@ async def google_login():
     return RedirectResponse(url=google_auth_url)
 
 
-@app.get("/google-callback", tags=["experimental"])
+@app.get("/google-callback", tags=["experimental"], response_model=GenerateKeyResponse)
 async def google_callback(code: str):
     import httpx
 
@@ -2906,10 +2906,16 @@ async def google_callback(code: str):
             # we can use user_email on litellm proxy now
 
             # TODO: Handle user info as needed, for example, store it in a database, authenticate the user, etc.
-            return JSONResponse(
-                content={"user_email": user_email, "user_name": user_name},
-                status_code=200,
+            response = await generate_key_helper_fn(
+                **{"duration": "24hr", "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": user_email, "team_id": "litellm-dashboard"}  # type: ignore
             )
+
+            key = response["token"]  # type: ignore
+            user_id = response["user_id"]  # type: ignore
+            {
+                "key": key,
+                "user_id": user_id,
+            }
         else:
             # Handle user info retrieval error
             raise HTTPException(
