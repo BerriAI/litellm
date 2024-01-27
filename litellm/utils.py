@@ -2029,14 +2029,15 @@ def client(original_function):
                 start_time=start_time,
             )
             ## check if metadata is passed in
+            litellm_params = {}
             if "metadata" in kwargs:
-                litellm_params = {"metadata": kwargs["metadata"]}
-                logging_obj.update_environment_variables(
-                    model=model,
-                    user="",
-                    optional_params={},
-                    litellm_params=litellm_params,
-                )
+                litellm_params["metadata"] = kwargs["metadata"]
+            logging_obj.update_environment_variables(
+                model=model,
+                user="",
+                optional_params={},
+                litellm_params=litellm_params,
+            )
             return logging_obj
         except Exception as e:
             import logging
