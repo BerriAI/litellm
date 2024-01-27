@@ -25,6 +25,8 @@ model LiteLLM_UserTable {
 // Generate Tokens for Proxy
 model LiteLLM_VerificationToken {
     token      String   @unique
+    key_name   String?
+    key_alias   String?
     spend      Float    @default(0.0)
     expires    DateTime?
     models     String[]
@@ -53,12 +55,13 @@ model LiteLLM_SpendLogs {
   call_type           String
   api_key             String  @default ("")
   spend               Float    @default(0.0)
+  total_tokens        Int     @default(0)
+  prompt_tokens       Int     @default(0)
+  completion_tokens   Int     @default(0)
   startTime           DateTime // Assuming start_time is a DateTime field
   endTime             DateTime // Assuming end_time is a DateTime field
   model               String   @default("")
   user                String   @default("")
-  modelParameters     Json     @default("{}")// Assuming optional_params is a JSON field
-  usage               Json     @default("{}")
   metadata            Json     @default("{}")
   cache_hit           String   @default("")
   cache_key           String   @default("")

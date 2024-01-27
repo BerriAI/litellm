@@ -10,7 +10,6 @@
 import os, openai, sys, json, inspect, uuid, datetime, threading
 from typing import Any, Literal, Union
 from functools import partial
-
 import dotenv, traceback, random, asyncio, time, contextvars
 from copy import deepcopy
 import httpx
@@ -586,6 +585,10 @@ def completion(
         )
         if model_response is not None and hasattr(model_response, "_hidden_params"):
             model_response._hidden_params["custom_llm_provider"] = custom_llm_provider
+            model_response._hidden_params["region_name"] = kwargs.get(
+                "aws_region_name", None
+            )  # support region-based pricing for bedrock
+
         ### REGISTER CUSTOM MODEL PRICING -- IF GIVEN ###
         if input_cost_per_token is not None and output_cost_per_token is not None:
             litellm.register_model(
@@ -2224,6 +2227,7 @@ def embedding(
     model,
     input=[],
     # Optional params
+    dimensions: Optional[int] = None,
     timeout=600,  # default to 10 minutes
     # set api_base, api_version, api_key
     api_base: Optional[str] = None,
@@ -2244,6 +2248,7 @@ def embedding(
     Parameters:
     - model: The embedding model to use.
     - input: The input for which embeddings are to be generated.
+    - dimensions: The number of dimensions the resulting output embeddings should have. Only supported in text-embedding-3 and later models.
     - timeout: The timeout value for the API call, default 10 mins
     - litellm_call_id: The call ID for litellm logging.
     - litellm_logging_obj: The litellm logging object.
@@ -2277,6 +2282,7 @@ def embedding(
     output_cost_per_second = kwargs.get("output_cost_per_second", None)
     openai_params = [
         "user",
+        "dimensions",
         "request_timeout",
         "api_base",
         "api_version",
@@ -2345,7 +2351,9 @@ def embedding(
         api_key=api_key,
     )
     optional_params = get_optional_params_embeddings(
+        model=model,
         user=user,
+        dimensions=dimensions,
         encoding_format=encoding_format,
         custom_llm_provider=custom_llm_provider,
         **non_default_params,
@@ -3067,7 +3075,7 @@ def image_generation(
             custom_llm_provider=custom_llm_provider,
             **non_default_params,
         )
-        logging = litellm_logging_obj
+        logging: Logging = litellm_logging_obj
         logging.update_environment_variables(
             model=model,
             user=user,

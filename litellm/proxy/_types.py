@@ -140,6 +140,7 @@ class GenerateRequestBase(LiteLLMBase):
 
 
 class GenerateKeyRequest(GenerateRequestBase):
+    key_alias: Optional[str] = None
     duration: Optional[str] = "1h"
     aliases: Optional[dict] = {}
     config: Optional[dict] = {}
@@ -304,6 +305,8 @@ class ConfigYAML(LiteLLMBase):
 
 class LiteLLM_VerificationToken(LiteLLMBase):
     token: str
+    key_name: Optional[str] = None
+    key_alias: Optional[str] = None
     spend: float = 0.0
     max_budget: Optional[float] = None
     expires: Union[str, None]
@@ -346,11 +349,12 @@ class LiteLLM_SpendLogs(LiteLLMBase):
     model: Optional[str] = ""
     call_type: str
     spend: Optional[float] = 0.0
+    total_tokens: Optional[int] = 0
+    prompt_tokens: Optional[int] = 0
+    completion_tokens: Optional[int] = 0
     startTime: Union[str, datetime, None]
     endTime: Union[str, datetime, None]
     user: Optional[str] = ""
-    modelParameters: Optional[Json] = {}
-    usage: Optional[Json] = {}
     metadata: Optional[Json] = {}
     cache_hit: Optional[str] = "False"
     cache_key: Optional[str] = None
