@@ -819,47 +819,49 @@ async def test_async_embedding_azure_caching():
 # Image Generation
 
 
-# ## Test OpenAI + Sync
-# def test_image_generation_openai():
-#     try:
-#         customHandler_success = CompletionCustomHandler()
-#         customHandler_failure = CompletionCustomHandler()
-#         litellm.callbacks = [customHandler_success]
+## Test OpenAI + Sync
+def test_image_generation_openai():
+    try:
+        customHandler_success = CompletionCustomHandler()
+        customHandler_failure = CompletionCustomHandler()
+        # litellm.callbacks = [customHandler_success]
 
-#         litellm.set_verbose = True
+        # litellm.set_verbose = True
 
-#         response = litellm.image_generation(
-#             prompt="A cute baby sea otter", model="dall-e-3"
-#         )
+        # response = litellm.image_generation(
+        #     prompt="A cute baby sea otter", model="dall-e-3"
+        # )
 
-#         print(f"response: {response}")
-#         assert len(response.data) > 0
+        # print(f"response: {response}")
+        # assert len(response.data) > 0
 
-#         print(f"customHandler_success.errors: {customHandler_success.errors}")
-#         print(f"customHandler_success.states: {customHandler_success.states}")
-#         assert len(customHandler_success.errors) == 0
-#         assert len(customHandler_success.states) == 3  # pre, post, success
-#         # test failure callback
-#         litellm.callbacks = [customHandler_failure]
-#         try:
-#             response = litellm.image_generation(
-#                 prompt="A cute baby sea otter", model="dall-e-4"
-#             )
-#         except:
-#             pass
-#         print(f"customHandler_failure.errors: {customHandler_failure.errors}")
-#         print(f"customHandler_failure.states: {customHandler_failure.states}")
-#         assert len(customHandler_failure.errors) == 0
-#         assert len(customHandler_failure.states) == 3  # pre, post, failure
-#     except litellm.RateLimitError as e:
-#         pass
-#     except litellm.ContentPolicyViolationError:
-#         pass  # OpenAI randomly raises these errors - skip when they occur
-#     except Exception as e:
-#         pytest.fail(f"An exception occurred - {str(e)}")
+        # print(f"customHandler_success.errors: {customHandler_success.errors}")
+        # print(f"customHandler_success.states: {customHandler_success.states}")
+        # assert len(customHandler_success.errors) == 0
+        # assert len(customHandler_success.states) == 3  # pre, post, success
+        # test failure callback
+        litellm.callbacks = [customHandler_failure]
+        try:
+            response = litellm.image_generation(
+                prompt="A cute baby sea otter",
+                model="dall-e-2",
+                api_key="my-bad-api-key",
+            )
+        except:
+            pass
+        print(f"customHandler_failure.errors: {customHandler_failure.errors}")
+        print(f"customHandler_failure.states: {customHandler_failure.states}")
+        assert len(customHandler_failure.errors) == 0
+        assert len(customHandler_failure.states) == 3  # pre, post, failure
+    except litellm.RateLimitError as e:
+        pass
+    except litellm.ContentPolicyViolationError:
+        pass  # OpenAI randomly raises these errors - skip when they occur
+    except Exception as e:
+        pytest.fail(f"An exception occurred - {str(e)}")
 
 
-# test_image_generation_openai()
+test_image_generation_openai()
 ## Test OpenAI + Async
 
 ## Test Azure + Sync
