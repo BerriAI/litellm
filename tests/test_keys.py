@@ -203,11 +203,14 @@ async def test_key_delete():
         )
 
 
-async def get_key_info(session, get_key, call_key):
+async def get_key_info(session, call_key, get_key=None):
     """
     Make sure only models user has access to are returned
     """
-    url = f"http://0.0.0.0:4000/key/info?key={get_key}"
+    if get_key is None:
+        url = "http://0.0.0.0:4000/key/info"
+    else:
+        url = f"http://0.0.0.0:4000/key/info?key={get_key}"
     headers = {
         "Authorization": f"Bearer {call_key}",
         "Content-Type": "application/json",
@@ -243,6 +246,9 @@ async def test_key_info():
         await get_key_info(session=session, get_key=key, call_key="sk-1234")
         # as key itself #
         await get_key_info(session=session, get_key=key, call_key=key)
+
+        # as key itself, use the auth param, and no query key needed
+        await get_key_info(session=session, call_key=key)
         # as random key #
         key_gen = await generate_key(session=session, i=0)
         random_key = key_gen["key"]
