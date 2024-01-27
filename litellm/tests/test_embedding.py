@@ -64,7 +64,9 @@ def test_openai_embedding_3():
             model="text-embedding-3-small",
             input=["good morning from litellm", "this is another item"],
             metadata={"anything": "good day"},
+            dimensions=5,
         )
+        print(f"response:", response)
         litellm_response = dict(response)
         litellm_response_keys = set(litellm_response.keys())
         litellm_response_keys.discard("_response_ms")
@@ -80,6 +82,7 @@ def test_openai_embedding_3():
         response = client.embeddings.create(
             model="text-embedding-3-small",
             input=["good morning from litellm", "this is another item"],
+            dimensions=5,
         )
 
         response = dict(response)

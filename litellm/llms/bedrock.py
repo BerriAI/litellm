@@ -659,9 +659,16 @@ def completion(
                 )
 
         ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here.
-        prompt_tokens = len(encoding.encode(prompt))
-        completion_tokens = len(
-            encoding.encode(model_response["choices"][0]["message"].get("content", ""))
+        prompt_tokens = response_metadata.get(
+            "x-amzn-bedrock-input-token-count", len(encoding.encode(prompt))
+        )
+        completion_tokens = response_metadata.get(
+            "x-amzn-bedrock-output-token-count",
+            len(
+                encoding.encode(
+                    model_response["choices"][0]["message"].get("content", "")
+                )
+            ),
         )
 
         model_response["created"] = int(time.time())
@@ -672,6 +679,8 @@ def completion(
             total_tokens=prompt_tokens + completion_tokens,
         )
         model_response.usage = usage
+        model_response._hidden_params["region_name"] = client.meta.region_name
+        print_verbose(f"model_response._hidden_params: {model_response._hidden_params}")
         return model_response
     except BedrockError as e:
         exception_mapping_worked = True

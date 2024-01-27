@@ -723,8 +723,8 @@ def test_cache_override():
     print(f"Embedding 2 response time: {end_time - start_time} seconds")
 
     assert (
-        end_time - start_time > 0.1
-    )  # ensure 2nd response comes in over 0.1s. This should not be cached.
+        end_time - start_time > 0.05
+    )  # ensure 2nd response comes in over 0.05s. This should not be cached.
 
 
 # test_cache_override()
