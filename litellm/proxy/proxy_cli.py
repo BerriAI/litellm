@@ -190,17 +190,27 @@ def run_server(
     global feature_telemetry
     args = locals()
     if local:
-        from proxy_server import app, save_worker_config, usage_telemetry
+        from proxy_server import app, save_worker_config, usage_telemetry, ProxyConfig
     else:
         try:
-            from .proxy_server import app, save_worker_config, usage_telemetry
+            from .proxy_server import (
+                app,
+                save_worker_config,
+                usage_telemetry,
+                ProxyConfig,
+            )
         except ImportError as e:
             if "litellm[proxy]" in str(e):
                 # user is missing a proxy dependency, ask them to pip install litellm[proxy]
                 raise e
             else:
                 # this is just a local/relative import error, user git cloned litellm
-                from proxy_server import app, save_worker_config, usage_telemetry
+                from proxy_server import (
+                    app,
+                    save_worker_config,
+                    usage_telemetry,
+                    ProxyConfig,
+                )
     feature_telemetry = usage_telemetry
     if version == True:
         pkg_version = importlib.metadata.version("litellm")
@@ -373,16 +383,16 @@ def run_server(
             read from there and save it to os.env['DATABASE_URL']
             """
             try:
-                import yaml
+                import yaml, asyncio
             except:
                 raise ImportError(
                     "yaml needs to be imported. Run - `pip install 'litellm[proxy]'`"
                 )
 
-            if os.path.exists(config):
-                with open(config, "r") as config_file:
-                    config = yaml.safe_load(config_file)
-            general_settings = config.get("general_settings", {})
+            proxy_config = ProxyConfig()
+            _, _, general_settings = asyncio.run(
+                proxy_config.load_config(router=None, config_file_path=config)
+            )
             database_url = general_settings.get("database_url", None)
             if database_url and database_url.startswith("os.environ/"):
                 original_dir = os.getcwd()

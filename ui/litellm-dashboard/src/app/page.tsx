@@ -1,20 +1,11 @@
-import React from 'react';
-import CreateKey from "../components/create_key_button"
-import ViewKeyTable from "../components/view_key_table"
-import Navbar from "../components/navbar"
-import { Grid, Col } from "@tremor/react";
-
+import React from "react";
+import Navbar from "../components/navbar";
+import UserDashboard from "../components/user_dashboard";
 const CreateKeyPage = () => {
-
   return (
-    <div className='h-screen'>
-    <Navbar/>
-    <Grid numItems={1} className="gap-0 p-10 h-[75vh]">
-      <Col numColSpan={1}>
-        <ViewKeyTable/>
-        <CreateKey/>
-      </Col>
-    </Grid>
+    <div className="flex min-h-screen flex-col items-center">
+      <Navbar />
+      <UserDashboard />
     </div>
   );
 };

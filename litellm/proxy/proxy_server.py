@@ -515,11 +515,15 @@ async def user_api_key_auth(
                 )
 
             if (
-                (route.startswith("/key/") or route.startswith("/user/"))
-                or route.startswith("/model/")
-                and not is_master_key_valid
-                and general_settings.get("allow_user_auth", False) != True
+                (
+                    route.startswith("/key/")
+                    or route.startswith("/user/")
+                    or route.startswith("/model/")
+                )
+                and (not is_master_key_valid)
+                and (not general_settings.get("allow_user_auth", False))
             ):
+                assert not general_settings.get("allow_user_auth", False)
                 if route == "/key/info":
                     # check if user can access this route
                     query_params = request.query_params
@@ -546,7 +550,7 @@ async def user_api_key_auth(
                     pass
                 else:
                     raise Exception(
-                        f"If master key is set, only master key can be used to generate, delete, update or get info for new keys/users"
+                        f"only master key can be used to generate, delete, update or get info for new keys/users."
                     )
 
             return UserAPIKeyAuth(api_key=api_key, **valid_token_dict)
