@@ -2862,6 +2862,8 @@ async def google_login(request: Request):
     scheme = request.url.scheme
     host = request.url.hostname
     port = request.url.port or 4000
+    if "localhost" not in host:
+        scheme = "https"
     GOOGLE_REDIRECT_URI = f"{scheme}://{host}:{port}/google-callback"
     GOOGLE_CLIENT_ID = (
         "246483686424-clje5sggkjma26ilktj6qssakqhoon0m.apps.googleusercontent.com"
