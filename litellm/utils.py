@@ -2190,7 +2190,6 @@ def client(original_function):
             result = original_function(*args, **kwargs)
             end_time = datetime.datetime.now()
             if "stream" in kwargs and kwargs["stream"] == True:
-                # TODO: Add to cache for streaming
                 if (
                     "complete_response" in kwargs
                     and kwargs["complete_response"] == True
