@@ -88,6 +88,7 @@ def prisma_client():
     litellm.proxy.proxy_server.litellm_proxy_budget_name = (
         f"litellm-proxy-budget-{time.time()}"
     )
+    litellm.proxy.proxy_server.user_custom_key_generate = None
 
     return prisma_client
 
