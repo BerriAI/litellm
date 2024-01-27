@@ -55,5 +55,5 @@ EXPOSE 4000/tcp
 
 # # Set your entrypoint and command
 
-ENTRYPOINT ["python3 litellm/proxy/proxy_cli.py"]
+ENTRYPOINT ["python3 litellm/litellm/proxy/proxy_cli.py"]
 CMD ["--port", "4000"]
