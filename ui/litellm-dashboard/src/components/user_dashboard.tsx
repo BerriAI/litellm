@@ -38,7 +38,7 @@ const UserDashboard = () => {
   if (proxyBaseUrl == null) {
     return (
       <div>
-        <EnterProxyUrl onUrlChange={handleProxyUrlChange} />
+        <EnterProxyUrl />
       </div>
     );
   }
@@ -47,22 +47,7 @@ const UserDashboard = () => {
     sessionStorage.setItem('returnUrl', window.location.href);
 
     
-    // window.location.href = `${proxyBaseUrl}/google-login/key/generate`;
-
-    fetch(`${proxyBaseUrl}/google-login/key/generate`, { redirect: 'follow' })
-    .then(response => {
-      if (!response.ok) {
-        throw new Error(`HTTP error! Status: ${response.status}`);
-      }
-      return response.json();
-    })
-    .then(data => {
-      console.log('Response Data:', data);
-    })
-    .catch(error => {
-      console.error('Fetch Error:', error);
-    });
-    // after this check return value from this page 
+    window.location.href = `${proxyBaseUrl}/google-login/key/generate`;
     
 
     return null;
