@@ -2864,7 +2864,7 @@ async def google_login(request: Request):
     port = request.url.port or 4000
     if "localhost" not in host:
         scheme = "https"
-    GOOGLE_REDIRECT_URI = f"{scheme}://{host}:{port}/google-callback"
+    GOOGLE_REDIRECT_URI = f"https://litellm-production-7002.up.railway.app/google-callback"
     GOOGLE_CLIENT_ID = (
         "246483686424-clje5sggkjma26ilktj6qssakqhoon0m.apps.googleusercontent.com"
     )
@@ -2882,7 +2882,7 @@ async def google_callback(code: str, request: Request):
     if "localhost" not in host:
         scheme = "https"
 
-    GOOGLE_REDIRECT_URI = f"{scheme}://{host}:{port}/google-callback"
+    GOOGLE_REDIRECT_URI = f"https://litellm-production-7002.up.railway.app/google-callback"
     GOOGLE_CLIENT_ID = (
         "246483686424-clje5sggkjma26ilktj6qssakqhoon0m.apps.googleusercontent.com"
     )
