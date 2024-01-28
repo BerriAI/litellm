@@ -516,11 +516,15 @@ async def user_api_key_auth(
                 )
 
             if (
-                (route.startswith("/key/") or route.startswith("/user/"))
-                or route.startswith("/model/")
-                and not is_master_key_valid
-                and general_settings.get("allow_user_auth", False) != True
+                (
+                    route.startswith("/key/")
+                    or route.startswith("/user/")
+                    or route.startswith("/model/")
+                )
+                and (not is_master_key_valid)
+                and (not general_settings.get("allow_user_auth", False))
             ):
+                assert not general_settings.get("allow_user_auth", False)
                 if route == "/key/info":
                     # check if user can access this route
                     query_params = request.query_params
@@ -547,7 +551,7 @@ async def user_api_key_auth(
                     pass
                 else:
                     raise Exception(
-                        f"If master key is set, only master key can be used to generate, delete, update or get info for new keys/users"
+                        f"only master key can be used to generate, delete, update or get info for new keys/users."
                     )
 
             return UserAPIKeyAuth(api_key=api_key, **valid_token_dict)
@@ -1383,12 +1387,7 @@ async def generate_key_helper_fn(
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
-    return {
-        "token": token,
-        "expires": expires,
-        "user_id": user_id,
-        "max_budget": max_budget,
-    }
+    return key_data
 
 
 async def delete_verification_token(tokens: List):
@@ -2397,12 +2396,9 @@ async def generate_key_fn(
             data_json["key_budget_duration"] = data_json.pop("budget_duration", None)
 
         response = await generate_key_helper_fn(**data_json)
-        return GenerateKeyResponse(
-            key=response["token"],
-            expires=response["expires"],
-            user_id=response["user_id"],
-        )
+        return GenerateKeyResponse(**response)
     except Exception as e:
+        traceback.print_exc()
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({str(e)})"),
@@ -2943,11 +2939,17 @@ async def google_callback(code: str, request: Request):
 
             key = response["token"]  # type: ignore
             user_id = response["user_id"]  # type: ignore
-            return RedirectResponse(url="chat.openai.com")
-            # return RedirectResponse(url=google_auth_url)
-            # return JSONResponse(
-            #     content={"key": key, "user_id": user_id}, status_code=200
-            # )
+            litellm_dashboard_ui = "http://localhost:3000"
+
+            litellm_dashboard_ui += (
+                "?userID="
+                + user_id
+                + "&accessToken="
+                + key
+                + "&proxyBaseUrl="
+                + os.getenv("GOOGLE_REDIRECT_URI")
+            )
+            return RedirectResponse(url=litellm_dashboard_ui)
 
         else:
             # Handle user info retrieval error

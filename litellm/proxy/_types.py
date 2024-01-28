@@ -141,9 +141,31 @@ class GenerateRequestBase(LiteLLMBase):
 
 class GenerateKeyRequest(GenerateRequestBase):
     key_alias: Optional[str] = None
-    duration: Optional[str] = "1h"
+    duration: Optional[str] = None
     aliases: Optional[dict] = {}
     config: Optional[dict] = {}
+
+
+class GenerateKeyResponse(GenerateKeyRequest):
+    key: str
+    key_name: Optional[str] = None
+    expires: Optional[datetime]
+    user_id: str
+
+    @root_validator(pre=True)
+    def set_model_info(cls, values):
+        if values.get("token") is not None:
+            values.update({"key": values.get("token")})
+        dict_fields = ["metadata", "aliases", "config"]
+        for field in dict_fields:
+            value = values.get(field)
+            if value is not None and isinstance(value, str):
+                try:
+                    values[field] = json.loads(value)
+                except json.JSONDecodeError:
+                    raise ValueError(f"Field {field} should be a valid dictionary")
+
+        return values
 
 
 class UpdateKeyRequest(GenerateKeyRequest):
@@ -172,12 +194,6 @@ class UserAPIKeyAuth(LiteLLMBase):  # the expected response object for user api 
     metadata: dict = {}
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
-
-
-class GenerateKeyResponse(LiteLLMBase):
-    key: str
-    expires: Optional[datetime]
-    user_id: str
 
 
 class DeleteKeyRequest(LiteLLMBase):
