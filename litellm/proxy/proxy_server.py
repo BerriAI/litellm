@@ -2938,11 +2938,17 @@ async def google_callback(code: str, request: Request):
 
             key = response["token"]  # type: ignore
             user_id = response["user_id"]  # type: ignore
-            return RedirectResponse(url="chat.openai.com")
-            # return RedirectResponse(url=google_auth_url)
-            # return JSONResponse(
-            #     content={"key": key, "user_id": user_id}, status_code=200
-            # )
+            litellm_dashboard_ui = "http://localhost:3000"
+
+            litellm_dashboard_ui += (
+                "?userID="
+                + user_id
+                + "&accessToken="
+                + key
+                + "&proxyBaseUrl="
+                + GOOGLE_REDIRECT_URI
+            )
+            return RedirectResponse(url=litellm_dashboard_ui)
 
         else:
             # Handle user info retrieval error
