@@ -2857,7 +2857,7 @@ async def user_auth(request: Request):
     return "Email sent!"
 
 
-@app.get("/google-login", tags=["experimental"])
+@app.get("/google-login/key/generate", tags=["experimental"])
 async def google_login(request: Request):
     GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI")
     GOOGLE_CLIENT_ID = (
