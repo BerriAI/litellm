@@ -14,6 +14,7 @@
     "@heroicons/react": "^1.0.6",
     "@remixicon/react": "^4.1.1",
     "@tremor/react": "^3.13.3",
+    "antd": "^5.13.2",
     "next": "14.1.0",
     "react": "^18",
     "react-dom": "^18"

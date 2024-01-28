@@ -1386,12 +1386,7 @@ async def generate_key_helper_fn(
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
-    return {
-        "token": token,
-        "expires": expires,
-        "user_id": user_id,
-        "max_budget": max_budget,
-    }
+    return key_data
 
 
 async def delete_verification_token(tokens: List):
@@ -2399,12 +2394,9 @@ async def generate_key_fn(
             data_json["key_budget_duration"] = data_json.pop("budget_duration", None)
 
         response = await generate_key_helper_fn(**data_json)
-        return GenerateKeyResponse(
-            key=response["token"],
-            expires=response["expires"],
-            user_id=response["user_id"],
-        )
+        return GenerateKeyResponse(**response)
     except Exception as e:
+        traceback.print_exc()
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({str(e)})"),
