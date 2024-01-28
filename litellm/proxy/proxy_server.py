@@ -2860,6 +2860,17 @@ async def user_auth(request: Request):
 @app.get("/google-login/key/generate", tags=["experimental"])
 async def google_login(request: Request):
     GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI")
+    if GOOGLE_REDIRECT_URI is None:
+        raise ProxyException(
+            message="GOOGLE_REDIRECT_URI not set. Set it in .env file",
+            type="auth_error",
+            param="GOOGLE_REDIRECT_URI",
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+    if GOOGLE_REDIRECT_URI.endswith("/"):
+        GOOGLE_REDIRECT_URI += "google-callback"
+    else:
+        GOOGLE_REDIRECT_URI += "/google-callback"
     GOOGLE_CLIENT_ID = (
         "246483686424-clje5sggkjma26ilktj6qssakqhoon0m.apps.googleusercontent.com"
     )
@@ -2872,6 +2883,18 @@ async def google_callback(code: str, request: Request):
     import httpx
 
     GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI")
+    if GOOGLE_REDIRECT_URI is None:
+        raise ProxyException(
+            message="GOOGLE_REDIRECT_URI not set. Set it in .env file",
+            type="auth_error",
+            param="GOOGLE_REDIRECT_URI",
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+    # Add "/google-callback"" to your callback URL
+    if GOOGLE_REDIRECT_URI.endswith("/"):
+        GOOGLE_REDIRECT_URI += "google-callback"
+    else:
+        GOOGLE_REDIRECT_URI += "/google-callback"
     GOOGLE_CLIENT_ID = (
         "246483686424-clje5sggkjma26ilktj6qssakqhoon0m.apps.googleusercontent.com"
     )
