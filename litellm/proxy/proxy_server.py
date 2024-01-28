@@ -2938,9 +2938,11 @@ async def google_callback(code: str, request: Request):
 
             key = response["token"]  # type: ignore
             user_id = response["user_id"]  # type: ignore
-            return JSONResponse(
-                content={"key": key, "user_id": user_id}, status_code=200
-            )
+            return RedirectResponse(url="chat.openai.com")
+            # return RedirectResponse(url=google_auth_url)
+            # return JSONResponse(
+            #     content={"key": key, "user_id": user_id}, status_code=200
+            # )
 
         else:
             # Handle user info retrieval error
