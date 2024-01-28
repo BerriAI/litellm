@@ -1,14 +1,14 @@
 "use client";
 
-import React, { useState } from "react";
-import { Button, TextInput } from "@tremor/react";
+import React, { useState, ChangeEvent } from "react";
+import { Button, Col, Grid, TextInput } from "@tremor/react";
 import { Card, Text } from "@tremor/react";
 
 const EnterProxyUrl: React.FC = () => {
   const [proxyUrl, setProxyUrl] = useState<string>("");
   const [isUrlSaved, setIsUrlSaved] = useState<boolean>(false);
 
-  const handleUrlChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleUrlChange = (event: ChangeEvent<HTMLInputElement>) => {
     setProxyUrl(event.target.value);
     // Reset the saved status when the URL changes
     setIsUrlSaved(false);
@@ -19,6 +19,9 @@ const EnterProxyUrl: React.FC = () => {
     // For now, let's just display the message
     setIsUrlSaved(true);
   };
+
+  // Construct the URL for clicking
+  const clickableUrl = `${window.location.href}?proxyBaseUrl=${proxyUrl}`;
 
   return (
     <div>
@@ -32,24 +35,27 @@ const EnterProxyUrl: React.FC = () => {
           onChange={handleUrlChange}
           placeholder="https://your-proxy-endpoint.com"
         />
-        <Button onClick={handleSaveClick}>Save</Button>
+        <Button onClick={handleSaveClick} className="gap-2">Save</Button>
         {/* Display message if the URL is saved */}
         {isUrlSaved && (
-        <div>
-
+          <div>
+            <Grid numItems={1} className="gap-2">
+            <Col>
             <p>
-            Save this URL: {window.location.href + "?proxyBaseUrl=" + proxyUrl}
+              Proxy Admin UI (Save this URL): {clickableUrl}
             </p>
+            </Col>
+            <Col>
             <p>
-            Go here 👉 
-            <a href={window.location.href + "?proxyBaseUrl=" + proxyUrl} target="_blank" rel="noopener noreferrer">
-            {window.location.href + "?proxyBaseUrl=" + proxyUrl}
-            </a>
+              Get Started with Proxy Admin UI  👉 
+              <a href={clickableUrl} target="_blank" rel="noopener noreferrer" style={{ color: 'blue', textDecoration: 'underline' }}>
+                {clickableUrl}
+              </a>
             </p>
-
-        </div>
+            </Col>
+            </Grid>
+          </div>
         )}
-
       </Card>
     </div>
   );
