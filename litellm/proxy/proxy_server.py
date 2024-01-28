@@ -2859,6 +2859,7 @@ async def user_auth(request: Request):
 
 @app.get("/google-login/key/generate", tags=["experimental"])
 async def google_login(request: Request):
+
     GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI")
     GOOGLE_CLIENT_ID = (
         "246483686424-clje5sggkjma26ilktj6qssakqhoon0m.apps.googleusercontent.com"
@@ -2870,7 +2871,6 @@ async def google_login(request: Request):
 @app.get("/google-callback", tags=["experimental"], response_model=GenerateKeyResponse)
 async def google_callback(code: str, request: Request):
     import httpx
-
     GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI")
     GOOGLE_CLIENT_ID = (
         "246483686424-clje5sggkjma26ilktj6qssakqhoon0m.apps.googleusercontent.com"
