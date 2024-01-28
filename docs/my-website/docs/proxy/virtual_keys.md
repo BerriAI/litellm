@@ -81,15 +81,17 @@ curl 'http://0.0.0.0:8000/key/generate' \
 
 Request Params:
 
-- `models`: *list or null (optional)* - Specify the models a token has access too. If null, then token has access to all models on server. 
+- `duration`: *Optional[str]* - Specify the length of time the token is valid for. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
+- `key_alias`: *Optional[str]* - User defined key alias
+- `team_id`: *Optional[str]* - The team id of the user
+- `models`: *Optional[list]* - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
+- `aliases`: *Optional[dict]* - Any alias mappings, on top of anything in the config.yaml model list. - https://docs.litellm.ai/docs/proxy/virtual_keys#managing-auth---upgradedowngrade-models
+- `config`: *Optional[dict]* - any key-specific configs, overrides config in config.yaml
+- `spend`: *Optional[int]* - Amount spent by key. Default is 0. Will be updated by proxy whenever key is used. https://docs.litellm.ai/docs/proxy/virtual_keys#managing-auth---tracking-spend
+- `max_budget`: *Optional[float]* - Specify max budget for a given key.
+- `max_parallel_requests`: *Optional[int]* - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
+- `metadata`: *Optional[dict]* - Metadata for key, store information for key. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
 
-- `duration`: *str or null (optional)* Specify the length of time the token is valid for. If null, default is set to 1 hour. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
-
-- `metadata`: *dict or null (optional)* Pass metadata for the created token. If null defaults to {}
-
-- `team_id`: *str or null (optional)* Specify team_id for the associated key
-
-- `max_budget`: *float or null (optional)* Specify max budget (in Dollars $) for a given key. If no value is set, the key has no budget
 
 ### Response
 
@@ -97,18 +99,9 @@ Request Params:
 {
     "key": "sk-kdEXbIqZRwEeEiHwdg7sFA", # Bearer token
     "expires": "2023-11-19T01:38:25.838000+00:00" # datetime object
+    "key_name": "sk-...7sFA" # abbreviated key string, ONLY stored in db if `allow_user_auth: true` set - [see](./ui.md)
+    ...
 }
-```
-
-### Keys that don't expire
-
-Just set duration to None. 
-
-```bash
-curl --location 'http://0.0.0.0:8000/key/generate' \
---header 'Authorization: Bearer <your-master-key>' \
---header 'Content-Type: application/json' \
---data '{"models": ["azure-models"], "aliases": {"mistral-7b": "gpt-3.5-turbo"}, "duration": null}'
 ```
 
 ### Upgrade/Downgrade Models 
