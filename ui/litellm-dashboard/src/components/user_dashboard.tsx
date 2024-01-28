@@ -35,18 +35,39 @@ const UserDashboard = () => {
     }
   }, [userID, accessToken, proxyBaseUrl, data]);
 
-  if (!userID || !accessToken || !proxyBaseUrl || !data) {
+  if (proxyBaseUrl == null) {
     return (
-      <Card
-        className="max-w-xs mx-auto"
-        decoration="top"
-        decorationColor="indigo"
-      >
-        <Text>Login to create/delete keys</Text>
-      </Card>
+      <div>
+        <EnterProxyUrl onUrlChange={handleProxyUrlChange} />
+      </div>
     );
   }
+  else if (userID == null || accessToken == null) {
+    // redirect to page: ProxyBaseUrl/google-login/key/generate
+    sessionStorage.setItem('returnUrl', window.location.href);
 
+    
+    // window.location.href = `${proxyBaseUrl}/google-login/key/generate`;
+
+    fetch(`${proxyBaseUrl}/google-login/key/generate`, { redirect: 'follow' })
+    .then(response => {
+      if (!response.ok) {
+        throw new Error(`HTTP error! Status: ${response.status}`);
+      }
+      return response.json();
+    })
+    .then(data => {
+      console.log('Response Data:', data);
+    })
+    .catch(error => {
+      console.error('Fetch Error:', error);
+    });
+    // after this check return value from this page 
+    
+
+    return null;
+  }
+  
   return (
     <Grid numItems={1} className="gap-0 p-10 h-[75vh] w-full">
       <Col numColSpan={1}>
