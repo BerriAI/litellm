@@ -2946,7 +2946,7 @@ async def google_callback(code: str, request: Request):
                 + "&accessToken="
                 + key
                 + "&proxyBaseUrl="
-                + GOOGLE_REDIRECT_URI
+                + os.getenv("GOOGLE_REDIRECT_URI")
             )
             return RedirectResponse(url=litellm_dashboard_ui)
 
