@@ -2863,7 +2863,7 @@ async def google_login(request: Request):
     Example:
 
     """
-    GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI")
+    GOOGLE_REDIRECT_URI = os.getenv("PROXY_BASE_URL")
     if GOOGLE_REDIRECT_URI is None:
         raise ProxyException(
             message="GOOGLE_REDIRECT_URI not set. Set it in .env file",
@@ -2875,8 +2875,15 @@ async def google_login(request: Request):
         GOOGLE_REDIRECT_URI += "google-callback"
     else:
         GOOGLE_REDIRECT_URI += "/google-callback"
-    GOOGLE_CLIENT_ID = (
-        "246483686424-clje5sggkjma26ilktj6qssakqhoon0m.apps.googleusercontent.com"
+
+    GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
+    if GOOGLE_CLIENT_ID is None:
+        GOOGLE_CLIENT_ID = (
+            "246483686424-clje5sggkjma26ilktj6qssakqhoon0m.apps.googleusercontent.com"
+        )
+
+    verbose_proxy_logger.info(
+        f"In /google-login/key/generate, \nGOOGLE_REDIRECT_URI: {GOOGLE_REDIRECT_URI}\nGOOGLE_CLIENT_ID: {GOOGLE_CLIENT_ID}"
     )
     google_auth_url = f"https://accounts.google.com/o/oauth2/auth?client_id={GOOGLE_CLIENT_ID}&redirect_uri={GOOGLE_REDIRECT_URI}&response_type=code&scope=openid%20profile%20email"
     return RedirectResponse(url=google_auth_url)
@@ -2886,7 +2893,7 @@ async def google_login(request: Request):
 async def google_callback(code: str, request: Request):
     import httpx
 
-    GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI")
+    GOOGLE_REDIRECT_URI = os.getenv("PROXY_BASE_URL")
     if GOOGLE_REDIRECT_URI is None:
         raise ProxyException(
             message="GOOGLE_REDIRECT_URI not set. Set it in .env file",
@@ -2899,8 +2906,19 @@ async def google_callback(code: str, request: Request):
         GOOGLE_REDIRECT_URI += "google-callback"
     else:
         GOOGLE_REDIRECT_URI += "/google-callback"
-    GOOGLE_CLIENT_ID = (
-        "246483686424-clje5sggkjma26ilktj6qssakqhoon0m.apps.googleusercontent.com"
+
+    GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
+    if GOOGLE_CLIENT_ID is None:
+        GOOGLE_CLIENT_ID = (
+            "246483686424-clje5sggkjma26ilktj6qssakqhoon0m.apps.googleusercontent.com"
+        )
+
+    GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
+    if GOOGLE_CLIENT_SECRET is None:
+        GOOGLE_CLIENT_SECRET = "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"
+
+    verbose_proxy_logger.info(
+        f"/google-callback\n GOOGLE_REDIRECT_URI: {GOOGLE_REDIRECT_URI}\n GOOGLE_CLIENT_ID: {GOOGLE_CLIENT_ID}"
     )
     # Exchange code for access token
     async with httpx.AsyncClient() as client:
@@ -2908,7 +2926,7 @@ async def google_callback(code: str, request: Request):
         data = {
             "code": code,
             "client_id": GOOGLE_CLIENT_ID,
-            "client_secret": "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",
+            "client_secret": GOOGLE_CLIENT_SECRET,
             "redirect_uri": GOOGLE_REDIRECT_URI,
             "grant_type": "authorization_code",
         }
@@ -2939,7 +2957,7 @@ async def google_callback(code: str, request: Request):
 
             key = response["token"]  # type: ignore
             user_id = response["user_id"]  # type: ignore
-            litellm_dashboard_ui = "http://localhost:3000"
+            litellm_dashboard_ui = "https://litellm-dashboard.vercel.app/"
 
             litellm_dashboard_ui += (
                 "?userID="
@@ -2947,7 +2965,7 @@ async def google_callback(code: str, request: Request):
                 + "&accessToken="
                 + key
                 + "&proxyBaseUrl="
-                + os.getenv("GOOGLE_REDIRECT_URI")
+                + os.getenv("PROXY_BASE_URL")
             )
             return RedirectResponse(url=litellm_dashboard_ui)
 
