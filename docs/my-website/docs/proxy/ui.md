@@ -52,7 +52,7 @@ GOOGLE_CLIENT_SECRET=
 
 ## 4. Use UI
 
-Get Started here: https://litellm-dashboard.vercel.app/
+👉 Get Started here: https://litellm-dashboard.vercel.app/
 
 
 <!-- You can use our hosted UI (https://dashboard.litellm.ai/) or [self-host your own](https://github.com/BerriAI/litellm/tree/main/ui). 
