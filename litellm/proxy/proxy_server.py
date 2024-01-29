@@ -245,8 +245,6 @@ async def user_api_key_auth(
             response = await user_custom_auth(request=request, api_key=api_key)
             return UserAPIKeyAuth.model_validate(response)
         ### LITELLM-DEFINED AUTH FUNCTION ###
-        if isinstance(api_key, str):
-            assert api_key.startswith("sk-")  # prevent token hashes from being used
         if master_key is None:
             if isinstance(api_key, str):
                 return UserAPIKeyAuth(api_key=api_key)
@@ -283,6 +281,10 @@ async def user_api_key_auth(
         if is_master_key_valid:
             return UserAPIKeyAuth(api_key=master_key)
 
+        if isinstance(
+            api_key, str
+        ):  # if generated token, make sure it starts with sk-.
+            assert api_key.startswith("sk-")  # prevent token hashes from being used
         if route.startswith("/config/") and not is_master_key_valid:
             raise Exception(f"Only admin can modify config")
 
