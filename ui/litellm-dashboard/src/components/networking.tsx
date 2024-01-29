@@ -15,8 +15,6 @@ export const keyCreateCall = async (
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        team_id: "core-infra-4",
-        max_budget: 10,
         user_id: userID,
       }),
     });
