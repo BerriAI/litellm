@@ -2959,6 +2959,11 @@ async def google_callback(code: str, request: Request):
             user_id = response["user_id"]  # type: ignore
             litellm_dashboard_ui = "https://litellm-dashboard.vercel.app/"
 
+            # if user set LITELLM_UI_LINK in .env, use that
+            litellm_ui_link_in_env = os.getenv("LITELLM_UI_LINK", None)
+            if litellm_ui_link_in_env is not None:
+                litellm_dashboard_ui = litellm_ui_link_in_env
+
             litellm_dashboard_ui += (
                 "?userID="
                 + user_id
