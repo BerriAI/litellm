@@ -1117,6 +1117,9 @@ class ProxyConfig:
                     # see usage here: https://docs.litellm.ai/docs/proxy/caching
                     pass
                 else:
+                    verbose_proxy_logger.debug(
+                        f"{blue_color_code} setting litellm.{key}={value}{reset_color_code}"
+                    )
                     setattr(litellm, key, value)
 
         ## GENERAL SERVER SETTINGS (e.g. master key,..) # do this after initializing litellm, to ensure sentry logging works for proxylogging
@@ -2385,6 +2388,26 @@ async def generate_key_fn(
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN, detail=message
                 )
+        # check if user set default key/generate params on config.yaml
+        if litellm.default_key_generate_params is not None:
+            for elem in data:
+                key, value = elem
+                if value is None and key in [
+                    "max_budget",
+                    "user_id",
+                    "team_id",
+                    "max_parallel_requests",
+                    "tpm_limit",
+                    "rpm_limit",
+                    "budget_duration",
+                ]:
+                    setattr(
+                        data, key, litellm.default_key_generate_params.get(key, None)
+                    )
+                elif key == "models" and value == []:
+                    setattr(data, key, litellm.default_key_generate_params.get(key, []))
+                elif key == "metadata" and value == {}:
+                    setattr(data, key, litellm.default_key_generate_params.get(key, {}))
 
         data_json = data.json()  # type: ignore
 
@@ -2958,6 +2981,11 @@ async def google_callback(code: str, request: Request):
             key = response["token"]  # type: ignore
             user_id = response["user_id"]  # type: ignore
             litellm_dashboard_ui = "https://litellm-dashboard.vercel.app/"
+
+            # if user set LITELLM_UI_LINK in .env, use that
+            litellm_ui_link_in_env = os.getenv("LITELLM_UI_LINK", None)
+            if litellm_ui_link_in_env is not None:
+                litellm_dashboard_ui = litellm_ui_link_in_env
 
             litellm_dashboard_ui += (
                 "?userID="
