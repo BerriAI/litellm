@@ -35,13 +35,6 @@ jobs:
           push: true
           tags: litellm/litellm:${{ github.event.inputs.tag || 'latest' }} 
       -
-        name: Build and push litellm-ui image
-        uses: docker/build-push-action@v5
-        with:
-          push: true
-          file: ui/Dockerfile
-          tags: litellm/litellm-ui:${{ github.event.inputs.tag || 'latest' }}
-      -
         name: Build and push litellm-database image
         uses: docker/build-push-action@v5
         with:
@@ -82,6 +75,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta.outputs.tags }}-latest # if a tag is provided, use that, otherwise use the release tag, and if neither is available, use 'latest'
           labels: ${{ steps.meta.outputs.labels }}
+          platform: local, linux/amd64,linux/arm64,linux/arm64/v8
+          
   build-and-push-image-ui:
     runs-on: ubuntu-latest
     permissions:
@@ -112,6 +107,7 @@ jobs:
           push: true
           tags: ${{ steps.meta-ui.outputs.tags }}-${{ github.event.inputs.tag || 'latest' }}, ${{ steps.meta-ui.outputs.tags }}-latest
           labels: ${{ steps.meta-ui.outputs.labels }}
+          platform: local, linux/amd64,linux/arm64,linux/arm64/v8
   build-and-push-image-database:
     runs-on: ubuntu-latest
     permissions:

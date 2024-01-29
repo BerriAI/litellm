@@ -75,6 +75,7 @@ from litellm.proxy.utils import (
     send_email,
     get_logging_payload,
     reset_budget,
+    hash_token,
 )
 from litellm.proxy.secret_managers.google_kms import load_google_kms
 import pydantic
@@ -103,6 +104,7 @@ from fastapi.responses import (
     ORJSONResponse,
     JSONResponse,
 )
+from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security.api_key import APIKeyHeader
 import json
@@ -197,6 +199,7 @@ use_queue = False
 health_check_interval = None
 health_check_results = {}
 queue: List = []
+litellm_proxy_budget_name = "litellm-proxy-budget"
 ### INITIALIZE GLOBAL LOGGING OBJECT ###
 proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
 ### REDIS QUEUE ###
@@ -242,6 +245,8 @@ async def user_api_key_auth(
             response = await user_custom_auth(request=request, api_key=api_key)
             return UserAPIKeyAuth.model_validate(response)
         ### LITELLM-DEFINED AUTH FUNCTION ###
+        if isinstance(api_key, str):
+            assert api_key.startswith("sk-")  # prevent token hashes from being used
         if master_key is None:
             if isinstance(api_key, str):
                 return UserAPIKeyAuth(api_key=api_key)
@@ -287,8 +292,9 @@ async def user_api_key_auth(
             raise Exception("No connected db.")
 
         ## check for cache hit (In-Memory Cache)
+        if api_key.startswith("sk-"):
+            api_key = hash_token(token=api_key)
         valid_token = user_api_key_cache.get_cache(key=api_key)
-        verbose_proxy_logger.debug(f"valid_token from cache: {valid_token}")
         if valid_token is None:
             ## check db
             verbose_proxy_logger.debug(f"api key: {api_key}")
@@ -370,29 +376,80 @@ async def user_api_key_auth(
                 )
 
             # Check 2. If user_id for this token is in budget
+            ## Check 2.5 If global proxy is in budget
             if valid_token.user_id is not None:
                 if prisma_client is not None:
                     user_id_information = await prisma_client.get_data(
-                        user_id=valid_token.user_id, table_name="user"
+                        user_id_list=[valid_token.user_id, litellm_proxy_budget_name],
+                        table_name="user",
+                        query_type="find_all",
                     )
                 if custom_db_client is not None:
                     user_id_information = await custom_db_client.get_data(
                         key=valid_token.user_id, table_name="user"
                     )
+
                 verbose_proxy_logger.debug(
                     f"user_id_information: {user_id_information}"
                 )
 
-                # Token exists, not expired now check if its in budget for the user
-                if valid_token.spend is not None and valid_token.user_id is not None:
-                    user_max_budget = getattr(user_id_information, "max_budget", None)
-                    user_current_spend = getattr(user_id_information, "spend", None)
+                if user_id_information is not None:
+                    if isinstance(user_id_information, list):
+                        ## Check if user in budget
+                        for _user in user_id_information:
+                            if _user is None:
+                                continue
+                            assert isinstance(_user, dict)
+                            # Token exists, not expired now check if its in budget for the user
+                            user_max_budget = _user.get("max_budget", None)
+                            user_current_spend = _user.get("spend", None)
 
-                    if user_max_budget is not None and user_current_spend is not None:
-                        if user_current_spend > user_max_budget:
-                            raise Exception(
-                                f"ExceededBudget: User {valid_token.user_id} has exceeded their budget. Current spend: {user_current_spend}; Max Budget: {user_max_budget}"
+                            verbose_proxy_logger.debug(
+                                f"user_max_budget: {user_max_budget}; user_current_spend: {user_current_spend}"
                             )
+
+                            if (
+                                user_max_budget is not None
+                                and user_current_spend is not None
+                            ):
+                                asyncio.create_task(
+                                    proxy_logging_obj.budget_alerts(
+                                        user_max_budget=user_max_budget,
+                                        user_current_spend=user_current_spend,
+                                        type="user_and_proxy_budget",
+                                        user_info=_user,
+                                    )
+                                )
+
+                                _user_id = _user.get("user_id", None)
+                                if user_current_spend > user_max_budget:
+                                    raise Exception(
+                                        f"ExceededBudget: User {_user_id} has exceeded their budget. Current spend: {user_current_spend}; Max Budget: {user_max_budget}"
+                                    )
+                    else:
+                        # Token exists, not expired now check if its in budget for the user
+                        user_max_budget = getattr(
+                            user_id_information, "max_budget", None
+                        )
+                        user_current_spend = getattr(user_id_information, "spend", None)
+
+                        if (
+                            user_max_budget is not None
+                            and user_current_spend is not None
+                        ):
+                            asyncio.create_task(
+                                proxy_logging_obj.budget_alerts(
+                                    user_max_budget=user_max_budget,
+                                    user_current_spend=user_current_spend,
+                                    type="user_budget",
+                                    user_info=user_id_information,
+                                )
+                            )
+
+                            if user_current_spend > user_max_budget:
+                                raise Exception(
+                                    f"ExceededBudget: User {valid_token.user_id} has exceeded their budget. Current spend: {user_current_spend}; Max Budget: {user_max_budget}"
+                                )
 
             # Check 3. If token is expired
             if valid_token.expires is not None:
@@ -415,16 +472,25 @@ async def user_api_key_auth(
 
             # Check 4. Token Spend is under budget
             if valid_token.spend is not None and valid_token.max_budget is not None:
+                asyncio.create_task(
+                    proxy_logging_obj.budget_alerts(
+                        user_max_budget=valid_token.max_budget,
+                        user_current_spend=valid_token.spend,
+                        type="token_budget",
+                        user_info=valid_token,
+                    )
+                )
+
                 if valid_token.spend > valid_token.max_budget:
                     raise Exception(
                         f"ExceededTokenBudget: Current spend for token: {valid_token.spend}; Max Budget for Token: {valid_token.max_budget}"
                     )
 
             # Token passed all checks
-            # Add token to cache
-            user_api_key_cache.set_cache(key=api_key, value=valid_token, ttl=60)
-
             api_key = valid_token.token
+
+            # Add hashed token to cache
+            user_api_key_cache.set_cache(key=api_key, value=valid_token, ttl=60)
             valid_token_dict = _get_pydantic_json_dict(valid_token)
             valid_token_dict.pop("token", None)
             """
@@ -450,16 +516,23 @@ async def user_api_key_auth(
                 )
 
             if (
-                (route.startswith("/key/") or route.startswith("/user/"))
-                or route.startswith("/model/")
-                and not is_master_key_valid
-                and general_settings.get("allow_user_auth", False) != True
+                (
+                    route.startswith("/key/")
+                    or route.startswith("/user/")
+                    or route.startswith("/model/")
+                )
+                and (not is_master_key_valid)
+                and (not general_settings.get("allow_user_auth", False))
             ):
+                assert not general_settings.get("allow_user_auth", False)
                 if route == "/key/info":
                     # check if user can access this route
                     query_params = request.query_params
                     key = query_params.get("key")
-                    if prisma_client.hash_token(token=key) != api_key:
+                    if (
+                        key is not None
+                        and prisma_client.hash_token(token=key) != api_key
+                    ):
                         raise HTTPException(
                             status_code=status.HTTP_403_FORBIDDEN,
                             detail="user not allowed to access this key's info",
@@ -478,7 +551,7 @@ async def user_api_key_auth(
                     pass
                 else:
                     raise Exception(
-                        f"If master key is set, only master key can be used to generate, delete, update or get info for new keys/users"
+                        f"only master key can be used to generate, delete, update or get info for new keys/users."
                     )
 
             return UserAPIKeyAuth(api_key=api_key, **valid_token_dict)
@@ -593,6 +666,12 @@ async def track_cost_callback(
                 "user_api_key_user_id", None
             )
 
+            if kwargs.get("cache_hit", False) == True:
+                response_cost = 0.0
+                verbose_proxy_logger.info(
+                    f"Cache Hit: response_cost {response_cost}, for user_id {user_id}"
+                )
+
             verbose_proxy_logger.info(
                 f"response_cost {response_cost}, for user_id {user_id}"
             )
@@ -636,35 +715,54 @@ async def update_database(
 
         ### UPDATE USER SPEND ###
         async def _update_user_db():
-            if user_id is None:
-                return
-            if prisma_client is not None:
-                existing_spend_obj = await prisma_client.get_data(user_id=user_id)
-            elif custom_db_client is not None:
-                existing_spend_obj = await custom_db_client.get_data(
-                    key=user_id, table_name="user"
+            """
+            - Update that user's row
+            - Update litellm-proxy-budget row (global proxy spend)
+            """
+            user_ids = [user_id, litellm_proxy_budget_name]
+            data_list = []
+            for id in user_ids:
+                if id is None:
+                    continue
+                if prisma_client is not None:
+                    existing_spend_obj = await prisma_client.get_data(user_id=id)
+                elif custom_db_client is not None and id != litellm_proxy_budget_name:
+                    existing_spend_obj = await custom_db_client.get_data(
+                        key=id, table_name="user"
+                    )
+                verbose_proxy_logger.debug(
+                    f"Updating existing_spend_obj: {existing_spend_obj}"
                 )
-            if existing_spend_obj is None:
-                existing_spend = 0
-            else:
-                existing_spend = existing_spend_obj.spend
+                if existing_spend_obj is None:
+                    existing_spend = 0
+                    existing_spend_obj = LiteLLM_UserTable(
+                        user_id=id, spend=0, max_budget=None, user_email=None
+                    )
+                else:
+                    existing_spend = existing_spend_obj.spend
 
-            # Calculate the new cost by adding the existing cost and response_cost
-            new_spend = existing_spend + response_cost
+                # Calculate the new cost by adding the existing cost and response_cost
+                existing_spend_obj.spend = existing_spend + response_cost
 
-            verbose_proxy_logger.debug(f"new cost: {new_spend}")
+                verbose_proxy_logger.debug(f"new cost: {existing_spend_obj.spend}")
+                data_list.append(existing_spend_obj)
+
             # Update the cost column for the given user id
             if prisma_client is not None:
                 await prisma_client.update_data(
-                    user_id=user_id, data={"spend": new_spend}
+                    data_list=data_list, query_type="update_many", table_name="user"
                 )
-            elif custom_db_client is not None:
+            elif custom_db_client is not None and user_id is not None:
+                new_spend = data_list[0].spend
                 await custom_db_client.update_data(
                     key=user_id, value={"spend": new_spend}, table_name="user"
                 )
 
         ### UPDATE KEY SPEND ###
         async def _update_key_db():
+            verbose_proxy_logger.debug(
+                f"adding spend to key db. Response cost: {response_cost}. Token: {token}."
+            )
             if prisma_client is not None:
                 # Fetch the existing cost for the given token
                 existing_spend_obj = await prisma_client.get_data(token=token)
@@ -916,7 +1014,7 @@ class ProxyConfig:
             blue_color_code = "\033[94m"
             reset_color_code = "\033[0m"
             for key, value in litellm_settings.items():
-                if key == "cache":
+                if key == "cache" and value == True:
                     print(f"{blue_color_code}\nSetting Cache on Proxy")  # noqa
                     from litellm.caching import Cache
 
@@ -1155,6 +1253,8 @@ async def generate_key_helper_fn(
     tpm_limit: Optional[int] = None,
     rpm_limit: Optional[int] = None,
     query_type: Literal["insert_data", "update_data"] = "insert_data",
+    update_key_values: Optional[dict] = None,
+    key_alias: Optional[str] = None,
 ):
     global prisma_client, custom_db_client
 
@@ -1207,8 +1307,8 @@ async def generate_key_helper_fn(
     config_json = json.dumps(config)
     metadata_json = json.dumps(metadata)
     user_id = user_id or str(uuid.uuid4())
-    tpm_limit = tpm_limit or sys.maxsize
-    rpm_limit = rpm_limit or sys.maxsize
+    tpm_limit = tpm_limit
+    rpm_limit = rpm_limit
     if type(team_id) is not str:
         team_id = str(team_id)
     try:
@@ -1228,6 +1328,7 @@ async def generate_key_helper_fn(
         }
         key_data = {
             "token": token,
+            "key_alias": key_alias,
             "expires": expires,
             "models": models,
             "aliases": aliases_json,
@@ -1243,6 +1344,8 @@ async def generate_key_helper_fn(
             "budget_duration": key_budget_duration,
             "budget_reset_at": key_reset_at,
         }
+        if general_settings.get("allow_user_auth", False) == True:
+            key_data["key_name"] = f"sk-...{token[-4:]}"
         if prisma_client is not None:
             ## CREATE USER (If necessary)
             verbose_proxy_logger.debug(f"prisma_client: Creating User={user_data}")
@@ -1255,7 +1358,9 @@ async def generate_key_helper_fn(
                     key_data["models"] = user_row.models
             elif query_type == "update_data":
                 user_row = await prisma_client.update_data(
-                    data=user_data, table_name="user"
+                    data=user_data,
+                    table_name="user",
+                    update_key_values=update_key_values,
                 )
 
             ## CREATE KEY
@@ -1282,12 +1387,7 @@ async def generate_key_helper_fn(
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
-    return {
-        "token": token,
-        "expires": expires,
-        "user_id": user_id,
-        "max_budget": max_budget,
-    }
+    return key_data
 
 
 async def delete_verification_token(tokens: List):
@@ -1382,8 +1482,6 @@ async def initialize(
                 verbose_proxy_logger.setLevel(
                     level=logging.DEBUG
                 )  # set proxy logs to debug
-                litellm.set_verbose = True
-
     dynamic_config = {"general": {}, user_model: {}}
     if config:
         (
@@ -1563,17 +1661,24 @@ async def startup_event():
     if prisma_client is not None and master_key is not None:
         # add master key to db
         await generate_key_helper_fn(
-            duration=None, models=[], aliases={}, config={}, spend=0, token=master_key
+            duration=None,
+            models=[],
+            aliases={},
+            config={},
+            spend=0,
+            token=master_key,
+            user_id="default_user_id",
         )
 
-    if (
-        prisma_client is not None
-        and litellm.max_budget > 0
-        and litellm.budget_duration is not None
-    ):
+    if prisma_client is not None and litellm.max_budget > 0:
+        if litellm.budget_duration is None:
+            raise Exception(
+                "budget_duration not set on Proxy. budget_duration is required to use max_budget."
+            )
+
         # add proxy budget to db in the user table
         await generate_key_helper_fn(
-            user_id="litellm-proxy-budget",
+            user_id=litellm_proxy_budget_name,
             duration=None,
             models=[],
             aliases={},
@@ -1582,6 +1687,10 @@ async def startup_event():
             max_budget=litellm.max_budget,
             budget_duration=litellm.budget_duration,
             query_type="update_data",
+            update_key_values={
+                "max_budget": litellm.max_budget,
+                "budget_duration": litellm.budget_duration,
+            },
         )
 
     verbose_proxy_logger.debug(
@@ -2248,7 +2357,8 @@ async def generate_key_fn(
     Docs: https://docs.litellm.ai/docs/proxy/virtual_keys
 
     Parameters:
-    - duration: Optional[str] - Specify the length of time the token is valid for. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d"). **(Default is set to 1 hour.)**
+    - duration: Optional[str] - Specify the length of time the token is valid for. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
+    - key_alias: Optional[str] - User defined key alias
     - team_id: Optional[str] - The team id of the user
     - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
     - aliases: Optional[dict] - Any alias mappings, on top of anything in the config.yaml model list. - https://docs.litellm.ai/docs/proxy/virtual_keys#managing-auth---upgradedowngrade-models
@@ -2286,12 +2396,9 @@ async def generate_key_fn(
             data_json["key_budget_duration"] = data_json.pop("budget_duration", None)
 
         response = await generate_key_helper_fn(**data_json)
-        return GenerateKeyResponse(
-            key=response["token"],
-            expires=response["expires"],
-            user_id=response["user_id"],
-        )
+        return GenerateKeyResponse(**response)
     except Exception as e:
+        traceback.print_exc()
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", f"Authentication Error({str(e)})"),
@@ -2356,10 +2463,10 @@ async def delete_key_fn(data: DeleteKeyRequest):
     Delete a key from the key management system.
 
     Parameters::
-    - keys (List[str]): A list of keys to delete. Example {"keys": ["sk-QWrxEynunsNpV1zT48HIrw"]}
+    - keys (List[str]): A list of keys or hashed keys to delete. Example {"keys": ["sk-QWrxEynunsNpV1zT48HIrw", "837e17519f44683334df5291321d97b8bf1098cd490e49e215f6fea935aa28be"]}
 
     Returns:
-    - deleted_keys (List[str]): A list of deleted keys. Example {"deleted_keys": ["sk-QWrxEynunsNpV1zT48HIrw"]}
+    - deleted_keys (List[str]): A list of deleted keys. Example {"deleted_keys": ["sk-QWrxEynunsNpV1zT48HIrw", "837e17519f44683334df5291321d97b8bf1098cd490e49e215f6fea935aa28be"]}
 
 
     Raises:
@@ -2396,14 +2503,39 @@ async def delete_key_fn(data: DeleteKeyRequest):
     "/key/info", tags=["key management"], dependencies=[Depends(user_api_key_auth)]
 )
 async def info_key_fn(
-    key: str = fastapi.Query(..., description="Key in the request parameters"),
+    key: Optional[str] = fastapi.Query(
+        default=None, description="Key in the request parameters"
+    ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
+    """
+    Retrieve information about a key.
+    Parameters:
+        key: Optional[str] = Query parameter representing the key in the request
+        user_api_key_dict: UserAPIKeyAuth = Dependency representing the user's API key
+    Returns:
+        Dict containing the key and its associated information
+    
+    Example Curl:
+    ```
+    curl -X GET "http://0.0.0.0:8000/key/info?key=sk-02Wr4IAlN3NvPXvL5JVvDA" \
+-H "Authorization: Bearer sk-1234"
+    ```
+
+    Example Curl - if no key is passed, it will use the Key Passed in Authorization Header
+    ```
+    curl -X GET "http://0.0.0.0:8000/key/info" \
+-H "Authorization: Bearer sk-02Wr4IAlN3NvPXvL5JVvDA"
+    ```
+    """
     global prisma_client
     try:
         if prisma_client is None:
             raise Exception(
                 f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
+        if key == None:
+            key = user_api_key_dict.api_key
         key_info = await prisma_client.get_data(token=key)
         ## REMOVE HASHED TOKEN INFO BEFORE RETURNING ##
         try:
@@ -2469,13 +2601,24 @@ async def spend_key_fn():
     tags=["budget & spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def spend_user_fn():
+async def spend_user_fn(
+    user_id: Optional[str] = fastapi.Query(
+        default=None,
+        description="Get User Table row for user_id",
+    ),
+):
     """
     View all users created, ordered by spend
 
     Example Request: 
     ```
     curl -X GET "http://0.0.0.0:8000/spend/users" \
+-H "Authorization: Bearer sk-1234"
+    ```
+
+    View User Table row for user_id
+    ```
+    curl -X GET "http://0.0.0.0:8000/spend/users?user_id=1234" \
 -H "Authorization: Bearer sk-1234"
     ```
     """
@@ -2486,9 +2629,15 @@ async def spend_user_fn():
                 f"Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
-        user_info = await prisma_client.get_data(
-            table_name="user", query_type="find_all"
-        )
+        if user_id is not None:
+            user_info = await prisma_client.get_data(
+                table_name="user", query_type="find_unique", user_id=user_id
+            )
+            return [user_info]
+        else:
+            user_info = await prisma_client.get_data(
+                table_name="user", query_type="find_all"
+            )
 
         return user_info
 
@@ -2508,6 +2657,10 @@ async def view_spend_logs(
     api_key: Optional[str] = fastapi.Query(
         default=None,
         description="Get spend logs based on api key",
+    ),
+    user_id: Optional[str] = fastapi.Query(
+        default=None,
+        description="Get spend logs based on user_id",
     ),
     request_id: Optional[str] = fastapi.Query(
         default=None,
@@ -2532,6 +2685,12 @@ async def view_spend_logs(
     Example Request for specific api_key
     ```
     curl -X GET "http://0.0.0.0:8000/spend/logs?api_key=sk-Fn8Ej39NkBQmUagFEoUWPQ" \
+-H "Authorization: Bearer sk-1234"
+    ```
+
+    Example Request for specific user_id
+    ```
+    curl -X GET "http://0.0.0.0:8000/spend/logs?user_id=ishaan@berri.ai" \
 -H "Authorization: Bearer sk-1234"
     ```
     """
@@ -2563,6 +2722,16 @@ async def view_spend_logs(
                 key_val={"key": "request_id", "value": request_id},
             )
             return [spend_log]
+        elif user_id is not None:
+            spend_log = await prisma_client.get_data(
+                table_name="spend",
+                query_type="find_all",
+                key_val={"key": "user", "value": user_id},
+            )
+            if isinstance(spend_log, list):
+                return spend_log
+            else:
+                return [spend_log]
         else:
             spend_logs = await prisma_client.get_data(
                 table_name="spend", query_type="find_all"
@@ -2685,6 +2854,132 @@ async def user_auth(request: Request):
     return "Email sent!"
 
 
+@app.get("/google-login/key/generate", tags=["experimental"])
+async def google_login(request: Request):
+    """
+    Create Proxy API Keys using Google Workspace SSO. Requires setting GOOGLE_REDIRECT_URI in .env
+
+    GOOGLE_REDIRECT_URI should be the your deployed proxy endpoint, e.g. GOOGLE_REDIRECT_URI="https://litellm-production-7002.up.railway.app"
+    Example:
+
+    """
+    GOOGLE_REDIRECT_URI = os.getenv("PROXY_BASE_URL")
+    if GOOGLE_REDIRECT_URI is None:
+        raise ProxyException(
+            message="PROXY_BASE_URL not set. Set it in .env file",
+            type="auth_error",
+            param="PROXY_BASE_URL",
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+    if GOOGLE_REDIRECT_URI.endswith("/"):
+        GOOGLE_REDIRECT_URI += "google-callback"
+    else:
+        GOOGLE_REDIRECT_URI += "/google-callback"
+
+    GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
+    if GOOGLE_CLIENT_ID is None:
+        GOOGLE_CLIENT_ID = (
+            "246483686424-clje5sggkjma26ilktj6qssakqhoon0m.apps.googleusercontent.com"
+        )
+
+    verbose_proxy_logger.info(
+        f"In /google-login/key/generate, \nGOOGLE_REDIRECT_URI: {GOOGLE_REDIRECT_URI}\nGOOGLE_CLIENT_ID: {GOOGLE_CLIENT_ID}"
+    )
+    google_auth_url = f"https://accounts.google.com/o/oauth2/auth?client_id={GOOGLE_CLIENT_ID}&redirect_uri={GOOGLE_REDIRECT_URI}&response_type=code&scope=openid%20profile%20email"
+    return RedirectResponse(url=google_auth_url)
+
+
+@app.get("/google-callback", tags=["experimental"], response_model=GenerateKeyResponse)
+async def google_callback(code: str, request: Request):
+    import httpx
+
+    GOOGLE_REDIRECT_URI = os.getenv("PROXY_BASE_URL")
+    if GOOGLE_REDIRECT_URI is None:
+        raise ProxyException(
+            message="PROXY_BASE_URL not set. Set it in .env file",
+            type="auth_error",
+            param="PROXY_BASE_URL",
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+    # Add "/google-callback"" to your callback URL
+    if GOOGLE_REDIRECT_URI.endswith("/"):
+        GOOGLE_REDIRECT_URI += "google-callback"
+    else:
+        GOOGLE_REDIRECT_URI += "/google-callback"
+
+    GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
+    if GOOGLE_CLIENT_ID is None:
+        GOOGLE_CLIENT_ID = (
+            "246483686424-clje5sggkjma26ilktj6qssakqhoon0m.apps.googleusercontent.com"
+        )
+
+    GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
+    if GOOGLE_CLIENT_SECRET is None:
+        GOOGLE_CLIENT_SECRET = "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"
+
+    verbose_proxy_logger.info(
+        f"/google-callback\n GOOGLE_REDIRECT_URI: {GOOGLE_REDIRECT_URI}\n GOOGLE_CLIENT_ID: {GOOGLE_CLIENT_ID}"
+    )
+    # Exchange code for access token
+    async with httpx.AsyncClient() as client:
+        token_url = f"https://oauth2.googleapis.com/token"
+        data = {
+            "code": code,
+            "client_id": GOOGLE_CLIENT_ID,
+            "client_secret": GOOGLE_CLIENT_SECRET,
+            "redirect_uri": GOOGLE_REDIRECT_URI,
+            "grant_type": "authorization_code",
+        }
+        response = await client.post(token_url, data=data)
+
+    # Process the response, extract user info, etc.
+    if response.status_code == 200:
+        access_token = response.json()["access_token"]
+
+        # Fetch user info using the access token
+        async with httpx.AsyncClient() as client:
+            user_info_url = "https://www.googleapis.com/oauth2/v1/userinfo"
+            headers = {"Authorization": f"Bearer {access_token}"}
+            user_info_response = await client.get(user_info_url, headers=headers)
+
+        # Process user info response
+        if user_info_response.status_code == 200:
+            user_info = user_info_response.json()
+            user_email = user_info.get("email")
+            user_name = user_info.get("name")
+
+            # we can use user_email on litellm proxy now
+
+            # TODO: Handle user info as needed, for example, store it in a database, authenticate the user, etc.
+            response = await generate_key_helper_fn(
+                **{"duration": "24hr", "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": user_email, "team_id": "litellm-dashboard"}  # type: ignore
+            )
+
+            key = response["token"]  # type: ignore
+            user_id = response["user_id"]  # type: ignore
+            litellm_dashboard_ui = "https://litellm-dashboard.vercel.app/"
+
+            litellm_dashboard_ui += (
+                "?userID="
+                + user_id
+                + "&accessToken="
+                + key
+                + "&proxyBaseUrl="
+                + os.getenv("PROXY_BASE_URL")
+            )
+            return RedirectResponse(url=litellm_dashboard_ui)
+
+        else:
+            # Handle user info retrieval error
+            raise HTTPException(
+                status_code=user_info_response.status_code,
+                detail=user_info_response.text,
+            )
+    else:
+        # Handle the error from the token exchange
+        raise HTTPException(status_code=response.status_code, detail=response.text)
+
+
 @router.get(
     "/user/info", tags=["user management"], dependencies=[Depends(user_api_key_auth)]
 )
@@ -2736,11 +3031,42 @@ async def user_info(
 @router.post(
     "/user/update", tags=["user management"], dependencies=[Depends(user_api_key_auth)]
 )
-async def user_update(request: Request):
+async def user_update(data: UpdateUserRequest):
     """
     [TODO]: Use this to update user budget
     """
-    pass
+    global prisma_client
+    try:
+        data_json: dict = data.json()
+        # get the row from db
+        if prisma_client is None:
+            raise Exception("Not connected to DB!")
+
+        non_default_values = {k: v for k, v in data_json.items() if v is not None}
+        response = await prisma_client.update_data(
+            user_id=data_json["user_id"],
+            data=non_default_values,
+            update_key_values=non_default_values,
+        )
+        return {"user_id": data_json["user_id"], **non_default_values}
+        # update based on remaining passed in values
+    except Exception as e:
+        traceback.print_exc()
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "detail", f"Authentication Error({str(e)})"),
+                type="auth_error",
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+            )
+        elif isinstance(e, ProxyException):
+            raise e
+        raise ProxyException(
+            message="Authentication Error, " + str(e),
+            type="auth_error",
+            param=getattr(e, "param", "None"),
+            code=status.HTTP_400_BAD_REQUEST,
+        )
 
 
 #### MODEL MANAGEMENT ####

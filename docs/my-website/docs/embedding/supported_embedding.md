@@ -13,8 +13,8 @@ response = embedding(model='text-embedding-ada-002', input=["good morning from l
 
 - `model`: *string* - ID of the model to use. `model='text-embedding-ada-002'`
 
-- `input`: *array* - Input text to embed, encoded as a string or array of tokens. To embed multiple inputs in a single request, pass an array of strings or array of token arrays. The input must not exceed the max input tokens for the model (8192 tokens for text-embedding-ada-002), cannot be an empty string, and any array must be 2048 dimensions or less. 
-```
+- `input`: *string or array* - Input text to embed, encoded as a string or array of tokens. To embed multiple inputs in a single request, pass an array of strings or array of token arrays. The input must not exceed the max input tokens for the model (8192 tokens for text-embedding-ada-002), cannot be an empty string, and any array must be 2048 dimensions or less. 
+```python
 input=["good morning from litellm"]
 ```
 
@@ -22,7 +22,11 @@ input=["good morning from litellm"]
 
 - `user`: *string (optional)* A unique identifier representing your end-user, 
 
-- `timeout`: *integer* - The maximum time, in seconds, to wait for the API to respond. Defaults to 600 seconds (10 minutes).
+- `dimensions`: *integer (Optional)* The number of dimensions the resulting output embeddings should have. Only supported in OpenAI/Azure text-embedding-3 and later models.
+
+- `encoding_format`: *string (Optional)* The format to return the embeddings in. Can be either `"float"` or `"base64"`. Defaults to `encoding_format="float"`
+
+- `timeout`: *integer (Optional)* - The maximum time, in seconds, to wait for the API to respond. Defaults to 600 seconds (10 minutes).
 
 - `api_base`: *string (optional)* - The api endpoint you want to call the model with
 
@@ -66,11 +70,18 @@ input=["good morning from litellm"]
 from litellm import embedding
 import os
 os.environ['OPENAI_API_KEY'] = ""
-response = embedding('text-embedding-ada-002', input=["good morning from litellm"])
+response = embedding(
+    model="text-embedding-3-small",
+    input=["good morning from litellm", "this is another item"],
+    metadata={"anything": "good day"},
+    dimensions=5 # Only supported in text-embedding-3 and later models.
+)
 ```
 
 | Model Name           | Function Call                               | Required OS Variables                |
 |----------------------|---------------------------------------------|--------------------------------------|
+| text-embedding-3-small | `embedding('text-embedding-3-small', input)` | `os.environ['OPENAI_API_KEY']`       |
+| text-embedding-3-large | `embedding('text-embedding-3-large', input)` | `os.environ['OPENAI_API_KEY']`       |
 | text-embedding-ada-002 | `embedding('text-embedding-ada-002', input)` | `os.environ['OPENAI_API_KEY']`       |
 
 ## Azure OpenAI Embedding Models

@@ -54,7 +54,7 @@ model_list:
   - model_name: sagemaker-embedding-model
     litellm_params:
       model: sagemaker/berri-benchmarking-gpt-j-6b-fp16
-      input_cost_per_second: 0.000420
+      input_cost_per_second: 0.000420 
 ```
 
 **Step 2: Start proxy**
@@ -67,25 +67,28 @@ litellm /path/to/config.yaml
 
 <Image img={require('../../img/spend_logs_table.png')} />
 
-## Cost Per Token 
+## Cost Per Token (e.g. Azure)
+
 
 ```python
 # !pip install boto3 
 from litellm import completion, completion_cost 
 
-os.environ["AWS_ACCESS_KEY_ID"] = ""
-os.environ["AWS_SECRET_ACCESS_KEY"] = ""
-os.environ["AWS_REGION_NAME"] = ""
+## set ENV variables
+os.environ["AZURE_API_KEY"] = ""
+os.environ["AZURE_API_BASE"] = ""
+os.environ["AZURE_API_VERSION"] = ""
 
 
-def test_completion_sagemaker():
+def test_completion_azure_model():
     try:
-        print("testing sagemaker")
+        print("testing azure custom pricing")
+        # azure call
         response = completion(
-            model="sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4",
-            messages=[{"role": "user", "content": "Hey, how's it going?"}],
-            input_cost_per_token=0.005,
-            output_cost_per_token=1,
+          model = "azure/<your_deployment_name>", 
+          messages = [{ "content": "Hello, how are you?","role": "user"}]
+          input_cost_per_token=0.005,
+          output_cost_per_token=1,
         )
         # Add any assertions here to check the response
         print(response)
@@ -94,15 +97,19 @@ def test_completion_sagemaker():
     except Exception as e:
         raise Exception(f"Error occurred: {e}")
 
+test_completion_azure_model()
 ```
 
 ### Usage with OpenAI Proxy Server
 
 ```yaml
 model_list:
-  - model_name: sagemaker-completion-model
+  - model_name: azure-model
     litellm_params:
-      model: sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4
-      input_cost_per_token: 0.000420 # 👈 key change
-      output_cost_per_token: 0.000420 # 👈 key change
+      model: azure/<your_deployment_name>
+      api_key: os.environ/AZURE_API_KEY
+      api_base: os.environ/AZURE_API_BASE
+      api_version: os.envrion/AZURE_API_VERSION
+      input_cost_per_token: 0.000421 # 👈 ONLY to track cost per token
+      output_cost_per_token: 0.000520 # 👈 ONLY to track cost per token
 ```

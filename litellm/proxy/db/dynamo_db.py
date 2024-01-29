@@ -5,6 +5,7 @@ from litellm.proxy._types import (
     LiteLLM_Config,
     LiteLLM_UserTable,
 )
+from litellm.proxy.utils import hash_token
 from litellm import get_secret
 from typing import Any, List, Literal, Optional, Union
 import json
@@ -186,7 +187,10 @@ class DynamoDBWrapper(CustomDB):
             elif table_name == "spend":
                 table = client.table(self.database_arguments.spend_table_name)
 
+            value = value.copy()
             for k, v in value.items():
+                if k == "token" and value[k].startswith("sk-"):
+                    value[k] = hash_token(token=v)
                 if isinstance(v, datetime):
                     value[k] = v.isoformat()
 
@@ -229,6 +233,10 @@ class DynamoDBWrapper(CustomDB):
                 table = client.table(self.database_arguments.config_table_name)
                 key_name = "param_name"
 
+            if key_name == "token" and key.startswith("sk-"):
+                # ensure it's hashed
+                key = hash_token(token=key)
+
             response = await table.get_item({key_name: key})
 
             new_response: Any = None
@@ -243,6 +251,10 @@ class DynamoDBWrapper(CustomDB):
                         and isinstance(v, str)
                     ):
                         new_response[k] = json.loads(v)
+                    elif (k == "tpm_limit" or k == "rpm_limit") and isinstance(
+                        v, float
+                    ):
+                        new_response[k] = int(v)
                     else:
                         new_response[k] = v
                 new_response = LiteLLM_VerificationToken(**new_response)
@@ -300,10 +312,13 @@ class DynamoDBWrapper(CustomDB):
             # Initialize an empty UpdateExpression
 
             actions: List = []
+            value = value.copy()
             for k, v in value.items():
                 # Convert datetime object to ISO8601 string
                 if isinstance(v, datetime):
                     v = v.isoformat()
+                if k == "token" and value[k].startswith("sk-"):
+                    value[k] = hash_token(token=v)
 
                 # Accumulate updates
                 actions.append((F(k), Value(value=v)))
