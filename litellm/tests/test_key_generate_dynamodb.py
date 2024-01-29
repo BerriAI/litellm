@@ -116,6 +116,10 @@ def test_call_with_invalid_key(custom_db_client):
 
 def test_call_with_invalid_model(custom_db_client):
     # 3. Make a call to a key with an invalid model - expect to fail
+    from litellm._logging import verbose_proxy_logger
+    import logging
+
+    verbose_proxy_logger.setLevel(logging.DEBUG)
     setattr(litellm.proxy.proxy_server, "custom_db_client", custom_db_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
     try:
