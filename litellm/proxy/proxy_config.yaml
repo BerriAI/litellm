@@ -69,6 +69,10 @@ litellm_settings:
   success_callback: ['langfuse']
   max_budget: 10      # global budget for proxy 
   budget_duration: 30d    # global budget duration, will reset after 30d
+  default_key_generate_params:
+    max_budget: 1.5000
+    models: ["azure-gpt-3.5"]
+    duration: None
   # cache: True     
   # setting callback class
   # callbacks: custom_callbacks.proxy_handler_instance # sets litellm.callbacks = [proxy_handler_instance]
