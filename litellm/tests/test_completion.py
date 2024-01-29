@@ -517,7 +517,7 @@ def hf_test_completion_tgi():
 
 def test_completion_cohere():  # commenting for now as the cohere endpoint is being flaky
     try:
-        litellm.CohereConfig(max_tokens=1000, stop_sequences=["a"])
+        litellm.CohereConfig(max_tokens=10, stop_sequences=["a"])
         response = completion(
             model="command-nightly", messages=messages, logger_fn=logger_fn
         )
