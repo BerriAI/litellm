@@ -1014,7 +1014,7 @@ class ProxyConfig:
             blue_color_code = "\033[94m"
             reset_color_code = "\033[0m"
             for key, value in litellm_settings.items():
-                if key == "cache":
+                if key == "cache" and value == True:
                     print(f"{blue_color_code}\nSetting Cache on Proxy")  # noqa
                     from litellm.caching import Cache
 
