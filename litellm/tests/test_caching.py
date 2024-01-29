@@ -127,9 +127,10 @@ def test_caching_with_models_v2():
     ]
     litellm.cache = Cache()
     print("test2 for caching")
+    litellm.set_verbose = True
     response1 = completion(model="gpt-3.5-turbo", messages=messages, caching=True)
     response2 = completion(model="gpt-3.5-turbo", messages=messages, caching=True)
-    response3 = completion(model="command-nightly", messages=messages, caching=True)
+    response3 = completion(model="azure/chatgpt-v-2", messages=messages, caching=True)
     print(f"response1: {response1}")
     print(f"response2: {response2}")
     print(f"response3: {response3}")
@@ -286,7 +287,7 @@ def test_redis_cache_completion():
     response3 = completion(
         model="gpt-3.5-turbo", messages=messages, caching=True, temperature=0.5
     )
-    response4 = completion(model="command-nightly", messages=messages, caching=True)
+    response4 = completion(model="azure/chatgpt-v-2", messages=messages, caching=True)
 
     print("\nresponse 1", response1)
     print("\nresponse 2", response2)
