@@ -33,7 +33,7 @@ from litellm.proxy.proxy_server import (
 )
 
 from litellm.proxy._types import NewUserRequest, DynamoDBArgs, GenerateKeyRequest
-from litellm.proxy.utils import DBClient
+from litellm.proxy.utils import DBClient, hash_token
 from starlette.datastructures import URL
 
 
@@ -116,6 +116,10 @@ def test_call_with_invalid_key(custom_db_client):
 
 def test_call_with_invalid_model(custom_db_client):
     # 3. Make a call to a key with an invalid model - expect to fail
+    from litellm._logging import verbose_proxy_logger
+    import logging
+
+    verbose_proxy_logger.setLevel(logging.DEBUG)
     setattr(litellm.proxy.proxy_server, "custom_db_client", custom_db_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
     try:
@@ -232,7 +236,7 @@ def test_call_with_user_over_budget(custom_db_client):
                     "stream": False,
                     "litellm_params": {
                         "metadata": {
-                            "user_api_key": generated_key,
+                            "user_api_key": hash_token(generated_key),
                             "user_api_key_user_id": user_id,
                         }
                     },
@@ -305,7 +309,7 @@ def test_call_with_user_over_budget_stream(custom_db_client):
                     "complete_streaming_response": resp,
                     "litellm_params": {
                         "metadata": {
-                            "user_api_key": generated_key,
+                            "user_api_key": hash_token(generated_key),
                             "user_api_key_user_id": user_id,
                         }
                     },
@@ -376,7 +380,7 @@ def test_call_with_user_key_budget(custom_db_client):
                     "stream": False,
                     "litellm_params": {
                         "metadata": {
-                            "user_api_key": generated_key,
+                            "user_api_key": hash_token(generated_key),
                             "user_api_key_user_id": user_id,
                         }
                     },
@@ -449,7 +453,7 @@ def test_call_with_key_over_budget_stream(custom_db_client):
                     "complete_streaming_response": resp,
                     "litellm_params": {
                         "metadata": {
-                            "user_api_key": generated_key,
+                            "user_api_key": hash_token(generated_key),
                             "user_api_key_user_id": user_id,
                         }
                     },

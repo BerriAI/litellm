@@ -11,6 +11,10 @@ model_list:
       api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
       api_version: "2023-05-15"
       api_key: os.environ/AZURE_API_KEY # The `os.environ/` prefix tells litellm to read this from the env. See https://docs.litellm.ai/docs/simple_proxy#load-api-keys-from-vault
+  - model_name: sagemaker-completion-model
+    litellm_params:
+      model: sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4
+      input_cost_per_second: 0.000420  
   - model_name: gpt-4
     litellm_params:
       model: azure/gpt-turbo
@@ -41,6 +45,8 @@ model_list:
 
 litellm_settings:
   drop_params: True
+  max_budget: 100 
+  budget_duration: 30d
 general_settings: 
   master_key: sk-1234 # [OPTIONAL] Only use this if you to require all calls to contain this key (Authorization: Bearer sk-1234)
   # database_url: "postgresql://<user>:<password>@<host>:<port>/<dbname>" # [OPTIONAL] use for token-based auth to proxy

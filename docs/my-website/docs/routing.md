@@ -605,6 +605,49 @@ response = router.completion(model="gpt-3.5-turbo", messages=messages)
 print(f"response: {response}")
 ```
 
+## Custom Callbacks - Track API Key, API Endpoint, Model Used 
+
+If you need to track the api_key, api endpoint, model, custom_llm_provider used for each completion call, you can setup a [custom callback](https://docs.litellm.ai/docs/observability/custom_callback) 
+
+### Usage
+
+```python
+import litellm
+from litellm.integrations.custom_logger import CustomLogger
+
+class MyCustomHandler(CustomLogger):        
+	def log_success_event(self, kwargs, response_obj, start_time, end_time): 
+		print(f"On Success")
+		print("kwargs=", kwargs)
+		litellm_params= kwargs.get("litellm_params")
+		api_key = litellm_params.get("api_key")
+		api_base = litellm_params.get("api_base")
+		custom_llm_provider= litellm_params.get("custom_llm_provider")
+		response_cost = kwargs.get("response_cost")
+
+		# print the values
+		print("api_key=", api_key)
+		print("api_base=", api_base)
+		print("custom_llm_provider=", custom_llm_provider)
+		print("response_cost=", response_cost)
+
+	def log_failure_event(self, kwargs, response_obj, start_time, end_time): 
+		print(f"On Failure")
+		print("kwargs=")
+
+customHandler = MyCustomHandler()
+
+litellm.callbacks = [customHandler]
+
+# Init Router
+router = Router(model_list=model_list, routing_strategy="simple-shuffle")
+
+# router completion call
+response = router.completion(
+	model="gpt-3.5-turbo", 
+	messages=[{ "role": "user", "content": "Hi who are you"}]
+)
+```
 
 ## Deploy Router 
 

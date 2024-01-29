@@ -2,35 +2,23 @@ import Image from '@theme/IdealImage';
 
 # [BETA] Admin UI
 
-- Track Spend Per API Key, User
-- Allow your users to create their own keys through a UI
-
 :::info
 
 This is in beta, so things may change. If you have feedback, [let us know](https://discord.com/invite/wuPM9dRgDw)
 
 :::
 
+Allow your users to create, view their own keys through a UI
+
+<Image img={require('../../img/admin_ui_2.png')} />  
+
+
+
 ## Quick Start
 
-Requirements: 
+## 1. Changes to your config.yaml
 
-- Need to a SMTP server connection to send emails (e.g. [Resend](https://resend.com/docs/send-with-smtp))
-
-[**See code**](https://github.com/BerriAI/litellm/blob/61cd800b9ffbb02c286481d2056b65c7fb5447bf/litellm/proxy/proxy_server.py#L1782)
-
-### Step 1. Save SMTP server credentials
-
-```env
-export SMTP_HOST="my-smtp-host"
-export SMTP_USERNAME="my-smtp-password"
-export SMTP_PASSWORD="my-smtp-password"
-export SMTP_SENDER_EMAIL="krrish@berri.ai"
-```
-
-### Step 2. Enable user auth 
-
-In your config.yaml, 
+Set `allow_user_auth: true` on your config
 
 ```yaml
 general_settings:
@@ -38,13 +26,36 @@ general_settings:
     allow_user_auth: true
 ```
 
-This will enable:
-* Users to create keys via `/key/generate` (by default, only admin can create keys)
-* The `/user/auth` endpoint to send user's emails with their login credentials (key + user id)
+## 2. Setup Google SSO - Use this to Authenticate Team Members to the UI
+- Create an Oauth 2.0 Client
+    <Image img={require('../../img/google_oauth2.png')} />  
 
-### Step 3. Connect to UI 
+    - Navigate to Google `Credenentials` 
+    - Create a new Oauth client ID 
+    - Set the `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` in your Proxy .env 
+- Set Redirect URL on your Oauth 2.0 Client 
+    - Click on your Oauth 2.0 client on https://console.cloud.google.com/
+    - Set a redirect url = `<your proxy base url>/google-callback`
+    ```
+    https://litellm-production-7002.up.railway.app/google-callback
+    ```
+    <Image img={require('../../img/google_redirect.png')} />  
+## 3. Required env variables on your Proxy
 
-You can use our hosted UI (https://dashboard.litellm.ai/) or [self-host your own](https://github.com/BerriAI/litellm/tree/main/ui). 
+```shell
+PROXY_BASE_URL="<your deployed proxy endpoint>" example PROXY_BASE_URL=https://litellm-production-7002.up.railway.app/
+
+# for Google SSO Login
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+```
+
+## 4. Use UI
+
+👉 Get Started here: https://litellm-dashboard.vercel.app/
+
+
+<!-- You can use our hosted UI (https://dashboard.litellm.ai/) or [self-host your own](https://github.com/BerriAI/litellm/tree/main/ui). 
 
 If you self-host, you need to save the UI url in your proxy environment as `LITELLM_HOSTED_UI`. 
 
@@ -71,5 +82,5 @@ Connect your proxy to your UI, by entering:
 
 ### Spend Per User
 
-<Image img={require('../../img/spend_per_user.png')} />  
+<Image img={require('../../img/spend_per_user.png')} />   -->
 

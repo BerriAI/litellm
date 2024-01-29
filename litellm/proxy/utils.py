@@ -181,6 +181,69 @@ class ProxyLogging:
                     level="Low",
                 )
 
+    async def budget_alerts(
+        self,
+        type: Literal["token_budget", "user_budget", "user_and_proxy_budget"],
+        user_max_budget: float,
+        user_current_spend: float,
+        user_info=None,
+    ):
+        if self.alerting is None:
+            # do nothing if alerting is not switched on
+            return
+
+        if type == "user_and_proxy_budget":
+            user_info = dict(user_info)
+            user_id = user_info["user_id"]
+            max_budget = user_info["max_budget"]
+            spend = user_info["spend"]
+            user_email = user_info["user_email"]
+            user_info = f"""\nUser ID: {user_id}\nMax Budget: ${max_budget}\nSpend: ${spend}\nUser Email: {user_email}"""
+        elif type == "token_budget":
+            token_info = dict(user_info)
+            token = token_info["token"]
+            spend = token_info["spend"]
+            max_budget = token_info["max_budget"]
+            user_id = token_info["user_id"]
+            user_info = f"""\nToken: {token}\nSpend: ${spend}\nMax Budget: ${max_budget}\nUser ID: {user_id}"""
+        else:
+            user_info = str(user_info)
+        # percent of max_budget left to spend
+        percent_left = (user_max_budget - user_current_spend) / user_max_budget
+        verbose_proxy_logger.debug(
+            f"Budget Alerts: Percent left: {percent_left} for {user_info}"
+        )
+
+        # check if crossed budget
+        if user_current_spend >= user_max_budget:
+            verbose_proxy_logger.debug(f"Budget Crossed for {user_info}")
+            message = "Budget Crossed for" + user_info
+            await self.alerting_handler(
+                message=message,
+                level="High",
+            )
+            return
+
+        # check if 5% of max budget is left
+        if percent_left <= 0.05:
+            message = "5% budget left for" + user_info
+            await self.alerting_handler(
+                message=message,
+                level="Medium",
+            )
+            return
+
+        # check if 15% of max budget is left
+        if percent_left <= 0.15:
+            message = "15% budget left for" + user_info
+            await self.alerting_handler(
+                message=message,
+                level="Low",
+            )
+            return
+
+        return
+
     async def alerting_handler(
         self, message: str, level: Literal["Low", "Medium", "High"]
     ):
@@ -191,6 +254,8 @@ class ProxyLogging:
         - Requests are hanging
         - Calls are failing
         - DB Read/Writes are failing
+        - Proxy Close to max budget
+        - Key Close to max budget
 
         Parameters:
             level: str - Low|Medium|High - if calls might fail (Medium) or are failing (High); Currently, no alerts would be 'Low'.
@@ -392,6 +457,7 @@ class PrismaClient:
         self,
         token: Optional[str] = None,
         user_id: Optional[str] = None,
+        user_id_list: Optional[list] = None,
         key_val: Optional[dict] = None,
         table_name: Optional[Literal["user", "key", "config", "spend"]] = None,
         query_type: Literal["find_unique", "find_all"] = "find_unique",
@@ -408,7 +474,9 @@ class PrismaClient:
                     hashed_token = token
                     if token.startswith("sk-"):
                         hashed_token = self.hash_token(token=token)
-                print_verbose("PrismaClient: find_unique")
+                    verbose_proxy_logger.debug(
+                        f"PrismaClient: find_unique for token: {hashed_token}"
+                    )
                 if query_type == "find_unique":
                     response = await self.db.litellm_verificationtoken.find_unique(
                         where={"token": hashed_token}
@@ -473,11 +541,21 @@ class PrismaClient:
                             "budget_reset_at": {"lt": reset_at},
                         }
                     )
-                return response
-            elif table_name == "user" and query_type == "find_all":
-                response = await self.db.litellm_usertable.find_many(  # type: ignore
-                    order={"spend": "desc"},
-                )
+                elif query_type == "find_all" and user_id_list is not None:
+                    user_id_values = str(tuple(user_id_list))
+                    sql_query = f"""
+                    SELECT *
+                    FROM "LiteLLM_UserTable"
+                    WHERE "user_id" IN {user_id_values}
+                    """
+
+                    # Execute the raw query
+                    # The asterisk before `user_id_list` unpacks the list into separate arguments
+                    response = await self.db.query_raw(sql_query)
+                elif query_type == "find_all":
+                    response = await self.db.litellm_usertable.find_many(  # type: ignore
+                        order={"spend": "desc"},
+                    )
                 return response
             elif table_name == "spend":
                 verbose_proxy_logger.debug(
@@ -617,6 +695,7 @@ class PrismaClient:
         user_id: Optional[str] = None,
         query_type: Literal["update", "update_many"] = "update",
         table_name: Optional[Literal["user", "key", "config", "spend"]] = None,
+        update_key_values: Optional[dict] = None,
     ):
         """
         Update existing data
@@ -649,23 +728,18 @@ class PrismaClient:
                 """
                 if user_id is None:
                     user_id = db_data["user_id"]
-                update_user_row = await self.db.litellm_usertable.update(
+                if update_key_values is None:
+                    update_key_values = db_data
+                update_user_row = await self.db.litellm_usertable.upsert(
                     where={"user_id": user_id},  # type: ignore
-                    data={**db_data},  # type: ignore
+                    data={
+                        "create": {**db_data},  # type: ignore
+                        "update": {
+                            **update_key_values  # type: ignore
+                        },  # just update user-specified values, if it already exists
+                    },
                 )
-                if update_user_row is None:
-                    # if the provided user does not exist, STILL Track this!
-                    # make a new user with {"user_id": user_id, "spend": data['spend']}
-
-                    db_data["user_id"] = user_id
-                    update_user_row = await self.db.litellm_usertable.upsert(
-                        where={"user_id": user_id},  # type: ignore
-                        data={
-                            "create": {**db_data},  # type: ignore
-                            "update": {},  # don't do anything if it already exists
-                        },
-                    )
-                print_verbose(
+                verbose_proxy_logger.info(
                     "\033[91m"
                     + f"DB User Table - update succeeded {update_user_row}"
                     + "\033[0m"
@@ -714,13 +788,18 @@ class PrismaClient:
                         data_json = self.jsonify_object(data=user.model_dump())
                     except:
                         data_json = self.jsonify_object(data=user.dict())
-                    batcher.litellm_usertable.update(
+                    batcher.litellm_usertable.upsert(
                         where={"user_id": user.user_id},  # type: ignore
-                        data={**data_json},  # type: ignore
+                        data={
+                            "create": {**data_json},  # type: ignore
+                            "update": {
+                                **data_json  # type: ignore
+                            },  # just update user-specified values, if it already exists
+                        },
                     )
                 await batcher.commit()
-                print_verbose(
-                    "\033[91m" + f"DB User Table update succeeded" + "\033[0m"
+                verbose_proxy_logger.info(
+                    "\033[91m" + f"DB User Table Batch update succeeded" + "\033[0m"
                 )
         except Exception as e:
             asyncio.create_task(
@@ -742,7 +821,13 @@ class PrismaClient:
         Allow user to delete a key(s)
         """
         try:
-            hashed_tokens = [self.hash_token(token=token) for token in tokens]
+            hashed_tokens = []
+            for token in tokens:
+                if isinstance(token, str) and token.startswith("sk-"):
+                    hashed_token = self.hash_token(token=token)
+                else:
+                    hashed_token = token
+                hashed_tokens.append(hashed_token)
             await self.db.litellm_verificationtoken.delete_many(
                 where={"token": {"in": hashed_tokens}}
             )
@@ -950,7 +1035,8 @@ async def send_email(sender_name, sender_email, receiver_email, subject, html):
         print_verbose(f"SMTP Connection Init")
         # Establish a secure connection with the SMTP server
         with smtplib.SMTP(smtp_host, smtp_port) as server:
-            server.starttls()
+            if os.getenv("SMTP_TLS", 'True') != "False":
+                server.starttls()
 
             # Login to your email account
             server.login(smtp_username, smtp_password)
@@ -959,7 +1045,7 @@ async def send_email(sender_name, sender_email, receiver_email, subject, html):
             server.send_message(email_message)
 
     except Exception as e:
-        print_verbose("An error occurred while sending the email:", str(e))
+        print_verbose("An error occurred while sending the email:" + str(e))
 
 
 def hash_token(token: str):
@@ -987,20 +1073,28 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time):
     metadata = (
         litellm_params.get("metadata", {}) or {}
     )  # if litellm_params['metadata'] == None
-    optional_params = kwargs.get("optional_params", {})
     call_type = kwargs.get("call_type", "litellm.completion")
     cache_hit = kwargs.get("cache_hit", False)
     usage = response_obj["usage"]
+    if type(usage) == litellm.Usage:
+        usage = dict(usage)
     id = response_obj.get("id", str(uuid.uuid4()))
     api_key = metadata.get("user_api_key", "")
     if api_key is not None and isinstance(api_key, str) and api_key.startswith("sk-"):
         # hash the api_key
         api_key = hash_token(api_key)
-
     if "headers" in metadata and "authorization" in metadata["headers"]:
         metadata["headers"].pop(
             "authorization"
         )  # do not store the original `sk-..` api key in the db
+    if litellm.cache is not None:
+        cache_key = litellm.cache.get_cache_key(**kwargs)
+    else:
+        cache_key = "Cache OFF"
+    if cache_hit == True:
+        import time
+
+        id = f"{id}_cache_hit{time.time()}"  # SpendLogs does not allow duplicate request_id
 
     payload = {
         "request_id": id,
@@ -1011,9 +1105,11 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time):
         "endTime": end_time,
         "model": kwargs.get("model", ""),
         "user": kwargs.get("user", ""),
-        "modelParameters": optional_params,
-        "usage": usage,
         "metadata": metadata,
+        "cache_key": cache_key,
+        "total_tokens": usage.get("total_tokens", 0),
+        "prompt_tokens": usage.get("prompt_tokens", 0),
+        "completion_tokens": usage.get("completion_tokens", 0),
     }
 
     json_fields = [
@@ -1037,8 +1133,6 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time):
             if type(payload[param]) == litellm.ModelResponse:
                 payload[param] = payload[param].model_dump_json()
             if type(payload[param]) == litellm.EmbeddingResponse:
-                payload[param] = payload[param].model_dump_json()
-            elif type(payload[param]) == litellm.Usage:
                 payload[param] = payload[param].model_dump_json()
             else:
                 payload[param] = json.dumps(payload[param])
