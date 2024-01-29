@@ -1,5 +1,7 @@
 # Use official Python base image
-FROM python:3.9
+FROM python:3.9.12
+
+EXPOSE 8501
 
 # Set the working directory in the container
 WORKDIR /app
@@ -11,7 +13,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the entire project directory to the container
-COPY . .
+COPY admin.py .
 
 # Set the entrypoint command to run admin.py with Streamlit
-ENTRYPOINT ["streamlit", "run", "admin.py"]
+ENTRYPOINT [ "streamlit", "run"]
+CMD ["admin.py"]

@@ -10,12 +10,11 @@
 import os, openai, sys, json, inspect, uuid, datetime, threading
 from typing import Any, Literal, Union
 from functools import partial
-
 import dotenv, traceback, random, asyncio, time, contextvars
 from copy import deepcopy
 import httpx
 import litellm
-
+from ._logging import verbose_logger
 from litellm import (  # type: ignore
     client,
     exception_type,
@@ -274,14 +273,10 @@ async def acompletion(
         else:
             # Call the synchronous function using run_in_executor
             response = await loop.run_in_executor(None, func_with_context)  # type: ignore
-        # if kwargs.get("stream", False):  # return an async generator
-        #     return _async_streaming(
-        #         response=response,
-        #         model=model,
-        #         custom_llm_provider=custom_llm_provider,
-        #         args=args,
-        #     )
-        # else:
+        if isinstance(response, CustomStreamWrapper):
+            response.set_logging_event_loop(
+                loop=loop
+            )  # sets the logging event loop if the user does sync streaming (e.g. on proxy for sagemaker calls)
         return response
     except Exception as e:
         custom_llm_provider = custom_llm_provider or "openai"
@@ -590,6 +585,10 @@ def completion(
         )
         if model_response is not None and hasattr(model_response, "_hidden_params"):
             model_response._hidden_params["custom_llm_provider"] = custom_llm_provider
+            model_response._hidden_params["region_name"] = kwargs.get(
+                "aws_region_name", None
+            )  # support region-based pricing for bedrock
+
         ### REGISTER CUSTOM MODEL PRICING -- IF GIVEN ###
         if input_cost_per_token is not None and output_cost_per_token is not None:
             litellm.register_model(
@@ -1421,9 +1420,15 @@ def completion(
                 return response
             response = model_response
         elif custom_llm_provider == "vertex_ai":
-            vertex_ai_project = litellm.vertex_project or get_secret("VERTEXAI_PROJECT")
-            vertex_ai_location = litellm.vertex_location or get_secret(
-                "VERTEXAI_LOCATION"
+            vertex_ai_project = (
+                optional_params.pop("vertex_ai_project", None)
+                or litellm.vertex_project
+                or get_secret("VERTEXAI_PROJECT")
+            )
+            vertex_ai_location = (
+                optional_params.pop("vertex_ai_location", None)
+                or litellm.vertex_location
+                or get_secret("VERTEXAI_LOCATION")
             )
 
             model_response = vertex_ai.completion(
@@ -1514,11 +1519,6 @@ def completion(
             if (
                 "stream" in optional_params and optional_params["stream"] == True
             ):  ## [BETA]
-                # sagemaker does not support streaming as of now so we're faking streaming:
-                # https://discuss.huggingface.co/t/streaming-output-text-when-deploying-on-sagemaker/39611
-                # "SageMaker is currently not supporting streaming responses."
-
-                # fake streaming for sagemaker
                 print_verbose(f"ENTERS SAGEMAKER CUSTOMSTREAMWRAPPER")
                 from .llms.sagemaker import TokenIterator
 
@@ -1528,6 +1528,12 @@ def completion(
                     model=model,
                     custom_llm_provider="sagemaker",
                     logging_obj=logging,
+                )
+                ## LOGGING
+                logging.post_call(
+                    input=messages,
+                    api_key=None,
+                    original_response=response,
                 )
                 return response
 
@@ -2221,6 +2227,7 @@ def embedding(
     model,
     input=[],
     # Optional params
+    dimensions: Optional[int] = None,
     timeout=600,  # default to 10 minutes
     # set api_base, api_version, api_key
     api_base: Optional[str] = None,
@@ -2241,6 +2248,7 @@ def embedding(
     Parameters:
     - model: The embedding model to use.
     - input: The input for which embeddings are to be generated.
+    - dimensions: The number of dimensions the resulting output embeddings should have. Only supported in text-embedding-3 and later models.
     - timeout: The timeout value for the API call, default 10 mins
     - litellm_call_id: The call ID for litellm logging.
     - litellm_logging_obj: The litellm logging object.
@@ -2274,6 +2282,7 @@ def embedding(
     output_cost_per_second = kwargs.get("output_cost_per_second", None)
     openai_params = [
         "user",
+        "dimensions",
         "request_timeout",
         "api_base",
         "api_version",
@@ -2342,7 +2351,9 @@ def embedding(
         api_key=api_key,
     )
     optional_params = get_optional_params_embeddings(
+        model=model,
         user=user,
+        dimensions=dimensions,
         encoding_format=encoding_format,
         custom_llm_provider=custom_llm_provider,
         **non_default_params,
@@ -3064,7 +3075,7 @@ def image_generation(
             custom_llm_provider=custom_llm_provider,
             **non_default_params,
         )
-        logging = litellm_logging_obj
+        logging: Logging = litellm_logging_obj
         logging.update_environment_variables(
             model=model,
             user=user,
@@ -3163,6 +3174,9 @@ async def ahealth_check(
 
         if model is None:
             raise Exception("model not set")
+
+        if model in litellm.model_cost and mode is None:
+            mode = litellm.model_cost[model]["mode"]
 
         model, custom_llm_provider, _, _ = get_llm_provider(model=model)
         mode = mode or "chat"  # default to chat completion calls
@@ -3342,6 +3356,16 @@ def stream_chunk_builder(
     chunks: list, messages: Optional[list] = None, start_time=None, end_time=None
 ):
     model_response = litellm.ModelResponse()
+    ### SORT CHUNKS BASED ON CREATED ORDER ##
+    print_verbose("Goes into checking if chunk has hiddden created at param")
+    if chunks[0]._hidden_params.get("created_at", None):
+        print_verbose("Chunks have a created at hidden param")
+        # Sort chunks based on created_at in ascending order
+        chunks = sorted(
+            chunks, key=lambda x: x._hidden_params.get("created_at", float("inf"))
+        )
+        print_verbose("Chunks sorted")
+
     # set hidden params from chunk to model_response
     if model_response is not None and hasattr(model_response, "_hidden_params"):
         model_response._hidden_params = chunks[0].get("_hidden_params", {})

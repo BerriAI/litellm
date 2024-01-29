@@ -8,7 +8,7 @@ dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
 import datetime, subprocess, sys
 import litellm, uuid
-from litellm._logging import print_verbose
+from litellm._logging import print_verbose, verbose_logger
 
 
 class S3Logger:
@@ -31,7 +31,9 @@ class S3Logger:
         import boto3
 
         try:
-            print_verbose("in init s3 logger")
+            verbose_logger.debug(
+                f"in init s3 logger - s3_callback_params {litellm.s3_callback_params}"
+            )
 
             if litellm.s3_callback_params is not None:
                 # read in .env variables - example os.environ/AWS_BUCKET_NAME
@@ -42,7 +44,7 @@ class S3Logger:
                 s3_bucket_name = litellm.s3_callback_params.get("s3_bucket_name")
                 s3_region_name = litellm.s3_callback_params.get("s3_region_name")
                 s3_api_version = litellm.s3_callback_params.get("s3_api_version")
-                s3_use_ssl = litellm.s3_callback_params.get("s3_use_ssl")
+                s3_use_ssl = litellm.s3_callback_params.get("s3_use_ssl", True)
                 s3_verify = litellm.s3_callback_params.get("s3_verify")
                 s3_endpoint_url = litellm.s3_callback_params.get("s3_endpoint_url")
                 s3_aws_access_key_id = litellm.s3_callback_params.get(
@@ -59,6 +61,7 @@ class S3Logger:
 
             self.bucket_name = s3_bucket_name
             self.s3_path = s3_path
+            verbose_logger.debug(f"s3 logger using endpoint url {s3_endpoint_url}")
             # Create an S3 client with custom endpoint URL
             self.s3_client = boto3.client(
                 "s3",
@@ -84,7 +87,9 @@ class S3Logger:
 
     def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
         try:
-            print_verbose(f"s3 Logging - Enters logging function for model {kwargs}")
+            verbose_logger.debug(
+                f"s3 Logging - Enters logging function for model {kwargs}"
+            )
 
             # construct payload to send to s3
             # follows the same params as langfuse.py
@@ -129,6 +134,7 @@ class S3Logger:
                 + "-time="
                 + str(start_time)
             )  # we need the s3 key to include the time, so we log cache hits too
+            s3_object_key += ".json"
 
             import json
 
@@ -151,5 +157,5 @@ class S3Logger:
             return response
         except Exception as e:
             traceback.print_exc()
-            print_verbose(f"s3 Layer Error - {str(e)}\n{traceback.format_exc()}")
+            verbose_logger.debug(f"s3 Layer Error - {str(e)}\n{traceback.format_exc()}")
             pass

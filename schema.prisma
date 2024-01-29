@@ -7,6 +7,7 @@ generator client {
   provider = "prisma-client-py"
 }
 
+// Track spend, rate limit, budget Users
 model LiteLLM_UserTable {
 		user_id    String @unique
     team_id    String?
@@ -21,9 +22,11 @@ model LiteLLM_UserTable {
     budget_reset_at DateTime?
 }
 
-// required for token gen
+// Generate Tokens for Proxy
 model LiteLLM_VerificationToken {
     token      String   @unique
+    key_name   String?
+    key_alias   String?
     spend      Float    @default(0.0)
     expires    DateTime?
     models     String[]
@@ -40,22 +43,26 @@ model LiteLLM_VerificationToken {
     budget_reset_at DateTime?
 }
 
+// store proxy config.yaml
 model LiteLLM_Config {
   param_name String @id
   param_value Json?
 }
 
+// View spend, model, api_key per request
 model LiteLLM_SpendLogs {
   request_id          String @unique
   call_type           String
   api_key             String  @default ("")
   spend               Float    @default(0.0)
+  total_tokens        Int     @default(0)
+  prompt_tokens       Int     @default(0)
+  completion_tokens   Int     @default(0)
   startTime           DateTime // Assuming start_time is a DateTime field
   endTime             DateTime // Assuming end_time is a DateTime field
   model               String   @default("")
   user                String   @default("")
-  modelParameters     Json     @default("{}")// Assuming optional_params is a JSON field
-  usage               Json     @default("{}")
   metadata            Json     @default("{}")
   cache_hit           String   @default("")
+  cache_key           String   @default("")
 }
