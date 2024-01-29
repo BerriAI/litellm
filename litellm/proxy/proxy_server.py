@@ -2866,9 +2866,9 @@ async def google_login(request: Request):
     GOOGLE_REDIRECT_URI = os.getenv("PROXY_BASE_URL")
     if GOOGLE_REDIRECT_URI is None:
         raise ProxyException(
-            message="GOOGLE_REDIRECT_URI not set. Set it in .env file",
+            message="PROXY_BASE_URL not set. Set it in .env file",
             type="auth_error",
-            param="GOOGLE_REDIRECT_URI",
+            param="PROXY_BASE_URL",
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
     if GOOGLE_REDIRECT_URI.endswith("/"):
@@ -2896,9 +2896,9 @@ async def google_callback(code: str, request: Request):
     GOOGLE_REDIRECT_URI = os.getenv("PROXY_BASE_URL")
     if GOOGLE_REDIRECT_URI is None:
         raise ProxyException(
-            message="GOOGLE_REDIRECT_URI not set. Set it in .env file",
+            message="PROXY_BASE_URL not set. Set it in .env file",
             type="auth_error",
-            param="GOOGLE_REDIRECT_URI",
+            param="PROXY_BASE_URL",
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
     # Add "/google-callback"" to your callback URL
