@@ -99,12 +99,16 @@ def ollama_pt(
 
 
 def mistral_instruct_pt(messages):
+    # Following the Mistral example's https://huggingface.co/docs/transformers/main/chat_templating 
     prompt = custom_prompt(
         initial_prompt_value="<s>",
         role_dict={
-            "system": {"pre_message": "[INST]", "post_message": "[/INST]"},
-            "user": {"pre_message": "[INST]", "post_message": "[/INST]"},
-            "assistant": {"pre_message": "[INST]", "post_message": "[/INST]"},
+            "system": {
+                "pre_message": "[INST] <<SYS>>\n",
+                "post_message": "<</SYS>> [/INST]\n",
+            },
+            "user": {"pre_message": "[INST] ", "post_message": " [/INST]\n"},
+            "assistant": {"pre_message": " ", "post_message": " "},
         },
         final_prompt_value="</s>",
         messages=messages,
