@@ -187,6 +187,7 @@ class DynamoDBWrapper(CustomDB):
             elif table_name == "spend":
                 table = client.table(self.database_arguments.spend_table_name)
 
+            value = value.copy()
             for k, v in value.items():
                 if k == "token" and value[k].startswith("sk-"):
                     value[k] = hash_token(token=v)
@@ -311,6 +312,7 @@ class DynamoDBWrapper(CustomDB):
             # Initialize an empty UpdateExpression
 
             actions: List = []
+            value = value.copy()
             for k, v in value.items():
                 # Convert datetime object to ISO8601 string
                 if isinstance(v, datetime):
