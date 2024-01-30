@@ -3227,6 +3227,7 @@ async def ahealth_check(
             or custom_llm_provider == "text-completion-openai"
         ):
             api_key = model_params.get("api_key") or get_secret("OPENAI_API_KEY")
+            organization = model_params.get("organization")
 
             timeout = (
                 model_params.get("timeout")
@@ -3244,6 +3245,7 @@ async def ahealth_check(
                 mode=mode,
                 prompt=prompt,
                 input=input,
+                organization=organization,
             )
         else:
             if mode == "embedding":
