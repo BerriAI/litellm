@@ -302,6 +302,25 @@ def test_bedrock_embedding_cohere():
 # test_bedrock_embedding_cohere()
 
 
+def test_demo_tokens_as_input_to_embeddings_fails_for_titan():
+    litellm.set_verbose = True
+
+    with pytest.raises(
+        litellm.BadRequestError,
+        match="BedrockException - Bedrock Embedding API input must be type str | List[str]",
+    ):
+        litellm.embedding(model="amazon.titan-embed-text-v1", input=[[1]])
+
+    with pytest.raises(
+        litellm.BadRequestError,
+        match="BedrockException - Bedrock Embedding API input must be type str | List[str]",
+    ):
+        litellm.embedding(
+            model="amazon.titan-embed-text-v1",
+            input=[1],
+        )
+
+
 # comment out hf tests - since hf endpoints are unstable
 def test_hf_embedding():
     try:
