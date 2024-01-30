@@ -204,6 +204,7 @@ def __init__(
     s3_bucket_name: Optional[str] = None,
     s3_region_name: Optional[str] = None,
     s3_api_version: Optional[str] = None,
+    s3_path: Optional[str] = None, # if you wish to save to a spefic path
     s3_use_ssl: Optional[bool] = True,
     s3_verify: Optional[Union[bool, str]] = None,
     s3_endpoint_url: Optional[str] = None,

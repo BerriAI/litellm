@@ -1,5 +1,5 @@
 from typing import Optional, Union, Any
-import types, time, json
+import types, time, json, traceback
 import httpx
 from .base import BaseLLM
 from litellm.utils import (
@@ -349,7 +349,7 @@ class OpenAIChatCompletion(BaseLLM):
             if hasattr(e, "status_code"):
                 raise OpenAIError(status_code=e.status_code, message=str(e))
             else:
-                raise OpenAIError(status_code=500, message=str(e))
+                raise OpenAIError(status_code=500, message=traceback.format_exc())
 
     async def acompletion(
         self,
@@ -706,19 +706,34 @@ class OpenAIChatCompletion(BaseLLM):
 
             ## COMPLETION CALL
             response = openai_client.images.generate(**data, timeout=timeout)  # type: ignore
+            response = response.model_dump()  # type: ignore
             ## LOGGING
             logging_obj.post_call(
-                input=input,
+                input=prompt,
                 api_key=api_key,
                 additional_args={"complete_input_dict": data},
                 original_response=response,
             )
             # return response
-            return convert_to_model_response_object(response_object=response.model_dump(), model_response_object=model_response, response_type="image_generation")  # type: ignore
+            return convert_to_model_response_object(response_object=response, model_response_object=model_response, response_type="image_generation")  # type: ignore
         except OpenAIError as e:
             exception_mapping_worked = True
+            ## LOGGING
+            logging_obj.post_call(
+                input=prompt,
+                api_key=api_key,
+                additional_args={"complete_input_dict": data},
+                original_response=str(e),
+            )
             raise e
         except Exception as e:
+            ## LOGGING
+            logging_obj.post_call(
+                input=prompt,
+                api_key=api_key,
+                additional_args={"complete_input_dict": data},
+                original_response=str(e),
+            )
             if hasattr(e, "status_code"):
                 raise OpenAIError(status_code=e.status_code, message=str(e))
             else:

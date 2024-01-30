@@ -124,7 +124,7 @@ def test_cost_azure_gpt_35():
         )
 
 
-test_cost_azure_gpt_35()
+# test_cost_azure_gpt_35()
 
 
 def test_cost_azure_embedding():
@@ -158,3 +158,78 @@ def test_cost_azure_embedding():
 
 
 # test_cost_azure_embedding()
+
+
+def test_cost_openai_image_gen():
+    cost = litellm.completion_cost(
+        model="dall-e-2", size="1024-x-1024", quality="standard", n=1
+    )
+    assert cost == 0.019922944
+
+
+def test_cost_bedrock_pricing():
+    """
+    - get pricing specific to region for a model
+    """
+    from litellm import ModelResponse, Choices, Message
+    from litellm.utils import Usage
+
+    litellm.set_verbose = True
+    input_tokens = litellm.token_counter(
+        model="bedrock/anthropic.claude-instant-v1",
+        messages=[{"role": "user", "content": "Hey, how's it going?"}],
+    )
+    print(f"input_tokens: {input_tokens}")
+    output_tokens = litellm.token_counter(
+        model="bedrock/anthropic.claude-instant-v1",
+        text="It's all going well",
+        count_response_tokens=True,
+    )
+    print(f"output_tokens: {output_tokens}")
+    resp = ModelResponse(
+        id="chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac",
+        choices=[
+            Choices(
+                finish_reason=None,
+                index=0,
+                message=Message(
+                    content="It's all going well",
+                    role="assistant",
+                ),
+            )
+        ],
+        created=1700775391,
+        model="anthropic.claude-instant-v1",
+        object="chat.completion",
+        system_fingerprint=None,
+        usage=Usage(
+            prompt_tokens=input_tokens,
+            completion_tokens=output_tokens,
+            total_tokens=input_tokens + output_tokens,
+        ),
+    )
+    resp._hidden_params = {
+        "custom_llm_provider": "bedrock",
+        "region_name": "ap-northeast-1",
+    }
+
+    cost = litellm.completion_cost(
+        model="anthropic.claude-instant-v1",
+        completion_response=resp,
+        messages=[{"role": "user", "content": "Hey, how's it going?"}],
+    )
+    predicted_cost = input_tokens * 0.00000223 + 0.00000755 * output_tokens
+    assert cost == predicted_cost
+
+
+def test_cost_bedrock_pricing_actual_calls():
+    litellm.set_verbose = True
+    model = "anthropic.claude-instant-v1"
+    messages = [{"role": "user", "content": "Hey, how's it going?"}]
+    response = litellm.completion(model=model, messages=messages)
+    assert response._hidden_params["region_name"] is not None
+    cost = litellm.completion_cost(
+        completion_response=response,
+        messages=[{"role": "user", "content": "Hey, how's it going?"}],
+    )
+    assert cost > 0

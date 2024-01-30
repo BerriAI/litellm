@@ -1,4 +1,4 @@
-# Key Management
+# Virtual Keys
 Track Spend, Set budgets and create virtual keys for the proxy
 
 Grant other's temporary access to your proxy, with keys that expire after a set duration.
@@ -12,7 +12,7 @@ Grant other's temporary access to your proxy, with keys that expire after a set 
 
 :::
 
-## Quick Start
+## Setup
 
 Requirements: 
 
@@ -58,36 +58,53 @@ litellm --config /path/to/config.yaml
 curl 'http://0.0.0.0:8000/key/generate' \
 --header 'Authorization: Bearer <your-master-key>' \
 --header 'Content-Type: application/json' \
---data-raw '{"models": ["gpt-3.5-turbo", "gpt-4", "claude-2"], "duration": "20m","metadata": {"user": "ishaan@berri.ai", "team": "core-infra"}}'
+--data-raw '{"models": ["gpt-3.5-turbo", "gpt-4", "claude-2"], "duration": "20m","metadata": {"user": "ishaan@berri.ai"}}'
 ```
 
-- `models`: *list or null (optional)* - Specify the models a token has access too. If null, then token has access to all models on server. 
 
-- `duration`: *str or null (optional)* Specify the length of time the token is valid for. If null, default is set to 1 hour. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
+## /key/generate
 
-- `metadata`: *dict or null (optional)* Pass metadata for the created token. If null defaults to {}
+### Request
+```shell
+curl 'http://0.0.0.0:8000/key/generate' \
+--header 'Authorization: Bearer <your-master-key>' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+  "models": ["gpt-3.5-turbo", "gpt-4", "claude-2"],
+  "duration": "20m",
+  "metadata": {"user": "ishaan@berri.ai"},
+  "team_id": "core-infra",
+  "max_budget": 10,
+}'
+```
 
-Expected response: 
+
+Request Params:
+
+- `duration`: *Optional[str]* - Specify the length of time the token is valid for. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
+- `key_alias`: *Optional[str]* - User defined key alias
+- `team_id`: *Optional[str]* - The team id of the user
+- `models`: *Optional[list]* - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
+- `aliases`: *Optional[dict]* - Any alias mappings, on top of anything in the config.yaml model list. - https://docs.litellm.ai/docs/proxy/virtual_keys#managing-auth---upgradedowngrade-models
+- `config`: *Optional[dict]* - any key-specific configs, overrides config in config.yaml
+- `spend`: *Optional[int]* - Amount spent by key. Default is 0. Will be updated by proxy whenever key is used. https://docs.litellm.ai/docs/proxy/virtual_keys#managing-auth---tracking-spend
+- `max_budget`: *Optional[float]* - Specify max budget for a given key.
+- `max_parallel_requests`: *Optional[int]* - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
+- `metadata`: *Optional[dict]* - Metadata for key, store information for key. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
+
+
+### Response
 
 ```python
 {
     "key": "sk-kdEXbIqZRwEeEiHwdg7sFA", # Bearer token
     "expires": "2023-11-19T01:38:25.838000+00:00" # datetime object
+    "key_name": "sk-...7sFA" # abbreviated key string, ONLY stored in db if `allow_user_auth: true` set - [see](./ui.md)
+    ...
 }
 ```
 
-## Keys that don't expire
-
-Just set duration to None. 
-
-```bash
-curl --location 'http://0.0.0.0:8000/key/generate' \
---header 'Authorization: Bearer <your-master-key>' \
---header 'Content-Type: application/json' \
---data '{"models": ["azure-models"], "aliases": {"mistral-7b": "gpt-3.5-turbo"}, "duration": null}'
-```
-
-## Upgrade/Downgrade Models 
+### Upgrade/Downgrade Models 
 
 If a user is expected to use a given model (i.e. gpt3-5), and you want to:
 
@@ -137,7 +154,7 @@ curl -X POST "https://0.0.0.0:8000/key/generate" \
 - **How are routing between diff keys/api bases done?** litellm handles this by shuffling between different models in the model list with the same model_name. [**See Code**](https://github.com/BerriAI/litellm/blob/main/litellm/router.py)
 
 
-## Grant Access to new model 
+### Grant Access to new model 
 
 Use model access groups to give users access to select models, and add new ones to it over time (e.g. mistral, llama-2, etc.)
 
@@ -163,6 +180,188 @@ curl --location 'http://localhost:8000/key/generate' \
 -H 'Content-Type: application/json' \
 -d '{"models": ["beta-models"], # 👈 Model Access Group
 			"max_budget": 0,}'
+```
+
+
+## /key/info
+
+### Request
+```shell
+curl -X GET "http://0.0.0.0:8000/key/info?key=sk-02Wr4IAlN3NvPXvL5JVvDA" \
+-H "Authorization: Bearer sk-1234"
+```
+
+Request Params:
+- key: str - The key you want the info for
+
+### Response
+
+`token` is the hashed key (The DB stores the hashed key for security)
+```json
+{
+  "key": "sk-02Wr4IAlN3NvPXvL5JVvDA",
+  "info": {
+    "token": "80321a12d03412c527f2bd9db5fabd746abead2e1d50b435a534432fbaca9ef5",
+    "spend": 0.0,
+    "expires": "2024-01-18T23:52:09.125000+00:00",
+    "models": ["azure-gpt-3.5", "azure-embedding-model"],
+    "aliases": {},
+    "config": {},
+    "user_id": "ishaan2@berri.ai",
+    "team_id": "None",
+    "max_parallel_requests": null,
+    "metadata": {}
+  }
+}
+
+
+```
+
+## /key/update
+
+### Request
+```shell
+curl 'http://0.0.0.0:8000/key/update' \
+--header 'Authorization: Bearer <your-master-key>' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+  "key": "sk-kdEXbIqZRwEeEiHwdg7sFA",
+  "models": ["gpt-3.5-turbo", "gpt-4", "claude-2"],
+  "metadata": {"user": "ishaan@berri.ai"},
+  "team_id": "core-infra"
+}'
+```
+
+Request Params:
+- key: str - The key that needs to be updated.
+
+- models: list or null (optional) - Specify the models a token has access to. If null, then the token has access to all models on the server.
+
+- metadata: dict or null (optional) - Pass metadata for the updated token. If null, defaults to an empty dictionary.
+
+- team_id: str or null (optional) - Specify the team_id for the associated key.
+
+### Response
+
+```json
+{
+  "key": "sk-kdEXbIqZRwEeEiHwdg7sFA",
+  "models": ["gpt-3.5-turbo", "gpt-4", "claude-2"],
+  "metadata": {
+    "user": "ishaan@berri.ai"
+  }
+}
+
+```
+
+
+## /key/delete
+
+### Request
+```shell
+curl 'http://0.0.0.0:8000/key/delete' \
+--header 'Authorization: Bearer <your-master-key>' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+  "keys": ["sk-kdEXbIqZRwEeEiHwdg7sFA"]
+}'
+```
+
+Request Params:
+- keys: List[str] - List of keys to delete
+
+### Response
+
+```json
+{
+  "deleted_keys": ["sk-kdEXbIqZRwEeEiHwdg7sFA"]
+}
+```
+
+## Default /key/generate params
+Use this, if you need to control the default `max_budget` or any `key/generate` param per key. 
+
+When a `/key/generate` request does not specify `max_budget`, it will use the `max_budget` specified in `default_key_generate_params`
+
+Set `litellm_settings:default_key_generate_params`:
+```yaml
+litellm_settings:
+  default_key_generate_params:
+    max_budget: 1.5000
+    models: ["azure-gpt-3.5"]
+    duration:     # blank means `null`
+    metadata: {"setting":"default"}
+    team_id: "core-infra"
+```
+## Set Budgets - Per Key
+
+Set `max_budget` in (USD $) param in the `key/generate` request. By default the `max_budget` is set to `null` and is not checked for keys
+
+```shell
+curl 'http://0.0.0.0:8000/key/generate' \
+--header 'Authorization: Bearer <your-master-key>' \
+--header 'Content-Type: application/json' \
+--data-raw '{
+  "metadata": {"user": "ishaan@berri.ai"},
+  "team_id": "core-infra",
+  "max_budget": 10,
+}'
+```
+
+#### Expected Behaviour
+- Costs Per key get auto-populated in `LiteLLM_VerificationToken` Table
+- After the key crosses it's `max_budget`, requests fail
+
+Example Request to `/chat/completions` when key has crossed budget
+
+```shell
+curl --location 'http://0.0.0.0:8000/chat/completions' \
+  --header 'Content-Type: application/json' \
+  --header 'Authorization: Bearer sk-ULl_IKCVFy2EZRzQB16RUA' \
+  --data ' {
+  "model": "azure-gpt-3.5",
+  "user": "e09b4da8-ed80-4b05-ac93-e16d9eb56fca",
+  "messages": [
+      {
+      "role": "user",
+      "content": "respond in 50 lines"
+      }
+  ],
+}'
+```
+
+
+Expected Response from `/chat/completions` when key has crossed budget
+```shell
+{
+  "detail":"Authentication Error, ExceededTokenBudget: Current spend for token: 7.2e-05; Max Budget for Token: 2e-07"
+}   
+```
+
+
+## Set Budgets - Per User
+
+LiteLLM exposes a `/user/new` endpoint to create budgets for users, that persist across multiple keys. 
+
+This is documented in the swagger (live on your server root endpoint - e.g. `http://0.0.0.0:8000/`). Here's an example request. 
+
+```shell 
+curl --location 'http://localhost:8000/user/new' \
+--header 'Authorization: Bearer <your-master-key>' \
+--header 'Content-Type: application/json' \
+--data-raw '{"models": ["azure-models"], "max_budget": 0, "user_id": "krrish3@berri.ai"}' 
+```
+The request is a normal `/key/generate` request body + a `max_budget` field. 
+
+**Sample Response**
+
+```shell
+{
+    "key": "sk-YF2OxDbrgd1y2KgwxmEA2w",
+    "expires": "2023-12-22T09:53:13.861000Z",
+    "user_id": "krrish3@berri.ai",
+    "max_budget": 0.0
+}
 ```
 
 ## Tracking Spend 
@@ -199,32 +398,6 @@ This is automatically updated (in USD) when calls are made to /completions, /cha
 }
 ```
 
-
-
-## Set Budgets 
-
-LiteLLM exposes a `/user/new` endpoint to create budgets for users, that persist across multiple keys. 
-
-This is documented in the swagger (live on your server root endpoint - e.g. `http://0.0.0.0:8000/`). Here's an example request. 
-
-```shell 
-curl --location 'http://localhost:8000/user/new' \
---header 'Authorization: Bearer <your-master-key>' \
---header 'Content-Type: application/json' \
---data-raw '{"models": ["azure-models"], "max_budget": 0, "user_id": "krrish3@berri.ai"}' 
-```
-The request is a normal `/key/generate` request body + a `max_budget` field. 
-
-**Sample Response**
-
-```shell
-{
-    "key": "sk-YF2OxDbrgd1y2KgwxmEA2w",
-    "expires": "2023-12-22T09:53:13.861000Z",
-    "user_id": "krrish3@berri.ai",
-    "max_budget": 0.0
-}
-```
 
 ## Custom Auth 
 
@@ -274,6 +447,97 @@ general_settings:
 ```shell
 $ litellm --config /path/to/config.yaml 
 ```
+
+## Custom /key/generate
+
+If you need to add custom logic before generating a Proxy API Key (Example Validating `team_id`)
+
+### 1. Write a custom `custom_generate_key_fn`
+
+
+The input to the custom_generate_key_fn function is a single parameter: `data` [(Type: GenerateKeyRequest)](https://github.com/BerriAI/litellm/blob/main/litellm/proxy/_types.py#L125)
+
+The output of your `custom_generate_key_fn` should be a dictionary with the following structure
+```python
+{
+    "decision": False,
+    "message": "This violates LiteLLM Proxy Rules. No team id provided.",
+}
+
+```
+
+- decision (Type: bool): A boolean value indicating whether the key generation is allowed (True) or not (False).
+
+- message (Type: str, Optional): An optional message providing additional information about the decision. This field is included when the decision is False.
+
+
+```python
+async def custom_generate_key_fn(data: GenerateKeyRequest)-> dict:
+        """
+        Asynchronous function for generating a key based on the input data.
+
+        Args:
+            data (GenerateKeyRequest): The input data for key generation.
+
+        Returns:
+            dict: A dictionary containing the decision and an optional message.
+            {
+                "decision": False,
+                "message": "This violates LiteLLM Proxy Rules. No team id provided.",
+            }
+        """
+        
+        # decide if a key should be generated or not
+        print("using custom auth function!")
+        data_json = data.json()  # type: ignore
+
+        # Unpacking variables
+        team_id = data_json.get("team_id")
+        duration = data_json.get("duration")
+        models = data_json.get("models")
+        aliases = data_json.get("aliases")
+        config = data_json.get("config")
+        spend = data_json.get("spend")
+        user_id = data_json.get("user_id")
+        max_parallel_requests = data_json.get("max_parallel_requests")
+        metadata = data_json.get("metadata")
+        tpm_limit = data_json.get("tpm_limit")
+        rpm_limit = data_json.get("rpm_limit")
+
+        if team_id is not None and team_id == "litellm-core-infra@gmail.com":
+            # only team_id="litellm-core-infra@gmail.com" can make keys
+            return {
+                "decision": True,
+            }
+        else:
+            print("Failed custom auth")
+            return {
+                "decision": False,
+                "message": "This violates LiteLLM Proxy Rules. No team id provided.",
+            }
+```
+
+
+### 2. Pass the filepath (relative to the config.yaml)
+
+Pass the filepath to the config.yaml 
+
+e.g. if they're both in the same dir - `./config.yaml` and `./custom_auth.py`, this is what it looks like:
+```yaml 
+model_list: 
+  - model_name: "openai-model"
+    litellm_params: 
+      model: "gpt-3.5-turbo"
+
+litellm_settings:
+  drop_params: True
+  set_verbose: True
+
+general_settings:
+  custom_key_generate: custom_auth.custom_generate_key_fn
+```
+
+
 
 
 ## [BETA] Dynamo DB 

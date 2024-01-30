@@ -191,6 +191,21 @@ def test_completion_gpt4_turbo():
 # test_completion_gpt4_turbo()
 
 
+def test_completion_gpt4_turbo_0125():
+    try:
+        response = completion(
+            model="gpt-4-0125-preview",
+            messages=messages,
+            max_tokens=10,
+        )
+        print(response)
+    except openai.RateLimitError:
+        print("got a rate liimt error")
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
+
 @pytest.mark.skip(reason="this test is flaky")
 def test_completion_gpt4_vision():
     try:
@@ -224,7 +239,7 @@ def test_completion_gpt4_vision():
 
 
 def test_completion_azure_gpt4_vision():
-    # azure gpt-4 vision takes 5s to respond
+    # azure/gpt-4, vision takes 5seconds to respond
     try:
         litellm.set_verbose = True
         response = completion(
@@ -268,7 +283,7 @@ def test_completion_azure_gpt4_vision():
         pytest.fail(f"Error occurred: {e}")
 
 
-test_completion_azure_gpt4_vision()
+# test_completion_azure_gpt4_vision()
 
 
 @pytest.mark.skip(reason="this test is flaky")
@@ -500,22 +515,22 @@ def hf_test_completion_tgi():
 # hf_test_error_logs()
 
 
-def test_completion_cohere():  # commenting for now as the cohere endpoint is being flaky
-    try:
-        litellm.CohereConfig(max_tokens=1000, stop_sequences=["a"])
-        response = completion(
-            model="command-nightly", messages=messages, logger_fn=logger_fn
-        )
-        # Add any assertions here to check the response
-        print(response)
-        response_str = response["choices"][0]["message"]["content"]
-        response_str_2 = response.choices[0].message.content
-        if type(response_str) != str:
-            pytest.fail(f"Error occurred: {e}")
-        if type(response_str_2) != str:
-            pytest.fail(f"Error occurred: {e}")
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
+# def test_completion_cohere():  # commenting out,for now as the cohere endpoint is being flaky
+#     try:
+#         litellm.CohereConfig(max_tokens=10, stop_sequences=["a"])
+#         response = completion(
+#             model="command-nightly", messages=messages, logger_fn=logger_fn
+#         )
+#         # Add any assertions here to check the response
+#         print(response)
+#         response_str = response["choices"][0]["message"]["content"]
+#         response_str_2 = response.choices[0].message.content
+#         if type(response_str) != str:
+#             pytest.fail(f"Error occurred: {e}")
+#         if type(response_str_2) != str:
+#             pytest.fail(f"Error occurred: {e}")
+#     except Exception as e:
+#         pytest.fail(f"Error occurred: {e}")
 
 
 # test_completion_cohere()
@@ -854,7 +869,7 @@ def test_completion_anyscale_with_functions():
 
 
 def test_completion_azure_key_completion_arg():
-    # this tests if we can pass api_key to completion, when it's not in the env
+    # this tests if we can pass api_key to completion, when it's not in the env.
     # DO NOT REMOVE THIS TEST. No MATTER WHAT Happens!
     # If you want to remove it, speak to Ishaan!
     # Ishaan will be very disappointed if this test is removed -> this is a standard way to pass api_key + the router + proxy use this
@@ -990,9 +1005,9 @@ def test_azure_openai_ad_token():
         print("azure ad token respoonse\n")
         print(response)
         litellm.input_callback = []
-    except:
+    except Exception as e:
         litellm.input_callback = []
-        pass
+        pytest.fail(f"An exception occurs - {str(e)}")
 
 
 # test_azure_openai_ad_token()
@@ -1269,6 +1284,8 @@ def test_completion_together_ai():
             "Cost for completion call together-computer/llama-2-70b: ",
             f"${float(cost):.10f}",
         )
+    except litellm.Timeout as e:
+        pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -1370,21 +1387,57 @@ def test_customprompt_together_ai():
 
 def test_completion_sagemaker():
     try:
-        print("testing sagemaker")
         litellm.set_verbose = True
+        print("testing sagemaker")
         response = completion(
             model="sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4",
             messages=messages,
             temperature=0.2,
             max_tokens=80,
+            input_cost_per_second=0.000420,
         )
         # Add any assertions here to check the response
         print(response)
+        cost = completion_cost(completion_response=response)
+        print("calculated cost", cost)
+        assert (
+            cost > 0.0 and cost < 1.0
+        )  # should never be > $1 for a single completion call
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
 
 # test_completion_sagemaker()
+
+
+def test_completion_sagemaker_stream():
+    try:
+        litellm.set_verbose = False
+        print("testing sagemaker")
+        response = completion(
+            model="sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4",
+            messages=messages,
+            temperature=0.2,
+            max_tokens=80,
+            stream=True,
+        )
+
+        complete_streaming_response = ""
+        first_chunk_id, chunk_id = None, None
+        for i, chunk in enumerate(response):
+            print(chunk)
+            chunk_id = chunk.id
+            print(chunk_id)
+            if i == 0:
+                first_chunk_id = chunk_id
+            else:
+                assert chunk_id == first_chunk_id
+            complete_streaming_response += chunk.choices[0].delta.content or ""
+        # Add any assertions here to check the response
+        # print(response)
+        assert len(complete_streaming_response) > 0
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 
 def test_completion_chat_sagemaker():

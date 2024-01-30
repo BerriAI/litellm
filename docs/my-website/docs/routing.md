@@ -302,6 +302,7 @@ asyncio.run(router_acompletion())
 
 The timeout set in router is for the entire length of the call, and is passed down to the completion() call level as well. 
 
+**Global Timeouts**
 ```python
 from litellm import Router 
 
@@ -313,6 +314,36 @@ router = Router(model_list=model_list,
 print(response)
 ```
 
+**Timeouts per model**
+
+```python
+from litellm import Router 
+import asyncio
+
+model_list = [{
+	"model_name": "gpt-3.5-turbo",
+	"litellm_params": {
+		"model": "azure/chatgpt-v-2",
+		"api_key": os.getenv("AZURE_API_KEY"),
+		"api_version": os.getenv("AZURE_API_VERSION"),
+		"api_base": os.getenv("AZURE_API_BASE"),
+		"timeout": 300 # sets a 5 minute timeout
+		"stream_timeout": 30 # sets a 30s timeout for streaming calls
+	}
+}]
+
+# init router
+router = Router(model_list=model_list, routing_strategy="least-busy")
+async def router_acompletion():
+	response = await router.acompletion(
+		model="gpt-3.5-turbo", 
+		messages=[{"role": "user", "content": "Hey, how's it going?"}]
+	)
+	print(response)
+	return response
+
+asyncio.run(router_acompletion())
+```
 ### Cooldowns
 
 Set the limit for how many calls a model is allowed to fail in a minute, before being cooled down for a minute. 
@@ -574,6 +605,49 @@ response = router.completion(model="gpt-3.5-turbo", messages=messages)
 print(f"response: {response}")
 ```
 
+## Custom Callbacks - Track API Key, API Endpoint, Model Used 
+
+If you need to track the api_key, api endpoint, model, custom_llm_provider used for each completion call, you can setup a [custom callback](https://docs.litellm.ai/docs/observability/custom_callback) 
+
+### Usage
+
+```python
+import litellm
+from litellm.integrations.custom_logger import CustomLogger
+
+class MyCustomHandler(CustomLogger):        
+	def log_success_event(self, kwargs, response_obj, start_time, end_time): 
+		print(f"On Success")
+		print("kwargs=", kwargs)
+		litellm_params= kwargs.get("litellm_params")
+		api_key = litellm_params.get("api_key")
+		api_base = litellm_params.get("api_base")
+		custom_llm_provider= litellm_params.get("custom_llm_provider")
+		response_cost = kwargs.get("response_cost")
+
+		# print the values
+		print("api_key=", api_key)
+		print("api_base=", api_base)
+		print("custom_llm_provider=", custom_llm_provider)
+		print("response_cost=", response_cost)
+
+	def log_failure_event(self, kwargs, response_obj, start_time, end_time): 
+		print(f"On Failure")
+		print("kwargs=")
+
+customHandler = MyCustomHandler()
+
+litellm.callbacks = [customHandler]
+
+# Init Router
+router = Router(model_list=model_list, routing_strategy="simple-shuffle")
+
+# router completion call
+response = router.completion(
+	model="gpt-3.5-turbo", 
+	messages=[{ "role": "user", "content": "Hi who are you"}]
+)
+```
 
 ## Deploy Router 
 
@@ -602,17 +676,63 @@ def __init__(
 	num_retries: int = 0,
 	timeout: Optional[float] = None,
 	default_litellm_params={},  # default params for Router.chat.completion.create
-	set_verbose: bool = False,
 	fallbacks: List = [],
-	allowed_fails: Optional[int] = None,
+	allowed_fails: Optional[int] = None, # Number of times a deployment can failbefore being added to cooldown
+	cooldown_time: float = 1,  # (seconds) time to cooldown a deployment after failure
 	context_window_fallbacks: List = [],
 	model_group_alias: Optional[dict] = {},
-	retry_after: int = 0,  # min time to wait before retrying a failed request
+	retry_after: int = 0,  # (min) time to wait before retrying a failed request
 	routing_strategy: Literal[
 		"simple-shuffle",
 		"least-busy",
 		"usage-based-routing",
 		"latency-based-routing",
 	] = "simple-shuffle",
+
+	## DEBUGGING ##
+	set_verbose: bool = False,	# set this to True for seeing logs
+    debug_level: Literal["DEBUG", "INFO"] = "INFO", # set this to "DEBUG" for detailed debugging
 ):
+```
+
+## Debugging Router
+### Basic Debugging
+Set `Router(set_verbose=True)`
+
+```python
+from litellm import Router
+
+router = Router(
+    model_list=model_list,
+    set_verbose=True
+)
+```
+
+### Detailed Debugging
+Set `Router(set_verbose=True,debug_level="DEBUG")`
+
+```python
+from litellm import Router
+
+router = Router(
+    model_list=model_list,
+    set_verbose=True,
+    debug_level="DEBUG"  # defaults to INFO
+)
+```
+
+### Very Detailed Debugging
+Set `litellm.set_verbose=True` and `Router(set_verbose=True,debug_level="DEBUG")`
+
+```python
+from litellm import Router
+import litellm
+
+litellm.set_verbose = True
+
+router = Router(
+    model_list=model_list,
+    set_verbose=True,
+    debug_level="DEBUG"  # defaults to INFO
+)
 ```
