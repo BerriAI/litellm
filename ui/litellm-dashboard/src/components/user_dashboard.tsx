@@ -43,11 +43,10 @@ const UserDashboard = () => {
     );
   }
   else if (userID == null || accessToken == null) {
-    // redirect to page: ProxyBaseUrl/google-login/key/generate
     const baseUrl = proxyBaseUrl.endsWith('/') ? proxyBaseUrl : proxyBaseUrl + '/';
   
     // Now you can construct the full URL
-    const url = `${baseUrl}google-login/key/generate`;
+    const url = `${baseUrl}sso/key/generate`;
 
     window.location.href = url;
     
