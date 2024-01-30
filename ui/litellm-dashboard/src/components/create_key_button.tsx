@@ -38,11 +38,11 @@ const CreateKey: React.FC<CreateKeyProps> = ({
     setApiKey(null);
   };
 
-  const handleCreate = async (values) => {
+  const handleCreate = async (formValues) => {
     try {
       message.info("Making API Call");
       setIsModalVisible(true);
-      const response = await keyCreateCall(proxyBaseUrl, accessToken, userID, values);
+      const response = await keyCreateCall(proxyBaseUrl, accessToken, userID, formValues);
       setData([...data, response]);
       setApiKey(response["key"]);
       message.success("API Key Created");
@@ -50,6 +50,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
       console.error("Error creating the key:", error);
     }
   };
+  
 
   return (
     <div>
@@ -97,13 +98,12 @@ const CreateKey: React.FC<CreateKeyProps> = ({
           >
             <Input.TextArea rows={4} placeholder="Enter metadata as JSON" />
           </Form.Item>
-          
+          <div style={{ textAlign: 'right', marginTop: '10px' }}>
+            <Button type="primary" htmlType="submit">
+              Create Key
+            </Button>
+          </div>
         </Form>
-        <div style={{ textAlign: 'right', marginTop: '10px' }}>
-    <Button type="primary" htmlType="submit" onClick={handleCreate}>
-      Create Key
-    </Button>
-  </div>
       </Modal>
       {apiKey && (
         <Modal
