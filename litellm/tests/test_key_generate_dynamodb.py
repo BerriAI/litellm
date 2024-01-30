@@ -472,3 +472,31 @@ def test_call_with_key_over_budget_stream(custom_db_client):
         error_detail = e.message
         assert "Authentication Error, ExceededTokenBudget:" in error_detail
         print(vars(e))
+
+
+def test_dynamo_db_migration(custom_db_client):
+    # Tests the temporary patch we have in place
+    setattr(litellm.proxy.proxy_server, "custom_db_client", custom_db_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    try:
+
+        async def test():
+            bearer_token = (
+                "Bearer " + "sk-elJDL2pOEjcAuC7zD4psAg"
+            )  # this works with ishaan's db, it's a never expiring key
+
+            request = Request(scope={"type": "http"})
+            request._url = URL(url="/chat/completions")
+
+            async def return_body():
+                return b'{"model": "azure-models"}'
+
+            request.body = return_body
+
+            # use generated key to auth in
+            result = await user_api_key_auth(request=request, api_key=bearer_token)
+            print("result from user auth with new key", result)
+
+        asyncio.run(test())
+    except Exception as e:
+        pytest.fail(f"An exception occurred - {str(e)}")
