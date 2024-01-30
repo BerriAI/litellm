@@ -569,6 +569,22 @@ def test_completion_openai():
 # test_completion_openai()
 
 
+def test_completion_openai_organization():
+    try:
+        litellm.set_verbose = True
+        try:
+            response = completion(
+                model="gpt-3.5-turbo", messages=messages, organization="org-ikDc4ex8NB"
+            )
+            pytest.fail("Request should have failed - This organization does not exist")
+        except Exception as e:
+            assert "No such organization: org-ikDc4ex8NB" in str(e)
+
+    except Exception as e:
+        print(e)
+        pytest.fail(f"Error occurred: {e}")
+
+
 def test_completion_text_openai():
     try:
         # litellm.set_verbose = True
