@@ -2885,7 +2885,7 @@ async def user_auth(request: Request):
     return "Email sent!"
 
 
-@app.get("/google-login/key/generate", tags=["experimental"])
+@app.get("/sso/key/generate", tags=["experimental"])
 async def google_login(request: Request):
     """
     Create Proxy API Keys using Google Workspace SSO. Requires setting GOOGLE_REDIRECT_URI in .env
@@ -2894,126 +2894,235 @@ async def google_login(request: Request):
     Example:
 
     """
-    GOOGLE_REDIRECT_URI = os.getenv("PROXY_BASE_URL")
-    if GOOGLE_REDIRECT_URI is None:
+    microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None)
+    google_client_id = os.getenv("GOOGLE_CLIENT_ID", None)
+    redirect_url = os.getenv("PROXY_BASE_URL", None)
+    if redirect_url is None:
         raise ProxyException(
             message="PROXY_BASE_URL not set. Set it in .env file",
             type="auth_error",
             param="PROXY_BASE_URL",
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
-    if GOOGLE_REDIRECT_URI.endswith("/"):
-        GOOGLE_REDIRECT_URI += "google-callback"
-    else:
-        GOOGLE_REDIRECT_URI += "/google-callback"
 
-    GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
-    if GOOGLE_CLIENT_ID is None:
-        GOOGLE_CLIENT_ID = (
-            "246483686424-clje5sggkjma26ilktj6qssakqhoon0m.apps.googleusercontent.com"
+    if redirect_url.endswith("/"):
+        redirect_url += "sso/callback"
+    else:
+        redirect_url += "/sso/callback"
+    # Google SSO Auth
+    if google_client_id is not None:
+        from fastapi_sso.sso.google import GoogleSSO
+
+        google_client_secret = os.getenv("GOOGLE_CLIENT_SECRET", None)
+        if google_client_secret is None:
+            raise ProxyException(
+                message="GOOGLE_CLIENT_SECRET not set. Set it in .env file",
+                type="auth_error",
+                param="GOOGLE_CLIENT_SECRET",
+                code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        google_sso = GoogleSSO(
+            client_id=google_client_id,
+            client_secret=google_client_secret,
+            redirect_uri=redirect_url,
         )
 
-    verbose_proxy_logger.info(
-        f"In /google-login/key/generate, \nGOOGLE_REDIRECT_URI: {GOOGLE_REDIRECT_URI}\nGOOGLE_CLIENT_ID: {GOOGLE_CLIENT_ID}"
-    )
-    google_auth_url = f"https://accounts.google.com/o/oauth2/auth?client_id={GOOGLE_CLIENT_ID}&redirect_uri={GOOGLE_REDIRECT_URI}&response_type=code&scope=openid%20profile%20email"
-    return RedirectResponse(url=google_auth_url)
+        verbose_proxy_logger.info(
+            f"In /google-login/key/generate, \nGOOGLE_REDIRECT_URI: {redirect_url}\nGOOGLE_CLIENT_ID: {google_client_id}"
+        )
+
+        with google_sso:
+            return await google_sso.get_login_redirect()
+
+    # Microsoft SSO Auth
+    elif microsoft_client_id is not None:
+        from fastapi_sso.sso.microsoft import MicrosoftSSO
+
+        microsoft_client_secret = os.getenv("MICROSOFT_CLIENT_SECRET", None)
+        microsoft_tenant = os.getenv("MICROSOFT_TENANT", None)
+        if microsoft_client_secret is None:
+            raise ProxyException(
+                message="MICROSOFT_CLIENT_SECRET not set. Set it in .env file",
+                type="auth_error",
+                param="MICROSOFT_CLIENT_SECRET",
+                code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        microsoft_sso = MicrosoftSSO(
+            client_id=microsoft_client_id,
+            client_secret=microsoft_client_secret,
+            tenant=microsoft_tenant,
+            redirect_uri=redirect_url,
+            allow_insecure_http=True,
+        )
+        with microsoft_sso:
+            return await microsoft_sso.get_login_redirect()
 
 
-@app.get("/google-callback", tags=["experimental"], response_model=GenerateKeyResponse)
-async def google_callback(code: str, request: Request):
-    import httpx
+@app.get("/sso/callback", tags=["experimental"])
+async def auth_callback(request: Request):
+    """Verify login"""
+    microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None)
+    google_client_id = os.getenv("GOOGLE_CLIENT_ID", None)
 
-    GOOGLE_REDIRECT_URI = os.getenv("PROXY_BASE_URL")
-    if GOOGLE_REDIRECT_URI is None:
+    redirect_url = os.getenv("PROXY_BASE_URL", None)
+    if redirect_url is None:
         raise ProxyException(
             message="PROXY_BASE_URL not set. Set it in .env file",
             type="auth_error",
             param="PROXY_BASE_URL",
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
-    # Add "/google-callback"" to your callback URL
-    if GOOGLE_REDIRECT_URI.endswith("/"):
-        GOOGLE_REDIRECT_URI += "google-callback"
+    if redirect_url.endswith("/"):
+        redirect_url += "sso/callback"
     else:
-        GOOGLE_REDIRECT_URI += "/google-callback"
+        redirect_url += "/sso/callback"
 
-    GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
-    if GOOGLE_CLIENT_ID is None:
-        GOOGLE_CLIENT_ID = (
-            "246483686424-clje5sggkjma26ilktj6qssakqhoon0m.apps.googleusercontent.com"
+    if google_client_id is not None:
+        from fastapi_sso.sso.google import GoogleSSO
+
+        google_client_secret = os.getenv("GOOGLE_CLIENT_SECRET", None)
+        if google_client_secret is None:
+            raise ProxyException(
+                message="GOOGLE_CLIENT_SECRET not set. Set it in .env file",
+                type="auth_error",
+                param="GOOGLE_CLIENT_SECRET",
+                code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        google_sso = GoogleSSO(
+            client_id=google_client_id,
+            redirect_uri=redirect_url,
+            client_secret=google_client_secret,
         )
+        result = await google_sso.verify_and_process(request)
+        return result
 
-    GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
-    if GOOGLE_CLIENT_SECRET is None:
-        GOOGLE_CLIENT_SECRET = "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"
+    elif microsoft_client_id is not None:
+        from fastapi_sso.sso.microsoft import MicrosoftSSO
 
-    verbose_proxy_logger.info(
-        f"/google-callback\n GOOGLE_REDIRECT_URI: {GOOGLE_REDIRECT_URI}\n GOOGLE_CLIENT_ID: {GOOGLE_CLIENT_ID}"
-    )
-    # Exchange code for access token
-    async with httpx.AsyncClient() as client:
-        token_url = f"https://oauth2.googleapis.com/token"
-        data = {
-            "code": code,
-            "client_id": GOOGLE_CLIENT_ID,
-            "client_secret": GOOGLE_CLIENT_SECRET,
-            "redirect_uri": GOOGLE_REDIRECT_URI,
-            "grant_type": "authorization_code",
-        }
-        response = await client.post(token_url, data=data)
-
-    # Process the response, extract user info, etc.
-    if response.status_code == 200:
-        access_token = response.json()["access_token"]
-
-        # Fetch user info using the access token
-        async with httpx.AsyncClient() as client:
-            user_info_url = "https://www.googleapis.com/oauth2/v1/userinfo"
-            headers = {"Authorization": f"Bearer {access_token}"}
-            user_info_response = await client.get(user_info_url, headers=headers)
-
-        # Process user info response
-        if user_info_response.status_code == 200:
-            user_info = user_info_response.json()
-            user_email = user_info.get("email")
-            user_name = user_info.get("name")
-
-            # we can use user_email on litellm proxy now
-
-            # TODO: Handle user info as needed, for example, store it in a database, authenticate the user, etc.
-            response = await generate_key_helper_fn(
-                **{"duration": "24hr", "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": user_email, "team_id": "litellm-dashboard"}  # type: ignore
+        microsoft_client_secret = os.getenv("MICROSOFT_CLIENT_SECRET", None)
+        microsoft_tenant = os.getenv("MICROSOFT_TENANT", None)
+        if microsoft_client_secret is None:
+            raise ProxyException(
+                message="MICROSOFT_CLIENT_SECRET not set. Set it in .env file",
+                type="auth_error",
+                param="MICROSOFT_CLIENT_SECRET",
+                code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        if microsoft_tenant is None:
+            raise ProxyException(
+                message="MICROSOFT_TENANT not set. Set it in .env file",
+                type="auth_error",
+                param="MICROSOFT_TENANT",
+                code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-            key = response["token"]  # type: ignore
-            user_id = response["user_id"]  # type: ignore
-            litellm_dashboard_ui = "https://litellm-dashboard.vercel.app/"
+        microsoft_sso = MicrosoftSSO(
+            client_id=microsoft_client_id,
+            client_secret=microsoft_client_secret,
+            tenant=microsoft_tenant,
+            redirect_uri=redirect_url,
+            allow_insecure_http=True,
+        )
+        result = await microsoft_sso.verify_and_process(request)
+        return result
 
-            # if user set LITELLM_UI_LINK in .env, use that
-            litellm_ui_link_in_env = os.getenv("LITELLM_UI_LINK", None)
-            if litellm_ui_link_in_env is not None:
-                litellm_dashboard_ui = litellm_ui_link_in_env
 
-            litellm_dashboard_ui += (
-                "?userID="
-                + user_id
-                + "&accessToken="
-                + key
-                + "&proxyBaseUrl="
-                + os.getenv("PROXY_BASE_URL")
-            )
-            return RedirectResponse(url=litellm_dashboard_ui)
+# @app.get("/google-callback", tags=["experimental"], response_model=GenerateKeyResponse)
+# async def google_callback(code: str, request: Request):
+#     import httpx
 
-        else:
-            # Handle user info retrieval error
-            raise HTTPException(
-                status_code=user_info_response.status_code,
-                detail=user_info_response.text,
-            )
-    else:
-        # Handle the error from the token exchange
-        raise HTTPException(status_code=response.status_code, detail=response.text)
+#     GOOGLE_REDIRECT_URI = os.getenv("PROXY_BASE_URL")
+#     if GOOGLE_REDIRECT_URI is None:
+#         raise ProxyException(
+#             message="PROXY_BASE_URL not set. Set it in .env file",
+#             type="auth_error",
+#             param="PROXY_BASE_URL",
+#             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+#         )
+#     # Add "/google-callback"" to your callback URL
+#     if GOOGLE_REDIRECT_URI.endswith("/"):
+#         GOOGLE_REDIRECT_URI += "google-callback"
+#     else:
+#         GOOGLE_REDIRECT_URI += "/google-callback"
+
+#     GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
+#     if GOOGLE_CLIENT_ID is None:
+#         GOOGLE_CLIENT_ID = (
+#             "246483686424-clje5sggkjma26ilktj6qssakqhoon0m.apps.googleusercontent.com"
+#         )
+
+#     GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
+#     if GOOGLE_CLIENT_SECRET is None:
+#         GOOGLE_CLIENT_SECRET = "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"
+
+#     verbose_proxy_logger.info(
+#         f"/google-callback\n GOOGLE_REDIRECT_URI: {GOOGLE_REDIRECT_URI}\n GOOGLE_CLIENT_ID: {GOOGLE_CLIENT_ID}"
+#     )
+#     # Exchange code for access token
+#     async with httpx.AsyncClient() as client:
+#         token_url = f"https://oauth2.googleapis.com/token"
+#         data = {
+#             "code": code,
+#             "client_id": GOOGLE_CLIENT_ID,
+#             "client_secret": GOOGLE_CLIENT_SECRET,
+#             "redirect_uri": GOOGLE_REDIRECT_URI,
+#             "grant_type": "authorization_code",
+#         }
+#         response = await client.post(token_url, data=data)
+
+#     # Process the response, extract user info, etc.
+#     if response.status_code == 200:
+#         access_token = response.json()["access_token"]
+
+#         # Fetch user info using the access token
+#         async with httpx.AsyncClient() as client:
+#             user_info_url = "https://www.googleapis.com/oauth2/v1/userinfo"
+#             headers = {"Authorization": f"Bearer {access_token}"}
+#             user_info_response = await client.get(user_info_url, headers=headers)
+
+#         # Process user info response
+#         if user_info_response.status_code == 200:
+#             user_info = user_info_response.json()
+#             user_email = user_info.get("email")
+#             user_name = user_info.get("name")
+
+#             # we can use user_email on litellm proxy now
+
+#             # TODO: Handle user info as needed, for example, store it in a database, authenticate the user, etc.
+#             response = await generate_key_helper_fn(
+#                 **{"duration": "24hr", "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": user_email, "team_id": "litellm-dashboard"}  # type: ignore
+#             )
+
+#             key = response["token"]  # type: ignore
+#             user_id = response["user_id"]  # type: ignore
+#             litellm_dashboard_ui = "https://litellm-dashboard.vercel.app/"
+
+#             # if user set LITELLM_UI_LINK in .env, use that
+#             litellm_ui_link_in_env = os.getenv("LITELLM_UI_LINK", None)
+#             if litellm_ui_link_in_env is not None:
+#                 litellm_dashboard_ui = litellm_ui_link_in_env
+
+#             litellm_dashboard_ui += (
+#                 "?userID="
+#                 + user_id
+#                 + "&accessToken="
+#                 + key
+#                 + "&proxyBaseUrl="
+#                 + os.getenv("PROXY_BASE_URL")
+#             )
+#             return RedirectResponse(url=litellm_dashboard_ui)
+
+#         else:
+#             # Handle user info retrieval error
+#             raise HTTPException(
+#                 status_code=user_info_response.status_code,
+#                 detail=user_info_response.text,
+#             )
+#     else:
+#         # Handle the error from the token exchange
+#         raise HTTPException(status_code=response.status_code, detail=response.text)
 
 
 @router.get(
