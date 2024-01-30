@@ -85,10 +85,10 @@ const CreateKey: React.FC<CreateKeyProps> = ({
           </Form.Item>
 
           <Form.Item
-            label="Models"
+            label="Models (Comma Separated). Eg: gpt-3.5-turbo,gpt-4"
             name="models"
           >
-            <Input placeholder="Enter models separated by commas" />
+            <Input placeholder="gpt-4,gpt-3.5-turbo" />
           </Form.Item>
           
 
@@ -99,7 +99,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
             <InputNumber step={0.01} precision={2} width={200}/>
           </Form.Item>
           <Form.Item
-            label="Duration"
+            label="Duration (eg: 30s, 30h, 30d)"
             name="duration"
           >
             <Input />
