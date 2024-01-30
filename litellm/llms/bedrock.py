@@ -702,6 +702,11 @@ def _embedding_func_single(
     encoding=None,
     logging_obj=None,
 ):
+    if type(input) != str:
+        raise BedrockError(
+            message="Bedrock Embedding API input must be type str | List[str]",
+            status_code=400,
+        )
     # logic for parsing in - calling - parsing out model embedding calls
     ## FORMAT EMBEDDING INPUT ##
     provider = model.split(".")[0]
@@ -805,7 +810,7 @@ def embedding(
                 logging_obj=logging_obj,
             )
         ]
-    else:
+    elif type(input) == list:
         ## Embedding Call
         embeddings = [
             _embedding_func_single(
@@ -817,6 +822,12 @@ def embedding(
             )
             for i in input
         ]  # [TODO]: make these parallel calls
+    else:
+        # enters this branch if input = int, ex. input=2
+        raise BedrockError(
+            message="Bedrock Embedding API input must be type str | List[str]",
+            status_code=400,
+        )
 
     ## Populate OpenAI compliant dictionary
     embedding_response = []
