@@ -59,16 +59,11 @@ const CreateKey: React.FC<CreateKeyProps> = ({
       <Modal
         title="Create Key"
         visible={isModalVisible}
-        onOk={handleOk}
-        onCancel={handleCancel}
+        width={800}
+        footer={null}
       >
-        <Form form={form} onFinish={handleCreate} labelCol={{ span: 6 }} wrapperCol={{ span: 16 }}>
-          <Form.Item
-            label="Duration"
-            name="duration"
-          >
-            <Input />
-          </Form.Item>
+        <Form form={form} onFinish={handleCreate} labelCol={{ span: 6 }} wrapperCol={{ span: 16 }} labelAlign="left">
+        
           <Form.Item
             label="Key Name"
             name="key_alias"
@@ -85,16 +80,16 @@ const CreateKey: React.FC<CreateKeyProps> = ({
           
 
           <Form.Item
-            label="Max Budget"
+            label="Max Budget (USD)"
             name="max_budget"
           >
-            <InputNumber />
+            <InputNumber step={0.01} precision={2} width={200}/>
           </Form.Item>
           <Form.Item
-            label="Max Parallel Requests"
-            name="max_parallel_requests"
+            label="Duration"
+            name="duration"
           >
-            <InputNumber />
+            <Input />
           </Form.Item>
           <Form.Item
             label="Metadata"
@@ -102,12 +97,13 @@ const CreateKey: React.FC<CreateKeyProps> = ({
           >
             <Input.TextArea rows={4} placeholder="Enter metadata as JSON" />
           </Form.Item>
-          <Form.Item>
-            <Button type="primary" htmlType="submit">
-              Create Key
-            </Button>
-          </Form.Item>
+          
         </Form>
+        <div style={{ textAlign: 'right', marginTop: '10px' }}>
+    <Button type="primary" htmlType="submit" onClick={handleCreate}>
+      Create Key
+    </Button>
+  </div>
       </Modal>
       {apiKey && (
         <Modal
