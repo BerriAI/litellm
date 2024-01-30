@@ -157,6 +157,12 @@ def is_port_in_use(port):
     type=int,
     help="Number of requests to hit async endpoint with",
 )
+@click.option(
+    "--run_gunicorn",
+    default=False,
+    is_flag=True,
+    help="Starts proxy via gunicorn, instead of uvicorn (better for managing multiple workers)",
+)
 @click.option("--local", is_flag=True, default=False, help="for local debugging")
 def run_server(
     host,
@@ -186,21 +192,32 @@ def run_server(
     use_queue,
     health,
     version,
+    run_gunicorn,
 ):
     global feature_telemetry
     args = locals()
     if local:
-        from proxy_server import app, save_worker_config, usage_telemetry
+        from proxy_server import app, save_worker_config, usage_telemetry, ProxyConfig
     else:
         try:
-            from .proxy_server import app, save_worker_config, usage_telemetry
+            from .proxy_server import (
+                app,
+                save_worker_config,
+                usage_telemetry,
+                ProxyConfig,
+            )
         except ImportError as e:
             if "litellm[proxy]" in str(e):
                 # user is missing a proxy dependency, ask them to pip install litellm[proxy]
                 raise e
             else:
                 # this is just a local/relative import error, user git cloned litellm
-                from proxy_server import app, save_worker_config, usage_telemetry
+                from proxy_server import (
+                    app,
+                    save_worker_config,
+                    usage_telemetry,
+                    ProxyConfig,
+                )
     feature_telemetry = usage_telemetry
     if version == True:
         pkg_version = importlib.metadata.version("litellm")
@@ -373,16 +390,16 @@ def run_server(
             read from there and save it to os.env['DATABASE_URL']
             """
             try:
-                import yaml
+                import yaml, asyncio
             except:
                 raise ImportError(
                     "yaml needs to be imported. Run - `pip install 'litellm[proxy]'`"
                 )
 
-            if os.path.exists(config):
-                with open(config, "r") as config_file:
-                    config = yaml.safe_load(config_file)
-            general_settings = config.get("general_settings", {})
+            proxy_config = ProxyConfig()
+            _, _, general_settings = asyncio.run(
+                proxy_config.load_config(router=None, config_file_path=config)
+            )
             database_url = general_settings.get("database_url", None)
             if database_url and database_url.startswith("os.environ/"):
                 original_dir = os.getcwd()
@@ -418,6 +435,7 @@ def run_server(
                         break  # Exit the loop if the subprocess succeeds
                     except subprocess.CalledProcessError as e:
                         print(f"Error: {e}")
+                        time.sleep(random.randrange(start=1, stop=5))
                     finally:
                         os.chdir(original_dir)
             else:
@@ -428,9 +446,9 @@ def run_server(
             port = random.randint(1024, 49152)
         from litellm.proxy.proxy_server import app
 
-        if os.name == "nt":
+        if run_gunicorn == False:
             uvicorn.run(app, host=host, port=port)  # run uvicorn
-        else:
+        elif run_gunicorn == True:
             import gunicorn.app.base
 
             # Gunicorn Application Class

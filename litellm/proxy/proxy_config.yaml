@@ -11,6 +11,12 @@ model_list:
       output_cost_per_token: 0.00003
       max_tokens: 4096
       base_model: gpt-3.5-turbo
+  - model_name: gpt-4
+    litellm_params:
+      model: azure/chatgpt-v-2
+      api_base: https://openai-gpt-4-test-v-1.openai.azure.com/
+      api_version: "2023-05-15"
+      api_key: os.environ/AZURE_API_KEY # The `os.environ/` prefix tells litellm to read this from the env. See https://docs.litellm.ai/docs/simple_proxy#load-api-keys-from-vault
   - model_name: gpt-vision
     litellm_params:
       model: azure/gpt-4-vision
@@ -25,6 +31,9 @@ model_list:
   - model_name: BEDROCK_GROUP
     litellm_params:
       model: bedrock/cohere.command-text-v14
+  - model_name: tg-ai
+    litellm_params:
+      model: together_ai/mistralai/Mistral-7B-Instruct-v0.1
   - model_name: sagemaker
     litellm_params:
       model: sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4
@@ -57,12 +66,22 @@ model_list:
       mode: embedding
 litellm_settings:
   fallbacks: [{"openai-gpt-3.5": ["azure-gpt-3.5"]}]
+  success_callback: ['langfuse']
+  max_budget: 10      # global budget for proxy 
+  budget_duration: 30d    # global budget duration, will reset after 30d
+  default_key_generate_params:
+    max_budget: 1.5000
+    models: ["azure-gpt-3.5"]
+    duration: None
   # cache: True     
   # setting callback class
   # callbacks: custom_callbacks.proxy_handler_instance # sets litellm.callbacks = [proxy_handler_instance]
 
-# general_settings: 
-  # master_key: sk-1234
+general_settings: 
+  allow_user_auth: True
+  master_key: sk-1234
+  alerting: ["slack"]
+  alerting_threshold: 10 # sends alerts if requests hang for 2 seconds
   # database_type: "dynamo_db" 
   # database_args: { # 👈  all args - https://github.com/BerriAI/litellm/blob/befbcbb7ac8f59835ce47415c128decf37aac328/litellm/proxy/_types.py#L190
   #   "billing_mode": "PAY_PER_REQUEST", 

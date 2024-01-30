@@ -4,7 +4,7 @@ openai>=1.0.0 # openai req.
 fastapi # server dep
 pydantic>=2.5 # openai req. 
 backoff==2.2.1 # server dep
-pyyaml==6.0 # server dep
+pyyaml>=6.0.1 # server dep
 uvicorn==0.22.0 # server dep
 gunicorn==21.2.0 # server dep
 boto3==1.28.58 # aws bedrock/sagemaker calls
@@ -14,8 +14,9 @@ mangum==0.17.0 # for aws lambda functions
 google-generativeai==0.1.0 # for vertex ai calls
 async_generator==1.10.0 # for async ollama calls
 traceloop-sdk==0.5.3 # for open telemetry logging
-langfuse>=2.0.0 # for langfuse self-hosted logging
+langfuse>=2.6.3 # for langfuse self-hosted logging
 orjson==3.9.7 # fast /embedding responses
+apscheduler==3.10.4 # for resetting budget in background 
 ### LITELLM PACKAGE DEPENDENCIES
 python-dotenv>=0.2.0 # for env 
 tiktoken>=0.4.0 # for calculating usage

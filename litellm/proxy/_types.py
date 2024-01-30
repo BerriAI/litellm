@@ -1,8 +1,8 @@
-from pydantic import BaseModel, Extra, Field, root_validator
+from pydantic import BaseModel, Extra, Field, root_validator, Json
 import enum
-from typing import Optional, List, Union, Dict, Literal
+from typing import Optional, List, Union, Dict, Literal, Any
 from datetime import datetime
-import uuid, json
+import uuid, json, sys, os
 
 
 class LiteLLMBase(BaseModel):
@@ -13,7 +13,7 @@ class LiteLLMBase(BaseModel):
     def json(self, **kwargs):
         try:
             return self.model_dump()  # noqa
-        except:
+        except Exception as e:
             # if using pydantic v1
             return self.dict()
 
@@ -122,27 +122,59 @@ class ModelParams(LiteLLMBase):
         return values
 
 
-class GenerateKeyRequest(LiteLLMBase):
-    duration: Optional[str] = "1h"
+class GenerateRequestBase(LiteLLMBase):
+    """
+    Overlapping schema between key and user generate/update requests
+    """
+
     models: Optional[list] = []
+    spend: Optional[float] = 0
+    max_budget: Optional[float] = None
+    user_id: Optional[str] = None
+    team_id: Optional[str] = None
+    max_parallel_requests: Optional[int] = None
+    metadata: Optional[dict] = {}
+    tpm_limit: Optional[int] = None
+    rpm_limit: Optional[int] = None
+    budget_duration: Optional[str] = None
+
+
+class GenerateKeyRequest(GenerateRequestBase):
+    key_alias: Optional[str] = None
+    duration: Optional[str] = None
     aliases: Optional[dict] = {}
     config: Optional[dict] = {}
-    spend: Optional[float] = 0
-    user_id: Optional[str] = None
-    max_parallel_requests: Optional[int] = None
-    metadata: Optional[dict] = {}
 
 
-class UpdateKeyRequest(LiteLLMBase):
+class GenerateKeyResponse(GenerateKeyRequest):
+    key: str
+    key_name: Optional[str] = None
+    expires: Optional[datetime]
+    user_id: str
+
+    @root_validator(pre=True)
+    def set_model_info(cls, values):
+        if values.get("token") is not None:
+            values.update({"key": values.get("token")})
+        dict_fields = ["metadata", "aliases", "config"]
+        for field in dict_fields:
+            value = values.get(field)
+            if value is not None and isinstance(value, str):
+                try:
+                    values[field] = json.loads(value)
+                except json.JSONDecodeError:
+                    raise ValueError(f"Field {field} should be a valid dictionary")
+
+        return values
+
+
+class UpdateKeyRequest(GenerateKeyRequest):
+    # Note: the defaults of all Params here MUST BE NONE
+    # else they will get overwritten
     key: str
     duration: Optional[str] = None
-    models: Optional[list] = None
-    aliases: Optional[dict] = None
-    config: Optional[dict] = None
     spend: Optional[float] = None
-    user_id: Optional[str] = None
-    max_parallel_requests: Optional[int] = None
-    metadata: Optional[dict] = {}
+    metadata: Optional[dict] = None
 
 
 class UserAPIKeyAuth(LiteLLMBase):  # the expected response object for user api key auth
@@ -155,20 +187,17 @@ class UserAPIKeyAuth(LiteLLMBase):  # the expected response object for user api 
     aliases: dict = {}
     config: dict = {}
     spend: Optional[float] = 0
+    max_budget: Optional[float] = None
     user_id: Optional[str] = None
     max_parallel_requests: Optional[int] = None
     duration: str = "1h"
     metadata: dict = {}
-
-
-class GenerateKeyResponse(LiteLLMBase):
-    key: str
-    expires: Optional[datetime]
-    user_id: str
+    tpm_limit: Optional[int] = None
+    rpm_limit: Optional[int] = None
 
 
 class DeleteKeyRequest(LiteLLMBase):
-    keys: List[str]
+    keys: List
 
 
 class NewUserRequest(GenerateKeyRequest):
@@ -177,6 +206,14 @@ class NewUserRequest(GenerateKeyRequest):
 
 class NewUserResponse(GenerateKeyResponse):
     max_budget: Optional[float] = None
+
+
+class UpdateUserRequest(GenerateRequestBase):
+    # Note: the defaults of all Params here MUST BE NONE
+    # else they will get overwritten
+    user_id: str
+    spend: Optional[float] = None
+    metadata: Optional[dict] = None
 
 
 class KeyManagementSystem(enum.Enum):
@@ -194,6 +231,7 @@ class DynamoDBArgs(LiteLLMBase):
     user_table_name: str = "LiteLLM_UserTable"
     key_table_name: str = "LiteLLM_VerificationToken"
     config_table_name: str = "LiteLLM_Config"
+    spend_table_name: str = "LiteLLM_SpendLogs"
 
 
 class ConfigGeneralSettings(LiteLLMBase):
@@ -283,7 +321,10 @@ class ConfigYAML(LiteLLMBase):
 
 class LiteLLM_VerificationToken(LiteLLMBase):
     token: str
+    key_name: Optional[str] = None
+    key_alias: Optional[str] = None
     spend: float = 0.0
+    max_budget: Optional[float] = None
     expires: Union[str, None]
     models: List[str]
     aliases: Dict[str, str] = {}
@@ -291,6 +332,10 @@ class LiteLLM_VerificationToken(LiteLLMBase):
     user_id: Union[str, None]
     max_parallel_requests: Union[int, None]
     metadata: Dict[str, str] = {}
+    tpm_limit: Optional[int] = None
+    rpm_limit: Optional[int] = None
+    budget_duration: Optional[str] = None
+    budget_reset_at: Optional[datetime] = None
 
 
 class LiteLLM_Config(LiteLLMBase):
@@ -310,5 +355,22 @@ class LiteLLM_UserTable(LiteLLMBase):
         if values.get("spend") is None:
             values.update({"spend": 0.0})
         if values.get("models") is None:
-            values.update({"models", []})
+            values.update({"models": []})
         return values
+
+
+class LiteLLM_SpendLogs(LiteLLMBase):
+    request_id: str
+    api_key: str
+    model: Optional[str] = ""
+    call_type: str
+    spend: Optional[float] = 0.0
+    total_tokens: Optional[int] = 0
+    prompt_tokens: Optional[int] = 0
+    completion_tokens: Optional[int] = 0
+    startTime: Union[str, datetime, None]
+    endTime: Union[str, datetime, None]
+    user: Optional[str] = ""
+    metadata: Optional[Json] = {}
+    cache_hit: Optional[str] = "False"
+    cache_key: Optional[str] = None

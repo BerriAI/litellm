@@ -483,3 +483,55 @@ general_settings:
   max_parallel_requests: 100 # max parallel requests for a user = 100
 ```
 
+## All settings 
+
+```python
+{
+  "environment_variables": {},
+  "model_list": [
+    {
+      "model_name": "string",
+      "litellm_params": {},
+      "model_info": {
+        "id": "string",
+        "mode": "embedding",
+        "input_cost_per_token": 0,
+        "output_cost_per_token": 0,
+        "max_tokens": 2048,
+        "base_model": "gpt-4-1106-preview",
+        "additionalProp1": {}
+      }
+    }
+  ],
+  "litellm_settings": {}, # ALL (https://github.com/BerriAI/litellm/blob/main/litellm/__init__.py)
+  "general_settings": {
+    "completion_model": "string",
+    "key_management_system": "google_kms", # either google_kms or azure_kms
+    "master_key": "string",
+    "database_url": "string",
+    "database_type": "dynamo_db",
+    "database_args": {
+      "billing_mode": "PROVISIONED_THROUGHPUT",
+      "read_capacity_units": 0,
+      "write_capacity_units": 0,
+      "ssl_verify": true,
+      "region_name": "string",
+      "user_table_name": "LiteLLM_UserTable",
+      "key_table_name": "LiteLLM_VerificationToken",
+      "config_table_name": "LiteLLM_Config",
+      "spend_table_name": "LiteLLM_SpendLogs"
+    },
+    "otel": true,
+    "custom_auth": "string",
+    "max_parallel_requests": 0,
+    "infer_model_from_keys": true,
+    "background_health_checks": true,
+    "health_check_interval": 300,
+    "alerting": [
+      "string"
+    ],
+    "alerting_threshold": 0
+  }
+}
+```
+
