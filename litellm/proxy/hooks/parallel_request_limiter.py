@@ -17,7 +17,12 @@ class MaxParallelRequestsHandler(CustomLogger):
         pass
 
     def print_verbose(self, print_statement):
-        verbose_proxy_logger.debug(print_statement)
+        try:
+            verbose_proxy_logger.debug(print_statement)
+            if litellm.set_verbose:
+                print(print_statement)  # noqa
+        except:
+            pass
 
     async def async_pre_call_hook(
         self,

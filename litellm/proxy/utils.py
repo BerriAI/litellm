@@ -21,6 +21,7 @@ from datetime import datetime, timedelta
 
 
 def print_verbose(print_statement):
+    verbose_proxy_logger.debug(print_statement)
     if litellm.set_verbose:
         print(f"LiteLLM Proxy: {print_statement}")  # noqa
 
@@ -96,6 +97,7 @@ class ProxyLogging:
         2. /embeddings
         3. /image/generation
         """
+        print_verbose(f"Inside Proxy Logging Pre-call hook!")
         ### ALERTING ###
         asyncio.create_task(self.response_taking_too_long(request_data=data))
 
@@ -1035,7 +1037,7 @@ async def send_email(sender_name, sender_email, receiver_email, subject, html):
         print_verbose(f"SMTP Connection Init")
         # Establish a secure connection with the SMTP server
         with smtplib.SMTP(smtp_host, smtp_port) as server:
-            if os.getenv("SMTP_TLS", 'True') != "False":
+            if os.getenv("SMTP_TLS", "True") != "False":
                 server.starttls()
 
             # Login to your email account
