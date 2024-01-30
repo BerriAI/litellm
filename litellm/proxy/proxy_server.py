@@ -2996,7 +2996,6 @@ async def auth_callback(request: Request):
             client_secret=google_client_secret,
         )
         result = await google_sso.verify_and_process(request)
-        return result
 
     elif microsoft_client_id is not None:
         from fastapi_sso.sso.microsoft import MicrosoftSSO
@@ -3026,7 +3025,34 @@ async def auth_callback(request: Request):
             allow_insecure_http=True,
         )
         result = await microsoft_sso.verify_and_process(request)
-        return result
+
+    # User is Authe'd in - generate key for the UI to access Proxy
+    user_id = getattr(result, "email", None)
+    if user_id is None:
+        user_id = getattr(result, "first_name", "") + getattr(result, "last_name", "")
+
+    response = await generate_key_helper_fn(
+        **{"duration": "24hr", "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": user_id, "team_id": "litellm-dashboard"}  # type: ignore
+    )
+
+    key = response["token"]  # type: ignore
+    user_id = response["user_id"]  # type: ignore
+    litellm_dashboard_ui = "https://litellm-dashboard.vercel.app/"
+
+    # if user set LITELLM_UI_LINK in .env, use that
+    litellm_ui_link_in_env = os.getenv("LITELLM_UI_LINK", None)
+    if litellm_ui_link_in_env is not None:
+        litellm_dashboard_ui = litellm_ui_link_in_env
+
+    litellm_dashboard_ui += (
+        "?userID="
+        + user_id
+        + "&accessToken="
+        + key
+        + "&proxyBaseUrl="
+        + os.getenv("PROXY_BASE_URL")
+    )
+    return RedirectResponse(url=litellm_dashboard_ui)
 
 
 # @app.get("/google-callback", tags=["experimental"], response_model=GenerateKeyResponse)
