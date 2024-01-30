@@ -515,7 +515,7 @@ def hf_test_completion_tgi():
 # hf_test_error_logs()
 
 
-# def test_completion_cohere():  # commenting out, for now as the cohere endpoint is being flaky
+# def test_completion_cohere():  # commenting out,for now as the cohere endpoint is being flaky
 #     try:
 #         litellm.CohereConfig(max_tokens=10, stop_sequences=["a"])
 #         response = completion(
