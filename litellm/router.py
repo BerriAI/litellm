@@ -1411,6 +1411,12 @@ class Router:
                 max_retries = litellm.get_secret(max_retries_env_name)
                 litellm_params["max_retries"] = max_retries
 
+            organization = litellm_params.get("organization", None)
+            if isinstance(organization, str) and organization.startswith("os.environ/"):
+                organization_env_name = organization.replace("os.environ/", "")
+                organization = litellm.get_secret(organization_env_name)
+                litellm_params["organization"] = organization
+
             if "azure" in model_name:
                 if api_base is None:
                     raise ValueError(
@@ -1610,6 +1616,7 @@ class Router:
                     base_url=api_base,
                     timeout=timeout,
                     max_retries=max_retries,
+                    organization=organization,
                     http_client=httpx.AsyncClient(
                         transport=AsyncCustomHTTPTransport(),
                         limits=httpx.Limits(
@@ -1630,6 +1637,7 @@ class Router:
                     base_url=api_base,
                     timeout=timeout,
                     max_retries=max_retries,
+                    organization=organization,
                     http_client=httpx.Client(
                         transport=CustomHTTPTransport(),
                         limits=httpx.Limits(
@@ -1651,6 +1659,7 @@ class Router:
                     base_url=api_base,
                     timeout=stream_timeout,
                     max_retries=max_retries,
+                    organization=organization,
                     http_client=httpx.AsyncClient(
                         transport=AsyncCustomHTTPTransport(),
                         limits=httpx.Limits(
@@ -1672,6 +1681,7 @@ class Router:
                     base_url=api_base,
                     timeout=stream_timeout,
                     max_retries=max_retries,
+                    organization=organization,
                     http_client=httpx.Client(
                         transport=CustomHTTPTransport(),
                         limits=httpx.Limits(
