@@ -41,6 +41,14 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   const handleCreate = async (formValues) => {
     try {
       message.info("Making API Call");
+      // Check if "models" exists and is not an empty string
+      if (formValues.models && formValues.models.trim() !== '') {
+        // Format the "models" field as an array
+        formValues.models = formValues.models.split(',').map(model => model.trim());
+      } else {
+        // If "models" is undefined or an empty string, set it to an empty array
+        formValues.models = [];
+      }
       setIsModalVisible(true);
       const response = await keyCreateCall(proxyBaseUrl, accessToken, userID, formValues);
       setData([...data, response]);
