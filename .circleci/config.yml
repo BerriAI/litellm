@@ -156,6 +156,7 @@ jobs:
               --config /app/config.yaml \
               --port 4000 \
               --num_workers 8 \
+              --run_gunicorn \ 
               --debug
       - run:
           name: Install curl and dockerize
