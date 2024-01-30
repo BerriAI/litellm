@@ -7,6 +7,8 @@ sys.path.insert(0, os.path.abspath("../.."))
 from litellm import completion
 import litellm
 
+import pytest
+
 litellm.success_callback = ["promptlayer"]
 litellm.set_verbose = True
 import time
@@ -57,11 +59,11 @@ def test_promptlayer_logging_with_metadata():
         sys.stdout = old_stdout
         output = new_stdout.getvalue().strip()
         print(output)
-        if "LiteLLM: Prompt Layer Logging: success" not in output:
-            raise Exception("Required log message not found!")
+
+        assert "Prompt Layer Logging: success" in output
 
     except Exception as e:
-        print(e)
+        pytest.fail(f"Error occurred: {e}")
 
 
 def test_promptlayer_logging_with_metadata_tags():
@@ -76,6 +78,7 @@ def test_promptlayer_logging_with_metadata_tags():
             temperature=0.2,
             max_tokens=20,
             metadata={"model": "ai21", "pl_tags": ["env:dev"]},
+            mock_response="this is a mock response"
         )
 
         # Restore stdout
@@ -83,11 +86,11 @@ def test_promptlayer_logging_with_metadata_tags():
         sys.stdout = old_stdout
         output = new_stdout.getvalue().strip()
         print(output)
-        if "LiteLLM: Prompt Layer Logging: success" not in output:
-            raise Exception("Required log message not found!")
+
+        assert "Prompt Layer Logging: success" in output
 
     except Exception as e:
-        print(e)
+        pytest.fail(f"Error occurred: {e}")
 
 test_promptlayer_logging_with_metadata()
 test_promptlayer_logging_with_metadata_tags()
