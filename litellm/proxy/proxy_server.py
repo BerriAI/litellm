@@ -292,6 +292,7 @@ async def user_api_key_auth(
             raise Exception("No connected db.")
 
         ## check for cache hit (In-Memory Cache)
+        original_api_key = api_key  # (Patch: For DynamoDB Backwards Compatibility)
         if api_key.startswith("sk-"):
             api_key = hash_token(token=api_key)
         valid_token = user_api_key_cache.get_cache(key=api_key)
@@ -304,10 +305,15 @@ async def user_api_key_auth(
                 )
 
             elif custom_db_client is not None:
-                valid_token = await custom_db_client.get_data(
-                    key=api_key, table_name="key"
-                )
-
+                try:
+                    valid_token = await custom_db_client.get_data(
+                        key=api_key, table_name="key"
+                    )
+                except:
+                    # (Patch: For DynamoDB Backwards Compatibility)
+                    valid_token = await custom_db_client.get_data(
+                        key=original_api_key, table_name="key"
+                    )
             verbose_proxy_logger.debug(f"Token from db: {valid_token}")
         elif valid_token is not None:
             verbose_proxy_logger.debug(f"API Key Cache Hit!")
