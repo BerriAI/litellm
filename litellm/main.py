@@ -591,26 +591,37 @@ def completion(
 
         ### REGISTER CUSTOM MODEL PRICING -- IF GIVEN ###
         if input_cost_per_token is not None and output_cost_per_token is not None:
+            print_verbose(f"Registering model={model} in model cost map")
             litellm.register_model(
                 {
+                    f"{custom_llm_provider}/{model}": {
+                        "input_cost_per_token": input_cost_per_token,
+                        "output_cost_per_token": output_cost_per_token,
+                        "litellm_provider": custom_llm_provider,
+                    },
                     model: {
                         "input_cost_per_token": input_cost_per_token,
                         "output_cost_per_token": output_cost_per_token,
                         "litellm_provider": custom_llm_provider,
-                    }
+                    },
                 }
             )
-        if (
+        elif (
             input_cost_per_second is not None
         ):  # time based pricing just needs cost in place
             output_cost_per_second = output_cost_per_second or 0.0
             litellm.register_model(
                 {
+                    f"{custom_llm_provider}/{model}": {
+                        "input_cost_per_second": input_cost_per_second,
+                        "output_cost_per_second": output_cost_per_second,
+                        "litellm_provider": custom_llm_provider,
+                    },
                     model: {
                         "input_cost_per_second": input_cost_per_second,
                         "output_cost_per_second": output_cost_per_second,
                         "litellm_provider": custom_llm_provider,
-                    }
+                    },
                 }
             )
         ### BUILD CUSTOM PROMPT TEMPLATE -- IF GIVEN ###
@@ -3265,6 +3276,7 @@ async def ahealth_check(
 ## Set verbose to true -> ```litellm.set_verbose = True```
 def print_verbose(print_statement):
     try:
+        verbose_logger.debug(print_statement)
         if litellm.set_verbose:
             print(print_statement)  # noqa
     except:
