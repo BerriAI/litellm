@@ -1411,7 +1411,7 @@ class Router:
                 max_retries = litellm.get_secret(max_retries_env_name)
                 litellm_params["max_retries"] = max_retries
 
-            organization = litellm_params.pop("organization", None)
+            organization = litellm_params.get("organization", None)
             if isinstance(organization, str) and organization.startswith("os.environ/"):
                 organization_env_name = organization.replace("os.environ/", "")
                 organization = litellm.get_secret(organization_env_name)
