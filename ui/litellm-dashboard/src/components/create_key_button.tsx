@@ -1,11 +1,14 @@
+
 "use client";
 
 import React, { useState, useEffect, useRef } from "react";
 import { Button, TextInput, Grid, Col } from "@tremor/react";
-import { message } from "antd";
 import { Card, Metric, Text } from "@tremor/react";
+import { Button as Button2, Modal, Form, Input, InputNumber, Select, message } from "antd";
 import { keyCreateCall } from "./networking";
-// Define the props type
+
+const { Option } = Select;
+
 interface CreateKeyProps {
   userID: string;
   accessToken: string;
@@ -14,8 +17,6 @@ interface CreateKeyProps {
   setData: React.Dispatch<React.SetStateAction<any[] | null>>;
 }
 
-import { Modal, Button as Button2 } from "antd";
-
 const CreateKey: React.FC<CreateKeyProps> = ({
   userID,
   accessToken,
@@ -23,51 +24,108 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   data,
   setData,
 }) => {
+  const [form] = Form.useForm();
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [apiKey, setApiKey] = useState(null);
+
   const handleOk = () => {
-    // Handle the OK action
-    console.log("OK Clicked");
     setIsModalVisible(false);
+    form.resetFields();
   };
 
   const handleCancel = () => {
-    // Handle the cancel action or closing the modal
-    console.log("Modal closed");
     setIsModalVisible(false);
     setApiKey(null);
+    form.resetFields();
   };
 
-  const handleCreate = async () => {
-    if (data == null) {
-      return;
-    }
+  const handleCreate = async (formValues: Record<string, any>) => {
     try {
       message.info("Making API Call");
+      // Check if "models" exists and is not an empty string
+      if (formValues.models && formValues.models.trim() !== '') {
+        // Format the "models" field as an array
+        formValues.models = formValues.models.split(',').map((model: string) => model.trim());
+      } else {
+        // If "models" is undefined or an empty string, set it to an empty array
+        formValues.models = [];
+      }
       setIsModalVisible(true);
-      const response = await keyCreateCall(proxyBaseUrl, accessToken, userID);
-      // Successfully completed the deletion. Update the state to trigger a rerender.
-      setData([...data, response]);
+      const response = await keyCreateCall(proxyBaseUrl, accessToken, userID, formValues);
+      setData((prevData) => (prevData ? [...prevData, response] : [response])); // Check if prevData is null
       setApiKey(response["key"]);
       message.success("API Key Created");
+      form.resetFields();
     } catch (error) {
-      console.error("Error deleting the key:", error);
-      // Handle any error situations, such as displaying an error message to the user.
+      console.error("Error creating the key:", error);
     }
   };
+  
 
   return (
     <div>
-      <Button className="mx-auto" onClick={handleCreate}>
+      <Button className="mx-auto" onClick={() => setIsModalVisible(true)}>
         + Create New Key
       </Button>
       <Modal
-        title="Save your key"
-        open={isModalVisible}
+        title="Create Key"
+        visible={isModalVisible}
+        width={800}
+        footer={null}
         onOk={handleOk}
         onCancel={handleCancel}
       >
-        <Grid numItems={1} className="gap-2 w-full">
+        <Form form={form} onFinish={handleCreate} labelCol={{ span: 6 }} wrapperCol={{ span: 16 }} labelAlign="left">
+        
+          <Form.Item
+            label="Key Name"
+            name="key_alias"
+          >
+            <Input />
+          </Form.Item>
+
+          <Form.Item
+            label="Models"
+            name="models"
+          >
+            <Input placeholder="Enter models separated by commas" />
+          </Form.Item>
+          
+
+          <Form.Item
+            label="Max Budget (USD)"
+            name="max_budget"
+          >
+            <InputNumber step={0.01} precision={2} width={200}/>
+          </Form.Item>
+          <Form.Item
+            label="Duration"
+            name="duration"
+          >
+            <Input />
+          </Form.Item>
+          <Form.Item
+            label="Metadata"
+            name="metadata"
+          >
+            <Input.TextArea rows={4} placeholder="Enter metadata as JSON" />
+          </Form.Item>
+          <div style={{ textAlign: 'right', marginTop: '10px' }}>
+            <Button2 htmlType="submit">
+              Create Key
+            </Button2>
+          </div>
+        </Form>
+      </Modal>
+      {apiKey && (
+        <Modal
+          title="Save your key"
+          visible={isModalVisible}
+          onOk={handleOk}
+          onCancel={handleCancel}
+          footer={null}
+        >
+          <Grid numItems={1} className="gap-2 w-full">
           <Col numColSpan={1}>
             <p>
               Please save this secret key somewhere safe and accessible. For
@@ -84,7 +142,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({
             )}
           </Col>
         </Grid>
-      </Modal>
+        </Modal>
+      )}
     </div>
   );
 };
