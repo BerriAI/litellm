@@ -1,4 +1,6 @@
 import Image from '@theme/IdealImage';
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
 
 # [BETA] Admin UI
 
@@ -26,22 +28,15 @@ general_settings:
     allow_user_auth: true
 ```
 
-## 2. Setup Google SSO - Use this to Authenticate Team Members to the UI
-- Create an Oauth 2.0 Client
-    <Image img={require('../../img/google_oauth2.png')} />  
+## 2. Setup SSO/Auth for UI
 
-    - Navigate to Google `Credenentials` 
-    - Create a new Oauth client ID 
-    - Set the `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` in your Proxy .env 
-- Set Redirect URL on your Oauth 2.0 Client 
-    - Click on your Oauth 2.0 client on https://console.cloud.google.com/
-    - Set a redirect url = `<your proxy base url>/google-callback`
-    ```
-    https://litellm-production-7002.up.railway.app/google-callback
-    ```
-    <Image img={require('../../img/google_redirect.png')} />  
-## 3. Required env variables on your Proxy
+<Tabs>
 
+<TabItem value="google" label="Google SSO">
+
+- Create a new Oauth 2.0 Client on https://console.cloud.google.com/ 
+
+**Required .env variables on your Proxy**
 ```shell
 PROXY_BASE_URL="<your deployed proxy endpoint>" example PROXY_BASE_URL=https://litellm-production-7002.up.railway.app/
 
@@ -49,6 +44,36 @@ PROXY_BASE_URL="<your deployed proxy endpoint>" example PROXY_BASE_URL=https://l
 GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
 ```
+
+- Set Redirect URL on your Oauth 2.0 Client on https://console.cloud.google.com/ 
+    - Set a redirect url = `<your proxy base url>/sso/callback`
+    ```shell
+    https://litellm-production-7002.up.railway.app/sso/callback
+    ```
+
+</TabItem>
+
+<TabItem value="msft" label="Microsoft SSO">
+
+- Create a new App Registration on https://portal.azure.com/
+- Create a client Secret for your App Registration
+
+**Required .env variables on your Proxy**
+```shell
+PROXY_BASE_URL="<your deployed proxy endpoint>" example PROXY_BASE_URL=https://litellm-production-7002.up.railway.app/
+
+MICROSOFT_CLIENT_ID="84583a4d-"
+MICROSOFT_CLIENT_SECRET="nbk8Q~"
+MICROSOFT_TENANT="5a39737
+```
+- Set Redirect URI on your App Registration on https://portal.azure.com/
+    - Set a redirect url = `<your proxy base url>/sso/callback`
+    ```shell
+    http://localhost:4000/sso/callback
+    ```
+
+</TabItem>
+</Tabs>
 
 ## 4. Use UI
 
