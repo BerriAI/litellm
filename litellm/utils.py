@@ -2929,32 +2929,10 @@ def cost_per_token(
                 model_with_provider_and_region in model_cost_ref
             ):  # use region based pricing, if it's available
                 model_with_provider = model_with_provider_and_region
+    if model_with_provider in model_cost_ref:
+        model = model_with_provider
     # see this https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models
     print_verbose(f"Looking up model={model} in model_cost_map")
-    if model_with_provider in model_cost_ref:
-        print_verbose(
-            f"Success: model={model_with_provider} in model_cost_map - {model_cost_ref[model_with_provider]}"
-        )
-        print_verbose(
-            f"applying cost={model_cost_ref[model_with_provider].get('input_cost_per_token', None)} for prompt_tokens={prompt_tokens}"
-        )
-        prompt_tokens_cost_usd_dollar = (
-            model_cost_ref[model_with_provider]["input_cost_per_token"] * prompt_tokens
-        )
-        print_verbose(
-            f"calculated prompt_tokens_cost_usd_dollar: {prompt_tokens_cost_usd_dollar}"
-        )
-        print_verbose(
-            f"applying cost={model_cost_ref[model_with_provider].get('output_cost_per_token', None)} for completion_tokens={completion_tokens}"
-        )
-        completion_tokens_cost_usd_dollar = (
-            model_cost_ref[model_with_provider]["output_cost_per_token"]
-            * completion_tokens
-        )
-        print_verbose(
-            f"calculated completion_tokens_cost_usd_dollar: {completion_tokens_cost_usd_dollar}"
-        )
-        return prompt_tokens_cost_usd_dollar, completion_tokens_cost_usd_dollar
     if model in model_cost_ref:
         print_verbose(f"Success: model={model} in model_cost_map")
         print_verbose(
