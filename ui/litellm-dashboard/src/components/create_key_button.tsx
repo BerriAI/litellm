@@ -123,12 +123,25 @@ const CreateKey: React.FC<CreateKeyProps> = ({
           visible={isModalVisible}
           onOk={handleOk}
           onCancel={handleCancel}
+          footer={null}
         >
-          {/* Display the result here */}
-          <p>
-            API Key: {apiKey} <br />
-            {/* Display other API response details here */}
-          </p>
+          <Grid numItems={1} className="gap-2 w-full">
+          <Col numColSpan={1}>
+            <p>
+              Please save this secret key somewhere safe and accessible. For
+              security reasons, <b>you will not be able to view it again</b>{" "}
+              through your LiteLLM account. If you lose this secret key, you will
+              need to generate a new one.
+            </p>
+          </Col>
+          <Col numColSpan={1}>
+            {apiKey != null ? (
+              <Text>API Key: {apiKey}</Text>
+            ) : (
+              <Text>Key being created, this might take 30s</Text>
+            )}
+          </Col>
+        </Grid>
         </Modal>
       )}
     </div>
