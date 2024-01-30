@@ -8,6 +8,7 @@ from datetime import datetime
 dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
 from packaging.version import Version
+from litellm._logging import verbose_logger
 
 
 class LangFuseLogger:
@@ -93,6 +94,7 @@ class LangFuseLogger:
             print_verbose(
                 f"Langfuse Layer Logging - final response object: {response_obj}"
             )
+            verbose_logger.info(f"Langfuse Layer Logging - logging success")
         except:
             traceback.print_exc()
             print_verbose(f"Langfuse Layer Error - {traceback.format_exc()}")
@@ -181,6 +183,8 @@ class LangFuseLogger:
         if supports_tags:
             for key, value in metadata.items():
                 tags.append(f"{key}:{value}")
+            if "cache_hit" in kwargs:
+                tags.append(f"cache_hit:{kwargs['cache_hit']}")
             trace_params.update({"tags": tags})
 
         trace = self.Langfuse.trace(**trace_params)

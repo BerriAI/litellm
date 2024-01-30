@@ -274,7 +274,7 @@ def test_completion_azure_stream():
         pytest.fail(f"Error occurred: {e}")
 
 
-test_completion_azure_stream()
+# test_completion_azure_stream()
 
 
 def test_completion_azure_function_calling_stream():
@@ -396,6 +396,36 @@ def test_completion_palm_stream():
 
 
 # test_completion_palm_stream()
+
+
+def test_completion_gemini_stream():
+    try:
+        litellm.set_verbose = False
+        print("Streaming gemini response")
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {
+                "role": "user",
+                "content": "how does a court case get to the Supreme Court?",
+            },
+        ]
+        print("testing gemini streaming")
+        response = completion(model="gemini/gemini-pro", messages=messages, stream=True)
+        print(f"type of response at the top: {response}")
+        complete_response = ""
+        # Add any assertions here to check the response
+        for idx, chunk in enumerate(response):
+            print(chunk)
+            # print(chunk.choices[0].delta)
+            chunk, finished = streaming_format_tests(idx, chunk)
+            if finished:
+                break
+            complete_response += chunk
+        if complete_response.strip() == "":
+            raise Exception("Empty response received")
+        print(f"completion_response: {complete_response}")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 
 def test_completion_mistral_api_stream():
@@ -703,8 +733,15 @@ def test_completion_bedrock_claude_stream():
         complete_response = ""
         has_finish_reason = False
         # Add any assertions here to check the response
+        first_chunk_id = None
         for idx, chunk in enumerate(response):
             # print
+            if idx == 0:
+                first_chunk_id = chunk.id
+            else:
+                assert (
+                    chunk.id == first_chunk_id
+                ), f"chunk ids do not match: {chunk.id} != first chunk id{first_chunk_id}"
             chunk, finished = streaming_format_tests(idx, chunk)
             has_finish_reason = finished
             complete_response += chunk
@@ -769,9 +806,30 @@ def test_sagemaker_weird_response():
     When the stream ends, flush any remaining holding chunks.
     """
     try:
-        chunk = """<s>[INST] Hey, how's it going? [/INST]
+        from litellm.llms.sagemaker import TokenIterator
+        import json
+        import json
+        from litellm.llms.sagemaker import TokenIterator
 
-    I'm doing well, thanks for asking! How about you? Is there anything you'd like to chat about or ask? I'm here to help with any questions you might have."""
+        chunk = """<s>[INST] Hey, how's it going? [/INST],
+        I'm doing well, thanks for asking! How about you? Is there anything you'd like to chat about or ask? I'm here to help with any questions you might have."""
+
+        data = "\n".join(
+            map(
+                lambda x: f"data: {json.dumps({'token': {'text': x.strip()}})}",
+                chunk.strip().split(","),
+            )
+        )
+        stream = bytes(data, encoding="utf8")
+
+        # Modify the array to be a dictionary with "PayloadPart" and "Bytes" keys.
+        stream_iterator = iter([{"PayloadPart": {"Bytes": stream}}])
+
+        token_iter = TokenIterator(stream_iterator)
+
+        # for token in token_iter:
+        #     print(token)
+        litellm.set_verbose = True
 
         logging_obj = litellm.Logging(
             model="berri-benchmarking-Llama-2-70b-chat-hf-4",
@@ -783,14 +841,19 @@ def test_sagemaker_weird_response():
             start_time=time.time(),
         )
         response = litellm.CustomStreamWrapper(
-            completion_stream=chunk,
+            completion_stream=token_iter,
             model="berri-benchmarking-Llama-2-70b-chat-hf-4",
             custom_llm_provider="sagemaker",
             logging_obj=logging_obj,
         )
         complete_response = ""
-        for chunk in response:
-            complete_response += chunk["choices"][0]["delta"]["content"]
+        for idx, chunk in enumerate(response):
+            # print
+            chunk, finished = streaming_format_tests(idx, chunk)
+            has_finish_reason = finished
+            complete_response += chunk
+            if finished:
+                break
         assert len(complete_response) > 0
     except Exception as e:
         pytest.fail(f"An exception occurred - {str(e)}")
@@ -813,41 +876,53 @@ async def test_sagemaker_streaming_async():
         )
 
         # Add any assertions here to check the response
+        print(response)
         complete_response = ""
+        has_finish_reason = False
+        # Add any assertions here to check the response
+        idx = 0
         async for chunk in response:
-            complete_response += chunk.choices[0].delta.content or ""
-        print(f"complete_response: {complete_response}")
-        assert len(complete_response) > 0
+            # print
+            chunk, finished = streaming_format_tests(idx, chunk)
+            has_finish_reason = finished
+            complete_response += chunk
+            if finished:
+                break
+            idx += 1
+        if has_finish_reason is False:
+            raise Exception("finish reason not set for last chunk")
+        if complete_response.strip() == "":
+            raise Exception("Empty response received")
+        print(f"completion_response: {complete_response}")
     except Exception as e:
         pytest.fail(f"An exception occurred - {str(e)}")
 
 
-# def test_completion_sagemaker_stream():
-#     try:
-#         response = completion(
-#             model="sagemaker/jumpstart-dft-meta-textgeneration-llama-2-7b",
-#             messages=messages,
-#             temperature=0.2,
-#             max_tokens=80,
-#             stream=True,
-#         )
-#         complete_response = ""
-#         has_finish_reason = False
-#         # Add any assertions here to check the response
-#         for idx, chunk in enumerate(response):
-#             chunk, finished = streaming_format_tests(idx, chunk)
-#             has_finish_reason = finished
-#             if finished:
-#                 break
-#             complete_response += chunk
-#         if has_finish_reason is False:
-#             raise Exception("finish reason not set for last chunk")
-#         if complete_response.strip() == "":
-#             raise Exception("Empty response received")
-#     except InvalidRequestError as e:
-#         pass
-#     except Exception as e:
-#         pytest.fail(f"Error occurred: {e}")
+def test_completion_sagemaker_stream():
+    try:
+        response = completion(
+            model="sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4",
+            messages=messages,
+            temperature=0.2,
+            max_tokens=80,
+            stream=True,
+        )
+        complete_response = ""
+        has_finish_reason = False
+        # Add any assertions here to check the response
+        for idx, chunk in enumerate(response):
+            chunk, finished = streaming_format_tests(idx, chunk)
+            has_finish_reason = finished
+            if finished:
+                break
+            complete_response += chunk
+        if has_finish_reason is False:
+            raise Exception("finish reason not set for last chunk")
+        if complete_response.strip() == "":
+            raise Exception("Empty response received")
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
+
 
 # test_completion_sagemaker_stream()
 

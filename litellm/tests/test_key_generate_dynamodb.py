@@ -25,10 +25,15 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import pytest, logging, asyncio
 import litellm, asyncio
-from litellm.proxy.proxy_server import new_user, user_api_key_auth, user_update
+from litellm.proxy.proxy_server import (
+    new_user,
+    user_api_key_auth,
+    user_update,
+    generate_key_fn,
+)
 
-from litellm.proxy._types import NewUserRequest, DynamoDBArgs
-from litellm.proxy.utils import DBClient
+from litellm.proxy._types import NewUserRequest, DynamoDBArgs, GenerateKeyRequest
+from litellm.proxy.utils import DBClient, hash_token
 from starlette.datastructures import URL
 
 
@@ -104,13 +109,17 @@ def test_call_with_invalid_key(custom_db_client):
         asyncio.run(test())
     except Exception as e:
         print("Got Exception", e)
-        print(e.detail)
-        assert "Authentication Error" in e.detail
+        print(e.message)
+        assert "Authentication Error" in e.message
         pass
 
 
 def test_call_with_invalid_model(custom_db_client):
     # 3. Make a call to a key with an invalid model - expect to fail
+    from litellm._logging import verbose_proxy_logger
+    import logging
+
+    verbose_proxy_logger.setLevel(logging.DEBUG)
     setattr(litellm.proxy.proxy_server, "custom_db_client", custom_db_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
     try:
@@ -138,7 +147,7 @@ def test_call_with_invalid_model(custom_db_client):
         asyncio.run(test())
     except Exception as e:
         assert (
-            e.detail
+            e.message
             == "Authentication Error, API Key not allowed to access model. This token can only access models=['mistral']. Tried to access gemini-pro-vision"
         )
         pass
@@ -175,10 +184,16 @@ def test_call_with_valid_model(custom_db_client):
         pytest.fail(f"An exception occurred - {str(e)}")
 
 
-def test_call_with_key_over_budget(custom_db_client):
+def test_call_with_user_over_budget(custom_db_client):
     # 5. Make a call with a key over budget, expect to fail
     setattr(litellm.proxy.proxy_server, "custom_db_client", custom_db_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    from litellm._logging import verbose_proxy_logger, verbose_logger
+    import logging
+
+    litellm.set_verbose = True
+    verbose_logger.setLevel(logging.DEBUG)
+    verbose_proxy_logger.setLevel(logging.DEBUG)
     try:
 
         async def test():
@@ -221,10 +236,11 @@ def test_call_with_key_over_budget(custom_db_client):
                     "stream": False,
                     "litellm_params": {
                         "metadata": {
-                            "user_api_key": generated_key,
+                            "user_api_key": hash_token(generated_key),
                             "user_api_key_user_id": user_id,
                         }
                     },
+                    "response_cost": 0.00002,
                 },
                 completion_response=resp,
             )
@@ -236,12 +252,12 @@ def test_call_with_key_over_budget(custom_db_client):
 
         asyncio.run(test())
     except Exception as e:
-        error_detail = e.detail
+        error_detail = e.message
         assert "Authentication Error, ExceededBudget:" in error_detail
         print(vars(e))
 
 
-def test_call_with_key_over_budget_stream(custom_db_client):
+def test_call_with_user_over_budget_stream(custom_db_client):
     # 6. Make a call with a key over budget, expect to fail
     setattr(litellm.proxy.proxy_server, "custom_db_client", custom_db_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
@@ -293,10 +309,11 @@ def test_call_with_key_over_budget_stream(custom_db_client):
                     "complete_streaming_response": resp,
                     "litellm_params": {
                         "metadata": {
-                            "user_api_key": generated_key,
+                            "user_api_key": hash_token(generated_key),
                             "user_api_key_user_id": user_id,
                         }
                     },
+                    "response_cost": 0.00002,
                 },
                 completion_response=ModelResponse(),
             )
@@ -308,6 +325,179 @@ def test_call_with_key_over_budget_stream(custom_db_client):
 
         asyncio.run(test())
     except Exception as e:
-        error_detail = e.detail
+        error_detail = e.message
         assert "Authentication Error, ExceededBudget:" in error_detail
         print(vars(e))
+
+
+def test_call_with_user_key_budget(custom_db_client):
+    # 7. Make a call with a key over budget, expect to fail
+    setattr(litellm.proxy.proxy_server, "custom_db_client", custom_db_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    from litellm._logging import verbose_proxy_logger
+    import logging
+
+    verbose_proxy_logger.setLevel(logging.DEBUG)
+    try:
+
+        async def test():
+            request = GenerateKeyRequest(max_budget=0.00001)
+            key = await generate_key_fn(request)
+            print(key)
+
+            generated_key = key.key
+            user_id = key.user_id
+            bearer_token = "Bearer " + generated_key
+
+            request = Request(scope={"type": "http"})
+            request._url = URL(url="/chat/completions")
+
+            # use generated key to auth in
+            result = await user_api_key_auth(request=request, api_key=bearer_token)
+            print("result from user auth with new key", result)
+
+            # update spend using track_cost callback, make 2nd request, it should fail
+            from litellm.proxy.proxy_server import track_cost_callback
+            from litellm import ModelResponse, Choices, Message, Usage
+
+            resp = ModelResponse(
+                id="chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac",
+                choices=[
+                    Choices(
+                        finish_reason=None,
+                        index=0,
+                        message=Message(
+                            content=" Sure! Here is a short poem about the sky:\n\nA canvas of blue, a",
+                            role="assistant",
+                        ),
+                    )
+                ],
+                model="gpt-35-turbo",  # azure always has model written like this
+                usage=Usage(prompt_tokens=210, completion_tokens=200, total_tokens=410),
+            )
+            await track_cost_callback(
+                kwargs={
+                    "stream": False,
+                    "litellm_params": {
+                        "metadata": {
+                            "user_api_key": hash_token(generated_key),
+                            "user_api_key_user_id": user_id,
+                        }
+                    },
+                    "response_cost": 0.00002,
+                },
+                completion_response=resp,
+            )
+
+            # use generated key to auth in
+            result = await user_api_key_auth(request=request, api_key=bearer_token)
+            print("result from user auth with new key", result)
+            pytest.fail(f"This should have failed!. They key crossed it's budget")
+
+        asyncio.run(test())
+    except Exception as e:
+        error_detail = e.message
+        assert "Authentication Error, ExceededTokenBudget:" in error_detail
+        print(vars(e))
+
+
+def test_call_with_key_over_budget_stream(custom_db_client):
+    # 8. Make a call with a key over budget, expect to fail
+    setattr(litellm.proxy.proxy_server, "custom_db_client", custom_db_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    from litellm._logging import verbose_proxy_logger
+    import logging
+
+    litellm.set_verbose = True
+    verbose_proxy_logger.setLevel(logging.DEBUG)
+    try:
+
+        async def test():
+            request = GenerateKeyRequest(max_budget=0.00001)
+            key = await generate_key_fn(request)
+            print(key)
+
+            generated_key = key.key
+            user_id = key.user_id
+            bearer_token = "Bearer " + generated_key
+
+            request = Request(scope={"type": "http"})
+            request._url = URL(url="/chat/completions")
+
+            # use generated key to auth in
+            result = await user_api_key_auth(request=request, api_key=bearer_token)
+            print("result from user auth with new key", result)
+
+            # update spend using track_cost callback, make 2nd request, it should fail
+            from litellm.proxy.proxy_server import track_cost_callback
+            from litellm import ModelResponse, Choices, Message, Usage
+
+            resp = ModelResponse(
+                id="chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac",
+                choices=[
+                    Choices(
+                        finish_reason=None,
+                        index=0,
+                        message=Message(
+                            content=" Sure! Here is a short poem about the sky:\n\nA canvas of blue, a",
+                            role="assistant",
+                        ),
+                    )
+                ],
+                model="gpt-35-turbo",  # azure always has model written like this
+                usage=Usage(prompt_tokens=210, completion_tokens=200, total_tokens=410),
+            )
+            await track_cost_callback(
+                kwargs={
+                    "stream": True,
+                    "complete_streaming_response": resp,
+                    "litellm_params": {
+                        "metadata": {
+                            "user_api_key": hash_token(generated_key),
+                            "user_api_key_user_id": user_id,
+                        }
+                    },
+                    "response_cost": 0.00002,
+                },
+                completion_response=ModelResponse(),
+            )
+
+            # use generated key to auth in
+            result = await user_api_key_auth(request=request, api_key=bearer_token)
+            print("result from user auth with new key", result)
+            pytest.fail(f"This should have failed!. They key crossed it's budget")
+
+        asyncio.run(test())
+    except Exception as e:
+        error_detail = e.message
+        assert "Authentication Error, ExceededTokenBudget:" in error_detail
+        print(vars(e))
+
+
+def test_dynamo_db_migration(custom_db_client):
+    # Tests the temporary patch we have in place
+    setattr(litellm.proxy.proxy_server, "custom_db_client", custom_db_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "user_custom_auth", None)
+    try:
+
+        async def test():
+            bearer_token = (
+                "Bearer " + "sk-elJDL2pOEjcAuC7zD4psAg"
+            )  # this works with ishaan's db, it's a never expiring key
+
+            request = Request(scope={"type": "http"})
+            request._url = URL(url="/chat/completions")
+
+            async def return_body():
+                return b'{"model": "azure-models"}'
+
+            request.body = return_body
+
+            # use generated key to auth in
+            result = await user_api_key_auth(request=request, api_key=bearer_token)
+            print("result from user auth with new key", result)
+
+        asyncio.run(test())
+    except Exception as e:
+        pytest.fail(f"An exception occurred - {str(e)}")
