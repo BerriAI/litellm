@@ -759,8 +759,11 @@ class OpenAIChatCompletion(BaseLLM):
         messages: Optional[list] = None,
         input: Optional[list] = None,
         prompt: Optional[str] = None,
+        organization: Optional[str] = None,
     ):
-        client = AsyncOpenAI(api_key=api_key, timeout=timeout)
+        client = AsyncOpenAI(
+            api_key=api_key, timeout=timeout, organization=organization
+        )
         if model is None and mode != "image_generation":
             raise Exception("model is not set")
 
