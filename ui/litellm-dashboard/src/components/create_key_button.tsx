@@ -36,6 +36,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   const handleCancel = () => {
     setIsModalVisible(false);
     setApiKey(null);
+    form.resetFields();
   };
 
   const handleCreate = async (formValues) => {
@@ -54,6 +55,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
       setData([...data, response]);
       setApiKey(response["key"]);
       message.success("API Key Created");
+      form.resetFields();
     } catch (error) {
       console.error("Error creating the key:", error);
     }
@@ -70,6 +72,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({
         visible={isModalVisible}
         width={800}
         footer={null}
+        onOk={handleOk}
+        onCancel={handleCancel}
       >
         <Form form={form} onFinish={handleCreate} labelCol={{ span: 6 }} wrapperCol={{ span: 16 }} labelAlign="left">
         
