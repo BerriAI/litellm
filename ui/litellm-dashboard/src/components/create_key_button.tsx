@@ -62,7 +62,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
         onOk={handleOk}
         onCancel={handleCancel}
       >
-        <Form form={form} onFinish={handleCreate}>
+        <Form form={form} onFinish={handleCreate} labelCol={{ span: 6 }} wrapperCol={{ span: 16 }}>
           <Form.Item
             label="Duration"
             name="duration"
