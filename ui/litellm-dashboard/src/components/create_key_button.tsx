@@ -39,20 +39,20 @@ const CreateKey: React.FC<CreateKeyProps> = ({
     form.resetFields();
   };
 
-  const handleCreate = async (formValues) => {
+  const handleCreate = async (formValues: Record<string, any>) => {
     try {
       message.info("Making API Call");
       // Check if "models" exists and is not an empty string
       if (formValues.models && formValues.models.trim() !== '') {
         // Format the "models" field as an array
-        formValues.models = formValues.models.split(',').map(model => model.trim());
+        formValues.models = formValues.models.split(',').map((model: string) => model.trim());
       } else {
         // If "models" is undefined or an empty string, set it to an empty array
         formValues.models = [];
       }
       setIsModalVisible(true);
       const response = await keyCreateCall(proxyBaseUrl, accessToken, userID, formValues);
-      setData([...data, response]);
+      setData((prevData) => (prevData ? [...prevData, response] : [response])); // Check if prevData is null
       setApiKey(response["key"]);
       message.success("API Key Created");
       form.resetFields();
@@ -111,9 +111,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({
             <Input.TextArea rows={4} placeholder="Enter metadata as JSON" />
           </Form.Item>
           <div style={{ textAlign: 'right', marginTop: '10px' }}>
-            <Button type="primary" htmlType="submit">
+            <Button2 htmlType="submit">
               Create Key
-            </Button>
+            </Button2>
           </div>
         </Form>
       </Modal>
