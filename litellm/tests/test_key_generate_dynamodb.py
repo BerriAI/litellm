@@ -478,6 +478,7 @@ def test_dynamo_db_migration(custom_db_client):
     # Tests the temporary patch we have in place
     setattr(litellm.proxy.proxy_server, "custom_db_client", custom_db_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "user_custom_auth", None)
     try:
 
         async def test():
