@@ -2248,7 +2248,12 @@ def client(original_function):
                 )
 
                 if num_retries:
-                    if isinstance(e, openai.APIError) or isinstance(e, openai.Timeout):
+                    if (
+                        isinstance(e, openai.APIError)
+                        or isinstance(e, openai.Timeout)
+                        or isinstance(openai.APIConnectionError)
+                    ):
+                        print_verbose(f"RETRY TRIGGERED!")
                         kwargs["num_retries"] = num_retries
                         return litellm.completion_with_retries(*args, **kwargs)
                 elif (
