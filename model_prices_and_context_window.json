@@ -1675,29 +1675,38 @@
     },
       "perplexity/pplx-7b-chat": { 
         "max_tokens": 8192, 
-        "input_cost_per_token": 0.0000000, 
-        "output_cost_per_token": 0.000000, 
+        "input_cost_per_token": 0.00000007, 
+        "output_cost_per_token": 0.00000028, 
+        "litellm_provider": "perplexity", 
+        "mode": "chat" 
+      },
+      "perplexity/pplx-34b-chat": { 
+        "max_tokens": 8192, 
+        "input_cost_per_token": 0.00000035, 
+        "output_cost_per_token": 0.00000140, 
         "litellm_provider": "perplexity", 
         "mode": "chat" 
       },
       "perplexity/pplx-70b-chat": { 
         "max_tokens": 4096, 
-        "input_cost_per_token": 0.0000000, 
-        "output_cost_per_token": 0.000000, 
+        "input_cost_per_token": 0.00000070, 
+        "output_cost_per_token": 0.00000280, 
         "litellm_provider": "perplexity", 
         "mode": "chat" 
       },
       "perplexity/pplx-7b-online": { 
         "max_tokens": 4096, 
         "input_cost_per_token": 0.0000000, 
-        "output_cost_per_token": 0.0005, 
+        "output_cost_per_token": 0.00000028, 
+        "input_cost_per_request": 0.005,
         "litellm_provider": "perplexity", 
         "mode": "chat" 
       },
       "perplexity/pplx-70b-online": { 
         "max_tokens": 4096, 
         "input_cost_per_token": 0.0000000, 
-        "output_cost_per_token": 0.0005, 
+        "output_cost_per_token": 0.00000280, 
+        "input_cost_per_request": 0.005,
         "litellm_provider": "perplexity", 
         "mode": "chat" 
       },
