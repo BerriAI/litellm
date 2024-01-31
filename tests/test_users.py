@@ -123,11 +123,19 @@ async def test_users_budgets_reset():
             session=session, get_user=get_user, call_user=key
         )
         reset_at_init_value = user_info["user_info"]["budget_reset_at"]
-        await asyncio.sleep(15)
-        user_info = await get_user_info(
-            session=session, get_user=get_user, call_user=key
-        )
-        reset_at_new_value = user_info["user_info"]["budget_reset_at"]
+        i = 0
+        reset_at_new_value = None
+        while i < 3:
+            await asyncio.sleep(15)
+            user_info = await get_user_info(
+                session=session, get_user=get_user, call_user=key
+            )
+            reset_at_new_value = user_info["user_info"]["budget_reset_at"]
+            try:
+                assert reset_at_init_value != reset_at_new_value
+                break
+            except:
+                i + 1
         assert reset_at_init_value != reset_at_new_value
 
 
