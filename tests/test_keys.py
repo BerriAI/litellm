@@ -351,21 +351,10 @@ async def test_key_info_spend_values_sagemaker():
         prompt_tokens, completion_tokens = await chat_completion_streaming(
             session=session, key=new_key, model="sagemaker-completion-model"
         )
-        # print(f"prompt_tokens: {prompt_tokens}, completion_tokens: {completion_tokens}")
-        # prompt_cost, completion_cost = litellm.cost_per_token(
-        #     model="azure/gpt-35-turbo",
-        #     prompt_tokens=prompt_tokens,
-        #     completion_tokens=completion_tokens,
-        # )
-        # response_cost = prompt_cost + completion_cost
         await asyncio.sleep(5)  # allow db log to be updated
         key_info = await get_key_info(
             session=session, get_key=new_key, call_key=new_key
         )
-        # print(
-        #     f"response_cost: {response_cost}; key_info spend: {key_info['info']['spend']}"
-        # )
-        # rounded_response_cost = round(response_cost, 8)
         rounded_key_info_spend = round(key_info["info"]["spend"], 8)
         assert rounded_key_info_spend > 0
         # assert rounded_response_cost == rounded_key_info_spend
