@@ -175,7 +175,7 @@ class LangFuseLogger:
 
         tags = []
         supports_tags = Version(langfuse.version.__version__) >= Version("2.6.3")
-        supports_costs = Version(langfuse.version.__version__) >= Version("2.7.0")
+        supports_costs = Version(langfuse.version.__version__) >= Version("2.7.3")
 
         print_verbose(f"Langfuse Layer Logging - logging to langfuse v2 ")
 
