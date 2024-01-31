@@ -161,9 +161,7 @@ router = APIRouter()
 origins = ["*"]
 
 
-app.mount(
-    "/ui", StaticFiles(directory="../../ui/litellm-dashboard/out", html=True), name="ui"
-)
+app.mount("/ui", StaticFiles(directory="_experimental/out", html=True), name="ui")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
