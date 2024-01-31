@@ -325,17 +325,18 @@ class LiteLLM_VerificationToken(LiteLLMBase):
     key_alias: Optional[str] = None
     spend: float = 0.0
     max_budget: Optional[float] = None
-    expires: Union[str, None]
+    expires: Union[datetime, str, None]
     models: List[str]
-    aliases: Dict[str, str] = {}
-    config: Dict[str, str] = {}
-    user_id: Union[str, None]
-    max_parallel_requests: Union[int, None]
-    metadata: Dict[str, str] = {}
+    aliases: Dict = {}
+    config: Dict = {}
+    user_id: Optional[str] = None
+    max_parallel_requests: Optional[int] = None
+    metadata: Dict = {}
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
     budget_duration: Optional[str] = None
     budget_reset_at: Optional[datetime] = None
+    team_id: Optional[str] = None
 
 
 class LiteLLM_Config(LiteLLMBase):
