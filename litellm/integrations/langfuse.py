@@ -9,6 +9,7 @@ dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
 from packaging.version import Version
 from litellm._logging import verbose_logger
+import litellm
 
 
 class LangFuseLogger:
@@ -63,11 +64,15 @@ class LangFuseLogger:
                         pass
 
             # end of processing langfuse ########################
-            input = prompt
-            output = response_obj["choices"][0]["message"].json()
-            print_verbose(
-                f"OUTPUT IN LANGFUSE: {output}; original: {response_obj['choices'][0]['message']}"
-            )
+            if kwargs.get("call_type", None) == "embedding" or isinstance(
+                response_obj, litellm.EmbeddingResponse
+            ):
+                input = prompt
+                output = response_obj["data"]
+            else:
+                input = prompt
+                output = response_obj["choices"][0]["message"].json()
+            print_verbose(f"OUTPUT IN LANGFUSE: {output}; original: {response_obj}")
             self._log_langfuse_v2(
                 user_id,
                 metadata,
@@ -173,8 +178,12 @@ class LangFuseLogger:
         tags = []
         supports_tags = Version(langfuse.version.__version__) >= Version("2.6.3")
 
+        generation_name = metadata.get("generation_name", None)
+        if generation_name is None:
+            # just log `litellm-{call_type}` as the generation name
+            generation_name = f"litellm-{kwargs.get('call_type', 'completion')}"
         trace_params = {
-            "name": metadata.get("generation_name", "litellm-completion"),
+            "name": generation_name,
             "input": input,
             "output": output,
             "user_id": metadata.get("trace_user_id", user_id),
@@ -190,7 +199,7 @@ class LangFuseLogger:
         trace = self.Langfuse.trace(**trace_params)
 
         trace.generation(
-            name=metadata.get("generation_name", "litellm-completion"),
+            name=generation_name,
             id=metadata.get("generation_id", None),
             startTime=start_time,
             endTime=end_time,
