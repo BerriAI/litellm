@@ -1370,6 +1370,10 @@ async def generate_key_helper_fn(
             saved_token["config"] = json.loads(saved_token["config"])
         if isinstance(saved_token["metadata"], str):
             saved_token["metadata"] = json.loads(saved_token["metadata"])
+        if saved_token.get("expires", None) is not None and isinstance(
+            saved_token["expires"], datetime
+        ):
+            saved_token["expires"] = saved_token["expires"].isoformat()
         user_api_key_cache.set_cache(
             key=key_data["token"],
             value=LiteLLM_VerificationToken(**saved_token),  # type: ignore
