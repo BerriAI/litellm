@@ -161,9 +161,12 @@ router = APIRouter()
 origins = ["*"]
 
 # get current directory
-current_dir = os.getcwd()
-ui_path = os.path.join(current_dir, "_experimental", "out")
-app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
+try:
+    current_dir = os.getcwd()
+    ui_path = os.path.join(current_dir, "_experimental", "out")
+    app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
+except:
+    pass
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
