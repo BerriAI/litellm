@@ -5,6 +5,15 @@ from datetime import datetime
 import uuid, json, sys, os
 
 
+def hash_token(token: str):
+    import hashlib
+
+    # Hash the string using SHA-256
+    hashed_token = hashlib.sha256(token.encode()).hexdigest()
+
+    return hashed_token
+
+
 class LiteLLMBase(BaseModel):
     """
     Implements default functions, all pydantic objects should have.
@@ -137,6 +146,7 @@ class GenerateRequestBase(LiteLLMBase):
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
     budget_duration: Optional[str] = None
+    allowed_cache_controls: Optional[list] = []
 
 
 class GenerateKeyRequest(GenerateRequestBase):
@@ -175,25 +185,6 @@ class UpdateKeyRequest(GenerateKeyRequest):
     duration: Optional[str] = None
     spend: Optional[float] = None
     metadata: Optional[dict] = None
-
-
-class UserAPIKeyAuth(LiteLLMBase):  # the expected response object for user api key auth
-    """
-    Return the row in the db
-    """
-
-    api_key: Optional[str] = None
-    models: list = []
-    aliases: dict = {}
-    config: dict = {}
-    spend: Optional[float] = 0
-    max_budget: Optional[float] = None
-    user_id: Optional[str] = None
-    max_parallel_requests: Optional[int] = None
-    duration: str = "1h"
-    metadata: dict = {}
-    tpm_limit: Optional[int] = None
-    rpm_limit: Optional[int] = None
 
 
 class DeleteKeyRequest(LiteLLMBase):
@@ -320,13 +311,13 @@ class ConfigYAML(LiteLLMBase):
 
 
 class LiteLLM_VerificationToken(LiteLLMBase):
-    token: str
+    token: Optional[str] = None
     key_name: Optional[str] = None
     key_alias: Optional[str] = None
     spend: float = 0.0
     max_budget: Optional[float] = None
-    expires: Union[datetime, str, None]
-    models: List[str]
+    expires: Optional[str] = None
+    models: List = []
     aliases: Dict = {}
     config: Dict = {}
     user_id: Optional[str] = None
@@ -336,7 +327,23 @@ class LiteLLM_VerificationToken(LiteLLMBase):
     rpm_limit: Optional[int] = None
     budget_duration: Optional[str] = None
     budget_reset_at: Optional[datetime] = None
-    team_id: Optional[str] = None
+    allowed_cache_controls: Optional[list] = []
+
+
+class UserAPIKeyAuth(
+    LiteLLM_VerificationToken
+):  # the expected response object for user api key auth
+    """
+    Return the row in the db
+    """
+
+    api_key: Optional[str] = None
+
+    @root_validator(pre=True)
+    def check_api_key(cls, values):
+        if values.get("api_key") is not None:
+            values.update({"token": hash_token(values.get("api_key"))})
+        return values
 
 
 class LiteLLM_Config(LiteLLMBase):
