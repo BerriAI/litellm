@@ -534,6 +534,7 @@ async def user_api_key_auth(
                 and (not is_master_key_valid)
                 and (not general_settings.get("allow_user_auth", False))
             ):
+                # enters this block when allow_user_auth is set to False
                 assert not general_settings.get("allow_user_auth", False)
                 if route == "/key/info":
                     # check if user can access this route
@@ -560,8 +561,9 @@ async def user_api_key_auth(
                     # /model/info just shows models user has access to
                     pass
                 else:
+                    allow_user_auth = general_settings.get("allow_user_auth", False)
                     raise Exception(
-                        f"only master key can be used to generate, delete, update or get info for new keys/users."
+                        f"Only master key can be used to generate, delete, update or get info for new keys/users. Value of allow_user_auth={allow_user_auth}"
                     )
 
             return UserAPIKeyAuth(api_key=api_key, **valid_token_dict)
