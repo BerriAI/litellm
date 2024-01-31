@@ -78,7 +78,6 @@ litellm_settings:
   # callbacks: custom_callbacks.proxy_handler_instance # sets litellm.callbacks = [proxy_handler_instance]
 
 general_settings: 
-  allow_user_auth: True
   master_key: sk-1234
   alerting: ["slack"]
   alerting_threshold: 10 # sends alerts if requests hang for 2 seconds
