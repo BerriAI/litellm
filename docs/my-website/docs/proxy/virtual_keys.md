@@ -278,6 +278,21 @@ Request Params:
 }
 ```
 
+## Default /key/generate params
+Use this, if you need to control the default `max_budget` or any `key/generate` param per key. 
+
+When a `/key/generate` request does not specify `max_budget`, it will use the `max_budget` specified in `default_key_generate_params`
+
+Set `litellm_settings:default_key_generate_params`:
+```yaml
+litellm_settings:
+  default_key_generate_params:
+    max_budget: 1.5000
+    models: ["azure-gpt-3.5"]
+    duration:     # blank means `null`
+    metadata: {"setting":"default"}
+    team_id: "core-infra"
+```
 ## Set Budgets - Per Key
 
 Set `max_budget` in (USD $) param in the `key/generate` request. By default the `max_budget` is set to `null` and is not checked for keys

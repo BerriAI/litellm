@@ -233,10 +233,6 @@ class DynamoDBWrapper(CustomDB):
                 table = client.table(self.database_arguments.config_table_name)
                 key_name = "param_name"
 
-            if key_name == "token" and key.startswith("sk-"):
-                # ensure it's hashed
-                key = hash_token(token=key)
-
             response = await table.get_item({key_name: key})
 
             new_response: Any = None

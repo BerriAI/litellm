@@ -115,6 +115,7 @@ const sidebars = {
         "proxy/ui",
         "proxy/model_management",
         "proxy/health",
+        "proxy/debugging",
         {
           "type": "category",
           "label": "🔥 Load Balancing",

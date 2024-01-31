@@ -188,7 +188,7 @@ print(response)
 </Tabs>
 
 
-## Save Model-specific params (API Base, API Keys, Temperature, Max Tokens, Seed, Headers etc.)
+## Save Model-specific params (API Base, API Keys, Temperature, Max Tokens, Seed, Organization, Headers etc.)
 You can use the config to save model-specific information like api_base, api_key, temperature, max_tokens, etc. 
 
 [**All input params**](https://docs.litellm.ai/docs/completion/input#input-params-1)
@@ -209,6 +209,12 @@ model_list:
       model: azure/gpt-4
       api_key: sk-123
       api_base: https://openai-gpt-4-test-v-2.openai.azure.com/
+      temperature: 0.2
+  - model_name: openai-gpt-3.5
+    litellm_params:
+      model: openai/gpt-3.5-turbo
+      api_key: sk-123
+      organization: org-ikDc4ex8NB
       temperature: 0.2
   - model_name: mistral-7b
     litellm_params:
@@ -481,5 +487,57 @@ set the max parallel request limit on the config.yaml (note: this expects the us
 ```yaml
 general_settings:
   max_parallel_requests: 100 # max parallel requests for a user = 100
+```
+
+## All settings 
+
+```python
+{
+  "environment_variables": {},
+  "model_list": [
+    {
+      "model_name": "string",
+      "litellm_params": {},
+      "model_info": {
+        "id": "string",
+        "mode": "embedding",
+        "input_cost_per_token": 0,
+        "output_cost_per_token": 0,
+        "max_tokens": 2048,
+        "base_model": "gpt-4-1106-preview",
+        "additionalProp1": {}
+      }
+    }
+  ],
+  "litellm_settings": {}, # ALL (https://github.com/BerriAI/litellm/blob/main/litellm/__init__.py)
+  "general_settings": {
+    "completion_model": "string",
+    "key_management_system": "google_kms", # either google_kms or azure_kms
+    "master_key": "string",
+    "database_url": "string",
+    "database_type": "dynamo_db",
+    "database_args": {
+      "billing_mode": "PROVISIONED_THROUGHPUT",
+      "read_capacity_units": 0,
+      "write_capacity_units": 0,
+      "ssl_verify": true,
+      "region_name": "string",
+      "user_table_name": "LiteLLM_UserTable",
+      "key_table_name": "LiteLLM_VerificationToken",
+      "config_table_name": "LiteLLM_Config",
+      "spend_table_name": "LiteLLM_SpendLogs"
+    },
+    "otel": true,
+    "custom_auth": "string",
+    "max_parallel_requests": 0,
+    "infer_model_from_keys": true,
+    "background_health_checks": true,
+    "health_check_interval": 300,
+    "alerting": [
+      "string"
+    ],
+    "alerting_threshold": 0
+  }
+}
 ```
 

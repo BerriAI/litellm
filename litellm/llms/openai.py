@@ -221,6 +221,7 @@ class OpenAIChatCompletion(BaseLLM):
         headers: Optional[dict] = None,
         custom_prompt_dict: dict = {},
         client=None,
+        organization: Optional[str] = None,
     ):
         super().completion()
         exception_mapping_worked = False
@@ -254,6 +255,7 @@ class OpenAIChatCompletion(BaseLLM):
                                 timeout=timeout,
                                 client=client,
                                 max_retries=max_retries,
+                                organization=organization,
                             )
                         else:
                             return self.acompletion(
@@ -266,6 +268,7 @@ class OpenAIChatCompletion(BaseLLM):
                                 timeout=timeout,
                                 client=client,
                                 max_retries=max_retries,
+                                organization=organization,
                             )
                     elif optional_params.get("stream", False):
                         return self.streaming(
@@ -278,6 +281,7 @@ class OpenAIChatCompletion(BaseLLM):
                             timeout=timeout,
                             client=client,
                             max_retries=max_retries,
+                            organization=organization,
                         )
                     else:
                         if not isinstance(max_retries, int):
@@ -291,6 +295,7 @@ class OpenAIChatCompletion(BaseLLM):
                                 http_client=litellm.client_session,
                                 timeout=timeout,
                                 max_retries=max_retries,
+                                organization=organization,
                             )
                         else:
                             openai_client = client
@@ -358,6 +363,7 @@ class OpenAIChatCompletion(BaseLLM):
         timeout: float,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
+        organization: Optional[str] = None,
         client=None,
         max_retries=None,
         logging_obj=None,
@@ -372,6 +378,7 @@ class OpenAIChatCompletion(BaseLLM):
                     http_client=litellm.aclient_session,
                     timeout=timeout,
                     max_retries=max_retries,
+                    organization=organization,
                 )
             else:
                 openai_aclient = client
@@ -412,6 +419,7 @@ class OpenAIChatCompletion(BaseLLM):
         model: str,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
+        organization: Optional[str] = None,
         client=None,
         max_retries=None,
         headers=None,
@@ -423,6 +431,7 @@ class OpenAIChatCompletion(BaseLLM):
                 http_client=litellm.client_session,
                 timeout=timeout,
                 max_retries=max_retries,
+                organization=organization,
             )
         else:
             openai_client = client
@@ -454,6 +463,7 @@ class OpenAIChatCompletion(BaseLLM):
         model: str,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
+        organization: Optional[str] = None,
         client=None,
         max_retries=None,
         headers=None,
@@ -467,6 +477,7 @@ class OpenAIChatCompletion(BaseLLM):
                     http_client=litellm.aclient_session,
                     timeout=timeout,
                     max_retries=max_retries,
+                    organization=organization,
                 )
             else:
                 openai_aclient = client
@@ -748,8 +759,11 @@ class OpenAIChatCompletion(BaseLLM):
         messages: Optional[list] = None,
         input: Optional[list] = None,
         prompt: Optional[str] = None,
+        organization: Optional[str] = None,
     ):
-        client = AsyncOpenAI(api_key=api_key, timeout=timeout)
+        client = AsyncOpenAI(
+            api_key=api_key, timeout=timeout, organization=organization
+        )
         if model is None and mode != "image_generation":
             raise Exception("model is not set")
 

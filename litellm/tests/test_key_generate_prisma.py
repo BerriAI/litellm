@@ -1188,3 +1188,27 @@ async def test_key_name_set(prisma_client):
     except Exception as e:
         print("Got Exception", e)
         pytest.fail(f"Got exception {e}")
+
+
+@pytest.mark.asyncio()
+async def test_default_key_params(prisma_client):
+    """
+    - create key
+    - get key info
+    - assert key_name is not null
+    """
+    setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
+    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "general_settings", {"allow_user_auth": True})
+    litellm.default_key_generate_params = {"max_budget": 0.000122}
+    await litellm.proxy.proxy_server.prisma_client.connect()
+    try:
+        request = GenerateKeyRequest()
+        key = await generate_key_fn(request)
+        generated_key = key.key
+        result = await info_key_fn(key=generated_key)
+        print("result from info_key_fn", result)
+        assert result["info"]["max_budget"] == 0.000122
+    except Exception as e:
+        print("Got Exception", e)
+        pytest.fail(f"Got exception {e}")
