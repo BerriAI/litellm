@@ -107,19 +107,23 @@ async def chat_completion(session, key, model="gpt-4"):
         ],
     }
 
-    async with session.post(url, headers=headers, json=data) as response:
-        status = response.status
-        response_text = await response.text()
+    for i in range(3):
+        try:
+            async with session.post(url, headers=headers, json=data) as response:
+                status = response.status
+                response_text = await response.text()
 
-        print(response_text)
-        print()
+                print(response_text)
+                print()
 
-        if status != 200:
-            raise Exception(
-                f"Request did not return a 200 status code: {status}. Response: {response_text}"
-            )
+                if status != 200:
+                    raise Exception(
+                        f"Request did not return a 200 status code: {status}. Response: {response_text}"
+                    )
 
-        return await response.json()
+                return await response.json()
+        except:
+            pass
 
 
 async def chat_completion_streaming(session, key, model="gpt-4"):
