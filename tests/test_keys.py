@@ -337,30 +337,6 @@ async def test_key_info_spend_values():
 
 
 @pytest.mark.asyncio
-async def test_key_info_spend_values_sagemaker():
-    """
-    Tests the sync streaming loop to ensure spend is correctly calculated.
-    - create key
-    - make completion call
-    - assert cost is expected value
-    """
-    async with aiohttp.ClientSession() as session:
-        ## streaming - sagemaker
-        key_gen = await generate_key(session=session, i=0, models=[])
-        new_key = key_gen["key"]
-        prompt_tokens, completion_tokens = await chat_completion_streaming(
-            session=session, key=new_key, model="sagemaker-completion-model"
-        )
-        await asyncio.sleep(5)  # allow db log to be updated
-        key_info = await get_key_info(
-            session=session, get_key=new_key, call_key=new_key
-        )
-        rounded_key_info_spend = round(key_info["info"]["spend"], 8)
-        assert rounded_key_info_spend > 0
-        # assert rounded_response_cost == rounded_key_info_spend
-
-
-@pytest.mark.asyncio
 async def test_key_with_budgets():
     """
     - Create key with budget and 5s duration
@@ -411,3 +387,27 @@ async def test_key_crossing_budget():
             pytest.fail("Should have failed - Key crossed it's budget")
         except Exception as e:
             assert "ExceededTokenBudget: Current spend for token:" in str(e)
+
+
+@pytest.mark.asyncio
+async def test_key_zinfo_spend_values_sagemaker():
+    """
+    Tests the sync streaming loop to ensure spend is correctly calculated.
+    - create key
+    - make completion call
+    - assert cost is expected value
+    """
+    async with aiohttp.ClientSession() as session:
+        ## streaming - sagemaker
+        key_gen = await generate_key(session=session, i=0, models=[])
+        new_key = key_gen["key"]
+        prompt_tokens, completion_tokens = await chat_completion_streaming(
+            session=session, key=new_key, model="sagemaker-completion-model"
+        )
+        await asyncio.sleep(5)  # allow db log to be updated
+        key_info = await get_key_info(
+            session=session, get_key=new_key, call_key=new_key
+        )
+        rounded_key_info_spend = round(key_info["info"]["spend"], 8)
+        assert rounded_key_info_spend > 0
+        # assert rounded_response_cost == rounded_key_info_spend
