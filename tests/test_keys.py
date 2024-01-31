@@ -122,8 +122,11 @@ async def chat_completion(session, key, model="gpt-4"):
                     )
 
                 return await response.json()
-        except:
-            pass
+        except Exception as e:
+            if "Request did not return a 200 status code" in str(e):
+                raise e
+            else:
+                pass
 
 
 async def chat_completion_streaming(session, key, model="gpt-4"):
