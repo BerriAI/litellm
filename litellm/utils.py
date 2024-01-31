@@ -7490,7 +7490,10 @@ class CustomStreamWrapper:
             logprobs = None
             original_chunk = None  # this is used for function/tool calling
             if len(str_line.choices) > 0:
-                if str_line.choices[0].delta.content is not None:
+                if (
+                    str_line.choices[0].delta is not None
+                    and str_line.choices[0].delta.content is not None
+                ):
                     text = str_line.choices[0].delta.content
                 else:  # function/tool calling chunk - when content is None. in this case we just return the original chunk from openai
                     original_chunk = str_line

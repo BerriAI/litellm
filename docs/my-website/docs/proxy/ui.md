@@ -31,6 +31,18 @@ general_settings:
 ## 2. Setup SSO/Auth for UI
 
 <Tabs>
+<TabItem value="username" label="Quick Start - Username, Password">
+
+Set the following in your .env on the Proxy
+
+```shell
+UI_USERNAME=ishaan-litellm
+UI_PASSWORD=langchain
+```
+
+On accessing the LiteLLM UI, you will be prompted to enter your username, password
+
+</TabItem>
 
 <TabItem value="google" label="Google SSO">
 
@@ -73,6 +85,7 @@ MICROSOFT_TENANT="5a39737
     ```
 
 </TabItem>
+
 </Tabs>
 
 ## 4. Use UI
