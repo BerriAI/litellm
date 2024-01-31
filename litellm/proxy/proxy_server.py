@@ -1266,6 +1266,7 @@ async def generate_key_helper_fn(
     query_type: Literal["insert_data", "update_data"] = "insert_data",
     update_key_values: Optional[dict] = None,
     key_alias: Optional[str] = None,
+    allowed_cache_controls: Optional[list] = [],
 ):
     global prisma_client, custom_db_client
 
@@ -1320,6 +1321,7 @@ async def generate_key_helper_fn(
     user_id = user_id or str(uuid.uuid4())
     tpm_limit = tpm_limit
     rpm_limit = rpm_limit
+    allowed_cache_controls = allowed_cache_controls
     if type(team_id) is not str:
         team_id = str(team_id)
     try:
@@ -1336,6 +1338,7 @@ async def generate_key_helper_fn(
             "rpm_limit": rpm_limit,
             "budget_duration": budget_duration,
             "budget_reset_at": reset_at,
+            "allowed_cache_controls": allowed_cache_controls,
         }
         key_data = {
             "token": token,
@@ -1354,6 +1357,7 @@ async def generate_key_helper_fn(
             "rpm_limit": rpm_limit,
             "budget_duration": key_budget_duration,
             "budget_reset_at": key_reset_at,
+            "allowed_cache_controls": allowed_cache_controls,
         }
         if general_settings.get("allow_user_auth", False) == True:
             key_data["key_name"] = f"sk-...{token[-4:]}"
