@@ -2972,6 +2972,11 @@ async def google_login(request: Request):
     "/login", include_in_schema=False
 )  # hidden since this is a helper for UI sso login
 async def login(request: Request):
+    try:
+        import multipart
+    except ImportError:
+        subprocess.run(["pip", "install", "python-multipart"])
+
     form = await request.form()
     username = str(form.get("username"))
     password = form.get("password")
