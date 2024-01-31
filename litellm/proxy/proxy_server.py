@@ -108,6 +108,7 @@ from fastapi.responses import (
 )
 from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from fastapi.security.api_key import APIKeyHeader
 import json
 import logging
@@ -157,6 +158,10 @@ async def openai_exception_handler(request: Request, exc: ProxyException):
 router = APIRouter()
 origins = ["*"]
 
+
+app.mount(
+    "/ui", StaticFiles(directory="../../ui/litellm-dashboard/out", html=True), name="ui"
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
