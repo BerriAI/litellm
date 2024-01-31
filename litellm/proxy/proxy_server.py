@@ -1267,7 +1267,7 @@ async def generate_key_helper_fn(
     update_key_values: Optional[dict] = None,
     key_alias: Optional[str] = None,
 ):
-    global prisma_client, custom_db_client
+    global prisma_client, custom_db_client, user_api_key_cache
 
     if prisma_client is None and custom_db_client is None:
         raise Exception(
@@ -1357,6 +1357,18 @@ async def generate_key_helper_fn(
         }
         if general_settings.get("allow_user_auth", False) == True:
             key_data["key_name"] = f"sk-...{token[-4:]}"
+        saved_token = copy.deepcopy(key_data)
+        if isinstance(saved_token["aliases"], str):
+            saved_token["aliases"] = json.loads(saved_token["aliases"])
+        if isinstance(saved_token["config"], str):
+            saved_token["config"] = json.loads(saved_token["config"])
+        if isinstance(saved_token["metadata"], str):
+            saved_token["metadata"] = json.loads(saved_token["metadata"])
+        user_api_key_cache.set_cache(
+            key=key_data["token"],
+            value=LiteLLM_VerificationToken(**saved_token),  # type: ignore
+            ttl=60,
+        )
         if prisma_client is not None:
             ## CREATE USER (If necessary)
             verbose_proxy_logger.debug(f"prisma_client: Creating User={user_data}")
@@ -1671,14 +1683,16 @@ async def startup_event():
 
     if prisma_client is not None and master_key is not None:
         # add master key to db
-        await generate_key_helper_fn(
-            duration=None,
-            models=[],
-            aliases={},
-            config={},
-            spend=0,
-            token=master_key,
-            user_id="default_user_id",
+        asyncio.create_task(
+            generate_key_helper_fn(
+                duration=None,
+                models=[],
+                aliases={},
+                config={},
+                spend=0,
+                token=master_key,
+                user_id="default_user_id",
+            )
         )
 
     if prisma_client is not None and litellm.max_budget > 0:
@@ -1688,20 +1702,22 @@ async def startup_event():
             )
 
         # add proxy budget to db in the user table
-        await generate_key_helper_fn(
-            user_id=litellm_proxy_budget_name,
-            duration=None,
-            models=[],
-            aliases={},
-            config={},
-            spend=0,
-            max_budget=litellm.max_budget,
-            budget_duration=litellm.budget_duration,
-            query_type="update_data",
-            update_key_values={
-                "max_budget": litellm.max_budget,
-                "budget_duration": litellm.budget_duration,
-            },
+        asyncio.create_task(
+            generate_key_helper_fn(
+                user_id=litellm_proxy_budget_name,
+                duration=None,
+                models=[],
+                aliases={},
+                config={},
+                spend=0,
+                max_budget=litellm.max_budget,
+                budget_duration=litellm.budget_duration,
+                query_type="update_data",
+                update_key_values={
+                    "max_budget": litellm.max_budget,
+                    "budget_duration": litellm.budget_duration,
+                },
+            )
         )
 
     verbose_proxy_logger.debug(
