@@ -456,6 +456,7 @@ async def test_streaming_router_call():
 
 @pytest.mark.asyncio
 async def test_streaming_router_tpm_limit():
+    litellm.set_verbose = True
     model_list = [
         {
             "model_name": "azure-model",
@@ -520,7 +521,7 @@ async def test_streaming_router_tpm_limit():
     )
     async for chunk in response:
         continue
-    await asyncio.sleep(1)  # success is done in a separate thread
+    await asyncio.sleep(5)  # success is done in a separate thread
 
     try:
         await parallel_request_handler.async_pre_call_hook(

@@ -76,6 +76,7 @@ from litellm.proxy.utils import (
     get_logging_payload,
     reset_budget,
     hash_token,
+    html_form,
 )
 from litellm.proxy.secret_managers.google_kms import load_google_kms
 import pydantic
@@ -94,6 +95,7 @@ from fastapi import (
     BackgroundTasks,
     Header,
     Response,
+    Form,
 )
 from fastapi.routing import APIRouter
 from fastapi.security import OAuth2PasswordBearer
@@ -245,8 +247,6 @@ async def user_api_key_auth(
             response = await user_custom_auth(request=request, api_key=api_key)
             return UserAPIKeyAuth.model_validate(response)
         ### LITELLM-DEFINED AUTH FUNCTION ###
-        if isinstance(api_key, str):
-            assert api_key.startswith("sk-")  # prevent token hashes from being used
         if master_key is None:
             if isinstance(api_key, str):
                 return UserAPIKeyAuth(api_key=api_key)
@@ -283,6 +283,10 @@ async def user_api_key_auth(
         if is_master_key_valid:
             return UserAPIKeyAuth(api_key=master_key)
 
+        if isinstance(
+            api_key, str
+        ):  # if generated token, make sure it starts with sk-.
+            assert api_key.startswith("sk-")  # prevent token hashes from being used
         if route.startswith("/config/") and not is_master_key_valid:
             raise Exception(f"Only admin can modify config")
 
@@ -292,6 +296,7 @@ async def user_api_key_auth(
             raise Exception("No connected db.")
 
         ## check for cache hit (In-Memory Cache)
+        original_api_key = api_key  # (Patch: For DynamoDB Backwards Compatibility)
         if api_key.startswith("sk-"):
             api_key = hash_token(token=api_key)
         valid_token = user_api_key_cache.get_cache(key=api_key)
@@ -304,10 +309,15 @@ async def user_api_key_auth(
                 )
 
             elif custom_db_client is not None:
-                valid_token = await custom_db_client.get_data(
-                    key=api_key, table_name="key"
-                )
-
+                try:
+                    valid_token = await custom_db_client.get_data(
+                        key=api_key, table_name="key"
+                    )
+                except:
+                    # (Patch: For DynamoDB Backwards Compatibility)
+                    valid_token = await custom_db_client.get_data(
+                        key=original_api_key, table_name="key"
+                    )
             verbose_proxy_logger.debug(f"Token from db: {valid_token}")
         elif valid_token is not None:
             verbose_proxy_logger.debug(f"API Key Cache Hit!")
@@ -1117,6 +1127,9 @@ class ProxyConfig:
                     # see usage here: https://docs.litellm.ai/docs/proxy/caching
                     pass
                 else:
+                    verbose_proxy_logger.debug(
+                        f"{blue_color_code} setting litellm.{key}={value}{reset_color_code}"
+                    )
                     setattr(litellm, key, value)
 
         ## GENERAL SERVER SETTINGS (e.g. master key,..) # do this after initializing litellm, to ensure sentry logging works for proxylogging
@@ -2385,6 +2398,26 @@ async def generate_key_fn(
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN, detail=message
                 )
+        # check if user set default key/generate params on config.yaml
+        if litellm.default_key_generate_params is not None:
+            for elem in data:
+                key, value = elem
+                if value is None and key in [
+                    "max_budget",
+                    "user_id",
+                    "team_id",
+                    "max_parallel_requests",
+                    "tpm_limit",
+                    "rpm_limit",
+                    "budget_duration",
+                ]:
+                    setattr(
+                        data, key, litellm.default_key_generate_params.get(key, None)
+                    )
+                elif key == "models" and value == []:
+                    setattr(data, key, litellm.default_key_generate_params.get(key, []))
+                elif key == "metadata" and value == {}:
+                    setattr(data, key, litellm.default_key_generate_params.get(key, {}))
 
         data_json = data.json()  # type: ignore
 
@@ -2854,7 +2887,7 @@ async def user_auth(request: Request):
     return "Email sent!"
 
 
-@app.get("/google-login/key/generate", tags=["experimental"])
+@app.get("/sso/key/generate", tags=["experimental"])
 async def google_login(request: Request):
     """
     Create Proxy API Keys using Google Workspace SSO. Requires setting GOOGLE_REDIRECT_URI in .env
@@ -2863,121 +2896,219 @@ async def google_login(request: Request):
     Example:
 
     """
-    GOOGLE_REDIRECT_URI = os.getenv("PROXY_BASE_URL")
-    if GOOGLE_REDIRECT_URI is None:
+    microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None)
+    google_client_id = os.getenv("GOOGLE_CLIENT_ID", None)
+    redirect_url = os.getenv("PROXY_BASE_URL", None)
+    if redirect_url is None:
         raise ProxyException(
             message="PROXY_BASE_URL not set. Set it in .env file",
             type="auth_error",
             param="PROXY_BASE_URL",
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
-    if GOOGLE_REDIRECT_URI.endswith("/"):
-        GOOGLE_REDIRECT_URI += "google-callback"
-    else:
-        GOOGLE_REDIRECT_URI += "/google-callback"
 
-    GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
-    if GOOGLE_CLIENT_ID is None:
-        GOOGLE_CLIENT_ID = (
-            "246483686424-clje5sggkjma26ilktj6qssakqhoon0m.apps.googleusercontent.com"
+    if redirect_url.endswith("/"):
+        redirect_url += "sso/callback"
+    else:
+        redirect_url += "/sso/callback"
+    # Google SSO Auth
+    if google_client_id is not None:
+        from fastapi_sso.sso.google import GoogleSSO
+
+        google_client_secret = os.getenv("GOOGLE_CLIENT_SECRET", None)
+        if google_client_secret is None:
+            raise ProxyException(
+                message="GOOGLE_CLIENT_SECRET not set. Set it in .env file",
+                type="auth_error",
+                param="GOOGLE_CLIENT_SECRET",
+                code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        google_sso = GoogleSSO(
+            client_id=google_client_id,
+            client_secret=google_client_secret,
+            redirect_uri=redirect_url,
         )
 
-    verbose_proxy_logger.info(
-        f"In /google-login/key/generate, \nGOOGLE_REDIRECT_URI: {GOOGLE_REDIRECT_URI}\nGOOGLE_CLIENT_ID: {GOOGLE_CLIENT_ID}"
-    )
-    google_auth_url = f"https://accounts.google.com/o/oauth2/auth?client_id={GOOGLE_CLIENT_ID}&redirect_uri={GOOGLE_REDIRECT_URI}&response_type=code&scope=openid%20profile%20email"
-    return RedirectResponse(url=google_auth_url)
+        verbose_proxy_logger.info(
+            f"In /google-login/key/generate, \nGOOGLE_REDIRECT_URI: {redirect_url}\nGOOGLE_CLIENT_ID: {google_client_id}"
+        )
+
+        with google_sso:
+            return await google_sso.get_login_redirect()
+
+    # Microsoft SSO Auth
+    elif microsoft_client_id is not None:
+        from fastapi_sso.sso.microsoft import MicrosoftSSO
+
+        microsoft_client_secret = os.getenv("MICROSOFT_CLIENT_SECRET", None)
+        microsoft_tenant = os.getenv("MICROSOFT_TENANT", None)
+        if microsoft_client_secret is None:
+            raise ProxyException(
+                message="MICROSOFT_CLIENT_SECRET not set. Set it in .env file",
+                type="auth_error",
+                param="MICROSOFT_CLIENT_SECRET",
+                code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        microsoft_sso = MicrosoftSSO(
+            client_id=microsoft_client_id,
+            client_secret=microsoft_client_secret,
+            tenant=microsoft_tenant,
+            redirect_uri=redirect_url,
+            allow_insecure_http=True,
+        )
+        with microsoft_sso:
+            return await microsoft_sso.get_login_redirect()
+    else:
+        # No Google, Microsoft SSO
+        # Use UI Credentials set in .env
+        from fastapi.responses import HTMLResponse
+
+        return HTMLResponse(content=html_form, status_code=200)
 
 
-@app.get("/google-callback", tags=["experimental"], response_model=GenerateKeyResponse)
-async def google_callback(code: str, request: Request):
-    import httpx
+@router.post(
+    "/login", include_in_schema=False
+)  # hidden since this is a helper for UI sso login
+async def login(request: Request):
+    try:
+        import multipart
+    except ImportError:
+        subprocess.run(["pip", "install", "python-multipart"])
 
-    GOOGLE_REDIRECT_URI = os.getenv("PROXY_BASE_URL")
-    if GOOGLE_REDIRECT_URI is None:
+    form = await request.form()
+    username = str(form.get("username"))
+    password = form.get("password")
+    ui_username = os.getenv("UI_USERNAME")
+    ui_password = os.getenv("UI_PASSWORD")
+
+    if username == ui_username and password == ui_password:
+        user_id = username
+        response = await generate_key_helper_fn(
+            **{"duration": "24hr", "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": user_id, "team_id": "litellm-dashboard"}  # type: ignore
+        )
+
+        key = response["token"]  # type: ignore
+        user_id = response["user_id"]  # type: ignore
+        litellm_dashboard_ui = "https://litellm-dashboard.vercel.app/"
+
+        # if user set LITELLM_UI_LINK in .env, use that
+        litellm_ui_link_in_env = os.getenv("LITELLM_UI_LINK", None)
+        if litellm_ui_link_in_env is not None:
+            litellm_dashboard_ui = litellm_ui_link_in_env
+
+        litellm_dashboard_ui += (
+            "?userID="
+            + user_id
+            + "&accessToken="
+            + key
+            + "&proxyBaseUrl="
+            + os.getenv("PROXY_BASE_URL")
+        )
+        return RedirectResponse(url=litellm_dashboard_ui)
+    else:
+        raise ProxyException(
+            message=f"Invalid credentials used to access UI. Passed in username: {username}, passed in password: {password}.\nCheck 'UI_USERNAME', 'UI_PASSWORD' in .env file",
+            type="auth_error",
+            param="invalid_credentials",
+            code=status.HTTP_401_UNAUTHORIZED,
+        )
+
+
+@app.get("/sso/callback", tags=["experimental"])
+async def auth_callback(request: Request):
+    """Verify login"""
+    microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None)
+    google_client_id = os.getenv("GOOGLE_CLIENT_ID", None)
+
+    redirect_url = os.getenv("PROXY_BASE_URL", None)
+    if redirect_url is None:
         raise ProxyException(
             message="PROXY_BASE_URL not set. Set it in .env file",
             type="auth_error",
             param="PROXY_BASE_URL",
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
-    # Add "/google-callback"" to your callback URL
-    if GOOGLE_REDIRECT_URI.endswith("/"):
-        GOOGLE_REDIRECT_URI += "google-callback"
+    if redirect_url.endswith("/"):
+        redirect_url += "sso/callback"
     else:
-        GOOGLE_REDIRECT_URI += "/google-callback"
+        redirect_url += "/sso/callback"
 
-    GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
-    if GOOGLE_CLIENT_ID is None:
-        GOOGLE_CLIENT_ID = (
-            "246483686424-clje5sggkjma26ilktj6qssakqhoon0m.apps.googleusercontent.com"
+    if google_client_id is not None:
+        from fastapi_sso.sso.google import GoogleSSO
+
+        google_client_secret = os.getenv("GOOGLE_CLIENT_SECRET", None)
+        if google_client_secret is None:
+            raise ProxyException(
+                message="GOOGLE_CLIENT_SECRET not set. Set it in .env file",
+                type="auth_error",
+                param="GOOGLE_CLIENT_SECRET",
+                code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        google_sso = GoogleSSO(
+            client_id=google_client_id,
+            redirect_uri=redirect_url,
+            client_secret=google_client_secret,
         )
+        result = await google_sso.verify_and_process(request)
 
-    GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
-    if GOOGLE_CLIENT_SECRET is None:
-        GOOGLE_CLIENT_SECRET = "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"
+    elif microsoft_client_id is not None:
+        from fastapi_sso.sso.microsoft import MicrosoftSSO
 
-    verbose_proxy_logger.info(
-        f"/google-callback\n GOOGLE_REDIRECT_URI: {GOOGLE_REDIRECT_URI}\n GOOGLE_CLIENT_ID: {GOOGLE_CLIENT_ID}"
+        microsoft_client_secret = os.getenv("MICROSOFT_CLIENT_SECRET", None)
+        microsoft_tenant = os.getenv("MICROSOFT_TENANT", None)
+        if microsoft_client_secret is None:
+            raise ProxyException(
+                message="MICROSOFT_CLIENT_SECRET not set. Set it in .env file",
+                type="auth_error",
+                param="MICROSOFT_CLIENT_SECRET",
+                code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        if microsoft_tenant is None:
+            raise ProxyException(
+                message="MICROSOFT_TENANT not set. Set it in .env file",
+                type="auth_error",
+                param="MICROSOFT_TENANT",
+                code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        microsoft_sso = MicrosoftSSO(
+            client_id=microsoft_client_id,
+            client_secret=microsoft_client_secret,
+            tenant=microsoft_tenant,
+            redirect_uri=redirect_url,
+            allow_insecure_http=True,
+        )
+        result = await microsoft_sso.verify_and_process(request)
+
+    # User is Authe'd in - generate key for the UI to access Proxy
+    user_id = getattr(result, "email", None)
+    if user_id is None:
+        user_id = getattr(result, "first_name", "") + getattr(result, "last_name", "")
+
+    response = await generate_key_helper_fn(
+        **{"duration": "24hr", "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": user_id, "team_id": "litellm-dashboard"}  # type: ignore
     )
-    # Exchange code for access token
-    async with httpx.AsyncClient() as client:
-        token_url = f"https://oauth2.googleapis.com/token"
-        data = {
-            "code": code,
-            "client_id": GOOGLE_CLIENT_ID,
-            "client_secret": GOOGLE_CLIENT_SECRET,
-            "redirect_uri": GOOGLE_REDIRECT_URI,
-            "grant_type": "authorization_code",
-        }
-        response = await client.post(token_url, data=data)
 
-    # Process the response, extract user info, etc.
-    if response.status_code == 200:
-        access_token = response.json()["access_token"]
+    key = response["token"]  # type: ignore
+    user_id = response["user_id"]  # type: ignore
+    litellm_dashboard_ui = "https://litellm-dashboard.vercel.app/"
 
-        # Fetch user info using the access token
-        async with httpx.AsyncClient() as client:
-            user_info_url = "https://www.googleapis.com/oauth2/v1/userinfo"
-            headers = {"Authorization": f"Bearer {access_token}"}
-            user_info_response = await client.get(user_info_url, headers=headers)
+    # if user set LITELLM_UI_LINK in .env, use that
+    litellm_ui_link_in_env = os.getenv("LITELLM_UI_LINK", None)
+    if litellm_ui_link_in_env is not None:
+        litellm_dashboard_ui = litellm_ui_link_in_env
 
-        # Process user info response
-        if user_info_response.status_code == 200:
-            user_info = user_info_response.json()
-            user_email = user_info.get("email")
-            user_name = user_info.get("name")
-
-            # we can use user_email on litellm proxy now
-
-            # TODO: Handle user info as needed, for example, store it in a database, authenticate the user, etc.
-            response = await generate_key_helper_fn(
-                **{"duration": "24hr", "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": user_email, "team_id": "litellm-dashboard"}  # type: ignore
-            )
-
-            key = response["token"]  # type: ignore
-            user_id = response["user_id"]  # type: ignore
-            litellm_dashboard_ui = "https://litellm-dashboard.vercel.app/"
-
-            litellm_dashboard_ui += (
-                "?userID="
-                + user_id
-                + "&accessToken="
-                + key
-                + "&proxyBaseUrl="
-                + os.getenv("PROXY_BASE_URL")
-            )
-            return RedirectResponse(url=litellm_dashboard_ui)
-
-        else:
-            # Handle user info retrieval error
-            raise HTTPException(
-                status_code=user_info_response.status_code,
-                detail=user_info_response.text,
-            )
-    else:
-        # Handle the error from the token exchange
-        raise HTTPException(status_code=response.status_code, detail=response.text)
+    litellm_dashboard_ui += (
+        "?userID="
+        + user_id
+        + "&accessToken="
+        + key
+        + "&proxyBaseUrl="
+        + os.getenv("PROXY_BASE_URL")
+    )
+    return RedirectResponse(url=litellm_dashboard_ui)
 
 
 @router.get(
@@ -3589,6 +3720,8 @@ async def health_readiness():
     cache_type = None
     if litellm.cache is not None:
         cache_type = litellm.cache.type
+    from litellm._version import version
+
     if prisma_client is not None:  # if db passed in, check if it's connected
         if prisma_client.db.is_connected() == True:
             response_object = {"db": "connected"}
@@ -3597,6 +3730,7 @@ async def health_readiness():
                 "status": "healthy",
                 "db": "connected",
                 "cache": cache_type,
+                "litellm_version": version,
                 "success_callbacks": litellm.success_callback,
             }
     else:
@@ -3604,6 +3738,7 @@ async def health_readiness():
             "status": "healthy",
             "db": "Not connected",
             "cache": cache_type,
+            "litellm_version": version,
             "success_callbacks": litellm.success_callback,
         }
     raise HTTPException(status_code=503, detail="Service Unhealthy")

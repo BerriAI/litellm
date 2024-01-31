@@ -145,8 +145,8 @@ def get_ollama_response(
         ):  # completion(top_k=3) > cohere_config(top_k=3) <- allows for dynamic variables to be passed in
             optional_params[k] = v
 
-    optional_params["stream"] = optional_params.get("stream", False)
-    data = {"model": model, "messages": messages, **optional_params}
+    stream = optional_params.pop("stream", False)
+    data = {"model": model, "messages": messages, "options": optional_params}
     ## LOGGING
     logging_obj.pre_call(
         input=None,
@@ -159,7 +159,7 @@ def get_ollama_response(
         },
     )
     if acompletion is True:
-        if optional_params.get("stream", False) == True:
+        if stream == True:
             response = ollama_async_streaming(
                 url=url,
                 data=data,
@@ -176,7 +176,7 @@ def get_ollama_response(
                 logging_obj=logging_obj,
             )
         return response
-    elif optional_params.get("stream", False) == True:
+    elif stream == True:
         return ollama_completion_stream(url=url, data=data, logging_obj=logging_obj)
 
     response = requests.post(

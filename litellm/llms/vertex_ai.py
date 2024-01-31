@@ -237,8 +237,11 @@ def completion(
             GenerationConfig,
         )
         from google.cloud.aiplatform_v1beta1.types import content as gapic_content_types
+        import google.auth
 
-        vertexai.init(project=vertex_project, location=vertex_location)
+        ## Load credentials with the correct quota project ref: https://github.com/googleapis/python-aiplatform/issues/2557#issuecomment-1709284744
+        creds, _ = google.auth.default(quota_project_id=vertex_project)
+        vertexai.init(project=vertex_project, location=vertex_location, credentials=creds)
 
         ## Load Config
         config = litellm.VertexAIConfig.get_config()
