@@ -76,6 +76,7 @@ from litellm.proxy.utils import (
     get_logging_payload,
     reset_budget,
     hash_token,
+    html_form,
 )
 from litellm.proxy.secret_managers.google_kms import load_google_kms
 import pydantic
@@ -94,6 +95,7 @@ from fastapi import (
     BackgroundTasks,
     Header,
     Response,
+    Form,
 )
 from fastapi.routing import APIRouter
 from fastapi.security import OAuth2PasswordBearer
@@ -2958,6 +2960,52 @@ async def google_login(request: Request):
         )
         with microsoft_sso:
             return await microsoft_sso.get_login_redirect()
+    else:
+        # No Google, Microsoft SSO
+        # Use UI Credentials set in .env
+        from fastapi.responses import HTMLResponse
+
+        return HTMLResponse(content=html_form, status_code=200)
+
+
+@router.post(
+    "/login", include_in_schema=False
+)  # hidden since this is a helper for UI sso login
+async def login(username: str = Form(...), password: str = Form(...)):
+    ui_username = os.getenv("UI_USERNAME")
+    ui_password = os.getenv("UI_PASSWORD")
+
+    if username == ui_username and password == ui_password:
+        user_id = username
+        response = await generate_key_helper_fn(
+            **{"duration": "24hr", "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": user_id, "team_id": "litellm-dashboard"}  # type: ignore
+        )
+
+        key = response["token"]  # type: ignore
+        user_id = response["user_id"]  # type: ignore
+        litellm_dashboard_ui = "https://litellm-dashboard.vercel.app/"
+
+        # if user set LITELLM_UI_LINK in .env, use that
+        litellm_ui_link_in_env = os.getenv("LITELLM_UI_LINK", None)
+        if litellm_ui_link_in_env is not None:
+            litellm_dashboard_ui = litellm_ui_link_in_env
+
+        litellm_dashboard_ui += (
+            "?userID="
+            + user_id
+            + "&accessToken="
+            + key
+            + "&proxyBaseUrl="
+            + os.getenv("PROXY_BASE_URL")
+        )
+        return RedirectResponse(url=litellm_dashboard_ui)
+    else:
+        raise ProxyException(
+            message=f"Invalid credentials used to access UI. Passed in username: {username}, passed in password: {password}.\nCheck 'UI_USERNAME', 'UI_PASSWORD' in .env file",
+            type="auth_error",
+            param="invalid_credentials",
+            code=status.HTTP_401_UNAUTHORIZED,
+        )
 
 
 @app.get("/sso/callback", tags=["experimental"])
@@ -3101,84 +3149,6 @@ async def user_info(
             param=getattr(e, "param", "None"),
             code=status.HTTP_400_BAD_REQUEST,
         )
-
-
-html_form = """
-<!DOCTYPE html>
-<html>
-<head>
-    <title>LiteLLM Login</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            background-color: #f4f4f4;
-            margin: 0;
-            padding: 0;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-        }
-
-        form {
-            background-color: #fff;
-            padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
-        }
-
-        label {
-            display: block;
-            margin-bottom: 8px;
-        }
-
-        input {
-            width: 100%;
-            padding: 8px;
-            margin-bottom: 16px;
-            box-sizing: border-box;
-            border: 1px solid #ccc;
-            border-radius: 4px;
-        }
-
-        input[type="submit"] {
-            background-color: #4caf50;
-            color: #fff;
-            cursor: pointer;
-        }
-
-        input[type="submit"]:hover {
-            background-color: #45a049;
-        }
-    </style>
-</head>
-<body>
-    <form action="/login" method="post">
-        <h2>LiteLLM Login</h2>
-        <label for="username">Username:</label>
-        <input type="text" id="username" name="username" required>
-        <label for="password">Password:</label>
-        <input type="password" id="password" name="password" required>
-        <input type="submit" value="Submit">
-    </form>
-</body>
-</html>
-"""
-from fastapi import FastAPI, Form
-from fastapi.responses import HTMLResponse
-
-
-@router.get("/login/page")
-async def login_page():
-    return HTMLResponse(content=html_form, status_code=200)
-
-
-@router.get("/login")
-async def login(username: str = Form(...), password: str = Form(...)):
-    # Here you can perform authentication logic
-    # For simplicity, let's just print the received credentials
-    # print(f"Received username: {username}, password: {password}")
-    return {"message": "Login successful"}
 
 
 @router.post(
