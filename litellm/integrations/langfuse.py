@@ -35,6 +35,26 @@ class LangFuseLogger:
             debug=self.langfuse_debug,
         )
 
+        if os.getenv("UPSTREAM_LANGFUSE_SECRET_KEY") is not None:
+            self.upstream_langfuse_secret_key = os.getenv(
+                "UPSTREAM_LANGFUSE_SECRET_KEY"
+            )
+            self.upstream_langfuse_public_key = os.getenv(
+                "UPSTREAM_LANGFUSE_PUBLIC_KEY"
+            )
+            self.upstream_langfuse_host = os.getenv("UPSTREAM_LANGFUSE_HOST")
+            self.upstream_langfuse_release = os.getenv("UPSTREAM_LANGFUSE_RELEASE")
+            self.upstream_langfuse_debug = os.getenv("UPSTREAM_LANGFUSE_DEBUG")
+            self.upstream_langfuse = Langfuse(
+                public_key=self.upstream_langfuse_public_key,
+                secret_key=self.upstream_langfuse_secret_key,
+                host=self.upstream_langfuse_host,
+                release=self.upstream_langfuse_release,
+                debug=self.upstream_langfuse_debug,
+            )
+        else:
+            self.upstream_langfuse = None
+
     def log_event(
         self, kwargs, response_obj, start_time, end_time, user_id, print_verbose
     ):
@@ -213,3 +233,26 @@ class LangFuseLogger:
             },
             metadata=metadata,
         )
+
+        if self.upstream_langfuse:
+            # user wants to log RAW LLM API call in 2nd langfuse project
+            # key change - model=response_obj["model"], instead of input model used
+            # this is useful for litellm proxy, where users need to see analytics on their LLM Endpoints
+
+            trace = self.upstream_langfuse.trace(**trace_params)
+
+            trace.generation(
+                name=generation_name,
+                id=metadata.get("generation_id", None),
+                startTime=start_time,
+                endTime=end_time,
+                model=response_obj["model"],
+                modelParameters=optional_params,
+                input=input,
+                output=output,
+                usage={
+                    "prompt_tokens": response_obj["usage"]["prompt_tokens"],
+                    "completion_tokens": response_obj["usage"]["completion_tokens"],
+                },
+                metadata=metadata,
+            )
