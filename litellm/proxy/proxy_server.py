@@ -3143,13 +3143,21 @@ async def auth_callback(request: Request):
 
     key = response["token"]  # type: ignore
     user_id = response["user_id"]  # type: ignore
-    litellm_dashboard_ui = "https://litellm-dashboard.vercel.app/"
 
-    # if user set LITELLM_UI_LINK in .env, use that
-    litellm_ui_link_in_env = os.getenv("LITELLM_UI_LINK", None)
-    if litellm_ui_link_in_env is not None:
-        litellm_dashboard_ui = litellm_ui_link_in_env
-
+    # get current host:port/ui
+    proxy_base_url = os.getenv("PROXY_BASE_URL", None)
+    if proxy_base_url is None:
+        raise ProxyException(
+            message="PROXY_BASE_URL not set. Set it in .env file",
+            type="auth_error",
+            param="PROXY_BASE_URL",
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+    if proxy_base_url.endswith("/"):
+        proxy_base_url += "ui"
+    else:
+        proxy_base_url += "/ui"
+    litellm_dashboard_ui = proxy_base_url
     litellm_dashboard_ui += (
         "?userID="
         + user_id
