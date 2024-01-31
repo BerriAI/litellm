@@ -2971,7 +2971,10 @@ async def google_login(request: Request):
 @router.post(
     "/login", include_in_schema=False
 )  # hidden since this is a helper for UI sso login
-async def login(username: str = Form(...), password: str = Form(...)):
+async def login(request: Request):
+    form = await request.form()
+    username = str(form.get("username"))
+    password = form.get("password")
     ui_username = os.getenv("UI_USERNAME")
     ui_password = os.getenv("UI_PASSWORD")
 
