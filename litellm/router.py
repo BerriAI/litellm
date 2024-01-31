@@ -289,11 +289,7 @@ class Router:
             timeout = kwargs.get("request_timeout", self.timeout)
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
             kwargs.setdefault("metadata", {}).update({"model_group": model})
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                # Submit the function to the executor with a timeout
-                future = executor.submit(self.function_with_fallbacks, **kwargs)
-                response = future.result(timeout=timeout)  # type: ignore
-
+            response = self.function_with_fallbacks(**kwargs)
             return response
         except Exception as e:
             raise e
