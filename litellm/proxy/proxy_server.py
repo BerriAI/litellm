@@ -3171,6 +3171,9 @@ async def auth_callback(request: Request):
         + "&proxyBaseUrl="
         + os.getenv("PROXY_BASE_URL")
     )
+
+    # if a user has logged in they should be allowed to create keys - this ensures that it's set to True
+    general_settings["allow_user_auth"] = True
     return RedirectResponse(url=litellm_dashboard_ui)
 
 
