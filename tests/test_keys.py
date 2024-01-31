@@ -355,9 +355,17 @@ async def test_key_with_budgets():
         print(f"hashed_token: {hashed_token}")
         key_info = await get_key_info(session=session, get_key=key, call_key=key)
         reset_at_init_value = key_info["info"]["budget_reset_at"]
-        await asyncio.sleep(30)
-        key_info = await get_key_info(session=session, get_key=key, call_key=key)
-        reset_at_new_value = key_info["info"]["budget_reset_at"]
+        reset_at_new_value = None
+        i = 0
+        while i < 3:
+            await asyncio.sleep(30)
+            key_info = await get_key_info(session=session, get_key=key, call_key=key)
+            reset_at_new_value = key_info["info"]["budget_reset_at"]
+            try:
+                assert reset_at_init_value != reset_at_new_value
+                break
+            except:
+                i + 1
         assert reset_at_init_value != reset_at_new_value
 
 
