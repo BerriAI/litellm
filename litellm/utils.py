@@ -2217,7 +2217,7 @@ def client(original_function):
                 litellm.cache is not None
                 and str(original_function.__name__)
                 in litellm.cache.supported_call_types
-            ):
+            ) and (kwargs.get("cache", {}).get("no-store", False) != True):
                 litellm.cache.add_cache(result, *args, **kwargs)
 
             # LOG SUCCESS - handle streaming success logging in the _next_ object, remove `handle_success` once it's deprecated
@@ -2430,9 +2430,12 @@ def client(original_function):
 
             # [OPTIONAL] ADD TO CACHE
             if (
-                litellm.cache is not None
-                and str(original_function.__name__)
-                in litellm.cache.supported_call_types
+                (litellm.cache is not None)
+                and (
+                    str(original_function.__name__)
+                    in litellm.cache.supported_call_types
+                )
+                and (kwargs.get("cache", {}).get("no-store", False) != True)
             ):
                 if isinstance(result, litellm.ModelResponse) or isinstance(
                     result, litellm.EmbeddingResponse

@@ -20,6 +20,7 @@ model LiteLLM_UserTable {
     rpm_limit     BigInt?
     budget_duration String? 
     budget_reset_at DateTime?
+    allowed_cache_controls String[] @default([])
 }
 
 // Generate Tokens for Proxy
@@ -41,6 +42,7 @@ model LiteLLM_VerificationToken {
     max_budget Float?    
     budget_duration String? 
     budget_reset_at DateTime?
+    allowed_cache_controls String[] @default([])
 }
 
 // store proxy config.yaml
