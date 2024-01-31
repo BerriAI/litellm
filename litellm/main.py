@@ -450,6 +450,7 @@ def completion(
     num_retries = kwargs.get("num_retries", None)  ## deprecated
     max_retries = kwargs.get("max_retries", None)
     context_window_fallback_dict = kwargs.get("context_window_fallback_dict", None)
+    organization = kwargs.get("organization", None)
     ### CUSTOM MODEL COST ###
     input_cost_per_token = kwargs.get("input_cost_per_token", None)
     output_cost_per_token = kwargs.get("output_cost_per_token", None)
@@ -591,26 +592,37 @@ def completion(
 
         ### REGISTER CUSTOM MODEL PRICING -- IF GIVEN ###
         if input_cost_per_token is not None and output_cost_per_token is not None:
+            print_verbose(f"Registering model={model} in model cost map")
             litellm.register_model(
                 {
+                    f"{custom_llm_provider}/{model}": {
+                        "input_cost_per_token": input_cost_per_token,
+                        "output_cost_per_token": output_cost_per_token,
+                        "litellm_provider": custom_llm_provider,
+                    },
                     model: {
                         "input_cost_per_token": input_cost_per_token,
                         "output_cost_per_token": output_cost_per_token,
                         "litellm_provider": custom_llm_provider,
-                    }
+                    },
                 }
             )
-        if (
+        elif (
             input_cost_per_second is not None
         ):  # time based pricing just needs cost in place
             output_cost_per_second = output_cost_per_second or 0.0
             litellm.register_model(
                 {
+                    f"{custom_llm_provider}/{model}": {
+                        "input_cost_per_second": input_cost_per_second,
+                        "output_cost_per_second": output_cost_per_second,
+                        "litellm_provider": custom_llm_provider,
+                    },
                     model: {
                         "input_cost_per_second": input_cost_per_second,
                         "output_cost_per_second": output_cost_per_second,
                         "litellm_provider": custom_llm_provider,
-                    }
+                    },
                 }
             )
         ### BUILD CUSTOM PROMPT TEMPLATE -- IF GIVEN ###
@@ -787,7 +799,8 @@ def completion(
                 or "https://api.openai.com/v1"
             )
             openai.organization = (
-                litellm.organization
+                organization
+                or litellm.organization
                 or get_secret("OPENAI_ORGANIZATION")
                 or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
             )
@@ -827,6 +840,7 @@ def completion(
                     timeout=timeout,
                     custom_prompt_dict=custom_prompt_dict,
                     client=client,  # pass AsyncOpenAI, OpenAI client
+                    organization=organization,
                 )
             except Exception as e:
                 ## LOGGING - log the original exception returned
@@ -3224,6 +3238,7 @@ async def ahealth_check(
             or custom_llm_provider == "text-completion-openai"
         ):
             api_key = model_params.get("api_key") or get_secret("OPENAI_API_KEY")
+            organization = model_params.get("organization")
 
             timeout = (
                 model_params.get("timeout")
@@ -3241,6 +3256,7 @@ async def ahealth_check(
                 mode=mode,
                 prompt=prompt,
                 input=input,
+                organization=organization,
             )
         else:
             if mode == "embedding":
@@ -3265,6 +3281,7 @@ async def ahealth_check(
 ## Set verbose to true -> ```litellm.set_verbose = True```
 def print_verbose(print_statement):
     try:
+        verbose_logger.debug(print_statement)
         if litellm.set_verbose:
             print(print_statement)  # noqa
     except:

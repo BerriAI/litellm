@@ -3,11 +3,13 @@
  */
 
 export const keyCreateCall = async (
-  proxyBaseUrl: String,
-  accessToken: String,
-  userID: String
+  proxyBaseUrl: string,
+  accessToken: string,
+  userID: string,
+  formValues: Record<string, any> // Assuming formValues is an object
 ) => {
   try {
+    console.log("Form Values in keyCreateCall:", formValues); // Log the form values before making the API call
     const response = await fetch(`${proxyBaseUrl}/key/generate`, {
       method: "POST",
       headers: {
@@ -15,18 +17,19 @@ export const keyCreateCall = async (
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        team_id: "core-infra-4",
-        max_budget: 10,
         user_id: userID,
+        ...formValues, // Include formValues in the request body
       }),
     });
 
     if (!response.ok) {
+      const errorData = await response.json();
+      console.error("Error response from the server:", errorData);
       throw new Error("Network response was not ok");
     }
 
     const data = await response.json();
-    console.log(data);
+    console.log("API Response:", data);
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -34,6 +37,7 @@ export const keyCreateCall = async (
     throw error;
   }
 };
+
 
 export const keyDeleteCall = async (
   proxyBaseUrl: String,

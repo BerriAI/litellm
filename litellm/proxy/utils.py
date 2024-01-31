@@ -21,6 +21,7 @@ from datetime import datetime, timedelta
 
 
 def print_verbose(print_statement):
+    verbose_proxy_logger.debug(print_statement)
     if litellm.set_verbose:
         print(f"LiteLLM Proxy: {print_statement}")  # noqa
 
@@ -96,6 +97,7 @@ class ProxyLogging:
         2. /embeddings
         3. /image/generation
         """
+        print_verbose(f"Inside Proxy Logging Pre-call hook!")
         ### ALERTING ###
         asyncio.create_task(self.response_taking_too_long(request_data=data))
 
@@ -1035,7 +1037,7 @@ async def send_email(sender_name, sender_email, receiver_email, subject, html):
         print_verbose(f"SMTP Connection Init")
         # Establish a secure connection with the SMTP server
         with smtplib.SMTP(smtp_host, smtp_port) as server:
-            if os.getenv("SMTP_TLS", 'True') != "False":
+            if os.getenv("SMTP_TLS", "True") != "False":
                 server.starttls()
 
             # Login to your email account
@@ -1206,3 +1208,67 @@ async def reset_budget(prisma_client: PrismaClient):
             await prisma_client.update_data(
                 query_type="update_many", data_list=users_to_reset, table_name="user"
             )
+
+
+# LiteLLM Admin UI - Non SSO Login
+html_form = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>LiteLLM Login</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f4f4f4;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+
+        form {
+            background-color: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+        }
+
+        input {
+            width: 100%;
+            padding: 8px;
+            margin-bottom: 16px;
+            box-sizing: border-box;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+
+        input[type="submit"] {
+            background-color: #4caf50;
+            color: #fff;
+            cursor: pointer;
+        }
+
+        input[type="submit"]:hover {
+            background-color: #45a049;
+        }
+    </style>
+</head>
+<body>
+    <form action="/login" method="post">
+        <h2>LiteLLM Login</h2>
+        <label for="username">Username:</label>
+        <input type="text" id="username" name="username" required>
+        <label for="password">Password:</label>
+        <input type="password" id="password" name="password" required>
+        <input type="submit" value="Submit">
+    </form>
+</body>
+</html>
+"""

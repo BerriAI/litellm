@@ -515,7 +515,7 @@ def hf_test_completion_tgi():
 # hf_test_error_logs()
 
 
-# def test_completion_cohere():  # commenting for now as the cohere endpoint is being flaky
+# def test_completion_cohere():  # commenting out,for now as the cohere endpoint is being flaky
 #     try:
 #         litellm.CohereConfig(max_tokens=10, stop_sequences=["a"])
 #         response = completion(
@@ -567,6 +567,22 @@ def test_completion_openai():
 
 
 # test_completion_openai()
+
+
+def test_completion_openai_organization():
+    try:
+        litellm.set_verbose = True
+        try:
+            response = completion(
+                model="gpt-3.5-turbo", messages=messages, organization="org-ikDc4ex8NB"
+            )
+            pytest.fail("Request should have failed - This organization does not exist")
+        except Exception as e:
+            assert "No such organization: org-ikDc4ex8NB" in str(e)
+
+    except Exception as e:
+        print(e)
+        pytest.fail(f"Error occurred: {e}")
 
 
 def test_completion_text_openai():

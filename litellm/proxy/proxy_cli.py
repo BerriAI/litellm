@@ -157,6 +157,12 @@ def is_port_in_use(port):
     type=int,
     help="Number of requests to hit async endpoint with",
 )
+@click.option(
+    "--run_gunicorn",
+    default=False,
+    is_flag=True,
+    help="Starts proxy via gunicorn, instead of uvicorn (better for managing multiple workers)",
+)
 @click.option("--local", is_flag=True, default=False, help="for local debugging")
 def run_server(
     host,
@@ -186,6 +192,7 @@ def run_server(
     use_queue,
     health,
     version,
+    run_gunicorn,
 ):
     global feature_telemetry
     args = locals()
@@ -439,9 +446,9 @@ def run_server(
             port = random.randint(1024, 49152)
         from litellm.proxy.proxy_server import app
 
-        if os.name == "nt":
+        if run_gunicorn == False:
             uvicorn.run(app, host=host, port=port)  # run uvicorn
-        else:
+        elif run_gunicorn == True:
             import gunicorn.app.base
 
             # Gunicorn Application Class
