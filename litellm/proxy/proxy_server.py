@@ -160,8 +160,10 @@ async def openai_exception_handler(request: Request, exc: ProxyException):
 router = APIRouter()
 origins = ["*"]
 
-
-app.mount("/ui", StaticFiles(directory="_experimental/out", html=True), name="ui")
+# get current directory
+current_dir = os.getcwd()
+ui_path = os.path.join(current_dir, "_experimental", "out")
+app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
