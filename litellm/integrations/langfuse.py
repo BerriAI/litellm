@@ -64,7 +64,7 @@ class LangFuseLogger:
                         pass
 
             # end of processing langfuse ########################
-            if kwargs.get("call_type") == "embedding" or isinstance(
+            if kwargs.get("call_type", None) == "embedding" or isinstance(
                 response_obj, litellm.EmbeddingResponse
             ):
                 input = prompt
