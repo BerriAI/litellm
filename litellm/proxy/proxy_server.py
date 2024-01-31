@@ -114,10 +114,12 @@ import json
 import logging
 from typing import Union
 
+proxy_base_url = os.getenv("PROXY_BASE_URL", None)
+ui_link = f"/ui?proxyBaseUrl={proxy_base_url}"
 app = FastAPI(
     docs_url="/",
     title="LiteLLM API",
-    description="Proxy Server to call 100+ LLMs in the OpenAI format\n\n👉 [LiteLLM Admin Panel on /ui](/ui). Create, Edit Keys with SSO",
+    description=f"Proxy Server to call 100+ LLMs in the OpenAI format\n\n👉 [LiteLLM Admin Panel on /ui]({ui_link}). Create, Edit Keys with SSO",
 )
 
 
