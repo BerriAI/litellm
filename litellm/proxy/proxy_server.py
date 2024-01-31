@@ -3836,10 +3836,12 @@ async def get_routes():
     routes = []
     for route in app.routes:
         route_info = {
-            "path": route.path,
-            "methods": route.methods,
-            "name": route.name,
-            "endpoint": route.endpoint.__name__ if route.endpoint else None,
+            "path": getattr(route, "path", None),
+            "methods": getattr(route, "methods", None),
+            "name": getattr(route, "name", None),
+            "endpoint": getattr(route, "endpoint", None).__name__
+            if getattr(route, "endpoint", None)
+            else None,
         }
         routes.append(route_info)
 
