@@ -162,7 +162,7 @@ origins = ["*"]
 
 # get current directory
 try:
-    current_dir = os.getcwd()
+    current_dir = os.path.dirname(os.path.abspath(__file__))
     ui_path = os.path.join(current_dir, "_experimental", "out")
     app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
 except:
