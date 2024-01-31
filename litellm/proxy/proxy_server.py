@@ -76,6 +76,7 @@ from litellm.proxy.utils import (
     get_logging_payload,
     reset_budget,
     hash_token,
+    html_form,
 )
 from litellm.proxy.secret_managers.google_kms import load_google_kms
 import pydantic
@@ -94,6 +95,7 @@ from fastapi import (
     BackgroundTasks,
     Header,
     Response,
+    Form,
 )
 from fastapi.routing import APIRouter
 from fastapi.security import OAuth2PasswordBearer
@@ -2958,6 +2960,60 @@ async def google_login(request: Request):
         )
         with microsoft_sso:
             return await microsoft_sso.get_login_redirect()
+    else:
+        # No Google, Microsoft SSO
+        # Use UI Credentials set in .env
+        from fastapi.responses import HTMLResponse
+
+        return HTMLResponse(content=html_form, status_code=200)
+
+
+@router.post(
+    "/login", include_in_schema=False
+)  # hidden since this is a helper for UI sso login
+async def login(request: Request):
+    try:
+        import multipart
+    except ImportError:
+        subprocess.run(["pip", "install", "python-multipart"])
+
+    form = await request.form()
+    username = str(form.get("username"))
+    password = form.get("password")
+    ui_username = os.getenv("UI_USERNAME")
+    ui_password = os.getenv("UI_PASSWORD")
+
+    if username == ui_username and password == ui_password:
+        user_id = username
+        response = await generate_key_helper_fn(
+            **{"duration": "24hr", "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": user_id, "team_id": "litellm-dashboard"}  # type: ignore
+        )
+
+        key = response["token"]  # type: ignore
+        user_id = response["user_id"]  # type: ignore
+        litellm_dashboard_ui = "https://litellm-dashboard.vercel.app/"
+
+        # if user set LITELLM_UI_LINK in .env, use that
+        litellm_ui_link_in_env = os.getenv("LITELLM_UI_LINK", None)
+        if litellm_ui_link_in_env is not None:
+            litellm_dashboard_ui = litellm_ui_link_in_env
+
+        litellm_dashboard_ui += (
+            "?userID="
+            + user_id
+            + "&accessToken="
+            + key
+            + "&proxyBaseUrl="
+            + os.getenv("PROXY_BASE_URL")
+        )
+        return RedirectResponse(url=litellm_dashboard_ui)
+    else:
+        raise ProxyException(
+            message=f"Invalid credentials used to access UI. Passed in username: {username}, passed in password: {password}.\nCheck 'UI_USERNAME', 'UI_PASSWORD' in .env file",
+            type="auth_error",
+            param="invalid_credentials",
+            code=status.HTTP_401_UNAUTHORIZED,
+        )
 
 
 @app.get("/sso/callback", tags=["experimental"])
