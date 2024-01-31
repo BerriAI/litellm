@@ -108,15 +108,18 @@ from fastapi.responses import (
 )
 from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from fastapi.security.api_key import APIKeyHeader
 import json
 import logging
 from typing import Union
 
+proxy_base_url = os.getenv("PROXY_BASE_URL", None)
+ui_link = f"/ui?proxyBaseUrl={proxy_base_url}"
 app = FastAPI(
     docs_url="/",
     title="LiteLLM API",
-    description="Proxy Server to call 100+ LLMs in the OpenAI format\n\nAdmin Panel on [https://dashboard.litellm.ai/admin](https://dashboard.litellm.ai/admin)",
+    description=f"Proxy Server to call 100+ LLMs in the OpenAI format\n\n👉 [LiteLLM Admin Panel on /ui]({ui_link}). Create, Edit Keys with SSO",
 )
 
 
@@ -157,6 +160,13 @@ async def openai_exception_handler(request: Request, exc: ProxyException):
 router = APIRouter()
 origins = ["*"]
 
+# get current directory
+try:
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    ui_path = os.path.join(current_dir, "_experimental", "out")
+    app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
+except:
+    pass
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -3138,13 +3148,21 @@ async def auth_callback(request: Request):
 
     key = response["token"]  # type: ignore
     user_id = response["user_id"]  # type: ignore
-    litellm_dashboard_ui = "https://litellm-dashboard.vercel.app/"
 
-    # if user set LITELLM_UI_LINK in .env, use that
-    litellm_ui_link_in_env = os.getenv("LITELLM_UI_LINK", None)
-    if litellm_ui_link_in_env is not None:
-        litellm_dashboard_ui = litellm_ui_link_in_env
-
+    # get current host:port/ui
+    proxy_base_url = os.getenv("PROXY_BASE_URL", None)
+    if proxy_base_url is None:
+        raise ProxyException(
+            message="PROXY_BASE_URL not set. Set it in .env file",
+            type="auth_error",
+            param="PROXY_BASE_URL",
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+    if proxy_base_url.endswith("/"):
+        proxy_base_url += "ui"
+    else:
+        proxy_base_url += "/ui"
+    litellm_dashboard_ui = proxy_base_url
     litellm_dashboard_ui += (
         "?userID="
         + user_id
@@ -3818,10 +3836,12 @@ async def get_routes():
     routes = []
     for route in app.routes:
         route_info = {
-            "path": route.path,
-            "methods": route.methods,
-            "name": route.name,
-            "endpoint": route.endpoint.__name__ if route.endpoint else None,
+            "path": getattr(route, "path", None),
+            "methods": getattr(route, "methods", None),
+            "name": getattr(route, "name", None),
+            "endpoint": getattr(route, "endpoint", None).__name__
+            if getattr(route, "endpoint", None)
+            else None,
         }
         routes.append(route_info)
 
