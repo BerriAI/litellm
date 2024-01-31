@@ -1743,7 +1743,10 @@ async def startup_event():
 
     ### START BUDGET SCHEDULER ###
     scheduler = AsyncIOScheduler()
-    scheduler.add_job(reset_budget, "interval", seconds=10, args=[prisma_client])
+    interval = random.randint(
+        7, 14
+    )  # random interval, so multiple workers avoid resetting budget at the same time
+    scheduler.add_job(reset_budget, "interval", seconds=interval, args=[prisma_client])
     scheduler.start()
 
 
