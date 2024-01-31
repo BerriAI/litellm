@@ -17,6 +17,7 @@ traceloop-sdk==0.5.3 # for open telemetry logging
 langfuse>=2.6.3 # for langfuse self-hosted logging
 orjson==3.9.7 # fast /embedding responses
 apscheduler==3.10.4 # for resetting budget in background 
+fastapi-sso==0.10.0
 ### LITELLM PACKAGE DEPENDENCIES
 python-dotenv>=0.2.0 # for env 
 tiktoken>=0.4.0 # for calculating usage
