@@ -234,8 +234,10 @@ def usage_telemetry(
 
 
 def _get_bearer_token(api_key: str):
-    assert api_key.startswith("Bearer ")  # ensure Bearer token passed in
-    api_key = api_key.replace("Bearer ", "")  # extract the token
+    if api_key.startswith("Bearer "):  # ensure Bearer token passed in
+        api_key = api_key.replace("Bearer ", "")  # extract the token
+    else:
+        api_key = ""
     return api_key
 
 
@@ -252,13 +254,21 @@ async def user_api_key_auth(
 ) -> UserAPIKeyAuth:
     global master_key, prisma_client, llm_model_list, user_custom_auth, custom_db_client
     try:
+        if isinstance(api_key, str):
+            passed_in_key = api_key
+            api_key = _get_bearer_token(api_key=api_key)
+
         ### USER-DEFINED AUTH FUNCTION -> This should always be run first if a user has defined it ###
         if user_custom_auth is not None:
             response = await user_custom_auth(request=request, api_key=api_key)
             return UserAPIKeyAuth.model_validate(response)
 
-        if isinstance(api_key, str):
-            api_key = _get_bearer_token(api_key=api_key)
+        if api_key == "":
+            # missing 'Bearer ' prefix
+            raise Exception(
+                f"Malformed API Key passed in. Ensure Key has `Bearer ` prefix. Passed in: {passed_in_key}"
+            )
+
         ### LITELLM-DEFINED AUTH FUNCTION ###
         if master_key is None:
             if isinstance(api_key, str):
