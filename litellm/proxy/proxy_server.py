@@ -141,11 +141,6 @@ class ProxyException(Exception):
         self.code = code
 
 
-# Literals - used by _get_bearer_token
-NO_API_KEY = "no-api-key"
-MISSING_BEARER = "missing-bearer"
-
-
 @app.exception_handler(ProxyException)
 async def openai_exception_handler(request: Request, exc: ProxyException):
     # NOTE: DO NOT MODIFY THIS, its crucial to map to Openai exceptions
@@ -240,13 +235,11 @@ def usage_telemetry(
 
 def _get_bearer_token(
     api_key: str,
-) -> Union[str, Literal["no-api-key", "missing-bearer"]]:
-    if api_key == "":
-        return NO_API_KEY
+):
     if api_key.startswith("Bearer "):  # ensure Bearer token passed in
         api_key = api_key.replace("Bearer ", "")  # extract the token
     else:
-        api_key = MISSING_BEARER
+        api_key = ""
     return api_key
 
 
@@ -281,14 +274,11 @@ async def user_api_key_auth(
 
         if api_key is None:
             raise Exception("No API Key passed in. api_key is None")
-        if secrets.compare_digest(api_key, MISSING_BEARER):
+        if secrets.compare_digest(api_key, ""):
             # missing 'Bearer ' prefix
             raise Exception(
                 f"Malformed API Key passed in. Ensure Key has `Bearer ` prefix. Passed in: {passed_in_key}"
             )
-        elif secrets.compare_digest(api_key, NO_API_KEY):
-            # no api key passed in
-            raise Exception(f"No API Key passed in. Passed in: {passed_in_key}")
 
         route: str = request.url.path
         if route == "/user/auth":
