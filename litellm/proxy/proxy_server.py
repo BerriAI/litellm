@@ -3089,6 +3089,7 @@ async def login(request: Request):
 @app.get("/sso/callback", tags=["experimental"])
 async def auth_callback(request: Request):
     """Verify login"""
+    global general_settings
     microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None)
     google_client_id = os.getenv("GOOGLE_CLIENT_ID", None)
 
