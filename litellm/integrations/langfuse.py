@@ -78,7 +78,7 @@ class LangFuseLogger:
                 optional_params,
                 input,
                 response_obj,
-                print_verbose
+                print_verbose,
             ) if self._is_langfuse_v2() else self._log_langfuse_v1(
                 user_id,
                 metadata,
@@ -89,7 +89,6 @@ class LangFuseLogger:
                 optional_params,
                 input,
                 response_obj,
-                
             )
 
             self.Langfuse.flush()
@@ -169,7 +168,7 @@ class LangFuseLogger:
         optional_params,
         input,
         response_obj,
-        print_verbose
+        print_verbose,
     ):
         import langfuse
 
@@ -186,6 +185,8 @@ class LangFuseLogger:
             "user_id": metadata.get("trace_user_id", user_id),
             "id": metadata.get("trace_id", None),
         }
+        cost = kwargs["response_cost"]
+        print_verbose(f"trace: {cost}")
         if supports_tags:
             for key, value in metadata.items():
                 tags.append(f"{key}:{value}")
@@ -194,10 +195,6 @@ class LangFuseLogger:
             trace_params.update({"tags": tags})
 
         trace = self.Langfuse.trace(**trace_params)
-        
-        cost = kwargs["response_cost"]
-        print_verbose(f"trace: {cost}")
-
         trace.generation(
             name=metadata.get("generation_name", "litellm-completion"),
             id=metadata.get("generation_id", None),
@@ -210,8 +207,7 @@ class LangFuseLogger:
             usage={
                 "prompt_tokens": response_obj["usage"]["prompt_tokens"],
                 "completion_tokens": response_obj["usage"]["completion_tokens"],
-                "input_cost": kwargs["response_cost"] if supports_costs else None,
-                "output_cost": kwargs["response_cost"] if supports_costs else None,
+                "total_cost": cost if supports_costs else None,
             },
             metadata=metadata,
         )
