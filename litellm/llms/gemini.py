@@ -163,7 +163,7 @@ def completion(
         input=prompt,
         api_key="",
         original_response=response,
-        additional_args={"complete_input_dict": {}},
+        additional_args={"complete_input_dict": {}, "safety_settings": safety_settings},
     )
     print_verbose(f"raw model_response: {response}")
     ## RESPONSE OBJECT
