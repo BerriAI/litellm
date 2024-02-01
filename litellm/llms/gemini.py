@@ -121,6 +121,7 @@ def completion(
     ## Load Config
     inference_params = copy.deepcopy(optional_params)
     stream = inference_params.pop("stream", None)
+    safety_settings = optional_params.pop("safety_settings", None)
     config = litellm.GeminiConfig.get_config()
     for k, v in config.items():
         if (
@@ -141,11 +142,13 @@ def completion(
             response = _model.generate_content(
                 contents=prompt,
                 generation_config=genai.types.GenerationConfig(**inference_params),
+                safety_settings=safety_settings,
             )
         else:
             response = _model.generate_content(
                 contents=prompt,
                 generation_config=genai.types.GenerationConfig(**inference_params),
+                safety_settings=safety_settings,
                 stream=True,
             )
             return response
