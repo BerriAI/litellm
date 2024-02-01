@@ -3171,23 +3171,21 @@ async def auth_callback(request: Request):
             param="PROXY_BASE_URL",
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
-    if proxy_base_url.endswith("/"):
-        proxy_base_url += "ui"
-    else:
-        proxy_base_url += "/ui"
+
     litellm_dashboard_ui = proxy_base_url
+    if proxy_base_url.endswith("/"):
+        litellm_dashboard_ui += "ui"
+        proxy_base_url = proxy_base_url[:-1]
+    else:
+        litellm_dashboard_ui += "/ui"
+
     import jwt
 
     jwt_token = jwt.encode(
         {"user_id": user_id, "key": key}, "secret", algorithm="HS256"
     )
     litellm_dashboard_ui += (
-        "?userID="
-        + user_id
-        + "&token="
-        + jwt_token
-        + "&proxyBaseUrl="
-        + os.getenv("PROXY_BASE_URL")
+        "?userID=" + user_id + "&token=" + jwt_token + "&proxyBaseUrl=" + proxy_base_url
     )
 
     # if a user has logged in they should be allowed to create keys - this ensures that it's set to True
