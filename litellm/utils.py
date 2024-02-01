@@ -233,7 +233,8 @@ class Delta(OpenAIObject):
     def __init__(self, content=None, role=None, **params):
         super(Delta, self).__init__(**params)
         self.content = content
-        self.role = role
+        if role is not None:
+            self.role = role
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
