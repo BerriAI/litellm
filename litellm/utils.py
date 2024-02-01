@@ -2189,7 +2189,7 @@ def client(original_function):
 
             # CHECK MAX TOKENS
             if (
-                kwargs("max_tokens", None) is not None
+                kwargs.get("max_tokens", None) is not None
                 and model is not None
                 and litellm.drop_params
                 == True  # user is okay with params being modified
@@ -2205,9 +2205,12 @@ def client(original_function):
                     if user_max_tokens > max_output_tokens:
                         user_max_tokens = max_output_tokens
                     ## Scenario 2: User limit + prompt > model limit
-                    input_tokens = token_counter(
-                        model=model, messages=kwargs.get("messages")
-                    )
+                    messages = None
+                    if len(args) > 1:
+                        messages = args[1]
+                    elif kwargs.get("messages", None):
+                        messages = kwargs["messages"]
+                    input_tokens = token_counter(model=model, messages=messages)
                     if input_tokens > max_output_tokens:
                         pass  # allow call to fail normally
                     elif user_max_tokens + input_tokens > max_output_tokens:
