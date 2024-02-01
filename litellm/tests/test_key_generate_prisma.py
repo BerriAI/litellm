@@ -1159,10 +1159,9 @@ async def test_key_name_null(prisma_client):
     try:
         request = GenerateKeyRequest()
         key = await generate_key_fn(request)
-        print("test_key_name_null key=", key)
         generated_key = key.key
         result = await info_key_fn(key=generated_key)
-        print("rtest_key_name_null esult from info_key_fn", result)
+        print("result from info_key_fn", result)
         assert result["info"]["key_name"] is None
     except Exception as e:
         print("Got Exception", e)
