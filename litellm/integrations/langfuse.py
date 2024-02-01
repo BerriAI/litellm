@@ -103,6 +103,7 @@ class LangFuseLogger:
                 optional_params,
                 input,
                 response_obj,
+                print_verbose,
             ) if self._is_langfuse_v2() else self._log_langfuse_v1(
                 user_id,
                 metadata,
@@ -192,11 +193,15 @@ class LangFuseLogger:
         optional_params,
         input,
         response_obj,
+        print_verbose,
     ):
         import langfuse
 
         tags = []
         supports_tags = Version(langfuse.version.__version__) >= Version("2.6.3")
+        supports_costs = Version(langfuse.version.__version__) >= Version("2.7.3")
+
+        print_verbose(f"Langfuse Layer Logging - logging to langfuse v2 ")
 
         generation_name = metadata.get("generation_name", None)
         if generation_name is None:
@@ -209,6 +214,8 @@ class LangFuseLogger:
             "user_id": metadata.get("trace_user_id", user_id),
             "id": metadata.get("trace_id", None),
         }
+        cost = kwargs["response_cost"]
+        print_verbose(f"trace: {cost}")
         if supports_tags:
             for key, value in metadata.items():
                 tags.append(f"{key}:{value}")
@@ -217,7 +224,6 @@ class LangFuseLogger:
             trace_params.update({"tags": tags})
 
         trace = self.Langfuse.trace(**trace_params)
-
         trace.generation(
             name=generation_name,
             id=metadata.get("generation_id", None),
@@ -230,6 +236,7 @@ class LangFuseLogger:
             usage={
                 "prompt_tokens": response_obj["usage"]["prompt_tokens"],
                 "completion_tokens": response_obj["usage"]["completion_tokens"],
+                "total_cost": cost if supports_costs else None,
             },
             metadata=metadata,
         )
