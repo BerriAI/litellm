@@ -3059,14 +3059,7 @@ async def login(request: Request):
         if litellm_ui_link_in_env is not None:
             litellm_dashboard_ui = litellm_ui_link_in_env
 
-        litellm_dashboard_ui += (
-            "?userID="
-            + user_id
-            + "&accessToken="
-            + key
-            + "&proxyBaseUrl="
-            + os.getenv("PROXY_BASE_URL")
-        )
+        litellm_dashboard_ui += "?userID=" + user_id + "&accessToken=" + key
         return RedirectResponse(url=litellm_dashboard_ui)
     else:
         raise ProxyException(
@@ -3084,14 +3077,9 @@ async def auth_callback(request: Request):
     microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None)
     google_client_id = os.getenv("GOOGLE_CLIENT_ID", None)
 
-    redirect_url = os.getenv("PROXY_BASE_URL", None)
-    if redirect_url is None:
-        raise ProxyException(
-            message="PROXY_BASE_URL not set. Set it in .env file",
-            type="auth_error",
-            param="PROXY_BASE_URL",
-            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
+    # get url from request
+    redirect_url = str(request.base_url)
+
     if redirect_url.endswith("/"):
         redirect_url += "sso/callback"
     else:
