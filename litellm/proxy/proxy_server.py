@@ -3143,7 +3143,7 @@ async def auth_callback(request: Request):
         user_id = getattr(result, "first_name", "") + getattr(result, "last_name", "")
 
     response = await generate_key_helper_fn(
-        **{"duration": "24hr", "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": user_id, "team_id": "litellm-dashboard"}  # type: ignore
+        **{"duration": "1hr", "models": [], "aliases": {}, "config": {}, "spend": 0, "user_id": user_id, "team_id": "litellm-dashboard"}  # type: ignore
     )
 
     key = response["token"]  # type: ignore
@@ -3163,11 +3163,16 @@ async def auth_callback(request: Request):
     else:
         proxy_base_url += "/ui"
     litellm_dashboard_ui = proxy_base_url
+    import jwt
+
+    jwt_token = jwt.encode(
+        {"user_id": user_id, "key": key}, "secret", algorithm="HS256"
+    )
     litellm_dashboard_ui += (
         "?userID="
         + user_id
-        + "&accessToken="
-        + key
+        + "&token="
+        + jwt_token
         + "&proxyBaseUrl="
         + os.getenv("PROXY_BASE_URL")
     )
