@@ -280,7 +280,7 @@ async def user_api_key_auth(
                 return UserAPIKeyAuth()
 
         if api_key is None:
-            raise Exception("No API Key passed in")
+            raise Exception("No API Key passed in. api_key is None")
         if secrets.compare_digest(api_key, MISSING_BEARER):
             # missing 'Bearer ' prefix
             raise Exception(
@@ -288,7 +288,7 @@ async def user_api_key_auth(
             )
         elif secrets.compare_digest(api_key, NO_API_KEY):
             # no api key passed in
-            raise Exception("No API Key passed in. Passed in: {passed_in_key}")
+            raise Exception(f"No API Key passed in. Passed in: {passed_in_key}")
 
         route: str = request.url.path
         if route == "/user/auth":
