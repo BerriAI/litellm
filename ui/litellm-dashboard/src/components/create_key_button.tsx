@@ -12,7 +12,6 @@ const { Option } = Select;
 interface CreateKeyProps {
   userID: string;
   accessToken: string;
-  proxyBaseUrl: string;
   data: any[] | null;
   setData: React.Dispatch<React.SetStateAction<any[] | null>>;
 }
@@ -20,7 +19,6 @@ interface CreateKeyProps {
 const CreateKey: React.FC<CreateKeyProps> = ({
   userID,
   accessToken,
-  proxyBaseUrl,
   data,
   setData,
 }) => {
@@ -51,7 +49,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
         formValues.models = [];
       }
       setIsModalVisible(true);
-      const response = await keyCreateCall(proxyBaseUrl, accessToken, userID, formValues);
+      const response = await keyCreateCall(accessToken, userID, formValues);
       setData((prevData) => (prevData ? [...prevData, response] : [response])); // Check if prevData is null
       setApiKey(response["key"]);
       message.success("API Key Created");
