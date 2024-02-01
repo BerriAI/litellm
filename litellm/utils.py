@@ -2094,13 +2094,13 @@ def client(original_function):
         logging_obj = kwargs.get("litellm_logging_obj", None)
 
         # only set litellm_call_id if its not in kwargs
+        call_type = original_function.__name__
         if "litellm_call_id" not in kwargs:
             kwargs["litellm_call_id"] = str(uuid.uuid4())
         try:
             model = args[0] if len(args) > 0 else kwargs["model"]
         except:
             model = None
-            call_type = original_function.__name__
             if (
                 call_type != CallTypes.image_generation.value
                 and call_type != CallTypes.text_completion.value
